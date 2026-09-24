@@ -303,11 +303,11 @@ server as a child (`opencode serve --hostname 127.0.0.1 --port <N>`), waits for
 the `opencode server listening on http://…` line, subscribes to `GET /event`,
 and relays an nd-JSON protocol over stdin/stdout to the host-side client.
 
-Event mapping, pinned by source review and live capture on 2026-09-11:
+Current bridge event mapping (initial protocol review and capture: 2026-09-11):
 
 | server event | payload | normalized hosted event |
 |---|---|---|
-| `message.part.delta` | `{partID, messageID, field:'text', delta}` — `field` is never `'reasoning'`; the part's type comes from its `message.part.updated` | `text-delta`, or `commentary-delta` when the `partID` is registered as a reasoning part; only for assistant, non-summary messages |
+| `message.part.delta` | `{partID, messageID, field:'text', delta}` — `field` is never `'reasoning'`; the part's type comes from its `message.part.updated` | `text-delta`, or `thinking-delta` when the `partID` is registered as a reasoning part; only for assistant, non-summary messages |
 | `message.part.updated` | start (empty) and end (full) snapshots of text/reasoning parts; tool parts with `callID` and `state.status` (`pending`/`running`/`completed`/`error`) | `tool-call` on `running`, `tool-result` on `completed`/`error`; end-snapshot text is idempotent (deltas are the stream), and only for assistant, non-summary messages |
 | `step-finish` part | per-model-call `tokens` and `cost` | `usage` (sum `tokens.input`/`tokens.output`, matching Floot) |
 | `message.updated` | `info` registry (`role`, `summary`, `agent`, `time`) | message registry only; **never** usage (it fires per step, cost is cumulative, tokens are last-step) |
@@ -423,10 +423,10 @@ reuse the Claude config generator — that emits Claude's `mcpServers`/`type: 's
   `permission.asked` with `{response:'once'}`; a `"*": "allow"` wildcard would
   override the built-in `ask`/`deny` rules and is deliberately not used. The
   outer slice is the enforcement boundary, matching the codex stance.
-- **Unsettled-call barrier:** `terminate()`/`destroy()` must refuse while
-  `bridge.pendingCalls() > 0`, with the exact message substring
-  `unsettled Endo tool call` that Floot retries on
-  (`agent.js:2932-2950`; precedent `claude-backend-factory.js:238-241,252,274`).
+- **Admitted-call barrier:** the shared supervisor fences admission and closes
+  native resources independently, but does not acknowledge completed cleanup
+  until admitted calls and required writes settle. Floot awaits termination;
+  it does not interpret backend error text or poll for tool completion.
 - The socket has no explicit mode and no peer-uid check today; any in-slice
   process can drive the pinned `HostedToolSet`. A follow-up, not a security
   claim.
@@ -624,7 +624,6 @@ New package `packages/opencode-sandbox/`.
 | `setup-hosted.js` | Session dirs, credential provisioning, mint `opencode-sandbox/backend`, bind at `floot/controller-profile/opencode-backend` | `claude-sandbox/setup-hosted.js:223-256`; Tokyo `provideManagedCredentials` |
 | `src/opencode-backend-factory.js` | `HostedBackendFactoryInterface`; lifecycle ordering, live ownership, teardown barriers | `claude-backend-factory.js` |
 | `src/opencode-backend-module.js` | Records each session's plan and exact dependencies with the daemon session owner (`provideSessionOwner`) and starts the native controller; no per-session formulas | replaces the deleted per-session provisioner |
-| `src/container-mount-bridge.js` | `provideContainerMountBridge`/`release…` (refused in phase 1) | `claude-sandbox/src/container-mount-bridge.js` |
 | `src/opencode-session-plan.js`, `src/opencode-session-storage.js` | OpenCode's field list over the shared primitives in `@endo/hosted-agent/session-plan.js`; the storage owner is `@endo/hosted-agent/session-storage.js` over that parser, bound to `<root>/<sandboxSessionId>` | new; the client-formula creation module is deleted |
 | `src/opencode-native-controller.js` | Activate the recorded plan, acquire scopes, project the workspace, configure MCP and the slice, and construct the protocol client under the shared supervisor | `@endo/hosted-agent/session-supervisor.js` |
 | `src/opencode-client.js` | Spawn/command the bridge; session-id handoff; pending-call count; terminal barrier | `codex-client.js` + `claude-client.js` |

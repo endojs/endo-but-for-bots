@@ -21,9 +21,8 @@
  * The result is snapshotted into the session's registry entry when the
  * session is created, together with the context it was composed from
  * (`promptContext`). A session keeps the prompt it started with: an edit here
- * reaches new sessions only, unless a preset bumps its `promptVersion`, in
- * which case the recorded context is what lets the migration compose the new
- * text for the same place and the same kind of driver.
+ * reaches new sessions only. Recorded context is descriptive metadata, not
+ * permission to replace the captured prompt during restoration.
  */
 
 import { assertPromptEnvironment } from '@endo/hosted-agent';
@@ -70,9 +69,8 @@ export const UNDECLARED_HOSTED_PROMPT_ENVIRONMENT = harden({
  * What a session recorded before contexts existed ran under: spoken, behind
  * the provider API. The two control presets described the mount tools to every
  * such session ("when your session runs in a sandbox that supports it"); the
- * other two never mentioned them. This is the fallback for a registry entry
- * that carries no prompt or no context of its own, not a promise of the old
- * bytes: a recipe that was wrong then is composed right now.
+ * other two never mentioned them. Kept only for preset catalog examples,
+ * never for reconstructing a registry entry's missing prompt or context.
  *
  * @param {string} presetId
  * @returns {PromptContext}

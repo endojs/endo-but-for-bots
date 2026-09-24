@@ -77,33 +77,25 @@ const fixture = (t, { prepare, backend = 'bwrap' } = {}) => {
   };
 };
 
-test('native profile reaches explicit Podman without legacy rlimit defaults', async t => {
+test('retired nativeProfile is refused before driver preparation', async t => {
   const f = fixture(t, { backend: 'podman' });
-  const nativeProfile = harden({
-    uid: 1000,
-    gid: 1000,
-    memoryBytes: 536_870_912n,
-    pids: 128,
-    cpuQuotaMicros: 200_000n,
-    cpuPeriodMicros: 100_000,
-    maxConcurrentOperations: 2,
-  });
-  /** @type {NativeSandboxMakeOpts} */
-  const opts = harden({ ...approved, backend: 'podman', nativeProfile });
-  const slice = await f.makeResolved(opts);
-  t.deepEqual(f.specs[0].nativeProfile, nativeProfile);
-  t.false(Object.hasOwn(f.specs[0], 'limits'));
-  await E(slice).dispose();
-  for (const backend of /** @type {const} */ ([undefined, 'auto', 'bwrap'])) {
+  for (const nativeProfile of [undefined, {}, { uid: 1000 }]) {
+    // Deliberately exercise stale callers, including an undefined old option.
     // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(() => f.makeResolved({ ...opts, backend }), {
-      message: /require explicit Podman/,
-    });
+    await t.throwsAsync(
+      () =>
+        f.makeResolved(
+          /** @type {any} */ ({
+            ...approved,
+            backend: 'podman',
+            nativeProfile,
+          }),
+        ),
+      { message: /nativeProfile is retired/ },
+    );
   }
-  await t.throwsAsync(() => f.makeResolved({ ...opts, limits: {} }), {
-    message: /cannot mix/,
-  });
-  t.is(f.specs.length, 1);
+  t.is(f.specs.length, 0);
+  t.is(f.mountCalls(), 0);
 });
 
 test('native preparation consumes explicit paths without daemon mount authority', async t => {

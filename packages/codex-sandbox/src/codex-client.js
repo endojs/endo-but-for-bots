@@ -130,6 +130,7 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @property {string} [turnId]
  * @property {(event: any) => void} push
  * @property {boolean} interrupted
+ * @property {boolean} startAdmitted Whether turn/start crossed the transport-write boundary.
  * @property {string} [interruptReason]
  * @property {string} [errorReason]
  * @property {Promise<void>} terminal
@@ -566,7 +567,7 @@ export const makeCodexClient = ({
     return shutdown;
   };
 
-  const sendMessage = async message => {
+  const sendMessage = async (message, beforeSend = () => {}) => {
     if (!transport) throw Error('Codex app-server is not initialized');
     const size = byteLength(message);
     if (size > maxRequestBytes) {
@@ -582,6 +583,7 @@ export const makeCodexClient = ({
     });
     await null;
     try {
+      beforeSend();
       await Promise.race([transport.send(harden(message)), deadline]);
     } catch (error) {
       // A failed or timed-out write has an unknown outcome, including for
@@ -593,7 +595,7 @@ export const makeCodexClient = ({
     }
   };
 
-  const request = async (method, params) => {
+  const request = async (method, params, beforeSend = () => {}) => {
     if (terminated) throw Error('Codex session terminated');
     const id = nextRequestId;
     nextRequestId += 1;
@@ -615,7 +617,7 @@ export const makeCodexClient = ({
     // blocks, the deadline still settles request() and the losing exchange
     // remains observed by Promise.race rather than becoming unhandled.
     const exchange = (async () => {
-      await sendMessage({ id, method, params });
+      await sendMessage({ id, method, params }, beforeSend);
       return response;
     })();
     await null;
@@ -651,6 +653,14 @@ export const makeCodexClient = ({
     }
     turn.interrupted = true;
     turn.interruptReason = reason;
+    if (!turn.startAdmitted) {
+      // Restoration and write-ahead preparation are not native execution.
+      // Let their owned work settle; send() fences the prompt and settles the
+      // ledger afterward. Waiting for turn/started here would admit precisely
+      // the work the caller canceled, or wait for an announcement never sent.
+      await turn.terminal;
+      return undefined;
+    }
     // The app-server honours `turn/interrupt` only for a turn it has announced
     // with `turn/started`. Asked earlier — and the announcement can trail the
     // `turn/start` response, let alone a response still in flight — it answers
@@ -820,9 +830,16 @@ export const makeCodexClient = ({
         timer = setTimeout(() => reject(timeoutFailure), toolCallTimeoutMs);
       }
     });
-    const operation = Promise.resolve().then(() =>
-      callTool(params.tool, params.arguments),
-    );
+    const operation = Promise.resolve().then(() => {
+      // The intent write may have yielded to shutdown. Check at the actual
+      // effect boundary, without another await before calling the tool.
+      if (closing || terminated) {
+        throw Error(
+          'Codex session is closing; no new Endo tool calls are admitted',
+        );
+      }
+      return callTool(params.tool, params.arguments);
+    });
     pendingToolOperations.add(operation);
     operation.then(
       () => pendingToolOperations.delete(operation),
@@ -1495,14 +1512,9 @@ export const makeCodexClient = ({
       approvalPolicy,
       sandbox: CODEX_SANDBOX_MODE,
       ...(opts.model || model ? { model: opts.model || model } : {}),
-      ...(opts.systemPrompt ||
-      opts.developerInstructions ||
-      developerInstructions
+      ...(opts.systemPrompt || developerInstructions
         ? {
-            developerInstructions:
-              opts.systemPrompt ||
-              opts.developerInstructions ||
-              developerInstructions,
+            developerInstructions: opts.systemPrompt || developerInstructions,
           }
         : {}),
     };
@@ -1669,6 +1681,11 @@ export const makeCodexClient = ({
 
   return makeExo('CodexClient', CodexClientInterface, {
     async send(prompt, opts = {}) {
+      if (Object.hasOwn(opts, 'developerInstructions')) {
+        throw Error(
+          'Per-turn developerInstructions is unsupported; use systemPrompt',
+        );
+      }
       if (terminated) throw Error('Codex session terminated');
       if (closing) throw Error('Codex session closing');
       if (new TextEncoder().encode(prompt).byteLength > maxPromptBytes) {
@@ -1729,6 +1746,7 @@ export const makeCodexClient = ({
         threadId: currentThreadId,
         push: channel.push,
         interrupted: false,
+        startAdmitted: false,
         terminal: channel.terminal,
         resolveTerminal: channel.settle,
         started,
@@ -1742,6 +1760,11 @@ export const makeCodexClient = ({
         earlyBytes: 0,
       };
       active = turn;
+      const assertPromptAdmission = () => {
+        if (terminated || closing || active !== turn || turn.interrupted) {
+          throw Error('Codex turn canceled before prompt admission');
+        }
+      };
       if (turnWallTimeoutMs > 0) {
         turn.wallTimer = setTimeout(() => {
           if (active === turn) {
@@ -1765,6 +1788,7 @@ export const makeCodexClient = ({
         // checkpoint the thread must be rolled back to if nothing acknowledges
         // it.
         const baseCheckpoint = await readLatestTurnId();
+        assertPromptAdmission();
         const restoreContext = replayContinuity && baseCheckpoint === null;
         if (restoreContext) {
           assertContinuity(opts);
@@ -1801,23 +1825,31 @@ export const makeCodexClient = ({
             }
           }
         }
+        assertPromptAdmission();
         turn.ledgerTurn = await ledger.begin({ baseCheckpoint });
-        const response = await request('turn/start', {
-          threadId: currentThreadId,
-          // The prompt, and only the prompt. A restored conversation reached
-          // the thread through `inject_items` above or the turn never got
-          // here.
-          input: [{ type: 'text', text: prompt, text_elements: [] }],
-          approvalPolicy,
-          sandboxPolicy: {
-            type: 'externalSandbox',
-            networkAccess: publicNetworkAdmitted ? 'enabled' : 'restricted',
+        const response = await request(
+          'turn/start',
+          {
+            threadId: currentThreadId,
+            // The prompt, and only the prompt. A restored conversation reached
+            // the thread through `inject_items` above or the turn never got
+            // here.
+            input: [{ type: 'text', text: prompt, text_elements: [] }],
+            approvalPolicy,
+            sandboxPolicy: {
+              type: 'externalSandbox',
+              networkAccess: publicNetworkAdmitted ? 'enabled' : 'restricted',
+            },
+            ...(opts.model || model ? { model: opts.model || model } : {}),
+            ...(opts.reasoningEffort || reasoningEffort
+              ? { effort: opts.reasoningEffort || reasoningEffort }
+              : {}),
           },
-          ...(opts.model || model ? { model: opts.model || model } : {}),
-          ...(opts.reasoningEffort || reasoningEffort
-            ? { effort: opts.reasoningEffort || reasoningEffort }
-            : {}),
-        });
+          () => {
+            assertPromptAdmission();
+            turn.startAdmitted = true;
+          },
+        );
         if (
           typeof response?.turn?.id !== 'string' ||
           response.turn.id === '' ||
@@ -1846,6 +1878,13 @@ export const makeCodexClient = ({
           }
         }
       } catch (error) {
+        if (turn.interrupted && !turn.startAdmitted) {
+          // Preparation has now settled, including any write-ahead record.
+          // Fence successors before publishing the terminal event; the same
+          // failure path settles the ledger and drains its host writes.
+          await failSession(error);
+          return channel.reader;
+        }
         await settleTurn(turn, {
           type: 'failed',
           reason: error instanceof Error ? error.message : `${error}`,
@@ -1907,9 +1946,11 @@ export const makeCodexClient = ({
           });
           closeDeferredAudited = true;
         }
-        throw Error(
-          `Codex session has ${pendingToolOperations.size} unsettled Endo tool call(s)`,
-        );
+        // Closing fences new effects at dispatch. Drain admitted calls rather
+        // than requiring callers to recognize and retry an English error.
+        // The supervisor independently fences grants and closes the sandbox;
+        // this wait is a completion barrier, not a delay to that containment.
+        await Promise.allSettled([...pendingToolOperations]);
       }
       if (!terminated && !closeRequestedAudited) {
         await audit('session-close-requested', {

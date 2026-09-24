@@ -97,6 +97,7 @@ test('factory facets retain disconnected turns, commit history, and provision de
           id: 'one',
           title: 'One',
           createdAt: 1,
+          systemPrompt: 'Captured fixture prompt.',
           presetId: 'general',
           lifecycle: 'ready',
           backendId: 'test',

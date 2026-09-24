@@ -178,6 +178,7 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
               id: 'one',
               title: 'One',
               createdAt: 1,
+              systemPrompt: 'Captured fixture prompt.',
               presetId: 'general',
               lifecycle,
               ...(executionState ? { executionState } : {}),

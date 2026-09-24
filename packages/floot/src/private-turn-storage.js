@@ -99,11 +99,11 @@ harden(retirePrivateTurnStorage);
  */
 export const providePrivateTurnStorage = async (host, sessionId) => {
   const prefix = privatePrefix(sessionId);
-  const names = new Set(await E(host).list());
-  ![...names].some(name => name.startsWith(`${prefix}migration-`)) ||
-    Fail`Legacy private journal requires session reset`;
+  !(await E(host).list()).some(name =>
+    name.startsWith(`${prefix}migration-`),
+  ) || Fail`Legacy private journal requires session reset`;
   const schemaName = `${prefix}schema`;
-  names.has(schemaName) ||
+  (await E(host).has(schemaName)) ||
     Fail`Private journal schema missing; session reset required`;
   const schema = await E(host).lookup(schemaName);
   assertSchema(schema, sessionId);
@@ -132,7 +132,7 @@ export const providePrivateTurnStorage = async (host, sessionId) => {
     list: () =>
       serialized(async () =>
         harden(
-          [...names]
+          (await E(host).list())
             .filter(name => name.startsWith(`${prefix}floot-turn-`))
             .map(name => name.slice(prefix.length)),
         ),
@@ -144,10 +144,10 @@ export const providePrivateTurnStorage = async (host, sessionId) => {
     storeValue: (value, name) =>
       serialized(async () => {
         const target = `${prefix}${assertJournalName(name)}`;
-        !names.has(target) || Fail`Private journal values are immutable`;
+        !(await E(host).has(target)) ||
+          Fail`Private journal values are immutable`;
         try {
           await E(host).storeValue(value, target);
-          names.add(target);
         } catch (error) {
           poisoned = true;
           throw error;
@@ -158,9 +158,8 @@ export const providePrivateTurnStorage = async (host, sessionId) => {
     remove: name =>
       serialized(async () => {
         const target = `${prefix}${assertJournalName(name)}`;
-        names.has(target) || Fail`Unknown private journal value`;
+        (await E(host).has(target)) || Fail`Unknown private journal value`;
         await E(host).remove(target);
-        names.delete(target);
       }),
   });
 };

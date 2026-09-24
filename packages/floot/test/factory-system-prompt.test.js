@@ -325,6 +325,22 @@ test('an operator prompt replaces the preset’s and is not recomposed', async t
   t.is(await world.promptOf(session), 'Be a poet.');
 });
 
+test('invalid custom prompts cannot publish an unrestorable session', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({ promptEnvironment: sandboxed });
+  t.teardown(world.close);
+  const before = [...world.hostStore.entries()];
+  for (const systemPrompt of ['', '  \n\t', null, false, 7, {}]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      E(world.factory).createSession({ ...hosted, systemPrompt }),
+      { message: /systemPrompt must be a nonblank string/ },
+    );
+  }
+  t.deepEqual(await E(world.factory).listSessions(), []);
+  t.deepEqual([...world.hostStore.entries()], before);
+});
+
 test('an explicit spoken record retains the setup session voice rules', async t => {
   t.timeout(10_000);
   const world = makeWorld({ promptEnvironment: sandboxed });
@@ -332,12 +348,36 @@ test('an explicit spoken record retains the setup session voice rules', async t 
   await E(world.factory).createSession({
     title: 'Spoken',
     presetId: 'general',
-    model: 'test:m',
+    backendId: 'test',
+    modelId: 'm',
     spoken: true,
   });
   const [entry] = await E(world.factory).listSessions();
   const session = await E(world.factory).getSession(entry.id);
   t.true((await world.promptOf(session)).includes('spoken aloud'));
+});
+
+test('createSession rejects the obsolete model option even beside canonical fields', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({ promptEnvironment: sandboxed });
+  t.teardown(world.close);
+  for (const model of ['test:m', '', undefined]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(E(world.factory).createSession({ ...hosted, model }), {
+      message: /option "model" is unsupported; use backendId and modelId/,
+    });
+  }
+  t.deepEqual(await E(world.factory).listSessions(), []);
+});
+
+test('createSession never infers a hosted backend from a colon in modelId', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({ promptEnvironment: sandboxed });
+  t.teardown(world.close);
+  await t.throwsAsync(E(world.factory).createSession({ modelId: 'test:m' }), {
+    message: /provider backend|provider kind/,
+  });
+  t.deepEqual(await E(world.factory).listSessions(), []);
 });
 
 test('createSession rejects non-record and positional arguments before provisioning', async t => {

@@ -5,6 +5,9 @@ import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
+// Internal test harness, deliberately not a runtime package export.
+// eslint-disable-next-line import/no-relative-packages
+import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
 
 import { makeCodexClient } from '../src/codex-client.js';
 
@@ -13,6 +16,35 @@ const INITIALIZE_RESULT = harden({
   platformFamily: 'unix',
   platformOs: 'linux',
   userAgent: 'codex-test',
+});
+
+test('obsolete per-turn instructions refuse before transport work without reserving a turn', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture({
+    clientOptions: { developerInstructions: 'Configured prompt' },
+  });
+  t.teardown(() => fixture.client.terminate());
+  for (const developerInstructions of ['old prompt', '', undefined]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () =>
+        fixture.client.send('hello', {
+          systemPrompt: 'Current',
+          developerInstructions,
+        }),
+      {
+        message: /Per-turn developerInstructions is unsupported/,
+      },
+    );
+  }
+  t.deepEqual(fixture.sent, []);
+  const reader = await fixture.client.send('hello', {
+    systemPrompt: 'Current',
+  });
+  const start = fixture.sent.find(message => message.method === 'thread/start');
+  t.is(start.params.developerInstructions, 'Current');
+  await fixture.client.interrupt();
+  await drain(reader);
 });
 
 test('catalog rotation restores the conversation once and reconciles the old catalog first', async t => {
@@ -776,6 +808,72 @@ test('supervisor fences promptly but drains an admitted Codex send checkpoint wr
   await stopping;
   t.true(persisted);
   t.true(stopped);
+});
+
+test('shutdown during a held tool intent does not dispatch the tool after release', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let writing = false;
+  const calls = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'lookup',
+          description: 'Test tool.',
+          inputSchema: { type: 'object', properties: {} },
+        },
+      ],
+      callTool: async (...args) => {
+        calls.push(args);
+        return 'ok';
+      },
+      auditEvent: async kind => {
+        if (kind === 'tool-intent') {
+          writing = true;
+          await held;
+        }
+      },
+    },
+  });
+  const owner = await supervise(fixture.client);
+  t.teardown(async () => {
+    release();
+    await owner.stop();
+  });
+  await owner.controller.send('hello');
+  fixture.push({
+    id: 91,
+    method: 'item/tool/call',
+    params: {
+      threadId: fixture.activeThreadId(),
+      turnId: 'turn-1',
+      callId: 'call-held',
+      tool: 'lookup',
+      arguments: {},
+    },
+  });
+  while (!writing) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  const stopping = owner.stop();
+  void stopping.catch(() => {});
+  await flush();
+  t.true(owner.events.includes('fence'));
+  t.false((await owner.controller.status()).stopped);
+  t.deepEqual(calls, []);
+  release();
+  await stopping;
+  t.deepEqual(
+    calls,
+    [],
+    'the intent write must not admit execution after shutdown',
+  );
 });
 
 for (const event of ['turn-terminal', 'server-request-denied', 'tool-intent']) {
@@ -2016,6 +2114,7 @@ test('teardown synchronously rejects a new turn before its close audit', async t
 });
 
 test('a timed-out Endo tool poisons the session until late settlement', async t => {
+  t.timeout(5000);
   /** @type {(value?: any) => void} */
   let settle = () => {};
   const audit = [];
@@ -2052,9 +2151,16 @@ test('a timed-out Endo tool poisons the session until late settlement', async t 
   });
   t.is((await drain(reader)).at(-1).type, 'abort');
   t.true(fixture.isClosed());
-  await t.throwsAsync(() => fixture.client.terminate(), {
-    message: /unsettled Endo tool call/,
+  let stopped = false;
+  const stopping = fixture.client.terminate().then(() => {
+    stopped = true;
   });
+  t.teardown(async () => {
+    settle('late result');
+    await stopping;
+  });
+  await flush();
+  t.false(stopped);
   settle('late result');
   for (let tries = 0; tries < 20; tries += 1) {
     if (audit.some(entry => entry.kind === 'tool-late-settled')) break;
@@ -2063,7 +2169,72 @@ test('a timed-out Endo tool poisons the session until late settlement', async t 
   }
   t.true(audit.some(entry => entry.kind === 'tool-outcome-unknown'));
   t.true(audit.some(entry => entry.kind === 'tool-late-settled'));
-  await fixture.client.terminate();
+  await stopping;
+  t.true(stopped);
+});
+
+test('supervisor fences independently while Codex termination drains an admitted tool', async t => {
+  t.timeout(5000);
+  let release = () => {};
+  const held = new Promise(resolve => {
+    release = () => resolve('tool result');
+  });
+  let entered = false;
+  const fixture = makeFixture({
+    clientOptions: {
+      toolCallTimeoutMs: 0,
+      dynamicTools: [
+        {
+          type: 'function',
+          name: 'wait',
+          description: 'Test tool.',
+          inputSchema: { type: 'object' },
+        },
+      ],
+      callTool: () => {
+        entered = true;
+        return held;
+      },
+    },
+  });
+  const owner = await supervise(fixture.client);
+  t.teardown(async () => {
+    release();
+    await owner.stop();
+  });
+  await owner.controller.send('hello');
+  fixture.push({
+    id: 953,
+    method: 'item/tool/call',
+    params: {
+      threadId: fixture.activeThreadId(),
+      turnId: 'turn-1',
+      callId: 'wait-drain',
+      tool: 'wait',
+      arguments: {},
+    },
+  });
+  while (!entered) {
+    // eslint-disable-next-line no-await-in-loop
+    await flush();
+  }
+  let stopped = false;
+  const stopping = owner.stop().then(() => {
+    stopped = true;
+  });
+  void stopping.catch(() => {});
+  await flush();
+  t.true(owner.events.includes('fence'));
+  t.true(owner.events.includes('sandbox-close'));
+  t.true(owner.events.includes('revoke'));
+  t.false(stopped);
+  t.throws(() => owner.controller.send('too late'), {
+    message: /stopping/,
+  });
+  release();
+  await stopping;
+  t.true(stopped);
+  t.true((await owner.controller.status()).stopped);
 });
 
 test('a failed late tool audit remains a shutdown failure after the tool settles', async t => {
@@ -2773,44 +2944,176 @@ test('a turn the app-server never announces cannot be interrupted, so the sessio
   t.regex((await drain(reader)).at(-1).reason, /not announced/);
 });
 
-test('interrupt during thread startup is a terminating barrier', async t => {
-  const queue = makeQueue();
-  /** @type {any[]} */
-  const sent = [];
-  let closed = false;
-  const client = makeCodexClient({
-    sessionId: 'deferred-thread-start',
-    start: async () => ({
-      messages: queue.messages,
-      send: async (/** @type {any} */ message) => {
-        sent.push(message);
-        if (message.method === 'initialize') {
-          queue.push({ id: message.id, result: INITIALIZE_RESULT });
-        } else if (message.method === 'account/read') {
-          queue.push({ id: message.id, result: ACCOUNT_RESULT });
+for (const phase of ['thread/start', 'thread/inject_items']) {
+  test(`interrupt during ${phase} is a terminating admission barrier`, async t => {
+    const queue = makeQueue();
+    /** @type {any[]} */
+    const sent = [];
+    let closed = false;
+    const client = makeCodexClient({
+      sessionId: 'deferred-thread-start',
+      requestTimeoutMs: 2000,
+      start: async () => ({
+        messages: queue.messages,
+        send: async (/** @type {any} */ message) => {
+          sent.push(message);
+          if (message.method === 'initialize') {
+            queue.push({ id: message.id, result: INITIALIZE_RESULT });
+          } else if (message.method === 'account/read') {
+            queue.push({ id: message.id, result: ACCOUNT_RESULT });
+          } else if (
+            message.method === 'thread/start' &&
+            phase !== 'thread/start'
+          ) {
+            queue.push({
+              id: message.id,
+              result: { thread: { id: 'thread-new' } },
+            });
+          }
+        },
+        close: async () => {
+          closed = true;
+          queue.close();
+        },
+      }),
+    });
+    t.teardown(() => client.terminate());
+    let sendP;
+    let interruption;
+    await exercisePromptCancellation(t, {
+      start: async () => {
+        sendP = client.send('must not execute', {
+          transcript: [{ kind: 'message', role: 'user', content: 'earlier' }],
+        });
+        sendP.catch(() => undefined);
+        for (let tries = 0; tries < 100; tries += 1) {
+          if (sent.some(message => message.method === phase)) break;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        t.true(
+          sent.some(message => message.method === phase),
+          'the actual native preparation request is held',
+        );
+      },
+      cancel: async () => {
+        interruption = client.interrupt();
+        interruption.catch(() => undefined);
+        await new Promise(resolve => setImmediate(resolve));
+      },
+      whileHeld: async () => {
+        await t.throwsAsync(() => client.send('next requested turn'), {
+          message: /Codex session (terminated|already has an active turn)/,
+        });
+      },
+      release: () => {
+        const held = sent.find(message => message.method === phase);
+        queue.push({
+          id: held.id,
+          result:
+            phase === 'thread/start' ? { thread: { id: 'thread-new' } } : {},
+        });
+      },
+      settle: async () => {
+        if (phase === 'thread/start') {
+          await t.throwsAsync(interruption, {
+            message: /interrupted during startup/,
+          });
+        } else {
+          await interruption;
+        }
+        t.true(closed);
+        if (phase === 'thread/start') {
+          await t.throwsAsync(sendP, { message: /interrupted during startup/ });
+        } else {
+          const terminal = (await drain(await sendP)).at(-1);
+          t.is(terminal.type, 'abort');
+          t.regex(terminal.reason, /before prompt admission/);
+        }
+        await t.throwsAsync(() => client.send('next requested turn'), {
+          message: 'Codex session terminated',
+        });
+      },
+      admitted: () =>
+        sent
+          .filter(message => message.method === 'turn/start')
+          .map(message => message.params.input[0].text),
+      expected: [],
+    });
+  });
+}
+
+test('interrupt during ledger admission fences the prompt and terminal-microtask successor', async t => {
+  let release;
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  let entered;
+  const held = new Promise(resolve => {
+    entered = resolve;
+  });
+  const saved = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      saveThreadState: async state => {
+        saved.push(state);
+        // The first write records the newly created empty thread. The second
+        // is the write-ahead ledger admission, before any native turn/start.
+        if (saved.length === 2) {
+          entered();
+          await gate;
         }
       },
-      close: async () => {
-        closed = true;
-        queue.close();
-      },
-    }),
+    },
   });
-  const sendP = client.send('first');
-  sendP.catch(() => undefined);
-  await null;
-  for (let tries = 0; tries < 50; tries += 1) {
-    if (sent.some(message => message.method === 'thread/start')) break;
-    // eslint-disable-next-line no-await-in-loop
-    await null;
-  }
-  await t.throwsAsync(() => client.interrupt(), {
-    message: /interrupted during startup/,
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
   });
-  t.true(closed);
-  await t.throwsAsync(sendP, { message: /interrupted during startup/ });
-  await t.throwsAsync(() => client.send('second'), {
-    message: 'Codex session terminated',
+  let sendP;
+  let interruption;
+  let successor;
+  await exercisePromptCancellation(t, {
+    start: async () => {
+      sendP = fixture.client.send('must not execute');
+      sendP.catch(() => undefined);
+      await held;
+      t.is(saved.length, 2);
+      t.deepEqual(saved[0], {
+        threadId: 'thread-new',
+        recovery: { baseTurnId: null },
+      });
+      t.deepEqual(saved[1], saved[0]);
+    },
+    cancel: async () => {
+      interruption = fixture.client.interrupt();
+      interruption.catch(() => undefined);
+      // Run at the public cancellation completion microtask, not a later
+      // timer: reservation release must not admit a successor before poison.
+      successor = interruption.then(() =>
+        fixture.client.send('immediate successor'),
+      );
+      successor.catch(() => undefined);
+    },
+    whileHeld: async () => {
+      await t.throwsAsync(() => fixture.client.send('next requested turn'), {
+        message: 'Codex session already has an active turn',
+      });
+    },
+    release,
+    settle: async () => {
+      await interruption;
+      await t.throwsAsync(successor, { message: 'Codex session terminated' });
+      const terminal = (await drain(await sendP)).at(-1);
+      t.is(terminal.type, 'abort');
+      t.regex(terminal.reason, /before prompt admission/);
+      t.true(fixture.isClosed());
+    },
+    admitted: () =>
+      fixture.sent
+        .filter(message => message.method === 'turn/start')
+        .map(message => message.params.input[0].text),
+    expected: [],
   });
 });
 

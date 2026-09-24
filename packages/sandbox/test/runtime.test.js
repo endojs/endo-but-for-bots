@@ -575,55 +575,22 @@ test('the native scope forwards a fixed resolver policy to factory validation', 
   );
 });
 
-test('the native scope guard checks a forwarded profile before the factory does', async t => {
+test('native scopes refuse retired nativeProfile before acquisition', async t => {
   const f = await fixture(t);
   const runtime = f.make();
+  t.teardown(() => runtime.close());
   const service = await runtime.openNative();
   const scope = await E(service).provideScope('a');
-  const nativeProfile = harden({
-    uid: 1000,
-    gid: 1000,
-    memoryBytes: 536_870_912n,
-    pids: 128,
-    cpuQuotaMicros: 200_000n,
-    cpuPeriodMicros: 100_000,
-    maxConcurrentOperations: 1,
-  });
-  // A malformed profile never reaches the factory: the interface guard is the
-  // boundary, and its rest pattern must not wave the record through unchecked.
-  await t.throwsAsync(
-    E(scope).makeResolved({
-      ...opts,
-      backend: 'podman',
-      // Deliberately ill-typed: the guard, not the compiler, is under test.
-      nativeProfile: /** @type {any} */ ({ ...nativeProfile, uid: '1000' }),
-    }),
-    { message: /uid/ },
-  );
-  await t.throwsAsync(
-    E(scope).makeResolved({
-      ...opts,
-      backend: 'podman',
-      nativeProfile: /** @type {any} */ ({
-        ...nativeProfile,
-        memoryBytes: 536_870_912,
-      }),
-    }),
-    { message: /memoryBytes/ },
-  );
+  for (const nativeProfile of [undefined, {}, { uid: 1000 }]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      E(scope).makeResolved(
+        /** @type {any} */ ({ ...opts, backend: 'podman', nativeProfile }),
+      ),
+      { message: /nativeProfile/ },
+    );
+  }
   t.is(f.probes(), 0, 'nothing was admitted');
-  // A well-formed profile is admitted and reaches the factory's own checks.
-  await t.throwsAsync(
-    E(scope).makeResolved({
-      ...opts,
-      backend: 'podman',
-      nativeProfile,
-      limits: {},
-    }),
-    { message: /cannot mix/ },
-  );
-  await E(scope).makeResolved({ ...opts, backend: 'podman', nativeProfile });
-  await runtime.close();
 });
 
 test('native scopes cannot each spend a separate generated-file budget', async t => {

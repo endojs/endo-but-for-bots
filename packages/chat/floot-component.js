@@ -766,6 +766,18 @@ export const flootComponent = (
     networkPolicy,
   ) => {
     const selected = models.find(candidate => candidate.id === model);
+    if (
+      model &&
+      (!selected ||
+        typeof selected.backendId !== 'string' ||
+        selected.backendId === '' ||
+        typeof selected.modelId !== 'string' ||
+        selected.modelId === '')
+    ) {
+      throw Error(
+        'Selected model has no current backend/model identity; reopen the session picker',
+      );
+    }
     // Always the record form: it is the only one that can say this session is
     // driven from here, where replies are read aloud. The factory composes
     // the voice rules into the system prompt of a session that says so, and
@@ -774,11 +786,10 @@ export const flootComponent = (
       title: title || DEFAULT_TITLE,
       spoken: true,
       ...(presetId ? { presetId } : {}),
-      ...(model ? { model } : {}),
       ...(selected?.backendId
         ? {
             backendId: selected.backendId,
-            modelId: selected.modelId || model,
+            modelId: selected.modelId,
           }
         : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),

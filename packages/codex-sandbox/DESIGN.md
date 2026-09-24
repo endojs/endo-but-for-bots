@@ -25,9 +25,46 @@ one long-lived app-server process per session.
    new thread from the stack's transcript records through
    `thread/inject_items`.
 6. `audit-journal.js` provides an append-only, hash-chained writer, an
-   independently protected durable head checkpoint that detects entry-store
-   rollback or suffix deletion, and a separately held reader over operator-owned
-   Endo persistence.
+   independently held head capability that detects entry-store rollback or
+   suffix deletion, and a reader API. The current native controller uses only
+   the writer; it does not publish a session audit-reader capability.
+   `codex-session-store.js` supplies host-private file-backed entry and anchor
+   stores, not an Endo petstore. Both reside beneath the same host-owned state
+   directory; separate capabilities are not protection against a host filesystem
+   writer able to change both.
+
+### Journal and checkpoint responsibilities
+
+Floot's journal is authoritative for conversation history and mediated Endo tool
+effects. Its tool executor records intent before execution and outcome before
+returning the result. Codex's audit is a second observation of those calls, not
+a second executor or a source from which to replay them.
+
+The Codex audit additionally records native thread/turn/item identifiers,
+provider-native tool observations, runtime verification, approval/denial events,
+and late tool-result/projection diagnostics. These retain transport evidence
+that is not equivalent to Floot's normalized conversation records. Current
+production code does not interpret these event kinds during recovery. The audit
+implementation verifies its chain/head before appending, and a failed required
+audit write remains a session failure; diagnostics are not best-effort today.
+
+The separate `thread/checkpoint.json` record is operational recovery state.
+`readThread` supplies the saved thread/tool-catalog identity and recovery marker;
+`makeTurnLedger` uses that marker for reconciliation and acknowledgement, and
+`writeThread` persists it. Removing this checkpoint is not journal deduplication.
+
+The current composition gives the trusted native controller both entry and
+anchor capabilities. The anchor supports interrupted-append repair and detects
+changes made through entry-only authority; it does not prove native process
+quiescence, exactly-once effects, or safety against a compromised host. The
+runtime's policy anchor is a different mechanism, not this audit head.
+
+Retain the unique transport evidence until a replacement diagnostic path and its
+failure semantics are defined and tested. This does not establish that the
+current hash-chain, full-history recovery walk, or unused-in-production reader
+surface is the simplest implementation. Those are distinct simplification
+questions; do not solve them by deleting the thread checkpoint or silently
+making required evidence writes best-effort.
 
 The client rejects concurrent turns instead of hiding a queue. Callers that
 want queuing must make that policy visible above the capability boundary.
@@ -36,7 +73,7 @@ want queuing must make that policy visible above the capability boundary.
 
 - A saved thread is resumed or the call fails; it never silently starts a new
   history.
-- A new thread ID must be durably accepted by `saveThreadId` before the first
+- A new thread ID must be durably accepted by `saveThreadState` before the first
   turn starts.
 - Endowed dynamic Endo tools are handled directly through app-server and every
   intent/result is durably audited.

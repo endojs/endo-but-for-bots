@@ -20,6 +20,31 @@ incomplete, account discovery retains runtime coupling, and current-release
 deployment/acceptance is outstanding. Consult that document before treating a
 historical finding introduction as current implementation status.
 
+Operator priority clarification (2026-09-24): storage scaling, paged unresolved
+evidence and an inference-admission budget for unresolved outcomes are deferred
+until actual pressure warrants them. Keep the known growth limits documented;
+do not discard uncertainty or introduce speculative capacity limits. This is not
+proof of bounded memory and does not close FA-01/FA-02 model-context compaction.
+The narrow removal of the private journal's per-session full-host name cache
+reduces redundant copies without changing storage format, ownership or policy.
+It passes 21 focused and 676 full Floot tests, with independent source review;
+transient listings, the journal name index and daemon indexes remain unchanged.
+No deployment is claimed.
+
+Admission conformance follow-up (2026-09-24): a shared test-only cancellation
+harness reproduced a Codex bug: canceling during `thread/inject_items` could
+still dispatch the canceled prompt. The client now fences admission at the
+transport-write boundary and drains owned preparation before failure settlement,
+with successors fenced before the reservation is released. Held-import and
+held-ledger tests prove zero prompt dispatch and immediate-successor refusal.
+All three native clients use the same behavioral assertion sequence while
+retaining their protocol-specific successor behavior. Independent review
+approves; full Claude/Codex/OpenCode suites pass 237/323/302 tests. Codex
+production-source types and scoped lint pass. Nine local daemon-backed Floot
+lifecycle/journal/restart regressions also pass. No owner/schema changes or
+deployment; persistence drain has no new deadline and this does not establish
+process-loss recovery. See RA-04 in [current alignment](REFACTOR-ALIGNMENT.md).
+
 This records the source audit and independent subagent reviews requested by the operator.
 It tracks follow-up work within the existing
 [hosted-agent sandbox unification design](../../designs/hosted-agent-sandbox-unification.md),
@@ -2249,6 +2274,26 @@ of 2026-09-21 (generation 157) after the retirement below.
 
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
 
+Old-image compatibility cleanup (2026-09-24, local): remove the OpenCode client's
+`12c637a73` commentary-to-thinking event rewrite. The current bridge emits
+explicit thinking events on both incremental and completed-part paths; the
+client now preserves event kinds. Both commentary and thinking pass-through
+regressions and all 302 package tests pass; independent review approves. Two
+stale comments referring to removed credential/state implementations are also
+corrected. No durable format or live state was changed; old images need retirement
+before deployment. The operator explicitly requests removal of obsolete internal
+options/properties/fallbacks rather than backward compatibility.
+
+Current-state dead-code deletion (2026-09-24, local): removed OpenCode's exported
+phase-one `container-mount-bridge.js` refusal facade and obsolete design inventory
+row. No tracked production/test importer, setup producer, or local host-config
+reference remains. The current shared backend factory already refuses unsupported
+mount attachments; no supported mounting behavior was removed. This does not
+establish complete live formula reachability. Retire obsolete externally minted
+instances deliberately before deployment; preserve Secrets and workspace roots.
+All 302 OpenCode package tests pass; independent source review approves the
+deletion. No deployment or live formula inventory is claimed.
+
 ### Prompt admission after pre-execution cancellation — 2026-09-24
 
 Claude had the same admission gap across asynchronous provisioning and transcript
@@ -2435,20 +2480,20 @@ these macOS tests could not. Still open on the host: no Tokyo run asserted a
 slice's effective limits, and the obsolete field was never presented to the
 parsers because old plans were retired before activation.
 
-Retained-code follow-up (2026-09-24): the separate lower-level `nativeProfile`
-option and its Podman startup-gate/profile/mount-observer branch still exist in
-`@endo/sandbox`, including an exported profile validator and native scope guard.
-Current production JavaScript references are confined to sandbox internals;
-the shared hosted execution envelope uses the attested policy path instead.
-This is a removal candidate, not proof of unreachable code: exported native
-scopes accept the option and retained external formulas may call them.
-Before deletion, trace those public entrypoints and retained callers, and separate
-this branch from helpers still required by the active attested-policy path.
-Do not restore the unused hosted setting merely to justify retaining the branch.
-Fresh startup-gate/profile/mount/operation suites pass 72 tests, native runtime
-passes 20, and OpenCode plan parsing passes 17 (including obsolete-field refusal).
-These establish local protocol and injected-observation behavior, not current
-hosted kernel isolation, live resource limits, or daemon-loss recovery.
+Retained-code follow-up (2026-09-24): with explicit operator approval, the separate
+lower-level `nativeProfile` mode has now been removed locally from `@endo/sandbox`.
+The export/types, startup gate, profile-only observations and exclusive tests are
+deleted; stale options reject before acquisition, including explicit `undefined`.
+The current policy path retains its rootless, namespace, mount, network identity,
+admission and cleanup checks. Runtime scopes and `makeResolved` remain.
+Independent adversarial source review approves; 135 focused tests and 463 full
+tests pass, and package lint/types pass with 28 warnings.
+An earlier wrapper printed the same full passing count but exited nonzero without
+a failure summary; the direct full AVA rerun exited zero, without establishing
+the earlier cause. This is intentional public-mode retirement, not a claim that
+exported code was unreachable. External old-mode formulas/callers must be retired
+before activation. No deployment, live kernel proof or daemon-loss recovery is
+claimed; see [current alignment](REFACTOR-ALIGNMENT.md#ra-01--demonstrate-simplification-not-merely-relocation).
 
 ## FA-06 — One session provisioner and execution envelope
 

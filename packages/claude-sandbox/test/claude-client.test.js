@@ -4,6 +4,9 @@
 import '@endo/init';
 import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+// Internal test harness, deliberately not a runtime package export.
+// eslint-disable-next-line import/no-relative-packages
+import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
 
 import {
   makeClaudeClient,
@@ -156,26 +159,34 @@ for (const phase of ['provision', 'restore']) {
       const transcript = [
         { kind: 'message', role: 'user', content: 'earlier' },
       ];
-      const first = await client.send('must not execute', { transcript });
-      await started;
+      let first;
+      let next;
       let interrupted;
-      if (cancellation === 'reader') await iterateReader(first).return();
-      else {
-        interrupted = client.interrupt();
-        interrupted.catch(() => {});
-        // Let the eventual close reach the selected reader before release.
-        await new Promise(resolve => setImmediate(resolve));
-      }
-      const next = await client.send('next requested turn', { transcript });
-      await new Promise(resolve => setImmediate(resolve));
-      t.is(fake.spawned.length, 0, 'pending preparation remains serialized');
-      release();
-      if (interrupted) await interrupted;
-      t.is((await drain(next)).at(-1).type, 'end');
-      t.deepEqual(
-        fake.spawned.map(proc => proc.argv[2]),
-        ['next requested turn'],
-      );
+      await exercisePromptCancellation(t, {
+        start: async () => {
+          first = await client.send('must not execute', { transcript });
+          await started;
+        },
+        cancel: async () => {
+          if (cancellation === 'reader') await iterateReader(first).return();
+          else {
+            interrupted = client.interrupt();
+            interrupted.catch(() => {});
+            await new Promise(resolve => setImmediate(resolve));
+          }
+        },
+        whileHeld: async () => {
+          next = await client.send('next requested turn', { transcript });
+          await new Promise(resolve => setImmediate(resolve));
+        },
+        release,
+        settle: async () => {
+          if (interrupted) await interrupted;
+          t.is((await drain(next)).at(-1).type, 'end');
+        },
+        admitted: () => fake.spawned.map(proc => proc.argv[2]),
+        expected: ['next requested turn'],
+      });
       t.is(restores, phase === 'restore' ? 2 : 1);
     });
   }
