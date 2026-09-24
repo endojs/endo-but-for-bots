@@ -40,6 +40,40 @@ test('coverage terminal refusal identifies outcome stage without widening accept
   t.regex(error.message, /phase=outcome, check=1/);
 });
 
+for (const type of ['rate_limit_event', 'tool_progress', 'tool_use_summary']) {
+  test(`known unsupported ${type} is named but remains refused`, t => {
+    const coverage = makeCoverage();
+    coverage.observe({
+      type: 'system',
+      subtype: 'init',
+      session_id: sessionId,
+    });
+    const error = t.throws(() =>
+      coverage.observe({
+        type,
+        session_id: sessionId,
+        content: 'SECRET_PRODUCER_CONTENT',
+      }),
+    );
+    t.true(error.message.includes(`phase=observe/${type}, check=6`));
+    t.false(error.message.includes('SECRET_'));
+    t.throws(() => coverage.assertOutcome('success'));
+  });
+}
+
+test('unknown top-level event names remain hidden and refused', t => {
+  const coverage = makeCoverage();
+  coverage.observe({ type: 'system', subtype: 'init', session_id: sessionId });
+  const error = t.throws(() =>
+    coverage.observe({
+      type: 'SECRET_UNKNOWN_TYPE',
+      session_id: sessionId,
+    }),
+  );
+  t.true(error.message.includes('phase=observe, check=6'));
+  t.false(error.message.includes('SECRET_'));
+});
+
 const compactionFixture = async () => {
   await null;
   return JSON.parse(

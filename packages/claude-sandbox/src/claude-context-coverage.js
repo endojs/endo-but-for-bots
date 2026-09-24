@@ -94,9 +94,18 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       charge(event);
       requireValue(event && typeof event === 'object');
       if (
-        ['system', 'result', 'assistant', 'user', 'stream_event'].includes(
-          event.type,
-        )
+        [
+          'system',
+          'result',
+          'assistant',
+          'user',
+          'stream_event',
+          // Pinned CLI protocol identifiers, for diagnostics only. These
+          // remain unsupported below; naming them does not certify coverage.
+          'rate_limit_event',
+          'tool_progress',
+          'tool_use_summary',
+        ].includes(event.type)
       ) {
         diagnosticPhase = `observe/${event.type}`;
       }
