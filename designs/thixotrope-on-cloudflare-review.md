@@ -392,10 +392,13 @@ Corrections 18–25 apply here.
   A session moves one frame per RPC round trip, crank and commit; messages and RPCs may be
   32 MiB against a 2 MB row; an object is soft-limited to 1,000 requests per second.
   Direction: credit windows and outbox quotas, chunked frames, and backoff on "overloaded".
-- **Step 1 refuses admin RPCs and fenced sessions (findings 1, 7).**
-  "Refuse the event if `meta.state ≠ active`" blocks `retire` on a fenced or failed hub, and
-  existing-session frames while fenced, though §7.3 fences only new sessions and withdrawals.
-  Direction: exempt admin RPCs, and have fenced hubs defer with a retryable code.
+- **Step 1 refuses fenced sessions, and admin RPCs have no stated rule (findings 1, 7).**
+  "Refuse the event if `meta.state ≠ active`" covers `webSocketMessage`, `deliver` and `alarm`,
+  so a fenced hub refuses existing-session frames, though §7.3 fences only new sessions and
+  withdrawals.
+  The addendum never says whether `retire` and the other admin RPCs run on a fenced, failed or
+  half-retired hub.
+  Direction: exempt admin RPCs explicitly, and have fenced hubs defer with a retryable code.
 
 ### §4.4 External peers
 
@@ -607,10 +610,10 @@ Work items, from the completeness critic, with Addendum A's additions:
 2. Engine session exports that port `main.rs` without threads, `flock`, files or NDJSON: set the
    profile and ceilings, boot, resume lazily, `eval(source, budget)`, checkpoint, return the halt
    class; keep today's two evals per frame.
-3. A minimal `ironhorse-store-do`: the 11 required `HeapStore` methods on the `MemoryStore`
-   pattern (`store.rs:3378`), the dense reachability defaults, no `tx` import, the `IRON` stamp in
-   a `meta` row, every value at most 2,000,000 B, integers as f64 within u32, and one statement
-   per `exec`.
+3. A minimal `ironhorse-store-do`: the 10 required `HeapStore` methods and `small_section_hashes`
+   on the `MemoryStore` pattern (`store.rs:3378`), the dense reachability defaults, no `tx`
+   import, the `IRON` stamp in a `meta` row, every value at most 2,000,000 B, integers as f64
+   within u32, and one statement per `exec`.
 4. A JS DO host: a static wasm import; lazy instantiation inside `try` in each handler; each crank
    in `transactionSync`; on any exception `this.vat = undefined`; a failure row in a separate
    transaction; a `sql.exec` shim returning error codes; frames copied out with `slice()`;
