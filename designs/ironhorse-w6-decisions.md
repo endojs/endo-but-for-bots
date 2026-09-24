@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-09 |
-| **Updated** | 2026-09-13 |
+| **Updated** | 2026-09-24 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active |
 | **Source** | Architecture review workstream W6 (`rust/engine/architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md`) |
@@ -433,6 +433,10 @@ These are existing persistence constraints, not evidence that the engine release
 owns scheduling.
 Schema-27/28 validation, legacy root verification, and the two manifest hashes
 remain carried costs.
+*Amended 2026-09-24 by the store seam's trust model (its phase 13, in progress):
+once it lands, `cranks` and the cadence are plain manifest fields bound into no root
+or seal, succession still refuses a cadence change or a counter regression, and the
+manifest hashes and legacy root verification stop being carried costs.*
 
 ### Contract for Phase 2B
 
