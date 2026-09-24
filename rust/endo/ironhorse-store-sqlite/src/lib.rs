@@ -60,8 +60,8 @@ fn page_col(v: i64) -> Result<u32, StoreError> {
 
 /// The `meta` key holding the encoded [`StoreManifest`].
 const META_MANIFEST: &str = "manifest";
-/// The `meta` key attesting that `edge_pairs` mirrors the sealed
-/// `page_edges` rows: its value is the big-endian epoch of the manifest
+/// The `meta` key recording that `edge_pairs` mirrors the `page_edges`
+/// rows: its value is the big-endian epoch of the manifest
 /// whose commit last maintained the index. Only commits write it, in
 /// the transaction that maintains the index rows, so a marker naming
 /// the committed epoch means a commit that keeps the marker last
@@ -72,7 +72,7 @@ const META_MANIFEST: &str = "manifest";
 /// index too. A change to the index's layout must move it to a new
 /// table under a new marker key: each build then rebuilds and trusts
 /// only its own table, so neither build's open rewrites rows the
-/// other's marker attests, and a commit by either moves the epoch past
+/// other's marker covers, and a commit by either moves the epoch past
 /// the other's marker. A build that retires the old table must delete
 /// its marker in the same transaction, or an older build would recreate
 /// the table empty and trust it.
@@ -80,9 +80,9 @@ const META_EDGE_PAIRS_EPOCH: &str = "edge_pairs_epoch";
 /// The `small_state` row name holding the encoded small state.
 const SMALL_NAME: &str = "small";
 
-/// Attest `edge_pairs` for `epoch`. The caller owns the commit
-/// transaction that brought the index rows to that epoch, so the marker
-/// commits (or rolls back) with the rows it vouches for.
+/// Record that `edge_pairs` is current for `epoch`. The caller owns the
+/// commit transaction that brought the index rows to that epoch, so the
+/// marker commits (or rolls back) with the rows it describes.
 fn write_edge_pairs_epoch(conn: &Connection, epoch: u64) -> Result<(), StoreError> {
     conn.execute(
         "INSERT INTO meta (key, value) VALUES (?1, ?2)
@@ -93,9 +93,10 @@ fn write_edge_pairs_epoch(conn: &Connection, epoch: u64) -> Result<(), StoreErro
     Ok(())
 }
 
-/// Whether the stored marker attests `edge_pairs` for `epoch`. An absent
-/// marker, one naming another epoch, or one that is not the 8-byte
-/// big-endian blob [`write_edge_pairs_epoch`] writes all read as stale.
+/// Whether the stored marker records `edge_pairs` as current for
+/// `epoch`. An absent marker, one naming another epoch, or one that is
+/// not the 8-byte big-endian blob [`write_edge_pairs_epoch`] writes all
+/// read as stale.
 fn edge_pairs_current(conn: &Connection, epoch: u64) -> Result<bool, StoreError> {
     conn.query_row(
         "SELECT EXISTS (SELECT 1 FROM meta WHERE key = ?1 AND value = ?2)",
@@ -251,8 +252,9 @@ pub struct SqliteHeapStore {
     /// Such an edit is not laundered — it is detected at the next open
     /// or fault rather than at the next commit — so this is a change in
     /// WHEN tamper is evident, not whether. Tamper-EVIDENCE at row
-    /// scale is the stated integrity scope; authentication is not (see
-    /// the design's threat model).
+    /// scale is the stated integrity scope until the store-seam design's
+    /// 2026-09-24 trust model retires it; its phase 13 removes this
+    /// cache.
     root_cache: Option<ironhorse_snapshot::store::RootLedger>,
 }
 
@@ -475,7 +477,7 @@ impl SqliteHeapStore {
         // that used to stand here was unreachable and is gone (review
         // wave 5).
         let manifest = Self::stored_manifest(&conn)?;
-        // Trust the edge index the file attests for its committed epoch
+        // Trust the edge index the file records as current for its epoch
         // (issue #1330): opening such a store reads one marker and
         // rewrites nothing. Only a store whose current rows no
         // marker-keeping commit wrote is rebuilt. A fresh store has
@@ -497,8 +499,8 @@ impl SqliteHeapStore {
         })
     }
 
-    /// Rebuild `edge_pairs` from the sealed `page_edges` rows. Open runs
-    /// this only when the store does not attest its index for the
+    /// Rebuild `edge_pairs` from the `page_edges` rows. Open runs this
+    /// only when the store does not record its index as current for the
     /// committed epoch (see [`META_EDGE_PAIRS_EPOCH`]): a store from
     /// before the table or the marker existed, or one last committed by
     /// a build that does not keep the marker. A crash mid-rebuild, or
@@ -506,31 +508,24 @@ impl SqliteHeapStore {
     /// stale as it found it, so the next open rebuilds again.
     ///
     /// The rebuild leaves the marker alone. Only a commit, the store's
-    /// authorized write, attests the index, so open leaves a store it may
+    /// authorized write, records the marker, so open leaves a store it may
     /// yet refuse (an incompatible boot layout or signature is found only
     /// later, by the caller's `migrate_store` or `validate_store`) exactly
     /// as every open used to: rebuilding an index that already mirrors
     /// its summaries rewrites the same rows. A stale store therefore
     /// rebuilds at each open until its first commit under this build
-    /// attests the index.
+    /// records the marker.
     ///
-    /// A store whose marker is current is trusted instead, by decision
-    /// (issue #1330): the heap database is daemon-private state, the
-    /// same trust class as `endo.sqlite`, so the derived index alone goes
-    /// unverified rather than cost an O(edges) write transaction on every
-    /// open. While the store is open, the EXCLUSIVE locking mode keeps
-    /// other SQLite writers out as our own commits maintain the index and
-    /// its marker transactionally. This narrows the partial-tampering
-    /// defense the sealed root gives every other row class: an at-rest
-    /// edit that drops or moves a pair, leaving the marker in place, can
-    /// make the partial and generational collectors free live objects,
-    /// and the next checkpoint seals the result as a valid epoch. So can
-    /// damage SQLite itself cannot see, such as storage that ignores
-    /// write ordering on power loss, and a bug in commit-time index
-    /// maintenance now persists across reopens instead of being repaired
-    /// by the next one. Deleting the marker from a closed store forces
-    /// the next open to rebuild. The sealed rows, `page_edges` included,
-    /// keep their tamper-evidence.
+    /// A store whose marker is current is trusted instead (issue #1330),
+    /// as the store seam's trust model (its phase 13) will trust every
+    /// row: open does not re-derive the index, and so no longer pays an
+    /// O(edges) write transaction for it. While the store is open, the
+    /// EXCLUSIVE locking mode keeps other SQLite writers out as our own
+    /// commits maintain the index and its marker transactionally. The
+    /// marker records which epoch the index was maintained for, not
+    /// whether its rows are right: a bug in commit-time maintenance
+    /// persists across reopens, and an offline edit of `page_edges` must
+    /// delete the marker so that the next open rebuilds the index.
     fn rebuild_edge_pairs(conn: &Connection) -> Result<(), StoreError> {
         let tx = conn.unchecked_transaction().map_err(sql_err)?;
         tx.execute("DELETE FROM edge_pairs", []).map_err(sql_err)?;
@@ -688,7 +683,7 @@ impl HeapStore for SqliteHeapStore {
         // The edge marker, by contrast, stays valid: no ladder step
         // changes the epoch or writes `page_edges`. A step that rewrote
         // the summaries would have to rebuild `edge_pairs` in its own
-        // transaction, or the next commit would attest a stale index.
+        // transaction, or the next commit would mark a stale index current.
         self.root_cache = None;
         self.conn
             .execute(
@@ -1371,8 +1366,8 @@ impl HeapStore for SqliteHeapStore {
                     params![pages as i64],
                 )
                 .map_err(sql_err)?;
-                // The pairs now mirror this batch's summaries: attest
-                // them for the epoch this transaction commits, so the
+                // The pairs now mirror this batch's summaries: record
+                // that for the epoch this transaction commits, so the
                 // next open trusts the index instead of rebuilding it.
                 write_edge_pairs_epoch(&tx, batch.manifest.epoch)?;
             }
@@ -1885,10 +1880,10 @@ mod tests {
         validate_store(&store, &sig()).expect("the previous epoch still validates");
         drop(resume_from_store(&store, &sig()).expect("the previous epoch still resumes"));
         // The edge marker was rewritten inside the aborted transaction
-        // too; it must roll back with the pairs it would have attested.
+        // too; it must roll back with the pairs it would have covered.
         assert!(
             edge_pairs_current(&store.conn, prior.epoch).unwrap(),
-            "the edge marker still attests the previous epoch"
+            "the edge marker still names the previous epoch"
         );
 
         store
@@ -1901,7 +1896,7 @@ mod tests {
         assert_eq!(store.manifest().unwrap().epoch, 2);
         assert!(
             edge_pairs_current(&store.conn, 2).unwrap(),
-            "the durable retry attests its own epoch"
+            "the durable retry records its own epoch"
         );
         assert!(
             store.root_cache.is_some(),
@@ -1921,7 +1916,7 @@ mod tests {
         let mut store = SqliteHeapStore::open_in_memory().unwrap();
         assert!(
             !edge_pairs_current(&store.conn, 1).unwrap(),
-            "a fresh store attests nothing"
+            "a fresh store records no marker"
         );
         store
             .commit(&image_to_batch_unchecked(&image, 1, ""))
@@ -2241,7 +2236,7 @@ mod tests {
     /// survives the refused open, proving the derived-table rebuild did
     /// not run. The edge marker is deleted too, so the index is stale
     /// and only the gate's position keeps the rebuild from running: an
-    /// attested index would survive any open, refused or not.
+    /// index its marker covers would survive any open, refused or not.
     #[test]
     fn unsupported_schema_refused_before_rebuild_touches_rows() {
         let dir = tmp_dir("unsupported-schema");

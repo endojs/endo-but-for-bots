@@ -3,7 +3,7 @@
 |             |                                                                          |
 | ----------- | ------------------------------------------------------------------------ |
 | **Created** | 2026-09-08                                                               |
-| **Updated** | 2026-09-08                                                               |
+| **Updated** | 2026-09-24                                                               |
 | **Author**  | kumavis (prompted)                                                       |
 | **Status**  | Reference                                                                |
 | **Source**  | Relocated from `rust/endo/ironhorse-store-sqlite/UPGRADE_EXPERIMENTS.md` |
@@ -104,7 +104,8 @@ Selective physical normalization of function/code and continuation rows could ma
 validation, and edits more direct and reduce whole-section rewrites.
 Today these rows travel inside `small_state`; a full typed decode/re-encode makes the experiments
 possible but is not an incremental editing algorithm.
-Any authoritative row split needs versioned migration and integrity coverage.
+Any authoritative row split needs versioned migration and coverage by the store's validator (the
+row hashes that cover rows today go with the store seam's phase 13).
 We have not benchmarked it and do not yet have evidence to justify normalizing the entire heap.
 
 Finally, this work prepares candidate images only.

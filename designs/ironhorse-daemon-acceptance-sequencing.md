@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-14 |
-| **Updated** | 2026-09-14 |
+| **Updated** | 2026-09-24 |
 | **Author** | kumavis (prompted) |
 | **Status** | Proposed |
 | **Source** | Architecture review (`rust/engine/architecture-review/2026-09-06/ARCHITECTURE-REVIEW.md`), read against the scope fence in `rust/engine/PR-1263-TODO.md` |
@@ -1238,6 +1238,13 @@ and a reader working from it alone will re-do them.
       Splitting needs a per-site judgement across `store.rs` and `machine.rs`;
       it was left out of the first Phase 0 increment rather than done in
       haste, because miscategorising a site is worse than the overload.
+      *Moot once the store seam's phase 13 lands (its 2026-09-24 trust
+      model): the at-rest root comparisons, the corruption half, go
+      (stage 1 stops making them on the run-time path, and stage 2
+      removes the root along with the migration steps' checks), while
+      the remaining pairing and succession guards stay refusals, pairing
+      on a random commit token instead of the seal; close this item
+      then.*
 - [ ] **Carry `std::io::ErrorKind` on `StoreError::Io` (Phase 0).** The kind
       is destroyed at construction, so `PermissionDenied` and `NotFound`
       classify `Transient` alongside a genuinely retryable write.

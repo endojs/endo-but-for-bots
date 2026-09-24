@@ -408,16 +408,16 @@ LLM-agent stack).*
 | [daemon-debug-worker-restart](daemon-debug-worker-restart.md) | 2026-04-17 | 2026-04-17 | Not Started |
 | [daemon-cas-management](daemon-cas-management.md) | 2026-04-17 | 2026-04-17 | In Progress |
 | [endor-git-bindings](endor-git-bindings.md) | 2026-07-15 | 2026-08-14 | Proposed |
-| [ironhorse-snapshot-schema](ironhorse-snapshot-schema.md) | 2026-09-08 | — | Reference |
-| [ironhorse-snapshot-schema-surgery](ironhorse-snapshot-schema-surgery.md) | 2026-09-08 | 2026-09-08 | Reference |
-| [ironhorse-snapshot-schema-gc](ironhorse-snapshot-schema-gc.md) | 2026-09-08 | 2026-09-23 | Proposed |
+| [ironhorse-snapshot-schema](ironhorse-snapshot-schema.md) | 2026-09-08 | 2026-09-24 | Reference |
+| [ironhorse-snapshot-schema-surgery](ironhorse-snapshot-schema-surgery.md) | 2026-09-08 | 2026-09-24 | Reference |
+| [ironhorse-snapshot-schema-gc](ironhorse-snapshot-schema-gc.md) | 2026-09-08 | 2026-09-24 | Proposed |
 | [ironhorse-snapshot-schema-debugging](ironhorse-snapshot-schema-debugging.md) | 2026-09-08 | 2026-09-08 | Proposed |
-| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | 2026-08-06 | 2026-09-23 | In Progress |
+| [ironhorse-snapshot-store-seam](ironhorse-snapshot-store-seam.md) | 2026-08-06 | 2026-09-24 | In Progress |
 | [ironhorse-debugger-recovery-and-uncaught](ironhorse-debugger-recovery-and-uncaught.md) | 2026-08-12 | 2026-08-14 | Proposed |
 | [ironhorse-known-defects](ironhorse-known-defects.md) | 2026-09-04 | 2026-09-07 | Reference |
 | [ironhorse-engine-trait-research](ironhorse-engine-trait-research.md) | 2026-09-08 | — | Reference |
-| [ironhorse-w6-decisions](ironhorse-w6-decisions.md) | 2026-09-09 | 2026-09-13 | Active |
-| [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) | 2026-09-14 | 2026-09-14 | Proposed |
+| [ironhorse-w6-decisions](ironhorse-w6-decisions.md) | 2026-09-09 | 2026-09-24 | Active |
+| [ironhorse-daemon-acceptance-sequencing](ironhorse-daemon-acceptance-sequencing.md) | 2026-09-14 | 2026-09-24 | Proposed |
 | [ironhorse-ses-compartment-equivalence](ironhorse-ses-compartment-equivalence.md) | 2026-09-15 | 2026-09-18 | Proposed |
 | [ironhorse-native-lockdown](ironhorse-native-lockdown.md) | 2026-09-16 | 2026-09-18 | **Complete** |
 | [ironhorse-guest-compartment](ironhorse-guest-compartment.md) | 2026-09-18 | 2026-09-19 | In Progress |
@@ -1535,7 +1535,7 @@ user interface move to Rust.
 | [ironhorse-snapshot-schema-gc](ironhorse-snapshot-schema-gc.md) | Proposed | Collector-oriented schema requirements and measurements; implementation remains part of the existing Ironhorse/store program. |
 | [ironhorse-snapshot-schema-debugging](ironhorse-snapshot-schema-debugging.md) | Proposed | Read-only graph, Chrome heap export, and optional debugger adapters; no implemented integration claimed. |
 | [ironhorse-quiescent-gc](ironhorse-quiescent-gc.md) | **Complete** | Whole-machine collection requires quiescence; production exact collection and refusal/recovery tests retain consumer cadence and GC integrity checks. |
-| ironhorse-snapshot-store-seam | In Progress | Paged heap-store persistence for IronHorse with transactional checkpoints and validated resume. See the design Status section for implementation history and open gates. |
+| ironhorse-snapshot-store-seam | In Progress | Paged heap-store persistence for IronHorse with transactional checkpoints and validated resume; phase 13 (in progress) moves it to a trusted store without tamper-evidence. See the design Status section for implementation history and open gates. |
 | endor-registry-proxy-worker | Proposed | Map Rust-acquired CAS package graphs in a separate XS worker using `@endo/compartment-mapper`; replace handwritten package resolution and share packaged-application fixtures with Node and compartment-mapper. |
 | ironhorse-debugger-recovery-and-uncaught | Proposed | Recovers the Ironhorse debugger row (roadmap stage 7) that left the branch before PR #600 merged, and lands break-on-uncaught-exceptions natively. Recovery recommendation: a fresh `builder` re-deriving against current `llm` (not a `weaver` cherry-pick) — the three unreachable slices (`2b6a8d7070`/`6bac90c221`/`8024ee3f55`) predate a wholesale `endor-* -> ironhorse-*` crate rename and a 505-commit interpreter rewrite, so they are reference material, not a mergeable branch; slice 1 (`ironhorse-debug` protocol core) ports nearly verbatim, slice 2's VM seam re-derives against today's `interp.rs`. Break-on-uncaught uses the structural predicate `jumps.is_empty()` plus a one-byte target-opcode peek for finally-only handlers (no bytecode change, oracle-locked to `fxTryNodeCode`), the `uncaughtExceptions` pseudo-breakpoint (option A, matching the already-shipped client), and a `caught` attribute on `<break>`. Gating prerequisite: Ironhorse's engine-raised errors must first unwind through the jump chain (verified: they `return Halt::Throw` inline with no raise helper, so `try/catch` cannot catch an engine `TypeError`). Folds the three `BreakpointTable` parity nits into slice 1's re-land. The Endo debugger client, not xsbug, is the protocol compatibility target; C-XS receives no new work and retires once Ironhorse reaches parity. The required modes are exactly `none`, `uncaught`, and `all`; caught-only breaking is out of scope. Supersedes the break-on-uncaught section of daemon-xs-worker-debugger for the Ironhorse engine. |
 | ironhorse-panic | Proposed | Separates the **Ironhorse panic** from the **Slot Machine recovery boundary**. Ironhorse classifies an uncatchable vat/worker termination no `try`/`catch`, promise handler, or engine path can intercept: `Halt::StackOverflow` and `Halt::MeterAbort` are existing panic/abort conditions, while `is_panic()` plus `Halt::Panic(PanicKind)` generalize the family. Its prospective `Machine` seam reports `ExecutionOutcome::Quiesced`, `Uncaught`, or `Panicked` but owns no durable commit. Slot Machine owns the worker snapshots and watermarks, per-worker SQLite WAL transcript, host-call records and logical handles, outbound-message embargo, crank commit/discard, restore, and replay. Debugger panics use a distinct `<panic>` message, orthogonal to `setExceptionBreakMode`. The off-by-default reference-error Coda captures the fault PC before unwind. |
