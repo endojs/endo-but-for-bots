@@ -152,3 +152,18 @@ investigation.
 See the host repository's
 `ops/explicit-journal-deployment-20260924.md` for exact pins and evidence.
 No successful cross-backend acceptance or new crash-recovery guarantee is claimed.
+
+### Deployment follow-up, generation 173
+
+Item 3 and bounded live fixes are pushed and deployed (`cc4228989`).
+Fae and OpenCode pass restart/recall; Codex and OpenCode pass tool use,
+public/private/off network checks and cancellation evidence under generation 171.
+Claude's validated capacity-notification handling passes 432 local tests, but
+generation-173 tests expose further message-delta framing and reconstructed-block
+equality failures. JSON-string equality is independently property-order-sensitive;
+its role in the live mismatch still needs structural evidence.
+Codex's fresh seed completes, but recall reaches a stopped native incarnation;
+separate new-session grant admission loses its inner diagnostic reasons.
+These remaining protocol/restoration findings require scoped follow-up, not a
+silent relaxation of context coverage or expansion into the deferred process-loss
+design. The refactor's cross-backend live acceptance is not complete.
