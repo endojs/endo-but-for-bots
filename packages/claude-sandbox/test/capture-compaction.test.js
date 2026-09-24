@@ -133,6 +133,21 @@ test('compaction coverage retains only current preboundary context', async t => 
   t.false(Object.hasOwn(without, 'compactionWitness'));
 });
 
+test('compaction coverage witness leaves out the CLI ai-title row', async t => {
+  const entries = records();
+  const title = { type: 'ai-title', aiTitle: 'Cats', sessionId: session };
+  entries.splice(2, 0, title);
+  const { stdout } = await run(t, entries, {
+    ...boundary,
+    coverage_before_uuid: id(9),
+  });
+  const witness = JSON.parse(stdout)
+    .compactionWitness.trimEnd()
+    .split('\n')
+    .map(JSON.parse);
+  t.deepEqual(witness, [entries[1], entries[3]]);
+});
+
 test('fresh compaction coverage includes the initial prompt', async t => {
   const entries = records();
   const { stdout } = await run(t, entries, {
@@ -271,6 +286,135 @@ test('capture preserves observed max-turns attachment without inventing portable
   );
 });
 
+// Observed live on 2026-09-25 (pinned CLI): the transcript carries the agent
+// and skill catalogs the public stream omits. They are model-visible context,
+// kept exactly, never portable dialogue.
+const agentListing = {
+  type: 'agent_listing_delta',
+  addedTypes: ['general'],
+  addedLines: ['- general: synthetic agent line'],
+  removedTypes: [],
+  isInitial: true,
+  showConcurrencyNote: false,
+};
+const skillListing = {
+  type: 'skill_listing',
+  content: '- synthetic: synthetic skill line',
+  skillCount: 1,
+  isInitial: true,
+  names: ['synthetic'],
+};
+
+// Observed live on 2026-09-25: the CLI writes its generated session title
+// as an `ai-title` row with no uuid, among the context rows.
+for (const coverage of [false, true]) {
+  test(`capture skips the CLI's ai-title row (coverage cut ${coverage})`, async t => {
+    const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };
+    const title = { type: 'ai-title', aiTitle: 'Greeting', sessionId: session };
+    const reply = {
+      ...contextRow(10, 'assistant', 'hi'),
+      parentUuid: root.uuid,
+    };
+    const notice = {
+      type: 'endo_capture',
+      session_id: session,
+      ...(coverage ? { coverage_before_uuid: null } : {}),
+    };
+    const result = JSON.parse(
+      (await run(t, [root, title, reply], notice)).stdout,
+    );
+    t.is(result.nativeContext.leafUuid, reply.uuid);
+    t.is(
+      result.nativeContext.transcript,
+      `${JSON.stringify(root)}\n${JSON.stringify(reply)}\n`,
+    );
+  });
+}
+
+test('capture preserves a task reminder attachment', async t => {
+  const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };
+  const reminder = {
+    uuid: id(10),
+    parentUuid: root.uuid,
+    sessionId: session,
+    type: 'attachment',
+    attachment: { type: 'task_reminder', content: [], itemCount: 0 },
+  };
+  const result = JSON.parse(
+    (
+      await run(t, [root, reminder], {
+        type: 'endo_capture',
+        session_id: session,
+      })
+    ).stdout,
+  );
+  t.is(
+    result.nativeContext.transcript,
+    `${JSON.stringify(root)}\n${JSON.stringify(reminder)}\n`,
+  );
+});
+
+test('capture preserves agent and skill listing attachments in order', async t => {
+  const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };
+  const agents = {
+    uuid: id(10),
+    parentUuid: root.uuid,
+    sessionId: session,
+    type: 'attachment',
+    attachment: agentListing,
+  };
+  const skills = {
+    uuid: id(11),
+    parentUuid: agents.uuid,
+    sessionId: session,
+    type: 'attachment',
+    attachment: skillListing,
+  };
+  const notice = { type: 'endo_capture', session_id: session };
+  const result = JSON.parse(
+    (await run(t, [root, agents, skills], notice)).stdout,
+  );
+  t.deepEqual(result.retainedTail, [
+    { kind: 'message', role: 'user', content: 'hello' },
+  ]);
+  t.is(result.nativeContext.leafUuid, skills.uuid);
+  t.is(
+    result.nativeContext.transcript,
+    `${[root, agents, skills].map(row => JSON.stringify(row)).join('\n')}\n`,
+  );
+});
+
+for (const [label, attachment] of [
+  ['agent listing with an extra key', { ...agentListing, extra: true }],
+  ['agent listing with non-string lines', { ...agentListing, addedLines: [1] }],
+  [
+    'agent listing with a non-string type',
+    { ...agentListing, addedTypes: [1] },
+  ],
+  ['skill listing with a string count', { ...skillListing, skillCount: '1' }],
+  ['skill listing without names', { ...skillListing, names: undefined }],
+  ['skill listing with non-string content', { ...skillListing, content: 1 }],
+  [
+    'task reminder with non-array content',
+    { type: 'task_reminder', content: 'x', itemCount: 0 },
+  ],
+]) {
+  test(`capture refuses ${label}`, async t => {
+    const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };
+    const row = {
+      uuid: id(10),
+      parentUuid: root.uuid,
+      sessionId: session,
+      type: 'attachment',
+      attachment: JSON.parse(JSON.stringify(attachment)),
+    };
+    const error = await t.throwsAsync(
+      run(t, [root, row], { type: 'endo_capture', session_id: session }),
+    );
+    t.regex(String(error?.stderr), /Unsupported context attachment/);
+  });
+}
+
 test('capture preserves summary wrapper, retained tool pair and completed tail', async t => {
   const { stdout } = await run(t, records());
   const { nativeContext, ...portable } = JSON.parse(stdout);
@@ -382,7 +526,7 @@ for (const [name, mutate] of [
   test(`capture refuses ${name} without partial output`, async t => {
     const error = await t.throwsAsync(run(t, mutate(records())));
     t.is(error.stdout, '');
-    t.is(error.stderr, 'Claude compaction capture failed\n');
+    t.regex(error.stderr, /^Claude compaction capture failed: [A-Za-z ]+\n$/);
   });
 }
 
@@ -524,7 +668,40 @@ test('combined native and portable checkpoint size is bounded before output', as
   rows[6].message.content = 'x'.repeat(9 * 1024 * 1024);
   const error = await t.throwsAsync(run(t, rows));
   t.is(error.stdout, '');
-  t.is(error.stderr, 'Claude compaction capture failed\n');
+  t.is(
+    error.stderr,
+    'Claude compaction capture failed: Capture output exceeds limit\n',
+  );
+});
+
+test('capture reports only its static local validation reason', async t => {
+  const error = await t.throwsAsync(
+    run(t, records(), {
+      ...boundary,
+      session_id: 'SECRET_PRODUCER_ID',
+    }),
+  );
+  t.is(error.stdout, '');
+  t.is(
+    error.stderr,
+    'Claude compaction capture failed: Invalid capture identity\n',
+  );
+});
+
+test('native parse errors cannot expose transcript fragments or masquerade as diagnostics', async t => {
+  const error = await t.throwsAsync(
+    run(
+      t,
+      records(),
+      boundary,
+      '\n{"SECRET_TRANSCRIPT": "Invalid capture identity"\n',
+    ),
+  );
+  t.is(error.stdout, '');
+  t.is(
+    error.stderr,
+    'Claude compaction capture failed: Unclassified capture failure\n',
+  );
 });
 
 test('native checkpoint excludes operational records after validating active leaf', async t => {

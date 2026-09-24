@@ -1062,6 +1062,72 @@ test.serial('Stop continues observing cancellation failure', async t => {
 });
 
 test.serial(
+  'a failed turn reads plainly in the conversation, raw reason folded',
+  async t => {
+    t.timeout(5000);
+    const parent = testDocument.createElement('div');
+    testDocument.body.appendChild(parent);
+    const raw =
+      'Claude compaction capture did not complete\n--- stderr ---\nClaude compaction capture failed: Unsupported context attachment';
+    const meta = { turnId: '1', turnState: 'failed' };
+    const facet = farSession('FailedSession', {
+      getInfo: () => harden({ id: 'one', title: 'hello' }),
+      getHistory: () =>
+        harden([
+          { role: 'user', content: 'hello', meta },
+          { role: 'assistant', content: 'Hey there!', meta },
+          {
+            role: 'assistant',
+            content: `Turn failed: ${raw}`,
+            meta: { ...meta, turnStatus: true },
+          },
+        ]),
+      getCurrentTurn: () => null,
+      getUsage: () => harden({ inputTokens: 0, outputTokens: 0 }),
+    });
+    const factory = farFactory('FailedFactory', {
+      listSessions: () => harden([{ id: 'one', title: 'hello' }]),
+      listPresets: () => harden([{ id: 'test', title: 'Test preset' }]),
+      listBackends: () => harden([{ id: 'claude', title: 'Claude Code' }]),
+      listModels: () => harden([]),
+      getSession: () => facet,
+    });
+    const dispose = flootComponent(parent, factory, [], () => {}, [], []);
+    t.teardown(() => {
+      dispose();
+      parent.remove();
+    });
+    await waitFor(() =>
+      parent.textContent.includes('This turn did not finish.'),
+    );
+    t.true(parent.textContent.includes('Hey there!'));
+    t.false(parent.textContent.includes('--- stderr ---'));
+    const details = parent.querySelector('.floot-turn-status-detail summary');
+    if (!details) throw Error('Missing Details disclosure');
+    details.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() => parent.textContent.includes('--- stderr ---'));
+    t.true(parent.textContent.includes('Unsupported context attachment'));
+  },
+);
+
+test.serial('a failed turn shows one plain line in the status bar', async t => {
+  const { parent, turns, send } = await setup(t);
+  await send('first');
+  await waitFor(() => turns.length === 1);
+  turns[0].channel.push(
+    harden({
+      type: 'abort',
+      reason:
+        'claude exited 1\n--- stderr ---\nWarning: no stdin data received in 3s',
+    }),
+  );
+  await waitFor(() =>
+    parent.textContent.includes('Turn did not finish: claude exited 1'),
+  );
+  t.false(parent.textContent.includes('--- stderr ---'));
+});
+
+test.serial(
   'a fresh view recovers the daemon turn and serializes its next submission',
   async t => {
     const { parent, turns, send } = await setup(t, 2, true);

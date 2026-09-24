@@ -6,29 +6,81 @@ import process from 'node:process';
 import { Buffer } from 'node:buffer';
 
 const LIMIT = 16 * 1024 * 1024;
+// Only errors minted here from static local messages may explain a refusal.
+// Native JSON parsing and filesystem errors can contain transcript/path data.
+const diagnosticErrors = new WeakMap();
+const diagnosticError = message => {
+  const error = Error(message);
+  diagnosticErrors.set(error, message);
+  return error;
+};
 const uuid = value => {
   if (
     typeof value !== 'string' ||
     !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value)
   )
-    throw Error('Invalid capture identity');
+    throw diagnosticError('Invalid capture identity');
   return value;
 };
 const requireValue = (condition, message) => {
-  if (!condition) throw Error(message);
+  if (!condition) throw diagnosticError(message);
 };
+const strings = value =>
+  Array.isArray(value) && value.every(item => typeof item === 'string');
+const exactKeys = (value, expected) =>
+  Object.keys(value).length === expected.length &&
+  expected.every(key => Object.hasOwn(value, key));
+// Loader-generated context the pinned CLI writes to its transcript but not to
+// its public stream. The native payload keeps each one byte for byte and in
+// order; none of them is dialogue or evidence that a host effect happened.
+// Keep in step with `nativeAttachment` in src/claude-context-coverage.js.
+const nativeAttachment = attachment =>
+  attachment?.type === 'total_tokens_reminder' ||
+  (attachment?.type === 'max_turns_reached' &&
+    Number.isInteger(attachment.maxTurns) &&
+    attachment.maxTurns > 0 &&
+    Number.isInteger(attachment.turnCount) &&
+    attachment.turnCount > 0) ||
+  (attachment?.type === 'agent_listing_delta' &&
+    exactKeys(attachment, [
+      'type',
+      'addedTypes',
+      'addedLines',
+      'removedTypes',
+      'isInitial',
+      'showConcurrencyNote',
+    ]) &&
+    strings(attachment.addedTypes) &&
+    strings(attachment.addedLines) &&
+    strings(attachment.removedTypes) &&
+    typeof attachment.isInitial === 'boolean' &&
+    typeof attachment.showConcurrencyNote === 'boolean') ||
+  (attachment?.type === 'task_reminder' &&
+    exactKeys(attachment, ['type', 'content', 'itemCount']) &&
+    Array.isArray(attachment.content) &&
+    attachment.content.every(
+      item => item !== null && typeof item === 'object' && !Array.isArray(item),
+    ) &&
+    Number.isSafeInteger(attachment.itemCount) &&
+    attachment.itemCount >= 0) ||
+  (attachment?.type === 'skill_listing' &&
+    exactKeys(attachment, [
+      'type',
+      'content',
+      'skillCount',
+      'isInitial',
+      'names',
+    ]) &&
+    typeof attachment.content === 'string' &&
+    strings(attachment.names) &&
+    typeof attachment.skillCount === 'number' &&
+    typeof attachment.isInitial === 'boolean');
 const projection = row => {
   if (row.type === 'attachment') {
-    // Omitted only from portable dialogue; the native payload preserves this
-    // exact historical token-budget attachment for Claude restoration.
-    const attachment = row.attachment;
+    // Omitted only from portable dialogue; the native payload preserves the
+    // exact attachment for Claude restoration.
     requireValue(
-      attachment?.type === 'total_tokens_reminder' ||
-        (attachment?.type === 'max_turns_reached' &&
-          Number.isInteger(attachment.maxTurns) &&
-          attachment.maxTurns > 0 &&
-          Number.isInteger(attachment.turnCount) &&
-          attachment.turnCount > 0),
+      nativeAttachment(row.attachment),
       'Unsupported context attachment',
     );
     return [];
@@ -116,7 +168,7 @@ const projection = row => {
         ...(block.is_error ? { failed: true } : {}),
       };
     }
-    throw Error('Unsupported context block');
+    throw diagnosticError('Unsupported context block');
   });
 };
 
@@ -148,6 +200,17 @@ const frames = async function* (file) {
   requireValue(line === '', 'Incomplete transcript frame');
 };
 
+// CLI operations and state, not conversation context. One list for both the
+// coverage witness and context selection, so they cannot drift apart.
+const operationalRows = new Set([
+  'queue-operation',
+  'last-prompt',
+  'file-history-snapshot',
+  'progress',
+  'mode',
+  // The CLI's generated session title: display metadata, no uuid.
+  'ai-title',
+]);
 const main = async () => {
   requireValue(process.argv.length === 3, 'Expected boundary record');
   let expected = JSON.parse(process.argv[2]);
@@ -163,7 +226,7 @@ const main = async () => {
   const session = uuid(expected.session_id);
   const config = process.env.CLAUDE_CONFIG_DIR;
   if (typeof config !== 'string' || !path.isAbsolute(config)) {
-    throw Error('Missing sandbox config directory');
+    throw diagnosticError('Missing sandbox config directory');
   }
   const filename = path.join(
     config,
@@ -289,16 +352,7 @@ const main = async () => {
         return;
       }
       if (!foundCoverageCut || row.uuid === boundary) return;
-      if (
-        [
-          'queue-operation',
-          'last-prompt',
-          'file-history-snapshot',
-          'progress',
-          'mode',
-        ].includes(row.type)
-      )
-        return;
+      if (operationalRows.has(row.type)) return;
       requireValue(row.sessionId === session, 'Coverage session mismatch');
       witnessBytes += Buffer.byteLength(text) + 1;
       requireValue(witnessBytes <= LIMIT, 'Coverage exceeds capture limit');
@@ -347,7 +401,7 @@ const main = async () => {
         return;
       }
       if (seenBoundary && row.subtype === 'compact_boundary')
-        throw Error('A newer boundary exists');
+        throw diagnosticError('A newer boundary exists');
       const needed = wanted.has(row.uuid);
       requireValue(
         row.uuid !== anchor || seenBoundary,
@@ -366,16 +420,7 @@ const main = async () => {
         // Validate the leaf, but do not import operational loader metadata.
         return;
       }
-      if (
-        !needed &&
-        [
-          'queue-operation',
-          'last-prompt',
-          'file-history-snapshot',
-          'progress',
-          'mode',
-        ].includes(row.type)
-      ) {
+      if (!needed && operationalRows.has(row.type)) {
         // These are CLI operations/state, not conversation context. Replaying
         // queued prompts or file-history snapshots is not authorized by capture.
         return;
@@ -494,8 +539,9 @@ const main = async () => {
     await file.close();
   }
 };
-main().catch(() => {
+main().catch(error => {
   // Never leak transcript contents, paths, or native parse errors to stderr.
-  process.stderr.write('Claude compaction capture failed\n');
+  const reason = diagnosticErrors.get(error) ?? 'Unclassified capture failure';
+  process.stderr.write(`Claude compaction capture failed: ${reason}\n`);
   process.exitCode = 1;
 });

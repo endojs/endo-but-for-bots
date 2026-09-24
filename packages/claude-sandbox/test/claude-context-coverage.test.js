@@ -40,6 +40,40 @@ test('coverage terminal refusal identifies outcome stage without widening accept
   t.regex(error.message, /phase=outcome, check=1/);
 });
 
+for (const type of ['tool_progress', 'tool_use_summary']) {
+  test(`known unsupported ${type} is named but remains refused`, t => {
+    const coverage = makeCoverage();
+    coverage.observe({
+      type: 'system',
+      subtype: 'init',
+      session_id: sessionId,
+    });
+    const error = t.throws(() =>
+      coverage.observe({
+        type,
+        session_id: sessionId,
+        content: 'SECRET_PRODUCER_CONTENT',
+      }),
+    );
+    t.true(error.message.includes(`phase=observe/${type}, check=6`));
+    t.false(error.message.includes('SECRET_'));
+    t.throws(() => coverage.assertOutcome('success'));
+  });
+}
+
+test('unknown top-level event names remain hidden and refused', t => {
+  const coverage = makeCoverage();
+  coverage.observe({ type: 'system', subtype: 'init', session_id: sessionId });
+  const error = t.throws(() =>
+    coverage.observe({
+      type: 'SECRET_UNKNOWN_TYPE',
+      session_id: sessionId,
+    }),
+  );
+  t.true(error.message.includes('phase=observe, check=6'));
+  t.false(error.message.includes('SECRET_'));
+});
+
 const compactionFixture = async () => {
   await null;
   return JSON.parse(
@@ -62,6 +96,93 @@ const checkCompaction = f => {
     outcome: 'success',
   });
 };
+const capacityEvent = () => ({
+  type: 'rate_limit_event',
+  uuid: id(99),
+  session_id: sessionId,
+  rate_limit_info: { status: 'allowed', utilization: 0.2 },
+});
+test('capacity notification never establishes a terminal result', t => {
+  const coverage = makeCoverage();
+  coverage.observe({ type: 'system', subtype: 'init', session_id: sessionId });
+  for (const status of ['allowed', 'allowed_warning', 'rejected']) {
+    t.notThrows(() =>
+      coverage.observe({ ...capacityEvent(), rate_limit_info: { status } }),
+    );
+  }
+  t.throws(() => coverage.assertOutcome('success'));
+});
+test('validated capacity notifications interleave without changing exact compaction coverage', async t => {
+  const f = await compactionFixture();
+  const events = [];
+  for (const event of f.events) {
+    events.push(event);
+    if (event.type !== 'result')
+      events.push({ ...capacityEvent(), session_id: f.sessionId });
+  }
+  f.events = events;
+  t.notThrows(() => checkCompaction(f));
+});
+for (const [name, change] of [
+  [
+    'extra dialogue',
+    event => {
+      event.message = { role: 'assistant', content: 'hidden' };
+    },
+  ],
+  [
+    'extra nested payload',
+    event => {
+      event.rate_limit_info.message = 'hidden';
+    },
+  ],
+  [
+    'invalid status',
+    event => {
+      event.rate_limit_info.status = 'done';
+    },
+  ],
+  [
+    'invalid numeric',
+    event => {
+      event.rate_limit_info.utilization = '0.2';
+    },
+  ],
+  [
+    'array info',
+    event => {
+      event.rate_limit_info = [];
+    },
+  ],
+  [
+    'invalid uuid',
+    event => {
+      event.uuid = 'invalid';
+    },
+  ],
+  [
+    'wrong session',
+    event => {
+      event.session_id = id(98);
+    },
+  ],
+]) {
+  test(`capacity event refuses ${name}`, t => {
+    const coverage = makeCoverage();
+    coverage.observe({
+      type: 'system',
+      subtype: 'init',
+      session_id: sessionId,
+    });
+    const event = capacityEvent();
+    change(event);
+    t.throws(() => coverage.observe(event));
+    t.throws(() => coverage.assertOutcome('success'));
+  });
+}
+test('capacity event before initialization remains refused', t => {
+  t.throws(() => makeCoverage().observe(capacityEvent()));
+});
 test('actual partial-stream auto compaction certifies prompt, retained tool frames and summary', async t => {
   const f = await compactionFixture();
   t.notThrows(() => checkCompaction(f));
@@ -481,6 +602,192 @@ test('thinking/signature and tool JSON deltas must match complete frames', t => 
       attachment: { type: 'max_turns_reached', maxTurns: 1, turnCount: 2 },
     }),
   );
+  t.notThrows(() => f.assert());
+});
+
+// Observed live on 2026-09-25: the pinned CLI writes its agent and skill
+// catalogs to the transcript but not to the public stream. They are preserved
+// as native context only; they never stand in for dialogue or tool evidence.
+const agentListing = {
+  type: 'agent_listing_delta',
+  addedTypes: ['general'],
+  addedLines: ['- general: synthetic agent line'],
+  removedTypes: [],
+  isInitial: true,
+  showConcurrencyNote: false,
+};
+const skillListing = {
+  type: 'skill_listing',
+  content: '- synthetic: synthetic skill line',
+  skillCount: 1,
+  isInitial: true,
+  names: ['synthetic'],
+};
+const listingCase = attachments => {
+  const f = fixture();
+  f.start();
+  f.block({ type: 'text', text: '' }, [{ type: 'text_delta', text: 'ok' }], {
+    type: 'text',
+    text: 'ok',
+  });
+  f.stop();
+  let parentUuid = f.rows.at(-1).uuid;
+  for (const [index, attachment] of attachments.entries()) {
+    const uuid = id(20 + index);
+    f.rows.push(
+      /** @type {any} */ ({
+        type: 'attachment',
+        sessionId,
+        uuid,
+        parentUuid,
+        attachment,
+      }),
+    );
+    parentUuid = uuid;
+  }
+  return f;
+};
+
+test('agent and skill listings are preserved as native-only context', t => {
+  t.notThrows(() => listingCase([agentListing, skillListing]).assert());
+});
+
+// Observed live on 2026-09-25: the CLI's to-do reminder.
+const taskReminder = { type: 'task_reminder', content: [], itemCount: 0 };
+test('a task reminder is preserved as native-only context', t => {
+  t.notThrows(() => listingCase([taskReminder]).assert());
+  t.throws(() => listingCase([{ ...taskReminder, content: 'x' }]).assert(), {
+    message: /native context coverage unavailable/,
+  });
+  t.throws(() => listingCase([{ ...taskReminder, extra: 1 }]).assert(), {
+    message: /native context coverage unavailable/,
+  });
+});
+
+for (const [label, attachment] of [
+  ['an extra key', { ...agentListing, extra: true }],
+  ['non-string agent lines', { ...agentListing, addedLines: [1] }],
+  ['a string skill count', { ...skillListing, skillCount: '1' }],
+  ['non-string skill names', { ...skillListing, names: [1] }],
+  ['an unknown attachment', { type: 'world-fact', text: 'unsupported' }],
+]) {
+  test(`listing attachments refuse ${label}`, t => {
+    t.throws(() => listingCase([attachment]).assert(), {
+      message: /native context coverage unavailable/,
+    });
+  });
+}
+
+for (const [name, complete, category] of [
+  ['text', { type: 'text', text: 'SECRET_CHANGED' }, 'text-value'],
+  [
+    'citations',
+    { type: 'text', text: 'ok', citations: [] },
+    'citations-presence',
+  ],
+  [
+    'unknown',
+    { type: 'text', text: 'ok', SECRET_FIELD: 'SECRET_VALUE' },
+    'block-other',
+  ],
+]) {
+  test(`assistant mismatch diagnostics expose only fixed categories: ${name}`, t => {
+    const f = fixture();
+    f.start();
+    const error = t.throws(() =>
+      f.block(
+        { type: 'text', text: '' },
+        [{ type: 'text_delta', text: 'ok' }],
+        complete,
+      ),
+    );
+    t.true(error.message.includes(`phase=observe/assistant/${category}`));
+    t.false(error.message.includes('SECRET'));
+    t.throws(() => f.assert());
+  });
+}
+
+test('tool frames and captured blocks accept only object-property reordering', t => {
+  const f = fixture();
+  const input = {
+    command: 'true',
+    nested: { enabled: true, count: 2, absent: null },
+    items: [1, 'two'],
+  };
+  const reordered = {
+    items: [1, 'two'],
+    nested: { absent: null, count: 2, enabled: true },
+    command: 'true',
+  };
+  f.start();
+  f.block(
+    { type: 'tool_use', id: 'call', name: 'Bash', input: {} },
+    [{ type: 'input_json_delta', partial_json: JSON.stringify(input) }],
+    { input: reordered, name: 'Bash', id: 'call', type: 'tool_use' },
+  );
+  f.stop();
+  // The native JSONL may independently serialize the same block's keys.
+  f.rows[1].message.content = /** @type {any} */ ([
+    { type: 'tool_use', id: 'call', name: 'Bash', input },
+  ]);
+  t.notThrows(() => f.assert());
+});
+
+for (const name of ['mcp__endo__exec', 'Bash']) {
+  for (const input of [
+    { items: [2, 1], value: null },
+    { items: [1, 2] },
+    { items: [1, 2], value: false },
+    { items: [1, 2], value: null, extra: 1 },
+    { items: { 0: 1, 1: 2 }, value: null },
+    { items: [1, '2'], value: null },
+  ]) {
+    test(`structural tool equality still rejects changed JSON ${name} ${JSON.stringify(input)}`, t => {
+      const extra = Object.hasOwn(input, 'extra');
+      // Exact equality for MCP tools, Endo's host effects among them. A
+      // built-in tool may gain CLI schema defaults: claude-context-cli-defaults.
+      const f = fixture();
+      f.start();
+      const attempt = () =>
+        f.block(
+          { type: 'tool_use', id: 'call', name, input: {} },
+          [
+            {
+              type: 'input_json_delta',
+              partial_json: '{"items":[1,2],"value":null}',
+            },
+          ],
+          { type: 'tool_use', id: 'call', name, input },
+        );
+      if (name === 'Bash' && extra) {
+        // Only an added key, and only for a built-in tool.
+        t.notThrows(attempt);
+      } else {
+        t.throws(attempt);
+        t.throws(() => f.assert());
+      }
+    });
+  }
+}
+
+test('deep JSON comparison uses bounded traversal depth without recursive calls', t => {
+  t.timeout(10_000);
+  let input = /** @type {any} */ ({ value: 'leaf', flag: true });
+  let reordered = /** @type {any} */ ({ flag: true, value: 'leaf' });
+  // The JSON parser/encoder has its own depth limit; stay within that boundary
+  // while exercising thousands of comparison frames, not recursive JS calls.
+  for (let depth = 0; depth < 2000; depth += 1) {
+    input = { child: input, index: depth };
+    reordered = { index: depth, child: reordered };
+  }
+  const f = fixture();
+  f.start();
+  f.block(
+    { type: 'tool_use', id: 'call', name: 'Bash', input: {} },
+    [{ type: 'input_json_delta', partial_json: JSON.stringify(input) }],
+    { type: 'tool_use', id: 'call', name: 'Bash', input: reordered },
+  );
+  f.stop();
   t.notThrows(() => f.assert());
 });
 

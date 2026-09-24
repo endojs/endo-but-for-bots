@@ -299,7 +299,9 @@ test('first native-required failure stays readable but cannot resume portably af
   });
   await agent.shutdown();
   // The old dispatch carries the requirement even if a later descriptor no
-  // longer advertises it. No volatile client flag may enable a lossy fallback.
+  // longer advertises it. Only a backend declaring `continuity: 'transcript'`
+  // (portableContextFallback) may take the portable path instead; see the
+  // next test. This agent does not, so it still refuses.
   const revived = await makeStreamingAgent(
     f.powers,
     undefined,
@@ -313,6 +315,108 @@ test('first native-required failure stays readable but cannot resume portably af
     { message: /cannot conceal unresolved or recovered tool evidence/ },
   );
   t.is(sends, 1);
+});
+
+test('a transcript-continuity backend resumes portably after a failed native capture', async t => {
+  t.timeout(10_000);
+  const f = fixture();
+  /** @type {any[]} */
+  const supplied = [];
+  let sends = 0;
+  const client = harden({
+    async send(_prompt, opts) {
+      sends += 1;
+      supplied.push(opts?.transcript);
+      const channel = makeBufferedReader();
+      if (sends === 1) {
+        channel.push({ type: 'text-delta', text: 'partial answer' });
+        channel.push({ type: 'abort', reason: 'capture unavailable' });
+      } else {
+        channel.push({ type: 'text-delta', text: 'second answer' });
+        channel.push({ type: 'end' });
+      }
+      return channel.reader;
+    },
+    async terminate() {
+      // This fixture owns no native process or other external resource.
+    },
+  });
+  /** @type {{kind: 'hosted', provideHostedClient: () => any}} */
+  const runtime = { kind: 'hosted', provideHostedClient: () => client };
+  const agent = await makeStreamingAgent(f.powers, undefined, runtime, 'Test', {
+    journalPowers: f.powers,
+    nativeContextFormat: 'claude-code-jsonl-v1',
+    portableContextFallback: true,
+  });
+  t.teardown(() => agent.shutdown());
+  await t.throwsAsync(agent.converse('first', makeReplyChannel().writer), {
+    message: /capture unavailable/,
+  });
+  await agent.converse('retry', makeReplyChannel().writer);
+  t.is(sends, 2);
+  const portable = supplied[1];
+  t.false(portable.some(record => record.kind === 'native-context'));
+  t.deepEqual(
+    portable
+      .filter(record => record.kind === 'message')
+      .map(record => [record.role, record.content])
+      .slice(0, 2),
+    [
+      ['user', 'first'],
+      ['assistant', 'partial answer'],
+    ],
+  );
+  t.true(
+    (await agent.getTranscript()).some(
+      record => record.kind === 'message' && record.content === 'second answer',
+    ),
+  );
+});
+
+test('a completed turn without a native checkpoint resumes portably with its reply', async t => {
+  // A Claude reply that streamed and passed coverage, whose capture failed,
+  // now completes without a checkpoint (live 2026-09-25).
+  t.timeout(10_000);
+  const f = fixture();
+  /** @type {any[]} */
+  const supplied = [];
+  let sends = 0;
+  const client = harden({
+    async send(_prompt, opts) {
+      sends += 1;
+      supplied.push(opts?.transcript);
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'text-delta',
+        text: sends === 1 ? 'full answer' : 'follow-up answer',
+      });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+    async terminate() {
+      // This fixture owns no native process or other external resource.
+    },
+  });
+  /** @type {{kind: 'hosted', provideHostedClient: () => any}} */
+  const runtime = { kind: 'hosted', provideHostedClient: () => client };
+  const agent = await makeStreamingAgent(f.powers, undefined, runtime, 'Test', {
+    journalPowers: f.powers,
+    nativeContextFormat: 'claude-code-jsonl-v1',
+    portableContextFallback: true,
+  });
+  t.teardown(() => agent.shutdown());
+  await agent.converse('first', makeReplyChannel().writer);
+  await agent.converse('second', makeReplyChannel().writer);
+  t.deepEqual(
+    supplied[1]
+      .filter(record => record.kind === 'message')
+      .map(record => [record.role, record.content]),
+    [
+      ['user', 'first'],
+      ['assistant', 'full answer'],
+    ],
+  );
+  t.false((await agent.getHistory()).some(message => message.meta?.turnStatus));
 });
 
 for (const fault of ['beforeStore', 'afterStore']) {

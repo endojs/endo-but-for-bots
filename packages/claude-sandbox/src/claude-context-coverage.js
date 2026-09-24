@@ -5,7 +5,133 @@ const LIMIT = 16 * 1024 * 1024;
 const isUuid = value =>
   typeof value === 'string' &&
   /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
-const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
+// Compare JSON structure, not object insertion order. Arrays, fields and
+// scalar values remain exact. The byte-prefix receipt below is deliberately
+// separate and still compares historical serialization byte for byte.
+// Explicit traversal frames avoid recursive comparison on deeply nested tool
+// input, and avoid queuing every child of a wide object at once.
+const same = (left, right) => {
+  const ancestorsLeft = new WeakSet();
+  const ancestorsRight = new WeakSet();
+  const stack = [];
+  let a = left;
+  let bValue = right;
+  for (;;) {
+    if (a !== bValue) {
+      if (!a || !bValue || typeof a !== 'object' || typeof bValue !== 'object')
+        return false;
+      if (Array.isArray(a) !== Array.isArray(bValue)) return false;
+      if (Array.isArray(a) && a.length !== bValue.length) return false;
+      const keys = Object.keys(a);
+      if (
+        keys.length !== Object.keys(bValue).length ||
+        keys.some(name => !Object.hasOwn(bValue, name))
+      )
+        return false;
+      // Inputs are JSON records; reject cycles rather than inventing cyclic
+      // equivalence if an internal caller violates that boundary.
+      if (ancestorsLeft.has(a) || ancestorsRight.has(bValue)) return false;
+      ancestorsLeft.add(a);
+      ancestorsRight.add(bValue);
+      stack.push({ left: a, right: bValue, keys, index: 0 });
+    }
+    let next = false;
+    while (stack.length) {
+      const frame = stack[stack.length - 1];
+      if (frame.index === frame.keys.length) {
+        ancestorsLeft.delete(frame.left);
+        ancestorsRight.delete(frame.right);
+        stack.pop();
+      } else {
+        const name = frame.keys[frame.index];
+        frame.index += 1;
+        a = frame.left[name];
+        bValue = frame.right[name];
+        next = true;
+        break;
+      }
+    }
+    if (!next) return true;
+  }
+};
+
+// Anthropic SDKRateLimitEvent / SDKRateLimitInfo is a capacity notification,
+// not dialogue or a terminal result. Closed shape prevents hidden message or
+// tool payloads from being silently treated as inert framing.
+// https://app.unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.185/files/sdk.d.ts
+const isRateLimitEvent = event => {
+  const info = event.rate_limit_info;
+  const status = value =>
+    ['allowed', 'allowed_warning', 'rejected'].includes(value);
+  const numeric = [
+    'resetsAt',
+    'utilization',
+    'overageResetsAt',
+    'surpassedThreshold',
+  ];
+  const boolean = [
+    'isUsingOverage',
+    'overageInUse',
+    'canUserPurchaseCredits',
+    'hasChargeableSavedPaymentMethod',
+  ];
+  const fields = [
+    'status',
+    'rateLimitType',
+    'overageStatus',
+    'overageDisabledReason',
+    'errorCode',
+    ...numeric,
+    ...boolean,
+  ];
+  return (
+    Object.keys(event).every(name =>
+      ['type', 'rate_limit_info', 'uuid', 'session_id'].includes(name),
+    ) &&
+    isUuid(event.uuid) &&
+    info &&
+    typeof info === 'object' &&
+    !Array.isArray(info) &&
+    Object.keys(info).every(name => fields.includes(name)) &&
+    status(info.status) &&
+    numeric.every(
+      name =>
+        info[name] === undefined ||
+        (typeof info[name] === 'number' &&
+          Number.isFinite(info[name]) &&
+          info[name] >= 0),
+    ) &&
+    boolean.every(
+      name => info[name] === undefined || typeof info[name] === 'boolean',
+    ) &&
+    (info.rateLimitType === undefined ||
+      [
+        'five_hour',
+        'seven_day',
+        'seven_day_opus',
+        'seven_day_sonnet',
+        'overage',
+      ].includes(info.rateLimitType)) &&
+    (info.overageStatus === undefined || status(info.overageStatus)) &&
+    (info.errorCode === undefined || info.errorCode === 'credits_required') &&
+    (info.overageDisabledReason === undefined ||
+      [
+        'overage_not_provisioned',
+        'org_level_disabled',
+        'org_level_disabled_until',
+        'out_of_credits',
+        'seat_tier_level_disabled',
+        'member_level_disabled',
+        'seat_tier_zero_credit_limit',
+        'group_zero_credit_limit',
+        'member_zero_credit_limit',
+        'org_service_level_disabled',
+        'no_limits_configured',
+        'fetch_error',
+        'unknown',
+      ].includes(info.overageDisabledReason))
+  );
+};
 
 /**
  * Conservative coverage proof for the pinned CLI's mainline partial stream.
@@ -37,6 +163,8 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
   /** @type {Array<{uuid: string, role: string, content: any, messageId?: string, model?: string, messageType?: string}>} */
   const frames = [];
   const frameIds = new Set();
+  const completedToolIds = new Set();
+  const receivedToolResults = new Set();
   let diagnosticPhase = 'initial';
   let diagnosticCheck = 0;
   const requireValue = condition => {
@@ -81,8 +209,10 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
   };
   const completedBlock = () => {
     if (block.value.type !== 'tool_use') return block.value;
-    requireValue(block.json !== '');
-    const input = JSON.parse(block.json);
+    // A tool called with no arguments streams no input JSON at all (or only
+    // empty fragments). Its start block already carried exactly `{}`, which
+    // the completed assistant block must still match field for field.
+    const input = block.json === '' ? {} : JSON.parse(block.json);
     requireValue(input && typeof input === 'object' && !Array.isArray(input));
     return { ...block.value, input };
   };
@@ -94,9 +224,17 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       charge(event);
       requireValue(event && typeof event === 'object');
       if (
-        ['system', 'result', 'assistant', 'user', 'stream_event'].includes(
-          event.type,
-        )
+        [
+          'system',
+          'result',
+          'assistant',
+          'user',
+          'stream_event',
+          // Named protocol categories do not themselves certify coverage.
+          'rate_limit_event',
+          'tool_progress',
+          'tool_use_summary',
+        ].includes(event.type)
       ) {
         diagnosticPhase = `observe/${event.type}`;
       }
@@ -131,6 +269,12 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         return;
       }
       requireValue(initialized);
+      if (event.type === 'rate_limit_event') {
+        requireValue(isRateLimitEvent(event));
+        // Never advances frames, block state, terminal state or success. Even
+        // rejected capacity is not a replacement for the producer's result.
+        return;
+      }
       if (boundary && frames.length === boundaryPosition) {
         requireValue(
           event.type === 'user' &&
@@ -183,11 +327,106 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
               event.message.model === message.model,
           );
           requireValue(Array.isArray(content) && content.length === 1);
-          requireValue(same(content[0], completedBlock()));
+          const completed = completedBlock();
+          // The CLI stores a built-in tool's input as its own schema parsed
+          // it, with defaults filled in (Edit's `replace_all: false`). Built-in
+          // tools are guest-controlled, not host-certified: they may change
+          // the workspace, but nothing treats their frames as host evidence.
+          // Every streamed key must still match; the CLI may add keys. MCP
+          // tools (Endo's host tools among them) must match exactly.
+          const extendsStreamedInput = (actual, streamed) => {
+            if (
+              streamed.type !== 'tool_use' ||
+              actual?.type !== 'tool_use' ||
+              typeof streamed.name !== 'string' ||
+              streamed.name.startsWith('mcp__')
+            )
+              return false;
+            const rest = value =>
+              Object.fromEntries(
+                Object.entries(value).filter(([key]) => key !== 'input'),
+              );
+            const input = actual.input;
+            return (
+              same(rest(actual), rest(streamed)) &&
+              input !== null &&
+              typeof input === 'object' &&
+              !Array.isArray(input) &&
+              Object.keys(streamed.input).every(
+                key =>
+                  Object.hasOwn(input, key) &&
+                  same(input[key], streamed.input[key]),
+              )
+            );
+          };
+          const matches =
+            same(content[0], completed) ||
+            extendsStreamedInput(content[0], completed);
+          if (!matches) {
+            // Describe only a fixed protocol field and mismatch category,
+            // never producer values, tool arguments or unknown field names.
+            diagnosticPhase = 'observe/assistant/block-other';
+            if (content[0] && typeof content[0] === 'object') {
+              for (const key of [
+                'type',
+                'text',
+                'thinking',
+                'signature',
+                'data',
+                'id',
+                'name',
+                'input',
+                'caller',
+                'citations',
+              ]) {
+                if (
+                  Object.hasOwn(content[0], key) !==
+                  Object.hasOwn(completed, key)
+                ) {
+                  diagnosticPhase = `observe/assistant/${key}-presence`;
+                  break;
+                }
+                if (!same(content[0][key], completed[key])) {
+                  diagnosticPhase = `observe/assistant/${key}-value`;
+                  break;
+                }
+              }
+            }
+          }
+          requireValue(matches);
+          if (completed.type === 'tool_use') {
+            requireValue(!completedToolIds.has(completed.id));
+            completedToolIds.add(completed.id);
+          }
           block.matched = true;
         } else {
-          requireValue(!message && !block);
+          // Claude drains completed tools while other assistant blocks stream.
+          // Such results must name an already completed tool, without consuming
+          // or closing the still-open message/block. This is context, not proof
+          // of a host effect; authoritative reconciliation remains separate.
+          if (message || block) {
+            requireValue(
+              Array.isArray(content) &&
+                content.length > 0 &&
+                content.every(
+                  item =>
+                    item.type === 'tool_result' &&
+                    completedToolIds.has(item.tool_use_id) &&
+                    !receivedToolResults.has(item.tool_use_id),
+                ) &&
+                new Set(content.map(item => item.tool_use_id)).size ===
+                  content.length,
+            );
+          }
           validateUserContent(content);
+          if (Array.isArray(content)) {
+            for (const item of content) {
+              if (item.type === 'tool_result') {
+                requireValue(!receivedToolResults.has(item.tool_use_id));
+                receivedToolResults.add(item.tool_use_id);
+              }
+            }
+          }
         }
         frameIds.add(event.uuid);
         // Copy so a caller cannot mutate an observation after acceptance.
@@ -303,8 +542,14 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       else
         requireValue(
           stream.type === 'message_delta' &&
-            Object.keys(stream.delta ?? {}).every(key =>
-              ['stop_reason', 'stop_sequence'].includes(key),
+            Object.keys(stream.delta ?? {}).every(
+              key =>
+                ['stop_reason', 'stop_sequence'].includes(key) ||
+                // Anthropic's message delta also carries nullable container
+                // and refusal metadata. Only absence is inert here; populated
+                // metadata needs its own coverage contract before acceptance.
+                (['container', 'stop_details'].includes(key) &&
+                  stream.delta[key] === null),
             ),
         );
     });
@@ -325,16 +570,60 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       );
     });
 
-  // Only these loader-generated attachments are known inert context. They do
-  // not certify a tool result or settle an effect.
-  const inert = row =>
-    row.type === 'attachment' &&
-    (row.attachment?.type === 'total_tokens_reminder' ||
-      (row.attachment?.type === 'max_turns_reached' &&
-        [row.attachment.maxTurns, row.attachment.turnCount].every(
+  // Native-only context is preserved byte-for-byte, not certified as streamed
+  // dialogue or host effect evidence. The guest may alter its own context.
+  const nativeAttachment = row => {
+    if (row.type !== 'attachment') return false;
+    const attachment = row.attachment;
+    const strings = value =>
+      Array.isArray(value) && value.every(item => typeof item === 'string');
+    const keys = expected =>
+      Object.keys(attachment).length === expected.length &&
+      expected.every(key => Object.hasOwn(attachment, key));
+    if (attachment?.type === 'agent_listing_delta')
+      return (
+        keys([
+          'type',
+          'addedTypes',
+          'addedLines',
+          'removedTypes',
+          'isInitial',
+          'showConcurrencyNote',
+        ]) &&
+        strings(attachment.addedTypes) &&
+        strings(attachment.addedLines) &&
+        strings(attachment.removedTypes) &&
+        typeof attachment.isInitial === 'boolean' &&
+        typeof attachment.showConcurrencyNote === 'boolean'
+      );
+    if (attachment?.type === 'task_reminder')
+      return (
+        keys(['type', 'content', 'itemCount']) &&
+        Array.isArray(attachment.content) &&
+        attachment.content.every(
+          item =>
+            item !== null && typeof item === 'object' && !Array.isArray(item),
+        ) &&
+        Number.isSafeInteger(attachment.itemCount) &&
+        Number(attachment.itemCount) >= 0
+      );
+    if (attachment?.type === 'skill_listing')
+      return (
+        keys(['type', 'content', 'skillCount', 'isInitial', 'names']) &&
+        typeof attachment.content === 'string' &&
+        strings(attachment.names) &&
+        typeof attachment.skillCount === 'number' &&
+        typeof attachment.isInitial === 'boolean'
+      );
+    return (
+      attachment?.type === 'total_tokens_reminder' ||
+      (attachment?.type === 'max_turns_reached' &&
+        [attachment.maxTurns, attachment.turnCount].every(
           value =>
             typeof value === 'number' && Number.isInteger(value) && value > 0,
-        )));
+        ))
+    );
+  };
   const ordinaryFlags = row =>
     ['isCompactSummary', 'isVisibleInTranscriptOnly', 'isMeta'].every(
       key => row[key] === undefined || row[key] === false,
@@ -392,7 +681,7 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
     for (const row of rows) {
       requireValue(row.parentUuid === parent && ordinaryFlags(row));
       parent = row.uuid;
-      if (!inert(row)) {
+      if (!nativeAttachment(row)) {
         requireValue(matches(row, expectedFrames[position]));
         position += 1;
       }
@@ -492,7 +781,9 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
     requireValue(same([...retained.keys()], preserved.all_uuids));
     for (const [uuid, row] of retained) {
       requireValue(
-        (row.type === 'user' || row.type === 'assistant' || inert(row)) &&
+        (row.type === 'user' ||
+          row.type === 'assistant' ||
+          nativeAttachment(row)) &&
           known.has(uuid) &&
           same(identity(row), identity(known.get(uuid))),
       );
@@ -610,17 +901,7 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         ids.add(row.uuid);
         parent = row.uuid;
         if (row.type === 'attachment') {
-          const attachment = row.attachment;
-          requireValue(
-            attachment?.type === 'total_tokens_reminder' ||
-              (attachment?.type === 'max_turns_reached' &&
-                [attachment.maxTurns, attachment.turnCount].every(
-                  value =>
-                    typeof value === 'number' &&
-                    Number.isInteger(value) &&
-                    value > 0,
-                )),
-          );
+          requireValue(nativeAttachment(row));
         } else {
           const frame = frames[position];
           requireValue(

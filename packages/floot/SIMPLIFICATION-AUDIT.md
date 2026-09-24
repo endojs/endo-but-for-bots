@@ -131,4 +131,118 @@ Item 3 subsequently passes all 714 Floot tests and seven real-daemon journal,
 retirement and native-context restart tests. Scoped lint and the root
 documentation/API gate pass; the factory's existing storage ownership is retained.
 It does not prove that the entire refactor is smaller than its original baseline.
-No deployment or new crash-recovery guarantee is claimed.
+Tokyo activated the explicit-storage revision `d8d8db599` on generation 170.
+Initial setup rejected legacy Claude/Codex credential wrappers.
+The approved renewal-owner retirement archived the old generations and recreated
+owners over the same Secrets, without clearing uncertain-renewal markers.
+Live metadata checks preserve all six Secrets, four archived guest/workspace roots, eight
+old renewal roots, and retained account/reset journals.
+All four backends pass model discovery; direct Fae passes free-route tool use
+and pending-turn cancellation.
+Hosted acceptance exposed OpenCode catalog-ID normalization and Claude/Codex
+native-context completion failures; fixes and renewed acceptance are in progress.
+The OpenCode fix preserves provider-scoped IDs and passes 304 tests.
+The Codex correction permits its app server and serialized context helper to
+coexist, dividing the existing aggregate memory/PID/CPU ceilings across three
+containers (including the anchor); other backends retain one operation.
+Its full suite passes 425 tests, and shared/controller checks pass 75 with one skip.
+Claude now reports static coverage phase/check diagnostics without weakening
+validation (175 coverage/client tests pass); its underlying failure is still under
+investigation.
+See the host repository's
+`ops/explicit-journal-deployment-20260924.md` for exact pins and evidence.
+No successful cross-backend acceptance or new crash-recovery guarantee is claimed.
+
+### Deployment follow-up, generation 173
+
+Item 3 and bounded live fixes are pushed and deployed (`cc4228989`).
+Fae and OpenCode pass restart/recall; Codex and OpenCode pass tool use,
+public/private/off network checks and cancellation evidence under generation 171.
+Claude's validated capacity-notification handling passes 432 local tests, but
+generation-173 tests expose further message-delta framing and reconstructed-block
+equality failures. JSON-string equality is independently property-order-sensitive;
+its role in the live mismatch still needs structural evidence.
+Codex's fresh seed completes, but recall reaches a stopped native incarnation;
+separate new-session grant admission loses its inner diagnostic reasons.
+These remaining protocol/restoration findings require scoped follow-up, not a
+silent relaxation of context coverage or expansion into the deferred process-loss
+design. The refactor's cross-backend live acceptance is not complete.
+
+### Claude validation follow-up, September 25
+
+Generation 174 deployed `696e06289`: context comparison now ignores JSON object
+property order while retaining exact values/key sets, and message deltas accept
+the provider's nullable `container` and `stop_details` fields only when null.
+All 449 Claude tests passed, with independent adversarial review.
+Fresh live tests still failed: the tool turn at assistant-block equality, and
+the short response later in native capture.
+These fixes therefore do not establish the full cause or successful acceptance.
+
+Reviewed diagnostic revision `3b4575efd` adds fixed-field mismatch categories and
+static local capture rejection reasons, never transcript values or unknown keys.
+All 454 Claude tests pass; no acceptance predicate is relaxed by diagnostics.
+Read-only inspection of the retained short transcript identifies unsupported
+`agent_listing_delta` and `skill_listing` attachments.
+They contain actual model-visible guidance, not merely accounting metadata.
+The pinned Claude CLI omits these attachments from the public event stream;
+its initialization catalog does not attest their complete contents.
+The approved guest-domain design permits native context mutation; provider
+authenticity is not a prerequisite for preservation (see the scope correction in
+[refactor alignment](REFACTOR-ALIGNMENT.md)).
+Support must preserve these context-bearing records and their ordering without
+silently treating them as inert or using them to certify host tool effects.
+The earlier proposed request-side authenticity gate was outside that scope.
+Native tool blocks also carry `caller`, but without the original partial stream
+that is only a candidate explanation for the tool mismatch, not a proven cause.
+No failed inference was replayed and no uncertainty marker was cleared.
+
+### Claude user-acceptance findings, September 25
+
+Operator testing on generation 175 found every Claude session unusable after
+its first message. Three independent causes, plus one deployment gap:
+
+- Generation 175's Claude setup refused the new image: the retained broker
+  pins its image, so sessions kept the generation-170 image and its capture
+  helper. The broker name was retired with the Claude sessions (operator
+  approved) and setup minted a broker on the configured image.
+- Tools called with no arguments stream no input JSON. The coverage check
+  treated that as missing input (`observe/assistant, check=10`); it now means
+  the start block's exact `{}`, still compared against the completed block.
+- `agent_listing_delta` and `skill_listing` attachments are now accepted, with
+  exact key sets, by both the daemon validator and the in-image capture helper.
+  They are preserved in order as native-only context, never as dialogue or
+  tool-effect evidence.
+- Completed tool results may interleave a still-streaming assistant block only
+  when each names a completed, not yet answered tool call.
+- The prompt process's stdin is ended at spawn. The open pipe cost three seconds
+  per turn and put a CLI warning into user-visible failure text.
+
+Still open: after any failed capture, Floot refuses every later turn in that
+session ("Native context cannot conceal unresolved or recovered tool evidence"),
+including after a turn with no tools. That permanence is a design decision, not
+a parser defect, and is not changed here. Failure text is also shown raw.
+
+Generation 176 then exposed one more capture gap: the CLI's `ai-title` row
+(session title, no uuid) failed the helper's identity check. Generation 177
+(`aadc49ce4`) skips it with the other operational rows. On generation 177, live
+two-turn probes pass for a greeting, three no-argument Endo tools, and two shell
+commands with arguments; each follow-up answers from the prior turn's context.
+Restart restoration and the cross-backend matrix were not rerun.
+
+Both open items above are now addressed (`88f9deb23`, `66511734c`,
+`3f611a638`). A backend declaring `continuity: 'transcript'` (Claude) resumes
+portably after a failed capture: the checkpoint's portable context, later
+records, and every piece of evidence the native bytes could not cover, until
+the next turn captures a new checkpoint. This deliberately reverses the earlier
+"no lossy fallback" choice for such backends: evidence is never hidden, but
+native reasoning continuity is lost for that stretch. Codex
+(`opaque-reconciled`) still refuses. Failed turns now read plainly in the UI,
+with the raw reason under Details; model context keeps the raw detail.
+
+Operator follow-ups the same day: capture accepts the CLI's `task_reminder`
+attachment, and coverage lets a built-in (non-`mcp__`) tool's stored input
+carry CLI schema defaults such as Edit's `replace_all` (`3cf0031c9`; MCP tools,
+Endo's host tools among them, still match exactly). Capture failures after a
+covered, successful reply are no longer fatal (`adf25f948`): the turn completes
+without a checkpoint and the next one restores portably; operators see a static
+warning. Deployed as generations 179 and 180 with live probes passing.

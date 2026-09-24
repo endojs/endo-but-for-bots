@@ -321,9 +321,7 @@ export const summarizeActions = (entries, now = Date.now()) => {
     }
   }
   const counts = [...tally.entries()].map(([name, count]) => ({ name, count }));
-  const thought = thoughts
-    ? thoughtLabel(Math.floor(ms / 1000), thinking)
-    : '';
+  const thought = thoughts ? thoughtLabel(Math.floor(ms / 1000), thinking) : '';
   const actions = total ? `${total} action${total === 1 ? '' : 's'}` : '';
   return {
     total,
@@ -515,6 +513,73 @@ const ActionGroup = ({ actions }) => {
     ),
   );
 };
+
+// What a person reads when a turn ends without finishing. The daemon's own
+// words (an adapter's reason, a CLI's stderr) stay one click away: they are
+// what an operator needs, and noise to everyone else.
+const TURN_STATUS_TEXT = harden({
+  failed: 'This turn did not finish.',
+  cancelled: 'This turn was stopped.',
+  'outcome-unknown':
+    'This turn stopped with an unknown outcome. Check any tool results before retrying.',
+});
+
+/**
+ * The plain summary and the raw detail of a turn-status message, which the
+ * daemon writes as `Turn <state>: <reason>` or `Turn <state>.`.
+ *
+ * @param {FlootMessage} msg
+ * @returns {{ summary: string, detail: string }}
+ */
+export const turnStatusView = msg => {
+  const state = String(msg.meta?.turnState || '');
+  const text = msg.text || '';
+  const prefix = `Turn ${state}`;
+  let detail = text;
+  if (state && text.startsWith(`${prefix}: `)) {
+    detail = text.slice(prefix.length + 2);
+  } else if (state && text === `${prefix}.`) {
+    detail = '';
+  }
+  const summary = Object.hasOwn(TURN_STATUS_TEXT, state)
+    ? TURN_STATUS_TEXT[/** @type {keyof typeof TURN_STATUS_TEXT} */ (state)]
+    : `This turn ended: ${state || 'unknown state'}.`;
+  return harden({ summary, detail: detail.trim() });
+};
+harden(turnStatusView);
+
+/** @param {{ msg: FlootMessage }} props */
+const TurnStatus = ({ msg }) => {
+  const [open, setOpen] = useState(false);
+  const { summary, detail } = turnStatusView(msg);
+  return h(
+    'div',
+    { class: 'floot-msg-row assistant status' },
+    h(
+      'div',
+      { class: 'floot-msg floot-turn-status' },
+      h('span', { class: 'floot-turn-status-summary' }, summary),
+      detail
+        ? h(
+            'details',
+            { class: 'floot-turn-status-detail', open },
+            h(
+              'summary',
+              {
+                onClick: (/** @type {FlootSafeEvent} */ event) => {
+                  event.preventDefault();
+                  setOpen(!open);
+                },
+              },
+              'Details',
+            ),
+            open ? h('pre', null, detail) : null,
+          )
+        : null,
+    ),
+  );
+};
+harden(TurnStatus);
 
 /**
  * @param {{ msg: FlootMessage, canReplay: boolean, onReplay: (text: string) => void, replaying: boolean }} props
@@ -954,13 +1019,15 @@ export const MessageList = ({ state, controller, debug = false }) => {
           key: `${state.activeSessionId || ''}:actions-${row.index}`,
           actions: row.actions,
         })
-      : h(Bubble, {
-          key: `msg-${row.index}`,
-          msg: row.msg,
-          canReplay,
-          replaying: canReplay && replayingText === (row.msg.text || ''),
-          onReplay: text => controller.replayMessage(text),
-        }),
+      : row.msg.meta?.turnStatus
+        ? h(TurnStatus, { key: `msg-${row.index}`, msg: row.msg })
+        : h(Bubble, {
+            key: `msg-${row.index}`,
+            msg: row.msg,
+            canReplay,
+            replaying: canReplay && replayingText === (row.msg.text || ''),
+            onReplay: text => controller.replayMessage(text),
+          }),
   );
   // The in-progress assistant bubble, or a thinking indicator before any text.
   if (streamingText) {
@@ -971,13 +1038,7 @@ export const MessageList = ({ state, controller, debug = false }) => {
         h('div', { class: 'floot-msg streaming' }, ...linkify(streamingText)),
       ),
     );
-  } else if (
-    thinking &&
-    !messages.some(
-      message =>
-        thoughtRunning(message),
-    )
-  ) {
+  } else if (thinking && !messages.some(message => thoughtRunning(message))) {
     rows.push(h(ThinkingRow, { key: 'thinking' }));
   }
   // Queued submissions come after the live turn's output, in the order they

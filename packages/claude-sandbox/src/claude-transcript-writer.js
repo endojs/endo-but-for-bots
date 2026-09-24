@@ -118,6 +118,31 @@ export const writeClaudeTranscript = (
     Fail`Native Claude context requires the sandbox-native importer`;
   const { pairs } = pairToolCalls(active, { perTurn: true });
   const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
+  // The Messages API accepts only `[A-Za-z0-9_-]` in a tool_use id. Floot
+  // names recovered evidence `recovered:<turn>:<call>`, which the CLI would
+  // send and the API refuse. Each call gets one API-safe id, distinct from
+  // every other id in the file, shared by the result written beside it.
+  const safeIds = new Set(
+    active
+      .filter(record => record.kind === 'tool-call')
+      .map(record => record.id)
+      .filter(id => /^[A-Za-z0-9_-]+$/.test(id)),
+  );
+  /** @type {Map<any, string>} */
+  const idFor = new Map();
+  const apiId = record => {
+    if (!idFor.has(record)) {
+      let id = record.id;
+      if (!/^[A-Za-z0-9_-]+$/.test(id)) {
+        const base = id.replace(/[^A-Za-z0-9_-]/g, '_');
+        id = base;
+        for (let n = 2; safeIds.has(id); n += 1) id = `${base}_${n}`;
+        safeIds.add(id);
+      }
+      idFor.set(record, id);
+    }
+    return idFor.get(record);
+  };
 
   let index = 0;
   /** @type {string | null} */
@@ -179,7 +204,7 @@ export const writeClaudeTranscript = (
         content: [
           {
             type: 'tool_use',
-            id: record.id,
+            id: apiId(record),
             name: record.name,
             input: toolInput(record.args),
           },
@@ -197,7 +222,7 @@ export const writeClaudeTranscript = (
         content: [
           {
             type: 'tool_result',
-            tool_use_id: record.id,
+            tool_use_id: apiId(record),
             content: result ? result.content : 'Tool call did not complete.',
             ...(result?.failed ? { is_error: true } : {}),
           },

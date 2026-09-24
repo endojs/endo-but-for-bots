@@ -250,3 +250,46 @@ test('a restored file round-trips through the reader as the records that wrote i
   }
   t.deepEqual([...readClaudeTranscript(written)], [...records]);
 });
+
+// Floot names recovered evidence `recovered:<turn>:<call>`. The Messages API
+// accepts only `[A-Za-z0-9_-]` in a tool_use id, so a restored file must map
+// those ids, the same way for a call and its result, colliding with none.
+test('tool ids are written in the API-safe alphabet, paired and distinct', t => {
+  const lines = parse(
+    writeClaudeTranscript(
+      [
+        { kind: 'message', role: 'user', content: 'go' },
+        { kind: 'tool-call', id: 'recovered_20_x', name: 'A', args: '{}' },
+        { kind: 'tool-result', id: 'recovered_20_x', content: 'first' },
+        { kind: 'tool-call', id: 'recovered:20:x', name: 'B', args: '{}' },
+        { kind: 'tool-result', id: 'recovered:20:x', content: 'second' },
+        {
+          kind: 'tool-call',
+          id: 'recovered-context_20_0',
+          name: 'C',
+          args: '{}',
+        },
+      ],
+      options,
+    ),
+  );
+  const uses = lines
+    .flatMap(line => line.message.content)
+    .filter(block => block?.type === 'tool_use');
+  const results = lines
+    .flatMap(line => line.message.content)
+    .filter(block => block?.type === 'tool_result');
+  t.deepEqual(
+    uses.map(block => block.id),
+    ['recovered_20_x', 'recovered_20_x_2', 'recovered-context_20_0'],
+  );
+  t.deepEqual(
+    results.map(block => [block.tool_use_id, block.content]),
+    [
+      ['recovered_20_x', 'first'],
+      ['recovered_20_x_2', 'second'],
+      ['recovered-context_20_0', 'Tool call did not complete.'],
+    ],
+  );
+  for (const block of uses) t.regex(block.id, /^[A-Za-z0-9_-]+$/);
+});

@@ -1277,7 +1277,12 @@ export const flootComponent = (
         const stopped = turnCancelled;
         if (turn.error) {
           sessionStatus.set(turn.sessionId, 'error');
-          status = `error: ${turn.error}`;
+          // One line in the status bar; the whole reason, stderr included,
+          // stays under "Details" on the turn's status in the conversation.
+          const firstLine = String(turn.error).split('\n', 1)[0].trim();
+          status = `Turn did not finish: ${
+            firstLine.length > 120 ? `${firstLine.slice(0, 119)}…` : firstLine
+          }`;
         } else {
           sessionStatus.delete(turn.sessionId);
           status = stopped ? 'stopped.' : 'Ready.';

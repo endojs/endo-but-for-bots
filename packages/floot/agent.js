@@ -478,6 +478,7 @@ const provisionPresetObjects = async (
  * @param {string} [options.modelId] - The model this session runs.
  * @param {string} [options.backendId] - Durable backend selection.
  * @param {string} [options.nativeContextFormat] - Required hosted restoration format, recorded before dispatch.
+ * @param {boolean} [options.portableContextFallback] - The backend rebuilds its conversation from supplied records every turn (`continuity: 'transcript'`), so context it cannot restore natively may be handed over as portable records instead of refused.
  * @param {string} [options.reasoningEffort] - Pinned reasoning selection.
  * @param {any} options.journalPowers - Explicit journal storage. The caller must
  *   supply private storage not exposed to the session guest. Capability identity
@@ -527,6 +528,7 @@ export const makeStreamingAgent = async (
     modelId,
     backendId,
     nativeContextFormat,
+    portableContextFallback = false,
     reasoningEffort,
     timers,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
@@ -1835,7 +1837,9 @@ export const makeStreamingAgent = async (
   };
 
   const getContextTranscript = async excludeTurnId =>
-    readContextTranscript(turnJournal, excludeTurnId);
+    readContextTranscript(turnJournal, excludeTurnId, {
+      portableFallback: portableContextFallback,
+    });
 
   const getHistory = async (excludeTurnId = undefined, settledOnly = false) => {
     const out = [];
@@ -3835,6 +3839,7 @@ export const make = async (
         /** @type {import('./src/runtime-config.js').RuntimeConfig} */
         let agentConfig;
         let nativeContextFormat;
+        let portableContextFallback = false;
         if (suspended) {
           // Construct a records-only observer, never a backend or inbox.
           agentConfig = { kind: 'records-only' };
@@ -3844,6 +3849,8 @@ export const make = async (
             throw Error(`Hosted backend "${entry.backendId}" is unavailable`);
           }
           nativeContextFormat = backend.descriptor.nativeContextFormat;
+          portableContextFallback =
+            backend.descriptor.continuity === 'transcript';
           // Runtime container-mount tools (designs/runtime-container-fs-mount.md):
           // let the session bind capabilities it holds into its sandbox
           // under /mnt/. Built before the tool catalog is pinned, so the
@@ -3963,6 +3970,7 @@ export const make = async (
             journalPowers,
             backendId: entry.backendId,
             nativeContextFormat,
+            portableContextFallback,
             modelId: await sessionModelId(entry),
             reasoningEffort: entry?.reasoningEffort || '',
             onChange: (kind, detail) => {
