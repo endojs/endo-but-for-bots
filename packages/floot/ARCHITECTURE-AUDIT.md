@@ -30,6 +30,12 @@ The reproduction lives in `endo-host/ops/codex-context-probe-20260924.mjs` with
 its companion findings document. This is synthetic protocol evidence, not
 real-provider encrypted-context acceptance, durable restart proof or deployment.
 FA-01/FA-02 remain open; do not infer completion from the successful import RPC.
+A later minimal native-rollout control preserves the ordered synthetic request
+across a fresh process without its prior state database. This identifies a viable
+restoration mechanism, not authenticated capture: the native stream does not expose
+the opaque compaction result and guest metadata must not supply trusted instructions.
+The current alignment document records the remaining capture, instruction-binding,
+effect and operational-ledger requirements before production integration.
 
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred

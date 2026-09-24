@@ -191,6 +191,31 @@ The host reproduction and limitations are recorded in
 provider, model `gpt-6-luna`, no credentials and no external network.
 No production Codex context implementation or deployment is claimed.
 
+A fresh-process native-rollout control now passes where injection fails.
+The isolated probe stops the original process, sets its home aside, and restores
+only session metadata plus the compaction row into an empty home at the same path.
+Four native turns complete; ordered model-visible input fields, instructions,
+model, tools and inference settings match the original continuation.
+No old database or live thread is reused. Dynamic transport metadata is excluded
+from this comparison; real encrypted-content acceptance is not established.
+The default injection experiment retains its failing assertion.
+
+The remaining implementation gate is authenticated capture, not another history
+store. Session metadata includes instructions/provider identity and must be
+constructed from trusted host configuration rather than accepted from guest data.
+The pinned app-server stream does not expose the opaque compacted item in the
+original compaction turn, so a completed-turn notification cannot authenticate
+the rollout's replacement bytes. Investigate a pinned native export or bounded
+observation of the existing trusted provider response path before production wiring.
+Bind any observation to the admitted turn/model/thread; a valid old encrypted item
+must not substitute for this turn's result. Verify retained nonopaque items against
+host-owned prior context and observed frames, preserve ordering, and keep Floot's
+effect reconciliation authoritative.
+Reuse the existing native-context journal envelope and persist-before-terminal
+contract; retain the separate operational ledger and tool-catalog binding.
+Do not await a new app-server RPC inside its serial notification pump, which would
+block the response needed to complete that same RPC.
+
 Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
 loopback synthetic API in a disposable, network-disabled container, without
 credentials or host mounts. Manual compaction emits a boundary with retained
