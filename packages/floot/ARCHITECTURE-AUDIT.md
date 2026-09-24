@@ -114,17 +114,17 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Current retained-code durability audit — required, in progress
 
-Next work is finding-driven, not chronological commit mapping: finish the hosted
-acceptance manifest correction already in progress, then assess outstanding
-findings against current source, retained formula references, and the required
+Next work is finding-driven, not chronological commit mapping: the hosted
+acceptance manifest correction is now committed in host `62a1077`; assess
+outstanding findings against current source, retained formula references, and the required
 cross-backend acceptance matrix. Superseded implementations need no further audit
 unless they remain reachable in persisted state or explain a current defect.
 
 Import/acceptance mapping (2026-09-24): twelve application and four host entries
 bring coverage to 205/479 and 24/93. Native import HTTP acknowledgement is not
 proof of prompt consumption; historical deployment reports are not current image
-acceptance. Host `60ee154` fixes permissive command matching; the separate hosted
-cutover manifest publication/locking gap is recorded below as an execution gate.
+acceptance. Host `60ee154` fixes permissive command matching; host `62a1077`
+subsequently corrects the separate manifest publication/locking gap locally.
 
 Retired lease/restoration mapping (2026-09-24): twelve further entries bring
 coverage to 193 application commits (newest 15 plus earliest 178).
@@ -589,19 +589,24 @@ Locks exclude cooperating runners, not UI activity or hostile same-UID processes
 exclusive operator use and trusted private directory ancestry remain prerequisites.
 The restoration runner defect is addressed; deployment/live acceptance remain open.
 
-Hosted tool/policy acceptance runner — separate open boundary (2026-09-24):
-`endo-host/ops/verify-hosted-cutover.mjs` still uses its older manifest writer,
-not the corrected restoration runner's private-manifest helper. It syncs the
-temporary file and renames it without parent-directory sync, and holds no
-exclusive runner lock. Its recorded stages precede remote work but do not by
-themselves prove durable publication or exclude concurrent phase execution.
+Hosted tool/policy acceptance runner — corrected locally (host `62a1077`,
+2026-09-24, not deployed): the older writer synced the temporary file but not
+the parent directory and held no exclusive runner lock. It now uses the same
+private-manifest helper as restoration, holding the lock across the awaited
+phase and syncing publication before remote controller lookup or stage effects.
+Existing seed manifests refuse replay without changing their contents. Read-only
+phases leave manifest content unchanged. Caller staging and cleanup include the
+new helper dependency. All 54 focused Node tests and five inert shell-wrapper
+tests pass; independent review reran the wrapper tests and earlier 43 manifest
+and cutover cases. Locking excludes cooperating runners, not UI activity or
+remote operations still settling after a timeout; stale locks require inspection.
 The command matcher also stripped quotes/backslashes, conflating shell commands
 with different expansion semantics. The reviewed correction accepts only the
 exact command or an inert literal bash wrapper preserving the exact inner string.
 Its adversarial regression fails before the fix; 26 cutover tests and 11 adjacent
 restoration tests pass, with the 26 independently rerun. No live acceptance run.
-Do not run a fresh cutover acceptance phase until the manifest boundary is
-corrected and reviewed. Historical observations remain recorded, not recertified.
+Historical observations remain recorded, not recertified. Current deployment and
+live acceptance remain separate outstanding gates.
 
 Claude diagnostic-read follow-up (2026-09-24, local, not deployed):
 the stderr excerpt reader limited decoded characters but could wait forever for
@@ -4376,6 +4381,13 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Host `62a1077` reuses the private-manifest owner for hosted acceptance,
+including phase exclusion, directory-synced publication, existing-seed refusal,
+and staged helper cleanup. Independent review passes; 54 Node and five wrapper
+tests pass. RA-01 tracing distinguishes an unused-but-exported native-profile
+feature from unreachable code; the operator approved retirement and a further
+current-code dead-code search. Deletion is in progress. No deployment.
 
 2026-09-24 — Operator clarified that exhaustive historical commit review is not
 required after multiple rewrites. Retain collected evidence but discontinue the

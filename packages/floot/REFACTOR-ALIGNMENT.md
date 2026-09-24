@@ -2,8 +2,9 @@
 
 Date: 2026-09-24. Priority audit requested by the operator.
 Application snapshot: `61e5375288ce9772b31c9a4997efb5e3809b6bff`.
-Host snapshot: `60ee154`; its uncommitted manifest integration is not counted as
-landed. No deployment or live-machine inspection was performed for this audit.
+Initial host snapshot: `60ee154`; the manifest integration was then uncommitted.
+Follow-up host `62a1077` completes it with reviewed dependency wiring and tests.
+No deployment or live-machine inspection was performed for this audit.
 
 ## Verdict
 
@@ -59,6 +60,13 @@ Concrete candidates:
 - Generic sandbox native-profile machinery remains in `sandbox/src/factory.js:579`
   and `sandbox/src/drivers/podman.js:566`. Establish public and retained-formula
   obligations before deletion; no compatibility framework is required.
+  Follow-up inspection found no production request producer in this repository,
+  but the package export, `NativeSandboxMakeOpts.nativeProfile`, remote guard,
+  factory path, and dedicated tests still expose a distinct host-only launch
+  mode. The operator approved retiring that feature (2026-09-24); deletion is
+  in progress. This is not unreachable dead code. Keep `makeResolved`, runtime scopes and common cleanup
+  regardless of that decision. Local historical inventories cannot rule out
+  every external caller or retained custom formula.
 - Codex creates its private audit journal/anchors in
   `codex-sandbox/src/codex-native-controller.js:109`. Phase 4 expressly gates
   removal on replacement runtime evidence. State precisely what remains unique;
@@ -121,6 +129,12 @@ Then push/pin/deploy the paired repositories and test create, tools, cancellatio
 restart/restore, network-policy changes and deletion across the supported backends.
 Use Codex Luna and the auto-free route for Fae/OpenCode live tests. Native import
 HTTP success is not enough: check actual subsequent context consumption.
+
+Follow-up: host `62a1077` completes the acceptance runner's manifest safety
+correction. It reuses the existing owner, adds no new storage format, and passes
+54 Node tests plus five inert shell-wrapper tests with independent review.
+This removes that local integration obstacle, not the remaining preservation,
+paired-deployment, or live acceptance gates.
 
 ## Boundaries, not extra scope
 

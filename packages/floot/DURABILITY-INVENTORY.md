@@ -696,7 +696,7 @@ independently rerun. No live inference, deployment, or acceptance was performed.
 
 | Commit | Retained owner / disposition | Evidence and remaining limit |
 |---|---|---|
-| `3a4bdb7` | Operator-owned manifest records disposable hosted identities/stages; journal tool pairs provide evidence rather than assistant claims | Retained runner's unsafe quote normalization corrected in host `60ee154`. Separate open defect: file rename lacks parent sync and phase has no runner lock; do not infer durable acquisition/exclusion from passing local evidence checks |
+| `3a4bdb7` | Operator-owned manifest records disposable hosted identities/stages; journal tool pairs provide evidence rather than assistant claims | Unsafe quote normalization corrected in host `60ee154`; `62a1077` adds private-manifest publication and whole-awaited-phase locking. Tests exercise filesystem failures and runner exclusion, not remote quiescence or live acceptance |
 | `f48d95d` | Historical application revision pin for Codex image-environment verifier | Later pins supersede it; pin change creates no new durable owner and does not prove activation or current acceptance |
 | `91eb785` | Explicit direct-provider restoration coverage through generic Floot protocol | Current model selection uses acceptance policy and version-two intent ledger. Eleven coverage tests pass; Fae recall is not native sandbox/network-policy proof |
 | `336ae3d` | Historical partial cutover report, subsequently updated with later observations | Named generation/session observations belong to that run; preserved capability identity was not an independent data backup and historical pass is not current release acceptance |
@@ -706,7 +706,9 @@ independently rerun. No live inference, deployment, or acceptance was performed.
 - Host `60ee154` removes quote/backslash normalization from acceptance evidence.
   Exact commands and inert literal bash wrappers with the exact inner command
   remain accepted. Altered expansion/escape/whitespace semantics are refused.
-  Manifest parent-sync and runner-lock gaps remain open; no deployment.
+  Host `62a1077` subsequently closes the parent-sync and runner-lock gaps using
+  the existing private-manifest helper; 54 focused Node tests and five wrapper
+  tests pass. Old seed manifests cannot replay; no deployment or live acceptance.
 
 - Claude rechecks cancellation after provisioning and immediately before native
   prompt spawn. Four held-preparation regressions fail before and pass after;
