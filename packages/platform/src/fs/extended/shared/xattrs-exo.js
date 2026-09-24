@@ -101,6 +101,13 @@ export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
           fireLocal(path, { kind: 'changed' });
           return { done: true, value };
         },
+        // The pump calls `throw()` when it aborts the stream (a rejected frame
+        // or a broken initiator). Discard the buffered frames so an aborted
+        // write commits nothing.
+        async throw() {
+          chunks.length = 0;
+          return { done: true, value: undefined };
+        },
         [Symbol.asyncIterator]() {
           return sink;
         },

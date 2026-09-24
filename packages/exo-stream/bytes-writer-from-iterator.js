@@ -57,6 +57,16 @@ export const bytesWriterFromIterator = (iterator, options = {}) => {
       }
       return { done: true, value: undefined };
     },
+    /** @param {unknown} error */
+    async throw(error) {
+      if (sinkIterator.throw) {
+        return sinkIterator.throw(error);
+      }
+      if (sinkIterator.return) {
+        return sinkIterator.return();
+      }
+      return { done: true, value: undefined };
+    },
     [Symbol.asyncIterator]() {
       return this;
     },

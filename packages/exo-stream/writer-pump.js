@@ -56,8 +56,8 @@ export const makeWriterPump = (iterable, options = {}) => {
 
     (async () => {
       await null;
-      // `iterator.return()` is called at most once per stream, whichever path
-      // gets there first.
+      // `iterator.return()` (or `iterator.throw()` on abort) is called at most
+      // once per stream, whichever path gets there first.
       let released = false;
       try {
         for (let i = 0; ; i += 1) {
@@ -113,10 +113,18 @@ export const makeWriterPump = (iterable, options = {}) => {
           }
         }
       } catch (err) {
-        if (iterator.return && !released) {
+        if (!released && (iterator.throw || iterator.return)) {
           released = true;
           try {
-            await iterator.return();
+            // Abort with `throw(err)` when the sink supports it, so a sink
+            // whose `return()` commits buffered frames (a file or xattr
+            // writer) can discard them instead: a rejected frame must leave
+            // durable state unchanged. Fall back to `return()` otherwise.
+            if (iterator.throw) {
+              await iterator.throw(err);
+            } else if (iterator.return) {
+              await iterator.return();
+            }
           } catch {
             // The initiator sees the error that ended the stream, not one
             // its cleanup raised on top of it.

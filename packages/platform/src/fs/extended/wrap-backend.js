@@ -56,8 +56,10 @@ import { makeFilesystem } from './posture.js';
  * Per-frame byte bound for the `PassableBytesWriter` sinks this module
  * returns (`OpenFile.write`, `File.write`).
  * Without an explicit bound `bytesWriterFromIterator` admits frames up to
- * `Number.MAX_SAFE_INTEGER` bytes, so one oversized frame from a remote
- * initiator would be fully marshalled into the responder's heap.
+ * `Number.MAX_SAFE_INTEGER` bytes.
+ * The frame has already been unmarshalled by the time the bound is checked,
+ * so the bound does not limit that transient allocation; it limits how much a
+ * single frame can add to the `chunks` buffered until `return()`.
  * 16 MiB is well above any frame the in-tree initiators send (for example
  * `layer.js` emits 1 MiB chunks).
  * The cumulative size across frames is buffered until `return()` and remains
@@ -509,6 +511,13 @@ export const wrapBackend = (backend, opts = {}) => {
             touch(path, { mtime: true });
             return { done: true, value };
           },
+          // The pump calls `throw()` when it aborts the stream (a rejected frame
+          // or a broken initiator). Discard the buffered frames so an aborted
+          // write commits nothing.
+          async throw() {
+            chunks.length = 0;
+            return { done: true, value: undefined };
+          },
           [Symbol.asyncIterator]() {
             return sinkIterator;
           },
@@ -775,6 +784,13 @@ export const wrapBackend = (backend, opts = {}) => {
             // POSIX: writing updates mtime.
             touch(path, { mtime: true });
             return { done: true, value };
+          },
+          // The pump calls `throw()` when it aborts the stream (a rejected frame
+          // or a broken initiator). Discard the buffered frames so an aborted
+          // write commits nothing.
+          async throw() {
+            chunks.length = 0;
+            return { done: true, value: undefined };
           },
           [Symbol.asyncIterator]() {
             return sinkIterator;

@@ -464,6 +464,60 @@ test('bytes writer rejects a frame one byte over byteLengthLimit', async t => {
   t.deepEqual(received, []);
 });
 
+// A sink whose `return()` commits buffered frames (a file or xattr writer)
+// must not have a rejected stream committed. The pump aborts with `throw()`
+// when the sink has one, and only falls back to `return()` otherwise.
+
+test('bytes writer aborts a rejected stream with throw(), not return()', async t => {
+  const calls = [];
+  const sink = {
+    async next(value) {
+      calls.push(['next', value.length]);
+      return harden({ done: false, value: undefined });
+    },
+    async return(value) {
+      calls.push(['return']);
+      return harden({ done: true, value });
+    },
+    async throw(error) {
+      calls.push(['throw', error instanceof Error]);
+      return harden({ done: true, value: undefined });
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+  const writerRef = bytesWriterFromIterator(sink, { byteLengthLimit: 4 });
+  const writer = iterateBytesWriter(writerRef);
+  await writer.next(new Uint8Array([1, 2]));
+  await t.throwsAsync(() => writer.next(new Uint8Array([1, 2, 3, 4, 5])));
+  t.deepEqual(calls, [
+    ['next', 2],
+    ['throw', true],
+  ]);
+});
+
+test('bytes writer falls back to return() on abort when the sink has no throw()', async t => {
+  const calls = [];
+  const sink = {
+    async next() {
+      calls.push('next');
+      return harden({ done: false, value: undefined });
+    },
+    async return(value) {
+      calls.push('return');
+      return harden({ done: true, value });
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+  const writerRef = bytesWriterFromIterator(sink, { byteLengthLimit: 4 });
+  const writer = iterateBytesWriter(writerRef);
+  await t.throwsAsync(() => writer.next(new Uint8Array([1, 2, 3, 4, 5])));
+  t.deepEqual(calls, ['return']);
+});
+
 test('bytes writer delivers a zero-length frame end to end', async t => {
   const received = [];
   const writerRef = bytesWriterFromIterator(makeRecordingSink(received), {
