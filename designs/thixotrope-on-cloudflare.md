@@ -10,6 +10,9 @@
 *Design report: running Thixotrope workers (an Ironhorse machine plus its SQLite heap store) as
 hibernating Durable Objects, with OCapN over WebSockets.*
 
+*[Addendum A, Single-Vat Hubs](thixotrope-on-cloudflare-addendum-single-vat-hub.md) supersedes
+§4 (Architecture) and §7 (Transport topology) and adds lifecycle and collection.*
+
 ---
 
 ## 1. Summary
@@ -83,6 +86,8 @@ Guests run as SES compartments inside Ironhorse, not as isolates Cloudflare mana
 ---
 
 ## 4. Architecture
+
+*Superseded by [Addendum A](thixotrope-on-cloudflare-addendum-single-vat-hub.md).*
 
 ```
           external OCapN peers / browsers
@@ -283,6 +288,8 @@ Checked against the SQL authorizer in workerd (`src/workerd/util/sqlite.c++`) an
 ---
 
 ## 7. Transport topology
+
+*Superseded by [Addendum A](thixotrope-on-cloudflare-addendum-single-vat-hub.md).*
 
 | Link | Transport | Hibernates? |
 |---|---|---|
