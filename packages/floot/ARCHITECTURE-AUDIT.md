@@ -20,6 +20,17 @@ incomplete, account discovery retains runtime coupling, and current-release
 deployment/acceptance is outstanding. Consult that document before treating a
 historical finding introduction as current implementation status.
 
+RA-02 continuation evidence (2026-09-24): Claude's reviewed single-boundary
+native compaction coverage is committed in `f9bb99e5e`; the current alignment
+document records 415 Claude and 699 Floot passing tests and the remaining limits.
+Codex's isolated pinned-runtime probe now proves that an opaque compaction item
+survives original-thread continuation, but fresh-thread injection changes the
+placement of generated runtime instructions and fails strict prefix equivalence.
+The reproduction lives in `endo-host/ops/codex-context-probe-20260924.mjs` with
+its companion findings document. This is synthetic protocol evidence, not
+real-provider encrypted-context acceptance, durable restart proof or deployment.
+FA-01/FA-02 remain open; do not infer completion from the successful import RPC.
+
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred
 until actual pressure warrants them. Keep the known growth limits documented;

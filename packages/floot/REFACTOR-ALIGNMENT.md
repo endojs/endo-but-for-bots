@@ -177,8 +177,19 @@ image's `0.152.0` pin. Its generated experimental JSON schema exposes
 summary. Reproduce with `codex app-server generate-json-schema --experimental
 --out <temporary-directory>`. Do not synthesize a canonical summary from these
 notifications. Faithful capture needs an authoritative replacement-context export
-or a deliberately designed opaque checkpoint contract. This is schema evidence,
-not an actual container compaction run.
+or a deliberately designed opaque checkpoint contract.
+The subsequent isolated Codex 0.152.0 container probe now supplies runtime evidence:
+remote compaction sends a `compaction_trigger` through Responses and stores the
+opaque replacement in `payload.replacement_history` of a native `compacted` row.
+The original continuation consumes that opaque item; public `thread/read` still
+exposes only the compaction occurrence.
+Fresh-thread injection preserves the item but changes runtime-instruction placement,
+so the strict request-prefix comparison fails despite four completed native turns.
+Do not count injection success as faithful opaque-context restoration.
+The host reproduction and limitations are recorded in
+`endo-host/ops/codex-context-probe-20260924.md`; this uses a loopback synthetic
+provider, model `gpt-6-luna`, no credentials and no external network.
+No production Codex context implementation or deployment is claimed.
 
 Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
 loopback synthetic API in a disposable, network-disabled container, without
