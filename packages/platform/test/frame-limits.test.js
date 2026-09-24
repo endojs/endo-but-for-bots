@@ -1,6 +1,7 @@
 // @ts-nocheck
 // Per-frame `byteLengthLimit` bounds on the extended-filesystem writer sinks
-// (`OpenFile.write`, `File.write`, `Xattrs.set`), and the invariant that a
+// (`OpenFile.write`, `File.write`, `Xattrs.set`), the aggregate bound on an
+// `Xattrs.set` value, and the invariant that a
 // rejected frame leaves durable state unchanged.
 //
 // Each sink buffers frames and commits them in `return()`. The writer pump
@@ -156,6 +157,37 @@ test('Xattrs.set rejected on a fresh name leaves the name unset', async t => {
   await t.throwsAsync(() => E(xattrs).get('user.fresh'), {
     message: /ENODATA/,
   });
+});
+
+test('Xattrs.set rejects in-limit frames whose total exceeds the limit', async t => {
+  const root = await makeFile('x.txt', 'data');
+  const xattrs = await E(await E(root).lookup('x.txt')).xattrs();
+  await setXattr(xattrs, 'user.x', [utf8('old')]);
+  const half = XATTR_FRAME_BYTE_LENGTH_LIMIT / 2;
+  await t.throwsAsync(
+    () =>
+      setXattr(xattrs, 'user.x', [
+        new Uint8Array(half),
+        new Uint8Array(half),
+        new Uint8Array(1),
+      ]),
+    { message: /E2BIG/ },
+  );
+  t.is(fromUtf8(await getXattr(xattrs, 'user.x')), 'old');
+});
+
+test('Xattrs.set admits in-limit frames totaling exactly the limit', async t => {
+  const root = await makeFile('x.txt', 'data');
+  const xattrs = await E(await E(root).lookup('x.txt')).xattrs();
+  const half = XATTR_FRAME_BYTE_LENGTH_LIMIT / 2;
+  await setXattr(xattrs, 'user.x', [
+    new Uint8Array(half).fill(1),
+    new Uint8Array(half).fill(2),
+  ]);
+  const got = await getXattr(xattrs, 'user.x');
+  t.is(got.length, XATTR_FRAME_BYTE_LENGTH_LIMIT);
+  t.is(got[0], 1);
+  t.is(got[got.length - 1], 2);
 });
 
 // A non-bytes frame (for example a stale base64 string from a pre-upgrade

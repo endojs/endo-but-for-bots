@@ -27,9 +27,10 @@ import { XattrsInterface } from '../type-guards.js';
 /** @import { Xattrs } from '../types.js' */
 
 /**
- * Per-frame byte bound for the `set(name)` writer sink.
+ * Byte bound for the `set(name)` writer sink, enforced both per frame and on
+ * the running total across all frames of one `set`.
  * Matches Linux `XATTR_SIZE_MAX` (64 KiB), the largest value a single
- * extended attribute may hold, so no legitimate frame exceeds it.
+ * extended attribute may hold, so no legitimate value exceeds it.
  * Without an explicit bound `bytesWriterFromIterator` admits frames up to
  * `Number.MAX_SAFE_INTEGER` bytes.
  */
@@ -81,16 +82,33 @@ export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
       const m = ensureMap();
       /** @type {Uint8Array[]} */
       const chunks = [];
+      let total = 0;
+      let rejected = false;
       const sink = {
         async next(chunk) {
+          if (rejected) {
+            throw makeError(X`E2BIG: xattr ${q(name)} write already rejected`);
+          }
           if (chunk instanceof Uint8Array && chunk.length !== 0) {
+            // The writer bounds each frame; bound the concatenated value too,
+            // so many in-limit frames cannot exceed `XATTR_SIZE_MAX`.
+            if (total + chunk.length > XATTR_FRAME_BYTE_LENGTH_LIMIT) {
+              rejected = true;
+              chunks.length = 0;
+              total = 0;
+              throw makeError(
+                X`E2BIG: xattr ${q(name)} value exceeds ${q(XATTR_FRAME_BYTE_LENGTH_LIMIT)} bytes`,
+              );
+            }
             chunks.push(chunk);
+            total += chunk.length;
           }
           return { done: false, value: undefined };
         },
         async return(value) {
-          let total = 0;
-          for (const c of chunks) total += c.length;
+          if (rejected) {
+            return { done: true, value };
+          }
           const merged = new Uint8Array(total);
           let p = 0;
           for (const c of chunks) {
@@ -105,7 +123,9 @@ export const makeXattrsExo = ({ xattrTable, fireLocal, lockKeyOf, path }) => {
         // or a broken initiator). Discard the buffered frames so an aborted
         // write commits nothing.
         async throw() {
+          rejected = true;
           chunks.length = 0;
+          total = 0;
           return { done: true, value: undefined };
         },
         [Symbol.asyncIterator]() {
