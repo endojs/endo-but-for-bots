@@ -2145,7 +2145,8 @@ Checks:
     TurboFan frame exceeds its Liftoff frame (from lane C), against the inputs whose chain
     contains that function (run count above).
     The flag takes a single function index (`node --v8-options`: "eagerly tier-up function with
-    this index", `type: int`), so combinations are covered by the 12% margin, not by runs.
+    this index", `type: int`), so combinations are covered by the 13.6% margin that 440 KiB
+    leaves below 500 KiB (§1.7), not by runs.
   - workerd with `v8Flags` pinned to `--liftoff-only` and to `--no-liftoff`, at the default
     stack and at `--stack-size=866`.
     workerd's V8 15.4 traps a different set than Node's V8 12.4 predicts (§1.3), so Node alone
