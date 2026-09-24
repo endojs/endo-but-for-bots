@@ -53,8 +53,8 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 193 of
-479 application commits and 20 of 93 host commits to explicit semantic evidence.
+Retrospective inventory update (2026-09-24): the coverage ledger now maps 205 of
+479 application commits and 24 of 93 host commits to explicit semantic evidence.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
 deployment acceptance. The caplet slice exposed the pin leak fixed in `71dfde012`;
@@ -96,6 +96,12 @@ Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
 ### Retrospective durability audit — required, in progress
+
+Import/acceptance mapping (2026-09-24): twelve application and four host entries
+bring coverage to 205/479 and 24/93. Native import HTTP acknowledgement is not
+proof of prompt consumption; historical deployment reports are not current image
+acceptance. Host `60ee154` fixes permissive command matching; the separate hosted
+cutover manifest publication/locking gap is recorded below as an execution gate.
 
 Retired lease/restoration mapping (2026-09-24): twelve further entries bring
 coverage to 193 application commits (newest 15 plus earliest 178).
@@ -558,7 +564,21 @@ Four inert shell-wrapper tests pass; this is not live inference or power-loss pr
 Old manifests require manual inspection, not automatic migration or replay.
 Locks exclude cooperating runners, not UI activity or hostile same-UID processes;
 exclusive operator use and trusted private directory ancestry remain prerequisites.
-The local runner defect is addressed; deployment/live acceptance remain open.
+The restoration runner defect is addressed; deployment/live acceptance remain open.
+
+Hosted tool/policy acceptance runner — separate open boundary (2026-09-24):
+`endo-host/ops/verify-hosted-cutover.mjs` still uses its older manifest writer,
+not the corrected restoration runner's private-manifest helper. It syncs the
+temporary file and renames it without parent-directory sync, and holds no
+exclusive runner lock. Its recorded stages precede remote work but do not by
+themselves prove durable publication or exclude concurrent phase execution.
+The command matcher also stripped quotes/backslashes, conflating shell commands
+with different expansion semantics. The reviewed correction accepts only the
+exact command or an inert literal bash wrapper preserving the exact inner string.
+Its adversarial regression fails before the fix; 26 cutover tests and 11 adjacent
+restoration tests pass, with the 26 independently rerun. No live acceptance run.
+Do not run a fresh cutover acceptance phase until the manifest boundary is
+corrected and reviewed. Historical observations remain recorded, not recertified.
 
 Claude diagnostic-read follow-up (2026-09-24, local, not deployed):
 the stderr excerpt reader limited decoded characters but could wait forever for
@@ -4333,6 +4353,12 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Map twelve application import/pin/diagnostic changes and four host
+acceptance changes. Host `60ee154` fixes false shell-command equivalence after a
+failing-before regression and adversarial review; 37 adjacent tests pass. Record
+the hosted cutover manifest's missing parent sync and runner lock as a separate
+open gate. No deployment or live acceptance.
 
 2026-09-24 — Map twelve retired-lease/restoration changes, bringing application
 coverage to 193/479. Historical custom-volume recovery and deployment reports are

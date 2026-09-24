@@ -71,7 +71,7 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 286 application entries and 73 host entries still need explicit ledger
+The other 274 application entries and 69 host entries still need explicit ledger
 mapping, even where the main audit already contains relevant review evidence.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
@@ -657,7 +657,48 @@ evidence for their original deployment only.
 | `b2a318a6b` | Historical repair ordering; custom-volume/project-ID lease leak retired with `812f10b47` | Current image acceptance and ownership gates must be checked independently; the historical plan is not present deployment evidence |
 | `53ad6e03e` | OpenCode source build moved import change from applied patch to fork commit; current default uses an immutable revision | CLI revision alone is not full-image identity: bridge comes from application context and other build inputs are not all immutable. Manifest digest pairing and live acceptance remain required |
 
+### Import integration, retained pins, and diagnostic corrections
+
+Twelve more application changes are traced to current implementations or explicit
+historical disposition. Fresh OpenCode setup/client/bridge/conformance tests pass
+87 cases; separate supervisor/controller/Codex-refusal checks pass 6/30/1 cases.
+Composite configuration drift checking also passes. These checks do not establish
+that the currently pinned native fork actually consumes every imported record.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `99fbe43ea` | Historical silently retained image-pin diagnosis; current shared setup refuses changed retained broker images before mint | Claude/OpenCode use assertRetainedBrokerImages; Codex checks retained environment/dependencies separately. Refusal requires deliberate retirement, not silent repinning; other profile changes are outside the shared image comparison |
+| `3e918d889` | OpenCode import attributes messages using ModelV2.Ref shape with providerID and id, preserving nested model routes | Exact-shape client regression passes. Model attribution is not conversation ownership; host journal remains authoritative |
+| `5c5e2d643` | Historical failed import observation distinguishes HTTP success from actual prompt consumption | Current bridge acknowledges HTTP completion, not native-row readback. Local type/protocol tests alone do not close native integration acceptance |
+| `517c0c5a7` | Historical investigation with subsequently corrected measurement interpretations | Missing-row/multi-turn explanations were superseded; synthetic-event storage observations and SIGKILL/WAL probes do not prove current restoration failure |
+| `a4297d12f` | Corrected historical v2-write/v1-read mismatch; current translator targets the pinned fork's v1 MessageTable/PartTable route | Bridge imports structured turns without prompting; fork internals are outside this repository and require native integration evidence |
+| `8744ac672` | Historical OpenCode/Claude native-store-loss recall acceptance | Current OpenCode uses a fresh in-memory session and fenced import. Historical deployment does not certify later images; local decoder tests explicitly do not prove native database readback |
+| `63d629461` | Documentation index sentence repair only | No runtime owner, persistence, or lifecycle change |
+| `86b9f7771` | Generated hosted-agent composite dependency reference to platform | Reference retained; fresh drift check passes. Generated configuration is not runtime durability evidence |
+| `dc6e8bcc1` | Historical custom Codex volume lease diagnostics removed with `812f10b47` | Added observation Set was ephemeral diagnostic state, never recovery authority; no retained custom lease owner to migrate |
+| `470c45b97` | Codex propagates app-server restoration refusal into structured failure and fences prompt dispatch | Focused unavailable-injection regression passes; remaining historical changes were test formatting. No live native-server acceptance claimed |
+| `399ffa797` | Historical lifecycle/storage consolidation plan, superseded by shared supervisor and directory storage | Old lease-clearing instructions are not current recovery procedures; directory allocation does not prove native exclusion or process-loss recovery |
+| `c966c4866` | Historical OpenCode grant leak priority; current supervisor fences broker independently and revokes after sandbox closure | Controller regression checks exactly-once grant removal with a live client. Ordinary injected cleanup does not establish #1323 process-loss quiescence |
+
+### Host acceptance evidence and historical activation
+
+Four more host commits are mapped below. Fresh cutover/restoration checks pass
+37 tests after the strict command-matching correction, with 26 cutover cases
+independently rerun. No live inference, deployment, or acceptance was performed.
+
+| Commit | Retained owner / disposition | Evidence and remaining limit |
+|---|---|---|
+| `3a4bdb7` | Operator-owned manifest records disposable hosted identities/stages; journal tool pairs provide evidence rather than assistant claims | Retained runner's unsafe quote normalization corrected in host `60ee154`. Separate open defect: file rename lacks parent sync and phase has no runner lock; do not infer durable acquisition/exclusion from passing local evidence checks |
+| `f48d95d` | Historical application revision pin for Codex image-environment verifier | Later pins supersede it; pin change creates no new durable owner and does not prove activation or current acceptance |
+| `91eb785` | Explicit direct-provider restoration coverage through generic Floot protocol | Current model selection uses acceptance policy and version-two intent ledger. Eleven coverage tests pass; Fae recall is not native sandbox/network-policy proof |
+| `336ae3d` | Historical partial cutover report, subsequently updated with later observations | Named generation/session observations belong to that run; preserved capability identity was not an independent data backup and historical pass is not current release acceptance |
+
 ### Post-snapshot changes
+
+- Host `60ee154` removes quote/backslash normalization from acceptance evidence.
+  Exact commands and inert literal bash wrappers with the exact inner command
+  remain accepted. Altered expansion/escape/whitespace semantics are refused.
+  Manifest parent-sync and runner-lock gaps remain open; no deployment.
 
 - Claude rechecks cancellation after provisioning and immediately before native
   prompt spawn. Four held-preparation regressions fail before and pass after;
