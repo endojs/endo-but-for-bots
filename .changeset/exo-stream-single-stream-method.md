@@ -30,7 +30,8 @@ The rename keeps the generic `stream()` protocol method name for byte readers/wr
 
 `@endo/9p-server`, `@endo/endo-fs-asset-server`, and `@endo/endo-fs-exec` bump `major`: each exports an entry point whose accepted-collaborator contract broke incompatibly (`serveConnection({ filesystem })`, `makeTreeRequestHandler({ tree })`, and `drainBytesReader`'s reader ref all now drive `stream()` on the caller-supplied readers), so a downstream caller passing its own `streamBase64`-era capability breaks on upgrade.
 `@endo/space-file-explorer` is already `major` for the structurally identical call-site adaptation.
-`@endo/sandbox`, `@endo/host-shell`, `@endo/claude-sandbox`, `@endo/codex-sandbox`, and `@endo/cli` bump `major` with no source change of their own beyond comments: each builds its byte readers and writers on the `@endo/exo-stream` bytes adapters (for example the `stdin`/`stdout`/`stderr` capabilities of a sandbox driver process or a host shell), so their wire contract changes with the dependency and a peer still speaking `streamBase64` breaks on upgrade.
+`@endo/sandbox`, `@endo/host-shell`, `@endo/claude-sandbox`, `@endo/codex-sandbox`, and `@endo/cli` bump `major` because each builds its byte readers and writers on the `@endo/exo-stream` bytes adapters (for example the `stdin`/`stdout`/`stderr` capabilities of a sandbox driver process or a host shell), so their wire contract changes with the dependency and a peer still speaking `streamBase64` breaks on upgrade.
+Their own diffs are small: `@endo/sandbox` changes only a doc comment in `src/factory.js` and a test, `@endo/codex-sandbox` changes only a test fixture, and `@endo/host-shell`, `@endo/claude-sandbox`, and `@endo/cli` have no source change at all.
 
 Upgrade note (readers): `iterateBytesReader`'s option `stringLengthLimit` was renamed to `byteLengthLimit`, and its unit changed from base64 characters to raw bytes.
 A caller that renames the key mechanically keeps a ~33%-too-large bound; a caller that leaves the old key in place silently reverts to the default 100 KB frame cap (there is no compile-time error), which rejects large chunks at runtime.
@@ -38,6 +39,7 @@ Update the key and recompute the limit in bytes.
 
 Upgrade note (writers): `bytesWriterFromIterator` gains the same `byteLengthLimit` option, but its default is deliberately asymmetric — omitted, the write frame size is unbounded (`Number.MAX_SAFE_INTEGER`), whereas the reader falls back to the 100 KB cap.
 A responder reachable by an untrusted peer should pass an explicit `byteLengthLimit`, as the `@endo/platform` file and xattr writers now do.
+Those `@endo/platform` writers also bound the running total they buffer before committing: `OpenFile.write` and `File.write` throw `E2BIG` past 256 MiB (configurable with `wrapBackend`'s new `writeByteLengthLimit` option), and `Xattrs.set` past 64 KiB.
 The writer now also validates every received frame against `M.byteArray()`: a responder that previously accepted whatever a peer pushed will reject a non-bytes frame (for example, a stale base64 string) at runtime.
 
 Upgrade note (accepted-source contract): `Directory.write()` / `copyInto` / `stageTree` and the mount-child probe no longer accept "any source advertising a byte-stream method".
