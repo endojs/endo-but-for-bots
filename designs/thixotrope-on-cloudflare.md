@@ -267,7 +267,7 @@ Checked against the SQL authorizer in workerd (`src/workerd/util/sqlite.c++`) an
 | Reading `sqlite_master` | ✅ | Only names starting with `_cf_` are blocked |
 | Blob sizes: slot page 5 KB (256 × 20 B), chunk extent 64 KB, free-list segment 16 KB, leaf hash 32 B | ✅ | Well under the 2 MB row cap |
 | Bound parameters (≤ 3 per statement) | ✅ | Limit is 100 |
-| `PRAGMA application_id / locking_mode / journal_mode / wal_autocheckpoint / synchronous`, `busy_timeout` | ❌ | Not allowlisted; the backend currently **refuses to open** when these fail *[Review correction 13](thixotrope-on-cloudflare-review.md#factual-corrections).* |
+| `PRAGMA application_id / locking_mode / journal_mode / wal_autocheckpoint / synchronous`, `busy_timeout` *[Review correction 13](thixotrope-on-cloudflare-review.md#factual-corrections).* | ❌ | Not allowlisted; the backend currently **refuses to open** when these fail |
 | `BEGIN IMMEDIATE`, `unchecked_transaction`, migration transactions | ❌ | Transaction statements are rejected; use `transactionSync` |
 | `CREATE TEMP TABLE` in reachability and generational-GC queries | ❌ | All TEMP objects are denied |
 | Small-state section payloads (u32 length, include bulk side tables) | ⚠️ | Can exceed the 2 MB row cap on large heaps *[Review correction 14](thixotrope-on-cloudflare-review.md#factual-corrections).* |

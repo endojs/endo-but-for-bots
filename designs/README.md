@@ -1843,7 +1843,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | slots-ocapn-op-lanes | S | 1-2 days to reconcile the candidate | 4 | Separate get/index/untag lanes across Eventual Send, JavaScript slots, and the Rust supervisor; implementation exists in draft [endojs/endo-but-for-bots#990](https://github.com/endojs/endo-but-for-bots/pull/990) but needs dedicated payloads and fail-closed translation parity |
 | ocapn-noise-cryptographic-review | S | 1 day | 4 | External review coordination |
 | thixotrope | M | Not re-estimated | 4 | XS and Ironhorse engines, comms hub, supervisor, and application installation are implemented. Remaining delivery-contract work and package experiments need a new estimate; the earlier XS-adapter estimate is obsolete. |
-| thixotrope-on-cloudflare | — | not estimated; its Phase 0 is a go/no-go measurement | 4 | The engine prerequisites are costed in `rust/engine/STACK-DEPTH-REFACTOR.md`; the rest waits on Phase 0. |
+| thixotrope-on-cloudflare | — | not estimated; its Phase 0 is a go/no-go measurement | 4 | The stack prerequisites are costed in `rust/engine/STACK-DEPTH-REFACTOR.md`; the other engine prerequisites (`rust/engine/WASM-BLOCKERS.md` B1, B5, B7, B8) are not costed; the rest waits on Phase 0. |
 | thixotrope-on-cloudflare-addendum-single-vat-hub | — | not estimated | 4 | Phase 2 of the base design; its protocol findings in the review must be resolved first. |
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
 | ~~ocapn-noise-network~~ | L | — | 4 | ✅ Complete (PR #137 consolidates stacked PRs #111/#112/#113; merged 2026-05-08) |

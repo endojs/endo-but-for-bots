@@ -103,7 +103,7 @@ The prototype patches were measured in a scratch copy of the engine.
   tier, a spread of 32×.
   All 25 recursion-family cases need 1,252-1,551 KiB on V8 and 1,855 KiB on Wasmtime to match
   native.
-  The smallest measured host limits are 500 KB (Chromium Worker) and 512 KiB (Wasmtime
+  The smallest measured host limits are 500 KiB (Chromium Worker) and 512 KiB (Wasmtime
   default).
 - **Different things bind on different hosts.**
   - On native and every V8 tier in Node, a light walker binds (`JSON.stringify`).
@@ -147,7 +147,7 @@ The prototype patches were measured in a scratch copy of the engine.
   `native_depth` at the same logical points.
   Six prototype patches, now in [`stack-depth-prototypes/`](stack-depth-prototypes/), kept
   `Halt`, result, `ReentryLimit` depth and computrons identical wherever they were checked,
-  in differential suites of 74 to 61,246 cases.
+  in differential checks ranging from two cases (A1) to 61,246 compiles (D1).
   All six build.
   Applied one at a time to the repository tree, all but A2 pass their crate's full test
   suite; A2 fails only six source scans of the dispatch loop (§4.3).
@@ -214,7 +214,8 @@ The compiler has separate counters, which also belong to the release contract:
 
 ### 1.2 Two stacks on wasm, and the host limits
 
-Wasm has two stacks, and either one can bind (WASM-BLOCKERS.md:223-235).
+Wasm has two stacks, and either one can bind
+([WASM-BLOCKERS.md B3](WASM-BLOCKERS.md#b3-the-native-recursion-budget-outruns-wasm-stacks)).
 
 - **The shadow stack** lives in linear memory and is sized at link time.
   The Rust default is 1 MiB, and an overflow traps with `memory access out of bounds`.
@@ -242,7 +243,7 @@ Wasm has two stacks, and either one can bind (WASM-BLOCKERS.md:223-235).
 | Host | Limit | Source | Configurable by the embedder? |
 |---|---|---|---|
 | V8 / Node, workerd | 984 KB; 864 KB on 32-bit ARM and IA32 builds | `V8_DEFAULT_STACK_SIZE_KB`, V8 14.1 `src/common/globals.h:196`; `:175-178` and `:179-185` set 864 for `V8_TARGET_ARCH_ARM` and `V8_TARGET_ARCH_IA32` (copy at `$S/stack/review2/globals-14.1.h`) | Node: `--stack-size`, or `worker_threads` `resourceLimits.stackSizeMb` (default 4). workerd: `v8Flags`, self-hosted only (`workerd.capnp:70-77`, "Use at your own risk"). **Cloudflare production: no documented knob** (`$S/stack/prior-art/cf-wrangler-config.md`, `cf-compat-flags.md`) |
-| Chromium dedicated Worker, worklets | 500 KB (492 KiB on 32-bit Windows) | Blink `v8_initializer.cc:1009-1012` `static const int kWorkerMaxStackSize = 500 * 1024;`, applied at `:1024` as `SetStackLimit(GetCurrentStackPosition() - kWorkerMaxStackSize)` | No; a page cannot pass V8 flags |
+| Chromium dedicated Worker, worklets | 500 KiB (492 KiB on 32-bit Windows) | Blink `v8_initializer.cc:1009-1012` `static const int kWorkerMaxStackSize = 500 * 1024;`, applied at `:1024` as `SetStackLimit(GetCurrentStackPosition() - kWorkerMaxStackSize)` | No; a page cannot pass V8 flags |
 | Chromium main thread | 984 KB (V8 default); 864 KB in 32-bit builds, such as 32-bit Windows | as above | No |
 | Firefox and WebKit Workers | not measured or sourced | – | – |
 | Wasmtime | 512 KiB | Wasmtime v49.0.0 `crates/wasmtime/src/config.rs:295` `max_wasm_stack: 512 * 1024` | Yes, but it cannot exceed `async_stack_size` (default `2 << 20` at `:301`; `bail!("max_wasm_stack size cannot exceed the async_stack_size")` at `:2632-2633`). The calling thread must also hold it: "Exhausting the thread stack typically leads to an **abort** of the process" (`:825-826`) |
@@ -255,7 +256,8 @@ The copy at `$S/stack/prior-art/wasmtime/config.rs` is 50.0.0-dev, where the `ba
 
 The Worker limit is a Blink constant counted from the stack position at worker start-up, so JS glue
 frames above the wasm count against it.
-This corrects WASM-BLOCKERS.md:266-267, which attributes it to "the worker thread's own OS stack".
+WASM-BLOCKERS.md's browser section now gives this constant; it had attributed the limit to the
+worker thread's own OS stack.
 Blink explains the value as "default stack size for secondary threads is 512KB on macOS"
 (`v8_initializer.cc:1001-1003`).
 Whether WebKit Workers inherit a similar limit is unverified.
@@ -284,8 +286,8 @@ and the shadow stack reaches 2,611,856 B on an accepted composition (§1.2).
 
 At the limits hosts actually ship with:
 
-- **Wasmtime 512 KiB:** 18 of the 25 cases trap, counting the rows of the table at
-  WASM-BLOCKERS.md:245-256.
+- **Wasmtime 512 KiB:** 18 of the 25 cases trap, counting the rows of the table in
+  WASM-BLOCKERS.md B3, "Measurements".
   Six of those programs are accepted natively.
   Their minimum stacks are from `$S/stack/measure/wasm.jsonl`:
   - proxy-get-2016 (needs 960 KiB);
@@ -522,7 +524,7 @@ At the limits hosts actually ship with:
 
 A host stack overflow is not contained.
 It is a host trap, no Rust destructors run, and the embedder must discard the instance
-(WASM-BLOCKERS.md:269-274 and 371-377).
+(WASM-BLOCKERS.md B3, "Failures are traps or host crashes", and its browser section).
 Because the guest chooses the depth, a trap turns a deterministic `ReentryLimit` into a
 host-dependent outcome.
 
@@ -635,6 +637,9 @@ Any minimum-stack requirement must assume the worst per-function mix, so CI must
 
 ### 1.6 Corrections to WASM-BLOCKERS.md B3
 
+All of these have since been applied to WASM-BLOCKERS.md (commits `27d9d7fe` and `ccd009f2`).
+The line numbers below refer to its text at `a9e3b2ab`.
+
 - Node `--stack-size ≥ 1300` (WASM-BLOCKERS.md:262 and 279-280) is not enough under TurboFan.
   The requirement is 1,518-1,551 KiB for the 25 cases, and accepted compositions need more
   (1,680 KiB for `comp-jstr-flatfast`, §4.7 E3).
@@ -657,13 +662,13 @@ Any minimum-stack requirement must assume the worst per-function mix, so CI must
   2,049 (`$S/stack/dispatch-reentry/ceilings.json`).
 - The 8 MiB shadow stack of WASM-BLOCKERS.md:230-231 is enough for everything measured, but
   2 MiB is not (§1.2).
-- The Worker limit is Blink's 500 KB constant (§1.2), not the OS thread stack.
+- The Worker limit is Blink's 500 KiB constant (§1.2), not the OS thread stack.
 
 ### 1.7 Target
 
 The target has to fit the smallest limit that a deployment cannot change.
 
-- For Chromium, that limit is the dedicated Worker's 500 KB (492 KiB on 32-bit Windows).
+- For Chromium, that limit is the dedicated Worker's 500 KiB (492 KiB on 32-bit Windows).
   Firefox and WebKit Worker limits were neither measured nor sourced, so those browsers are
   **unassessed**, and this target does not cover them.
 - Next is Wasmtime's 512 KiB default.
@@ -673,7 +678,7 @@ The target has to fit the smallest limit that a deployment cannot change.
 The shadow stack is linked into the image and counts toward Cloudflare's 128 MB isolate limit,
 which covers memory "including the JavaScript heap and WebAssembly allocations"
 (<https://developers.cloudflare.com/workers/platform/limits/>, fetched copy at
-`$S/cf/workerd-engine-recheck/limits.md:123`; also `designs/thixotrope-on-cloudflare.md:344`).
+`$S/cf/workerd-engine-recheck/limits.md:123`; also `designs/thixotrope-on-cloudflare.md` §9).
 So it should be as small as the measurements allow, but no smaller than the worst accepted
 composition (§1.2).
 
@@ -712,7 +717,7 @@ Each must produce native-identical `Halt`, result and computrons under each of:
   workerd's V8 (§1.3);
 - Node 22 at `--stack-size=440` (500 less 12%) under `--liftoff-only` and under `--no-liftoff`,
   and at `--stack-size=500` with single-function eager tier-up (lane B).
-  This stands in for the Chromium Worker, since both are a V8 stack limit of about 500 KB
+  This stands in for the Chromium Worker, since both are a V8 stack limit of about 500 KiB
   *(inferred equivalence; confirm with the next item)*;
 - a Chromium dedicated Worker.
 
@@ -1234,7 +1239,7 @@ the Chromium Worker or on workerd.
 | 3 | B3: explicit-stack `JSON.parse` | b | S-M | 855,159 → 17,836 B at the ceiling (WT) | `json-parse-arr/obj-10k` and the `jparse-*` ceilings; with B6, `JSON.parse` with a reviver over deep text (`jrevive-*`). B3 alone clears `jrevive-*` only under Liftoff; under TurboFan (the Worker and workerd after tier-up, lane B's `--no-liftoff` runs) the internalize walk still binds. Not `json-reviver-10k`, whose depth is in the holder the reviver builds (B6) | no |
 | 4 | B4: iterative fast and generic `flat` | b | S | 244,479 → 16,868 B at 1,022 levels (WT, fast path); generic 0 *(est.)* | `flat-self` and `flat-generic`-2015 *(est.; both run in the unprototyped generic path)*; fixes the U2 composition | no |
 | 5 | A1: thin native dispatchers (`call_native_method_inner`, `call_native_inner`) | a | S-M | forEach 13,950 → 6,762 B per level (N, measured); up to the 6,768 B monolith frame per activation on SH *(est.)*; WT small (1,136 B frame) | native and shadow margin | no |
-| 6 | D1: compiler batch (iterative `Drop`, worklists, outlined scoper and coder arms) | d | M (6 files, +341/−47) | WT, D1a-D1c together: callchain 1,952 → 962 KiB, elseif 1,569 → 834, member 1,441 → 707, function-512 1,060 → 747, cond 779 → 413 KiB, tagged-2043 2,205 → 1,249 KiB; a `1+1+…` chain becomes constant (18 KiB); Node TurboFan callchain-2044 1,123 → 741 KiB | `parse-cond-chain`, `parse-512-blocks` *(est.; D1a measured)*, likely `eval-deep` *(est.)*; the five pin+1 refusal traps, including tagged-2044 (D1c); `callchain`-2044 and `elseif`-2044 at 984 KB | no |
+| 6 | D1: compiler batch (iterative `Drop`, worklists, outlined scoper and coder arms) | d | M (6 files, +348/−47) | WT, D1a-D1c together: callchain 1,952 → 962 KiB, elseif 1,569 → 834, member 1,441 → 707, function-512 1,060 → 747, cond 779 → 413 KiB, tagged-2043 2,205 → 1,249 KiB; a `1+1+…` chain becomes constant (18 KiB); Node TurboFan callchain-2044 1,123 → 741 KiB | `parse-cond-chain`, `parse-512-blocks` *(est.; D1a measured)*, likely `eval-deep` *(est.)*; the five pin+1 refusal traps, including tagged-2044 (D1c); `callchain`-2044 and `elseif`-2044 at 984 KB | no |
 | 7 | A2: split the arms of `dispatch_at_inner` into handlers | a | L (the group split as prototyped is M; per-opcode handlers are L) | per level on WT: async 11,200 → 910 B, forEach 13,527 → 2,850 B, getter 13,104 → 3,138 B | `foreach-63/10k`, `async-64/10k`, and the 12 heavy ceilings measured on the prototype (§4.3); the other ceilings of §1.3 *(est.)* | no (perf-gated) |
 | 8 | B5: explicit-stack `JSON.stringify` | b | M | 0.9-1.1 KB → ≈0 per level *(est., by analogy with B3)* | `json-stringify-10k`, the binding case on native and every V8 tier, and a trap on workerd under every tier; the `jstr-arr`, `jstr-obj` and `jstr-replacer` ceilings, which also trap on workerd under every tier *(est.)* | no |
 | 9 | B6: explicit-stack reviver plus a flat `JsonSource` arena | b | M | 496 B → ≈0 per level (WT) *(est.)*; also removes U6's O(n·d) clone | `json-reviver-10k` (WT, Worker, workerd TurboFan); with B3, `jrevive-arr`-2000 and `jrevive-obj`-1999 under TurboFan, which trap on workerd with `--no-liftoff` even on the B3 prototype | no |
@@ -1266,7 +1271,7 @@ What must land for each host's Target 1 run, from the trap lists of §1.3 and
 | Host and limit | Traps today (measured) | Must land | Phase |
 |---|---|---|---|
 | Cloudflare workerd, 984 KB, tier not controllable | Default tiering: `json-stringify-10k` and the accepted `JSON.stringify` ceilings (`jstr-arr`-2014, `jstr-obj`-2014, `jstr-replacer`-1999); `elseif`-2044 and `eval-callchain`-2044; the unpinned `or`-2043, `nullish`-2043 and `ifelse-block`-2041 chains. Liftoff pinned: `json-stringify-10k`, the same three `JSON.stringify` ceilings, the tagged-template chain. TurboFan pinned: `proxy-get-10k`, the accepted `proxy-get-2016`, `proxy-define-10k`, `proxy-call-10k`, `json-reviver-10k`, `json-stringify-10k`, `flat-self`; the three `JSON.stringify` ceilings, `jrevive-arr`-2000, `jrevive-obj`-1999 and `flat-generic`-2015; `callchain`-2044, `elseif`-2044, `eval-callchain`-2044; `and`-2043, `or`-2043, `nullish`-2043 and `ifelse-block`-2041; the tagged-template chain; the trapped-Proxy ceilings. All 37 heavy ceilings pass under every tier | B5, B6 (with B3 for `jrevive-*` under TurboFan), B1 (`[[Get]]`, `[[DefineOwnProperty]]`, `[[Call]]`), B4 (generic path), D1; B3 also as margin, since Node's TurboFan needs 1,015 KiB for `json-parse-*-10k`. D2's logical-operator, `if`/`else if` and tagged-template spines: after D1 the tagged chain still needs 1,042 KiB (LO) and 1,058 KiB (TF) on Node, of which parse plus scope is 580 and 772 KiB, and `\|\|`-2043 still needs 516 KiB (LO) and 500 KiB (TF), `??`-2043 580 and 675 KiB. B10 for the trapped-Proxy ceilings, which stay expected traps until then | 1, 2 and 4 |
-| Chromium dedicated Worker, 500 KB | 11 family cases (`$S/web/chromium.json`); 6 of 19 pins and all 4 `eval-*` compositions; the walker ceilings `jstr-*`, `jparse-*`, `jrevive-*` and `flat-generic` (§1.3); the stand-in (`node --stack-size=500`) also traps the renderer ceiling under TurboFan, `jrevive-arr`-2000 under both tiers (`revise4/jrevive_node500.txt`) and the trapped-Proxy ceilings under both tiers | B1, B3, B4, B5, B6 (with B3 for `jrevive-*` under TurboFan), B8, D1, D2 (after D1, Node TurboFan still needs 601 KiB for `function`-512, 741 KiB for `callchain`-2044, 516 KiB for `elseif`-2044, 500 KiB for `\|\|`-2043 and 675 KiB for `??`-2043; the tagged chain needs 1,058 KiB); B10 for the trapped-Proxy ceilings | 1, 2 and 4 |
+| Chromium dedicated Worker, 500 KiB | 11 family cases (`$S/web/chromium.json`); 6 of 19 pins and all 4 `eval-*` compositions; the walker ceilings `jstr-*`, `jparse-*`, `jrevive-*` and `flat-generic` (§1.3); the stand-in (`node --stack-size=500`) also traps the renderer ceiling under TurboFan, `jrevive-arr`-2000 under both tiers (`revise4/jrevive_node500.txt`) and the trapped-Proxy ceilings under both tiers | B1, B3, B4, B5, B6 (with B3 for `jrevive-*` under TurboFan), B8, D1, D2 (after D1, Node TurboFan still needs 601 KiB for `function`-512, 741 KiB for `callchain`-2044, 516 KiB for `elseif`-2044, 500 KiB for `\|\|`-2043 and 675 KiB for `??`-2043; the tagged chain needs 1,058 KiB); B10 for the trapped-Proxy ceilings | 1, 2 and 4 |
 | Wasmtime, 512 KiB | 18 family cases; 10 of 19 pins and 5 pin+1 refusals (4 in the probe, tagged-2044 in the compile harness); every heavy ceiling bisected in §1.3 except the iterator helpers; every walker ceiling except `flat-fast`-1022 (`walkers/max_wt.jsonl`: from 726,339 B for `flat-generic`-2015 to a trap at 2 MiB for `jstr-obj`-2014); the renderer and trapped-Proxy ceilings; the tagged-template chain | B1, B3, B4, B5, B6, B8, A2, D1 (D1c for the pin+1 refusals), D2; B10 for the trapped-Proxy ceilings | 1, 2 and 4 |
 
 The workerd and Chromium sets are listed in §1.3 and Appendix B; the "after D1" figures are from
@@ -1339,16 +1344,17 @@ stacks as well.
   and staying under the 1.25× benchmark gate, is a subsystem redesign, which §4.2's scale calls
   L.
   It can be staged:
-  - **A2a (M):** the group split as prototyped, 8 `#[inline(never)]` group functions behind one
-    table (`a2-dispatch-split-table.patch` touches only `dispatch.rs`, +470/−105).
+  - **A2a (M):** the group split as prototyped, 8 `#[inline(never)]` group functions chosen by one
+    `match` on the opcode, which this report calls table routing
+    (`a2-dispatch-split-table.patch` touches only `dispatch.rs`, +480/−105).
   - **A2b (L):** per-opcode handlers, if A2a fails the benchmark gate or leaves too large a
     group frame.
 
   Run `benches/run.py --check-baseline` on the A2a prototype before committing to either
   (Phase 1, §5).
-- **Reduction (measured,**
-  [`a2-dispatch-split-table.patch`](stack-depth-prototypes/a2-dispatch-split-table.patch)**,**
-  8 group functions routed by one table, with A1's forEach dispatcher**):**
+- **Reduction (measured with
+  [`a2-dispatch-split-table.patch`](stack-depth-prototypes/a2-dispatch-split-table.patch),
+  8 group functions chosen by one `match`, with A1's forEach dispatcher):**
   - loop frame: 208 B N, 304 B WT, 96 B SH;
   - group frames: 512-1,232 B N and 256-624 B WT.
 
@@ -1383,9 +1389,13 @@ stacks as well.
   tests and 1,111 of 1,117 `ironhorse-vm` tests (`cargo test --release -p ironhorse-vm`).
   The six failures are the source scans in `tests/dispatch_loop_control_transfer.rs`, which
   check that every exit from the dispatch loop goes through the depth and meter guards.
-  The prototype copies `macro_rules! dispatch_halt` into its group functions and leaves one
-  raw return the scan cannot classify, so a production A2 must satisfy those scans or
-  deliberately update them.
+  Three fail on the prototype's own code: it copies `macro_rules! dispatch_halt` into its group
+  functions (two scans require one declaration) and leaves one raw return the scan cannot
+  classify.
+  The other three fail because the scans look only inside `dispatch_at_inner`, from which the
+  split moved the raise sites, a mutation anchor and the `dispatch_result!`-wrapped handler
+  calls.
+  A production A2 must satisfy those scans or deliberately update them.
   Re-run for this revision (`$S/stack/revise4/a2_diff.py`): the native probe on the repository
   crate against each native build of the prototype, over every `ceilings.json` entry at its
   ceiling and ceiling+1 plus all 25 `families.json` cases.
@@ -1465,7 +1475,7 @@ The common recipe is a `Vec<Frame>` loop in which:
 - **Effort:** S per method.
   The prototype,
   [`b1-b2-proxy-cursor-loops.patch`](stack-depth-prototypes/b1-b2-proxy-cursor-loops.patch)
-  (+316/−59), covers `[[Get]]`, `[[Set]]`, `[[GetOwnProperty]]`, `[[DefineOwnProperty]]`,
+  (+322/−59), covers `[[Get]]`, `[[Set]]`, `[[GetOwnProperty]]`, `[[DefineOwnProperty]]`,
   `[[Call]]` and `[[Construct]]`.
   Still to do: `[[HasProperty]]`, `[[Delete]]`, `[[OwnPropertyKeys]]`, the prototype methods,
   the extensibility methods and the index-key variants of `[[Get]]`, `[[Delete]]`,
@@ -1515,8 +1525,8 @@ The common recipe is a `Vec<Frame>` loop in which:
   or `}`.
   The per-element charge stays before the child's enter (`json.rs:1085-1088`).
 - **Effort:** S-M.
-- **Reduction (measured,**
-  [`b3-b4-json-parse-and-flat.patch`](stack-depth-prototypes/b3-b4-json-parse-and-flat.patch)**):**
+- **Reduction (measured with
+  [`b3-b4-json-parse-and-flat.patch`](stack-depth-prototypes/b3-b4-json-parse-and-flat.patch)):**
   at the ceiling:
   - native 1,104 / 2,176 KiB → 36 KiB, the process floor;
   - WT 855,159 → 17,836 B;
@@ -1772,7 +1782,7 @@ The scratch data file names still say E1-E4: `d1a-compiler-outline-only.patch` i
     `:1475`, `:1585`).
 - **Effort:** M.
   The combined patch touches six files (`ast.rs`, `coder.rs`, `lib.rs`, `parser/stmt.rs`,
-  `parser.rs`, `scoper.rs`; +341/−47).
+  `parser.rs`, `scoper.rs`; +348/−47).
   D1a alone is two files (`coder.rs`, `scoper.rs`).
 - **Also S, not prototyped:** `scope_lookup` as a loop, and worklists without clones for the
   cover conversions and `check_strict_binding`.
@@ -1926,7 +1936,7 @@ See §6.
 | Hatch | Effect (measured) | Availability | Verdict |
 |---|---|---|---|
 | E1: `-C link-arg=-zstack-size` | fixes only the shadow stack. The 25 cases peak at 1,403,480 B, but accepted compositions reach 2,611,856 B (§1.2), so 2 MiB is too small today. An 8 MiB shadow stack takes initial memory from 63 to 175 pages; V8 then counts 10.94 MiB (175 × 64 KiB) per instance as external memory, against 3.94 MiB (63 × 64 KiB) (`process.memoryUsage().external` delta on instantiation, `$S/stack/revise4/shadow_external_mem.txt`, re-running `review3/`), while RSS stays at 2.3-3.0 MiB (`$S/stack/prior-art/jspi`) | everywhere, at link time | **required**; use 4 MiB until D1, D2, B5, B6 and B7 land *(est. headroom over 2,611,856 B)*. Lower it, including to 2 MiB on Cloudflare (128 MB isolate limit), only once lane A's shadow high-water marks for the U2-U4 compositions support it |
-| E2: Wasmtime `max_wasm_stack` ≥ 2 MiB, with `async_stack_size` above it | all 25 pass at 2,000,000 B (WASM-BLOCKERS.md:243-256). The limit is in Cranelift bytes, so an upgrade can move it | embedders that own Wasmtime | stopgap; not enough for the §1.6 compositions |
+| E2: Wasmtime `max_wasm_stack` ≥ 2 MiB, with `async_stack_size` above it | all 25 pass at 2,000,000 B (WASM-BLOCKERS.md B3). The limit is in Cranelift bytes, so an upgrade can move it | embedders that own Wasmtime | stopgap; not enough for the §1.6 compositions |
 | E3: Node `--stack-size`, or run in `worker_threads` | `worker_threads` default `stackSizeMb` 4 gives 0/24 traps; `stackSizeMb` 1 traps 3 | Node-hosted daemon | fine for Node; size it against TurboFan and lane B's measured maximum, today at least 1,680 KiB (1.72 MB): accepted compositions need more than the 25 cases' 1,518-1,551 KiB (`walkers/max_node_turbofan.jsonl`: `comp-jstr-flatfast` 1,982 levels 1,680 KiB, `comp-jstr-regexp` 1,592 KiB) until B4 and B7 land |
 | E4: wrap the entry in `WebAssembly.promising` (JSPI) | a JSPI stack is sized from V8 flags, not Blink's Worker constant (V8 ≥ 13.7 `stacks.cc`: `min(v8_flags.stack_size, wasm_stack_switching_stack_size + margin)`). Traps out of 24, direct → JSPI: Chromium Worker 11 → 2, AudioWorklet 9 → 1, main thread 1 → 2, workerd 1 → 2. The call becomes async | Chrome/Edge 137, Firefox 153, Safari 27 (MDN browser-compat-data 8.1.2); workerd by default (verified: `typeof WebAssembly.promising === 'function'` at compatibilityDate 2025-09-01); Node 22 only behind the old flag | cheap interim for Chromium Workers; Firefox and Safari ship JSPI, but their Worker stacks were not measured; neutral or worse on workerd; never fixes `json-stringify-10k` under default flags |
 | E5: JSPI stack chaining ("sync hop") | a wasm import re-enters the instance through a `promising` export, giving a fresh ~1 MB V8 stack per hop; the inner run completes synchronously and returns its result through linear memory. Toy recursion on workerd 1.20260923.1: 14,079 levels direct and ≥ 4,194,304 chained (`$S/stack/revise2/wdchain/out.json`, `version.txt`). Chromium main about 14k direct; Chromium Worker 3.2-3.5M chained, limited by about 0.7 KB of central-stack glue per hop *(est.)* (`$S/stack/prior-art/chain`) | V8 hosts with JSPI, including workerd | removes the host-stack ceiling on Cloudflare **for charged VM recursion only**; compiles need D1, D2 and B7 first (see below) |
@@ -1982,7 +1992,7 @@ The earlier `$S/stack/prior-art/wdchain/wd.log` is empty and recorded no result 
 - **Contract:** hops add no charges, so `ReentryLimit` depths and computrons are unchanged.
 - **Keep it synchronous.**
   The sync variant never suspends, which preserves the rule "Keep the crank fully synchronous"
-  in `designs/thixotrope-on-cloudflare.md:143-146`.
+  in `designs/thixotrope-on-cloudflare.md` §5.1, rule 3.
   The async variant would let other Durable Object events interleave.
 - **Costs:**
   - one lifetime-erasing `unsafe` in a non-engine glue crate (precedent: `xs-oracle` as the
@@ -1996,7 +2006,8 @@ The earlier `$S/stack/prior-art/wdchain/wd.log` is empty and recorded no result 
 
 **F1. Reweighting or lowering the budget** changes acceptance on every host and is a versioned
 release (`interp.rs:364-366`).
-A wasm-only change would split native and wasm workers across releases (WASM-BLOCKERS.md:286-287).
+A wasm-only change would split native and wasm workers across releases
+(WASM-BLOCKERS.md B3, Options).
 §1.4 shows that no single weight pair balances all hosts.
 Reweighting only makes sense *after* the frames shrink, and only to re-derive weights under which
 2,048 units is a true byte bound everywhere (Target 2).
@@ -2274,10 +2285,10 @@ These need either L effort or a release:
    each in `review3/admission_12e6.txt`, which also shows 4e6 to 11e6 elements agreeing).
    The halt kind matches but the computrons do not, so the `Halt` is not byte-identical across
    hosts.
-   This is a determinism break that is not about the stack; it belongs next to B5's admission
-   risk (§4.4) and in WASM-BLOCKERS as a separate blocker.
+   This is a determinism break that is not about the stack; it belongs next to option B5's
+   admission risk (§4.4); WASM-BLOCKERS B7 now covers it.
 6. **Is Node a faithful proxy for the V8 hosts?**
-   For the Chromium Worker, both are V8 limits of about 500 KB, but the Worker counts from its
+   For the Chromium Worker, both are V8 limits of about 500 KiB, but the Worker counts from its
    start-up stack position.
    A Playwright Worker lane would remove the doubt at higher CI cost.
    For workerd it is not: with TurboFan pinned, workerd traps a different set than Node's
@@ -2296,7 +2307,7 @@ These need either L effort or a release:
    They are denial-of-service vectors at constant computrons, independent of the stack.
 10. **Firefox and WebKit.**
     Their Worker stack limits were neither measured nor sourced.
-    Blink ties its 500 KB to macOS's 512 KB default for secondary threads
+    Blink ties its 500 KiB to macOS's 512 KiB default for secondary threads
     (`v8_initializer.cc:1001-1003`), which WebKit Workers may share *(unverified)*.
     Running the families in Firefox and WebKit Workers needs those Playwright browsers, which
     are not installed here.
@@ -2305,7 +2316,7 @@ These need either L effort or a release:
 
 **Kept: the six prototype patches**, which support "release-neutral, already prototyped".
 They are in [`stack-depth-prototypes/`](stack-depth-prototypes/), normalized to apply from the
-repository root:
+repository root with `git apply --directory=rust/engine`:
 
 - `b1-b2-proxy-cursor-loops.patch` (B1, B2), scratch `mop-proxy/prototype.patch`;
 - `b3-b4-json-parse-and-flat.patch` (B3, B4's fast path), scratch
@@ -2356,7 +2367,7 @@ The differential harnesses named here are among them:
 - `review2/` (the second review's files): `pinplus1_wt.txt`, `shapes.py`, `shapes_wt.txt`,
   `shapemax.txt`, `wd/` and `wd2/` (workerd tagged-chain and heavy-ceiling runs),
   `heavy_node500.txt`, `a2_extra.txt`, `globals-14.1.h` (V8 14.1 `src/common/globals.h`);
-- `revise3/` (this revision's re-runs):
+- `revise3/` (the third revision's re-runs):
   - `cst-base/`, `cst-e1/`, `cst-e3/` (the stage harness with a `tagged` shape, against the
     repository crate, D1a and D1a-D1c), `cst_*.wasm` (exnref, for Wasmtime) and
     `cstl_*.wasm` (legacy EH, for Node), `bis.py`, `bisnode.py`;

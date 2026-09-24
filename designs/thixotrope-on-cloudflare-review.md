@@ -10,8 +10,10 @@
 *Verification review of [Thixotrope on Cloudflare](thixotrope-on-cloudflare.md) (the base report)
 and [Addendum A, Single-Vat Hubs](thixotrope-on-cloudflare-addendum-single-vat-hub.md).*
 
-The base report was checked at `5663b155`, whose text differs from the current `075c0118` only by
-the supersession notes; Addendum A was checked at `075c0118`.
+The base report was checked at `5663b155`, whose text differs from `075c0118` only by the
+supersession notes; Addendum A was checked at `075c0118`.
+Commit `d067226a` then added metadata, correction markers and `## Prompt` sections to both
+documents without changing their text.
 Every quote below is copied from the current text.
 Claims were checked statically against the repository code, the workerd source and the Cloudflare
 documentation, and by experiments in local workerd.
@@ -20,6 +22,9 @@ pass, and a completeness critic followed; where the skeptic overturned the verif
 and evidence are used.
 A separate adversarial review of Addendum A ran three local workerd experiments (e1–e3); its
 findings are cited as "finding 1" to "finding 20".
+That review is not published on its own:
+[Addendum A: findings by section](#addendum-a-findings-by-section) summarizes each finding where
+it is cited.
 All of it was re-checked against [WASM-BLOCKERS.md](../rust/engine/WASM-BLOCKERS.md) and
 [STACK-DEPTH-REFACTOR.md](../rust/engine/STACK-DEPTH-REFACTOR.md) at `d152375e`.
 *(inferred)* marks inference.
@@ -49,11 +54,17 @@ relies on does not exist.
 Rows 1–3 can each rule the design out, rows 4–5 are prerequisite engineering for Phase 0, and
 rows 6–11 block Phase 2.
 "U" and "C" are the completeness critic's items.
+U1–U7 are the unstated blockers it found: U1, the compiler runs on every delivery; U2, the
+platform fixes the stack; U3, the instance must be dropped after any exception; U4, the memory
+budget; U5, lazy resume; U6, exactly-once delivery and host state; U7, engine identity and
+upgrades.
+C1–C10 are its contradictions with WASM-BLOCKERS
+([below](#contradictions-with-the-engine-reports)).
 
 | # | Blocker | Affects | Evidence (short) | Blocks |
 |---|---|---|---|---|
 | 1 | The host call stack is fixed by the platform and too small: programs the engine accepts natively trap, at a depth that moves with V8 tier-up | Base §1, §8, §9 (not mentioned); Add. §6.4 | `JSON.stringify` of nested arrays traps from depth 1,343–1,529 where native accepts 2,000; only self-hosted `v8Flags` raise the stack (local-workerd; WASM-BLOCKERS B3 and Cloudflare section; STACK-DEPTH-REFACTOR §1.5). U2, C3 | Phase 0 go/no-go; Phase 2 until STACK-DEPTH-REFACTOR Phases 1–2 land |
-| 2 | 128 MB is per isolate and shared by co-resident objects; the default ceilings allow about 0.5 GB of linear memory, array items and side tables are bounded by no ceiling, and linear memory never shrinks | Base §1, §9, §10; Add. §1 | 11,468,800 B per instance before any heap; demo counter vat 42.13 MiB lazy, 60.31 MiB eager at wake, 59.56 / 77.75 MiB after one chunk-allocating crank *(Node)*; the default chunk ceiling halts at 556–599 MB; an overrun replaces the isolate (WASM-BLOCKERS B7, B8). U4, C4, finding 10 | Phase 0 (ceiling profile and admission); Phase 2 |
+| 2 | 128 MB is per isolate and shared by co-resident objects; the default ceilings let a string heap reach 0.56–1.2 GB of linear memory, array items and side tables are bounded by no ceiling, and linear memory never shrinks | Base §1, §9, §10; Add. §1 | 11,468,800 B per instance before any heap; demo counter vat 42.13 MiB lazy, 60.31 MiB eager at wake, 59.56 / 77.75 MiB after one chunk-allocating crank *(Node)*; string push loops halt at the default chunk ceiling at 556,335,104 B *(Node)* and 599,392,256 B (local-workerd), and string doubling reaches 1.21 GB (Wasmtime); an overrun replaces the isolate (WASM-BLOCKERS B7, B8). U4, C4, finding 10 | Phase 0 (ceiling profile and admission); Phase 2 |
 | 3 | Lazy resume does not make a wake cost the pages a message touches | Base §5.2, §8 Phase 0, §9 | 977 of 1006 slot pages resident right after opening the counter vat; wake 260–340 ms lazy against 279–497 ms eager on the real SQLite backend *(native)*; an allocating checkpoint re-reads every non-resident page (`value.rs:899-919`). U5 | Phase 0 go/no-go (latency) |
 | 4 | Reusing the cached instance after a trap or rollback commits state that SQL rolled back | Base §5.3 `this.vat ??=`, §6.1 `tx`; Add. §4.2, §6.4 | SQL count 3 while the vat held 4, then the next crank committed 5 (local-workerd); each trap leaks about 4.1 MiB of linear memory and some shadow stack, and every call fails after about ten traps; guests can trigger traps (B3, B7). Merges U3, finding 5 and WASM-BLOCKERS "A trap poisons the instance" | Phase 0 (host contract) |
 | 5 | The engine the worker needs does not build on stable Rust, and the compiler runs on every delivery | Base §1, §2, §6.1 | `ironhorse-compile` refuses `panic=abort` (`lib.rs:30-31`); the worker compiles every eval (`main.rs:121-128`); two source-text evals per inbound frame (`ironhorse-engine.js:286, 297`); the working build needs `RUSTC_BOOTSTRAP=1 -Zbuild-std` (WASM-BLOCKERS B1). U1, C1 | Phase 0 (build) |
@@ -73,7 +84,7 @@ Each quote is copied from the current text, for use as an inline correction note
 | 1 | "All live object state, including CapTP session tables, lives in pages of the Ironhorse heap" | Base §1 | Only the guest object graph and the worker's half of its pipe session to the host are in the heap. C-lists, answer routes, publications, gifts and session identities are host hub state, written as one JSON document after every mutating frame. | `hub.js:17-20, 51-55`; `worker-peer.js:88-101` |
 | 2 | "Nothing live is left in the JS isolate, so the failure mode in" | Base §1 | The host endpoint holds live objects by design: system resources, the worker controller and pending host-owed answers, which reject at-most-once after a restart. A DO wake after hibernation is such a restart *(inferred)*. | `daemon.js:46-53`; `ocapn.js:683-686` |
 | 3 | "A worker costs something only while it processes a message." | Base §1 | Duration is billed only while running or unable to hibernate, but SQL storage ($0.20/GB-month beyond 5 GB) accrues while hibernated, and requests and rows written are billed separately. | DO pricing |
-| 4 | "Cloudflare provides storage, compute and connection hosting, and heap images stay portable to" | Base §1 | Not with today's runtime profile: it hashes the worker executable and resume requires an exact match, so the native worker refuses a wasm-written heap and vice versa. Native and wasm32 also still diverge (B7), and in-DO export and import each need about 3–3.5× the container size in linear memory. | `ironhorse-runtime.js:117-129`; `format.rs:437-438`; WASM-BLOCKERS B7; 17,273,470 B container: export 11.00→68.81 MiB, import 11.31→82.56 MiB *(Node)* |
+| 4 | "Cloudflare provides storage, compute and connection hosting, and heap images stay portable to" | Base §1 | Not with today's runtime profile: it hashes the worker executable and resume requires an exact match, so the native worker refuses a wasm-written heap and vice versa. Native and wasm32 also still diverge (B7), and in-DO export and import add about 3.5× (export) to 4.3× (import) the container size in linear memory. | `ironhorse-runtime.js:117-129`; `format.rs:437-438`; WASM-BLOCKERS B7; 17,273,470 B container: export 11.00→68.81 MiB, import 11.31→82.56 MiB *(Node)* |
 | 5 | "The one real port is a new `HeapStore` backend over the DO SQL API." | Base §1 | The worker also needs `ironhorse-compile`, on every delivery, which refuses `panic=abort`; `ironhorse-vm` refusals abort under `panic=abort`; and the port needs stack work (B3), heap ceilings (B8), a new worker loop and host ABI (B5), and adoption of lazy resume, which the worker does not use. | `ironhorse-compile/src/lib.rs:30-31`; `main.rs:121-128, 247`; WASM-BLOCKERS B1, B3, B5, B8 |
 | 6 | "Never call `ws.accept()` or `addEventListener`, because registered listeners keep the isolate" | Base §5.1 | Only `ws.accept()` makes a socket non-hibernatable. On a socket passed to `acceptWebSocket`, `addEventListener` "does nothing" and does not pin the object. | `actor-state.h:666-671`; a DO with a listener registered was evicted after 13 s idle (local-workerd) |
 | 7 | "slot pages and chunk extents are faulted in on demand." | Base §5.2 | Restore validation faults every page that holds a side-table owner or a directly referenced value, and the lazy chunk arena allocates the full chunk length at attach. | `persist.rs:69, 118`; `value.rs:1850`; 977 of 1006 slot pages resident after opening the counter vat |
@@ -86,7 +97,7 @@ Each quote is copied from the current text, for use as an inline correction note
 | 14 | "Can exceed the 2 MB row cap on large heaps" | Base §6.2 | The Arrays section passes 2,000,000 B at about 83k array elements summed over the heap (24 B each), in a heap file of about 2 MB; Collections at about 50k entries. The counter vat's Functions section is already 1,376,481 B. An over-cap value fails the whole commit, so the row is ❌. | Row sizes measured through `SqliteHeapStore` *(native)* |
 | 15 | "Lazy paging, evicting cold pages, sharding across DOs, Containers for outliers" | Base §9 | Lazy paging does not bound memory (corrections 7–8); no production code evicts; evicting a chunk extent frees nothing; wasm memory never shrinks; and DOs of one Worker may share an isolate and its 128 MB. | `store_suite.rs:246-293` (only callers); `value.rs:1914-1936`; DO in-memory-state docs |
 | 16 | "O(dirty) commits already. Batch small frames; skip commits for read-only cranks" | Base §9 | Every crank dirties at least the Meter section and the manifest row, so no crank is read-only. A touched Arrays or Collections section is re-encoded whole, the free list is re-encoded at every checkpoint, and a dirty page with k outgoing edges costs about 4 + 3k billed rows. | `lib.rs:1332-1351, 1278-1283`; `machine.rs:1028-1052`; `rowsWritten` (local-workerd) |
-| 17 | "Computron budgets already exist; split long work across alarm cranks" | Base §9 | A budget refusal ends the crank as a fatal halt; the engine cannot resume it in a later alarm. Computrons also do not bound CPU time (0.119–14.55 M computrons/s). | `interp.rs:2286-2287`; WASM-BLOCKERS Cloudflare section, "CPU" |
+| 17 | "Computron budgets already exist; split long work across alarm cranks" | Base §9 | A budget refusal ends the crank as a fatal halt; the engine cannot resume it in a later alarm. Computrons also do not bound CPU time: measured rates run from 0.119 M computrons/s (`indexOf` over a 2 MB string, *Node*) to about 37 M/s (a backtracking RegExp, local-workerd). | `interp.rs:2286-2287`; WASM-BLOCKERS Cloudflare section, "CPU"; `/^(a+)+$/` on 24 `a`s and a `b`: 184,549,438 computrons in 4.98–8.78 s (local-workerd) |
 | 18 | "Hub-to-hub delivery (exactly once)" | Add. §4.3 | Not exactly once as specified: with no gap check, frame k+1 can commit before k, and k is then dropped as a duplicate. | [Trace](#42-crank-and-43-hub-to-hub-delivery) |
 | 19 | "External nodes dial in through the edge router, which calls `acceptWebSocket` on the hub." | Add. §4.4 | `acceptWebSocket` is a method of the object's own `ctx`; the router forwards the upgrade with `stub.fetch(request)`, and the hub accepts the socket. | `actor-state.h:586, 675`; DO WebSockets best practices |
 | 20 | "`newUniqueId({ locationHint })`" | Add. §5 | `newUniqueId` takes only `{ jurisdiction }`. `locationHint` is an option of `get()`, honoured best-effort on the first `get()` only. | `api/actor.h:203-213, 230-249`; DO namespace and data-location docs |
@@ -118,7 +129,7 @@ Corrections 1–5 apply here.
 - **Heaps are not portable yet.**
   Boot fingerprints match native and wasm32 (`36855d7e…`, with `consensus` on both), but the
   profile hashes the executable (correction 4), and the targets still diverge at 27 audited sites,
-  with fixes prototyped for eight (WASM-BLOCKERS B7).
+  with fixes prototyped for 11 of them and validated on eight repros (WASM-BLOCKERS B7).
   Direction: a platform-neutral profile, the B7 fixes, container import in the local adapter,
   and an engine-upgrade plan.
 - **"Cost scales with use" omits per-message charges (correction 3).**
@@ -262,7 +273,8 @@ Corrections 12–14 apply here.
   A JS exception from an import unwinds Rust frames without destructors and escapes
   `catch_unwind`, leaving a `RefCell` borrowed (local-workerd; WASM-BLOCKERS Cloudflare section).
   Direction: one statement per call, integers as f64 within u32, error codes instead of throws,
-  and `extern "C-unwind"` on any import that re-enters wasm.
+  and, if any call re-enters wasm, `extern "C-unwind"` on the re-entered export and on the import
+  that calls back.
 - **The reentrant `tx(fn_id)` callback is avoidable (correction 12).**
   `commit_verified` does all its reads and the verifier (`lib.rs:1011-1098`) before its first
   write, and the §5.3 host already wraps the crank in `transactionSync`.
@@ -539,8 +551,9 @@ Corrections 18–25 apply here.
 
 - **No metrics, and both documents miss conventions (finding 20).**
   Nothing measures outbox depth, retries, alarm exhaustion, traps, fence durations or gift waiters.
-  The base report changed in `075c0118` but still says Updated 2026-09-23, and neither document
-  has the `## Prompt` section that designs/AGENTS.md asks for.
+  When reviewed, the base report had changed in `075c0118` but still said Updated 2026-09-23, and
+  neither document had the `## Prompt` section that designs/AGENTS.md asks for; `d067226a` fixed
+  both.
 
 ## Contradictions with the engine reports
 
@@ -552,8 +565,8 @@ Rechecked against WASM-BLOCKERS.md at `d152375e`, with line numbers from that te
 |---|---|---|---|
 | C1 | §1: builds "as-is"; "one real port" | B1 hard; `ironhorse-compile` and `ironhorse-runtime` fail on both targets; `vm` and `regexp` refusals abort under `panic=abort` | WASM-BLOCKERS. The base report is wrong (correction 5). |
 | C2 | §5.3 caches `this.vat` across events | "A trap poisons the instance, cumulatively": discard after any trap | WASM-BLOCKERS, since `e487f62e` corrected the "does not poison" heading. The base report is wrong. |
-| C3 | Silent on the stack; picks workerd as host | B3 "hard in browsers and workerd"; the stack refactors are required | WASM-BLOCKERS; the base report must add the stack. WASM-BLOCKERS is imprecise at line 725: "in a Durable Object, 23" is one run after a request pass had tiered V8 up, and a fresh-instance DO run matched 24 of 25 (only `json-stringify-10k` trapped). It should say 23–24 of 25 in either context, depending on tier-up. |
-| C4 | §9: 128 MB mitigated by lazy paging, eviction and sharding | B8 "the ceilings do not bound memory", "hard under a 128 MB cap"; recycle the instance | WASM-BLOCKERS. The base report is wrong (correction 15). Two fixes to WASM-BLOCKERS: B8's "4–5× the chunk ceiling for string heaps" is the string-doubling worst case, since string push loops halted at 2.1–2.3× (556,335,104 B in Node, 599,392,256 B in workerd), so "up to 4–5×" is exact; and the Cloudflare "Memory" bullet (line 756) still asks only for lower ceilings, though B8 now says no ceiling bounds array items or side tables, so it must also require admitting them (B7). |
+| C3 | Silent on the stack; picks workerd as host | B3 "hard in browsers and workerd"; the stack refactors are required | WASM-BLOCKERS; the base report must add the stack. WASM-BLOCKERS was imprecise at line 725: "in a Durable Object, 23" is one run after a request pass had tiered V8 up, and a fresh-instance DO run matched 24 of 25 (only `json-stringify-10k` trapped). With TurboFan pinned (`--no-liftoff`), 7 of the 25 trap (STACK-DEPTH-REFACTOR §1.3), so it should say 18–24 of 25 in either context, depending on tier state. |
+| C4 | §9: 128 MB mitigated by lazy paging, eviction and sharding | B8 "the ceilings do not bound memory", "hard under a 128 MB cap"; recycle the instance | WASM-BLOCKERS. The base report is wrong (correction 15). Two fixes to WASM-BLOCKERS: B8's "4–5× the chunk ceiling for string heaps" is the string-doubling worst case, since string push loops halted at 2.1–2.2× (556,335,104 B in Node, 599,392,256 B in workerd), so "up to 4–5×" is exact; and the Cloudflare "Memory" bullet (line 756) still asks only for lower ceilings, though B8 now says no ceiling bounds array items or side tables, so it must also require admitting them (B7). |
 | C5 | §1, §8: heaps portable and "can move both ways" | Not investigated; a Thixotrope profile check refuses it first | Both incomplete. WASM-BLOCKERS is out of date: the verification restored two natively written Thixotrope heaps in a wasm32 instance *(Node)*, the SES boot heap (7,651,170 B container) and the counter vat (17,273,470 B), by passing the native profile string; each ran `1+1` and the outbound drain, lazily and eagerly. wasm32 → native was not run. The base report stays wrong until the profile is platform-neutral (correction 4). |
 | C6 | §9: "Ironhorse is already an interpreter" | "Speed": 1.5–2.7× slower than native; "Not investigated" still lists performance (line 794) | WASM-BLOCKERS' measurement is right, and its "Not investigated" entry is stale. The base report understates the cost. |
 | C7 | §5.2: "instantiate the WASM module" | Cloudflare section: the module must be bundled | Resolved: WASM-BLOCKERS no longer recommends `WebAssembly.compile` for workerd, and the base report never proposed runtime compilation. Engine upgrades remain (blocker 6). |
@@ -561,9 +574,12 @@ Rechecked against WASM-BLOCKERS.md at `d152375e`, with line numbers from that te
 | C9 | §6.1, §9: hold no borrows across a reentrant `tx` | Cloudflare section: "A Durable Object's transaction callback re-enters wasm from JS"; use `extern "C-unwind"` | WASM-BLOCKERS on the mechanics; the base report's rule cannot be met (correction 12). WASM-BLOCKERS states re-entry as a given at line 742; it happens only if the host calls back into wasm from a transaction callback, which the design can avoid. |
 | C10 | §4: quarantine through PITR; §5.3 has no fatal path | B1 option 3: drop the instance and restore from the last committed snapshot | WASM-BLOCKERS, for the engine. The base report is wrong: PITR is a whole-database rollback, and quarantine needs a failure row committed outside the halted crank, which Addendum A §6.4 also leaves out. |
 
-Outside C1–C10, STACK-DEPTH-REFACTOR §1.6 lists corrections to B3.
-One is still unapplied: the Chromium Worker limit is Blink's 500 KB constant, not the thread's OS
-stack that WASM-BLOCKERS.md:652 suggests.
+Commit `ccd009f2` applied the WASM-BLOCKERS fixes that C3, C4, C5, C6 and C9 propose, and a
+later revision widened C3's range to 18–24 of 25; the line numbers in the table refer to the
+text at `d152375e`.
+Outside C1–C10, STACK-DEPTH-REFACTOR §1.6 lists corrections to B3, all since applied.
+The last of them, Blink's 500 KiB Worker limit in place of the thread's OS stack that
+WASM-BLOCKERS.md:652 suggested, landed in `ccd009f2`.
 
 ## What Phase 0 needs
 
@@ -581,8 +597,8 @@ Work items, from the completeness critic, with Addendum A's additions:
 1. Build one cdylib with `RUSTC_BOOTSTRAP=1`, `-Zbuild-std=std,panic_unwind`, `-C panic=unwind`,
    `-C target-feature=+exception-handling`, `-C llvm-args=-wasm-use-legacy-eh=false` (exnref),
    the `-zstack-size` of STACK-DEPTH-REFACTOR §4.7 (E1) and `consensus`, with
-   `extern "C-unwind"` on any import that re-enters wasm and a CI job (WASM-BLOCKERS B1, B2, B6);
-   an exnref build made this way ran in local workerd.
+   `extern "C-unwind"` on any re-entered export and on the import that calls back into it, and a
+   CI job (WASM-BLOCKERS B1, B2, B6); an exnref build made this way ran in local workerd.
 2. Engine session exports that port `main.rs` without threads, `flock`, files or NDJSON: set the
    profile and ceilings, boot, resume lazily, `eval(source, budget)`, checkpoint, return the halt
    class; keep today's two evals per frame.
@@ -599,7 +615,8 @@ Work items, from the completeness critic, with Addendum A's additions:
 6. A Cloudflare ceiling profile (`set_chunk_ceiling`, `set_slot_ceiling`) plus admission of array
    items and side tables, which no ceiling bounds today (WASM-BLOCKERS B7, B8), tested to halt
    with `HeapExhausted` below about 100 MiB of linear memory under string, array and Map growth,
-   counting the 11 MiB baseline and 2× vector growth.
+   counting the baseline (11 MiB with an 8 MiB shadow stack, about 7 MiB with E1's 4 MiB) and 2×
+   vector growth.
 7. Test heaps: first boot inside the DO, the demo counter vat through `import_from_container`,
    and synthetic sweeps (a plain list, Map and WeakMap tables, arrays, closures, a large free
    list).
@@ -612,15 +629,17 @@ Work items, from the completeness critic, with Addendum A's additions:
 Decisive measurements, ranked:
 
 1. The production DO stack depth against the 25 recursion families and a `JSON.stringify` depth
-   sweep; if it matches OSS workerd's 984 KiB, accepted programs trap by tier, and B3's heap
-   stacks become mandatory before any heap is shared between local and cloud.
+   sweep; if it matches OSS workerd's 984 KiB, accepted programs trap by tier, and the heap-stack
+   refactors of WASM-BLOCKERS B3 become mandatory before any heap is shared between local and
+   cloud.
 2. Peak linear memory per awake worker, co-residency per production isolate, and whether compiled
-   wasm code counts toward 128 MB (locally: 11 MiB baseline, 42–78 MiB for the counter vat,
+   wasm code counts toward 128 MB (locally: 11 MiB baseline with the 8 MiB shadow stack,
+   42–78 MiB for the counter vat,
    67–83 MiB for first boot, export and import *(Node)*).
 3. Cold wake for SES and OCapN heaps with today's engine, split into instantiate (Liftoff),
    resume, first crank and first commit (the lazy wasm wake of the counter vat took 781 ms
    *(Node)*).
-4. CPU per crank against computrons (0.12 to 37 million per second), including first boot, which
+4. CPU per crank against computrons (0.119 to 37 million per second), including first boot, which
    decides whether a budget halt can pre-empt the platform reset.
 5. Hub-to-hub delivery (Addendum A §12): RPC round trip including the receiver's durable commit,
    and one crank with routing (c-list rewrite plus outbox) against one without.
@@ -682,7 +701,8 @@ The verification ran in session scratch that does not survive the session, so th
 review relies on are inlined above, and claims that could not be re-checked were dropped.
 Repository `file:line` citations refer to commit `d152375e`; the code is unchanged since
 `5663b155`, where the verification ran.
-Quotes from the two design documents match their current text (`075c0118`).
+Quotes from the two design documents match their text at `075c0118`, which `d067226a` changed
+only by adding metadata, markers and `## Prompt` sections.
 WASM-BLOCKERS.md citations use its text at `d152375e`, and STACK-DEPTH-REFACTOR.md citations use
 its text at `11781239`, which is current at `d152375e`.
 workerd citations (`src/workerd/…`, `src/cloudflare/…`) refer to commit

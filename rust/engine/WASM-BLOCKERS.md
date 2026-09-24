@@ -22,7 +22,8 @@ browser section.
 
 Every claim below was checked by building and running something unless it is marked
 *inferred*.
-The [appendix](#appendix-reproduction) has the commands.
+The [appendix](#appendix-reproduction) has the commands for the Node, Wasmtime and Chromium runs.
+The workerd harness and the divergence audit's crafted-store probes were not kept.
 
 ## Summary
 
@@ -32,16 +33,18 @@ the only panic strategy stable Rust offers on wasm.
 `ironhorse-runtime` fails only because it depends on it.
 
 With unwinding turned on through an unstable toolchain feature, the whole compile-and-run
-pipeline works on both targets and in all three hosts.
+pipeline works on both targets and in all four hosts.
 Heap exhaustion, compiler budget refusal, and `eval`-time `SyntaxError`s are contained, as they
 are natively.
 A `wasm32-unknown-unknown` build needs **no imports at all**.
 
 It is **not** yet deterministic across targets, even with `consensus` on.
-An audit confirmed 27 sites where the same guest program gets a different answer or a
-different computron count on wasm32 than on native x86_64 (B7).
+An audit confirmed 27 sites where native x86_64 and wasm32 behave differently (B7).
+Most give the same guest program a different answer or a different computron count.
+The rest are host-side: a crafted store, error values, a WASI panic, and a restore that is
+nondeterministic on every target.
 Examples are allocating near a heap ceiling, growing arrays or side tables past wasm32's
-allocation limits, and one four-line program that crashes the wasm32 engine outright.
+allocation limits, and one three-line program that crashes the wasm32 engine outright.
 The probes that stay clear of those sites and of the host limits in B3 and B8 matched native
 exactly.
 
@@ -52,7 +55,7 @@ What stands in the way, in order of severity:
 | B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors | toolchain / engine | **hard** |
 | B7 | Heap admission, unadmitted host allocations, `usize` arithmetic and snapshot decoding depend on the target, so native and wasm32 diverge in results and metering; one tiny program crashes wasm32 | engine | **hard (consensus)** |
 | B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
-| B8 | The ceilings do not bound memory: 4–5× the chunk ceiling for string heaps, unbounded for arrays and side tables; a host memory cap turns deterministic `HeapExhausted` into a host-dependent trap | engine / host | **hard under a 128 MB cap** |
+| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for string heaps, unbounded for arrays and side tables; a host memory cap turns deterministic `HeapExhausted` into a host-dependent trap | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
 | B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
@@ -181,16 +184,17 @@ rustc warns that `exception-handling` is an unstable target feature.
 
 The probe then shows:
 
-- **Heap exhaustion is contained** (Node, Wasmtime, Chromium).
+- **Heap exhaustion is contained** (Node, Wasmtime, Chromium, workerd).
   `var a=[]; for(;;) a.push({x:a.length})` under `set_slot_ceiling(20_000)` halts with
   `HeapExhausted`, and a fresh `Interp` in the same instance then runs `1+1` to `2`.
 - **Compiler budget refusal is contained** (Node, Wasmtime), when the host calls
   `compile_atoms_with_budget` at top level.
   The same `Refused` unwind inside a guest `eval` under an armed meter was **not** exercised.
   The probe meant for it hit the parser's tree-depth limit instead.
-- **Early errors through `eval` are contained** (Node, Wasmtime): the `Poisoned` cases above.
-- **`eval` and `Function` work** (Node, Wasmtime, Chromium), including the compiler-budget
-  `SyntaxError`s.
+- **Early errors through `eval` are contained** (Node, Wasmtime, workerd): the `Poisoned` cases
+  above.
+- **`eval` and `Function` work** (Node, Wasmtime, Chromium, workerd), including the
+  compiler-budget `SyntaxError`s.
 
 ### Options
 
@@ -236,8 +240,9 @@ Option 2 lifts the constraint for good.
 
 A consensus build must give the same result and the same computrons on every target.
 An audit of the engine for native-versus-wasm32 divergence confirmed 27 distinct sites.
-Each was reproduced by running the same program on the native probe and on the wasm32 probe
-under Wasmtime, both with `consensus`, and comparing the full output line.
+Each guest-visible site was reproduced by running the same program on the native probe and on
+the wasm32 probe under Wasmtime, both with `consensus`, and comparing the full output line.
+The snapshot and store findings used crafted inputs or host calls.
 It found them through five lenses: host-layout charges, casts, overflow points, floating point,
 and snapshots.
 The sites fall into four families.
@@ -288,13 +293,13 @@ At the same point native completes, or halts deterministically.
 |---|---|---|---|
 | Map and Set entries (`ironhorse-vm/src/bulk.rs:479`) | `var m=new Map(); for (var i=0;i<N;i++) m.set(i,i); m.size`, N = 2^25 + 1 | `Return 33554433` | capacity-overflow panic, trap |
 | Array items (`bulk.rs:242`) | 80 × `JSON.parse` of a 1,000,000-element array, all kept | `Return 80:1000000` (4.4 GiB RSS) | allocation failure, trap |
-| `Intl.Segmenter` segments (`interp/locale.rs:308`) | 8 × `seg.segment()` of a 32M-unit string, all kept | `Return 8` (6.7 GiB RSS) | allocation failure, trap |
-| `Intl.ListFormat` (`natives/dispatch.rs:1966`, `intl.rs:757`) | 2,000 references to one 1.1M-unit string, then a number | catchable `TypeError` | allocation failure, trap |
+| `Intl.Segmenter` segments (`interp/locale.rs:308`) | 8 × `seg.segment()` of a 32M-unit string, all kept | `Return 8` (6.6 GiB RSS) | allocation failure, trap |
+| `Intl.ListFormat` (`natives/dispatch.rs:1967`, `intl.rs:757`) | 2,000 references to one 1.1M-unit string, then a number | catchable `TypeError` | allocation failure, trap |
 | Typed-array `join`, typed-array and array `toLocaleString` (`natives/buffer.rs:558`, `:287`, `natives/array.rs:4482`) | a long separator or long elements | `HeapExhausted` | capacity-overflow panic, trap |
 | `Function` constructor (`interp/eval.rs:226`, then `ironhorse-compile/src/lexer.rs:167`) | `Function(s,s,…,'')` with a 268.8M-code-point assembled source | `Return function12` | `EngineInvariant("eval:compiler-invariant")` |
 
 The same sites break native resource accounting too.
-Under the default ceilings the native process reached 4.2–6.7 GiB of RSS in these repros.
+Under the default ceilings the native process reached about 4–6.6 GiB of RSS in these repros.
 With a slot ceiling of 50,000, one million Map entries, Set entries, array items or indexed
 properties still succeed.
 The fix is to admit side-table and array-item storage, and guest-amplified host copies, against
@@ -304,7 +309,7 @@ the ceilings before allocating.
 
 - **`advance_string_index` (`natives/regexp.rs:301`)** computes `i + 1` in `usize`.
   With `lastIndex = 2**32 - 1` that overflows on wasm32 only, and with overflow checks on it
-  panics, so a four-line guest program crashes the wasm engine:
+  panics, so a three-line guest program crashes the wasm engine:
 
   ```js
   var re = /(?:)/gu; var n = 0;
@@ -365,17 +370,18 @@ the ceilings before allocating.
 
 ### Fix prototypes
 
-Two of the audit's fixes are kept in [`determinism-prototypes/`](determinism-prototypes/):
+Three of the audit's fixes, which cover 11 of the 27 sites, are kept as two patches in
+[`determinism-prototypes/`](determinism-prototypes/):
 - fixed per-element admission widths, with the matcher's charges pinned the same way;
 - the `advance_string_index` overflow;
 - the `JSON.stringify` output sizing.
 
-With both applied, eight of the repros above print exactly the native line on wasm32.
+With both patches applied, eight of the repros above print exactly the native line on wasm32.
 Patched native output is byte-identical to unpatched native output, so native thresholds do
 not move.
 A control repro in the RegExp compiler, which neither patch touches, still diverges.
-The engine's test suites pass, except for one source-mutation test whose anchor line the JSON
-patch rewrites.
+The `ironhorse-vm` and `ironhorse-regexp` test suites pass, except for one source-mutation test
+whose anchor line the JSON patch rewrites.
 
 ## B3: the native-recursion budget outruns wasm stacks
 
@@ -484,8 +490,9 @@ The failures were:
   It works on 2 MiB and 8 MiB host threads.
 
 A trap is not contained, even with unwinding enabled.
-Rust state at the moment of the trap is not rolled back (*inferred*), so the instance must be
-discarded.
+Rust state at the moment of the trap is not rolled back, so the instance must be discarded.
+In local workerd, a trap inside a transaction rolled SQL back while the instance's own state
+kept the change, and the next crank committed the mismatch (see the Cloudflare section).
 The guest controls how deep it recurses, so on an undersized stack a guest can turn a
 deterministic `ReentryLimit` into a host-dependent failure.
 That is a determinism break across hosts, not just a crash.
@@ -494,17 +501,21 @@ That is a determinism break across hosts, not just a crash.
 
 - **Require minimum stacks** where the embedder controls them, and document them next to
   `NATIVE_STACK_BYTES`:
-  - `-zstack-size` ≥ 8 MiB.
+  - `-zstack-size` ≥ 4 MiB: the worst accepted composition measured needs 2,611,856 bytes of
+    shadow stack (STACK-DEPTH-REFACTOR.md
+    [§1.2](STACK-DEPTH-REFACTOR.md#12-two-stacks-on-wasm-and-the-host-limits)).
+    The figures in this report used 8 MiB.
   - Wasmtime `max_wasm_stack` ≥ 2 MiB for the families above, on a host thread whose own
     stack is comfortably larger.
     Some accepted programs need more than 3 MiB (see above), so 2 MiB is a floor, not a bound.
     The wasmtime-py 49 `Config` has no `async_stack_size` setter, and `max_wasm_stack` above
     2,097,152 bytes panics the process with "max_wasm_stack size cannot exceed the
     async_stack_size".
-    From Python the usable margin above the measured 2,000,000-byte requirement is therefore
-    about 5%; the Rust API can raise `async_stack_size`.
-  - Node `--stack-size` ≥ 1,551 KiB for the 25 cases under TurboFan, and more for accepted
-    compositions (1,680 KiB measured), plus margin.
+    From Python the usable margin above the 1,899,520 bytes the 25 cases need is therefore about
+    10%; the Rust API can raise `async_stack_size`.
+  - Node `--stack-size` ≥ 1,551 KiB for the 25 cases (1,518 KiB with TurboFan pinned, 1,551 KiB
+    under the worst measured tier mix), more for accepted compositions (1,680 KiB measured),
+    plus margin.
 - **Browsers and workerd** cannot raise the stack, so there the frames must shrink or leave the
   call stack.
   Candidates include:
@@ -513,7 +524,7 @@ That is a determinism break across hosts, not just a crash.
   - bounding the compiler's AST recursion the same way
   - shrinking the heavy `dispatch_at` and `call_native` frames
 
-  [STACK-DEPTH-REFACTOR.md](STACK-DEPTH-REFACTOR.md) (in progress) maps every recursion
+  [STACK-DEPTH-REFACTOR.md](STACK-DEPTH-REFACTOR.md) maps every recursion
   family and ranks these refactors.
   Lowering `NATIVE_DEPTH_LIMIT` for wasm alone would not work: the limit is release-versioned
   and changes acceptance, so native and wasm workers could no longer share a release.
@@ -532,7 +543,7 @@ Measured:
   Native repros reached 4.2–6.7 GiB of RSS under the default ceilings.
 
 So for heaps dominated by strings the footprint is up to 4–5× the chunk ceiling (string
-doubling is the worst case; push loops of strings halted at 2.1–2.3×), and for heaps dominated
+doubling is the worst case; push loops of strings halted at 2.1–2.2×), and for heaps dominated
 by arrays or side tables no ceiling bounds it.
 
 Wasm linear memory never shrinks.
@@ -655,13 +666,16 @@ Firefox and Safari were not available to test.
   `eval(ptr, len)` and `out_ptr`.
 - **The stack is the main problem** (B3).
   A page cannot configure it.
-  The main thread fails only the `JSON.stringify` ceiling (cold).
+  Among the 42 B3 cases the main thread fails only the `JSON.stringify` ceiling (cold).
+  It also traps accepted compiler chains and deep-object `JSON.stringify`
+  ([STACK-DEPTH-REFACTOR.md §1.3](STACK-DEPTH-REFACTOR.md#13-what-traps-today)).
   A dedicated **Web Worker has a smaller stack**.
   17 of 42 cases trap there, including an accepted 2,016-layer Proxy chain.
   `--js-flags=--stack-size=4000` fixed the main thread but not the Worker.
   The Worker's limit is a Blink constant, `kWorkerMaxStackSize = 500 * 1024`, not the V8 flag
-  (see [STACK-DEPTH-REFACTOR.md §1.2](STACK-DEPTH-REFACTOR.md#12-two-stacks-on-wasm-and-the-host-limits));
-  a page could not pass the flag anyway.
+  (see STACK-DEPTH-REFACTOR.md
+  [§1.2](STACK-DEPTH-REFACTOR.md#12-two-stacks-on-wasm-and-the-host-limits)); a page could not
+  pass the flag anyway.
   This is a real tension.
   Long cranks belong in a Worker so they do not freeze the page, and the Worker is where the
   stack is smallest.
@@ -733,8 +747,10 @@ documentation, not measured.
   With `--no-wasm-legacy-eh`, the legacy build fails at startup ("Invalid opcode 0x06") while the
   `exnref` build runs, so `exnref` is the encoding to ship (B2).
 - **The stack cannot be raised** (B3).
-  - 23–24 of the 25 B3 cases match native, in a request handler or a Durable Object, depending
-    on whether V8 has tiered up: fresh instances matched 24, and a run after tier-up 23.
+  - 18–24 of the 25 B3 cases match native, in a request handler or a Durable Object, depending
+    on V8's tier state: fresh instances matched 24, one run after natural tier-up 23, and runs
+    with TurboFan pinned (`--no-liftoff`) 18, including the accepted 2,016-layer Proxy chain
+    ([STACK-DEPTH-REFACTOR.md §1.3](STACK-DEPTH-REFACTOR.md#13-what-traps-today)).
   - The `JSON.stringify` ceiling traps in both.
   - The Proxy `[[Call]]` chain passes on a cold run and traps after V8 tiers up: `--liftoff-only`
     passed 6 of 6 runs, `--no-liftoff` trapped 6 of 6.
@@ -750,6 +766,8 @@ documentation, not measured.
 - **A trap poisons the instance, cumulatively** (see the browser section).
   In a Durable Object this is a guest-triggerable wedge: an embedder that caches the instance
   across events will fail every event after about ten traps, until the object is evicted.
+  Each trap also leaks about 4.1 MiB of linear memory, because destructors do not run: in local
+  workerd an instance grew from 11.3 MiB to 52.4 MiB over ten traps.
 - **Unwinding across the JS boundary needs `extern "C-unwind"`.**
   If the host calls back into wasm from a Durable Object's transaction callback, the call
   re-enters wasm from JS; a host can avoid that by running the whole crank inside one callback.
@@ -760,9 +778,11 @@ documentation, not measured.
   running destructors, so a `RefCell` borrowed at that moment stays borrowed and later calls trap.
   Host imports should catch JS exceptions and return error codes.
 - **Memory** (B8).
-  An instance starts at 11,468,800 bytes of linear memory, 8 MiB of it the shadow stack.
+  An instance starts at 11,468,800 bytes of linear memory, 8 MiB of it the shadow stack (about
+  7 MB with the 4 MiB shadow stack B3 recommends).
   Under the default ceilings, the slot ceiling halts at 66,912,256 bytes of linear memory.
-  The chunk ceiling halts at 599,392,256 bytes, with the same computrons natively.
+  A string push loop halts at the chunk ceiling at 599,392,256 bytes, with the same computrons
+  natively; string doubling reaches 1.21 GB (B8).
   Cloudflare's 128 MB limit is per isolate, "including the JavaScript heap and WebAssembly
   allocations", and one isolate can host several Durable Objects (Workers limits and Durable
   Object in-memory-state documentation).
