@@ -423,7 +423,6 @@ const compareMessageNames = (left, right) => {
   return BigInt(left) < BigInt(right) ? -1 : 1;
 };
 
-/** @type {PetName} */
 /**
  * Per-frame raw-byte bound for readable-blob uploads, higher than the
  * `iterateBytesReader` default to accommodate large payloads like bundles.
@@ -432,6 +431,19 @@ const compareMessageNames = (left, right) => {
  */
 export const READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT = 7_500_000;
 
+/**
+ * Drains a remote bytes reader for a readable-blob upload, rejecting any frame
+ * larger than `READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT`.
+ * `formulateReadableBlob` feeds the returned iterator to the content store.
+ *
+ * @param {Parameters<typeof iterateBytesReader>[0]} readerRef
+ */
+export const iterateReadableBlobUpload = readerRef =>
+  iterateBytesReader(readerRef, {
+    byteLengthLimit: READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT,
+  });
+
+/** @type {PetName} */
 const PROMISE_STATUS_NAME = /** @type {PetName} */ ('status');
 // Stores the resolved formula identifier as a direct pet store entry so the
 // formula graph keeps the resolved value reachable (prevents premature
@@ -4849,11 +4861,9 @@ const makeDaemonCore = async (
           await randomHex256()
         );
         const contentSha256 = await contentStore.store(
-          // `iterateBytesReader` returns the iterator synchronously; the
-          // store consumes it, so no `await` here.
-          iterateBytesReader(readerRef, {
-            byteLengthLimit: READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT,
-          }),
+          // `iterateReadableBlobUpload` returns the iterator synchronously;
+          // the store consumes it, so no `await` here.
+          iterateReadableBlobUpload(readerRef),
         );
 
         await deferredTasks.execute({

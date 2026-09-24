@@ -1,7 +1,8 @@
 // @ts-check
 
-// Pins the per-frame bound `formulateReadableBlob` passes to
-// `iterateBytesReader`. The limit moved from base64 characters to raw bytes in
+// Pins the per-frame bound on readable-blob uploads. `formulateReadableBlob`
+// drains the uploader's reader through `iterateReadableBlobUpload`, which these
+// tests drive directly. The limit moved from base64 characters to raw bytes in
 // the byte-stream change, and an unconverted literal would silently widen the
 // bound by a third, so both edges are checked in raw bytes.
 
@@ -9,8 +10,10 @@
 import '@endo/init/debug.js';
 import test from 'ava';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
-import { READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT } from '../src/manager.js';
+import {
+  READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT,
+  iterateReadableBlobUpload,
+} from '../src/manager.js';
 
 /** @param {number} length */
 const drainOneFrame = async length => {
@@ -20,9 +23,7 @@ const drainOneFrame = async length => {
     })(),
   );
   let total = 0;
-  for await (const chunk of iterateBytesReader(reader, {
-    byteLengthLimit: READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT,
-  })) {
+  for await (const chunk of iterateReadableBlobUpload(reader)) {
     total += chunk.length;
   }
   return total;
