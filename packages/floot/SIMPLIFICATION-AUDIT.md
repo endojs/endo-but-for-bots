@@ -131,4 +131,24 @@ Item 3 subsequently passes all 714 Floot tests and seven real-daemon journal,
 retirement and native-context restart tests. Scoped lint and the root
 documentation/API gate pass; the factory's existing storage ownership is retained.
 It does not prove that the entire refactor is smaller than its original baseline.
-No deployment or new crash-recovery guarantee is claimed.
+Tokyo activated the explicit-storage revision `d8d8db599` on generation 170.
+Initial setup rejected legacy Claude/Codex credential wrappers.
+The approved renewal-owner retirement archived the old generations and recreated
+owners over the same Secrets, without clearing uncertain-renewal markers.
+Live metadata checks preserve all six Secrets, four archived guest/workspace roots, eight
+old renewal roots, and retained account/reset journals.
+All four backends pass model discovery; direct Fae passes free-route tool use
+and pending-turn cancellation.
+Hosted acceptance exposed OpenCode catalog-ID normalization and Claude/Codex
+native-context completion failures; fixes and renewed acceptance are in progress.
+The OpenCode fix preserves provider-scoped IDs and passes 304 tests.
+The Codex correction permits its app server and serialized context helper to
+coexist, dividing the existing aggregate memory/PID/CPU ceilings across three
+containers (including the anchor); other backends retain one operation.
+Its full suite passes 425 tests, and shared/controller checks pass 75 with one skip.
+Claude now reports static coverage phase/check diagnostics without weakening
+validation (175 coverage/client tests pass); its underlying failure is still under
+investigation.
+See the host repository's
+`ops/explicit-journal-deployment-20260924.md` for exact pins and evidence.
+No successful cross-backend acceptance or new crash-recovery guarantee is claimed.
