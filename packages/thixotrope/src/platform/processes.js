@@ -10,6 +10,8 @@
  * @property {(fd: number) => ({ write: (text: string) => void, end: (text?: string) => void } | undefined)} input
  * @property {Promise<number | null>} exited exit code, or null when the
  *   child was signaled or failed to spawn
+ * @property {Promise<Error>} failed resolves on the first process or pipe
+ *   error; stays pending on normal exit (never rejects)
  * @property {(signal: string) => void} kill
  *
  * Spawn a host process. `stdio` entries name the pipes by descriptor:
