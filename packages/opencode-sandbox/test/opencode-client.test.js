@@ -3,6 +3,9 @@
 import '@endo/init';
 import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+// Internal test harness, deliberately not a runtime package export.
+// eslint-disable-next-line import/no-relative-packages
+import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
 
 import { makeOpencodeClient } from '../src/opencode-client.js';
 
@@ -880,50 +883,56 @@ for (const cancelMode of ['reader', 'interrupt']) {
       const transcript = [
         { kind: 'message', role: 'user', content: 'earlier' },
       ];
-      const cancelled = await client.send('must not execute', { transcript });
-      await waitFor(() =>
-        bridge.commands.some(text => JSON.parse(text).op === 'import'),
-      );
-      let cancellation;
-      if (cancelMode === 'reader') await iterateReader(cancelled).return();
-      else {
-        cancellation = client.interrupt();
-        cancellation.catch(() => {});
-      }
-      if (cancellation) {
-        await cancellation;
-        t.is((await drain(cancelled)).at(-1).type, 'abort');
-      }
-      const next = await client.send('next requested turn', { transcript });
-      // A stale native terminal is not an acknowledgment of import completion.
-      bridge.push(JSON.stringify({ type: 'end' }));
-      await tick();
-      t.false(bridge.commands.some(text => JSON.parse(text).op === 'send'));
-      t.false(
-        bridge.commands.some(text => JSON.parse(text).op === 'interrupt'),
-      );
-      bridge.push(JSON.stringify({ type: 'imported', ok: imported }));
-      if (imported) {
-        await waitFor(() =>
-          bridge.commands.some(text => JSON.parse(text).op === 'send'),
-        );
-        t.deepEqual(
+      let cancelled;
+      let next;
+      await exercisePromptCancellation(t, {
+        start: async () => {
+          cancelled = await client.send('must not execute', { transcript });
+          await waitFor(() =>
+            bridge.commands.some(text => JSON.parse(text).op === 'import'),
+          );
+        },
+        cancel: async () => {
+          if (cancelMode === 'reader') await iterateReader(cancelled).return();
+          else {
+            await client.interrupt();
+            t.is((await drain(cancelled)).at(-1).type, 'abort');
+          }
+        },
+        whileHeld: async () => {
+          next = await client.send('next requested turn', { transcript });
+          // A stale terminal must not release the import barrier.
+          bridge.push(JSON.stringify({ type: 'end' }));
+          await tick();
+          t.false(
+            bridge.commands.some(text => JSON.parse(text).op === 'interrupt'),
+          );
+        },
+        release: () =>
+          bridge.push(JSON.stringify({ type: 'imported', ok: imported })),
+        settle: async () => {
+          if (imported) {
+            await waitFor(() =>
+              bridge.commands.some(text => JSON.parse(text).op === 'send'),
+            );
+            bridge.push(JSON.stringify({ type: 'end' }));
+            t.is((await drain(next)).at(-1).type, 'end');
+          } else {
+            const events = await drain(next);
+            t.is(events.at(-1).type, 'abort');
+            t.regex(
+              events.at(-1).reason,
+              /previous conversation restoration failed/,
+            );
+          }
+        },
+        admitted: () =>
           bridge.commands
             .map(text => JSON.parse(text))
-            .filter(command => command.op === 'send'),
-          [{ op: 'send', text: 'next requested turn' }],
-        );
-        bridge.push(JSON.stringify({ type: 'end' }));
-        t.is((await drain(next)).at(-1).type, 'end');
-      } else {
-        const events = await drain(next);
-        t.is(events.at(-1).type, 'abort');
-        t.regex(
-          events.at(-1).reason,
-          /previous conversation restoration failed/,
-        );
-        t.false(bridge.commands.some(text => JSON.parse(text).op === 'send'));
-      }
+            .filter(command => command.op === 'send')
+            .map(command => command.text),
+        expected: imported ? ['next requested turn'] : [],
+      });
       t.is(
         bridge.commands.filter(text => JSON.parse(text).op === 'import').length,
         1,
@@ -987,28 +996,47 @@ for (const cancelMode of ['reader', 'interrupt']) {
       baseArgs(fake, { model: 'openrouter/deepseek/v4' }),
     );
     t.teardown(() => client.terminate());
-    const first = await client.send('must not execute', {
-      transcript: [{ kind: 'message', role: 'user', content: 'old' }],
-    });
-    await waitFor(() => fake.spawnCalls.length === 1);
+    let first;
     let cancellation;
-    if (cancelMode === 'reader') await iterateReader(first).return();
-    else {
-      cancellation = client.interrupt();
-      cancellation.catch(() => {});
-    }
-    bridge.push(readyLine('ses_1'));
-    if (cancellation) await cancellation;
-    const next = await client.send('next requested turn');
-    await waitFor(() =>
-      bridge.commands.some(text => JSON.parse(text).op === 'send'),
-    );
-    t.deepEqual(
-      bridge.commands.map(text => JSON.parse(text)),
-      [{ op: 'send', text: 'next requested turn' }],
-    );
-    bridge.push(JSON.stringify({ type: 'end' }));
-    t.is((await drain(next)).at(-1).type, 'end');
+    await exercisePromptCancellation(t, {
+      start: async () => {
+        first = await client.send('must not execute', {
+          transcript: [{ kind: 'message', role: 'user', content: 'old' }],
+        });
+        await waitFor(() => fake.spawnCalls.length === 1);
+      },
+      cancel: async () => {
+        if (cancelMode === 'reader') await iterateReader(first).return();
+        else {
+          cancellation = client.interrupt();
+          cancellation.catch(() => {});
+        }
+      },
+      whileHeld: async () => {
+        await tick();
+        t.deepEqual(bridge.commands, []);
+      },
+      release: () => bridge.push(readyLine('ses_1')),
+      settle: async () => {
+        if (cancellation) await cancellation;
+        const next = await client.send('next requested turn');
+        await waitFor(() =>
+          bridge.commands.some(text => JSON.parse(text).op === 'send'),
+        );
+        t.deepEqual(
+          bridge.commands.map(text => JSON.parse(text)),
+          [{ op: 'send', text: 'next requested turn' }],
+        );
+        bridge.push(JSON.stringify({ type: 'end' }));
+        t.is((await drain(next)).at(-1).type, 'end');
+      },
+      admitted: () =>
+        bridge.commands
+          .map(text => JSON.parse(text))
+          .filter(command => command.op === 'send')
+          .map(command => command.text),
+      expected: ['next requested turn'],
+    });
   });
 }
 

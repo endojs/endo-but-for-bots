@@ -31,6 +31,20 @@ It passes 21 focused and 676 full Floot tests, with independent source review;
 transient listings, the journal name index and daemon indexes remain unchanged.
 No deployment is claimed.
 
+Admission conformance follow-up (2026-09-24): a shared test-only cancellation
+harness reproduced a Codex bug: canceling during `thread/inject_items` could
+still dispatch the canceled prompt. The client now fences admission at the
+transport-write boundary and drains owned preparation before failure settlement,
+with successors fenced before the reservation is released. Held-import and
+held-ledger tests prove zero prompt dispatch and immediate-successor refusal.
+All three native clients use the same behavioral assertion sequence while
+retaining their protocol-specific successor behavior. Independent review
+approves; full Claude/Codex/OpenCode suites pass 237/323/302 tests. Codex
+production-source types and scoped lint pass. Nine local daemon-backed Floot
+lifecycle/journal/restart regressions also pass. No owner/schema changes or
+deployment; persistence drain has no new deadline and this does not establish
+process-loss recovery. See RA-04 in [current alignment](REFACTOR-ALIGNMENT.md).
+
 This records the source audit and independent subagent reviews requested by the operator.
 It tracks follow-up work within the existing
 [hosted-agent sandbox unification design](../../designs/hosted-agent-sandbox-unification.md),

@@ -144,6 +144,17 @@ OpenCode has explicit checkpoint capture, while the current Claude/Codex event
 translators do not produce equivalent canonical compaction boundaries. Supporting
 restoration from a supplied checkpoint is not proof of capturing native changes.
 
+Protocol investigation (2026-09-24): the locally installed Codex CLI matches the
+image's `0.152.0` pin. Its generated experimental JSON schema exposes
+`ContextCompactionThreadItem` with only `id` and `type`; raw
+`CompactionResponseItem` carries encrypted content, not a portable plaintext
+summary. Reproduce with `codex app-server generate-json-schema --experimental
+--out <temporary-directory>`. Do not synthesize a canonical summary from these
+notifications. Faithful capture needs an authoritative replacement-context export
+or a deliberately designed opaque checkpoint contract. This is schema evidence,
+not an actual container compaction run. Claude's pinned protocol still needs a
+dummy-data capture before claiming its summary/retained-tail mapping is known.
+
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
 settled-turn window. The module header's earlier unconditional bounded-memory
@@ -176,6 +187,29 @@ Expose account-authority/member identity and status capabilities explicitly from
 discovery, without creating another credential owner. Runtime-specific model
 admission remains separate. This extends FA-07's current ontology work.
 
+Proposed implementation boundary (2026-09-24; not landed): each trusted setup
+producer atomically publishes one complete source record in the existing profile's
+`account-bindings` directory. Records carry the existing oracle identity and
+capability, provider metadata, explicit runtime/member uses, and an optional
+paired reset-admin identity/capability. No new credential or renewal owner is
+introduced. Deduplicate only identical account authorities, never matching
+labels, provider names or pool-member strings. Failed source discovery may keep
+old display data but must not authorize reset actions. Reset actions must bind
+both account and admin identity so a stale UI cannot target a replacement admin.
+The direct provider uses the same publication contract; backend descriptions
+remain capability-free model/runtime metadata.
+
+Permission review paused the production identity/reset-authority rewrite pending
+explicit operator approval. Preparatory publication/discovery code and a daemon
+restart regression are uncommitted drafts, not deployed or certified. Keep this
+slice separate from independently authorized cancellation conformance work.
+The draft is preserved in local Git stash
+`5e3145554e77402d23f8dc9debeafe881b4e241c`, named
+`RA03 account binding draft awaiting explicit approval`, not in the candidate
+working tree. Its incomplete setup conversion caused one full-suite setup test
+failure before isolation; do not treat that draft as validated or apply it without
+the pending approval.
+
 ### RA-04 — Verify common turn-admission behavior
 
 The recent cancellation regressions demonstrate drift at a shared behavioral
@@ -184,6 +218,26 @@ canceled prompt. Keep adapter-specific protocols; introduce a common conformance
 matrix covering cancellation before preparation, during restoration, before
 dispatch, and after dispatch, including failure/next-turn behavior.
 Only factor implementation after the identical responsibilities are established.
+
+The shared cancellation test work reproduced a further Codex defect: interrupting
+a held `thread/inject_items` restoration marked the active turn interrupted but
+waited for a native turn announcement; once import completed, the client still
+sent the canceled prompt through `turn/start`. The regression observes that
+forbidden prompt, rather than treating a timeout alone as proof. A local fix
+distinguishes prompt admission from preparation, checks cancellation at the actual
+transport write, and waits for already-owned preparation/persistence before
+settling the turn. It fences successors before releasing the turn reservation.
+Independent adversarial review approves. Full package suites pass: Claude 237,
+Codex 323 and OpenCode 302; focused client suites pass 47, 97 and 35 respectively.
+Codex production-source types, scoped lint and formatting pass. The shared
+test-only harness covers held preparation/restoration, canceled-prompt admission
+and each adapter's declared successor disposition. Codex additionally holds its
+write-ahead save and attempts a successor in the interrupt-completion microtask.
+No new durable owner or schema is introduced. Existing native post-admission
+interrupt tests remain; this is not an exhaustive cross-backend lifecycle matrix.
+Not deployed. Persistence drain is not claimed to have a deadline, interrupt
+completion alone is not proof of native quiescence, and this does not solve
+process loss.
 
 ### RA-05 — Rebaseline and accept the actual candidate
 
@@ -223,6 +277,12 @@ the shared execution envelope, Floot runtime configuration and context projectio
 Independent source reviews covered Floot ontology, daemon/journal ownership, and
 native adapter/host integration. These are not live Podman, long-run memory, or
 current-release deployment results.
+
+After the prompt/configuration and private-cache cleanup, nine daemon-backed
+regressions pass: Floot factory lifecycle, journal retirement, direct-provider
+journaling and archived context across cold restart. They exercise the committed
+cleanup on the local daemon; they do not validate the pending account-binding
+draft or replace Tokyo acceptance.
 
 1. Reconcile this current-state verdict with the open FA findings; use this map,
    not historical commit counts, to choose work.

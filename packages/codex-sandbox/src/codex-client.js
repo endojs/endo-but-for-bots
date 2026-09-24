@@ -130,6 +130,7 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @property {string} [turnId]
  * @property {(event: any) => void} push
  * @property {boolean} interrupted
+ * @property {boolean} startAdmitted Whether turn/start crossed the transport-write boundary.
  * @property {string} [interruptReason]
  * @property {string} [errorReason]
  * @property {Promise<void>} terminal
@@ -566,7 +567,7 @@ export const makeCodexClient = ({
     return shutdown;
   };
 
-  const sendMessage = async message => {
+  const sendMessage = async (message, beforeSend = () => {}) => {
     if (!transport) throw Error('Codex app-server is not initialized');
     const size = byteLength(message);
     if (size > maxRequestBytes) {
@@ -582,6 +583,7 @@ export const makeCodexClient = ({
     });
     await null;
     try {
+      beforeSend();
       await Promise.race([transport.send(harden(message)), deadline]);
     } catch (error) {
       // A failed or timed-out write has an unknown outcome, including for
@@ -593,7 +595,7 @@ export const makeCodexClient = ({
     }
   };
 
-  const request = async (method, params) => {
+  const request = async (method, params, beforeSend = () => {}) => {
     if (terminated) throw Error('Codex session terminated');
     const id = nextRequestId;
     nextRequestId += 1;
@@ -615,7 +617,7 @@ export const makeCodexClient = ({
     // blocks, the deadline still settles request() and the losing exchange
     // remains observed by Promise.race rather than becoming unhandled.
     const exchange = (async () => {
-      await sendMessage({ id, method, params });
+      await sendMessage({ id, method, params }, beforeSend);
       return response;
     })();
     await null;
@@ -651,6 +653,14 @@ export const makeCodexClient = ({
     }
     turn.interrupted = true;
     turn.interruptReason = reason;
+    if (!turn.startAdmitted) {
+      // Restoration and write-ahead preparation are not native execution.
+      // Let their owned work settle; send() fences the prompt and settles the
+      // ledger afterward. Waiting for turn/started here would admit precisely
+      // the work the caller canceled, or wait for an announcement never sent.
+      await turn.terminal;
+      return undefined;
+    }
     // The app-server honours `turn/interrupt` only for a turn it has announced
     // with `turn/started`. Asked earlier — and the announcement can trail the
     // `turn/start` response, let alone a response still in flight — it answers
@@ -1729,6 +1739,7 @@ export const makeCodexClient = ({
         threadId: currentThreadId,
         push: channel.push,
         interrupted: false,
+        startAdmitted: false,
         terminal: channel.terminal,
         resolveTerminal: channel.settle,
         started,
@@ -1742,6 +1753,11 @@ export const makeCodexClient = ({
         earlyBytes: 0,
       };
       active = turn;
+      const assertPromptAdmission = () => {
+        if (terminated || closing || active !== turn || turn.interrupted) {
+          throw Error('Codex turn canceled before prompt admission');
+        }
+      };
       if (turnWallTimeoutMs > 0) {
         turn.wallTimer = setTimeout(() => {
           if (active === turn) {
@@ -1765,6 +1781,7 @@ export const makeCodexClient = ({
         // checkpoint the thread must be rolled back to if nothing acknowledges
         // it.
         const baseCheckpoint = await readLatestTurnId();
+        assertPromptAdmission();
         const restoreContext = replayContinuity && baseCheckpoint === null;
         if (restoreContext) {
           assertContinuity(opts);
@@ -1801,23 +1818,31 @@ export const makeCodexClient = ({
             }
           }
         }
+        assertPromptAdmission();
         turn.ledgerTurn = await ledger.begin({ baseCheckpoint });
-        const response = await request('turn/start', {
-          threadId: currentThreadId,
-          // The prompt, and only the prompt. A restored conversation reached
-          // the thread through `inject_items` above or the turn never got
-          // here.
-          input: [{ type: 'text', text: prompt, text_elements: [] }],
-          approvalPolicy,
-          sandboxPolicy: {
-            type: 'externalSandbox',
-            networkAccess: publicNetworkAdmitted ? 'enabled' : 'restricted',
+        const response = await request(
+          'turn/start',
+          {
+            threadId: currentThreadId,
+            // The prompt, and only the prompt. A restored conversation reached
+            // the thread through `inject_items` above or the turn never got
+            // here.
+            input: [{ type: 'text', text: prompt, text_elements: [] }],
+            approvalPolicy,
+            sandboxPolicy: {
+              type: 'externalSandbox',
+              networkAccess: publicNetworkAdmitted ? 'enabled' : 'restricted',
+            },
+            ...(opts.model || model ? { model: opts.model || model } : {}),
+            ...(opts.reasoningEffort || reasoningEffort
+              ? { effort: opts.reasoningEffort || reasoningEffort }
+              : {}),
           },
-          ...(opts.model || model ? { model: opts.model || model } : {}),
-          ...(opts.reasoningEffort || reasoningEffort
-            ? { effort: opts.reasoningEffort || reasoningEffort }
-            : {}),
-        });
+          () => {
+            assertPromptAdmission();
+            turn.startAdmitted = true;
+          },
+        );
         if (
           typeof response?.turn?.id !== 'string' ||
           response.turn.id === '' ||
@@ -1846,6 +1871,13 @@ export const makeCodexClient = ({
           }
         }
       } catch (error) {
+        if (turn.interrupted && !turn.startAdmitted) {
+          // Preparation has now settled, including any write-ahead record.
+          // Fence successors before publishing the terminal event; the same
+          // failure path settles the ledger and drains its host writes.
+          await failSession(error);
+          return channel.reader;
+        }
         await settleTurn(turn, {
           type: 'failed',
           reason: error instanceof Error ? error.message : `${error}`,

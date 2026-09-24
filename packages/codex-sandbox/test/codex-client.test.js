@@ -5,6 +5,9 @@ import test from 'ava';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
+// Internal test harness, deliberately not a runtime package export.
+// eslint-disable-next-line import/no-relative-packages
+import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
 
 import { makeCodexClient } from '../src/codex-client.js';
 
@@ -2802,44 +2805,176 @@ test('a turn the app-server never announces cannot be interrupted, so the sessio
   t.regex((await drain(reader)).at(-1).reason, /not announced/);
 });
 
-test('interrupt during thread startup is a terminating barrier', async t => {
-  const queue = makeQueue();
-  /** @type {any[]} */
-  const sent = [];
-  let closed = false;
-  const client = makeCodexClient({
-    sessionId: 'deferred-thread-start',
-    start: async () => ({
-      messages: queue.messages,
-      send: async (/** @type {any} */ message) => {
-        sent.push(message);
-        if (message.method === 'initialize') {
-          queue.push({ id: message.id, result: INITIALIZE_RESULT });
-        } else if (message.method === 'account/read') {
-          queue.push({ id: message.id, result: ACCOUNT_RESULT });
+for (const phase of ['thread/start', 'thread/inject_items']) {
+  test(`interrupt during ${phase} is a terminating admission barrier`, async t => {
+    const queue = makeQueue();
+    /** @type {any[]} */
+    const sent = [];
+    let closed = false;
+    const client = makeCodexClient({
+      sessionId: 'deferred-thread-start',
+      requestTimeoutMs: 2000,
+      start: async () => ({
+        messages: queue.messages,
+        send: async (/** @type {any} */ message) => {
+          sent.push(message);
+          if (message.method === 'initialize') {
+            queue.push({ id: message.id, result: INITIALIZE_RESULT });
+          } else if (message.method === 'account/read') {
+            queue.push({ id: message.id, result: ACCOUNT_RESULT });
+          } else if (
+            message.method === 'thread/start' &&
+            phase !== 'thread/start'
+          ) {
+            queue.push({
+              id: message.id,
+              result: { thread: { id: 'thread-new' } },
+            });
+          }
+        },
+        close: async () => {
+          closed = true;
+          queue.close();
+        },
+      }),
+    });
+    t.teardown(() => client.terminate());
+    let sendP;
+    let interruption;
+    await exercisePromptCancellation(t, {
+      start: async () => {
+        sendP = client.send('must not execute', {
+          transcript: [{ kind: 'message', role: 'user', content: 'earlier' }],
+        });
+        sendP.catch(() => undefined);
+        for (let tries = 0; tries < 100; tries += 1) {
+          if (sent.some(message => message.method === phase)) break;
+          // eslint-disable-next-line no-await-in-loop
+          await new Promise(resolve => setImmediate(resolve));
+        }
+        t.true(
+          sent.some(message => message.method === phase),
+          'the actual native preparation request is held',
+        );
+      },
+      cancel: async () => {
+        interruption = client.interrupt();
+        interruption.catch(() => undefined);
+        await new Promise(resolve => setImmediate(resolve));
+      },
+      whileHeld: async () => {
+        await t.throwsAsync(() => client.send('next requested turn'), {
+          message: /Codex session (terminated|already has an active turn)/,
+        });
+      },
+      release: () => {
+        const held = sent.find(message => message.method === phase);
+        queue.push({
+          id: held.id,
+          result:
+            phase === 'thread/start' ? { thread: { id: 'thread-new' } } : {},
+        });
+      },
+      settle: async () => {
+        if (phase === 'thread/start') {
+          await t.throwsAsync(interruption, {
+            message: /interrupted during startup/,
+          });
+        } else {
+          await interruption;
+        }
+        t.true(closed);
+        if (phase === 'thread/start') {
+          await t.throwsAsync(sendP, { message: /interrupted during startup/ });
+        } else {
+          const terminal = (await drain(await sendP)).at(-1);
+          t.is(terminal.type, 'abort');
+          t.regex(terminal.reason, /before prompt admission/);
+        }
+        await t.throwsAsync(() => client.send('next requested turn'), {
+          message: 'Codex session terminated',
+        });
+      },
+      admitted: () =>
+        sent
+          .filter(message => message.method === 'turn/start')
+          .map(message => message.params.input[0].text),
+      expected: [],
+    });
+  });
+}
+
+test('interrupt during ledger admission fences the prompt and terminal-microtask successor', async t => {
+  let release;
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  let entered;
+  const held = new Promise(resolve => {
+    entered = resolve;
+  });
+  const saved = [];
+  const fixture = makeFixture({
+    clientOptions: {
+      saveThreadState: async state => {
+        saved.push(state);
+        // The first write records the newly created empty thread. The second
+        // is the write-ahead ledger admission, before any native turn/start.
+        if (saved.length === 2) {
+          entered();
+          await gate;
         }
       },
-      close: async () => {
-        closed = true;
-        queue.close();
-      },
-    }),
+    },
   });
-  const sendP = client.send('first');
-  sendP.catch(() => undefined);
-  await null;
-  for (let tries = 0; tries < 50; tries += 1) {
-    if (sent.some(message => message.method === 'thread/start')) break;
-    // eslint-disable-next-line no-await-in-loop
-    await null;
-  }
-  await t.throwsAsync(() => client.interrupt(), {
-    message: /interrupted during startup/,
+  t.teardown(async () => {
+    release();
+    await fixture.client.terminate();
   });
-  t.true(closed);
-  await t.throwsAsync(sendP, { message: /interrupted during startup/ });
-  await t.throwsAsync(() => client.send('second'), {
-    message: 'Codex session terminated',
+  let sendP;
+  let interruption;
+  let successor;
+  await exercisePromptCancellation(t, {
+    start: async () => {
+      sendP = fixture.client.send('must not execute');
+      sendP.catch(() => undefined);
+      await held;
+      t.is(saved.length, 2);
+      t.deepEqual(saved[0], {
+        threadId: 'thread-new',
+        recovery: { baseTurnId: null },
+      });
+      t.deepEqual(saved[1], saved[0]);
+    },
+    cancel: async () => {
+      interruption = fixture.client.interrupt();
+      interruption.catch(() => undefined);
+      // Run at the public cancellation completion microtask, not a later
+      // timer: reservation release must not admit a successor before poison.
+      successor = interruption.then(() =>
+        fixture.client.send('immediate successor'),
+      );
+      successor.catch(() => undefined);
+    },
+    whileHeld: async () => {
+      await t.throwsAsync(() => fixture.client.send('next requested turn'), {
+        message: 'Codex session already has an active turn',
+      });
+    },
+    release,
+    settle: async () => {
+      await interruption;
+      await t.throwsAsync(successor, { message: 'Codex session terminated' });
+      const terminal = (await drain(await sendP)).at(-1);
+      t.is(terminal.type, 'abort');
+      t.regex(terminal.reason, /before prompt admission/);
+      t.true(fixture.isClosed());
+    },
+    admitted: () =>
+      fixture.sent
+        .filter(message => message.method === 'turn/start')
+        .map(message => message.params.input[0].text),
+    expected: [],
   });
 });
 
