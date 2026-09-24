@@ -424,6 +424,14 @@ const compareMessageNames = (left, right) => {
 };
 
 /** @type {PetName} */
+/**
+ * Per-frame raw-byte bound for readable-blob uploads, higher than the
+ * `iterateBytesReader` default to accommodate large payloads like bundles.
+ * 7_500_000 bytes preserves the prior bound of 10_000_000 base64 characters
+ * (about 7.5 MB of binary) per frame.
+ */
+export const READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT = 7_500_000;
+
 const PROMISE_STATUS_NAME = /** @type {PetName} */ ('status');
 // Stores the resolved formula identifier as a direct pet store entry so the
 // formula graph keeps the resolved value reachable (prevents premature
@@ -4841,14 +4849,10 @@ const makeDaemonCore = async (
           await randomHex256()
         );
         const contentSha256 = await contentStore.store(
-          // Use a higher per-frame byte length limit to accommodate large
-          // payloads like bundles.
-          // The limit is in raw bytes: 7_500_000 preserves the prior bound of
-          // 10_000_000 base64 characters (about 7.5 MB of binary) per frame.
           // `iterateBytesReader` returns the iterator synchronously; the
           // store consumes it, so no `await` here.
           iterateBytesReader(readerRef, {
-            byteLengthLimit: 7_500_000,
+            byteLengthLimit: READABLE_BLOB_FRAME_BYTE_LENGTH_LIMIT,
           }),
         );
 
