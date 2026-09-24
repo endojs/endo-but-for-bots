@@ -39,9 +39,11 @@ Re-runs made while revising this report are under `$S/stack/revise2/`, `$S/stack
 Files a reviewer produced are under `$S/stack/review2/` and `$S/stack/review3/`; where this
 report relies on one, it was re-run into `revise3/` or `revise4/` unless the text says
 otherwise.
-**That directory is not part of the repository and will not outlive the session.**
-[Appendix A](#appendix-a-evidence-to-preserve) lists the patches and data files to copy out,
+That directory is session scratch and is not preserved; `$S/…` references record where each
+figure came from.
+The six prototype patches are kept in [`stack-depth-prototypes/`](stack-depth-prototypes/),
 and [Appendix B](#appendix-b-key-per-case-data) inlines the key per-case tables.
+[Appendix A](#appendix-a-evidence) lists what was kept and what was not.
 
 Methods, in brief:
 
@@ -90,7 +92,7 @@ Abbreviations in tables: **N** native release, **WT** Wasmtime host stack (Crane
 Unless a column says otherwise, figures are bytes of host stack per guest nesting level.
 Estimates are marked *(est.)*.
 Nothing in the repository was modified to produce this report.
-The scratch patches are prototypes in a copy.
+The prototype patches were measured in a scratch copy of the engine.
 
 ## Summary
 
@@ -143,7 +145,8 @@ The scratch patches are prototypes in a copy.
 - **Most of the fix is release-neutral and already prototyped.**
   The recipe: move frames onto explicit heap stacks, or shrink them, while charging
   `native_depth` at the same logical points.
-  Six scratch prototype patches kept `Halt`, result, `ReentryLimit` depth and computrons
+  Six prototype patches, kept in [`stack-depth-prototypes/`](stack-depth-prototypes/), kept
+  `Halt`, result, `ReentryLimit` depth and computrons
   identical wherever they were checked, in differential suites of 74 to 61,246 cases.
   Among them:
   - Proxy forwarding: 0 B per layer.
@@ -1301,8 +1304,8 @@ stacks as well.
   Outline the 424-B Intl/Temporal temporaries of `call_native_inner` the same way.
 - **Effort:** S-M, mechanical.
 - **Reduction (measured):** outlining only `ArrayForEach` behind a thin dispatcher
-  (`$S/stack/dispatch-reentry/exp1-thin-native-dispatch.patch`) took forEach from 13,950 to
-  6,762 B per level natively.
+  ([`a1-thin-native-dispatch.patch`](stack-depth-prototypes/a1-thin-native-dispatch.patch))
+  took forEach from 13,950 to 6,762 B per level natively.
   The new frames are 64 B for the dispatcher and 400 B N / 224 B SH / 384 B WT for
   `experiment_array_foreach`.
   gen-next stayed at 13,666 B per level, the same as without the patch and as §2.1's 13,664 B,
@@ -1334,14 +1337,15 @@ stacks as well.
   L.
   It can be staged:
   - **A2a (M):** the group split as prototyped, 8 `#[inline(never)]` group functions behind one
-    table (`exp3-dispatch-split-table.patch` touches only `dispatch.rs`, +470/−105).
+    table (`a2-dispatch-split-table.patch` touches only `dispatch.rs`, +470/−105).
   - **A2b (L):** per-opcode handlers, if A2a fails the benchmark gate or leaves too large a
     group frame.
 
   Run `benches/run.py --check-baseline` on the A2a prototype before committing to either
   (Phase 1, §5).
-- **Reduction (measured,** `$S/stack/dispatch-reentry/exp3-dispatch-split-table.patch`**,** 8
-  group functions routed by one table, with A1's forEach dispatcher**):**
+- **Reduction (measured,**
+  [`a2-dispatch-split-table.patch`](stack-depth-prototypes/a2-dispatch-split-table.patch)**,**
+  8 group functions routed by one table, with A1's forEach dispatcher**):**
   - loop frame: 208 B N, 304 B WT, 96 B SH;
   - group frames: 512-1,232 B N and 256-624 B WT.
 
@@ -1376,7 +1380,7 @@ stacks as well.
   crate against each native build of the prototype, over every `ceilings.json` entry at its
   ceiling and ceiling+1 plus all 25 `families.json` cases.
   All 99 give byte-identical output lines for the table-routing build (`probe-exp13`, the
-  `exp3-dispatch-split-table.patch` state; `a2_diff_exp13_table.jsonl`) and for the
+  `a2-dispatch-split-table.patch` state; `a2_diff_exp13_table.jsonl`) and for the
   sequential-routing build (`probe-exp12`; `a2_diff_exp12_sequential.jsonl`), including five
   value-stack `StackOverflow` halts.
   Code motion changes no counter.
@@ -1449,8 +1453,10 @@ The common recipe is a `Vec<Frame>` loop in which:
   `native_depth` equals the recursive shape at every point.
   A trap-present layer hands off to an `#[inline(never)]` `*_trapped` function.
 - **Effort:** S per method.
-  The prototype, `$S/stack/mop-proxy/prototype.patch` (+316/−59), covers `[[Get]]`, `[[Set]]`,
-  `[[GetOwnProperty]]`, `[[DefineOwnProperty]]`, `[[Call]]` and `[[Construct]]`.
+  The prototype,
+  [`b1-b2-proxy-cursor-loops.patch`](stack-depth-prototypes/b1-b2-proxy-cursor-loops.patch)
+  (+316/−59), covers `[[Get]]`, `[[Set]]`, `[[GetOwnProperty]]`, `[[DefineOwnProperty]]`,
+  `[[Call]]` and `[[Construct]]`.
   Still to do: `[[HasProperty]]`, `[[Delete]]`, `[[OwnPropertyKeys]]`, the prototype methods,
   the extensibility methods and the index-key variants of `[[Get]]`, `[[Delete]]`,
   `[[GetOwnProperty]]` and `[[HasProperty]]` (the last is `uninterned_index_has`,
@@ -1499,8 +1505,9 @@ The common recipe is a `Vec<Frame>` loop in which:
   or `}`.
   The per-element charge stays before the child's enter (`json.rs:1085-1088`).
 - **Effort:** S-M.
-- **Reduction (measured,** `$S/stack/walkers/prototype-json-parse-flat.patch`**):** at the
-  ceiling:
+- **Reduction (measured,**
+  [`b3-b4-json-parse-and-flat.patch`](stack-depth-prototypes/b3-b4-json-parse-and-flat.patch)**):**
+  at the ceiling:
   - native 1,104 / 2,176 KiB → 36 KiB, the process floor;
   - WT 855,159 → 17,836 B;
   - Liftoff 543 → 46 KiB, the floor.
@@ -1739,9 +1746,10 @@ never reaches.
 So walker refactors cannot change which programs get the "stack overflow" `SyntaxError`,
 provided the parser's charge points and node order stay put.
 
-**D1. Compiler batch (prototyped as D1a-D1c; patches in `$S/stack/compiler/exp/`).**
-The patch and data file names there still say E1-E4: `e1-outline-only.patch` is D1a, and
-`e1-e4-prototype.patch` holds D1a-D1c (its comments say "E2 prototype" for D1b and
+**D1. Compiler batch (prototyped as D1a-D1c; patches in
+[`stack-depth-prototypes/`](stack-depth-prototypes/)).**
+The scratch data file names still say E1-E4: `d1a-compiler-outline-only.patch` is D1a, and
+`d1a-d1c-compiler-worklists.patch` holds D1a-D1c (its comments say "E2 prototype" for D1b and
 "E3 prototype" for D1c).
 
 - **Changes:**
@@ -2283,20 +2291,29 @@ These need either L effort or a release:
     Running the families in Firefox and WebKit Workers needs those Playwright browsers, which
     are not installed here.
 
-## Appendix A: evidence to preserve
+## Appendix A: evidence
 
-All paths are under `$S/stack/` unless they start with `$S/`.
-Everything here lives in session scratch, so copy it out before the session ends.
+**Kept: the six prototype patches**, which support "release-neutral, already prototyped".
+They are in [`stack-depth-prototypes/`](stack-depth-prototypes/), normalized to apply from the
+repository root:
 
-**The six prototype patches**, which support "release-neutral, already prototyped":
+- `b1-b2-proxy-cursor-loops.patch` (B1, B2), scratch `mop-proxy/prototype.patch`;
+- `b3-b4-json-parse-and-flat.patch` (B3, B4's fast path), scratch
+  `walkers/prototype-json-parse-flat.patch`;
+- `a1-thin-native-dispatch.patch` (A1), scratch
+  `dispatch-reentry/exp1-thin-native-dispatch.patch`;
+- `a2-dispatch-split-table.patch` (A2), scratch
+  `dispatch-reentry/exp3-dispatch-split-table.patch`;
+- `d1a-compiler-outline-only.patch` (D1a) and `d1a-d1c-compiler-worklists.patch` (D1a-D1c),
+  scratch `compiler/exp/e1-outline-only.patch` and `e1-e4-prototype.patch`.
 
-- `mop-proxy/prototype.patch` (B1, B2) and `mop-proxy/compare.py` (the 570-case differential);
-- `walkers/prototype-json-parse-flat.patch` (B3, B4's fast path);
-- `dispatch-reentry/exp1-thin-native-dispatch.patch` (A1);
-- `dispatch-reentry/exp3-dispatch-split-table.patch` (A2);
-- `compiler/exp/e1-outline-only.patch` (D1a) and `compiler/exp/e1-e4-prototype.patch`
-  (D1a-D1c), with `compiler/diff_base.txt` and `diff_e*.txt` (the 61,246-compile
-  differential).
+**Not kept: the scratch data.**
+The files below are under `$S/stack/` (or `$S/` where shown), session scratch that is not kept.
+They are listed so the provenance labels in this report can be read.
+The differential harnesses named here are among them:
+
+- `mop-proxy/compare.py` (the 570-case differential for B1 and B2);
+- `compiler/diff_base.txt` and `diff_e*.txt` (the 61,246-compile differential for D1).
 
 **Data files, by area:**
 
