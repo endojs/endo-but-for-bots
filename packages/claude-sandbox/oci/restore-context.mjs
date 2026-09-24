@@ -211,7 +211,9 @@ const main = async () => {
     } finally {
       await rm(temporary, { force: true });
     }
-    process.stdout.write(`${JSON.stringify({ sessionId: session })}\n`);
+    process.stdout.write(
+      `${JSON.stringify({ sessionId: session, leafUuid: parentUuid })}\n`,
+    );
   } finally {
     await rm(staging, { recursive: true, force: true });
   }

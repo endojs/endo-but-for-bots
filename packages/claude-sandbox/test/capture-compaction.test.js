@@ -197,6 +197,40 @@ test('ordinary capture excludes resume mode metadata from native import', async 
   ]);
 });
 
+test('capture preserves observed max-turns attachment without inventing portable dialogue', async t => {
+  const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };
+  const attachment = {
+    uuid: id(10),
+    parentUuid: root.uuid,
+    sessionId: session,
+    type: 'attachment',
+    attachment: { type: 'max_turns_reached', maxTurns: 1, turnCount: 2 },
+  };
+  const notice = { type: 'endo_capture', session_id: session };
+  const result = JSON.parse((await run(t, [root, attachment], notice)).stdout);
+  t.deepEqual(result.retainedTail, [
+    { kind: 'message', role: 'user', content: 'hello' },
+  ]);
+  t.is(result.nativeContext.leafUuid, attachment.uuid);
+  t.is(
+    result.nativeContext.transcript,
+    `${JSON.stringify(root)}\n${JSON.stringify(attachment)}\n`,
+  );
+  await t.throwsAsync(
+    run(
+      t,
+      [
+        root,
+        {
+          ...attachment,
+          attachment: { ...attachment.attachment, maxTurns: '1' },
+        },
+      ],
+      notice,
+    ),
+  );
+});
+
 test('capture preserves summary wrapper, retained tool pair and completed tail', async t => {
   const { stdout } = await run(t, records());
   const { nativeContext, ...portable } = JSON.parse(stdout);
@@ -432,6 +466,17 @@ test('different thinking signatures cannot collapse to the same portable project
   const error = await t.throwsAsync(run(t, rows));
   t.is(error.stdout, '');
 });
+
+for (const field of ['id', 'type', 'model']) {
+  test(`duplicate native message ${field} cannot change behind identical portable content`, async t => {
+    const rows = records();
+    const duplicate = JSON.parse(JSON.stringify(rows[1]));
+    duplicate.message[field] = 'different';
+    rows.splice(3, 0, duplicate);
+    const error = await t.throwsAsync(run(t, rows));
+    t.is(error.stdout, '');
+  });
+}
 
 test('combined native and portable checkpoint size is bounded before output', async t => {
   t.timeout(10_000);

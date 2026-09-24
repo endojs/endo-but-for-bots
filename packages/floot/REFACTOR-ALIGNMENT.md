@@ -529,6 +529,50 @@ The combined Claude client/helper suite passes 105 tests and production types pa
 The bounded hosted-turn/projection slice passes 87 focused tests but remains
 uncommitted integration work; its mock producer contract is not real capture proof.
 
+Coverage-proof implementation WIP: a standalone Claude observer checks the pinned
+partial-stream protocol against helper-validated native JSONL.
+It requires the admitted prompt after an explicit pre-turn leaf, every observed
+mainline complete frame in order, and no unmatched streamed block.
+It rejects current-turn compaction, unknown framing and inconsistent identities;
+a sticky refusal never becomes a truncated/partial proof.
+The cumulative observation limit is 16 MiB, matching the existing capture transport
+profile rather than limiting the lifetime journal.
+The importer now returns the exact published leaf UUID for the caller's pre-turn
+cut; it is derived again on restoration, not a second durable state owner.
+This observer is not wired into failed-turn admission yet.
+Its caller must still establish producer stop, immutable prior-prefix identity,
+trusted pre-turn cut, runtime/account binding and reconciled effect evidence.
+
+The probe now matches production `--include-partial-messages` and exercises an
+actual CLI `error_max_turns` with exit 1 after one synthetic native tool.
+Its native context includes a `max_turns_reached` attachment, now explicitly
+validated and preserved by capture.
+Exact restoration without a suffix selected 9 of 13 rows, preserved one synthetic
+thinking block, yielded identical historical API messages and executed the tool
+only once. The checked-in failed-turn fixture records only that first turn.
+The failure-plus-notice comparison exposed native loader-generated padding:
+without an appended assistant notice, the CLI synthesizes a continuation prompt
+and `No response requested.` placeholder. Failed-turn notice semantics are not
+certified by the successful-turn suffix test.
+
+Independent review caught a grouping identity gap in the observer: native
+`message.id` cannot be omitted merely because UUID, role and content agree.
+The capture helper now also refuses duplicate rows that change message ID,
+message type or model while retaining identical portable content.
+These fields influence native interpretation; checking only text/signatures was
+insufficient. No production failed-turn certification or deployment is claimed.
+
+The coverage slice now binds assistant message ID, type and model across stream
+start, complete frame and native record; exact redacted-thinking blocks are
+supported without accepting deltas that could rewrite opaque data.
+Independent adversarial re-review approves the standalone observer/helper/fixture
+slice only. The combined suites pass 72 tests, production types and repository
+documentation gates pass, and scoped lint has no errors.
+The real pinned failure fixture is a reproducible positive case; mutation tests
+cover missing/altered prompt, stale cut, native grouping changes, unmatched partial
+text/thinking, missing frames, changed order and observation overflow.
+The observer does not by itself certify a failed turn or authorize restoration.
+
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
 settled-turn window. The module header's earlier unconditional bounded-memory

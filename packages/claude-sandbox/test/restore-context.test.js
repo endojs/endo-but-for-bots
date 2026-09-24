@@ -113,7 +113,11 @@ test('sandbox native importer validates and publishes exact context bytes', asyn
     JSON.stringify(f.checkpoint),
   );
   t.is(result.code, 0, result.stderr);
-  t.deepEqual(JSON.parse(result.stdout), { sessionId: f.session });
+  t.deepEqual(JSON.parse(result.stdout), {
+    sessionId: f.session,
+    leafUuid: JSON.parse(f.checkpoint.payload.trimEnd().split('\n').at(-1))
+      .uuid,
+  });
   t.is(await readFile(f.file, 'utf8'), f.checkpoint.payload);
 });
 
@@ -216,6 +220,7 @@ test('native suffix appends dialogue without changing the captured prefix', asyn
     .split('\n')
     .map(line => JSON.parse(line));
   t.is(added.length, 1);
+  t.is(JSON.parse(result.stdout).leafUuid, added[0].uuid);
   t.like(added[0].message, {
     role: 'assistant',
     content: [{ type: 'text', text: suffix[0].content }],

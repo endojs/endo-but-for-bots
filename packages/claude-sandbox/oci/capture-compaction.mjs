@@ -21,8 +21,14 @@ const projection = row => {
   if (row.type === 'attachment') {
     // Omitted only from portable dialogue; the native payload preserves this
     // exact historical token-budget attachment for Claude restoration.
+    const attachment = row.attachment;
     requireValue(
-      row.attachment?.type === 'total_tokens_reminder',
+      attachment?.type === 'total_tokens_reminder' ||
+        (attachment?.type === 'max_turns_reached' &&
+          Number.isInteger(attachment.maxTurns) &&
+          attachment.maxTurns > 0 &&
+          Number.isInteger(attachment.turnCount) &&
+          attachment.turnCount > 0),
       'Unsupported context attachment',
     );
     return [];
@@ -366,6 +372,9 @@ const main = async () => {
         // Compare context payloads, not the portable projection: different
         // signatures or redacted bytes must never be silently deduplicated.
         type: row.type,
+        messageId: row.message?.id,
+        messageType: row.message?.type,
+        model: row.message?.model,
         role: row.message?.role,
         content: row.message?.content,
         attachment: row.attachment,
