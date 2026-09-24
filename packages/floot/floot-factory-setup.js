@@ -367,36 +367,24 @@ export const main = async agent => {
   );
 
   // 2. Put the auth token in the daemon's secret manager and hand the factory
-  // the `SecretBlob`. `@secrets` is carried only by the root host, so a setup
-  // run from a child host falls back to the pre-secret-manager arrangement: a
-  // plaintext token inside the config value, which cannot be rotated, revoked,
-  // or audited.
+  // the `SecretBlob`. Failure aborts before replacing the provider config;
+  // an authenticated setup must run with the root host's Secrets authority.
   /** @type {string | undefined} */
   let authSecretLocator;
   if (authToken || hasExistingSecret) {
-    try {
-      ({ locator: authSecretLocator } = authToken
-        ? await provideAuthSecret({
-            hostAgent: agent,
-            name: secretName,
-            description: `Floot ${provider} provider auth token`,
-            token: authToken,
-          })
-        : { locator: await E(agent).locate('secrets', secretName) });
-    } catch (error) {
-      if (provider === 'openrouter') throw error;
-      if (!authToken) throw error;
-      console.warn(
-        `Floot: could not use the secret manager (${
-          error instanceof Error ? error.message : String(error)
-        }); falling back to a plaintext token in ${dir}/llm-provider.`,
-      );
-    }
+    ({ locator: authSecretLocator } = authToken
+      ? await provideAuthSecret({
+          hostAgent: agent,
+          name: secretName,
+          description: `Floot ${provider} provider auth token`,
+          token: authToken,
+        })
+      : { locator: await E(agent).locate('secrets', secretName) });
   }
 
   // 3. Store the provider config as a value under `floot/llm-provider` and hand
   // the factory a capability reference to it under `llm-provider` — the fae
-  // pattern. The value carries a credential only on the fallback path.
+  // pattern. The value never carries a credential.
   if (await E(agent).has(dir, 'llm-provider')) {
     await E(agent).remove(dir, 'llm-provider');
   }
@@ -404,7 +392,6 @@ export const main = async agent => {
     harden({
       provider,
       model,
-      ...(authSecretLocator ? {} : { authToken }),
     }),
     [dir, 'llm-provider'],
   );
@@ -413,8 +400,7 @@ export const main = async agent => {
   if (authSecretLocator) {
     await E(factoryHost).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
   } else if (await E(factoryHost).has(AUTH_SECRET_PETNAME)) {
-    // Do not leave a stale blob reachable beside a fallback plaintext token:
-    // the factory prefers the capability, so a stale one would win silently.
+    // Switching to a tokenless provider withdraws the old credential binding.
     await E(factoryHost).remove(AUTH_SECRET_PETNAME);
   }
 

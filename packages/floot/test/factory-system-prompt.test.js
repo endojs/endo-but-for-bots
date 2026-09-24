@@ -3,7 +3,10 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { Far } from '@endo/far';
-import { encodeAuthToken } from '@endo/fae/src/credentials.js';
+import {
+  AUTH_SECRET_PETNAME,
+  encodeAuthToken,
+} from '@endo/fae/src/credentials.js';
 import { makePromiseKit } from './_promise-kit.js';
 
 import { make } from '../agent.js';
@@ -14,6 +17,12 @@ const sandboxed = harden({
   nativeTools: true,
   workspacePath: '/workspace',
 });
+
+/** @param {string} token */
+const authSecret = token =>
+  Far('TestAuthSecret', {
+    readBase64: () => encodeAuthToken(token),
+  });
 
 /**
  * A factory over an in-memory host with one hosted backend, which records the
@@ -111,7 +120,10 @@ const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
     stop: () => undefined,
   });
   /** @type {Map<string, unknown>} */
-  const hostStore = new Map([['codex-backend', backend]]);
+  const hostStore = new Map([
+    ['codex-backend', backend],
+    [AUTH_SECRET_PETNAME, authSecret('test-key')],
+  ]);
   const host = Far('PromptHost', {
     list: () => harden([...hostStore.keys()]),
     has: name => hostStore.has(name),
@@ -603,9 +615,9 @@ test('catalog listing after refresh does not join a held old-config fetch', asyn
     harden({
       provider: 'openrouter',
       model: 'vendor/old',
-      authToken: 'old-test-key',
     }),
   );
+  world.hostStore.set(AUTH_SECRET_PETNAME, authSecret('old-test-key'));
   const old = E(world.factory).listModels('provider');
   void old.catch(() => {});
   await entered.promise;
@@ -614,9 +626,9 @@ test('catalog listing after refresh does not join a held old-config fetch', asyn
     harden({
       provider: 'openrouter',
       model: 'vendor/new',
-      authToken: 'new-test-key',
     }),
   );
+  world.hostStore.set(AUTH_SECRET_PETNAME, authSecret('new-test-key'));
   await E(world.factory).refreshCredentials();
   const current = await E(world.factory).listModels('provider');
   t.deepEqual(
@@ -651,7 +663,6 @@ test('old catalog constructor rejection cannot detach the replacement owner', as
       return harden({
         provider: 'openrouter',
         model: 'vendor/new',
-        authToken: 'test-key',
       });
     },
     fetch: async url => {
@@ -709,7 +720,6 @@ test('factory disposal drains a retired catalog fetch and fences new reads', asy
     harden({
       provider: 'openrouter',
       model: 'vendor/model',
-      authToken: 'test-key',
     }),
   );
   const listing = E(world.factory).listModels('provider');
@@ -754,7 +764,6 @@ test('disposal fences a catalog constructor held on configuration before it can 
   const config = harden({
     provider: 'openrouter',
     model: 'vendor/model',
-    authToken: 'test-key',
   });
   t.teardown(async () => {
     release.resolve(config);
@@ -826,7 +835,6 @@ test('old catalog-read completion cannot evict its still-pending replacement', a
     harden({
       provider: 'openrouter',
       model: 'vendor/old',
-      authToken: 'test-key',
     }),
   );
   const old = E(world.factory).listModels();
@@ -837,7 +845,6 @@ test('old catalog-read completion cannot evict its still-pending replacement', a
     harden({
       provider: 'openrouter',
       model: 'vendor/new',
-      authToken: 'test-key',
     }),
   );
   await E(world.factory).refreshCredentials();
@@ -929,7 +936,6 @@ for (const pinned of [false, true]) {
         harden({
           provider: 'openrouter',
           model: 'vendor/model:free',
-          authToken: 'test-only-key',
         }),
       );
       const parent = await E(world.factory).createSession({
@@ -976,7 +982,6 @@ for (const pinned of [false, true]) {
         harden({
           provider: 'openrouter',
           model: 'vendor/new-default',
-          authToken: 'test-only-key',
         }),
       );
       const revived = await world.revive();
@@ -1037,7 +1042,6 @@ test('direct provider creation persists explicit identity for a discovered pin i
     harden({
       provider: 'openrouter',
       model: 'openrouter/free',
-      authToken: 'test-only-key',
     }),
   );
   const session = await E(world.factory).createSession({

@@ -4,6 +4,10 @@ import { Fail } from '@endo/errors';
 import { Far } from '@endo/far';
 import { E } from '@endo/eventual-send';
 import { createProvider } from '@endo/lal/providers/index.js';
+import {
+  AUTH_SECRET_PETNAME,
+  encodeAuthToken,
+} from '@endo/fae/src/credentials.js';
 import { make } from '../agent.js';
 import { createStreamingProvider } from '../providers/index.js';
 
@@ -96,12 +100,15 @@ const openRouterFactory = (config, fetch) =>
   make(
     Far('OpenRouterFactoryPowers', {
       list: () => harden([]),
-      has: () => false,
+      has: name => name === AUTH_SECRET_PETNAME,
       lookup: name => {
+        if (name === AUTH_SECRET_PETNAME)
+          return Far('OpenRouterTestSecret', {
+            readBase64: () => encodeAuthToken('or-key'),
+          });
         if (name === 'llm-provider')
           return harden({
             provider: 'openrouter',
-            authToken: 'or-key',
             ...config,
           });
         throw Error('Unknown name');

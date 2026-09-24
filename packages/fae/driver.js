@@ -12,7 +12,7 @@ import { resolveAuthToken } from './src/credentials.js';
  * a single fae agent.  Its namespace holds two capability references
  * written by the factory at creation time:
  *
- *   - `llm-provider`  – the provider config `{ host, model, authToken }`
+ *   - `llm-provider`  – the token-free provider config `{ host, model }`
  *   - `agent`          – the agent's EndoGuest (inbox, mail, petstore, tools)
  *
  * and optionally a third:
@@ -43,10 +43,9 @@ export const make = async (powers, context, { env } = {}) => {
   const delegatedPrompt = env?.FAE_SUBAGENT_PROMPT || undefined;
 
   const startLoop = async () => {
-    const storedConfig =
-      /** @type {{ host: string, model: string, authToken?: string }} */ (
-        await E(powers).lookup('llm-provider')
-      );
+    const storedConfig = /** @type {{ host: string, model: string }} */ (
+      await E(powers).lookup('llm-provider')
+    );
     const agentPowers = await E(powers).lookup('agent');
     const spawner = (await E(powers).has('subagent-spawner'))
       ? await E(powers).lookup('subagent-spawner')

@@ -132,39 +132,20 @@ export const make = (guestPowers, _context) => {
           if (openRouter && !authSecretName && !authToken) {
             throw Error('OpenRouter requires an API key in Secrets');
           }
-          /** @type {string | undefined} */
-          let secretFailure;
           if (authToken) {
-            try {
-              ({ secretName: authSecretName } = await provideAuthSecret({
-                hostAgent,
-                name: `${name}-auth`,
-                description: `LLM auth token for provider "${name}"`,
-                token: authToken,
-              }));
-            } catch (secretError) {
-              if (openRouter) throw secretError;
-              // `@secrets` is carried only by the root host. Say so rather than
-              // silently storing a plaintext token as if nothing happened.
-              secretFailure =
-                secretError instanceof Error
-                  ? secretError.message
-                  : String(secretError);
-              console.error(
-                `[llm-provider-factory] secret manager unavailable (${secretFailure}); storing a plaintext token for "${name}"`,
-              );
-            }
+            ({ secretName: authSecretName } = await provideAuthSecret({
+              hostAgent,
+              name: `${name}-auth`,
+              description: `LLM auth token for provider "${name}"`,
+              token: authToken,
+            }));
           }
 
           await E(hostAgent).storeValue(
             harden({
               host,
               model,
-              ...(authSecretName
-                ? { authSecretName }
-                : authToken
-                  ? { authToken }
-                  : {}),
+              ...(authSecretName ? { authSecretName } : {}),
             }),
             name,
           );
@@ -173,15 +154,9 @@ export const make = (guestPowers, _context) => {
           await E(powers).reply(
             msg.number,
             [
-              // The operator, not just the caplet's stderr, is told when the
-              // token was stored in plaintext: what they lose is rotation,
-              // revocation, and an audit trail, and only they can fix it.
-              // eslint-disable-next-line no-nested-ternary
               authSecretName
                 ? `Provider "${name}" created successfully; its token is held as secrets/${authSecretName}.`
-                : secretFailure
-                  ? `Provider "${name}" created, but the secret manager was unavailable (${secretFailure}), so its token is stored in plaintext under the pet name "${name}". That token cannot be rotated, revoked, or audited. Re-run this from the daemon's root host to move it into @secrets.`
-                  : `Provider "${name}" created successfully.`,
+                : `Provider "${name}" created successfully.`,
             ],
             [],
             [],

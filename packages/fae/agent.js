@@ -160,7 +160,6 @@ Example: if a message says "Here is @counter for you", adopt it:
  * @typedef {object} ProviderConstructorConfig
  * @property {string} host - LAL host URL.
  * @property {string} model - LAL model identifier.
- * @property {string} authToken - LAL auth token.
  */
 
 /**
@@ -174,7 +173,7 @@ Example: if a message says "Here is @counter for you", adopt it:
  *
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | undefined} context - Context for cancellation
- * @param {ProviderConstructorConfig | InjectedProviderConfig} providerConfig - LLM provider config. Pass `provider` to inject a pre-built provider (e.g. for tests); otherwise host/model/authToken are used to construct one.
+ * @param {ProviderConstructorConfig | InjectedProviderConfig} providerConfig - Token-free host/model config, or an injected provider. Authentication is supplied by the Secret resolver in options.
  * @param {string} [systemPrompt] - Override system prompt (defaults to guestSystemPrompt)
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Present only
