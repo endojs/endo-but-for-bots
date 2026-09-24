@@ -1,0 +1,1206 @@
+--- a/ironhorse-vm/src/interp/dispatch.rs
++++ b/ironhorse-vm/src/interp/dispatch.rs
+@@ -249,7 +249,61 @@
+             }
+ 
+             use Opcode::*;
+-            match op {
++            let flow = match op {
++                Opcode::XS_CODE_BEGIN_SLOPPY | Opcode::XS_CODE_BEGIN_STRICT | Opcode::XS_CODE_BEGIN_STRICT_BASE | Opcode::XS_CODE_BEGIN_STRICT_DERIVED | Opcode::XS_CODE_BEGIN_STRICT_FIELD | Opcode::XS_CODE_ARGUMENTS | Opcode::XS_CODE_ARGUMENTS_SLOPPY | Opcode::XS_CODE_ARGUMENTS_STRICT | Opcode::XS_CODE_EVAL_ENVIRONMENT | Opcode::XS_CODE_PROGRAM_ENVIRONMENT | Opcode::XS_CODE_EVAL_REFERENCE | Opcode::XS_CODE_PROGRAM_REFERENCE | Opcode::XS_CODE_WITH | Opcode::XS_CODE_WITHOUT | Opcode::XS_CODE_RESERVE_1 | Opcode::XS_CODE_RESERVE_2 | Opcode::XS_CODE_NEW_LOCAL | Opcode::XS_CODE_NEW_TEMPORARY | Opcode::XS_CODE_VAR_LOCAL_1 | Opcode::XS_CODE_VAR_LOCAL_2 | Opcode::XS_CODE_LET_LOCAL_1 | Opcode::XS_CODE_LET_LOCAL_2 | Opcode::XS_CODE_CONST_LOCAL_1 | Opcode::XS_CODE_CONST_LOCAL_2 | Opcode::XS_CODE_SET_LOCAL_1 | Opcode::XS_CODE_SET_LOCAL_2 | Opcode::XS_CODE_PULL_LOCAL_1 | Opcode::XS_CODE_PULL_LOCAL_2 | Opcode::XS_CODE_GET_LOCAL_1 | Opcode::XS_CODE_GET_LOCAL_2 | Opcode::XS_CODE_RESET_LOCAL_1 | Opcode::XS_CODE_RESET_LOCAL_2 | Opcode::XS_CODE_UNWIND_1 | Opcode::XS_CODE_UNWIND_2 | Opcode::XS_CODE_GET_VARIABLE | Opcode::XS_CODE_GET_THIS_VARIABLE | Opcode::XS_CODE_TO_INSTANCE => self.dispatch_group_0(code, pc, return_depth, op),
++                Opcode::XS_CODE_SET_VARIABLE | Opcode::XS_CODE_OBJECT | Opcode::XS_CODE_INSTANTIATE | Opcode::XS_CODE_ARRAY | Opcode::XS_CODE_AT | Opcode::XS_CODE_AT_2 | Opcode::XS_CODE_GET_PROPERTY_AT | Opcode::XS_CODE_SET_PROPERTY_AT | Opcode::XS_CODE_NEW_PROPERTY_AT | Opcode::XS_CODE_FOR_OF | Opcode::XS_CODE_FOR_AWAIT_OF | Opcode::XS_CODE_FOR_IN | Opcode::XS_CODE_CHECK_INSTANCE | Opcode::XS_CODE_NEW_PROPERTY | Opcode::XS_CODE_NEW_PRIVATE_1 | Opcode::XS_CODE_NEW_PRIVATE_2 | Opcode::XS_CODE_GET_PRIVATE_1 | Opcode::XS_CODE_GET_PRIVATE_2 | Opcode::XS_CODE_SET_PRIVATE_1 | Opcode::XS_CODE_SET_PRIVATE_2 | Opcode::XS_CODE_HAS_PRIVATE_1 | Opcode::XS_CODE_HAS_PRIVATE_2 | Opcode::XS_CODE_SET_PROPERTY | Opcode::XS_CODE_GET_PROPERTY | Opcode::XS_CODE_DELETE_PROPERTY | Opcode::XS_CODE_DELETE_PROPERTY_AT | Opcode::XS_CODE_COPY_OBJECT | Opcode::XS_CODE_CONSTRUCTOR_FUNCTION | Opcode::XS_CODE_FUNCTION | Opcode::XS_CODE_GENERATOR_FUNCTION | Opcode::XS_CODE_ASYNC_FUNCTION | Opcode::XS_CODE_ASYNC_GENERATOR_FUNCTION | Opcode::XS_CODE_CODE_1 | Opcode::XS_CODE_CODE_2 | Opcode::XS_CODE_CODE_4 => self.dispatch_group_1(code, pc, return_depth, op),
++                Opcode::XS_CODE_FUNCTION_ENVIRONMENT | Opcode::XS_CODE_ENVIRONMENT | Opcode::XS_CODE_EXTEND | Opcode::XS_CODE_CLASS | Opcode::XS_CODE_SET_HOME | Opcode::XS_CODE_NAME | Opcode::XS_CODE_CALL | Opcode::XS_CODE_NEW | Opcode::XS_CODE_SUPER | Opcode::XS_CODE_EVAL | Opcode::XS_CODE_EVAL_TAIL | Opcode::XS_CODE_RUN | Opcode::XS_CODE_RUN_1 | Opcode::XS_CODE_RUN_2 | Opcode::XS_CODE_RUN_4 | Opcode::XS_CODE_RUN_TAIL | Opcode::XS_CODE_RUN_TAIL_1 | Opcode::XS_CODE_RUN_TAIL_2 | Opcode::XS_CODE_RUN_TAIL_4 => self.dispatch_group_2(code, pc, return_depth, op),
++                Opcode::XS_CODE_ARGUMENT | Opcode::XS_CODE_NEW_CLOSURE | Opcode::XS_CODE_GET_CLOSURE_1 | Opcode::XS_CODE_GET_CLOSURE_2 | Opcode::XS_CODE_VAR_CLOSURE_1 | Opcode::XS_CODE_VAR_CLOSURE_2 | Opcode::XS_CODE_LET_CLOSURE_1 | Opcode::XS_CODE_LET_CLOSURE_2 | Opcode::XS_CODE_SET_CLOSURE_1 | Opcode::XS_CODE_SET_CLOSURE_2 | Opcode::XS_CODE_CONST_CLOSURE_1 | Opcode::XS_CODE_CONST_CLOSURE_2 | Opcode::XS_CODE_RESET_CLOSURE_1 | Opcode::XS_CODE_RESET_CLOSURE_2 | Opcode::XS_CODE_REFRESH_CLOSURE_1 | Opcode::XS_CODE_REFRESH_CLOSURE_2 | Opcode::XS_CODE_REFRESH_LOCAL_1 | Opcode::XS_CODE_REFRESH_LOCAL_2 | Opcode::XS_CODE_PULL_CLOSURE_1 | Opcode::XS_CODE_PULL_CLOSURE_2 | Opcode::XS_CODE_RETRIEVE_1 | Opcode::XS_CODE_RETRIEVE_2 | Opcode::XS_CODE_RETRIEVE_TARGET | Opcode::XS_CODE_RETRIEVE_THIS | Opcode::XS_CODE_STORE_1 | Opcode::XS_CODE_STORE_2 | Opcode::XS_CODE_STORE_ARROW => self.dispatch_group_3(code, pc, return_depth, op),
++                Opcode::XS_CODE_INTEGER_1 | Opcode::XS_CODE_INTEGER_2 | Opcode::XS_CODE_INTEGER_4 | Opcode::XS_CODE_NUMBER | Opcode::XS_CODE_TRUE | Opcode::XS_CODE_FALSE | Opcode::XS_CODE_NULL | Opcode::XS_CODE_UNDEFINED | Opcode::XS_CODE_SYMBOL | Opcode::XS_CODE_REGEXP | Opcode::XS_CODE_STRING_1 | Opcode::XS_CODE_STRING_2 | Opcode::XS_CODE_STRING_4 | Opcode::XS_CODE_BIGINT_1 | Opcode::XS_CODE_BIGINT_2 | Opcode::XS_CODE_TYPEOF | Opcode::XS_CODE_ADD | Opcode::XS_CODE_SUBTRACT | Opcode::XS_CODE_MULTIPLY | Opcode::XS_CODE_DIVIDE | Opcode::XS_CODE_MODULO | Opcode::XS_CODE_BIT_AND | Opcode::XS_CODE_BIT_OR | Opcode::XS_CODE_BIT_XOR | Opcode::XS_CODE_LEFT_SHIFT | Opcode::XS_CODE_SIGNED_RIGHT_SHIFT | Opcode::XS_CODE_UNSIGNED_RIGHT_SHIFT | Opcode::XS_CODE_BIT_NOT | Opcode::XS_CODE_LESS | Opcode::XS_CODE_LESS_EQUAL | Opcode::XS_CODE_MORE | Opcode::XS_CODE_MORE_EQUAL | Opcode::XS_CODE_STRICT_EQUAL | Opcode::XS_CODE_STRICT_NOT_EQUAL | Opcode::XS_CODE_EQUAL | Opcode::XS_CODE_NOT_EQUAL | Opcode::XS_CODE_MINUS | Opcode::XS_CODE_PLUS => self.dispatch_group_4(code, pc, return_depth, op),
++                Opcode::XS_CODE_NOT | Opcode::XS_CODE_VOID | Opcode::XS_CODE_GLOBAL | Opcode::XS_CODE_GET_THIS | Opcode::XS_CODE_SUPER_AT | Opcode::XS_CODE_SUPER_AT_2 | Opcode::XS_CODE_SET_THIS | Opcode::XS_CODE_GET_SUPER | Opcode::XS_CODE_GET_SUPER_AT | Opcode::XS_CODE_SET_SUPER | Opcode::XS_CODE_SET_SUPER_AT | Opcode::XS_CODE_TEMPLATE_CACHE | Opcode::XS_CODE_TEMPLATE | Opcode::XS_CODE_THIS | Opcode::XS_CODE_TARGET | Opcode::XS_CODE_CURRENT | Opcode::XS_CODE_TO_NUMERIC | Opcode::XS_CODE_TO_STRING | Opcode::XS_CODE_INCREMENT | Opcode::XS_CODE_DECREMENT | Opcode::XS_CODE_EXPONENTIATION | Opcode::XS_CODE_INSTANCEOF | Opcode::XS_CODE_IN | Opcode::XS_CODE_DUB | Opcode::XS_CODE_DUB_AT | Opcode::XS_CODE_POP | Opcode::XS_CODE_SWAP | Opcode::XS_CODE_LINE | Opcode::XS_CODE_FILE | Opcode::XS_CODE_DEBUGGER | Opcode::XS_CODE_PROFILE | Opcode::XS_CODE_BRANCH_1 | Opcode::XS_CODE_BRANCH_2 | Opcode::XS_CODE_BRANCH_4 => self.dispatch_group_5(code, pc, return_depth, op),
++                Opcode::XS_CODE_BRANCH_STATUS_1 | Opcode::XS_CODE_BRANCH_STATUS_2 | Opcode::XS_CODE_BRANCH_STATUS_4 | Opcode::XS_CODE_BRANCH_ELSE_1 | Opcode::XS_CODE_BRANCH_ELSE_2 | Opcode::XS_CODE_BRANCH_IF_1 | Opcode::XS_CODE_BRANCH_IF_2 | Opcode::XS_CODE_BRANCH_COALESCE_1 | Opcode::XS_CODE_BRANCH_COALESCE_2 | Opcode::XS_CODE_BRANCH_COALESCE_4 | Opcode::XS_CODE_BRANCH_CHAIN_1 | Opcode::XS_CODE_BRANCH_CHAIN_2 | Opcode::XS_CODE_BRANCH_CHAIN_4 | Opcode::XS_CODE_SET_RESULT | Opcode::XS_CODE_GET_RESULT | Opcode::XS_CODE_END | Opcode::XS_CODE_END_ARROW | Opcode::XS_CODE_END_BASE | Opcode::XS_CODE_END_DERIVED | Opcode::XS_CODE_RETURN | Opcode::XS_CODE_START_GENERATOR | Opcode::XS_CODE_YIELD | Opcode::XS_CODE_YIELD_STAR | Opcode::XS_CODE_START_ASYNC_GENERATOR | Opcode::XS_CODE_START_ASYNC => self.dispatch_group_6(code, pc, return_depth, op),
++                _ => self.dispatch_group_7(code, pc, return_depth, op),
++            };
++            match flow { Flow::Next(p) => pc = p, Flow::Exit(s) => return s, Flow::NotMine => unreachable!() }
++        }
++    }
++
++    #[inline(never)]
++    #[allow(unreachable_code, unused_variables, unused_mut, unused_macros, clippy::all)]
++    fn dispatch_group_0(&mut self, code: &[u8], mut pc: usize, return_depth: usize, op: Opcode) -> Flow {
++        let len = code.len();
++        let byte = code[pc];
++        let size = op.size();
++        let ilen = crate::opcode::encoded_instruction_len(code, pc).unwrap_or(0);
++        macro_rules! s1 { ($off:expr) => { code[pc + $off] as i8 as i32 }; }
++        macro_rules! u1 { ($off:expr) => { code[pc + $off] as usize }; }
++        macro_rules! id { ($off:expr) => { u16::from_le_bytes([code[pc + $off], code[pc + $off + 1]]) }; }
++        macro_rules! dispatch_halt {
++            ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $halt {
++                    Step::Unwound(target)
++                        if $machine.call_stack.len() < $return_depth
++                            || !$machine.resume_target_belongs_to(target, $code) =>
++                    {
++                        return Flow::Exit(Step::Unwound(target));
++                    }
++                    Step::Unwound(target) => {
++                        $machine.assert_resume_target(target, $code);
++                        $program_counter = target.pc;
++                        if $machine.check_meter() == MeterCheck::Abort {
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
++                        }
++                        return Flow::Next($program_counter);
++                    }
++                    halt => return Flow::Exit(halt),
++                }
++            };
++        }
++        macro_rules! dispatch_result {
++            ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $expression {
++                    Ok(value) => value,
++                    Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code),
++                }
++            };
++        }
++        use Opcode::*;
++        match op {
+                 // ---- program prologue / frame -----------------------
+                 XS_CODE_BEGIN_SLOPPY => {
+                     // `this` setup (`XS_CODE_BEGIN_SLOPPY` in `xsRun.c`):
+@@ -690,6 +744,52 @@
+                     dispatch_result!(self.dispatch_to_instance(), pc, self, return_depth, code);
+                     pc += size as usize;
+                 }
++                _ => return Flow::NotMine,
++        }
++        Flow::Next(pc)
++    }
++
++    #[inline(never)]
++    #[allow(unreachable_code, unused_variables, unused_mut, unused_macros, clippy::all)]
++    fn dispatch_group_1(&mut self, code: &[u8], mut pc: usize, return_depth: usize, op: Opcode) -> Flow {
++        let len = code.len();
++        let byte = code[pc];
++        let size = op.size();
++        let ilen = crate::opcode::encoded_instruction_len(code, pc).unwrap_or(0);
++        macro_rules! s1 { ($off:expr) => { code[pc + $off] as i8 as i32 }; }
++        macro_rules! u1 { ($off:expr) => { code[pc + $off] as usize }; }
++        macro_rules! id { ($off:expr) => { u16::from_le_bytes([code[pc + $off], code[pc + $off + 1]]) }; }
++        macro_rules! dispatch_halt {
++            ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $halt {
++                    Step::Unwound(target)
++                        if $machine.call_stack.len() < $return_depth
++                            || !$machine.resume_target_belongs_to(target, $code) =>
++                    {
++                        return Flow::Exit(Step::Unwound(target));
++                    }
++                    Step::Unwound(target) => {
++                        $machine.assert_resume_target(target, $code);
++                        $program_counter = target.pc;
++                        if $machine.check_meter() == MeterCheck::Abort {
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
++                        }
++                        return Flow::Next($program_counter);
++                    }
++                    halt => return Flow::Exit(halt),
++                }
++            };
++        }
++        macro_rules! dispatch_result {
++            ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $expression {
++                    Ok(value) => value,
++                    Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code),
++                }
++            };
++        }
++        use Opcode::*;
++        match op {
+                 XS_CODE_SET_VARIABLE => {
+                     let name = id!(1);
+                     dispatch_result!(
+@@ -749,7 +849,7 @@
+                 XS_CODE_AT | XS_CODE_AT_2 => {
+                     let depth = if op == XS_CODE_AT_2 { 1 } else { 0 };
+                     let Some(base_index) = self.stack.len().checked_sub(2 + depth) else {
+-                        return Step::Host(Halt::EngineInvariant("at:stack-underflow"));
++                        return Flow::Exit(Step::Host(Halt::EngineInvariant("at:stack-underflow")));
+                     };
+                     let idx = base_index + 1;
+                     let key = self.stack[idx];
+@@ -789,7 +889,7 @@
+                         Some(at) => at,
+                         // Every primitive kind resolves; `None` is a payload that does
+                         // not match its kind, the engine's own value being malformed.
+-                        None => return Step::Host(Halt::EngineInvariant("at:key-kind")),
++                        None => return Flow::Exit(Step::Host(Halt::EngineInvariant("at:key-kind"))),
+                     };
+                     self.stack[idx] = at;
+                     pc += size as usize;
+@@ -836,12 +936,12 @@
+                 // literal keeps below.
+                 XS_CODE_NEW_PROPERTY_AT => {
+                     if pc + 3 > len {
+-                        return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
++                        return Flow::Exit(Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
+                             pc,
+                             opcode: byte,
+                             needed: 3,
+                             remaining: len - pc,
+-                        }));
++                        })));
+                     }
+                     let property_flag = code[pc + 2];
+                     dispatch_result!(
+@@ -901,12 +1001,12 @@
+                 // so the flag pair is NOT a separate dispatched opcode.
+                 XS_CODE_NEW_PROPERTY => {
+                     if pc + 5 > len {
+-                        return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
++                        return Flow::Exit(Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
+                             pc,
+                             opcode: byte,
+                             needed: 5,
+                             remaining: len - pc,
+-                        }));
++                        })));
+                     }
+                     let id = id!(1);
+                     let property_flag = code[pc + 4];
+@@ -925,12 +1025,12 @@
+                 // the ordinary public-property MOP untouched.
+                 XS_CODE_NEW_PRIVATE_1 | XS_CODE_NEW_PRIVATE_2 => {
+                     if pc + ilen + 2 > len {
+-                        return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
++                        return Flow::Exit(Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
+                             pc,
+                             opcode: byte,
+                             needed: ilen + 2,
+                             remaining: len - pc,
+-                        }));
++                        })));
+                     }
+                     let index = self.closure_index(op, code, pc);
+                     let flag = code[pc + ilen + 1];
+@@ -1167,6 +1267,52 @@
+                     }
+                     pc = body_start + n;
+                 }
++                _ => return Flow::NotMine,
++        }
++        Flow::Next(pc)
++    }
++
++    #[inline(never)]
++    #[allow(unreachable_code, unused_variables, unused_mut, unused_macros, clippy::all)]
++    fn dispatch_group_2(&mut self, code: &[u8], mut pc: usize, return_depth: usize, op: Opcode) -> Flow {
++        let len = code.len();
++        let byte = code[pc];
++        let size = op.size();
++        let ilen = crate::opcode::encoded_instruction_len(code, pc).unwrap_or(0);
++        macro_rules! s1 { ($off:expr) => { code[pc + $off] as i8 as i32 }; }
++        macro_rules! u1 { ($off:expr) => { code[pc + $off] as usize }; }
++        macro_rules! id { ($off:expr) => { u16::from_le_bytes([code[pc + $off], code[pc + $off + 1]]) }; }
++        macro_rules! dispatch_halt {
++            ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $halt {
++                    Step::Unwound(target)
++                        if $machine.call_stack.len() < $return_depth
++                            || !$machine.resume_target_belongs_to(target, $code) =>
++                    {
++                        return Flow::Exit(Step::Unwound(target));
++                    }
++                    Step::Unwound(target) => {
++                        $machine.assert_resume_target(target, $code);
++                        $program_counter = target.pc;
++                        if $machine.check_meter() == MeterCheck::Abort {
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
++                        }
++                        return Flow::Next($program_counter);
++                    }
++                    halt => return Flow::Exit(halt),
++                }
++            };
++        }
++        macro_rules! dispatch_result {
++            ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $expression {
++                    Ok(value) => value,
++                    Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code),
++                }
++            };
++        }
++        use Opcode::*;
++        match op {
+                 // `function_environment` (`fxNewEnvironmentInstance`): the
+                 // function captures its defining scope through a fresh
+                 // closure environment instance whose prototype is the
+@@ -1244,7 +1390,7 @@
+                         {
+                             (ctor, proto)
+                         }
+-                        _ => return Step::Host(Halt::EngineInvariant("class:invalid-stack")),
++                        _ => return Flow::Exit(Step::Host(Halt::EngineInvariant("class:invalid-stack"))),
+                     };
+                     let derived = self
+                         .functions
+@@ -1374,17 +1520,17 @@
+                 XS_CODE_EVAL | XS_CODE_EVAL_TAIL => {
+                     let argc = dispatch_result!(self.pop_run_count(), pc, self, return_depth, code);
+                     let Some(base) = self.stack.len().checked_sub(argc + 4) else {
+-                        return Step::Host(Halt::EngineInvariant("eval:frame-underflow"));
++                        return Flow::Exit(Step::Host(Halt::EngineInvariant("eval:frame-underflow")));
+                     };
+                     let native = match self.stack.get(base + 1).and_then(|slot| match slot.value {
+                         Payload::Reference(function) => self.native_of(function),
+                         _ => None,
+                     }) {
+                         Some(native) => native,
+-                        None => return Step::Host(Halt::NotImplemented("eval:shadowed-call")),
++                        None => return Flow::Exit(Step::Host(Halt::NotImplemented("eval:shadowed-call"))),
+                     };
+                     if native != Native::Eval {
+-                        return Step::Host(Halt::NotImplemented("eval:shadowed-call"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("eval:shadowed-call")));
+                     }
+                     // This opcode is emitted only for a **direct** eval call,
+                     // so the source (if a string) evaluates in the caller's
+@@ -1407,7 +1553,7 @@
+                     self.eval_direct = false;
+                     dispatch_result!(outcome, pc, self, return_depth, code);
+                     if self.check_meter() == MeterCheck::Abort {
+-                        return Step::Host(Halt::MeterAbort);
++                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                     }
+                     pc += size as usize;
+                 }
+@@ -1484,7 +1630,7 @@
+                         let result = self.call_promise_function(code, f, base, argc);
+                         dispatch_result!(result, pc, self, return_depth, code);
+                         if self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = ret_pc;
+                     } else if let Some((native, base)) = callee {
+@@ -1498,7 +1644,7 @@
+                         );
+                         // Return into the JS caller: `END_ALL` checks.
+                         if self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = ret_pc;
+                     } else if let Some((NativeMethod::FunctionCall, base)) = method {
+@@ -1528,14 +1674,14 @@
+                         ) {
+                             true => {
+                                 if self.check_meter() == MeterCheck::Abort {
+-                                    return Step::Host(Halt::MeterAbort);
++                                    return Flow::Exit(Step::Host(Halt::MeterAbort));
+                                 }
+                                 pc = ret_pc;
+                             }
+                             false => match self.enter_call_dot_call(base, argc, ret_pc) {
+                                 Ok(body_start) => {
+                                     if self.check_meter() == MeterCheck::Abort {
+-                                        return Step::Host(Halt::MeterAbort);
++                                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                                     }
+                                     pc = body_start;
+                                 }
+@@ -1567,14 +1713,14 @@
+                         ) {
+                             true => {
+                                 if self.check_meter() == MeterCheck::Abort {
+-                                    return Step::Host(Halt::MeterAbort);
++                                    return Flow::Exit(Step::Host(Halt::MeterAbort));
+                                 }
+                                 pc = ret_pc;
+                             }
+                             false => match self.enter_call_dot_apply(base, argc, ret_pc, code) {
+                                 Ok(body_start) => {
+                                     if self.check_meter() == MeterCheck::Abort {
+-                                        return Step::Host(Halt::MeterAbort);
++                                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                                     }
+                                     pc = body_start;
+                                 }
+@@ -1611,7 +1757,7 @@
+                             code
+                         );
+                         if self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = ret_pc;
+                     } else if let Some((bf, base)) =
+@@ -1637,10 +1783,10 @@
+                             match self.enter_construct_bound(bf, base, argc, ret_pc) {
+                                 Ok(body_start) => {
+                                     if self.check_meter() == MeterCheck::Abort {
+-                                        return Step::Host(Halt::MeterAbort);
++                                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                                     }
+                                     pc = body_start;
+-                                    continue;
++                                    return Flow::Next(pc);
+                                 }
+                                 Err(halt) => dispatch_halt!(halt, pc, self, return_depth, code),
+                             }
+@@ -1668,7 +1814,7 @@
+                         );
+                         self.push(result);
+                         if self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = ret_pc;
+                     } else if let Some((px, base)) =
+@@ -1710,7 +1856,7 @@
+                         };
+                         self.push(result);
+                         if self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = ret_pc;
+                     } else if let Some(seg) = self.cross_segment_callee(argc) {
+@@ -1724,7 +1870,7 @@
+                             Ok(result) => {
+                                 self.push(result);
+                                 if self.check_meter() == MeterCheck::Abort {
+-                                    return Step::Host(Halt::MeterAbort);
++                                    return Flow::Exit(Step::Host(Halt::MeterAbort));
+                                 }
+                                 pc = ret_pc;
+                             }
+@@ -1744,7 +1890,7 @@
+                                 // Call entry: `mxFirstCode()` runs a meter check
+                                 // before the callee's first opcode.
+                                 if self.check_meter() == MeterCheck::Abort {
+-                                    return Step::Host(Halt::MeterAbort);
++                                    return Flow::Exit(Step::Host(Halt::MeterAbort));
+                                 }
+                                 pc = body_start;
+                             }
+@@ -1756,6 +1902,52 @@
+                         }
+                     }
+                 }
++                _ => return Flow::NotMine,
++        }
++        Flow::Next(pc)
++    }
++
++    #[inline(never)]
++    #[allow(unreachable_code, unused_variables, unused_mut, unused_macros, clippy::all)]
++    fn dispatch_group_3(&mut self, code: &[u8], mut pc: usize, return_depth: usize, op: Opcode) -> Flow {
++        let len = code.len();
++        let byte = code[pc];
++        let size = op.size();
++        let ilen = crate::opcode::encoded_instruction_len(code, pc).unwrap_or(0);
++        macro_rules! s1 { ($off:expr) => { code[pc + $off] as i8 as i32 }; }
++        macro_rules! u1 { ($off:expr) => { code[pc + $off] as usize }; }
++        macro_rules! id { ($off:expr) => { u16::from_le_bytes([code[pc + $off], code[pc + $off + 1]]) }; }
++        macro_rules! dispatch_halt {
++            ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $halt {
++                    Step::Unwound(target)
++                        if $machine.call_stack.len() < $return_depth
++                            || !$machine.resume_target_belongs_to(target, $code) =>
++                    {
++                        return Flow::Exit(Step::Unwound(target));
++                    }
++                    Step::Unwound(target) => {
++                        $machine.assert_resume_target(target, $code);
++                        $program_counter = target.pc;
++                        if $machine.check_meter() == MeterCheck::Abort {
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
++                        }
++                        return Flow::Next($program_counter);
++                    }
++                    halt => return Flow::Exit(halt),
++                }
++            };
++        }
++        macro_rules! dispatch_result {
++            ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $expression {
++                    Ok(value) => value,
++                    Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code),
++                }
++            };
++        }
++        use Opcode::*;
++        match op {
+                 // `argument i` (`XS_CODE_ARGUMENT`): push the frame's i-th
+                 // positional argument (`mxFrameArgv(i)`), or `undefined`
+                 // when fewer were passed.
+@@ -1802,7 +1994,7 @@
+                             }
+                             self.push(Slot::of(s.kind, s.value));
+                         }
+-                        None => return Step::Host(Halt::EngineInvariant("get_closure:no-cell")),
++                        None => return Flow::Exit(Step::Host(Halt::EngineInvariant("get_closure:no-cell"))),
+                     }
+                     pc += op.size() as usize;
+                 }
+@@ -1975,7 +2167,7 @@
+                         }
+                     });
+                     let (Some(env), Some(arrow)) = (env, arrow) else {
+-                        return Step::Host(Halt::EngineInvariant("store_arrow:frame"));
++                        return Flow::Exit(Step::Host(Halt::EngineInvariant("store_arrow:frame")));
+                     };
+                     let home = self
+                         .functions
+@@ -1998,6 +2190,52 @@
+                     pc += size as usize;
+                 }
+ 
++                _ => return Flow::NotMine,
++        }
++        Flow::Next(pc)
++    }
++
++    #[inline(never)]
++    #[allow(unreachable_code, unused_variables, unused_mut, unused_macros, clippy::all)]
++    fn dispatch_group_4(&mut self, code: &[u8], mut pc: usize, return_depth: usize, op: Opcode) -> Flow {
++        let len = code.len();
++        let byte = code[pc];
++        let size = op.size();
++        let ilen = crate::opcode::encoded_instruction_len(code, pc).unwrap_or(0);
++        macro_rules! s1 { ($off:expr) => { code[pc + $off] as i8 as i32 }; }
++        macro_rules! u1 { ($off:expr) => { code[pc + $off] as usize }; }
++        macro_rules! id { ($off:expr) => { u16::from_le_bytes([code[pc + $off], code[pc + $off + 1]]) }; }
++        macro_rules! dispatch_halt {
++            ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $halt {
++                    Step::Unwound(target)
++                        if $machine.call_stack.len() < $return_depth
++                            || !$machine.resume_target_belongs_to(target, $code) =>
++                    {
++                        return Flow::Exit(Step::Unwound(target));
++                    }
++                    Step::Unwound(target) => {
++                        $machine.assert_resume_target(target, $code);
++                        $program_counter = target.pc;
++                        if $machine.check_meter() == MeterCheck::Abort {
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
++                        }
++                        return Flow::Next($program_counter);
++                    }
++                    halt => return Flow::Exit(halt),
++                }
++            };
++        }
++        macro_rules! dispatch_result {
++            ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $expression {
++                    Ok(value) => value,
++                    Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code),
++                }
++            };
++        }
++        use Opcode::*;
++        match op {
+                 // ---- literals ---------------------------------------
+                 XS_CODE_INTEGER_1 => {
+                     self.push(Slot::integer(s1!(1)));
+@@ -2159,7 +2397,7 @@
+                         // Closure/EnvReference/Uninitialized are never live
+                         // stack *values*: reaching one here is the engine's
+                         // own state being wrong, not an unported shape.
+-                        _ => return Step::Host(Halt::EngineInvariant("typeof:non-value-kind")),
++                        _ => return Flow::Exit(Step::Host(Halt::EngineInvariant("typeof:non-value-kind"))),
+                     };
+                     if let Some(s) = self.stack.last_mut() {
+                         *s = Slot::of(Kind::String, Payload::String(off));
+@@ -2419,6 +2657,52 @@
+                     self.push(a);
+                     pc += size as usize;
+                 }
++                _ => return Flow::NotMine,
++        }
++        Flow::Next(pc)
++    }
++
++    #[inline(never)]
++    #[allow(unreachable_code, unused_variables, unused_mut, unused_macros, clippy::all)]
++    fn dispatch_group_5(&mut self, code: &[u8], mut pc: usize, return_depth: usize, op: Opcode) -> Flow {
++        let len = code.len();
++        let byte = code[pc];
++        let size = op.size();
++        let ilen = crate::opcode::encoded_instruction_len(code, pc).unwrap_or(0);
++        macro_rules! s1 { ($off:expr) => { code[pc + $off] as i8 as i32 }; }
++        macro_rules! u1 { ($off:expr) => { code[pc + $off] as usize }; }
++        macro_rules! id { ($off:expr) => { u16::from_le_bytes([code[pc + $off], code[pc + $off + 1]]) }; }
++        macro_rules! dispatch_halt {
++            ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $halt {
++                    Step::Unwound(target)
++                        if $machine.call_stack.len() < $return_depth
++                            || !$machine.resume_target_belongs_to(target, $code) =>
++                    {
++                        return Flow::Exit(Step::Unwound(target));
++                    }
++                    Step::Unwound(target) => {
++                        $machine.assert_resume_target(target, $code);
++                        $program_counter = target.pc;
++                        if $machine.check_meter() == MeterCheck::Abort {
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
++                        }
++                        return Flow::Next($program_counter);
++                    }
++                    halt => return Flow::Exit(halt),
++                }
++            };
++        }
++        macro_rules! dispatch_result {
++            ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $expression {
++                    Ok(value) => value,
++                    Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code),
++                }
++            };
++        }
++        use Opcode::*;
++        match op {
+                 XS_CODE_NOT => {
+                     let a = dispatch_result!(self.pop_checked(), pc, self, return_depth, code);
+                     let t = self.truthy(&a);
+@@ -2460,15 +2744,14 @@
+                     let receiver_depth = if op == XS_CODE_SUPER_AT_2 { 3 } else { 2 };
+                     let receiver_pos = match self.stack.len().checked_sub(receiver_depth) {
+                         Some(pos) => pos,
+-                        None => return Step::Host(Halt::EngineInvariant("super_at:stack")),
++                        None => return Flow::Exit(Step::Host(Halt::EngineInvariant("super_at:stack"))),
+                     };
+                     let key_pos = receiver_pos + 1;
+                     let receiver = self.stack[receiver_pos];
+                     let receiver_ref = match receiver.value {
+                         Payload::Reference(object) if receiver.kind == Kind::Reference => object,
+                         _ => {
+-                            return Step::Host(Halt::NotImplemented("super_at:primitive-receiver"))
+-                        }
++                            return Flow::Exit(Step::Host(Halt::NotImplemented("super_at:primitive-receiver")))}
+                     };
+                     let home = self
+                         .functions
+@@ -2476,7 +2759,7 @@
+                         .map(|info| info.home)
+                         .unwrap_or(crate::value::SlotIndex::NULL);
+                     if home.is_null() {
+-                        return Step::Host(Halt::NotImplemented("super_at:no-home"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("super_at:no-home")));
+                     }
+                     let base = self.instance_prototype(home);
+                     let key = match dispatch_result!(
+@@ -2487,7 +2770,7 @@
+                         code
+                     ) {
+                         Some(key) => key,
+-                        None => return Step::Host(Halt::NotImplemented("super_at:key")),
++                        None => return Flow::Exit(Step::Host(Halt::NotImplemented("super_at:key"))),
+                     };
+                     let mut super_ref =
+                         Slot::of(Kind::EnvReference, Payload::Reference(receiver_ref));
+@@ -2573,10 +2856,10 @@
+                 XS_CODE_TEMPLATE => {
+                     let cooked = match self.stack.last().map(|slot| (slot.kind, slot.value)) {
+                         Some((Kind::Reference, Payload::Reference(cooked))) => cooked,
+-                        _ => return Step::Host(Halt::EngineInvariant("template:object")),
++                        _ => return Flow::Exit(Step::Host(Halt::EngineInvariant("template:object"))),
+                     };
+                     if !self.freeze_template_object(cooked) {
+-                        return Step::Host(Halt::NotImplemented("template:raw"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("template:raw")));
+                     }
+                     pc += size as usize;
+                 }
+@@ -2615,7 +2898,7 @@
+                 // rather than pushing a bogus value.
+                 XS_CODE_CURRENT => {
+                     if self.cur_func.is_null() {
+-                        return Step::Host(Halt::NotImplemented("current:program-level"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("current:program-level")));
+                     }
+                     let f = self.cur_func;
+                     self.push(Slot::of(Kind::Reference, Payload::Reference(f)));
+@@ -2649,7 +2932,7 @@
+                                 *s = numeric;
+                             }
+                         }
+-                        _ => return Step::Host(Halt::NotImplemented("to_numeric:unmodeled-kind")),
++                        _ => return Flow::Exit(Step::Host(Halt::NotImplemented("to_numeric:unmodeled-kind"))),
+                     }
+                     pc += size as usize;
+                 }
+@@ -2686,7 +2969,7 @@
+                             *top = result;
+                         }
+                         pc += size as usize;
+-                        continue;
++                        return Flow::Next(pc);
+                     }
+                     if let Some(top) = self.stack.last_mut() {
+                         *top = numeric;
+@@ -2694,8 +2977,7 @@
+                     let top = match self.stack.last_mut() {
+                         Some(s) => s,
+                         None => {
+-                            return Step::Host(Halt::EngineInvariant("increment:stack-underflow"))
+-                        }
++                            return Flow::Exit(Step::Host(Halt::EngineInvariant("increment:stack-underflow")))}
+                     };
+                     match (top.kind, top.value) {
+                         (Kind::Integer, Payload::Integer(v)) => {
+@@ -2722,10 +3004,9 @@
+                         // BigInt (handled before); anything else is the
+                         // engine's own coercion result being malformed.
+                         _ => {
+-                            return Step::Host(Halt::EngineInvariant(
++                            return Flow::Exit(Step::Host(Halt::EngineInvariant(
+                                 "increment:non-numeric-result",
+-                            ))
+-                        }
++                            )))}
+                     }
+                     pc += size as usize;
+                 }
+@@ -2785,7 +3066,7 @@
+                     // for a computed compound assignment (xsRun.c DUB_AT).
+                     let n = self.stack.len();
+                     if n < 2 {
+-                        return Step::Host(Halt::EngineInvariant("dub_at:stack-underflow"));
++                        return Flow::Exit(Step::Host(Halt::EngineInvariant("dub_at:stack-underflow")));
+                     }
+                     let receiver = self.stack[n - 2];
+                     let key = self.stack[n - 1];
+@@ -2803,7 +3084,7 @@
+                 XS_CODE_SWAP => {
+                     let n = self.stack.len();
+                     if n < 2 {
+-                        return Step::Host(Halt::EngineInvariant("value-stack:underflow"));
++                        return Flow::Exit(Step::Host(Halt::EngineInvariant("value-stack:underflow")));
+                     }
+                     self.stack.swap(n - 1, n - 2);
+                     pc += size as usize;
+@@ -2829,14 +3110,14 @@
+                 XS_CODE_BRANCH_1 => {
+                     let off = s1!(1);
+                     if off < 0 && self.check_meter() == MeterCheck::Abort {
+-                        return Step::Host(Halt::MeterAbort);
++                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                     }
+                     pc = branch_target(pc, size, off);
+                 }
+                 XS_CODE_BRANCH_2 => {
+                     let off = i16::from_le_bytes([code[pc + 1], code[pc + 2]]) as i32;
+                     if off < 0 && self.check_meter() == MeterCheck::Abort {
+-                        return Step::Host(Halt::MeterAbort);
++                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                     }
+                     pc = branch_target(pc, size, off);
+                 }
+@@ -2848,10 +3129,56 @@
+                         code[pc + 4],
+                     ]);
+                     if off < 0 && self.check_meter() == MeterCheck::Abort {
+-                        return Step::Host(Halt::MeterAbort);
++                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                     }
+                     pc = branch_target(pc, size, off);
+                 }
++                _ => return Flow::NotMine,
++        }
++        Flow::Next(pc)
++    }
++
++    #[inline(never)]
++    #[allow(unreachable_code, unused_variables, unused_mut, unused_macros, clippy::all)]
++    fn dispatch_group_6(&mut self, code: &[u8], mut pc: usize, return_depth: usize, op: Opcode) -> Flow {
++        let len = code.len();
++        let byte = code[pc];
++        let size = op.size();
++        let ilen = crate::opcode::encoded_instruction_len(code, pc).unwrap_or(0);
++        macro_rules! s1 { ($off:expr) => { code[pc + $off] as i8 as i32 }; }
++        macro_rules! u1 { ($off:expr) => { code[pc + $off] as usize }; }
++        macro_rules! id { ($off:expr) => { u16::from_le_bytes([code[pc + $off], code[pc + $off + 1]]) }; }
++        macro_rules! dispatch_halt {
++            ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $halt {
++                    Step::Unwound(target)
++                        if $machine.call_stack.len() < $return_depth
++                            || !$machine.resume_target_belongs_to(target, $code) =>
++                    {
++                        return Flow::Exit(Step::Unwound(target));
++                    }
++                    Step::Unwound(target) => {
++                        $machine.assert_resume_target(target, $code);
++                        $program_counter = target.pc;
++                        if $machine.check_meter() == MeterCheck::Abort {
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
++                        }
++                        return Flow::Next($program_counter);
++                    }
++                    halt => return Flow::Exit(halt),
++                }
++            };
++        }
++        macro_rules! dispatch_result {
++            ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $expression {
++                    Ok(value) => value,
++                    Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code),
++                }
++            };
++        }
++        use Opcode::*;
++        match op {
+                 // `branch_status` (`XS_CODE_BRANCH_STATUS_*`, xsRun.c:1577): the
+                 // generator/async resume epilogue, right after `YIELD`/`AWAIT`.
+                 // XS branches on `the->status` (the resume mode): `next`
+@@ -2901,7 +3228,7 @@
+                         }
+                         ResumeStatus::NoStatus => {
+                             if off < 0 && self.check_meter() == MeterCheck::Abort {
+-                                return Step::Host(Halt::MeterAbort);
++                                return Flow::Exit(Step::Host(Halt::MeterAbort));
+                             }
+                             pc = branch_target(pc, size, off);
+                         }
+@@ -2918,7 +3245,7 @@
+                         pc += size as usize;
+                     } else {
+                         if off < 0 && self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = branch_target(pc, size, off);
+                     }
+@@ -2931,7 +3258,7 @@
+                         pc += size as usize;
+                     } else {
+                         if off < 0 && self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = branch_target(pc, size, off);
+                     }
+@@ -2945,7 +3272,7 @@
+                     let cond = self.truthy(&v);
+                     if cond {
+                         if off < 0 && self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = branch_target(pc, size, off);
+                     } else {
+@@ -2958,7 +3285,7 @@
+                     let cond = self.truthy(&v);
+                     if cond {
+                         if off < 0 && self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = branch_target(pc, size, off);
+                     } else {
+@@ -2991,7 +3318,7 @@
+                         pc += size as usize;
+                     } else {
+                         if off < 0 && self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = branch_target(pc, size, off);
+                     }
+@@ -3019,7 +3346,7 @@
+                             *s = Slot::undefined();
+                         }
+                         if off < 0 && self.check_meter() == MeterCheck::Abort {
+-                            return Step::Host(Halt::MeterAbort);
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
+                         }
+                         pc = branch_target(pc, size, off);
+                     } else {
+@@ -3068,7 +3395,7 @@
+                             let _ = self.leave_call_to_frame_base();
+                             self.push(ret);
+                         }
+-                        return Step::Returned;
++                        return Flow::Exit(Step::Returned);
+                     }
+                     // Guard the non-boundary resume against a frame underflow:
+                     // crafted bytecode can reach this return-family opcode with
+@@ -3084,7 +3411,7 @@
+                     // as the sibling stack-underflow guards do (`yield:`/
+                     // `await:`/`add:stack-underflow`), never `panic!`.
+                     if self.call_stack.len() < return_depth {
+-                        return Step::Host(Halt::EngineInvariant("end:frame-underflow"));
++                        return Flow::Exit(Step::Host(Halt::EngineInvariant("end:frame-underflow")));
+                     }
+                     // Construct return (XS's `END` with `mxFrameHasTarget`):
+                     // a constructor's completion is its `this` instance unless
+@@ -3096,7 +3423,7 @@
+                     pc = resume;
+                     // Returning into a JS caller: `mxFirstCode()` checks.
+                     if self.check_meter() == MeterCheck::Abort {
+-                        return Step::Host(Halt::MeterAbort);
++                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                     }
+                 }
+                 // `return` (`XS_CODE_RETURN`, xsRun.c:1080): the top-level
+@@ -3106,9 +3433,9 @@
+                 // `set_result; end`), so this is the exit-to-host boundary.
+                 XS_CODE_RETURN => {
+                     if return_depth != 0 || !self.call_stack.is_empty() {
+-                        return Step::Host(Halt::EngineInvariant("return:non-program-frame"));
++                        return Flow::Exit(Step::Host(Halt::EngineInvariant("return:non-program-frame")));
+                     }
+-                    return Step::Returned;
++                    return Flow::Exit(Step::Returned);
+                 }
+ 
+                 // ---- generators -------------------------------------
+@@ -3123,7 +3450,7 @@
+                     // A generator built with `new` is a `TypeError` in XS
+                     // (`mxFrameHasTarget`); self-name rather than mis-handle.
+                     if self.cur_target {
+-                        return Step::Host(Halt::NotImplemented("generator:new-target"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("generator:new-target")));
+                     }
+                     let resume_pc = pc + size as usize;
+                     let proto = self
+@@ -3138,21 +3465,21 @@
+                             let _ = self.leave_call();
+                             self.push(gen_slot);
+                         }
+-                        return Step::Returned;
++                        return Flow::Exit(Step::Returned);
+                     }
+                     // Same frame-underflow guard as `END` (see there): a
+                     // `start_generator` reached below `return_depth` on crafted
+                     // bytecode must not pop an outer frame (#1046).
+                     if self.call_stack.len() < return_depth {
+-                        return Step::Host(Halt::EngineInvariant(
++                        return Flow::Exit(Step::Host(Halt::EngineInvariant(
+                             "start_generator:frame-underflow",
+-                        ));
++                        )));
+                     }
+                     let resume = self.leave_call();
+                     self.push(gen_slot);
+                     pc = resume;
+                     if self.check_meter() == MeterCheck::Abort {
+-                        return Step::Host(Halt::MeterAbort);
++                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                     }
+                 }
+                 // `yield` (`XS_CODE_YIELD`, xsRun.c:1213): suspend the running
+@@ -3188,18 +3515,18 @@
+                             Suspension::Yield,
+                         ) {
+                             Ok(frame) => frame,
+-                            Err(halt) => return Step::Host(halt),
++                            Err(halt) => return Flow::Exit(Step::Host(halt)),
+                         };
+                         if let Some(g) = self.async_generators.get_mut(&gen) {
+                             g.frame = Some(frame);
+                             g.state = AsyncGeneratorState::Awaiting;
+                         }
+-                        return Step::AsyncYielded(yielded);
++                        return Flow::Exit(Step::AsyncYielded(yielded));
+                     }
+                     let (gen, stack_base, jumps_base, call_depth_base) =
+                         match self.gen_run_stack.last() {
+                             Some(g) => (g.gen, g.stack_base, g.jumps_base, g.call_depth_base),
+-                            None => return Step::Host(Halt::EngineInvariant("yield:no-generator")),
++                            None => return Flow::Exit(Step::Host(Halt::EngineInvariant("yield:no-generator"))),
+                         };
+                     let resume_pc = pc + size as usize;
+                     let yielded =
+@@ -3212,19 +3539,19 @@
+                         Suspension::Yield,
+                     ) {
+                         Ok(frame) => frame,
+-                        Err(halt) => return Step::Host(halt),
++                        Err(halt) => return Flow::Exit(Step::Host(halt)),
+                     };
+                     if let Some(g) = self.generators.get_mut(&gen) {
+                         g.state = GeneratorState::SuspendedYield;
+                         g.frame = Some(frame);
+                     }
+-                    return Step::Yielded(yielded);
++                    return Flow::Exit(Step::Yielded(yielded));
+                 }
+ 
+                 // ---- async functions --------------------------------
+                 XS_CODE_START_ASYNC_GENERATOR => {
+                     if self.cur_target {
+-                        return Step::Host(Halt::NotImplemented("async-generator:new-target"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("async-generator:new-target")));
+                     }
+                     let resume_pc = pc + size as usize;
+                     let proto = self
+@@ -3237,21 +3564,21 @@
+                             let _ = self.leave_call();
+                             self.push(slot);
+                         }
+-                        return Step::Returned;
++                        return Flow::Exit(Step::Returned);
+                     }
+                     // Same frame-underflow guard as `END` (see there): a
+                     // `start_async_generator` reached below `return_depth` on
+                     // crafted bytecode must not pop an outer frame (#1046).
+                     if self.call_stack.len() < return_depth {
+-                        return Step::Host(Halt::EngineInvariant(
++                        return Flow::Exit(Step::Host(Halt::EngineInvariant(
+                             "start_async_generator:frame-underflow",
+-                        ));
++                        )));
+                     }
+                     let resume = self.leave_call();
+                     self.push(slot);
+                     pc = resume;
+                     if self.check_meter() == MeterCheck::Abort {
+-                        return Step::Host(Halt::MeterAbort);
++                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                     }
+                 }
+                 // `start_async` (`XS_CODE_START_ASYNC`, xsRun.c:1094): the
+@@ -3267,7 +3594,7 @@
+                     // `new asyncFn()` is a `TypeError` in XS (async functions are
+                     // not constructors); self-name rather than mis-handle.
+                     if self.cur_target {
+-                        return Step::Host(Halt::NotImplemented("async:new-target"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("async:new-target")));
+                     }
+                     let resume_pc = pc + size as usize;
+                     let inst = self.new_async_instance(resume_pc);
+@@ -3296,7 +3623,7 @@
+                             let _ = self.leave_call();
+                             self.push(promise_slot);
+                         }
+-                        return Step::Returned;
++                        return Flow::Exit(Step::Returned);
+                     }
+                     // Same frame-underflow guard as `END` (see there): a
+                     // `start_async` reached below `return_depth` on crafted
+@@ -3304,15 +3631,61 @@
+                     // site the `leave_call with empty call stack` fuzz abort
+                     // hit (#1046).
+                     if self.call_stack.len() < return_depth {
+-                        return Step::Host(Halt::EngineInvariant("start_async:frame-underflow"));
++                        return Flow::Exit(Step::Host(Halt::EngineInvariant("start_async:frame-underflow")));
+                     }
+                     let resume = self.leave_call();
+                     self.push(promise_slot);
+                     pc = resume;
+                     if self.check_meter() == MeterCheck::Abort {
+-                        return Step::Host(Halt::MeterAbort);
++                        return Flow::Exit(Step::Host(Halt::MeterAbort));
++                    }
++                }
++                _ => return Flow::NotMine,
++        }
++        Flow::Next(pc)
++    }
++
++    #[inline(never)]
++    #[allow(unreachable_code, unused_variables, unused_mut, unused_macros, clippy::all)]
++    fn dispatch_group_7(&mut self, code: &[u8], mut pc: usize, return_depth: usize, op: Opcode) -> Flow {
++        let len = code.len();
++        let byte = code[pc];
++        let size = op.size();
++        let ilen = crate::opcode::encoded_instruction_len(code, pc).unwrap_or(0);
++        macro_rules! s1 { ($off:expr) => { code[pc + $off] as i8 as i32 }; }
++        macro_rules! u1 { ($off:expr) => { code[pc + $off] as usize }; }
++        macro_rules! id { ($off:expr) => { u16::from_le_bytes([code[pc + $off], code[pc + $off + 1]]) }; }
++        macro_rules! dispatch_halt {
++            ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $halt {
++                    Step::Unwound(target)
++                        if $machine.call_stack.len() < $return_depth
++                            || !$machine.resume_target_belongs_to(target, $code) =>
++                    {
++                        return Flow::Exit(Step::Unwound(target));
+                     }
++                    Step::Unwound(target) => {
++                        $machine.assert_resume_target(target, $code);
++                        $program_counter = target.pc;
++                        if $machine.check_meter() == MeterCheck::Abort {
++                            return Flow::Exit(Step::Host(Halt::MeterAbort));
++                        }
++                        return Flow::Next($program_counter);
++                    }
++                    halt => return Flow::Exit(halt),
++                }
++            };
++        }
++        macro_rules! dispatch_result {
++            ($expression:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
++                match $expression {
++                    Ok(value) => value,
++                    Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code),
+                 }
++            };
++        }
++        use Opcode::*;
++        match op {
+                 // `await` (`XS_CODE_AWAIT`, xsRun.c:1212): suspend the running
+                 // async instance. Shares XS's `YIELD` `mxCase` — snapshot the
+                 // activation (scope + own stack temporaries + resume cursor) into
+@@ -3354,20 +3727,19 @@
+                             Suspension::Await,
+                         ) {
+                             Ok(frame) => frame,
+-                            Err(halt) => return Step::Host(halt),
++                            Err(halt) => return Flow::Exit(Step::Host(halt)),
+                         };
+                         if let Some(g) = self.async_generators.get_mut(&gen) {
+                             g.frame = Some(frame);
+                             g.state = AsyncGeneratorState::Awaiting;
+                         }
+-                        return Step::Awaited(awaited);
++                        return Flow::Exit(Step::Awaited(awaited));
+                     }
+                     let (inst, stack_base, jumps_base, call_depth_base) =
+                         match self.async_run_stack.last() {
+                             Some(a) => (a.inst, a.stack_base, a.jumps_base, a.call_depth_base),
+                             None => {
+-                                return Step::Host(Halt::EngineInvariant("await:no-async-instance"))
+-                            }
++                                return Flow::Exit(Step::Host(Halt::EngineInvariant("await:no-async-instance")))}
+                         };
+                     let resume_pc = pc + size as usize;
+                     let awaited =
+@@ -3380,12 +3752,12 @@
+                         Suspension::Await,
+                     ) {
+                         Ok(frame) => frame,
+-                        Err(halt) => return Step::Host(halt),
++                        Err(halt) => return Flow::Exit(Step::Host(halt)),
+                     };
+                     if let Some(a) = self.async_instances.get_mut(&inst) {
+                         a.frame = Some(frame);
+                     }
+-                    return Step::Awaited(awaited);
++                    return Flow::Exit(Step::Awaited(awaited));
+                 }
+ 
+                 // ---- exceptions: the jump-buffer chain --------------
+@@ -3412,11 +3784,11 @@
+                     // untrusted offset before retaining it, so a later throw
+                     // cannot reach the resume-target invariant with bad input.
+                     if target >= len {
+-                        return Step::Host(Halt::Decode(DecodeError::InvalidCatchTarget {
++                        return Flow::Exit(Step::Host(Halt::Decode(DecodeError::InvalidCatchTarget {
+                             pc,
+                             target,
+                             len,
+-                        }));
++                        })));
+                     }
+                     self.jumps.push(CatchJump {
+                         target_pc: target,
+@@ -3582,11 +3954,11 @@
+                             .value
+                         {
+                             Payload::Integer(n) if n >= 3 => n as usize,
+-                            _ => return Step::Host(Halt::EngineInvariant("module:transfer-shape")),
++                            _ => return Flow::Exit(Step::Host(Halt::EngineInvariant("module:transfer-shape"))),
+                         };
+                     let start = match self.stack.len().checked_sub(count) {
+                         Some(start) => start,
+-                        None => return Step::Host(Halt::EngineInvariant("module:transfer-stack")),
++                        None => return Flow::Exit(Step::Host(Halt::EngineInvariant("module:transfer-stack"))),
+                     };
+                     let imported = self.stack[start + 1].kind == Kind::String;
+                     let local_id = match self.stack[start].value {
+@@ -3603,21 +3975,21 @@
+                 XS_CODE_MODULE => {
+                     let flags = code.get(pc + 1).copied().unwrap_or_default();
+                     if flags & 32 != 0 {
+-                        return Step::Host(Halt::NotImplemented("module:dynamic-import"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("module:dynamic-import")));
+                     }
+                     if flags & 64 != 0 {
+-                        return Step::Host(Halt::NotImplemented("module:import-meta"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("module:import-meta")));
+                     }
+                     let count =
+                         match dispatch_result!(self.pop_checked(), pc, self, return_depth, code)
+                             .value
+                         {
+                             Payload::Integer(n) if n >= 2 => n as usize,
+-                            _ => return Step::Host(Halt::EngineInvariant("module:envelope-shape")),
++                            _ => return Flow::Exit(Step::Host(Halt::EngineInvariant("module:envelope-shape"))),
+                         };
+                     let start = match self.stack.len().checked_sub(count) {
+                         Some(start) => start,
+-                        None => return Step::Host(Halt::EngineInvariant("module:envelope-stack")),
++                        None => return Flow::Exit(Step::Host(Halt::EngineInvariant("module:envelope-stack"))),
+                     };
+                     let initialize = self.stack[start];
+                     let execute = self.stack[start + 1];
+@@ -3625,17 +3997,17 @@
+                     if transfers.iter().any(|transfer| {
+                         matches!(transfer.value, Payload::At(_, imported) if imported != 0)
+                     }) {
+-                        return Step::Host(Halt::NotImplemented("module:static-linking"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("module:static-linking")));
+                     }
+                     let execute_function = match execute.value {
+                         Payload::Reference(function) if execute.kind == Kind::Reference => function,
+-                        _ => return Step::Host(Halt::NotImplemented("module:execute-function")),
++                        _ => return Flow::Exit(Step::Host(Halt::NotImplemented("module:execute-function"))),
+                     };
+                     if self.functions[&execute_function].body_start.is_none() {
+-                        return Step::Host(Halt::NotImplemented("module:execute-body"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("module:execute-body")));
+                     }
+                     if self.instance_prototype(execute_function) == self.async_function_proto {
+-                        return Step::Host(Halt::NotImplemented("module:top-level-await"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("module:top-level-await")));
+                     }
+                     let execute_environment = self.functions[&execute_function].closures;
+                     let initialize_function = match initialize.value {
+@@ -3649,7 +4021,7 @@
+                         .unwrap_or(crate::value::SlotIndex::NULL);
+                     for transfer in &transfers {
+                         let Payload::At(local_id, _) = transfer.value else {
+-                            return Step::Host(Halt::EngineInvariant("module:transfer-record"));
++                            return Flow::Exit(Step::Host(Halt::EngineInvariant("module:transfer-record")));
+                         };
+                         if local_id == crate::value::XS_NO_ID {
+                             continue;
+@@ -3691,10 +4063,10 @@
+                 // in `ironhorse_vm::module` supplies neither capability, so
+                 // these operations return specific unsupported labels.
+                 XS_CODE_IMPORT => {
+-                    return Step::Host(Halt::NotImplemented("module:dynamic-import"));
++                    return Flow::Exit(Step::Host(Halt::NotImplemented("module:dynamic-import")));
+                 }
+                 XS_CODE_IMPORT_META => {
+-                    return Step::Host(Halt::NotImplemented("module:import-meta"));
++                    return Flow::Exit(Step::Host(Halt::NotImplemented("module:import-meta")));
+                 }
+ 
+                 other => {
+@@ -3703,11 +4075,14 @@
+                     // nothing: give the nameless opcode its own literal so the
+                     // refusal still says what stopped the run.
+                     if other.name().is_empty() {
+-                        return Step::Host(Halt::NotImplemented("opcode:no-code"));
++                        return Flow::Exit(Step::Host(Halt::NotImplemented("opcode:no-code")));
+                     }
+-                    return Step::Host(Halt::NotImplemented(other.name()));
++                    return Flow::Exit(Step::Host(Halt::NotImplemented(other.name())));
+                 }
+-            }
++
+         }
++        Flow::Next(pc)
+     }
+ }
++
++enum Flow { Next(usize), Exit(Step), NotMine }

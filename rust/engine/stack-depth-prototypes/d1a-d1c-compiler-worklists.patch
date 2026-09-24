@@ -1,0 +1,1536 @@
+--- a/ironhorse-compile/src/ast.rs
++++ b/ironhorse-compile/src/ast.rs
+@@ -521,3 +521,21 @@
+     out.push('"');
+     out
+ }
++
++/// E3 prototype: tear a tree down with a heap worklist instead of the
++/// recursive drop glue (one host frame chain per tree level).
++impl Drop for Node {
++    fn drop(&mut self) {
++        if self.children.is_empty() {
++            return;
++        }
++        let mut stack = std::mem::take(&mut self.children);
++        while let Some(item) = stack.pop() {
++            match item {
++                Item::Node(mut n) => stack.append(&mut n.children),
++                Item::List(mut v) => stack.append(&mut v),
++                Item::Symbol(_) | Item::Null => {}
++            }
++        }
++    }
++}
+--- a/ironhorse-compile/src/coder.rs
++++ b/ironhorse-compile/src/coder.rs
+@@ -658,23 +658,19 @@
+     /// parser interns in an order that diverges from AST pre-order (e.g.
+     /// numeric/computed property keys, some declaration positions) are a
+     /// named edge for the declaration/object slices.
+-    fn intern_tree(&mut self, item: &Item) {
+-        self.meter.work(1);
+-        match item {
+-            Item::Symbol(s) => {
+-                self.symbols.intern(s);
++    fn intern_tree(&mut self, root: &Item) {
++        // E2 prototype: pre-order worklist, same visit and charge order.
++        let mut stack: Vec<&Item> = vec![root];
++        while let Some(item) = stack.pop() {
++            self.meter.work(1);
++            match item {
++                Item::Symbol(s) => {
++                    self.symbols.intern(s);
++                }
++                Item::Node(n) => stack.extend(n.children.iter().rev()),
++                Item::List(items) => stack.extend(items.iter().rev()),
++                Item::Null => {}
+             }
+-            Item::Node(n) => {
+-                for c in &n.children {
+-                    self.intern_tree(c);
+-                }
+-            }
+-            Item::List(items) => {
+-                for c in items {
+-                    self.intern_tree(c);
+-                }
+-            }
+-            Item::Null => {}
+         }
+     }
+ 
+@@ -995,6 +991,7 @@
+     /// `const` slot, so the body can refer to itself. The slot was
+     /// allocated in `scope_coding_params`; the reference is a no-op (the
+     /// name resolves to its own slot).
++    #[inline(never)]
+     fn code_function_name(&mut self, scope: usize) {
+         use crate::scoper::dflags;
+         // A captured self-name (`fxDeclareNodeCodeAssign`'s `CONST` branch)
+@@ -1497,11 +1494,7 @@
+             Add | Subtract | Multiply | Divide | Modulo | Exponentiation | BitAnd | BitOr
+             | BitXor | LeftShift | SignedRightShift | UnsignedRightShift | Equal | NotEqual
+             | StrictEqual | StrictNotEqual | Less | LessEqual | More | MoreEqual | Instanceof
+-            | In => {
+-                self.code(&node.children[0]);
+-                self.code(&node.children[1]);
+-                self.add_byte(-1, binary_code(node.token));
+-            }
++            | In => self.code_binary_spine(node),
+             And => self.code_and(node, tail),
+             Or => self.code_or(node, tail),
+             Coalesce => self.code_coalesce(node, tail),
+@@ -1589,7 +1582,45 @@
+         }
+     }
+ 
++    /// E2 prototype: a left-nested run of binary operators coded with an
++    /// explicit spine instead of one host frame per operator.
++    #[inline(never)]
++    fn code_binary_spine(&mut self, root: &Node) {
++        fn is_binary(t: Token) -> bool {
++            use Token::*;
++            matches!(t, Add | Subtract | Multiply | Divide | Modulo | Exponentiation | BitAnd
++                | BitOr | BitXor | LeftShift | SignedRightShift | UnsignedRightShift | Equal
++                | NotEqual | StrictEqual | StrictNotEqual | Less | LessEqual | More | MoreEqual
++                | Instanceof | In)
++        }
++        let mut spine: Vec<&Node> = vec![root];
++        let mut left = &root.children[0];
++        while let Item::Node(n) = left {
++            if !is_binary(n.token) {
++                break;
++            }
++            self.meter.work(1);
++            if self.depth >= crate::ast::TREE_DEPTH_LIMIT {
++                self.report(n.line, "stack overflow");
++            }
++            self.depth += 1;
++            self.no_value = false;
++            self.tail = false;
++            spine.push(n);
++            left = &n.children[0];
++        }
++        self.code(left);
++        while let Some(n) = spine.pop() {
++            self.code(&n.children[1]);
++            self.add_byte(-1, binary_code(n.token));
++            if !std::ptr::eq(n, root) {
++                self.depth -= 1;
++            }
++        }
++    }
++
+     /// `fxProgramNodeCode`.
++    #[inline(never)]
+     fn code_program(&mut self, node: &Node) {
+         self.program_flag = true;
+         if node.flags & crate::ast::flags::STRICT != 0 {
+@@ -1639,6 +1670,7 @@
+     /// with nothing to hoist keeps XS's strict shape byte for byte, so the
+     /// deviation from the oracle's eval-goal bytes is confined to the one
+     /// case whose semantics differ.
++    #[inline(never)]
+     fn code_scope_eval(&mut self, node: &Node) {
+         let scope = self.scope_of(node);
+         let strict = self.tree.scopes[scope].flags & crate::ast::flags::STRICT != 0;
+@@ -1731,6 +1763,7 @@
+     /// the `MODULE` opcode that assembles the module record. No debug
+     /// metering (`LINE`/`PROFILE`) — the oracle module entry compiles with
+     /// no `mxDebugFlag`, exactly like the script entry.
++    #[inline(never)]
+     fn code_module(&mut self, node: &Node) {
+         use crate::ast::flags as f;
+         let scope = self.scope_of(node);
+@@ -1896,6 +1929,7 @@
+     }
+ 
+     /// `fxStatementsNodeCode`.
++    #[inline(never)]
+     fn code_statements(&mut self, node: &Node) {
+         if let Some(Item::List(items)) = node.children.first() {
+             for item in items {
+@@ -1908,6 +1942,7 @@
+     /// result; a function-body statement discards its value with a `POP`,
+     /// except that a trailing `SET_LOCAL`/`SET_CLOSURE` is rewritten in
+     /// place to the fused `PULL_LOCAL`/`PULL_CLOSURE` (store-and-pop).
++    #[inline(never)]
+     fn code_statement(&mut self, node: &Node) {
+         if self.program_flag {
+             self.code(&node.children[0]);
+@@ -1943,6 +1978,7 @@
+     /// `fxScopeCodeDefineNodes` (function/host defines) is deferred, and
+     /// `fxScopeCodeUsingStatement` with no disposables is just the
+     /// statement dispatch.
++    #[inline(never)]
+     fn code_block(&mut self, node: &Node) {
+         let scope = self.scope_of(node);
+         self.scope_coding_block(scope);
+@@ -1962,6 +1998,7 @@
+     /// (so its free accesses take the symbol path), then pop the
+     /// environment. `with` is a syntax error in strict mode, so only the
+     /// sloppy path is reached. Children `[expression, statement]`.
++    #[inline(never)]
+     fn code_with(&mut self, node: &Node) {
+         self.code(&node.children[0]);
+         self.add_byte(0, XS_CODE_TO_INSTANCE);
+@@ -1982,6 +2019,7 @@
+ 
+     /// `fxIfNodeCode` (program-flag branch: each arm sets the result to
+     /// `undefined` first, per XS).
++    #[inline(never)]
+     fn code_if(&mut self, node: &Node) {
+         self.code(&node.children[0]);
+         if self.program_flag {
+@@ -2020,6 +2058,7 @@
+     }
+ 
+     /// `fxAndExpressionNodeCode`.
++    #[inline(never)]
+     fn code_and(&mut self, node: &Node, tail: bool) {
+         let end_target = self.create_target();
+         self.code(&node.children[0]);
+@@ -2033,6 +2072,7 @@
+     }
+ 
+     /// `fxOrExpressionNodeCode`.
++    #[inline(never)]
+     fn code_or(&mut self, node: &Node, tail: bool) {
+         let end_target = self.create_target();
+         self.code(&node.children[0]);
+@@ -2045,6 +2085,7 @@
+     }
+ 
+     /// `fxCoalesceExpressionNodeCode`.
++    #[inline(never)]
+     fn code_coalesce(&mut self, node: &Node, tail: bool) {
+         let end_target = self.create_target();
+         self.code(&node.children[0]);
+@@ -2055,6 +2096,7 @@
+     }
+ 
+     /// `fxQuestionMarkNodeCode`.
++    #[inline(never)]
+     fn code_question_mark(&mut self, node: &Node, tail: bool) {
+         let else_target = self.create_target();
+         let end_target = self.create_target();
+@@ -2072,6 +2114,7 @@
+ 
+     /// `fxExpressionsNodeCode` (sequence): each item but the first is
+     /// preceded by a `POP` of the previous value.
++    #[inline(never)]
+     fn code_expressions(&mut self, node: &Node, tail: bool) {
+         if let Some(Item::List(items)) = node.children.first() {
+             let last = items.len().saturating_sub(1);
+@@ -2095,6 +2138,7 @@
+     /// anonymous label). Nested labels are collapsed into one break /
+     /// continue target answering to the whole symbol chain, exactly as XS
+     /// folds `former->nextLabel = self`.
++    #[inline(never)]
+     fn code_label(&mut self, node: &Node) {
+         // Descend the label chain to the wrapped statement, collecting the
+         // label symbols. XS's collapsed `nextLabel` order is innermost
+@@ -2167,6 +2211,7 @@
+ 
+     /// `fxWhileNodeCode`. Children `[expression, statement]`; break /
+     /// continue targets come from the enclosing `Label`.
++    #[inline(never)]
+     fn code_while(&mut self, node: &Node) {
+         let cont = self.first_continue_target.expect("while continue target");
+         let brk = self.first_break_target.expect("while break target");
+@@ -2182,6 +2227,7 @@
+     }
+ 
+     /// `fxDoNodeCode`. Children `[statement, expression]`.
++    #[inline(never)]
+     fn code_do(&mut self, node: &Node) {
+         let cont = self.first_continue_target.expect("do continue target");
+         let loop_target = self.create_target();
+@@ -2199,6 +2245,7 @@
+     /// `fxForNodeCode` — the C-style loop. Children `[initialization,
+     /// expression, iteration, statement]` (any of the first three may be
+     /// `Null`).
++    #[inline(never)]
+     fn code_for(&mut self, node: &Node) {
+         let scope = self.scope_of(node);
+         // Detach the loop's own continue target from the stack for the
+@@ -2268,6 +2315,7 @@
+     /// on break/continue/return/throw, using the same selector/alias/
+     /// finalize/jump machinery as `try`. Declaring heads (`for (let x …)`)
+     /// and `using` are deferred (the scope is asserted non-declaring).
++    #[inline(never)]
+     fn code_for_in_of(&mut self, node: &Node) {
+         let is_async = node.token == Token::ForAwaitOf;
+         let iter_op = match node.token {
+@@ -2612,6 +2660,7 @@
+     }
+ 
+     /// `fxBreakContinueNodeCode`. Child `[symbol-or-null]`.
++    #[inline(never)]
+     fn code_break_continue(&mut self, node: &Node) {
+         let symbol = match node.children.first() {
+             Some(Item::Symbol(s)) => Some(SymbolName::from_units(s)),
+@@ -2648,6 +2697,7 @@
+     }
+ 
+     /// `fxThrowNodeCode`. Child `[expression]`.
++    #[inline(never)]
+     fn code_throw(&mut self, node: &Node) {
+         self.code(&node.children[0]);
+         self.add_byte(-1, XS_CODE_THROW);
+@@ -2659,6 +2709,7 @@
+     /// to `target`) — threads a `.return()`/`.throw()` completion out to the
+     /// function's return target. The async form (`await`/`THROW_STATUS`) and
+     /// `yield*` (`Delegate`) are deferred.
++    #[inline(never)]
+     fn code_yield(&mut self, node: &Node) {
+         let is_async = node.flags & crate::ast::flags::ASYNC != 0;
+         let target = self.create_target();
+@@ -2707,6 +2758,7 @@
+     /// `YIELD_STAR` and re-entering on resume, with the `async` variant
+     /// awaiting each step. A faithful transliteration of XS's four-section
+     /// (loop / return / throw / normal) state machine.
++    #[inline(never)]
+     fn code_delegate(&mut self, node: &Node) {
+         let is_async = node.flags & crate::ast::flags::ASYNC != 0;
+         let next_target = self.create_target();
+@@ -2855,6 +2907,7 @@
+     /// `AWAIT`, and (until the async job resumes — `BRANCH_STATUS`
+     /// fall-through) thread the rejection/completion out to the return
+     /// target.
++    #[inline(never)]
+     fn code_await(&mut self, node: &Node) {
+         let target = self.create_target();
+         self.code(&node.children[0]);
+@@ -2927,6 +2980,7 @@
+     /// eval flag) then `GET_VARIABLE`. Resolved (local/closure) access
+     /// needs the scoper's per-node declaration and arrives with the
+     /// declaration slices.
++    #[inline(never)]
+     fn code_access(&mut self, node: &Node) {
+         // fxAccessNodeCode: a resolved access loads its frame slot; a free
+         // reference falls back to the symbol path.
+@@ -2957,6 +3011,7 @@
+     /// refined to a destructuring pattern — a Syntax Error (`invalid
+     /// initializer`). A pattern context codes the binding through the
+     /// Assign/Reference path instead, which never lands here.
++    #[inline(never)]
+     fn code_binding(&mut self, node: &Node) {
+         if let Item::Node(t) = &node.children[0] {
+             if t.token == Token::Access {
+@@ -2981,6 +3036,7 @@
+     /// `fxImportCallNodeCode` — a dynamic `import(specifier[, options])`.
+     /// Code the specifier, then the options (or `UNDEFINED` when absent),
+     /// mark the module header's `mxImportFlag`, and emit `IMPORT`.
++    #[inline(never)]
+     fn code_import_call(&mut self, node: &Node) {
+         self.code(&node.children[0]);
+         match &node.children[1] {
+@@ -2993,6 +3049,7 @@
+ 
+     /// `fxImportMetaNodeCode` — `import.meta`: mark the header's
+     /// `mxImportMetaFlag` and push the meta object.
++    #[inline(never)]
+     fn code_import_meta(&mut self, _node: &Node) {
+         self.import_meta_flag = true;
+         self.add_byte(1, XS_CODE_IMPORT_META);
+@@ -3036,6 +3093,7 @@
+     /// a `for (const x of y)` iteration binding (coded through the
+     /// reference/assign path, never dispatched here) is exempt exactly as
+     /// in XS.
++    #[inline(never)]
+     fn code_declare(&mut self, node: &Node) {
+         match node.token {
+             Token::Const => self.report(node.line, "invalid const"),
+@@ -3053,6 +3111,7 @@
+     /// `fxDeclareNodeCodeReference` — a resolved declaration needs no
+     /// reference; an unresolved one (a sloppy-eval `var`) takes the symbol
+     /// path.
++    #[inline(never)]
+     fn code_declare_reference(&mut self, node: &Node) {
+         if self.resolution_of(node).is_some() {
+             return;
+@@ -3069,6 +3128,7 @@
+     /// declaration's slot with the token's binding op (`VAR_LOCAL` /
+     /// `LET_LOCAL` / `CONST_LOCAL`, or the `*_CLOSURE` variants), or
+     /// `SET_VARIABLE` on the symbol path.
++    #[inline(never)]
+     fn code_declare_assign(&mut self, node: &Node) {
+         match self.resolution_of(node) {
+             None => {
+@@ -3127,6 +3187,7 @@
+     /// function value), store, and pop. A define is coded once (XS's
+     /// `mxDefineNodeCodedFlag`): it is hoisted to the top of its scope by
+     /// [`Coder::code_define_nodes`], so the in-list statement is a no-op.
++    #[inline(never)]
+     fn code_define(&mut self, node: &Node) {
+         if !self.defined.insert(node_id(node)) {
+             return;
+@@ -3150,6 +3211,7 @@
+     /// (`Define`) statements at the top of a scope's body, in source order,
+     /// before the ordinary statements. Marks each coded so its in-list
+     /// occurrence is skipped.
++    #[inline(never)]
+     fn code_define_nodes(&mut self, body: &Item) {
+         for item in Self::statement_items(body) {
+             if let Item::Node(n) = item {
+@@ -3215,6 +3277,7 @@
+     /// install its result as `this` (`SET_THIS`). Child `[params]`. The
+     /// instance-field-init call after `super(...)` is deferred with fields;
+     /// a `@host` heritage is a deferred (native) form.
++    #[inline(never)]
+     fn code_super(&mut self, node: &Node) {
+         self.add_byte(3, XS_CODE_SUPER);
+         self.code(&node.children[0]);
+@@ -3232,6 +3295,7 @@
+         }
+     }
+ 
++    #[inline(never)]
+     fn code_class(&mut self, node: &Node) {
+         use crate::ast::flags as f;
+         assert!(
+@@ -3474,6 +3538,7 @@
+     /// XS's field function is a real `mxFieldFlag` function with a scope, so
+     /// it `RESERVE`s the alias slots, `RETRIEVE`s the closures at entry, and
+     /// `STORE`s them from the enclosing class frame after creation.
++    #[inline(never)]
+     fn code_field_init_function(&mut self, fields: &[&Node], fi: usize) {
+         let saved_return = self.return_target;
+         let saved_scope_level = self.scope_level;
+@@ -3600,6 +3665,7 @@
+     /// A `Property` is a plain data field; a `PropertyAt` reads its captured
+     /// `atAccess` key (`NEW_PROPERTY_AT`); a `PrivateProperty` installs a
+     /// private (`NEW_PRIVATE`) whose brand is the captured `symbolAccess`.
++    #[inline(never)]
+     fn code_field(&mut self, p: &Node, plan: &FieldPlan) {
+         use crate::ast::flags as f;
+         // A `static { … }` block runs its statements directly (no
+@@ -3665,6 +3731,7 @@
+         }
+     }
+ 
++    #[inline(never)]
+     fn code_function(&mut self, node: &Node) {
+         use crate::ast::flags as f;
+         let flags = node.flags;
+@@ -4097,6 +4164,7 @@
+     /// into an array), and closes the iterator (`.return()`) on early exit,
+     /// inside the selector/alias/finalize/jump `try`/`finally` machinery
+     /// (only the return target crosses it — array patterns are not loops).
++    #[inline(never)]
+     fn code_array_binding_assign(&mut self, node: &Node, _flag: i32) {
+         let items: &[Item] = match node.children.first() {
+             Some(Item::List(v)) => v,
+@@ -4283,6 +4351,7 @@
+     /// (`PropertyBindingAt`), and `= default` inside a pattern element are
+     /// handled by the target's own coder, but the spread / at branches
+     /// assert.
++    #[inline(never)]
+     fn code_object_binding_assign(&mut self, node: &Node, _flag: i32) {
+         let items: &[Item] = match node.children.first() {
+             Some(Item::List(v)) => v,
+@@ -4374,6 +4443,7 @@
+     /// sloppy simple-parameter function, else `ARGUMENTS_STRICT`, operand =
+     /// the parameter count) and store it into that slot. Emitted between
+     /// `fxScopeCodingParams` and the parameter binding loop.
++    #[inline(never)]
+     fn code_arguments_object(&mut self, scope: usize, func: &Node, is_strict: bool) {
+         // Emit the object only when the function references `arguments` —
+         // i.e. `fxFunctionNodeHoist` injected the synthetic `arguments` `Var`
+@@ -4452,6 +4522,7 @@
+         }
+     }
+ 
++    #[inline(never)]
+     fn code_params_binding(&mut self, node: &Node) {
+         let Some(Item::List(items)) = node.children.first() else {
+             return;
+@@ -4499,6 +4570,7 @@
+     /// `null` `with`, then the lexical declarations into an `undefined` one,
+     /// so an eval-created name resolves to the right frame. Child
+     /// `[statement]`.
++    #[inline(never)]
+     fn code_body(&mut self, node: &Node) {
+         let scope = self.scope_of(node);
+         // `fxScopeCodingBody`/`fxScopeCodedBody` key on the body *node*'s
+@@ -4630,6 +4702,7 @@
+     /// value (or `undefined`), set the result, unwind to the return
+     /// target, and branch to it (the branch is elided when the target is
+     /// the next instruction).
++    #[inline(never)]
+     fn code_return(&mut self, node: &Node) {
+         assert!(
+             !self.program_flag,
+@@ -4681,6 +4754,7 @@
+     /// nullish), then place the target so a taken branch lands with the
+     /// nullish base as the chain's `undefined`/`null` value. The saved outer
+     /// chain target is restored (chains can nest through call arguments).
++    #[inline(never)]
+     fn code_chain(&mut self, node: &Node) {
+         let saved = self.chain_target;
+         let target = self.create_target();
+@@ -4694,6 +4768,7 @@
+     /// then `BRANCH_CHAIN` to the enclosing chain's short-circuit target: the
+     /// branch is taken (leaving the nullish base as the result) exactly when
+     /// the base is `null`/`undefined`, otherwise the access continues.
++    #[inline(never)]
+     fn code_option(&mut self, node: &Node, tail: bool) {
+         self.tail = tail;
+         self.code(&node.children[0]);
+@@ -4704,6 +4779,7 @@
+     /// `fxChainNodeCodeThis` — the call-reference variant of
+     /// [`Coder::code_chain`]: install a fresh short-circuit target, code the
+     /// chain's `this`/value pair, place the target, restore the outer target.
++    #[inline(never)]
+     fn code_chain_this(&mut self, node: &Node, flag: i32) -> i32 {
+         let saved = self.chain_target;
+         let target = self.create_target();
+@@ -4719,6 +4795,7 @@
+     /// receiver/value pair on the stack, so a nullish base must drop the
+     /// receiver (`SWAP`/`POP`) before short-circuiting the whole chain to
+     /// `undefined`; a present base skips that dance and continues the call.
++    #[inline(never)]
+     fn code_option_this(&mut self, node: &Node, flag: i32) -> i32 {
+         let swap_target = self.create_target();
+         let skip_target = self.create_target();
+@@ -4734,6 +4811,7 @@
+         flag
+     }
+ 
++    #[inline(never)]
+     fn code_member(&mut self, node: &Node) {
+         self.code(&node.children[0]);
+         let is_super = self.node_is_super(&node.children[0]);
+@@ -4758,6 +4836,7 @@
+     /// `fxPrivateMemberNodeCode` — `obj.#x` read: code the reference, then
+     /// `GET_PRIVATE` by the resolved brand index. Children `[symbol,
+     /// reference]`.
++    #[inline(never)]
+     fn code_private_member(&mut self, node: &Node) {
+         self.code(&node.children[1]);
+         let index = self.private_index(node);
+@@ -4766,6 +4845,7 @@
+ 
+     /// `fxPrivateIdentifierNodeCode` — the `#x in obj` brand check: code the
+     /// reference, then `HAS_PRIVATE` by the resolved brand index.
++    #[inline(never)]
+     fn code_private_identifier(&mut self, node: &Node) {
+         self.code(&node.children[1]);
+         let index = self.private_index(node);
+@@ -4780,6 +4860,7 @@
+     /// `fxMemberAtNodeCode` — computed access `ref[at]`. Children
+     /// `[reference, at]`. Symbol-free (`AT` + `GET_PROPERTY_AT`); the
+     /// subexpressions carry any symbols.
++    #[inline(never)]
+     fn code_member_at(&mut self, node: &Node) {
+         let is_super = self.node_is_super(&node.children[0]);
+         self.code(&node.children[0]);
+@@ -4804,6 +4885,7 @@
+ 
+     /// `fxCallNodeCode`. Children `[reference, params]`: set up the callee
+     /// and its `this`, `CALL`, then the argument list + `RUN`.
++    #[inline(never)]
+     fn code_call(&mut self, node: &Node, tail: bool) {
+         // A syntactic `eval(...)` call (the callee is the identifier
+         // `eval` — XS keys on the name, not resolution) closes with the
+@@ -4861,6 +4943,7 @@
+         }
+     }
+ 
++    #[inline(never)]
+     fn code_object(&mut self, node: &Node) {
+         let object = self.use_temporary();
+         let items: &[Item] = match node.children.first() {
+@@ -4937,6 +5020,7 @@
+     /// running `counter` slot indexes appends and each `...expr` is
+     /// iterated with the `for-of` protocol (`FOR_OF` + a `next()`/`done`
+     /// loop) into the array.
++    #[inline(never)]
+     fn code_array(&mut self, node: &Node) {
+         let array = self.use_temporary();
+         self.add_byte(1, XS_CODE_ARRAY);
+@@ -5029,6 +5113,7 @@
+     /// prefix `++x`/`--x` (which the parser flags `EXPRESSION_NO_VALUE` to
+     /// skip the old-value save/restore, yielding the new value). Child
+     /// `[reference]`.
++    #[inline(never)]
+     fn code_postfix(&mut self, node: &Node, stmt_no_value: bool) {
+         let no_value = stmt_no_value || node.flags & crate::ast::flags::EXPRESSION_NO_VALUE != 0;
+         self.code_this(&node.children[0], 1);
+@@ -5055,6 +5140,7 @@
+     }
+ 
+     /// `fxDeleteNodeCode` → the `codeDelete` family.
++    #[inline(never)]
+     fn code_delete(&mut self, item: &Item) {
+         match item {
+             Item::Node(n) => match n.token {
+@@ -5125,6 +5211,7 @@
+ 
+     /// `fxNodeCodeDelete` — the non-reference `delete expr`: run it for
+     /// effect then yield `true`.
++    #[inline(never)]
+     fn code_delete_value(&mut self, item: &Item) {
+         self.code(item);
+         self.add_byte(-1, XS_CODE_POP);
+@@ -5133,6 +5220,7 @@
+ 
+     /// `fxNewNodeCode`. Children `[reference, params]`: the constructor,
+     /// `NEW`, then the argument list + `RUN`.
++    #[inline(never)]
+     fn code_new(&mut self, node: &Node) {
+         self.code(&node.children[0]);
+         self.add_byte(2, XS_CODE_NEW);
+@@ -5145,6 +5233,7 @@
+     /// `[List(items)]`; each arg is pushed then a single `RUN_1 count`
+     /// pops callee+this+args and leaves the result. Spread arguments and
+     /// direct-`eval` parameter passing (the `EVAL` opcode) are deferred.
++    #[inline(never)]
+     fn code_params(&mut self, node: &Node, is_eval: bool, tail: bool) {
+         let items: &[Item] = match node.children.first() {
+             Some(Item::List(v)) => v,
+@@ -5216,6 +5305,7 @@
+ 
+     /// `fxSpreadNodeCode` — iterate `...expr` with the `for-of` protocol,
+     /// pushing each `value` as a call argument and bumping `counter`.
++    #[inline(never)]
+     fn code_spread(&mut self, expr: &Item, counter: i32) {
+         let next_target = self.create_target();
+         let done_target = self.create_target();
+@@ -5249,6 +5339,7 @@
+ 
+     /// `fxNodeDispatchCodeThis` — dispatch a callee reference in
+     /// receiver-setup mode, returning the residual `flag`.
++    #[inline(never)]
+     fn code_this(&mut self, item: &Item, flag: i32) -> i32 {
+         match item {
+             Item::Node(n) => match n.token {
+@@ -5272,6 +5363,7 @@
+ 
+     /// `fxNodeCodeThis` — the fallback: push `undefined` as the receiver,
+     /// then the value.
++    #[inline(never)]
+     fn code_node_this(&mut self, item: &Item, _flag: i32) -> i32 {
+         self.add_byte(1, XS_CODE_UNDEFINED);
+         self.code(item);
+@@ -5281,6 +5373,7 @@
+     /// `fxAccessNodeCodeThis`. A resolved local pushes its slot (with no
+     /// separate receiver); a free reference pushes `undefined` as the
+     /// receiver then loads the value by symbol.
++    #[inline(never)]
+     fn code_access_this(&mut self, node: &Node, flag: i32) -> i32 {
+         if flag == 0 {
+             self.add_byte(1, XS_CODE_UNDEFINED);
+@@ -5310,6 +5403,7 @@
+     }
+ 
+     /// `fxMemberNodeCodeThis` — the object is the receiver (`DUB`'d).
++    #[inline(never)]
+     fn code_member_this(&mut self, node: &Node, _flag: i32) -> i32 {
+         self.code(&node.children[0]);
+         let is_super = self.node_is_super(&node.children[0]);
+@@ -5329,6 +5423,7 @@
+ 
+     /// `fxPrivateMemberNodeCodeThis` — `obj.#m(...)` callee: the object is
+     /// the receiver (`DUB`'d), then the private value is read by brand.
++    #[inline(never)]
+     fn code_private_member_this(&mut self, node: &Node, _flag: i32) -> i32 {
+         self.code(&node.children[1]);
+         self.add_byte(1, XS_CODE_DUB);
+@@ -5338,6 +5433,7 @@
+     }
+ 
+     /// `fxMemberAtNodeCodeThis`.
++    #[inline(never)]
+     fn code_member_at_this(&mut self, node: &Node, flag: i32) -> i32 {
+         let is_super = self.node_is_super(&node.children[0]);
+         let mut flag = flag;
+@@ -5383,6 +5479,7 @@
+     /// item's `codeThis`; otherwise the fallback (`undefined` receiver +
+     /// the sequence's value), dispatched on the original node so scope
+     /// keying stays intact.
++    #[inline(never)]
+     fn code_expressions_this(&mut self, node: &Node, flag: i32) -> i32 {
+         if let Some(Item::List(items)) = node.children.first() {
+             if items.len() == 1 {
+@@ -5399,6 +5496,7 @@
+ 
+     /// `fxAssignNodeCode` — plain `=`. Children `[reference, value]`:
+     /// prepare the reference, evaluate the value, store.
++    #[inline(never)]
+     fn code_assign_node(&mut self, node: &Node) {
+         // Name inference: `x = function(){}` names the anonymous value `x`.
+         self.set_pending_name(&node.children[0], &node.children[1]);
+@@ -5409,6 +5507,7 @@
+ 
+     /// `fxCompoundExpressionNodeCode` — `+=`, `-=`, … and the short-circuit
+     /// `&&=` / `||=` / `??=`. Children `[reference, value]`.
++    #[inline(never)]
+     fn code_compound(&mut self, node: &Node, stmt_no_value: bool) {
+         use Token::*;
+         let no_value = stmt_no_value || node.flags & crate::ast::flags::EXPRESSION_NO_VALUE != 0;
+@@ -5457,6 +5556,7 @@
+     /// `fxCompoundExpressionNodeCodeName` — name an anonymous function /
+     /// class assigned to a plain identifier. Property references do not infer
+     /// names under logical assignment.
++    #[inline(never)]
+     fn code_compound_name(&mut self, node: &Node) {
+         if let Item::Node(r) = &node.children[0] {
+             if r.token == Token::Access && Self::infers_name(&node.children[1]) {
+@@ -5467,6 +5567,7 @@
+     }
+ 
+     /// `fxNodeDispatchCodeReference` — prepare a store target.
++    #[inline(never)]
+     fn code_reference(&mut self, item: &Item, flag: i32) {
+         match item {
+             Item::Node(n) => match n.token {
+@@ -5524,6 +5625,7 @@
+     }
+ 
+     /// `fxNodeDispatchCodeAssign` — store into the prepared reference.
++    #[inline(never)]
+     fn code_assign(&mut self, item: &Item, flag: i32) {
+         match item {
+             Item::Node(n) => match n.token {
+@@ -5628,6 +5730,7 @@
+     /// (string concatenation); a real reference is a tagged template — a
+     /// call `tag(strings, ...substitutions)` where `strings` is the frozen
+     /// template object (`strings.raw` the raw array), cached per call site.
++    #[inline(never)]
+     fn code_template(&mut self, node: &Node, tail: bool) {
+         let items = match &node.children[1] {
+             Item::List(v) => v,
+@@ -5658,6 +5761,7 @@
+     /// illegal escape), a `raws` array of the raw values, `strings.raw =
+     /// raws`, then `TEMPLATE` to freeze. The cached object is argument 0 of
+     /// the tag call, followed by each substitution expression.
++    #[inline(never)]
+     fn code_tagged_template(&mut self, node: &Node, items: &[Item], tail: bool) {
+         let cache_target = self.create_target();
+         // The cooked/raw arrays are sized by the number of `TemplateMiddle`
+@@ -5762,6 +5866,7 @@
+     /// (the flags string); those land in child slots `[1, 0]` here (the
+     /// slot order is the reverse of XS's field order, as the byte stream
+     /// pins: pattern first, flags second).
++    #[inline(never)]
+     fn code_regexp(&mut self, node: &Node) {
+         self.add_byte(1, XS_CODE_REGEXP);
+         self.add_byte(2, XS_CODE_NEW);
+@@ -5772,6 +5877,7 @@
+ 
+     /// `fxSwitchNodeCode`. Children `[expression, List(cases)]`; each
+     /// `Case` is `[test-or-null, body-or-null]`.
++    #[inline(never)]
+     fn code_switch(&mut self, node: &Node) {
+         let scope = self.scope_of(node);
+         self.code(&node.children[0]);
+@@ -5829,6 +5935,7 @@
+     /// `fxCatchNodeCode`. Children `[parameter-or-null, statements]`. The
+     /// parameter-binding branch emits `NEW_LOCAL` (a symbol op) and is
+     /// deferred to the atom-table child; the bare `catch {}` form is here.
++    #[inline(never)]
+     fn code_catch(&mut self, node: &Node) {
+         if matches!(node.children[0], Item::Null) {
+             // No parameter: the primary scope is the body block.
+@@ -5883,6 +5990,7 @@
+     }
+ 
+     /// `fxTryNodeCode`. Children `[tryBlock, catch-or-null, finally-or-null]`.
++    #[inline(never)]
+     fn code_try(&mut self, node: &Node) {
+         let exception = self.use_temporary();
+         let selector = self.use_temporary();
+--- a/ironhorse-compile/src/lib.rs
++++ b/ironhorse-compile/src/lib.rs
+@@ -95,3 +95,13 @@
+     }
+     Ok(out)
+ }
++
++/// Scratch measurement hook: parse and scope, then leak the tree so its drop
++/// glue is not measured.
++pub fn scope_forget(source: &str) -> Result<(), parser::ParseError> {
++    let mut parser = Parser::new(source, false, false)?;
++    let root = parser.parse_program(false)?;
++    let r = scoper::run(&root).map(|_| ());
++    std::mem::forget(root);
++    r
++}
+--- a/ironhorse-compile/src/parser/stmt.rs
++++ b/ironhorse-compile/src/parser/stmt.rs
+@@ -1424,7 +1424,7 @@
+         };
+         let line = node.line;
+         let elision = node.flags & flags::ELISION != 0;
+-        let Some(Item::List(items)) = node.children.into_iter().next() else {
++        let Some(Item::List(items)) = std::mem::take(&mut { node }.children).into_iter().next() else {
+             return Ok(None);
+         };
+         let n = items.len();
+@@ -1472,7 +1472,7 @@
+             return Ok(None);
+         };
+         let line = node.line;
+-        let Some(Item::List(props)) = node.children.into_iter().next() else {
++        let Some(Item::List(props)) = std::mem::take(&mut { node }.children).into_iter().next() else {
+             return Ok(None);
+         };
+         let n = props.len();
+@@ -1582,7 +1582,7 @@
+             return Ok(None);
+         };
+         let line = node.line;
+-        let expr = match node.children.into_iter().next() {
++        let expr = match std::mem::take(&mut { node }.children).into_iter().next() {
+             Some(e) => e,
+             None => return Ok(None),
+         };
+--- a/ironhorse-compile/src/parser.rs
++++ b/ironhorse-compile/src/parser.rs
+@@ -138,35 +138,40 @@
+ /// Return the line of the second `__proto__:` setter in an object literal.
+ /// Converted assignment/parameter covers are `ObjectBinding` nodes, so only
+ /// nodes that remain `Object` are subject to Annex B.3.1.
+-fn duplicate_proto_setter_line(item: &Item) -> Option<u32> {
+-    match item {
+-        Item::Node(node) => {
+-            if node.token == Token::Object {
+-                let mut found = false;
+-                if let Some(Item::List(properties)) = node.children.first() {
+-                    for property in properties {
+-                        if let Item::Node(property) = property {
+-                            let is_proto_setter = property.token == Token::Property
+-                                && property.flags & flags::SHORTHAND == 0
+-                                && matches!(
+-                                    property.children.first(),
+-                                    Some(Item::Symbol(symbol)) if SymbolName::from_units(symbol) == "__proto__"
+-                                );
+-                            if is_proto_setter {
+-                                if found {
+-                                    return Some(property.line);
++fn duplicate_proto_setter_line(root: &Item) -> Option<u32> {
++    // E2 prototype: the same pre-order search as a worklist.
++    let mut stack: Vec<&Item> = vec![root];
++    while let Some(item) = stack.pop() {
++        match item {
++            Item::Node(node) => {
++                if node.token == Token::Object {
++                    let mut found = false;
++                    if let Some(Item::List(properties)) = node.children.first() {
++                        for property in properties {
++                            if let Item::Node(property) = property {
++                                let is_proto_setter = property.token == Token::Property
++                                    && property.flags & flags::SHORTHAND == 0
++                                    && matches!(
++                                        property.children.first(),
++                                        Some(Item::Symbol(symbol)) if SymbolName::from_units(symbol) == "__proto__"
++                                    );
++                                if is_proto_setter {
++                                    if found {
++                                        return Some(property.line);
++                                    }
++                                    found = true;
+                                 }
+-                                found = true;
+                             }
+                         }
+                     }
+                 }
++                stack.extend(node.children.iter().rev());
+             }
+-            node.children.iter().find_map(duplicate_proto_setter_line)
++            Item::List(items) => stack.extend(items.iter().rev()),
++            Item::Symbol(_) | Item::Null => {}
+         }
+-        Item::List(items) => items.iter().find_map(duplicate_proto_setter_line),
+-        Item::Symbol(_) | Item::Null => None,
+     }
++    None
+ }
+ 
+ /// The parser: the token window (`states[0]`/`states[1]`), the mode-flag
+@@ -433,6 +438,7 @@
+         self.stack.push(Item::Symbol(symbol.to_units()));
+     }
+ 
++    #[inline(never)]
+     fn push_integer(&mut self, value: i32, line: u32) {
+         self.push(Item::Node(Box::new(self.new_node(
+             Token::Integer,
+@@ -443,6 +449,7 @@
+         ))));
+     }
+ 
++    #[inline(never)]
+     fn push_number(&mut self, value: f64, line: u32) {
+         self.push(Item::Node(Box::new(self.new_node(
+             Token::Number,
+@@ -461,6 +468,7 @@
+     /// `mxStringLegacyFlag` (bit 2) when its escape scan saw a legacy
+     /// octal or `\8`/`\9`. `fxStringNodeHoist` turns that into a
+     /// SyntaxError in a strict scope; sloppy code keeps the value.
++    #[inline(never)]
+     fn push_string_legacy(&mut self, value: Vec<u16>, line: u32, escaped: bool, legacy: bool) {
+         let mut flags = if escaped { 1 } else { 0 };
+         if legacy {
+@@ -480,6 +488,7 @@
+     /// carries `mxStringErrorFlag` (bit 1) when its escape scan failed, so
+     /// the coder can turn it into `undefined` (tagged) or a SyntaxError
+     /// (everywhere else). Kept faithful; not surfaced in the dump.
++    #[inline(never)]
+     fn push_string_flagged(&mut self, value: Vec<u16>, line: u32, escaped: bool, error: bool) {
+         let mut flags = if escaped { 1 } else { 0 };
+         if error {
+@@ -500,6 +509,7 @@
+     /// octal in template position). A *tagged* template never codes the cooked
+     /// slot (it emits `undefined` instead), so this fires only for the untagged
+     /// primary-position template just built on the stack top.
++    #[inline(never)]
+     fn reject_untagged_template_cooked_error(&self) -> PResult<()> {
+         let Some(Item::Node(node)) = self.stack.last() else {
+             return Ok(());
+@@ -521,6 +531,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn push_raw(&mut self, value: Vec<u16>, line: u32) {
+         self.push(Item::Node(Box::new(self.new_node(
+             Token::String,
+@@ -531,6 +542,7 @@
+         ))));
+     }
+ 
++    #[inline(never)]
+     fn push_bigint(&mut self, value: crate::lexer::BigIntLiteral, line: u32) {
+         self.push(Item::Node(Box::new(self.new_node(
+             Token::Bigint,
+@@ -1401,6 +1413,7 @@
+ 
+     /// The cooked / raw strings of the current `Template`/`TemplateHead`
+     /// lexeme.
++    #[inline(never)]
+     fn cur_template_strings(&self) -> (Vec<u16>, Vec<u16>) {
+         (
+             self.cur.string.clone().unwrap_or_default(),
+@@ -1410,6 +1423,7 @@
+ 
+     /// `import` in expression position: dynamic `import(...)` or
+     /// `import.meta`.
++    #[inline(never)]
+     fn import_literal(&mut self, no_call: bool, line: u32) -> PResult<()> {
+         self.match_token(Token::Import)?;
+         if !no_call && self.cur.token == Token::LeftParenthesis {
+@@ -1465,6 +1479,7 @@
+     }
+ 
+     /// `super(...)` / `super.x` / `super[e]`.
++    #[inline(never)]
+     fn super_literal(&mut self, line: u32) -> PResult<()> {
+         self.match_token(Token::Super)?;
+         if self.cur.token == Token::LeftParenthesis {
+@@ -1494,6 +1509,7 @@
+     /// covers (`async function` / `async (…)` / `async x =>`), or a bare
+     /// single-identifier arrow head (`x =>`). Transliterates the
+     /// `XS_TOKEN_IDENTIFIER` arm of `fxLiteralExpression`.
++    #[inline(never)]
+     fn identifier_literal(&mut self, line: u32) -> PResult<()> {
+         let escaped = self.cur.escaped;
+         let mut symbol = self.cur.symbol.clone().unwrap_or_default();
+@@ -1560,6 +1576,7 @@
+     }
+ 
+     /// `fxArrayExpression` — array literal (elision, spread, elements).
++    #[inline(never)]
+     fn array_expression(&mut self) -> PResult<()> {
+         let mut count = 0usize;
+         let mut elision = true;
+@@ -1615,6 +1632,7 @@
+     /// string/number keys, `...spread`) and method / accessor / generator
+     /// / async shorthand (`{ m() {} }`, `{ get x() {} }`, `{ *g() {} }`,
+     /// `{ async f() {} }`).
++    #[inline(never)]
+     fn object_expression(&mut self) -> PResult<()> {
+         let mut count = 0usize;
+         let line = self.cur.line;
+@@ -1705,6 +1723,7 @@
+     /// `PropertyAt`). The accessor/generator/async lookahead
+     /// (`token2`) is recognized so callers can reject the deferred
+     /// method forms precisely.
++    #[inline(never)]
+     fn property_name(&mut self) -> PResult<(Option<SymbolName>, Token, Token, Token)> {
+         let mut symbol: Option<SymbolName> = None;
+         let mut token1 = Token::NoToken;
+@@ -1909,6 +1928,7 @@
+     /// `fxTemplateExpression` — a template with substitutions
+     /// (`TemplateHead` … `${ expr }` … `TemplateTail`). Leaves a node
+     /// list of the items on the stack.
++    #[inline(never)]
+     fn template_expression(&mut self) -> PResult<()> {
+         let mut count = 0usize;
+         let line = self.cur.line;
+@@ -1986,6 +2006,7 @@
+ 
+     /// `fxParameters` — a parenthesized argument list (`( a, b, ...c )`),
+     /// yielding a `Params` node wrapping the argument list.
++    #[inline(never)]
+     fn parameters(&mut self) -> PResult<()> {
+         let mut count = 0usize;
+         let line = self.cur.line;
+@@ -2027,6 +2048,7 @@
+         self.nested(STATEMENT_COST, |p| p.new_expression_inner())
+     }
+ 
++    #[inline(never)]
+     fn new_expression_inner(&mut self) -> PResult<()> {
+         let line = self.cur.line;
+         self.match_token(Token::New)?;
+@@ -2107,6 +2129,7 @@
+     /// reparsed via [`Self::parameters_binding_from_expressions`]) and,
+     /// when `flag` (async) is set but no `=>` follows, an `async(args)`
+     /// call.
++    #[inline(never)]
+     fn group_expression(&mut self, flag: u32) -> PResult<()> {
+         let mut comma_flag = false;
+         let mut spread_flag = false;
+--- a/ironhorse-compile/src/scoper.rs
++++ b/ironhorse-compile/src/scoper.rs
+@@ -758,6 +758,7 @@
+     /// its body) inside it so their inner scopes chain through the field
+     /// function. `is_static` members carry a `Body` static block whose body is
+     /// child 0; a data field's value is child 1. Returns the scope index.
++    #[inline(never)]
+     fn hoist_field_init_scope(
+         &mut self,
+         members: &[&Node],
+@@ -1171,16 +1172,51 @@
+             Token::Export => self.hoist_export(node),
+             Token::Class => self.hoist_class(node),
+             // fold: Host — deferred (see report).
+-            _ => self.hoist_children(node),
++            _ => self.hoist_default_iter(node),
+         }
+     }
+ 
++    /// E2 prototype: the default hoist arm (visit every child in order) as an
++    /// explicit work stack. A child that is itself default-arm is entered in
++    /// place — `descend`'s work charge and depth check, in the same order the
++    /// recursion made them — instead of recursing on the host stack.
++    fn hoist_default_iter(&mut self, root: &Node) -> Result<(), ParseError> {
++        enum W<'t> { Items(&'t [Item], usize), Leave }
++        let mut stack: Vec<W<'_>> = vec![W::Items(&root.children, 0)];
++        while let Some(top) = stack.last_mut() {
++            match top {
++                W::Leave => { stack.pop(); self.depth -= 1; }
++                W::Items(items, i) => {
++                    if *i >= items.len() { stack.pop(); continue; }
++                    let item = &items[*i];
++                    *i += 1;
++                    match item {
++                        Item::List(v) => stack.push(W::Items(v, 0)),
++                        Item::Node(n) if hoist_is_default(n.token) => {
++                            self.meter.work(1);
++                            if self.depth >= TREE_DEPTH_LIMIT {
++                                return Err(err(n.line, "stack overflow"));
++                            }
++                            self.depth += 1;
++                            stack.push(W::Leave);
++                            stack.push(W::Items(&n.children, 0));
++                        }
++                        Item::Node(n) => self.hoist_dispatch(n)?,
++                        _ => {}
++                    }
++                }
++            }
++        }
++        Ok(())
++    }
++
+     /// `fxClassNodeHoist` — create the class's block scopes: a `symbolScope`
+     /// binding the class name (a `const` closure visible in the body) when
+     /// named, and the class body scope holding private brands, computed field
+     /// keys, private method values and the instance initializer closure.
+     /// Children `[symbol, heritage, items, constructorInit,
+     /// instanceInit, constructor]`.
++    #[inline(never)]
+     fn hoist_class(&mut self, node: &Node) -> Result<(), ParseError> {
+         let former = self.class_node;
+         let symbol = child_sym(node, 0);
+@@ -1374,6 +1410,7 @@
+         }
+     }
+ 
++    #[inline(never)]
+     fn hoist_program(&mut self, node: &Node) -> Result<(), ParseError> {
+         // XS: XS_TOKEN_EVAL when parser->flags has mxEvalFlag, else PROGRAM.
+         let token = if self.node_flags(node) & SCOPE_EVAL != 0 {
+@@ -1395,6 +1432,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_module(&mut self, node: &Node) -> Result<(), ParseError> {
+         let si = self.scope_new(node, Token::Module);
+         self.function_scope = Some(si);
+@@ -1409,6 +1447,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_block(&mut self, node: &Node) -> Result<(), ParseError> {
+         let si = self.scope_new(node, Token::Block);
+         self.node_scope.insert(node_id(node), (si, None));
+@@ -1419,6 +1458,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_body(&mut self, node: &Node) -> Result<(), ParseError> {
+         let si = self.scope_new(node, Token::Block);
+         self.body_scope = Some(si);
+@@ -1433,6 +1473,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_function(&mut self, node: &Node) -> Result<(), ParseError> {
+         let function_scope = self.function_scope;
+         let body_scope = self.body_scope;
+@@ -1478,6 +1519,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_call(&mut self, node: &Node) -> Result<(), ParseError> {
+         // children[0] = reference, children[1] = params
+         if let Some(reference) = child_node(node, 0) {
+@@ -1506,6 +1548,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_catch(&mut self, node: &Node) -> Result<(), ParseError> {
+         // children[0] = parameter (or Null), children[1] = statement
+         let has_param = matches!(child(node, 0), Some(Item::Node(_)));
+@@ -1550,6 +1593,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_coalesce(&mut self, node: &Node) -> Result<(), ParseError> {
+         // early error: mixing ?? with && / || without parentheses
+         if let Some(l) = child_node(node, 0) {
+@@ -1571,6 +1615,7 @@
+         self.hoist_children(node)
+     }
+ 
++    #[inline(never)]
+     fn hoist_declare(&mut self, node: &Node) -> Result<(), ParseError> {
+         let symbol = child_sym(node, 0).map(Sym::Named);
+         let symbol = match symbol {
+@@ -1626,6 +1671,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_var(
+         &mut self,
+         symbol: &Sym,
+@@ -1681,6 +1727,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_define(&mut self, node: &Node) -> Result<(), ParseError> {
+         // children[0] = symbol, children[1] = initializer (function)
+         let symbol = match child_sym(node, 0) {
+@@ -1739,6 +1786,7 @@
+ 
+     /// Hoist a function node but suppress the named-expression self CONST
+     /// (used for a function *declaration*'s initializer).
++    #[inline(never)]
+     fn hoist_function_no_self(&mut self, node: &Node) -> Result<(), ParseError> {
+         if node.token != Token::Function && node.token != Token::Generator {
+             return self.hoist_dispatch(node);
+@@ -1789,6 +1837,7 @@
+         }
+     }
+ 
++    #[inline(never)]
+     fn hoist_for(&mut self, node: &Node) -> Result<(), ParseError> {
+         let si = self.scope_new(node, Token::Block);
+         self.node_scope.insert(node_id(node), (si, None));
+@@ -1801,6 +1850,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_for_in_of(&mut self, node: &Node) -> Result<(), ParseError> {
+         let si = self.scope_new(node, Token::Block);
+         self.node_scope.insert(node_id(node), (si, None));
+@@ -1813,6 +1863,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_switch(&mut self, node: &Node) -> Result<(), ParseError> {
+         // children[0] = expression, children[1] = items (list of Case)
+         if let Some(expr) = child(node, 0) {
+@@ -1827,6 +1878,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_with(&mut self, node: &Node) -> Result<(), ParseError> {
+         // children[0] = expression, children[1] = statement
+         if let Some(expr) = child(node, 0) {
+@@ -1842,6 +1894,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn hoist_string(&mut self, node: &Node) -> Result<(), ParseError> {
+         // `fxStringNodeHoist`: a string carrying `mxStringLegacyFlag` (a
+         // legacy octal or `\8`/`\9`) inside a strict scope becomes
+@@ -1869,6 +1922,7 @@
+     /// a bare `import "m"` declares one anonymous slot. The `from`/`with`
+     /// re-export attributes are coder-side. Modules are strict, so
+     /// importing `arguments`/`eval` is an early error.
++    #[inline(never)]
+     fn hoist_import(&mut self, node: &Node) -> Result<(), ParseError> {
+         let scope = self.scope.unwrap();
+         let strict = self.node_flags(node) & SCOPE_STRICT != 0;
+@@ -1923,6 +1977,7 @@
+     /// name in the export-link set, raising a duplicate-export early
+     /// error. The `export … from` re-export indirection (which synthesizes
+     /// indirect `let` bindings) is folded (see report).
++    #[inline(never)]
+     fn hoist_export(&mut self, node: &Node) -> Result<(), ParseError> {
+         // `export … from "m"` — a re-export. XS synthesizes one anonymous
+         // module-scope `let` per specifier (its `importSpecifier` *and*
+@@ -2098,8 +2153,39 @@
+             Token::PrivateMember | Token::PrivateIdentifier => self.bind_private_member(node),
+             Token::Delete => self.bind_delete(node),
+             // fold: Field — deferred.
+-            _ => self.bind_children(node),
++            _ => self.bind_default_iter(node),
++        }
++    }
++
++    /// E2 prototype: the default bind arm as an explicit work stack.
++    fn bind_default_iter(&mut self, root: &Node) -> Result<(), ParseError> {
++        enum W<'t> { Items(&'t [Item], usize), Leave }
++        let mut stack: Vec<W<'_>> = vec![W::Items(&root.children, 0)];
++        while let Some(top) = stack.last_mut() {
++            match top {
++                W::Leave => { stack.pop(); self.depth -= 1; }
++                W::Items(items, i) => {
++                    if *i >= items.len() { stack.pop(); continue; }
++                    let item = &items[*i];
++                    *i += 1;
++                    match item {
++                        Item::List(v) => stack.push(W::Items(v, 0)),
++                        Item::Node(n) if bind_is_default(n.token) => {
++                            self.meter.work(1);
++                            if self.depth >= TREE_DEPTH_LIMIT {
++                                return Err(err(n.line, "stack overflow"));
++                            }
++                            self.depth += 1;
++                            stack.push(W::Leave);
++                            stack.push(W::Items(&n.children, 0));
++                        }
++                        Item::Node(n) => self.bind_dispatch(n)?,
++                        _ => {}
++                    }
++                }
++            }
+         }
++        Ok(())
+     }
+ 
+     /// `fxClassNodeBind` — reserve the two frame slots the class coder uses
+@@ -2108,6 +2194,7 @@
+     /// constructor, and members. Hoisting already created the class/symbol
+     /// scopes and any instance/static initializer function scopes; binding
+     /// fills their capture and frame-count receipts for the coder.
++    #[inline(never)]
+     fn bind_class(&mut self, node: &Node) -> Result<(), ParseError> {
+         let former = self.class_node;
+         self.push_variables(2);
+@@ -2246,6 +2333,7 @@
+     /// captures interleave), or, for a `static { … }` block, its body.
+     /// `scopeCount == scopeMaximum` = the captured closures plus the peak
+     /// temporary depth of the field values. Records each member's fi aliases.
++    #[inline(never)]
+     fn bind_field_init_scope(
+         &mut self,
+         fi: usize,
+@@ -2331,6 +2419,7 @@
+         *self.node_scope.get(&node_id(node)).expect("scope for node")
+     }
+ 
++    #[inline(never)]
+     fn bind_program(&mut self, node: &Node) -> Result<(), ParseError> {
+         let (si, _) = self.scope_of(node);
+         self.fx_scope_binding(si);
+@@ -2342,6 +2431,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_module(&mut self, node: &Node) -> Result<(), ParseError> {
+         let (si, _) = self.scope_of(node);
+         self.fx_scope_binding(si);
+@@ -2353,6 +2443,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_block(&mut self, node: &Node) -> Result<(), ParseError> {
+         let (si, _) = self.scope_of(node);
+         self.fx_scope_binding(si);
+@@ -2370,6 +2461,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_function(&mut self, node: &Node) -> Result<(), ParseError> {
+         let (si, _) = self.scope_of(node);
+         let level = self.scope_level;
+@@ -2407,6 +2499,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_access(&mut self, node: &Node) -> Result<(), ParseError> {
+         if let Some(sym) = child_sym(node, 0) {
+             let scope = self.scope.unwrap();
+@@ -2424,6 +2517,7 @@
+     /// The target is found by unwrapping a single-item parenthesized
+     /// sequence exactly as the coder's `codeDelete` dispatch does (a
+     /// multi-item `delete (a, b.#x)` is a value-`delete`, not an error).
++    #[inline(never)]
+     fn bind_delete(&mut self, node: &Node) -> Result<(), ParseError> {
+         if let Some(target) = node.children.first() {
+             if delete_target_is_private(target) {
+@@ -2442,6 +2536,7 @@
+     /// environment from which a missing brand could be supplied.
+     /// The reference (child 1)
+     /// binds after the lookup, matching `fxPrivateMemberNodeDistribute`.
++    #[inline(never)]
+     fn bind_private_member(&mut self, node: &Node) -> Result<(), ParseError> {
+         // A private member accessed on `super` (`super.#x`, `super.#m()`)
+         // is invalid syntax: the reference base carries the `super` flag.
+@@ -2467,6 +2562,7 @@
+ 
+     /// `fxDeclareNodeBind` — a declaration node in the tree resolves its
+     /// own symbol (so the coder learns its slot).
++    #[inline(never)]
+     fn bind_declare_node(&mut self, node: &Node) -> Result<(), ParseError> {
+         if let Some(sym) = child_sym(node, 0) {
+             let scope = self.scope.unwrap();
+@@ -2483,6 +2579,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_define(&mut self, node: &Node) -> Result<(), ParseError> {
+         if let Some(sym) = child_sym(node, 0) {
+             let scope = self.scope.unwrap();
+@@ -2500,6 +2597,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_assign(&mut self, node: &Node) -> Result<(), ParseError> {
+         // children[0]=reference, children[1]=value
+         if let Some(reference) = child(node, 0) {
+@@ -2511,6 +2609,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_binding(&mut self, node: &Node) -> Result<(), ParseError> {
+         // children[0]=target, children[1]=initializer
+         if let Some(target) = child(node, 0) {
+@@ -2522,6 +2621,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_catch(&mut self, node: &Node) -> Result<(), ParseError> {
+         let (scope, statement_scope) = self.scope_of(node);
+         let has_param = matches!(child(node, 0), Some(Item::Node(_)));
+@@ -2564,6 +2664,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_for(&mut self, node: &Node) -> Result<(), ParseError> {
+         let (si, _) = self.scope_of(node);
+         self.fx_scope_binding(si);
+@@ -2583,6 +2684,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_for_in_of(&mut self, node: &Node) -> Result<(), ParseError> {
+         let (si, _) = self.scope_of(node);
+         self.push_variables(6);
+@@ -2597,6 +2699,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_switch(&mut self, node: &Node) -> Result<(), ParseError> {
+         if let Some(expr) = child(node, 0) {
+             self.bind_item(expr)?;
+@@ -2617,6 +2720,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_with(&mut self, node: &Node) -> Result<(), ParseError> {
+         if let Some(expr) = child(node, 0) {
+             self.bind_item(expr)?;
+@@ -2630,6 +2734,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_try(&mut self, node: &Node) -> Result<(), ParseError> {
+         self.push_variables(3);
+         for i in 0..3 {
+@@ -2641,6 +2746,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_array(&mut self, node: &Node) -> Result<(), ParseError> {
+         self.push_variables(1);
+         let spread = node.flags & flags::SPREAD != 0;
+@@ -2655,6 +2761,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_array_binding(&mut self, node: &Node) -> Result<(), ParseError> {
+         self.push_variables(6);
+         self.bind_children(node)?;
+@@ -2662,6 +2769,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_object(&mut self, node: &Node) -> Result<(), ParseError> {
+         self.push_variables(1);
+         // `fxObjectNodeBind`: copy each property's method/getter/setter flag
+@@ -2692,6 +2800,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_object_binding(&mut self, node: &Node) -> Result<(), ParseError> {
+         self.push_variables(2);
+         self.bind_children(node)?;
+@@ -2699,6 +2808,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_params(&mut self, node: &Node) -> Result<(), ParseError> {
+         let spread = node.flags & flags::SPREAD != 0;
+         if spread {
+@@ -2711,6 +2821,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_params_binding(&mut self, node: &Node) -> Result<(), ParseError> {
+         // `fxParamsBindingNodeBind`: getter/setter/plain parameter-count
+         // early errors — a getter takes no parameters, a setter exactly one
+@@ -2771,6 +2882,7 @@
+         self.bind_children(node)
+     }
+ 
++    #[inline(never)]
+     fn bind_spread(&mut self, node: &Node) -> Result<(), ParseError> {
+         self.push_variables(1);
+         self.bind_children(node)?;
+@@ -2778,6 +2890,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_delegate(&mut self, node: &Node) -> Result<(), ParseError> {
+         self.push_variables(5);
+         if let Some(expr) = child(node, 0) {
+@@ -2787,6 +2900,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_template(&mut self, node: &Node) -> Result<(), ParseError> {
+         // children[0]=reference (Null for untagged), children[1]=items
+         let tagged = matches!(child(node, 0), Some(Item::Node(_)));
+@@ -2800,11 +2914,13 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_this_target(&mut self, _node: &Node) -> Result<(), ParseError> {
+         self.scope_arrow(self.scope);
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_super(&mut self, node: &Node) -> Result<(), ParseError> {
+         self.scope_arrow(self.scope);
+         if let Some(params) = child(node, 0) {
+@@ -2828,6 +2944,7 @@
+         Ok(())
+     }
+ 
++    #[inline(never)]
+     fn bind_postfix(&mut self, node: &Node) -> Result<(), ParseError> {
+         if let Some(left) = child(node, 0) {
+             self.bind_item(left)?;
+@@ -2841,6 +2958,7 @@
+     /// local name and mark its declaration a closure|useClosure indirect
+     /// binding, or raise `unknown variable` if it does not resolve. A
+     /// re-export (`export … from`) is bound at load time, not here.
++    #[inline(never)]
+     fn bind_export(&mut self, node: &Node) -> Result<(), ParseError> {
+         if matches!(child(node, 1), Some(Item::Node(_))) {
+             return Ok(());
+@@ -3098,3 +3216,27 @@
+         }
+     }
+ }
++
++/// E2 prototype: the tokens `hoist_dispatch_inner` sends to its default arm.
++fn hoist_is_default(t: Token) -> bool {
++    !matches!(t,
++        Token::Program | Token::Module | Token::Block | Token::Body | Token::Function
++        | Token::Generator | Token::Call | Token::New | Token::Catch | Token::Coalesce
++        | Token::Arg | Token::Var | Token::Let | Token::Const | Token::Using | Token::Define
++        | Token::For | Token::ForIn | Token::ForOf | Token::ForAwaitOf | Token::Switch
++        | Token::With | Token::String | Token::Import | Token::Export | Token::Class)
++}
++
++/// E2 prototype: the tokens `bind_dispatch_inner` sends to its default arm.
++fn bind_is_default(t: Token) -> bool {
++    !matches!(t,
++        Token::Program | Token::Module | Token::Block | Token::Body | Token::Function
++        | Token::Generator | Token::Access | Token::Arg | Token::Var | Token::Let | Token::Const
++        | Token::Using | Token::Define | Token::Assign | Token::Binding | Token::Catch
++        | Token::For | Token::ForIn | Token::ForOf | Token::ForAwaitOf | Token::Switch
++        | Token::With | Token::Try | Token::Array | Token::ArrayBinding | Token::Object
++        | Token::ObjectBinding | Token::Params | Token::ParamsBinding | Token::Spread
++        | Token::Delegate | Token::Template | Token::This | Token::Target | Token::Super
++        | Token::Increment | Token::Decrement | Token::Export | Token::Class
++        | Token::PrivateMember | Token::PrivateIdentifier | Token::Delete)
++}

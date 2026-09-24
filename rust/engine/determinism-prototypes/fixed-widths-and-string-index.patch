@@ -1,0 +1,221 @@
+--- a/ironhorse-vm/src/interp/natives/regexp.rs
++++ b/ironhorse-vm/src/interp/natives/regexp.rs
+@@ -297,11 +297,13 @@
+         unicode: bool,
+     ) -> u64 {
+         if unicode {
+-            if let Ok(i) = usize::try_from(index) {
+-                if i + 1 < subject.len()
+-                    && (0xD800..=0xDBFF).contains(&subject[i])
+-                    && (0xDC00..=0xDFFF).contains(&subject[i + 1])
+-                {
++            // `index` is a guest ToLength (up to 2**53 - 1); never form
++            // `index + 1` in the host's usize, which is 32 bits on wasm32.
++            let pair = usize::try_from(index)
++                .ok()
++                .and_then(|i| subject.get(i..i.checked_add(2)?));
++            if let Some(&[lead, trail]) = pair {
++                if (0xD800..=0xDBFF).contains(&lead) && (0xDC00..=0xDFFF).contains(&trail) {
+                     return index.saturating_add(2);
+                 }
+             }
+--- a/ironhorse-vm/src/interp/admission.rs
++++ b/ironhorse-vm/src/interp/admission.rs
+@@ -1,6 +1,50 @@
+ //! Meter checks and fallible admission for temporary allocations.
+ use super::*;
+ 
++/// The bytes one scratch element is charged against the chunk ceiling.
++///
++/// Whether an admission fits decides whether a crank halts `HeapExhausted`,
++/// so the charge is consensus state and must not follow the host pointer
++/// width as `size_of::<T>()` does (`usize`, tuples holding it). Each element
++/// type declares a fixed charge (its audited 64-bit layout), and a 64-bit
++/// build asserts the constant still equals that layout.
++pub(crate) trait ScratchElement {
++    const CHARGE: usize;
++}
++
++macro_rules! scratch_element {
++    ($($t:ty => $n:expr),* $(,)?) => {$(
++        impl crate::interp::admission::ScratchElement for $t {
++            const CHARGE: usize = $n;
++        }
++        #[cfg(target_pointer_width = "64")]
++        const _: () = assert!(std::mem::size_of::<$t>() == $n);
++    )*};
++}
++pub(crate) use scratch_element;
++
++scratch_element! {
++    u8 => 1,
++    u16 => 2,
++    u32 => 4,
++    i32 => 4,
++    f64 => 8,
++    usize => 8,
++    Slot => 24,
++    (i32, i32) => 8,
++    (Slot, usize, usize) => 40,
++    (char, u8) => 8,
++    ReadKey => 8,
++    (ReadKey, Slot) => 32,
++    (ReadKey, usize) => 16,
++    (u16, OrdinaryDescriptor) => 88,
++    (u32, Slot) => 32,
++    (Slot, Slot) => 48,
++    Option<Slot> => 24,
++    Option<crate::value::SlotIndex> => 8,
++    Vec<u16> => 24,
++}
++
+ impl Interp {
+     /// A loop-closing metering check (`mxCheckMeter`). Consults the host
+     /// when one is installed; a fresh, never-armed machine (the default
+@@ -93,7 +137,7 @@
+     }
+ 
+     /// Extend a string output only after admitting its complete new size.
+-    pub(super) fn extend_reserved_units<T: Copy>(
++    pub(super) fn extend_reserved_units<T: Copy + ScratchElement>(
+         &mut self,
+         output: &mut Vec<T>,
+         addition: &[T],
+@@ -103,7 +147,7 @@
+             .checked_add(addition.len())
+             .ok_or(Step::Host(Halt::HeapExhausted))?;
+         let bytes = length
+-            .checked_mul(std::mem::size_of::<T>())
++            .checked_mul(T::CHARGE)
+             .ok_or(Step::Host(Halt::HeapExhausted))?;
+         if !self.chunks.can_allocate(bytes) {
+             return Err(Step::Host(Halt::HeapExhausted));
+@@ -118,14 +162,14 @@
+ 
+     /// Bound an unmetered temporary by the heap profile before reserving it.
+     /// Its caller prepays the operation's existing work charge first.
+-    pub(super) fn reserve_scratch<T>(&mut self, capacity: usize) -> Result<Vec<T>, Step> {
++    pub(super) fn reserve_scratch<T: ScratchElement>(&mut self, capacity: usize) -> Result<Vec<T>, Step> {
+         self.admit_scratch::<T>(capacity)?;
+         Self::reserved_vec(capacity)
+     }
+ 
+     /// Admit new element-wise scratch work, charged once before collecting it.
+     /// Unlike `reserve_scratch`, the caller has no existing prepaid loop cost.
+-    pub(super) fn reserve_work_scratch<T>(&mut self, capacity: usize) -> Result<Vec<T>, Step> {
++    pub(super) fn reserve_work_scratch<T: ScratchElement>(&mut self, capacity: usize) -> Result<Vec<T>, Step> {
+         self.admit_scratch::<T>(capacity)?;
+         let raw = (capacity as u64)
+             .checked_mul(crate::meter::BUILTIN_METERING)
+@@ -136,7 +180,7 @@
+ 
+     /// Bound each output expansion before copying, including `$` substitutions
+     /// whose expansion can be much larger than the replacement template.
+-    pub(super) fn extend_work_scratch<T: Copy>(
++    pub(super) fn extend_work_scratch<T: Copy + ScratchElement>(
+         &mut self,
+         output: &mut Vec<T>,
+         addition: &[T],
+@@ -157,7 +201,7 @@
+         Ok(())
+     }
+ 
+-    pub(super) fn extend_prepaid_scratch<T: Copy>(
++    pub(super) fn extend_prepaid_scratch<T: Copy + ScratchElement>(
+         &mut self,
+         output: &mut Vec<T>,
+         addition: &[T],
+@@ -174,7 +218,7 @@
+         Ok(())
+     }
+ 
+-    pub(super) fn push_prepaid_scratch<T>(
++    pub(super) fn push_prepaid_scratch<T: ScratchElement>(
+         &mut self,
+         output: &mut Vec<T>,
+         value: T,
+@@ -205,9 +249,9 @@
+         buffer
+     }
+ 
+-    pub(super) fn admit_scratch<T>(&mut self, capacity: usize) -> Result<(), Step> {
++    pub(super) fn admit_scratch<T: ScratchElement>(&mut self, capacity: usize) -> Result<(), Step> {
+         let bytes = capacity
+-            .checked_mul(std::mem::size_of::<T>())
++            .checked_mul(T::CHARGE)
+             .ok_or(Step::Host(Halt::HeapExhausted))?;
+         if !self.chunks.can_allocate(bytes) {
+             return Err(Step::Host(Halt::HeapExhausted));
+@@ -218,9 +262,9 @@
+     /// Reserve a bounded representation copy for immutable host diagnostics.
+     /// This helper cannot charge work; guest callers use their normal admission
+     /// checkpoints. It is restricted to copies, never guest numeric lengths.
+-    pub(super) fn reserve_copy_scratch<T>(&self, capacity: usize) -> Vec<T> {
++    pub(super) fn reserve_copy_scratch<T: ScratchElement>(&self, capacity: usize) -> Vec<T> {
+         let bytes = capacity
+-            .checked_mul(std::mem::size_of::<T>())
++            .checked_mul(T::CHARGE)
+             .unwrap_or_else(|| crate::value::heap_exhausted());
+         if !self.chunks.can_allocate(bytes) {
+             crate::value::heap_exhausted();
+--- a/ironhorse-vm/src/interp/natives/json.rs
++++ b/ironhorse-vm/src/interp/natives/json.rs
+@@ -18,6 +18,11 @@
+     Object(Vec<(ReadKey, JsonSource)>),
+ }
+ 
++crate::interp::admission::scratch_element! {
++    JsonSource => 40,
++    (ReadKey, JsonSource) => 48,
++}
++
+ /// One string property name retained by `JSON.stringify`.  The id drives the
+ /// VM's property MOP, `key` is the exact String value passed to `toJSON` and a
+ /// replacer callback, and `units` preserves the UTF-16 spelling used in the
+--- a/ironhorse-regexp/src/matcher.rs
++++ b/ironhorse-regexp/src/matcher.rs
+@@ -121,12 +121,26 @@
+ pub const MAX_MATCH_STATES: usize = 65_536;
+ pub const MAX_MATCH_BYTES: usize = 64 << 20;
+ 
++/// Consensus byte charges for the matcher's retained records. They decide
++/// `resource_limit`, so they must not follow the host pointer width as
++/// `size_of` does (`State` holds a `Vec`, `AssertionData` a `usize`). These
++/// are the audited 64-bit layouts; a 64-bit build asserts they still agree.
++const STATE_CHARGE: usize = 40;
++const ASSERTION_CHARGE: usize = 16;
++const QUANTIFIER_CHARGE: usize = 12;
++#[cfg(target_pointer_width = "64")]
++const _: () = assert!(
++    std::mem::size_of::<State>() == STATE_CHARGE
++        && std::mem::size_of::<AssertionData>() == ASSERTION_CHARGE
++        && std::mem::size_of::<QuantifierData>() == QUANTIFIER_CHARGE
++);
++
+ fn save_captures(
+     states: &mut Vec<State>,
+     captures: &[(i32, i32)],
+     base_bytes: usize,
+ ) -> Option<Vec<(i32, i32)>> {
+-    let state_bytes = std::mem::size_of::<State>().checked_add(std::mem::size_of_val(captures))?;
++    let state_bytes = STATE_CHARGE.checked_add(std::mem::size_of_val(captures))?;
+     let count = states.len().checked_add(1)?;
+     if count > MAX_MATCH_STATES
+         || base_bytes.checked_add(count.checked_mul(state_bytes)?)? > MAX_MATCH_BYTES
+@@ -187,14 +201,8 @@
+     let base_bytes = [
+         (capture_count, std::mem::size_of::<(i32, i32)>()),
+         (name_count, std::mem::size_of::<i32>()),
+-        (
+-            program.assertion_count,
+-            std::mem::size_of::<AssertionData>(),
+-        ),
+-        (
+-            program.quantifier_count,
+-            std::mem::size_of::<QuantifierData>(),
+-        ),
++        (program.assertion_count, ASSERTION_CHARGE),
++        (program.quantifier_count, QUANTIFIER_CHARGE),
+     ]
+     .into_iter()
+     .try_fold(0usize, |sum, (n, width)| {
