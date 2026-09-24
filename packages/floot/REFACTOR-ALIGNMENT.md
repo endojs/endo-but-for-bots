@@ -72,9 +72,14 @@ Concrete candidates:
   all 237 Claude tests pass, including eight focused storage tests. Scoped lint,
   formatting and production-source types pass; the full test-inclusive typecheck
   still has 25 pre-existing fixture errors. No deployment is claimed.
-  Current-source follow-ups identified in the scan: Floot creation's `model` alias
-  and colon-encoded backend (the chat caller still needs porting); preset-prompt
-  version migration; Codex's per-turn `developerInstructions` alias. These are
+  Removed Floot creation's `model` alias and colon-encoded backend inference;
+  the chat caller now sends canonical `backendId` and `modelId` only. Obsolete
+  `model` fields reject before registry load or resource acquisition, even when
+  empty, undefined or accompanied by canonical fields. Model IDs containing
+  colons remain intact, including current OpenRouter routes; they no longer
+  select a backend implicitly. All 674 Floot tests pass locally.
+  Current-source follow-ups identified in the scan: preset-prompt version
+  migration and Codex's per-turn `developerInstructions` alias. These are
   not yet removed by this record. The Codex constructor/wire field of that name
   is current vendor vocabulary and must not be deleted with the per-turn alias.
 - Removed locally: OpenCode's unused `src/container-mount-bridge.js` phase-one

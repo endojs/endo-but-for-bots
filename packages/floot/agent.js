@@ -4882,6 +4882,11 @@ export const make = async (
    * @returns {Promise<string>} the new session id
    */
   const provisionSession = async options => {
+    if (Object.hasOwn(options, 'model')) {
+      throw Error(
+        'createSession option "model" is unsupported; use backendId and modelId',
+      );
+    }
     await loadRegistry();
     const preset = getPreset(options.presetId || DEFAULT_PRESET_ID);
     const id = `${newSessionId()}-${creationOrdinal.toString(36)}`;
@@ -4895,22 +4900,11 @@ export const make = async (
             subagentName: `${subagentName}`,
             subagentDepth: Number(subagentDepth),
           };
-    const selectedModel = options.modelId || options.model || '';
-    let backendId = 'provider';
-    let modelId = selectedModel;
+    const selectedModel = options.modelId || '';
+    const backendId = options.backendId || 'provider';
+    const modelId = selectedModel;
     const providerConfig = await getProviderConfig().catch(() => undefined);
     const openRouter = providerConfig?.provider === 'openrouter';
-    if (options.backendId && options.backendId !== 'provider') {
-      backendId = `${options.backendId}`;
-      modelId = `${options.modelId || ''}`;
-    } else if (
-      options.backendId !== 'provider' &&
-      typeof selectedModel === 'string' &&
-      (!openRouter || !selectedModel.includes('/')) &&
-      selectedModel.includes(':')
-    ) {
-      [backendId, modelId] = selectedModel.split(/:(.*)/s, 2);
-    }
     if (
       backendId === 'provider' &&
       openRouter &&

@@ -92,12 +92,14 @@ test.serial(
         harden([
           {
             id: 'openrouter/free',
+            modelId: 'openrouter/free',
             title: 'Auto free',
             backendId: 'provider',
             default: true,
           },
           {
             id: 'vendor/model:free',
+            modelId: 'vendor/model:free',
             title: 'Free model',
             backendId: 'provider',
           },
@@ -186,7 +188,8 @@ test.serial(
       .querySelector('.floot-preset-card')
       ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
     await waitFor(() => created.length === 1);
-    t.is(created[0][0].model, 'vendor/model:free');
+    t.is(created[0][0].modelId, 'vendor/model:free');
+    t.false(Object.hasOwn(created[0][0], 'model'));
     t.is(created[0][0].backendId, 'provider');
     t.false('reasoningEffort' in created[0][0]);
     t.false('networkPolicy' in created[0][0]);
@@ -303,7 +306,8 @@ test.serial(
       .querySelector('.floot-preset-card')
       ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
     await waitFor(() => created.length === 1);
-    t.is(created[0].model, models[149].id);
+    t.is(created[0].modelId, models[149].modelId);
+    t.false(Object.hasOwn(created[0], 'model'));
     t.is(created[0].backendId, 'opencode');
   },
 );
@@ -2669,6 +2673,32 @@ const openPicker = async (t, answers) => {
 };
 
 test.serial(
+  'new session refuses a model without canonical identity instead of falling back',
+  async t => {
+    t.timeout(5000);
+    const { parent, created, card } = await openPicker(t, {
+      listBackends: () => harden([{ id: 'provider', title: 'Fae' }]),
+      listModels: () =>
+        harden([
+          {
+            id: 'vendor/model:free',
+            backendId: 'provider',
+            title: 'Incomplete route',
+          },
+        ]),
+      listModelCatalogs: () => harden([]),
+    });
+    card()?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+    await waitFor(() =>
+      parent.textContent.includes(
+        'Selected model has no current backend/model identity',
+      ),
+    );
+    t.deepEqual(created, []);
+  },
+);
+
+test.serial(
   'new session preselects a model the chosen subscription can use, never one only a lane lists',
   async t => {
     t.timeout(5000);
@@ -2800,6 +2830,7 @@ test.serial(
             : [
                 {
                   id: 'openrouter/free',
+                  modelId: 'openrouter/free',
                   title: 'Auto free',
                   backendId: 'provider',
                   subscriptionIds: ['default'],
@@ -2829,7 +2860,8 @@ test.serial(
     // The selection follows the refreshed list: what is picked is what the
     // select shows, not the empty choice the picker opened with.
     await pick();
-    t.like(created[0], { model: 'openrouter/free' });
+    t.like(created[0], { backendId: 'provider', modelId: 'openrouter/free' });
+    t.false(Object.hasOwn(created[0], 'model'));
     // Closing and opening again is another read.
     parent
       .querySelector('.floot-modal-backdrop')
