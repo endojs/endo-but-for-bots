@@ -287,6 +287,35 @@ cancel-during-capture handling, journal-before-terminal wiring and acceptance.
 No production deployment, automatic/repeated native compaction or completed
 RA-02 claim follows from this selector/probe slice.
 
+Codex export/import preparation (2026-09-24): the pure renderer now constructs a
+fresh native identity and provider/tool metadata from explicit host configuration,
+while preserving the captured base instruction text and exact context row bytes.
+The sandbox-only I/O helper reads one explicit rollout, never discovers a newest
+session, rejects nonregular/final-symlink files, bounds fatal UTF-8 decoding and
+checks for concurrent mutation. It publishes rendered projections with an
+exclusive temporary file and no-clobber hard link, not an overwrite of a loaded
+native thread. Existing files/symlinks remain untouched, including concurrent
+publication attempts. Parent realpath checks are diagnostics, not race-safe host
+confinement: this I/O module must run inside the existing sandbox.
+
+The actual renderer and file helpers pass pinned-runtime ordinary and
+post-compaction-suffix probes with a host-selected synthetic dynamic tool,
+using fresh native identities in the same app-server process.
+The handler runs once before restoration, never again; ordinary restored context
+retains its function call and output. Equality now also covers tool call IDs,
+names, arguments and outputs. Both cases permit another native context capture.
+This is a no-effect synthetic handler, not Endo-tool settlement or real provider
+acceptance. All 381 Codex tests pass, including 56 focused selector/render/I/O
+tests; production types and scoped lint pass. Independent source review approves.
+These helpers remain unwired to the client, OCI image and journal producer.
+Their 16 MiB source-file bound refuses an oversized physical rollout rather than
+truncating it, even if its latest compacted context is small. Streaming selection
+or another justified source-allocation policy is still needed for that case;
+do not call this proof of indefinitely bounded healthy continuation.
+Next is helper transport and client integration with the existing catalog binding,
+operational reconciliation, cancellation fence and journal-before-terminal rule.
+No production deployment is claimed.
+
 Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
 loopback synthetic API in a disposable, network-disabled container, without
 credentials or host mounts. Manual compaction emits a boundary with retained

@@ -48,6 +48,12 @@ synthetic ordinary and post-compaction-suffix continuation under a fresh identit
 in the same pinned app-server, plus re-export after another native turn.
 It has 29 focused tests and remains unwired to the production client/journal.
 The alignment document records exact scope and remaining integration gates.
+The next reviewed slice adds exact native rendering and bounded sandbox-only
+file export/no-clobber import. Actual helper probes preserve ordinary and
+post-compaction-suffix context with one synthetic dynamic-tool execution and no
+replay. All 381 Codex tests pass. Client/journal/image wiring remains unfinished;
+source-file bounds, host runtime bindings and effect reconciliation remain
+explicit limits, not completed acceptance claims.
 
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred
