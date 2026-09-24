@@ -9,19 +9,6 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { validateGeneratedFiles } from '../generated-files.js';
 import { makeCgroup2Probe } from '../limits.js';
 import { makePodmanHostEnvironment } from '../podman-host-environment.js';
-import {
-  observeNativePodmanMounts,
-  validateNativePodmanMounts,
-} from '../native-podman-mounts.js';
-import {
-  assertNativePodmanProfile,
-  nativePodmanProfileArgs,
-  observeNativePodmanProfile,
-} from '../native-podman-profile.js';
-import {
-  makePodmanStartupCommand,
-  makePodmanStartupGate,
-} from '../podman-startup-gate.js';
 import { makeResourceRegistry } from '../resource-registry.js';
 import {
   makeProcReader,
@@ -49,7 +36,6 @@ import { DEFAULT_PATH } from './path.js';
 
 /** @import { GeneratedFileStage, GeneratedFileStorage } from '../generated-file-storage-types.js' */
 /** @import { DriverPreparation } from '../native-factory-types.js' */
-/** @import { NativePodmanMount } from '../native-podman-mounts.js' */
 /** @import { SandboxDriver, SliceSpec, SpawnOpts, DriverProcess, BackendProbe, BackendProbeDetails, SlicePolicyRequest, SlicePolicyAttestation } from '../types.js' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
 
@@ -563,20 +549,13 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
   if (extras.policyArgv !== undefined) {
     argv.push(...extras.policyArgv);
   } else {
-    if (spec.nativeProfile !== undefined) {
-      argv.push(
-        ...nativePodmanProfileArgs(spec.nativeProfile),
-        '--image-volume=ignore',
-      );
-    } else {
-      argv.push(
-        '--security-opt',
-        'no-new-privileges',
-        '--cap-drop',
-        'ALL',
-        '--read-only',
-      );
-    }
+    argv.push(
+      '--security-opt',
+      'no-new-privileges',
+      '--cap-drop',
+      'ALL',
+      '--read-only',
+    );
     argv.push(
       // The slice's upper rootfs layer is read-only; writes go to the
       // scratch volume bound at /scratch (see below).  podman supplies a
@@ -607,7 +586,6 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
         `target=${mount.innerPath}`,
       ];
       if (mount.mode === 'ro') parts.push('readonly');
-      if (spec.nativeProfile !== undefined) parts.push('nosuid', 'nodev');
       argv.push('--mount', encodeMount(parts));
     }
 
@@ -620,7 +598,6 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
           'type=bind',
           `source=${spec.scratchHostPath}`,
           'target=/scratch',
-          ...(spec.nativeProfile !== undefined ? ['nosuid', 'nodev'] : []),
         ]),
       );
     }
@@ -634,13 +611,11 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
   // `Config.Env`.  This mirrors the bwrap driver's `--setenv PATH=…`
   // path-synthesis behaviour.
   let hadPath = false;
-  for (const [key, value] of Object.entries(
-    spec.nativeProfile ? {} : spec.env,
-  )) {
+  for (const [key, value] of Object.entries(spec.env)) {
     argv.push('-e', `${key}=${value}`);
     if (key === 'PATH') hadPath = true;
   }
-  if (!spec.nativeProfile && !hadPath && extras.pathInjection !== null) {
+  if (!hadPath && extras.pathInjection !== null) {
     argv.push('-e', `PATH=${extras.pathInjection}`);
   }
 
@@ -1496,32 +1471,6 @@ export const makePodmanDriver = ({
   };
 
   /**
-   * The destinations a native gate must observe: granted binds, the driver's
-   * own staged literal files, and host scratch. Generated entries are the
-   * driver's staging, distinguished from binds so the mount policy can give
-   * the resolver literal its protected-path exception without extending it
-   * to any caller-supplied source.
-   *
-   * @param {SliceSpec} spec
-   * @param {readonly { innerPath: string }[]} generated
-   * @returns {readonly NativePodmanMount[]}
-   */
-  const nativeMountDeclarations = (spec, generated) => {
-    /** @type {NativePodmanMount[]} */
-    const declarations = [];
-    for (const { innerPath, mode } of spec.mounts) {
-      declarations.push({ innerPath, mode, kind: 'bind' });
-    }
-    for (const { innerPath } of generated) {
-      declarations.push({ innerPath, mode: 'ro', kind: 'generated' });
-    }
-    if (spec.scratchHostPath !== '') {
-      declarations.push({ innerPath: '/scratch', mode: 'rw', kind: 'bind' });
-    }
-    return harden(declarations);
-  };
-
-  /**
    * Inspect one container and return its parsed record.
    *
    * @param {typeof import('child_process')} cp
@@ -2098,20 +2047,8 @@ export const makePodmanDriver = ({
    * @returns {Promise<PodmanSliceContext>}
    */
   const buildSlice = async (spec, resources, assertPreparing) => {
-    if (spec.nativeProfile !== undefined) {
-      assertNativePodmanProfile(spec.nativeProfile);
-      if (
-        spec.policy !== undefined ||
-        spec.limits !== undefined ||
-        spec.network !== 'join' ||
-        spec.seccomp !== 'default' ||
-        spec.rootfs.kind !== 'oci' ||
-        !PINNED_IMAGE_REFERENCE_PATTERN.test(spec.rootfs.ref)
-      ) {
-        throw makeError(
-          X`Native profile requires a pinned OCI image, broker network join, default seccomp and no legacy policy or rlimits`,
-        );
-      }
+    if ('nativeProfile' in spec) {
+      throw makeError(X`nativeProfile is retired; use the shared slice policy`);
     }
     const files = validateGeneratedFiles(spec.generatedFiles ?? [], [
       '/run',
@@ -2125,9 +2062,6 @@ export const makePodmanDriver = ({
     // generated later by the host allocator and encoded before container create.
     for (const file of files) encodeMount([`target=${file.innerPath}`]);
     spec = harden({ ...spec, generatedFiles: files });
-    if (spec.nativeProfile !== undefined) {
-      validateNativePodmanMounts(nativeMountDeclarations(spec, files));
-    }
     // makeStage is inactive: it allocates no storage until an owned spawn.
     // Do this before any other acquisition, since a closed allocator can refuse.
     /** @type {GeneratedFileStage | undefined} */
@@ -2485,7 +2419,6 @@ export const makePodmanDriver = ({
     // one more container than every per-container ceiling — and than
     // the aggregate the attestation states — was computed for.
     const maxConcurrentOperations =
-      slice.spec.nativeProfile?.maxConcurrentOperations ??
       slice.policy?.request.resources.maxConcurrentOperations;
     if (maxConcurrentOperations !== undefined) {
       const admitted = slice.live.size + slice.reserved.size;
@@ -2528,12 +2461,6 @@ export const makePodmanDriver = ({
     async function admitOperation() {
       const cp = await getCp();
       assertAdmissionOpen();
-      if (
-        slice.spec.nativeProfile !== undefined &&
-        !(await isRootless(cp, slice.runtime))
-      ) {
-        throw makeError(X`Native Podman operations require a rootless engine`);
-      }
       if (slice.join !== null) {
         // Resolve the immutable id again before every operation: a container
         // replaced under the same name must not host this operation, and the
@@ -2570,13 +2497,6 @@ export const makePodmanDriver = ({
         slice.runtimeDetails.path.value,
       );
       const pathInjection = slicePath.source === 'env' ? null : slicePath.value;
-      const startupCommand =
-        slice.spec.nativeProfile === undefined
-          ? undefined
-          : makePodmanStartupCommand(argv, {
-              PATH: slicePath.value,
-              ...operationSpec.env,
-            });
       const createArgv = podmanArgs(slice.runtime, [
         ...assembleCreateArgv(operationSpec, containerName, slice.netBackend, {
           seccompProfilePath: slice.seccompTempPath,
@@ -2588,9 +2508,8 @@ export const makePodmanDriver = ({
           // `policy()` proved.
           ...(slice.policy !== null ? { policyArgv: slice.policy.argv } : {}),
         }),
-        ...(startupCommand?.createArgs ?? []),
         slice.ref,
-        ...(startupCommand?.argv ?? argv),
+        ...argv,
       ]);
       // Register ownership before create can materialize the container, even
       // when create eventually reports an error. A successful removal is
@@ -2762,7 +2681,7 @@ export const makePodmanDriver = ({
         child = cp.spawn('podman', startArgv, {
           stdio: [
             'pipe',
-            startupCommand || opts.captureStdout !== false ? 'pipe' : 'ignore',
+            opts.captureStdout !== false ? 'pipe' : 'ignore',
             opts.captureStderr === false ? 'ignore' : 'pipe',
           ],
           // A fresh copy per spawn, as for control commands.
@@ -2812,119 +2731,6 @@ export const makePodmanDriver = ({
       // in `reserved` as well would count this operation twice.
       slice.live.set(containerName, { child, wait: exited });
       releaseReservation();
-
-      if (slice.spec.nativeProfile !== undefined) {
-        const gate = makePodmanStartupGate(child, {
-          timeoutMs: CONTROL_COMMAND_TIMEOUT_MS,
-        });
-        void admissionCancelled?.catch(error => gate.cancel(error));
-        await gate.ready;
-        // The fixed trusted gate has run: this is a startup witness even if
-        // later kernel observation or cleanup fails.
-        startupWitness = true;
-        try {
-          assertAdmissionOpen();
-          const proc = await getProcfs();
-          const before = await inspectContainer(
-            cp,
-            slice.runtime,
-            containerReference,
-          );
-          const pid = before?.State?.Pid;
-          if (
-            before?.Id !== containerReference ||
-            before?.State?.Running !== true ||
-            typeof pid !== 'number' ||
-            !Number.isInteger(pid) ||
-            pid <= 0
-          ) {
-            throw makeError(
-              X`Native gate has no running original container identity`,
-            );
-          }
-          // /proc stat's starttime distinguishes PID reuse while reading the
-          // kernel files. The gate cannot exec the workload until release.
-          const readStart = async () => {
-            const stat = await proc.readFile(`/proc/${pid}/stat`);
-            const fields = stat.slice(stat.lastIndexOf(')') + 2).split(/\s+/);
-            const start = fields[19];
-            if (!start || !/^[0-9]+$/.test(start)) {
-              throw makeError(X`Native gate start identity is unreadable`);
-            }
-            return start;
-          };
-          const started = await readStart();
-          const hostUid = process.geteuid?.();
-          const hostGid = process.getegid?.();
-          if (hostUid === undefined || hostGid === undefined) {
-            throw makeError(X`Native gate requires a POSIX host identity`);
-          }
-          const observed = await observeNativePodmanProfile({
-            proc,
-            pid,
-            profile: slice.spec.nativeProfile,
-            hostUid,
-            hostGid,
-          });
-          await observeNativePodmanMounts(
-            proc,
-            pid,
-            nativeMountDeclarations(slice.spec, generatedMounts),
-          );
-          const target = await resolveContainerNetworkTarget(
-            cp,
-            slice.runtime,
-            proc,
-            containerReference,
-            'native operation',
-          );
-          const network = await readNetworkNamespace(proc, pid);
-          assertLoopbackOnly(network, containerReference);
-          if (
-            target.pid !== pid ||
-            target.containerId !== containerReference ||
-            target.namespaceId !== slice.join?.namespaceId
-          ) {
-            throw makeError(
-              X`Native operation did not join its original broker network`,
-            );
-          }
-          const after = await inspectContainer(
-            cp,
-            slice.runtime,
-            containerReference,
-          );
-          if (
-            after?.Id !== containerReference ||
-            after?.State?.Running !== true ||
-            after?.State?.Pid !== pid ||
-            (await readStart()) !== started
-          ) {
-            throw makeError(X`Native gate identity changed during observation`);
-          }
-          claimNamespaces(containerName, {
-            pid: observed.namespaces.pid,
-            ipc: observed.namespaces.ipc,
-            mount: observed.namespaces.mount,
-          });
-          // The gate issues its release write within this same synchronous
-          // stretch, so a cancellation this check can observe — the caller's
-          // synchronous predicate, or a rejection already delivered — cannot
-          // slip in between the check and the moment execution becomes
-          // possible. A rejection delivered after the check and before the
-          // write is acknowledged still fails the release: the operation is
-          // then removed, but may have run. Once acknowledged, the operation
-          // is live and cancellation belongs to its owner, as on every path.
-          assertAdmissionOpen();
-          await gate.release();
-          // The gate requires stdout even for an uncaptured workload. Resume
-          // draining after release so that such output cannot stall it.
-          if (opts.captureStdout === false) child.stdout?.resume();
-        } catch (error) {
-          gate.cancel(error);
-          throw error;
-        }
-      }
 
       const stdinStream = child.stdin;
       /** @type {DriverProcess & { writeStdin(chunk: Uint8Array): Promise<void>, closeStdin(): Promise<void> }} */

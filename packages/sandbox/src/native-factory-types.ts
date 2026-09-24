@@ -1,5 +1,4 @@
 import type { FarRef, RemoteFunctions } from '@endo/eventual-send';
-import type { NativePodmanProfile } from './native-podman-profile-types.js';
 
 import type {
   DriverSliceContext,
@@ -26,8 +25,6 @@ export type NativeSandboxMakeOpts = Omit<
   mounts?: Readonly<SliceSpec['mounts']>;
   /** Explicitly owned scratch; no implicit daemon mount acquisition. */
   scratchHostPath?: string;
-  /** Explicit host launch policy, checked on each actual Podman operation. */
-  nativeProfile?: NativePodmanProfile;
 };
 
 /** Static mounts only; no methods accept or create daemon Mount capabilities. */

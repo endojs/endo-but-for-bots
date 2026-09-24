@@ -3,7 +3,6 @@
 import { M } from '@endo/patterns';
 
 import { GeneratedFileShape } from './generated-files.js';
-import { NativePodmanProfileShape } from './native-podman-profile.js';
 
 /**
  * Runtime `M.interface()` guards for the `@endo/sandbox` capability
@@ -199,9 +198,6 @@ const NativeSandboxMakeOptsShape = M.splitRecord(
       }),
     ),
     scratchHostPath: M.string(),
-    // Checked here as a remote argument; the driver rechecks ranges and
-    // refuses the profile beside any legacy policy or rlimits.
-    nativeProfile: NativePodmanProfileShape,
   },
 );
 

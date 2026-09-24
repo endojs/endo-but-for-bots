@@ -34,7 +34,7 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 | Shared framing, admission and cancellation semantics | Shared turn channel exists, but three client admission state machines remain; recent Claude/OpenCode pre-admission cancellation defects needed parallel fixes | Partial: common behavioral conformance is warranted before deciding whether more implementation sharing is useful |
 | Bounded resident memory for long healthy work | `context-transcript.js` pages archived metadata but accumulates active/exception record arrays; without a checkpoint it selects all eligible nonpending history | Not complete. Per-value/per-turn bounds do not bound the whole context; direct Fae has no automatic compaction producer |
 | Runtime/provider/account/model are separate concepts | Explicit session identity and discriminated runtime configuration exist; hosted plans carry account authority | Partial: account status discovery still uses runtime-derived pet names and keys in `floot/agent.js:2663` onward |
-| Smaller common implementation; delete superseded paths | Vendor packages shrank, shared implementation grew substantially; generic sandbox `nativeProfile` path still exists outside current hosted use | Simplicity target not demonstrated. Profile is a deletion candidate, not proven dead solely by lack of a hosted caller |
+| Smaller common implementation; delete superseded paths | Vendor packages shrank, shared implementation grew substantially; generic sandbox `nativeProfile` path has now been retired locally with operator approval | Simplicity target not demonstrated. Removing this obsolete mode is progress, not proof of the overall target |
 | One current set of guarantees and final conformance | Design contains overlapping historical status blocks; host revision pin is older than application HEAD | Not complete. Rebaseline documentation and candidate, then perform coordinated deployment and current cross-backend acceptance |
 
 ## Priority findings
@@ -64,6 +64,12 @@ Concrete candidates:
   to thinking events. Current bridge output names thinking explicitly; generic
   commentary stays commentary. All 302 OpenCode tests pass and independent
   review approves. Retire old images before activation; no deployment claimed.
+  Current-source follow-ups identified in the scan: Claude's ambient state-root
+  fallback despite captured formula configuration; Floot creation's `model` alias
+  and colon-encoded backend (the chat caller still needs porting); preset-prompt
+  version migration; Codex's per-turn `developerInstructions` alias. These are
+  not yet removed by this record. The Codex constructor/wire field of that name
+  is current vendor vocabulary and must not be deleted with the per-turn alias.
 - Removed locally: OpenCode's unused `src/container-mount-bridge.js` phase-one
   refusal facade and package export. Current setup neither imports nor mints it,
   and the shared backend factory already rejects unsupported container mounts.
@@ -72,16 +78,18 @@ Concrete candidates:
   formula; obsolete instances require deliberate retirement before activation.
   All 302 OpenCode package tests pass; independent source review approves the
   deletion. No deployment or live formula inventory is claimed.
-- Generic sandbox native-profile machinery remains in `sandbox/src/factory.js:579`
-  and `sandbox/src/drivers/podman.js:566`. Establish public and retained-formula
-  obligations before deletion; no compatibility framework is required.
-  Follow-up inspection found no production request producer in this repository,
-  but the package export, `NativeSandboxMakeOpts.nativeProfile`, remote guard,
-  factory path, and dedicated tests still expose a distinct host-only launch
-  mode. The operator approved retiring that feature (2026-09-24); deletion is
-  in progress. This is not unreachable dead code. Keep `makeResolved`, runtime scopes and common cleanup
-  regardless of that decision. Local historical inventories cannot rule out
-  every external caller or retained custom formula.
+- Retired locally with explicit operator approval (2026-09-24): the generic
+  sandbox `nativeProfile` mode, public export/types, old startup gate, profile-only
+  observations, helpers and exclusive tests. Stale fields, including an explicit
+  `undefined`, reject before resource acquisition. `makeResolved`, runtime scopes,
+  policy rootless/namespace/mount checks, network identity checks, admission and
+  common cleanup remain. Independent adversarial source review approves.
+  Focused tests: 135 passed; direct full AVA: 463 passed with exit zero; package
+  lint/types passed (28 warnings). An earlier wrapper printed 463 passes but
+  exited nonzero without a failure summary; its cause is not established.
+  This removes an intentionally retired public mode, not merely unreachable code.
+  External callers/retained formulas must be retired before activation; no live
+  inventory or deployment is claimed.
 - Codex creates its private audit journal/anchors in
   `codex-sandbox/src/codex-native-controller.js:109`. Phase 4 expressly gates
   removal on replacement runtime evidence. State precisely what remains unique;

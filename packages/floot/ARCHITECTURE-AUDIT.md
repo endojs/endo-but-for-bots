@@ -2455,20 +2455,20 @@ these macOS tests could not. Still open on the host: no Tokyo run asserted a
 slice's effective limits, and the obsolete field was never presented to the
 parsers because old plans were retired before activation.
 
-Retained-code follow-up (2026-09-24): the separate lower-level `nativeProfile`
-option and its Podman startup-gate/profile/mount-observer branch still exist in
-`@endo/sandbox`, including an exported profile validator and native scope guard.
-Current production JavaScript references are confined to sandbox internals;
-the shared hosted execution envelope uses the attested policy path instead.
-This is a removal candidate, not proof of unreachable code: exported native
-scopes accept the option and retained external formulas may call them.
-Before deletion, trace those public entrypoints and retained callers, and separate
-this branch from helpers still required by the active attested-policy path.
-Do not restore the unused hosted setting merely to justify retaining the branch.
-Fresh startup-gate/profile/mount/operation suites pass 72 tests, native runtime
-passes 20, and OpenCode plan parsing passes 17 (including obsolete-field refusal).
-These establish local protocol and injected-observation behavior, not current
-hosted kernel isolation, live resource limits, or daemon-loss recovery.
+Retained-code follow-up (2026-09-24): with explicit operator approval, the separate
+lower-level `nativeProfile` mode has now been removed locally from `@endo/sandbox`.
+The export/types, startup gate, profile-only observations and exclusive tests are
+deleted; stale options reject before acquisition, including explicit `undefined`.
+The current policy path retains its rootless, namespace, mount, network identity,
+admission and cleanup checks. Runtime scopes and `makeResolved` remain.
+Independent adversarial source review approves; 135 focused tests and 463 full
+tests pass, and package lint/types pass with 28 warnings.
+An earlier wrapper printed the same full passing count but exited nonzero without
+a failure summary; the direct full AVA rerun exited zero, without establishing
+the earlier cause. This is intentional public-mode retirement, not a claim that
+exported code was unreachable. External old-mode formulas/callers must be retired
+before activation. No deployment, live kernel proof or daemon-loss recovery is
+claimed; see [current alignment](REFACTOR-ALIGNMENT.md#ra-01--demonstrate-simplification-not-merely-relocation).
 
 ## FA-06 — One session provisioner and execution envelope
 
