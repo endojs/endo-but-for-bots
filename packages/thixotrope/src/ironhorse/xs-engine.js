@@ -92,6 +92,7 @@ export const makeXsEngine = (
         failAll(reason);
         child.kill('SIGKILL');
       };
+      void child.failed.then(failProtocol);
       void child.exited.then(code => {
         exited = true;
         failAll(

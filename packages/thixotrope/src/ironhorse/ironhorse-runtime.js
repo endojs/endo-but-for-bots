@@ -63,6 +63,10 @@ export const acquireIronhorseRuntime = async (
     rejectWait?.(error);
     if (!closing) onLost();
   };
+  void child.failed.then(error => {
+    child.kill('SIGKILL');
+    fail(error);
+  });
   // The worker speaks one JSON message per line on stderr; accumulate each
   // line for the ownership-loss diagnostic while feeding the protocol queue.
   void (async () => {
