@@ -20,6 +20,17 @@ incomplete, account discovery retains runtime coupling, and current-release
 deployment/acceptance is outstanding. Consult that document before treating a
 historical finding introduction as current implementation status.
 
+Operator priority clarification (2026-09-24): storage scaling, paged unresolved
+evidence and an inference-admission budget for unresolved outcomes are deferred
+until actual pressure warrants them. Keep the known growth limits documented;
+do not discard uncertainty or introduce speculative capacity limits. This is not
+proof of bounded memory and does not close FA-01/FA-02 model-context compaction.
+The narrow removal of the private journal's per-session full-host name cache
+reduces redundant copies without changing storage format, ownership or policy.
+It passes 21 focused and 676 full Floot tests, with independent source review;
+transient listings, the journal name index and daemon indexes remain unchanged.
+No deployment is claimed.
+
 This records the source audit and independent subagent reviews requested by the operator.
 It tracks follow-up work within the existing
 [hosted-agent sandbox unification design](../../designs/hosted-agent-sandbox-unification.md),

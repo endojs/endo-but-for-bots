@@ -94,6 +94,7 @@ for (const fails of [false, true]) {
     const release = makePromiseKit();
     const host = Far('DelayedPrivateStorage', {
       list: () => harden([...values.keys()]),
+      has: name => values.has(name),
       lookup: name => values.get(name),
       storeValue: async (value, name) => {
         entered.resolve(undefined);
@@ -146,6 +147,10 @@ const fixture = () => {
       calls.push(['list']);
       return harden([...values.keys()]);
     },
+    has: name => {
+      calls.push(['has', name]);
+      return values.has(name);
+    },
     lookup: name => {
       calls.push(['lookup', name]);
       return values.get(name);
@@ -185,7 +190,12 @@ test('creation publishes exact schema and opening is read-only', async t => {
   host.calls.length = 0;
   const storage = await providePrivateTurnStorage(host.powers, 'session');
   t.deepEqual(await E(storage).list(), []);
-  t.deepEqual(host.calls, [['list'], ['lookup', schemaName]]);
+  t.deepEqual(host.calls, [
+    ['list'],
+    ['has', schemaName],
+    ['lookup', schemaName],
+    ['list'],
+  ]);
   await t.throwsAsync(createPrivateTurnStorage(host.powers, 'session'), {
     message: /namespace already exists/,
   });
@@ -205,7 +215,7 @@ test('missing schema and orphaned values are never adopted', async t => {
     message: /namespace already exists/,
   });
   t.deepEqual([...host.values.values()], ['orphan']);
-  t.false(host.calls.some(([method]) => method !== 'list'));
+  t.false(host.calls.some(([method]) => !['list', 'has'].includes(method)));
 });
 
 for (const marker of ['manifest', 'ready', 'resolution']) {
@@ -248,7 +258,11 @@ test('schema shape, version, and session identity are exact', async t => {
     await t.throwsAsync(providePrivateTurnStorage(host.powers, 'session'), {
       message: /Invalid private journal schema/,
     });
-    t.deepEqual(host.calls, [['list'], ['lookup', schemaName]]);
+    t.deepEqual(host.calls, [
+      ['list'],
+      ['has', schemaName],
+      ['lookup', schemaName],
+    ]);
   }
 });
 
@@ -347,6 +361,36 @@ test('all journal value classes work, schema and arbitrary host names do not', a
   }
   t.deepEqual(await E(storage).list(), valid);
   t.is(host.values.size, 5);
+});
+
+test('open storage checks current names without retaining the host inventory', async t => {
+  const host = fixture();
+  await createPrivateTurnStorage(host.powers, 'session');
+  const storage = await providePrivateTurnStorage(host.powers, 'session');
+  const target = `${prefix}${eventName(1)}`;
+  host.values.set(target, 'external');
+  host.values.set(`floot-private-turn-8-session2-${eventName(1)}`, 'other');
+  host.values.set('unrelated-host-name', 'other');
+  t.deepEqual(await E(storage).list(), [eventName(1)]);
+  host.calls.length = 0;
+  await t.throwsAsync(E(storage).storeValue('overwrite', eventName(1)), {
+    message: /immutable/,
+  });
+  t.is(host.values.get(target), 'external');
+  host.values.delete(target);
+  await t.throwsAsync(E(storage).remove(eventName(1)), {
+    message: /Unknown private journal value/,
+  });
+  await E(storage).storeValue('new', eventName(1));
+  await E(storage).remove(eventName(1));
+  t.false(host.calls.some(([method]) => method === 'list'));
+  t.true(host.calls.some(([method]) => method === 'has'));
+  t.deepEqual(await E(storage).list(), []);
+  t.is(host.values.get('unrelated-host-name'), 'other');
+  t.is(
+    host.values.get(`floot-private-turn-8-session2-${eventName(1)}`),
+    'other',
+  );
 });
 
 test('serialized writes preserve immutability without poisoning on rejection', async t => {

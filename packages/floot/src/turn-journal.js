@@ -28,8 +28,9 @@ const SNAPSHOT_VERSION = 2;
  * 10,001st event, which made a long healthy session end in "capacity
  * exhausted" and needed operator archival. What that ceiling bounded was the
  * replay — every event read back into memory at every start — and the
- * resident record map that held every turn's full text. Both are bounded
- * below by construction, so the ceiling had nothing left to protect.
+ * resident record map that held every turn's full text. Snapshots and archival
+ * reduce that work, but do not establish a global memory bound: unresolved
+ * turns and the lifetime storage-name index can still grow.
  *
  * `MAX_EVENT_SIZE` bounds one stored event. Every text field is cut to
  * `PREVIEW_CHARS` before the event is written, with the full text stored as
@@ -43,7 +44,7 @@ const SNAPSHOT_VERSION = 2;
  * storage-value bound, not an output ceiling: a tool result larger than this
  * is refused at the call, which fails one tool call rather than the session.
  *
- * `RETAINED_TURNS` bounds the record map. Settled turns beyond it are moved
+ * `RETAINED_TURNS` bounds the settled part of the record map. Older settled turns are moved
  * to archive chunks in storage and read back only on request; a turn with an
  * unresolved outcome is never archived, because it is the evidence recovery
  * needs in front of it.
@@ -56,7 +57,10 @@ const SNAPSHOT_VERSION = 2;
  * until the session itself is removed in Endo and collected; a snapshot is a
  * derived accelerator, so the only value this journal ever discards is a
  * snapshot a newer one has superseded. Storage grows with the conversation
- * — that is what keeping it means — while memory and replay do not.
+ * — that is what keeping it means. Replay starts at the latest snapshot, but
+ * that snapshot and resident memory can grow with unresolved turns. Startup
+ * also lists all storage names. Storage scaling is a deferred concern, not a
+ * guarantee established by these per-value and settled-turn bounds.
  */
 const MAX_EVENT_SIZE = 131_072;
 const PREVIEW_CHARS = 8192;
