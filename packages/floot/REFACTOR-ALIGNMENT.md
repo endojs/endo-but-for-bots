@@ -168,6 +168,20 @@ lines 75–129 reconstruct and flatten them. Its own read-view comment explicitl
 states that archive I/O and active output still grow with history. Checkpoints
 permit skipping superseded content, but do not create themselves or bound a long
 active tail. Direct Fae currently has no automatic compaction producer.
+
+Direct-provider implementation preparation (2026-09-24): use the existing
+portable compaction record and journal, not another conversation store.
+The producer belongs at Floot's settled provider-round boundary; summarization
+must disable tools, preserve whole tool pairs and unresolved/recovered evidence,
+record its usage, and durably publish before selecting the shorter context.
+The current pending turn is excluded from journal context reads and added through
+`stagedMessages`, so merely writing a checkpoint would not change the active loop.
+Threshold/output reserve, current-route capacity and pending-turn selection still
+need implementation. OpenRouter already reports the serving model's capacity,
+but merged usage intentionally retains old capacity when a new reading is unknown;
+that display aggregate cannot be an admission/compaction authority, especially
+for the auto-free route. This is a scoped implementation investigation, not an
+implemented compaction producer or a new evidence-storage budget.
 OpenCode has explicit checkpoint capture, while the current Claude/Codex event
 translators do not produce equivalent canonical compaction boundaries. Supporting
 restoration from a supplied checkpoint is not proof of capturing native changes.
@@ -376,6 +390,27 @@ independent client/Floot-context review passes 132 tests, and production types
 and scoped lint pass. This covers recreated native state, not loss of only the
 guest rollout while retaining an old host ledger; that case is being checked
 separately without bypassing unresolved recovery markers.
+
+Disposable-projection recovery (2026-09-24): an inherited Codex thread no longer
+has to resume before the exact journal checkpoint can acknowledge its completed
+ledger marker. When no recovery remains, restoration builds from the journal
+without opening the old guest rollout. Missing native history with an outstanding
+marker still refuses; there is no catch-and-ignore recovery fallback.
+All 114 client tests pass, with 122 client/controller tests independently passing.
+The full Codex suite passes 426 tests; production types and scoped lint pass.
+This changes ordinary acknowledged restoration, not process-loss guarantees.
+
+Actual-client daemon regression (2026-09-24): a new fixture runs the production
+Codex client, tool/prompt adapters, Floot agent and private journal across two cold
+daemon restarts. It checks that a complete native transcript and finished turn
+precede checkpoint acknowledgement, exact externalized native payloads reach
+restoration, the synthetic `rollout-1` baseline is persisted, and a mediated tool
+effect happens only once. The restored turn captures another checkpoint; the
+next restart preserves history, transcript and turns without startup inference.
+Independent review and the focused test pass; daemon package types pass.
+The combined serial Floot daemon durability/lifecycle suite passes 11 tests.
+The app-server/helper are deterministic mocks: this verifies the client/journal
+seam and real daemon durability, not CLI parsing or live provider acceptance.
 
 Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
 loopback synthetic API in a disposable, network-disabled container, without

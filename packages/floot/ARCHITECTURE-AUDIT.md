@@ -82,6 +82,13 @@ when restoring into entirely fresh native state. Crash-before-dispatch regressio
 cover empty and synthetic restored baselines; 111 client tests and independent
 132 client/context tests pass. Guest-rollout-only loss remains a separate check;
 unresolved operational recovery must never be skipped to make restoration pass.
+Acknowledged Codex projection loss is now handled without resuming the old guest
+rollout; outstanding ledger recovery still requires the original native history.
+Independent client/controller tests pass 122 cases. A new actual-client Floot
+daemon regression verifies journal-before-ack ordering, exact checkpoint delivery,
+restored baseline persistence and one tool effect across two cold restarts.
+It uses deterministic app-server/helper boundaries, not a real CLI/provider;
+independent review, the focused daemon test and daemon types pass.
 
 Operator priority clarification (2026-09-24): storage scaling, paged unresolved
 evidence and an inference-admission budget for unresolved outcomes are deferred

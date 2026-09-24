@@ -135,8 +135,8 @@ test('a thread inherited across incarnations is superseded, not resumed', async 
   // thread it started; across incarnations the stack's records decide. A
   // thread id in the saved state can only have been written by a previous
   // incarnation, so it names the CLI's own surviving store -- which is
-  // exactly what the records exist to replace. It is reconciled under its
-  // original catalog and then left behind, intact, for audit.
+  // exactly what the records exist to replace. With no outstanding marker,
+  // it need not be present or opened before replacement.
   //
   // With no records handed in there is nothing to replay, and that is not a
   // refusal: an empty stack claim honestly means no conversation, so the
@@ -148,9 +148,9 @@ test('a thread inherited across incarnations is superseded, not resumed', async 
     clientOptions: { savedToolSetId: 'same', toolSetId: 'same' },
   });
   const reader = await fixture.client.send('continue', {});
-  t.true(
+  t.false(
     fixture.sent.some(message => message.method === 'thread/resume'),
-    'the inherited thread is resumed so it can be reconciled',
+    'acknowledged native history is not required for journal restoration',
   );
   t.true(
     fixture.sent.some(message => message.method === 'thread/start'),
@@ -493,6 +493,7 @@ const makeQueue = () => {
  *   configReadResult?: any,
  *   existingTurnIds?: string[],
  *   restoredTurnIds?: string[],
+ *   missingInheritedRollout?: boolean,
  *   turnCounterStart?: number,
  *   announceTurns?: boolean,
  *   closeFailures?: number,
@@ -522,6 +523,7 @@ const makeFixture = ({
   announceTurns = true,
   closeFailures = 0,
   restoredTurnIds = [],
+  missingInheritedRollout = false,
 } = {}) => {
   const queue = makeQueue();
   const sent = [];
@@ -569,6 +571,13 @@ const makeFixture = ({
         });
         break;
       case 'thread/resume':
+        if (missingInheritedRollout && !message.params.path) {
+          push({
+            id: message.id,
+            error: { code: -32_000, message: 'Native rollout missing' },
+          });
+          break;
+        }
         activeThread = message.params.threadId;
         if (message.params.path)
           turnIds.splice(0, turnIds.length, ...restoredTurnIds);
@@ -1104,6 +1113,83 @@ for (const restoredBase of [null, 'rollout-1']) {
     await drain(reader);
   });
 }
+
+for (const acknowledged of [false, true]) {
+  test(`missing disposable native rollout restores from journal after acknowledgement (${acknowledged})`, async t => {
+    t.timeout(5000);
+    const fixture = makeFixture({
+      threadId: 'missing-native',
+      missingInheritedRollout: true,
+      restoredTurnIds: ['rollout-1'],
+      clientOptions: {
+        ...(acknowledged
+          ? {
+              savedRecovery: {
+                baseTurnId: null,
+                turnId: 'prior-host-checkpoint',
+                status: 'completed',
+              },
+            }
+          : {}),
+        nativeContext: nativeTestTransport(),
+        makeNativeIdentity: () => ({
+          sessionId: 'restored-native',
+          timestamp: '2026-09-24T00:00:00.000Z',
+        }),
+      },
+    });
+    t.teardown(() => fixture.client.terminate());
+    const reader = await fixture.client.send('continue', {
+      transcript: [nativeTestSnapshot()],
+      acknowledgedCheckpoint: 'prior-host-checkpoint',
+    });
+    t.false(
+      fixture.sent.some(
+        message => message.method === 'thread/resume' && !message.params.path,
+      ),
+    );
+    t.false(fixture.sent.some(message => message.method === 'thread/revert'));
+    t.is(
+      fixture.sent.find(message => message.method === 'turn/start').params
+        .threadId,
+      'restored-native',
+    );
+    await fixture.client.interrupt();
+    await drain(reader);
+  });
+}
+
+test('missing native rollout with outstanding work refuses before replacement or dispatch', async t => {
+  let restored = 0;
+  const fixture = makeFixture({
+    threadId: 'missing-native',
+    missingInheritedRollout: true,
+    clientOptions: {
+      savedRecovery: {
+        baseTurnId: 'prior-host-checkpoint',
+        turnId: 'uncommitted-turn',
+      },
+      nativeContext: nativeTestTransport({
+        restore: async () => {
+          restored += 1;
+          throw Error('Unexpected restoration');
+        },
+      }),
+    },
+  });
+  t.teardown(() => fixture.client.terminate());
+  await t.throwsAsync(
+    () =>
+      fixture.client.send('continue', {
+        transcript: [nativeTestSnapshot()],
+        acknowledgedCheckpoint: 'prior-host-checkpoint',
+      }),
+    { message: /Native rollout missing/ },
+  );
+  t.is(restored, 0);
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+  t.true((await fixture.client.status()).needsReconciliation);
+});
 
 test('native capture failure aborts without an incomplete checkpoint or success', async t => {
   t.timeout(5000);
@@ -1731,7 +1817,7 @@ test('unconsumed thread-scoped notifications do not poison an active turn', asyn
   t.is((await drain(reader)).at(-1).type, 'end');
 });
 
-test('a persisted thread is resumed under its own sandbox before it is superseded', async t => {
+test('an acknowledged persisted thread is superseded under the current sandbox policy', async t => {
   const fixture = makeFixture({ threadId: 'thread-saved' });
   const reader = await fixture.client.send('continue');
   fixture.push({
@@ -1743,13 +1829,13 @@ test('a persisted thread is resumed under its own sandbox before it is supersede
   });
   await drain(reader);
   t.is(
-    fixture.sent.find(message => message.method === 'thread/resume').params
+    fixture.sent.find(message => message.method === 'thread/start').params
       .sandbox,
     'danger-full-access',
   );
-  // The inherited thread is resumed -- that is what carries the sandbox
-  // setting above -- and then superseded, so the turn runs on a thread this
-  // incarnation owns rather than on the CLI's surviving store.
+  // No outstanding marker needs reconciliation against the disposable old
+  // projection. The replacement still receives the current sandbox policy.
+  t.falsy(fixture.sent.find(message => message.method === 'thread/resume'));
   t.truthy(fixture.sent.find(message => message.method === 'thread/start'));
   const models = await fixture.client.models();
   t.is(models[0].id, 'gpt-test');
@@ -2124,12 +2210,9 @@ test('a failed thread-binding audit is retried before dispatch', async t => {
     },
   });
   await drain(reader);
-  // Three, not two: the first attempt fails, and the retry binds twice --
-  // once to the inherited thread it resumes in order to reconcile, and once
-  // to the thread that supersedes it. What the test pins is that a failed
-  // binding audit is retried before anything is dispatched, not the number
-  // of threads a turn touches.
-  t.is(bindingAttempts, 3);
+  // The failed binding audit must be retried before dispatch. No outstanding
+  // marker requires an extra binding to the old inherited projection.
+  t.is(bindingAttempts, 2);
   await fixture.client.acknowledge('turn-1');
   await fixture.client.terminate();
 });

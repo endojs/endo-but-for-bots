@@ -1915,15 +1915,19 @@ export const makeCodexClient = ({
           assertContinuity(opts, catalogChanged());
         }
         if (rotating) {
-          // Reconcile the old native thread under its original catalog before
-          // abandoning it. Never clear its recovery marker on a failed check.
-          await ensureThread(opts, true);
+          // The journal's exact committed checkpoint can acknowledge a
+          // completed marker without opening its disposable native projection.
           if (opts.acknowledgedCheckpoint) {
             await acknowledgeContinuityCheckpoint(
               String(opts.acknowledgedCheckpoint),
             );
           }
-          await reconcileThread();
+          // Outstanding work still requires the original native history under
+          // its original catalog. Never hide its loss by restoring a new copy.
+          if (ledger.status().needsReconciliation) {
+            await ensureThread(opts, true);
+            await reconcileThread();
+          }
           threadReady = false;
         }
         currentThreadId = await ensureThread(opts);
