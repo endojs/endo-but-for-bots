@@ -417,13 +417,20 @@ The V8 columns are single runs of a **freshly started process** (see "V8 is not 
 | `eval` of 5,000 nested parens and braces (compiler budget) | catchable `SyntaxError`s | ok | ok | ok | **trap** | ok | ok |
 | *Accepted:* 2,016-layer Proxy `[[Get]]` | completes | ok | ok | **trap** | **trap** | ok | ok |
 | *Accepted:* 63 nested `forEach` (the documented allowance) | completes | ok | ok | ok | **trap** | ok | ok |
-| *Accepted:* 64 nested `async` calls | completes | ok | ok | ok | **trap** | ok | ok |
+| *Accepted:* 64 nested `async` calls (half the allowance, which is 126) | completes | ok | ok | ok | **trap** | ok | ok |
 | *Accepted:* 511 nested blocks; a 990-deep `?:` chain | completes | ok | ok | ok | **trap** | ok | ok |
 | Self-containing `join` / `String(a)`, deep `RegExp`, copied Iterator setter, 91 parens, 256-deep render | as native | ok | ok | ok | ok | ok | ok |
 
 The rows marked *Accepted* matter most.
 On an undersized stack, programs the engine **accepts** natively fail too; it is not only the
 programs it was going to halt anyway.
+The table's accepted rows all pass at Wasmtime 1 MiB, but they are not the worst accepted
+programs.
+[STACK-DEPTH-REFACTOR.md §1.3](STACK-DEPTH-REFACTOR.md#13-what-traps-today) measures more:
+- eight heavy re-entry ceilings trap at 1 MiB, and two of them still trap at 1.5 MiB;
+- some accepted programs trap even at 2,097,152 B, such as a 4 KB chain of 2,038 tagged
+  templates, and `JSON.stringify` of objects nested to the native ceiling;
+- 41 nested `eval`s compiling such a chain need 3,281,859 B.
 
 A second batch covered the file's remaining 17 cases: `[[Set]]`, `[[HasProperty]]`,
 `[[Delete]]`, `[[GetOwnProperty]]`, `[[GetPrototypeOf]]`, `[[SetPrototypeOf]]`,
@@ -488,14 +495,16 @@ That is a determinism break across hosts, not just a crash.
 - **Require minimum stacks** where the embedder controls them, and document them next to
   `NATIVE_STACK_BYTES`:
   - `-zstack-size` ≥ 8 MiB.
-  - Wasmtime `max_wasm_stack` ≥ 2 MiB, on a host thread whose own stack is comfortably
-    larger.
+  - Wasmtime `max_wasm_stack` ≥ 2 MiB for the families above, on a host thread whose own
+    stack is comfortably larger.
+    Some accepted programs need more than 3 MiB (see above), so 2 MiB is a floor, not a bound.
     The wasmtime-py 49 `Config` has no `async_stack_size` setter, and `max_wasm_stack` above
     2,097,152 bytes panics the process with "max_wasm_stack size cannot exceed the
     async_stack_size".
     From Python the usable margin above the measured 2,000,000-byte requirement is therefore
     about 5%; the Rust API can raise `async_stack_size`.
-  - Node `--stack-size` ≥ 1600, the TurboFan figure, plus margin.
+  - Node `--stack-size` ≥ 1,551 KiB for the 25 cases under TurboFan, and more for accepted
+    compositions (1,680 KiB measured), plus margin.
 - **Browsers and workerd** cannot raise the stack, so there the frames must shrink or leave the
   call stack.
   Candidates include:
@@ -522,8 +531,9 @@ Measured:
   Ten million `a.push(0)` calls grew linear memory to 583 MB while the chunk arena held 12 KB.
   Native repros reached 4.2–6.7 GiB of RSS under the default ceilings.
 
-So for heaps dominated by strings the footprint is 4–5× the chunk ceiling, and for heaps
-dominated by arrays or side tables no ceiling bounds it.
+So for heaps dominated by strings the footprint is up to 4–5× the chunk ceiling (string
+doubling is the worst case; push loops of strings halted at 2.1–2.3×), and for heaps dominated
+by arrays or side tables no ceiling bounds it.
 
 Wasm linear memory never shrinks.
 On a host whose memory cap is below that footprint, `memory.grow` fails before the engine's
@@ -649,8 +659,9 @@ Firefox and Safari were not available to test.
   A dedicated **Web Worker has a smaller stack**.
   17 of 42 cases trap there, including an accepted 2,016-layer Proxy chain.
   `--js-flags=--stack-size=4000` fixed the main thread but not the Worker.
-  That suggests the Worker is limited by its thread's own OS stack (*inferred*); a page could
-  not pass the flag anyway.
+  The Worker's limit is a Blink constant, `kWorkerMaxStackSize = 500 * 1024`, not the V8 flag
+  (see [STACK-DEPTH-REFACTOR.md §1.2](STACK-DEPTH-REFACTOR.md#12-two-stacks-on-wasm-and-the-host-limits));
+  a page could not pass the flag anyway.
   This is a real tension.
   Long cranks belong in a Worker so they do not freeze the page, and the Worker is where the
   stack is smallest.
@@ -722,7 +733,8 @@ documentation, not measured.
   With `--no-wasm-legacy-eh`, the legacy build fails at startup ("Invalid opcode 0x06") while the
   `exnref` build runs, so `exnref` is the encoding to ship (B2).
 - **The stack cannot be raised** (B3).
-  - In a request handler 24 of the 25 B3 cases match native; in a Durable Object, 23.
+  - 23–24 of the 25 B3 cases match native, in a request handler or a Durable Object, depending
+    on whether V8 has tiered up: fresh instances matched 24, and a run after tier-up 23.
   - The `JSON.stringify` ceiling traps in both.
   - The Proxy `[[Call]]` chain passes on a cold run and traps after V8 tiers up: `--liftoff-only`
     passed 6 of 6 runs, `--no-liftoff` trapped 6 of 6.
@@ -739,7 +751,8 @@ documentation, not measured.
   In a Durable Object this is a guest-triggerable wedge: an embedder that caches the instance
   across events will fail every event after about ten traps, until the object is evicted.
 - **Unwinding across the JS boundary needs `extern "C-unwind"`.**
-  A Durable Object's transaction callback re-enters wasm from JS.
+  If the host calls back into wasm from a Durable Object's transaction callback, the call
+  re-enters wasm from JS; a host can avoid that by running the whole crank inside one callback.
   A Rust unwind crossing an `extern "C"` export or import aborts (`RuntimeError: unreachable`).
   With `extern "C-unwind"` on both, an outer `catch_unwind` receives the original payload and the
   transaction rolls back.
@@ -753,8 +766,10 @@ documentation, not measured.
   Cloudflare's 128 MB limit is per isolate, "including the JavaScript heap and WebAssembly
   allocations", and one isolate can host several Durable Objects (Workers limits and Durable
   Object in-memory-state documentation).
-  Ceilings for Cloudflare must be set well below the defaults, and the instance should be
-  recycled when its linear memory passes a threshold, since it never shrinks.
+  Ceilings for Cloudflare must be set well below the defaults, but ceilings alone are not
+  enough: array items and side tables must also be admitted against them first (B7, B8).
+  The instance should be recycled when its linear memory passes a threshold, since it never
+  shrinks.
 - **CPU.**
   Computrons do not bound CPU time uniformly: 14.55 million per second on a tight loop against
   0.119 million per second on `indexOf` over a 2 MB string (Node).
@@ -785,13 +800,18 @@ documentation, not measured.
 
 ## Not investigated
 
-- Restoring a snapshot taken natively on wasm, and the reverse (see the B7 decode hazard).
-  For Thixotrope heaps a higher-level check refuses it first.
-  The engine's boot fingerprints match between native and wasm builds, but Thixotrope's runtime
-  profile hashes the worker executable (`packages/thixotrope/src/ironhorse-runtime.js:117-129`)
-  and resume requires an exact signature match (`ironhorse-snapshot/src/format.rs:437-438`).
-  Moving heaps between builds needs a platform-neutral profile first.
-- Performance relative to native.
+- Restoring a wasm32-written heap natively.
+  The other direction works at the engine level: the Cloudflare verification imported two
+  natively written Thixotrope heaps into a wasm32 instance under Node.
+  They were a 7.65 MB SES boot heap and a 17.27 MB counter vat, and each resumed lazily and
+  eagerly and ran `1+1` and the outbound drain.
+  It had to pass the native profile string, because Thixotrope's runtime profile hashes the
+  worker executable (`packages/thixotrope/src/ironhorse-runtime.js:117-129`) and resume requires
+  an exact signature match (`ironhorse-snapshot/src/format.rs:437-438`).
+  The engine's boot fingerprints already match between native and wasm builds, so moving heaps
+  between builds needs only a platform-neutral profile.
+  See also the B7 decode hazards.
+- Performance beyond the one workload measured in the Cloudflare section (1.5–2.7× native).
 - Firefox and Safari.
 - `wasm32-wasip2` and the component model, `wasm64`, and `wasm32-wasip1-threads`.
 - An abort-mode build (B1 option 3) was not built.
