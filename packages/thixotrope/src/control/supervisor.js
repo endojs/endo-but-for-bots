@@ -37,7 +37,7 @@ import { makeInFlight } from '../in-flight.js';
 import { settleWithin, withExpiry } from '../platform/timers.js';
 
 import { makeApplicationRegistry } from './application-registry.js';
-import { evaluateSource } from './evaluate-source.js';
+import { installNativeResource } from './install-native-resource.js';
 import { makeDurableAlarms } from '../alarms/durable-alarms.js';
 import { makeGuestClock } from '../alarms/guest-clock.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
@@ -46,7 +46,6 @@ import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
 import { readIronhorseLimits } from '../ironhorse/ironhorse-limits.js';
 import { makeLocalControl } from './local-control.js';
 import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
-import { makeAdapterKeeper } from '../adapter-keeper.js';
 import { makeNativeResourceRegistry } from '../native/registry.js';
 import { makeObservableMap } from '../observable-map.js';
 import { makeMailbox } from '../mail/mailbox.js';
@@ -172,9 +171,9 @@ export const serveThixotrope = async (
           if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
             throw error;
         }
-        if (config !== undefined && config.version !== 3) {
+        if (config !== undefined && config.version !== 4) {
           throw Error(
-            'Incompatible workspace metadata: alarm acknowledgements require version 3; migrate or use a fresh state directory',
+            'Incompatible workspace metadata: dedicated native managers require version 4; migrate or use a fresh state directory',
           );
         }
         return release;
@@ -309,22 +308,17 @@ export const serveThixotrope = async (
           ? candidates[0].workerId
           : (await daemon.createWorker({ debugLabel: 'workspace' })).workerId;
       config = {
-        version: 3,
+        version: 4,
         workerId,
         publication: `workspace-${workerId}`,
-        // Unguessable, because a publication secret is a bearer capability and
-        // this one names the object the host calls `started()` on.
-        resourceNotice: randomId(),
         initialized: false,
       };
       await save(files, configPath, config);
     }
     if (
-      config?.version !== 3 ||
+      config?.version !== 4 ||
       !daemon.listWorkerIds().includes(config.workerId) ||
       config.publication !== `workspace-${config.workerId}` ||
-      typeof config.resourceNotice !== 'string' ||
-      !/^[0-9a-f]{32}$/.test(config.resourceNotice) ||
       typeof config.initialized !== 'boolean'
     )
       throw Error('Invalid workspace metadata');
@@ -413,13 +407,9 @@ export const serveThixotrope = async (
     };
 
     if (inventory !== undefined) {
-      const lifecycle = await workspace.evaluate(
-        `(globalThis.nativeResources ??= (${makeNativeResourceRegistry.toString()})(
-          inventory, (${makeAdapterKeeper.toString()})
-        )).lifecycle`,
+      await workspace.evaluate(
+        `(globalThis.nativeResources ??= (${makeNativeResourceRegistry.toString()})(inventory), true)`,
       );
-      daemon.publish(lifecycle, config.resourceNotice);
-      workspace.notifyOnStart(config.resourceNotice);
     }
 
     /** @param {unknown} text */
@@ -495,7 +485,16 @@ export const serveThixotrope = async (
       },
       applications: () => E(applications).list(),
       reachability: () => daemon.inspectReachability(),
-      collect: () => daemon.collectVats(),
+      // An allocation has no guest root until its facade reaches the registry.
+      // Serialize collection with installations across that short boundary.
+      collect: () => {
+        const collecting = installingNative.then(() => daemon.collectVats());
+        installingNative = collecting.then(
+          () => {},
+          () => {},
+        );
+        return collecting;
+      },
       inventoryStatus: () => E(inventory).subscriptionCounts(),
       installNative: (name, directory) => {
         const installing = installingNative.then(async () => {
@@ -521,21 +520,19 @@ export const serveThixotrope = async (
               ]),
             ),
           );
-          await evaluateSource(
-            workspace,
-            `(endowments => nativeResources.install(endowments.name, endowments.digest, powers => (${bundle}).make(powers), endowments.adapters))`,
-            {
-              name,
-              digest,
-              adapters: daemon.makeResource('native-adapter', {
-                moduleUrl: description.moduleUrl,
-                packageIdentity: {
-                  directory: description.directory,
-                  digest: description.digest,
-                },
-              }),
-            },
-          );
+          await installNativeResource(daemon, workspace, {
+            name,
+            digest,
+            allocationKey: randomId(),
+            bundle,
+            adapters: daemon.makeResource('native-adapter', {
+              moduleUrl: description.moduleUrl,
+              packageIdentity: {
+                directory: description.directory,
+                digest: description.digest,
+              },
+            }),
+          });
           return harden({ name, directory: description.directory, digest });
         });
         installingNative = installing.then(

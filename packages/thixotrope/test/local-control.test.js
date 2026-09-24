@@ -16,12 +16,12 @@ import { makeNodePowers } from '../src/platform/node/powers.js';
 const nodePowers = makeNodePowers();
 
 test.serial(
-  'old workspace clocks are rejected before restoring workers',
+  'old workspace layouts are rejected before restoring workers',
   async t => {
     t.timeout(5000);
     const path = await mkdtemp('/tmp/thix-old-clock-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
-    const metadata = '{"version":2}';
+    const metadata = '{"version":3}';
     await writeFile(join(path, 'workspace.json'), metadata);
     let released = false;
     let started = false;
@@ -39,7 +39,7 @@ test.serial(
             },
           },
         }),
-      { message: /alarm acknowledgements require version 3/ },
+      { message: /dedicated native managers require version 4/ },
     );
     t.true(released);
     t.false(started);

@@ -208,15 +208,18 @@ heap reclamation has already happened.
 
 HTTP is a directory-installed native resource with `durable.js` and `ephemeral.js` entry modules.
 `thix install-native STATE NAME DIRECTORY` selects the daemon's workspace by its state directory.
-The durable factory runs in that existing workspace and returns registration and lifecycle facets.
+The durable factory runs in a dedicated manager vat and returns registration and lifecycle facets.
 Only the registration facet enters the named inventory slot; applications receive it through grants.
-The registry retains the lifecycle facet privately and notifies it after daemon startup.
+The workspace retains an installation record with code identity, manager reference, and completion
+status so interrupted installation can resume on explicit retry.
+Each manager receives its own startup notification through its privately published lifecycle facet.
+Its recovery, heap, and execution limits are independent of the workspace and other managers.
 
 The ephemeral module runs in a separate Node process, owning the HTTP server, sockets, request
 buffers, deadlines, and response handling.
 The primary daemon provides generic launch, routing, retirement, and shutdown.
 It does not import the HTTP implementation or hold desired listener state in a host JSON registry.
-The workspace manager retains desired registrations and handlers as ordinary heap state.
+The manager vat retains desired registrations and handlers as ordinary heap state.
 Directory contents and the durable bundle are pinned; source changes require a new installation.
 Dependencies outside the directory are not included in its digest.
 
@@ -269,9 +272,11 @@ Disconnecting a terminal leaves guest state available for later attachment.
 The socket carries local administrative authority and is protected by the state directory's ownership
 and permissions.
 
-Workspace metadata version 3 identifies the current alarm acknowledgement protocol.
+Workspace metadata version 4 identifies dedicated native managers and includes the alarm
+acknowledgement protocol introduced in version 3.
 Earlier workspaces require explicit migration or fresh state; startup rejects them before restoring
-workers, because their heap-persisted clock closures cannot be replaced by loading new source.
+workers, because their heap-persisted registry and clock closures cannot be replaced by loading
+new source.
 
 The workspace supplies a worker controller and an observable inventory backed by an ordinary Map.
 Guest code can retain capabilities in normal variables and closures without using the inventory.
@@ -337,7 +342,8 @@ Persistent service metadata uses a `SyncStringAtom`: a synchronous `read()` retu
 `undefined`, and a successful `write(string)` durably replaces the slot before the next effect.
 The file-backed atom is one implementation.
 The host alarm ledger performs its JSON encoding and transitions above this interface.
-HTTP registrations and the public clock's promises instead live in ordinary workspace heap state.
+HTTP registrations live in their installed manager vat's heap; the public clock's promises live in
+the workspace heap.
 The manual persistence boundary is confined to host state that cannot rely on a durable guest heap.
 Platform adapters return plain data, iterator facades, and opaque tokens rather than Node streams,
 servers, or timer objects; callbacks likewise do not receive native objects as their receiver.
