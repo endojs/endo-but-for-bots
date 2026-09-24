@@ -166,6 +166,7 @@ fn partial_collect_is_conservative_and_exact() {
     assert!(o.completed);
     assert_eq!(o.result, "8");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::check_stored_digests(&store).expect("digests stay consistent");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
         resumed
@@ -254,6 +255,7 @@ fn partial_collect_keeps_side_table_only_referenced_objects() {
     assert!(o.completed, "halt: {:?}", o.halt);
     assert_eq!(o.result, "1999", "0 + 1999 read back from live elements");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::check_stored_digests(&store).expect("digests stay consistent");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
         resumed
@@ -334,6 +336,7 @@ fn partial_collect_reclaims_page_isolated_garbage() {
     assert!(o.completed, "halt: {:?}", o.halt);
     assert_eq!(o.result, "8");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::check_stored_digests(&store).expect("digests stay consistent");
     let resumed = resume_from_store(&store, &sig()).expect("resume");
     assert_eq!(
         resumed
@@ -456,6 +459,7 @@ fn lifo_churn_rewrites_only_the_tail_free_segment() {
     let o = session.machine_mut().run(&compiled[1].0);
     assert!(o.completed, "halt: {:?}", o.halt);
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::check_stored_digests(&store).expect("digests stay consistent");
 
     let segs_after = free_seg_count(store.manifest().unwrap().free_len);
     assert_eq!(
@@ -696,11 +700,13 @@ fn partial_collect_under_bulk_table_churn_stays_parity_clean() {
     let freed_1 = partial_collect(&mut session, &store).expect("collect after build");
     assert!(freed_1 > 0, "the dropped chain reclaims: {freed_1}");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::check_stored_digests(&store).expect("digests stay consistent");
 
     let o2 = session.machine_mut().run(&compiled[1].0);
     assert!(o2.completed, "halt: {:?}", o2.halt);
     assert_eq!(o2.result, "1010", "post-churn dynamic read");
     checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+    ironhorse_snapshot::store::check_stored_digests(&store).expect("digests stay consistent");
     let _freed_2 = partial_collect(&mut session, &store).expect("collect after churn");
 
     let o3 = session.machine_mut().run(&compiled[2].0);
@@ -796,10 +802,12 @@ fn generational_collect_frees_new_garbage_and_never_more_than_partial() {
         // Draw the generation boundary: everything to here is OLD.
         let _ = partial_collect(&mut session, &store).expect("boundary collect");
         checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+        ironhorse_snapshot::store::check_stored_digests(&store).expect("digests stay consistent");
 
         let o = session.machine_mut().run(&compiled[1].0);
         assert!(o.completed, "halt: {:?}", o.halt);
         checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+        ironhorse_snapshot::store::check_stored_digests(&store).expect("digests stay consistent");
 
         let freed = if generational {
             generational_collect(&mut session, &store).expect("generational")
@@ -885,5 +893,6 @@ fn relocated_native_names_survive_repeated_collection_and_restore() {
         );
         session = resumed;
         checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoint");
+        ironhorse_snapshot::store::check_stored_digests(&store).expect("digests stay consistent");
     }
 }

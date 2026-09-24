@@ -176,8 +176,8 @@ fn a_populated_stack_atom_is_refused_at_container_read() {
 
 /// The store mirror of the STAC gate: a raw commit carrying a
 /// populated stack section (a crafted store, or a writer predating the
-/// gate) is refused at `validate_store` — the one function both
-/// resume paths run.
+/// gate) is refused by `validate_store`, and by both resume paths as
+/// the restore adopts the stack.
 #[test]
 fn a_populated_stack_section_is_refused_at_store_validation() {
     let m = quiescent_machine("var t = 0; t = 1; t");
@@ -195,6 +195,21 @@ fn a_populated_stack_section_is_refused_at_store_validation() {
         Err(other) => panic!("refused, but not by the quiescence gate: {other:?}"),
         Ok(_) => panic!("a populated stack section must not validate"),
     }
+    assert!(matches!(
+        ironhorse_snapshot::machine::resume_from_store(&store, &sig()),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "arena restore failed"
+        )))
+    ));
+    assert!(matches!(
+        ironhorse_snapshot::machine::resume_from_store_lazy(
+            std::rc::Rc::new(std::cell::RefCell::new(store)),
+            &sig()
+        ),
+        Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "arena restore failed"
+        )))
+    ));
 }
 
 /// Finding 9: `table_length` mirrors XS's power-of-two rehash

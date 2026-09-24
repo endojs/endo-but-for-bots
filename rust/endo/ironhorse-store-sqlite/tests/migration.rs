@@ -7,7 +7,8 @@ use ironhorse_snapshot::store::HeapStoreCommit;
 
 use ironhorse_snapshot::machine::{checkpoint_to_store, resume_from_store};
 use ironhorse_snapshot::store::{
-    migrate_store, validate_store, HeapStore, StoreError, STORE_SCHEMA_VERSION,
+    check_stored_digests, migrate_store, validate_store, HeapStore, StoreError,
+    STORE_SCHEMA_VERSION,
 };
 use ironhorse_snapshot::{Signature, SnapshotError};
 use ironhorse_store_sqlite::SqliteHeapStore;
@@ -117,7 +118,10 @@ fn v5_sqlite_store_migrates_in_place_and_keeps_working() {
         manifest.store_schema, STORE_SCHEMA_VERSION,
         "migration restamped the store to the current schema"
     );
-    validate_store(&store, &sig()).expect("migrated store recombines to its v6 root");
+    validate_store(&store, &sig()).expect("the migrated store validates");
+    // Stage 1 still writes the digests the build before it verifies at
+    // open, so a migrated store must keep them consistent.
+    check_stored_digests(&store).expect("the migrated store's digests verify");
 
     // Resume, re-read the v5-era content, and extend the chain.
     let (bytecode, symbols) =
@@ -148,6 +152,7 @@ fn v5_sqlite_store_migrates_in_place_and_keeps_working() {
     assert_eq!(manifest.store_schema, STORE_SCHEMA_VERSION);
     assert_eq!(manifest.epoch, epoch);
     validate_store(&store, &sig()).expect("still valid on reopen");
+    check_stored_digests(&store).expect("the extended chain's digests verify");
 }
 
 /// Review wave 4, F2/F3: the signature gate fires before the first

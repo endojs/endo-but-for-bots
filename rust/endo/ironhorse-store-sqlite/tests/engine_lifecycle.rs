@@ -612,7 +612,9 @@ fn second_opener_of_an_existing_store_fails_closed() {
 /// A store open cannot lock is refused at open, not found out at its first
 /// checkpoint: SQLite runs `BEGIN IMMEDIATE` on a read-only database as a
 /// plain read transaction, so the lock above would silently be no lock at
-/// all, and every later commit would fail. A `mode=ro` URI stands in for a
+/// all, and every later commit would fail. The refusal is a capability the
+/// medium lacks, which a retry cannot change, so it classifies as a refusal
+/// rather than transient I/O. A `mode=ro` URI stands in for a
 /// write-protected file, whose mode root would ignore.
 #[test]
 fn read_only_store_is_refused_at_open() {
@@ -632,13 +634,34 @@ fn read_only_store_is_refused_at_open() {
     let before = std::fs::read(&path).unwrap();
 
     match SqliteHeapStore::open(format!("file:{}?mode=ro", path.display())) {
-        Err(StoreError::Io(msg)) => assert!(msg.contains("read-only"), "named refusal: {msg}"),
+        Err(error @ StoreError::Unsupported(what)) => {
+            assert!(what.contains("read-only"), "named refusal: {what}");
+            assert_eq!(
+                error.classify(),
+                ironhorse_snapshot::store::StoreFailure::Refused
+            );
+        }
         other => panic!("a read-only store must be refused at open, got {other:?}"),
     }
     assert_eq!(
         std::fs::read(&path).unwrap(),
         before,
         "the refused open left the store untouched"
+    );
+
+    // A fresh (empty) database opened read-only is refused the same way,
+    // before the fresh-store stamp tries to write it.
+    let fresh = dir.join("fresh.sqlite");
+    std::fs::write(&fresh, b"").unwrap();
+    match SqliteHeapStore::open(format!("file:{}?mode=ro", fresh.display())) {
+        Err(StoreError::Unsupported(what)) => {
+            assert!(what.contains("read-only"), "named refusal: {what}")
+        }
+        other => panic!("a fresh read-only database must be refused, got {other:?}"),
+    }
+    assert!(
+        std::fs::read(&fresh).unwrap().is_empty(),
+        "nothing was written"
     );
 }
 

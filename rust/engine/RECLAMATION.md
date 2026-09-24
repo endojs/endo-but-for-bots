@@ -33,7 +33,8 @@ The failure is reported separately, so the consumer can retry collection without
 Fault tests cover these counters, durable state, and retry behavior.
 
 The existing failure latch, derived side-reference indexes, corruption checks, lazy backing
-rules, authenticated cadence, and old root/seal validation remain required.
+rules, the cadence succession rule, and migration's old root/seal validation (until the
+store-seam design's phase 13 retires roots and seals) remain required.
 Raw arena collectors are isolated-graph APIs, not a supported route around Interp admission.
 Temporary promise-root ranges remain because the implementation reads settlement state from
 them and preserves their operands on host halts; removing them needs a separate execution

@@ -8,12 +8,12 @@ mod migration_fixtures;
 
 use common::TempDir;
 use ironhorse_snapshot::store::HeapStoreCommit;
-use migration_fixtures::{FIXTURE_CRANKS, FIXTURE_RESULTS};
+use migration_fixtures::{write_stage1_file_store, FIXTURE_CRANKS, FIXTURE_RESULTS, STAGE1_PROBE};
 
 use ironhorse_snapshot::machine::{checkpoint_to_store, resume_from_store};
 use ironhorse_snapshot::store::{
-    export_to_container, import_from_container, migrate_store, root_hash, store_to_image,
-    validate_store, HeapStore, MemoryStore, StoreError, STORE_SCHEMA_VERSION,
+    check_stored_digests, export_to_container, import_from_container, migrate_store, root_hash,
+    store_to_image, validate_store, HeapStore, MemoryStore, StoreError, STORE_SCHEMA_VERSION,
 };
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::{Signature, SnapshotError};
@@ -116,6 +116,7 @@ fn assert_resumes_and_reads(store: &mut dyn HeapStore) {
     assert_eq!(o.result, FIXTURE_RESULTS[1]);
     let epoch = checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint after migrate");
     assert_eq!(epoch, epoch_before + 1, "epoch chain continues");
+    check_stored_digests(store).expect("the extended chain's digests verify");
 }
 
 #[test]
@@ -136,7 +137,10 @@ fn v5_file_store_migrates_in_place_and_keeps_working() {
         manifest.store_schema, STORE_SCHEMA_VERSION,
         "migration restamped the store to the current schema"
     );
-    validate_store(&store, &sig()).expect("migrated store recombines to its v6 root");
+    validate_store(&store, &sig()).expect("the migrated store validates");
+    // Stage 1 still writes the digests the build before it verifies at
+    // open, so a migrated store must keep them consistent.
+    check_stored_digests(&store).expect("the migrated store's digests verify");
     drop(store);
 
     // Reopen before mutating: migration is idempotent — the second
@@ -647,4 +651,64 @@ fn v5_container_imports_and_round_trips_unchanged() {
         "container round-trips byte-identically across the schema bump"
     );
     assert_resumes_and_reads(&mut store);
+}
+
+/// The committed stage-1 fixture keeps the digests the build before the
+/// store-seam design's phase 13 verifies at open, passes both validator
+/// levels, and resumes where it stopped; a checkpoint of the resumed
+/// machine keeps the digests consistent too.
+///
+/// The fixture's history is frozen, so a build whose boot layout or cost
+/// table differs from the one that wrote it cannot resume it. The
+/// deterministic-math provider is such a build, and skips the rest after
+/// the digest checks, which do not depend on it; in any other build a
+/// refusal fails the test, and the fixture must be regenerated (see
+/// `migration_fixtures.rs`).
+#[test]
+fn stage1_file_store_fixture_keeps_its_digests_and_resumes() {
+    use ironhorse_snapshot::store::validate_store_content;
+    let dir = TempDir::new("ih-stage1-fixture");
+    let path = dir.join("heap.ihstore");
+    std::fs::copy(fixture("store-v35-stage1.ihstore"), &path).unwrap();
+    let mut store = FileStore::open(&path).unwrap();
+    assert_eq!(store.manifest().unwrap().store_schema, 35);
+    check_stored_digests(&store).expect("stage 1 wrote consistent digests");
+    match validate_store_content(&store, &sig()) {
+        Ok(_) => {}
+        // The fixture was written under the platform math provider, whose
+        // boot layout the deterministic-math lane does not share; any other
+        // build that refuses it needs the fixture regenerated.
+        Err(StoreError::Snapshot(
+            SnapshotError::BootLayoutMismatch { .. } | SnapshotError::CostTableMismatch { .. },
+        )) if ironhorse_vm::MATH_PROVIDER != "platform" => return,
+        Err(other) => panic!(
+            "the fixture must validate (regenerate it if the boot layout or cost table \
+             changed): {other:?}"
+        ),
+    }
+    let mut session = resume_from_store(&store, &sig()).expect("the fixture resumes");
+    assert_eq!(session.epoch(), 4);
+    let (code, symbols) = ironhorse_compile::compile_atoms(STAGE1_PROBE.0).unwrap();
+    let code = session
+        .machine_mut()
+        .relink_crank(&code, &ironhorse_vm::parse_symbols(&symbols))
+        .unwrap();
+    let o = session.machine_mut().run(&code);
+    assert!(o.completed, "{:?}", o.halt);
+    assert_eq!(o.result, STAGE1_PROBE.1);
+    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoints");
+    check_stored_digests(&store).expect("the checkpoint keeps the digests consistent");
+}
+
+/// The stage-1 history, written fresh on every run: a lazy resume, the
+/// first checkpoint after it, a full collection and incremental
+/// checkpoints each leave consistent digests and a store that passes the
+/// full validator.
+#[test]
+fn stage1_history_writes_consistent_digests() {
+    use ironhorse_snapshot::store::validate_store_content;
+    let dir = TempDir::new("ih-stage1-history");
+    let path = dir.join("heap.ihstore");
+    write_stage1_file_store(&path);
+    validate_store_content(&FileStore::open(&path).unwrap(), &sig()).expect("validates");
 }

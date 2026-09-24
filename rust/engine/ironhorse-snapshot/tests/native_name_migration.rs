@@ -39,6 +39,7 @@ fn schema28_native_name_defaults_migrate_without_rewriting_heap() {
 
     assert!(migrate_store(&mut store, &signature).unwrap());
     assert_eq!(store.manifest().unwrap().store_schema, STORE_SCHEMA_VERSION);
+    ironhorse_snapshot::store::check_stored_digests(&store).unwrap();
     assert_eq!(store.read_small_state().unwrap(), small);
     assert_eq!(store.leaf_hashes().unwrap(), (pages, exts));
     assert!(!migrate_store(&mut store, &signature).unwrap());

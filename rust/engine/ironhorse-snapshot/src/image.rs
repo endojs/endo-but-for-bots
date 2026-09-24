@@ -777,6 +777,19 @@ impl MachineImage {
         let chunks = ChunkArena::from_image(self.chunks.clone());
         (slots, chunks)
     }
+
+    /// [`Self::to_arenas`], refusing an out-of-range or duplicate free
+    /// entry, or a live count the free list does not account for, instead
+    /// of panicking. The store's eager resume restores through here from
+    /// a free list no validator has checked (the store-seam design's trust
+    /// model), so a bad one must come back as an error.
+    pub fn try_to_arenas(&self) -> Result<(SlotArena, ChunkArena), SnapshotError> {
+        let slots =
+            SlotArena::try_from_image(self.slots.clone(), self.slot_free.clone(), self.slot_live)
+                .map_err(|_| SnapshotError::Corrupt("invalid slot arena image"))?;
+        let chunks = ChunkArena::from_image(self.chunks.clone());
+        Ok((slots, chunks))
+    }
 }
 
 // --- string-list and slot-list atom payload helpers ---
@@ -963,8 +976,9 @@ fn decode_heap(p: &[u8]) -> Result<(Vec<Slot>, Vec<u32>, u32), SnapshotError> {
     if p.len() - i != want {
         return Err(SnapshotError::Corrupt("HEAP trailing bytes"));
     }
-    // Semantic gates on the free list, matching the store path's
-    // (`validate_store`): every index in range, no duplicates. An
+    // Semantic gates on the free list, matching the store validator's
+    // (`validate_store`) and the VM's own as it builds the slot arena:
+    // every index in range, no duplicates. An
     // out-of-range entry would panic the arena's free-bitmap rebuild
     // at construction (the snapshot_decoder fuzz target found that
     // panic within its first half-minute once the toolchain ran
@@ -4556,8 +4570,11 @@ fn check_stored_bounds(
     const OOB: SnapshotError = SnapshotError::Corrupt("slot index out of arena bounds");
     const OOC: SnapshotError = SnapshotError::Corrupt("chunk offset out of arena bounds");
     const FREE: SnapshotError = SnapshotError::Corrupt("side table names a free slot");
-    // The free set, as a bitmap (entries already range-checked and
-    // deduplicated by both decode paths). It cuts BOTH ways: a freed heap record is OPAQUE — the sweep does not
+    // The free set, as a bitmap. The container decode range-checks and
+    // deduplicates the entries first; the store paths build their arenas,
+    // which refuse a bad free list, after this runs, so here an entry out
+    // of range is ignored and a duplicate marks once. The free set cuts
+    // BOTH ways: a freed heap record is OPAQUE — the sweep does not
     // scrub it and chunk compaction remaps MARKED slots only, so an
     // honest post-GC snapshot legitimately holds freed records whose
     // stale chunk offsets sit outside the compacted arena, and nothing
