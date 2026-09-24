@@ -12,7 +12,7 @@ import harden from '@endo/harden';
  * @property {(...parts: string[]) => string} resolve
  * @property {(path: string) => boolean} isAbsolute
  * @property {(url: string | URL) => string} fileURLToPath
- * @property {(path: string) => URL} pathToFileURL
+ * @property {(path: string) => string} pathToFileURL
  *
  * @param {object} host
  * @param {PathPowers['join']} host.join

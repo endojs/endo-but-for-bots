@@ -14,7 +14,7 @@ export const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 harden(MAX_TIMER_DELAY_MS);
 
 /**
- * Timer handles are opaque host values. Core passes them back to
+ * Timer handles are opaque tokens without platform methods. Core passes them back to
  * {@link TimerPowers.clearTimer} and never inspects them.
  *
  * @typedef {unknown} TimerHandle
@@ -29,13 +29,6 @@ harden(MAX_TIMER_DELAY_MS);
  *   process exit with this timer still pending; absent on hosts without
  *   that notion
  *
- * @param {object} host
- * @param {() => number} host.now
- * @param {() => number} host.monotonicNow
- * @param {(callback: () => void, delayMs: number) => TimerHandle} host.setTimer
- * @param {(handle: TimerHandle) => void} host.clearTimer
- * @param {(handle: TimerHandle) => void} [host.unrefTimer]
- * @returns {TimerPowers}
  */
 /**
  * Arm `onExpire` for the duration of `operation`, and clear it however
@@ -90,6 +83,7 @@ export const settleWithin = async (timers, delayMs, promise) => {
 };
 harden(settleWithin);
 
+/** @param {TimerPowers} host @returns {TimerPowers} */
 export const makeTimerPowers = ({
   now,
   monotonicNow,
