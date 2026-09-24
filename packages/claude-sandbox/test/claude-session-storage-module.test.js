@@ -84,13 +84,13 @@ test('the storage caplet requires both roots and removes one recorded plan throu
 });
 
 test.serial(
-  'the state provider caplet requires its root, reads the formula env before the process env, and prepares owned directories',
+  'the state provider requires its captured root and ignores ambient configuration',
   async t => {
     const base = await realpath(
       await mkdtemp(path.join(os.tmpdir(), 'claude-state-')),
     );
     t.teardown(() => rm(base, { recursive: true, force: true }));
-    // Hermetic against a deployment shell that exports the fallback.
+    // Preserve the test process environment while testing ambient drift.
     const previous = process.env.ENDO_CLAUDE_STATE_DIR;
     t.teardown(() => {
       if (previous === undefined) delete process.env.ENDO_CLAUDE_STATE_DIR;
@@ -101,20 +101,25 @@ test.serial(
       message: /ENDO_CLAUDE_STATE_DIR is required/,
     });
     process.env.ENDO_CLAUDE_STATE_DIR = path.join(base, 'ambient');
-    const ambient = makeStateProvider(null, undefined, { env: {} });
-    t.is(
-      path.dirname(
-        path.dirname(
-          (await ambient.prepareSessionDirectory('session-b')).directory,
-        ),
-      ),
-      path.join(base, 'ambient', 'native_allocations'),
-      'the daemon-process fallback applies when the formula env is silent',
+    t.throws(() => makeStateProvider(null, undefined, { env: {} }), {
+      message: /ENDO_CLAUDE_STATE_DIR is required/,
+    });
+    t.throws(
+      () =>
+        makeStateProvider(null, undefined, {
+          env: { ENDO_CLAUDE_STATE_DIR: '' },
+        }),
+      { message: /ENDO_CLAUDE_STATE_DIR is required/ },
     );
+    t.false(await exists(path.join(base, 'ambient')));
     const provider = makeStateProvider(null, undefined, {
       env: { ENDO_CLAUDE_STATE_DIR: path.join(base, 'state') },
     });
     const { directory } = await provider.prepareSessionDirectory('session-a');
+    if (typeof directory !== 'string') {
+      t.fail('state provider must return its allocated directory');
+      return;
+    }
     t.is(
       path.dirname(path.dirname(directory)),
       path.join(base, 'state', 'native_allocations'),

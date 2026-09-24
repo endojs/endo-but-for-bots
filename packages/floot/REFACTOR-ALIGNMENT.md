@@ -64,8 +64,15 @@ Concrete candidates:
   to thinking events. Current bridge output names thinking explicitly; generic
   commentary stays commentary. All 302 OpenCode tests pass and independent
   review approves. Retire old images before activation; no deployment claimed.
-  Current-source follow-ups identified in the scan: Claude's ambient state-root
-  fallback despite captured formula configuration; Floot creation's `model` alias
+  Removed Claude's ambient state-root fallback: state providers now require the
+  root captured in their formula options, as current setup already supplies.
+  Missing or empty captured roots refuse rather than use process environment;
+  conflicting ambient configuration cannot retarget storage after restart.
+  No new durable owner or format is introduced. Independent review approves;
+  all 237 Claude tests pass, including eight focused storage tests. Scoped lint,
+  formatting and production-source types pass; the full test-inclusive typecheck
+  still has 25 pre-existing fixture errors. No deployment is claimed.
+  Current-source follow-ups identified in the scan: Floot creation's `model` alias
   and colon-encoded backend (the chat caller still needs porting); preset-prompt
   version migration; Codex's per-turn `developerInstructions` alias. These are
   not yet removed by this record. The Codex constructor/wire field of that name
