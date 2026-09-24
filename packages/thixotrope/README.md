@@ -252,7 +252,9 @@ A closed registration cannot close a later registration that reuses its port.
 
 The initial HTTP profile uses ports 1024–65535 on IPv4 loopback, text bodies up to 64 KiB,
 16 concurrent requests, and a five-second deadline.
-Restart creates a fresh adapter and reconstructs desired listeners, never pending HTTP requests.
+Daemon restart creates a fresh adapter and reconstructs desired listeners, never pending requests.
+After an adapter exits while the daemon stays alive, its replacement is created on the next
+registration, status, or close operation; there is no autonomous restart monitor.
 Already accepted calls into durable application vats may still complete.
 A failed port bind does not prevent other registrations from being restored.
 
@@ -284,25 +286,30 @@ E(inventory.get('clock'))
 E(E(apps).get('reminders')).status();
 ```
 
-Applications receive `now()` and `when(deadline)`.
-A separate guest clock vat owns the promise returned by `when`, its resolver, and the pending alarm.
+Applications receive `now()`, `when(deadline)`, and `arm(deadline)`.
+The last returns `{settlement, canceller}`, with `E(canceller).cancel()` cancelling that alarm.
+The clock lives in the workspace and gives applications guest-owned promises.
 The reminder example attaches its listener in another guest vat; both survive restart.
-If a deadline passes while the supervisor is down, restart delivers the overdue alarm to that
+If a deadline passes while the supervisor is down, restart delivers the overdue alarm to the
 original promise and listener.
-Repeated delivery acknowledgments cannot settle it twice.
 
-The host holds a private control facet and rebuilds its timer index from guest registrations.
-Lost host registration answers are repaired by startup and periodic scans.
-OS timers and observation sessions are disposable; stopping them does not cancel guest alarms.
-Host metadata selects the clock vat and its private publication; it contains no alarm records.
-`alarms` reports scheduler activity and failures without exposing the control capability or secret.
+The host retains each deadline and its eventual fulfillment time or cancellation in an alarm ledger.
+It records the outcome before notifying the clock, and deletes it only after the clock acknowledges
+recording its own settlement.
+Interrupted acknowledgements retry; other cleanup failures retry on the next clock operation.
+OS timers are disposable, and there is no periodic scan of a guest clock vat.
+`alarms` reports pending deadlines, retained ledger rows, and materialized promise resources.
 
-This version supports one-shot absolute deadlines, with up to 1,024 pending alarms shared by the clock.
+This version supports one-shot absolute deadlines, with up to 1,024 pending or unacknowledged rows.
 Deadlines are nonnegative signed 64-bit bigint milliseconds.
-The host checks wall-clock time before firing and scans every second, so this is not a precise timer.
-A backward clock adjustment delays firing; forward adjustments make elapsed deadlines due.
-The periodic scans currently wake the clock vat even when no alarms are pending.
-Cancellation, recurring scheduling, per-application quotas, and notification UI are future work.
+The host checks wall-clock time before firing, so this is not a precise timer.
+A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
+Recurring scheduling, per-application quotas, and notification UI remain future work.
+
+Workspace metadata version 3 is required for the acknowledgement protocol.
+Older workspaces require migration or a fresh state directory because their persisted clock code
+cannot acknowledge outcomes; startup rejects them before restoring workers.
+See [alarm settlement](designs/alarm-settlement.md) for recovery and cleanup details.
 
 ## Local introductions and capability mail
 

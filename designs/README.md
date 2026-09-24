@@ -119,10 +119,11 @@ authenticated encrypted QUIC connection carrying netstring-framed OCapN
 messages under the `ocapn/netstring/0` ALPN; `@number0/iroh` is optional
 and injectable so CI tests run against an in-memory mock, with a
 real-endpoint integration test gated behind `ENDO_IROH_INTEGRATION=1`),
-[thixotrope](thixotrope.md) (added 2026-07-16, rewritten 2026-09-08;
+[thixotrope](thixotrope.md) (added 2026-07-16, revised 2026-09-24;
 `@endo/thixotrope` is an orthogonally persistent object-capability machine with an OCapN comms hub,
 XS and Ironhorse worker engines, durable guest references and listeners, a persistent workspace,
-application installation, and retention diagnostics.
+application and directory-native resource installation, acknowledged alarm settlement, configurable
+Ironhorse defaults, and retention diagnostics.
 The main design describes current architecture and delivery limitations; potential upgrades,
 revocation mechanisms, and persistence-boundary experiments live in the package's designs directory),
 [endor-git-bindings](endor-git-bindings.md) (added 2026-07-15,
@@ -482,7 +483,7 @@ LLM-agent stack).*
 | [ocapn-noise-key-only-session-boundary](ocapn-noise-key-only-session-boundary.md) | 2026-07-18 | 2026-07-19 | Proposed |
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-05-18 | **Complete** |
 | [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-05-19 | Proposed |
-| [thixotrope](thixotrope.md) | 2026-07-16 | 2026-09-08 | In Progress |
+| [thixotrope](thixotrope.md) | 2026-07-16 | 2026-09-24 | In Progress |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | Not Started |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |

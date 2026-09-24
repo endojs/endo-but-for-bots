@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-16 |
-| **Updated** | 2026-09-08 |
+| **Updated** | 2026-09-24 |
 | **Author** | Aaron Davis (prompted) |
 | **Status** | In Progress |
 
@@ -129,7 +129,14 @@ Guest outbound frames remain in the heap until the adapter drains them through a
 A deterministic VM halt produces a fatal result and quarantines the vat; it does not commit the
 failed execution step or repeatedly replay it into service.
 
-The host pins the worker executable, bootstrap bytes, execution budget, and protocol profile.
+The host pins the worker executable, bootstrap bytes, and protocol profile.
+Execution and heap limits are configurable daemon-wide defaults, reported by `thix status`.
+Runtime manifest version 2 allows increases across restart while rejecting decreases; the request
+watchdog timeout may change in either direction.
+The crank meter resets for each evaluation; heap ceilings apply across the vat's lifetime, with
+collection between completed cranks.
+Per-vat overrides remain a follow-up, and raising limits does not clear a vat's failure metadata.
+See [Ironhorse limits](../packages/thixotrope/designs/ironhorse-limits.md) for exact settings.
 Incompatible or unversioned stored state is refused.
 A closed SQLite image is copied only after successful worker shutdown folds in its WAL.
 Snapshot references are file digests and are checked before restore.
@@ -199,19 +206,32 @@ heap reclamation has already happened.
 
 ### Guest-owned HTTP listeners
 
-A granted listener capability lets a persistent guest publish an HTTP handler on a selected loopback port.
-The host records desired listener state and the handler publication before opening the socket.
-Restart reconstructs open listeners; binding failures remain inspectable.
-An explicit close persists the closed state before releasing sockets and the publication.
-Listener identities are single-use, so a stale capability cannot close a replacement on the same port.
-Interrupted initial registration is cancelled when its publication outcome cannot be safely resumed.
+HTTP is a directory-installed native resource with `durable.js` and `ephemeral.js` entry modules.
+`thix install-native STATE NAME DIRECTORY` selects the daemon's workspace by its state directory.
+The durable factory runs in that existing workspace and returns registration and lifecycle facets.
+Only the registration facet enters the named inventory slot; applications receive it through grants.
+The registry retains the lifecycle facet privately and notifies it after daemon startup.
 
-HTTP request/response state belongs to a disposable protocol session.
-Socket loss, timeout, response completion, and shutdown release its references and pending answers.
-Startup removes sessions abandoned by a process crash.
-An already accepted guest invocation may complete after the HTTP client disappears; the host does not
-reissue the request or reject unrelated durable guest promise listeners.
-The durable listener recipe and guest handler persist, while sockets and request sessions do not.
+The ephemeral module runs in a separate Node process, owning the HTTP server, sockets, request
+buffers, deadlines, and response handling.
+The primary daemon provides generic launch, routing, retirement, and shutdown.
+It does not import the HTTP implementation or hold desired listener state in a host JSON registry.
+The workspace manager retains desired registrations and handlers as ordinary heap state.
+Directory contents and the durable bundle are pinned; source changes require a new installation.
+Dependencies outside the directory are not included in its digest.
+
+Registration returns a status/close handle even when binding fails.
+Status retries binding and reports an inactive listener and error; close withdraws desired state.
+Stale handles cannot affect a later registration on the same port.
+Daemon restart restores desired listeners through a fresh adapter.
+After adapter death during operation, replacement happens on the next manager operation that
+provides the adapter; there is no autonomous restart monitor.
+
+Each adapter incarnation has one transient protocol session, shared by its requests.
+Request timeout, disconnect, or completion releases request-local state; process retirement breaks
+the incarnation's references and retires its session.
+An already accepted guest invocation may complete after the HTTP client disappears.
+A replacement adapter restores registrations, never pending HTTP requests.
 
 The initial HTTP profile bounds bodies, concurrency, and duration, and copies only method, path,
 and text body into the guest.
@@ -220,22 +240,26 @@ These checks do not authenticate local processes; the guest HTTP interface is av
 
 ### Durable time promises
 
-The supervisor can grant a public clock backed by a separate persistent guest vat.
-`when(deadline)` allocates a guest promise and records its resolver before requesting a host timer.
-The pending alarm Map is the authoritative state; host timer handles and registration replies are not.
-A private control facet lets the host enumerate pending alarms and deliver due events idempotently.
-Applications receive only time and scheduling authority, not the control facet or host scheduler.
+The supervisor can grant a public clock living in the existing persistent workspace.
+It exposes `now()`, `when(deadline)`, and `arm(deadline)` with a per-alarm cancellation capability.
+The host records deadlines and terminal outcomes in a small manual-persistence ledger.
+It schedules one timer for the earliest pending deadline; there is no periodic guest scan or host
+control facet that enumerates guest alarms.
 
-Startup and periodic reconciliation rebuild the host index and repair lost registration answers.
-A missed firing acknowledgment retries the same alarm identity; the guest resolves each alarm once.
-A deadline that passes during downtime settles the original promise after restart, preserving listeners
-in other guest vats through comms.
-Observation sessions are bounded and disposable, and shutdown drains their cleanup before store release.
+Fulfillment time or cancellation is persisted before settling the corresponding host promise.
+The clock observes that promise and gives callers a separate guest-owned promise, which other vats
+may retain without directly observing the host resource.
+After recording settlement through the vat's normal persistence mechanism, it acknowledges cleanup.
+The host retains the outcome until that acknowledgement, so restart can replay an interrupted delivery.
+An interrupted acknowledgement retries; other cleanup failures retry on subsequent clock use.
+An interrupted arm is abandoned explicitly because the host may already have stored its deadline.
+See [alarm settlement](../packages/thixotrope/designs/alarm-settlement.md) for the protocol.
 
-The initial profile uses absolute bigint Unix milliseconds with a signed 64-bit nonnegative range,
-a shared limit of 1,024 pending alarms, and a one-second host scan interval.
+The initial profile uses absolute bigint Unix milliseconds in the nonnegative signed 64-bit range.
+The shared limit of 1,024 rows includes pending alarms and unacknowledged outcomes.
+A deadline that passes during downtime settles after restart, preserving downstream guest listeners.
 Wall-clock adjustments affect when deadlines become due; this is not a real-time scheduling guarantee.
-Cancellation and recurring scheduling are not yet provided.
+Cancellation is supported; recurring scheduling remains application work.
 
 ## Workspace and installed applications
 
@@ -244,6 +268,10 @@ Terminal attachment does not own the workspace lifetime.
 Disconnecting a terminal leaves guest state available for later attachment.
 The socket carries local administrative authority and is protected by the state directory's ownership
 and permissions.
+
+Workspace metadata version 3 identifies the current alarm acknowledgement protocol.
+Earlier workspaces require explicit migration or fresh state; startup rejects them before restoring
+workers, because their heap-persisted clock closures cannot be replaced by loading new source.
 
 The workspace supplies a worker controller and an observable inventory backed by an ordinary Map.
 Guest code can retain capabilities in normal variables and closures without using the inventory.
@@ -308,9 +336,11 @@ on every operating system.
 Persistent service metadata uses a `SyncStringAtom`: a synchronous `read()` returns a string or
 `undefined`, and a successful `write(string)` durably replaces the slot before the next effect.
 The file-backed atom is one implementation.
-HTTP and clock managers perform their own JSON encoding, schema validation, and state transitions
-above this storage interface.
-They do not require a file path as the service-state abstraction.
+The host alarm ledger performs its JSON encoding and transitions above this interface.
+HTTP registrations and the public clock's promises instead live in ordinary workspace heap state.
+The manual persistence boundary is confined to host state that cannot rely on a durable guest heap.
+Platform adapters return plain data, iterator facades, and opaque tokens rather than Node streams,
+servers, or timer objects; callbacks likewise do not receive native objects as their receiver.
 
 ## Publications and host observation sessions
 
@@ -332,7 +362,9 @@ Worker sessions connect the hub to persistent guest heaps.
 An ephemeral client is a short-lived, reifying host client with its own hub session.
 Its implementation uses the `transient:` session prefix to mark that the client cannot be restored.
 “Ephemeral client” describes the API owner; “transient session” describes its hub representation.
-HTTP allocates one such client per request; alarm observation also uses disposable clients.
+Inventory views use ephemeral clients.
+Native adapter processes instead have one transient hub session per incarnation; HTTP shares that
+session across requests, and alarm settlement uses restorable host promises.
 Closing a client retires its session and releases its references and answer routes.
 The daemon tracks both clients being opened and clients already open, so shutdown cannot miss
 an opening that completes concurrently.

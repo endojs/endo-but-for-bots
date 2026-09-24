@@ -22,7 +22,9 @@ The daemon supplies generic process launch, reference routing, retirement, and s
 A native process is an ephemeral hub session with a fresh identity, not a replaying worker.
 Process exit permanently breaks that incarnation's references; its inputs are never replayed.
 Pipe loss terminates the process so its OS resources are released.
-The durable manager creates a successor and reconstructs only declared state.
+The durable manager creates a successor on its next adapter-using operation or daemon startup,
+and reconstructs only declared state.
+It does not autonomously restart an adapter immediately after process exit.
 
 HTTP's package owns the server, sockets, buffering, deadlines, response handling, and routing.
 The workspace manager retains registrations and application handlers in its ordinary heap.
@@ -55,11 +57,12 @@ This is a pinned-directory installation, not a copied package or an automatic up
 Keep the directory present and unchanged for future incarnations.
 Use a new inventory name and an unchanged new directory for a new installation.
 
-This changes workspace metadata to version 2 and removes the old `http-port` host resource.
-Existing version-1 workspaces and durable HTTP closures need an explicit migration; no automatic
-migration is included in this early design.
+Native installation introduced workspace metadata version 2 and removed the old `http-port` resource.
+The subsequent [alarm acknowledgement protocol](alarm-settlement.md) requires workspace version 3.
+Older workspaces and durable closures need explicit migration; no automatic migration is included.
 Use a fresh state directory for this implementation.
-No Ironhorse heap format or runtime code change is intended.
+The native installation itself does not change Ironhorse heap format; execution-limit changes are
+documented separately in [Ironhorse limits](ironhorse-limits.md).
 
 ## Validation and review
 
@@ -73,7 +76,7 @@ close so a withdrawn registration cannot remain served.
 Registration returns its durable handle even if immediate binding fails.
 Status retries the binding and reports inactive/error, so callers can always cancel desired state.
 
-The final review found no remaining actionable issues.
+The native-installation increment passed its precommit review.
 Validation covered 23 focused functional tests in each of three SES modes, the native Ironhorse
 HTTP restart and process-crash tests, package lint/typechecking, the root declaration build,
 and package documentation.
@@ -83,11 +86,13 @@ the nested checkouts under `output/` and `tmp/`; package documentation generated
 ### Ironhorse compatibility
 
 Sending the durable bundle in one evaluation request exhausted the current Ironhorse decoder's
-per-crank heap while building intermediate string prefixes.
+heap ceiling during decoding while building intermediate string prefixes.
 Installation now transfers source in bounded chunks, then evaluates the assembled expression.
 The supervisor serializes installations and waits for accepted installations before shutdown.
 
 An outer destructured-parameter wrapper around the bundled strict functions triggered Ironhorse's
 `invalid directive` parser error.
-Using a simple parameter and property access avoids that parser incompatibility.
-The native HTTP integration passes without engine changes or a higher production meter.
+Upstream commit `242b339b8`, now included through the `llm` rebase, fixes that parser issue (#1313).
+The existing simple-parameter wrapper remains valid.
+Chunked source transfer still addresses the separate decoder allocation cost.
+Configurable execution and heap defaults are documented in [Ironhorse limits](ironhorse-limits.md).
