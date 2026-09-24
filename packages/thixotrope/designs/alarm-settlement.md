@@ -25,7 +25,8 @@ may have succeeded before its directory sync failed.
 Repeated release remains harmless when the original release succeeded but its answer was lost.
 This protocol is local to alarms and does not add a general transaction or resource-retirement API.
 
-Workspace metadata version 3 identifies clocks with this acknowledgement protocol.
+Workspace metadata version 3 introduced clocks with this acknowledgement protocol.
+The current version 4 also requires dedicated native manager vats.
 Startup checks it under the store lease before restoring workers or starting alarms.
 Older heap-persisted clock implementations cannot acknowledge outcomes and require migration or
 fresh state; automatically substituting new source would not replace their retained closures.

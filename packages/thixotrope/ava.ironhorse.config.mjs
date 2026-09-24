@@ -7,6 +7,7 @@ export default {
     'test/ironhorse/scenarios.js',
     'test/ironhorse/reliability.js',
     'test/ironhorse/limits.js',
+    'test/ironhorse/native-install.js',
     'test/ironhorse/remote-delivery.js',
     'test/ironhorse/reachability.js',
     'test/ironhorse/supervisor.js',
