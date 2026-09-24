@@ -11,6 +11,15 @@
 
 ## Purpose and maintenance
 
+Priority current-state review (2026-09-24):
+[Refactor alignment](REFACTOR-ALIGNMENT.md) compares the retained repository with
+the intended end state, rather than reviewing historical commits. It is the
+current prioritization entry point: primary ownership is consolidated, but
+simplicity is unproven, active-context/unresolved-evidence memory bounds remain
+incomplete, account discovery retains runtime coupling, and current-release
+deployment/acceptance is outstanding. Consult that document before treating a
+historical finding introduction as current implementation status.
+
 This records the source audit and independent subagent reviews requested by the operator.
 It tracks follow-up work within the existing
 [hosted-agent sandbox unification design](../../designs/hosted-agent-sandbox-unification.md),
@@ -34,10 +43,14 @@ For every remediation commit, update the affected finding here:
 
 Every new implementation also requires a durability audit against the Endo
 daemon's formula patterns before deployment approval.
-This requirement is retrospective: audit all implementation changes already
-landed as part of this refactor, not merely future changes or open findings.
+This requirement is retrospective: audit the current retained implementation,
+including code already landed during this refactor, not merely future changes.
+Operator scope clarification (2026-09-24): auditing every historical PR commit is
+not required. Several rewrites superseded earlier implementations. Use history
+only to resolve current ownership, retained formula references, or regressions;
+do not make unmapped historical commits a completion gate.
 Existing deployed status and passing local tests do not waive this check.
-Inventory each implemented change and its durable boundary, record authoritative
+Inventory each retained component and its durable boundary, record authoritative
 replay/restart evidence, and reopen findings where that evidence is missing or
 contradicts correct ownership and recovery.
 Review durable owners and dependencies, reconstruction and replay, cancellation
@@ -53,8 +66,12 @@ no retained formula referring to it.
 
 ## Findings register
 
-Retrospective inventory update (2026-09-24): the coverage ledger now maps 205 of
+Historical reference inventory (2026-09-24): the coverage ledger maps 205 of
 479 application commits and 24 of 93 host commits to explicit semantic evidence.
+These counts are historical bookkeeping, not progress toward a required commit
+quota. Further exhaustive mapping is discontinued. Completion is judged against
+the current findings, retained owners/code paths, durability tests, and deployment
+acceptance gates. Preserve useful evidence already collected in the ledger.
 The cursor/9P/caplet-publication slice adds four mappings, with fresh 16-test cursor
 and 56-test 9P runs. This is coverage progress, not closure of the audit or live
 deployment acceptance. The caplet slice exposed the pin leak fixed in `71dfde012`;
@@ -95,7 +112,13 @@ not in the current refactor branch and not ready to merge.
 Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
-### Retrospective durability audit — required, in progress
+### Current retained-code durability audit — required, in progress
+
+Next work is finding-driven, not chronological commit mapping: finish the hosted
+acceptance manifest correction already in progress, then assess outstanding
+findings against current source, retained formula references, and the required
+cross-backend acceptance matrix. Superseded implementations need no further audit
+unless they remain reachable in persisted state or explain a current defect.
 
 Import/acceptance mapping (2026-09-24): twelve application and four host entries
 bring coverage to 205/479 and 24/93. Native import HTTP acknowledgement is not
@@ -4353,6 +4376,12 @@ Do not erase generic sandbox functionality just because the retired hosted path 
 New abstractions should serve the remaining current topology, not preserve both systems.
 
 ## Change log
+
+2026-09-24 — Operator clarified that exhaustive historical commit review is not
+required after multiple rewrites. Retain collected evidence but discontinue the
+commit-count completion gate; audit current retained implementation and open
+findings instead. Existing durability, preservation, review, and live acceptance
+requirements remain in force.
 
 2026-09-24 — Map twelve application import/pin/diagnostic changes and four host
 acceptance changes. Host `60ee154` fixes false shell-command equivalence after a

@@ -4,6 +4,13 @@ Snapshot: 2026-09-24.
 This is the coverage ledger for [the architecture audit](ARCHITECTURE-AUDIT.md),
 not a claim that all listed changes are correct or reviewed.
 
+Operator scope clarification (2026-09-24): this is now a historical reference,
+not a checklist requiring every commit to be audited. Multiple rewrites retired
+earlier implementations. Further review is driven by current retained code,
+formula/state ownership, and open architecture findings. Unmapped historical
+commits are not a completion blocker; use their history only when relevant to a
+current owner, persisted reference, or regression.
+
 ## Scope and interpretation
 
 The application range is `3332f19283b38d0e75207218a30df94e44c6d98f` (excluded) through
@@ -71,8 +78,9 @@ verification. Later sections identify their fresh runs separately.
 These commits introduce no new durable
 formula owner or persisted storage schema, but several change lifecycle ordering.
 They are not interchangeable with purely presentational changes.
-The other 274 application entries and 69 host entries still need explicit ledger
-mapping, even where the main audit already contains relevant review evidence.
+The other 274 application entries and 69 host entries remain unmapped historical
+references. Exhaustive mapping is no longer required; current findings and
+retained implementation determine the remaining work.
 This is missing coverage mapping, not a claim that all those changes are unreviewed.
 
 | Commit | Owner / boundary | Recorded evidence | Remaining limit |
