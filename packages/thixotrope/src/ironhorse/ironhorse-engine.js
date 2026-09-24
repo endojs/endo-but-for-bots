@@ -220,6 +220,7 @@ export const makeIronhorseEngine = (
           },
         );
         const workerProcess = child;
+        void workerProcess.failed.then(fail);
         exited = workerProcess.exited.then(code => {
           if (pending)
             fail(Error(`Ironhorse worker exited (${code ?? 'signaled'})`));
