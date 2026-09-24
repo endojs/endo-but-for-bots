@@ -38,10 +38,13 @@ export const makeProcessPowers = ({ childProcess, readline }) => {
         done = true;
         wake();
       });
-      source.on('error', error => {
+      /** @param {Error} error */
+      const fail = error => {
         failure = error;
         wake();
-      });
+      };
+      lines.on('error', fail);
+      source.on('error', fail);
     } else {
       done = true;
     }
@@ -74,6 +77,13 @@ export const makeProcessPowers = ({ childProcess, readline }) => {
       ...options,
       stdio: /** @type {any} */ (stdio),
     });
+    // Pipe errors are emitted independently of process exit. Subscribe before
+    // returning any facets so even a closed input cannot throw in the host.
+    /** @type {Promise<Error>} */
+    const failed = new Promise(resolve => {
+      child.once('error', resolve);
+      for (const stream of child.stdio) stream?.on('error', resolve);
+    });
     const exited = new Promise(resolve => {
       child.once('error', () => resolve(null));
       child.once('exit', code => resolve(code));
@@ -99,6 +109,7 @@ export const makeProcessPowers = ({ childProcess, readline }) => {
         });
       },
       exited,
+      failed,
       kill: signal => {
         child.kill(/** @type {NodeJS.Signals} */ (signal));
       },
