@@ -71,7 +71,6 @@ import {
   PROVIDER_PROMPT_ENVIRONMENT,
   UNDECLARED_HOSTED_PROMPT_ENVIRONMENT,
   composePresetPrompt,
-  legacyPromptContext,
   normalizePromptContext,
 } from './src/system-prompt.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
@@ -255,12 +254,9 @@ const FlootSessionInterface = M.interface('FlootSession', {
 
 // The prompts themselves are composed in src/system-prompt.js from a standard
 // base plus sections chosen by how a session is driven, where its model runs,
-// and its preset. The preset catalog also exposes a spoken provider-context
-// example; it is not used to reconstruct a session's captured prompt.
-const legacyPresetPrompt = presetId =>
-  composePresetPrompt({ presetId, context: legacyPromptContext(presetId) });
+// and its preset.
 
-// Catalog of session presets. Each preset pairs a system prompt with a set of
+// Catalog of session presets. Each preset declares a set of
 // objects to provision (idempotently) into the session guest's petstore the
 // first time the session's agent is built. Provisioned objects are referenced
 // ONLY by the session guest, so the daemon's GC reaps them (and their on-disk
@@ -270,7 +266,6 @@ const PRESETS = [
     id: 'general',
     title: 'General assistant',
     description: 'A blank session with no project workspace.',
-    systemPrompt: legacyPresetPrompt('general'),
     objects: [],
   },
   {
@@ -278,7 +273,6 @@ const PRESETS = [
     title: 'New project',
     description:
       'Start a project with a writable, git-backed workspace ready to populate.',
-    systemPrompt: legacyPresetPrompt('new-project'),
     objects: [{ kind: 'git-workspace', petName: 'workspace' }],
   },
   {
@@ -286,7 +280,6 @@ const PRESETS = [
     title: 'Full Endo control',
     description:
       'Full control of the Endo daemon via an "endo" host reference. High access — handle with care.',
-    systemPrompt: legacyPresetPrompt('full-control'),
     objects: [
       { kind: 'host-powers', petName: 'endo' },
       { kind: 'code-mount', petName: 'endo-src', required: false },
@@ -297,7 +290,6 @@ const PRESETS = [
     title: 'Machine admin (NixOS)',
     description:
       "Full Endo control PLUS proposing this host's NixOS configuration changes and Endo releases through operator-approved deploy workflows. Root-equivalent machine control — handle with extreme care.",
-    systemPrompt: legacyPresetPrompt('machine-admin'),
     objects: [
       { kind: 'host-powers', petName: 'endo' },
       { kind: 'code-mount', petName: 'endo-src', required: false },

@@ -81,27 +81,3 @@ harden(buildMcpConfig);
 export const makeMcpSocketServer = options =>
   makeHostedMcpSocketServer({ ...options, buildConfig: buildMcpConfig });
 harden(makeMcpSocketServer);
-
-/**
- * Convenience for callers that do not retain partial startup. Native session
- * owners use makeMcpSocketServer directly so failed cleanup stays retryable.
- * @param {Parameters<typeof makeMcpSocketServer>[0]} options
- */
-export const startMcpSocketServer = async options => {
-  const server = makeMcpSocketServer(options);
-  try {
-    await server.start();
-    return server;
-  } catch (error) {
-    try {
-      await server.close();
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        'Hosted MCP startup and cleanup failed',
-      );
-    }
-    throw error;
-  }
-};
-harden(startMcpSocketServer);

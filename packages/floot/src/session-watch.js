@@ -34,11 +34,7 @@
 
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { assertPassable } from '@endo/pass-style';
-import {
-  applyTranscript,
-  diffTranscript,
-  sameData,
-} from './transcript-delta.js';
+import { diffTranscript, sameData } from './transcript-delta.js';
 
 /** @import { BufferedReaderKit } from '@endo/exo-stream' */
 /** @import { Passable } from '@endo/pass-style' */
@@ -112,11 +108,6 @@ const within = (promise, ms, what, timers) =>
       },
     );
   });
-
-// The transcript delta the daemon publishes and a viewer applies; both ends
-// run `./transcript-delta.js`, and this module remains the authority on the
-// wire format.
-export { applyTranscript, diffTranscript };
 
 /**
  * The viewers of one subject.

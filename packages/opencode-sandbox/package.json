@@ -26,7 +26,6 @@
     "./src/opencode-broker-service-agent.js": "./src/opencode-broker-service-agent.js",
     "./src/opencode-backend-factory.js": "./src/opencode-backend-factory.js",
     "./src/opencode-backend-module.js": "./src/opencode-backend-module.js",
-    "./src/parse-rootfs.js": "./src/parse-rootfs.js",
     "./src/mcp-socket-server.js": "./src/mcp-socket-server.js",
     "./package.json": "./package.json"
   },

@@ -51,7 +51,6 @@ import {
 import { writeClaudeTranscript } from './claude-transcript-writer.js';
 import { renderNativeContext } from '../oci/native-context-projection.mjs';
 import { makeMcpSocketServer } from './mcp-socket-server.js';
-import { rootfsLabel } from './parse-rootfs.js';
 
 /** @import { ClaudeClientArgs } from './claude-client.js' */
 
@@ -216,7 +215,7 @@ export const makeClaudeNativeController = (powers = {}) => {
           policy: { assertHostedAgentPolicyV1, hostedPolicyFromSlice },
         },
       );
-      const { slice, rootfs, prepared: state, tools: mcp } = envelope;
+      const { slice, prepared: state, tools: mcp } = envelope;
       return makeClient({
         sessionId: approved.sessionId,
         createdAt: '',
@@ -227,7 +226,7 @@ export const makeClaudeNativeController = (powers = {}) => {
         workspaceMountPoint: approved.workspaceMountPoint,
         workspacePath: WORKSPACE_PATH,
         backend: 'podman',
-        rootfsLabel: rootfsLabel(rootfs),
+        rootfsLabel: approved.rootfs,
         model: approved.model,
         reasoningEffort: approved.reasoningEffort,
         systemPrompt: approved.systemPrompt,

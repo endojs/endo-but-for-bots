@@ -2,6 +2,7 @@
 import '@endo/init';
 
 import test from 'ava';
+import { createHash } from 'node:crypto';
 
 import {
   canonicalAuditJson,
@@ -9,6 +10,13 @@ import {
   makeStoredAuditJournal,
   verifyAuditEntries,
 } from '../src/audit-journal.js';
+
+// Inspect the fixture's retained entries, not a production reader capability.
+const entriesOf = values =>
+  [...values.keys()]
+    .sort()
+    .map(name => values.get(name))
+    .filter(value => typeof value.sequence === 'bigint');
 
 const makeHeadStore = () => {
   const heads = [];
@@ -32,7 +40,7 @@ const makeHeadStore = () => {
 test('audit journal serializes concurrent appends into a durable hash chain', async t => {
   const durable = [];
   const heads = makeHeadStore();
-  const { writer, reader } = makeAuditJournal({
+  const { writer } = makeAuditJournal({
     ...heads,
     journalId: 'journal-1',
     sessionId: 'session-1',
@@ -50,52 +58,13 @@ test('audit journal serializes concurrent appends into a durable hash chain', as
     writer.append('turn-terminal', { status: 'completed' }),
   ]);
 
-  const entries = await reader.entries();
+  const entries = durable;
   t.is(entries.length, 3);
   t.deepEqual(
     entries.map(entry => entry.sequence),
     [0n, 1n, 2n],
   );
-  t.deepEqual(await reader.verify(), verifyAuditEntries(entries));
-  t.true((await reader.verify()).ok);
-});
-
-test('a reader queued ahead of an append never sees the append half-written', async t => {
-  const durable = [];
-  const heads = makeHeadStore();
-  let releaseEntry = () => {};
-  const entryGate = new Promise(resolve => {
-    releaseEntry = () => resolve(undefined);
-  });
-  let gated = false;
-  const { writer, reader } = makeAuditJournal({
-    ...heads,
-    journalId: 'journal-race',
-    sessionId: 'session-race',
-    readEntries: async () => durable,
-    appendEntry: async entry => {
-      // Hold the entry write after the anchor has landed: the window in which
-      // the store shows a head one ahead of the entries.
-      if (gated) await entryGate;
-      durable.push(entry);
-    },
-  });
-  await writer.append('session-open');
-  gated = true;
-  const verifying = reader.verify();
-  const listing = reader.entries();
-  const appending = writer.append('turn-requested');
-  await null;
-  await null;
-  releaseEntry();
-  await appending;
-  t.true(
-    (await verifying).ok,
-    'a legitimate append is not reported as corruption',
-  );
-  t.is((await listing).length, 1);
-  t.true((await reader.verify()).ok);
-  t.is((await reader.entries()).length, 2);
+  t.true(verifyAuditEntries(entries).ok);
 });
 
 test('audit recovery detects interior mutation before another append', async t => {
@@ -191,10 +160,10 @@ test('audit recovery completes only an anchor-prepared entry', async t => {
   });
   await recovered.writer.append('turn-requested');
   t.deepEqual(
-    (await recovered.reader.entries()).map(entry => entry.sequence),
+    durable.map(entry => entry.sequence),
     [0n, 1n],
   );
-  t.true((await recovered.reader.verify()).ok);
+  t.true(verifyAuditEntries(durable).ok);
 });
 
 test('audit recovery never blesses an entry-store-forged suffix', async t => {
@@ -237,18 +206,6 @@ test('audit recovery never blesses an entry-store-forged suffix', async t => {
   });
 });
 
-test('an empty audit journal verifies without a synthetic head', async t => {
-  const heads = makeHeadStore();
-  const journal = makeAuditJournal({
-    ...heads,
-    journalId: 'empty',
-    sessionId: 'empty-session',
-    readEntries: async () => [],
-    appendEntry: async () => undefined,
-  });
-  t.true((await journal.reader.verify()).ok);
-});
-
 test('audit head repairs one authorized deletion and rejects a longer rollback', async t => {
   const durable = [];
   const heads = makeHeadStore();
@@ -276,7 +233,7 @@ test('audit head repairs one authorized deletion and rejects a longer rollback',
   });
   await recovered.writer.append('three');
   t.deepEqual(
-    (await recovered.reader.entries()).map(entry => entry.kind),
+    durable.map(entry => entry.kind),
     ['one', 'two', 'three'],
   );
   durable.splice(-2);
@@ -343,12 +300,12 @@ test('petstore audit journal survives reconstruction outside the session', async
     anchorPowers,
   });
   await recovered.writer.append('session-close', {});
-  const entries = await recovered.reader.entries();
+  const entries = entriesOf(values);
   t.deepEqual(
     entries.map(entry => entry.sequence),
     [0n, 1n],
   );
-  t.true((await recovered.reader.verify()).ok);
+  t.true(verifyAuditEntries(entriesOf(values)).ok);
 
   // One deleted tail entry is restored from the independently protected
   // write-ahead anchor.
@@ -359,7 +316,7 @@ test('petstore audit journal survives reconstruction outside the session', async
     anchorPowers,
   });
   await rolledBack.writer.append('after-one-entry-rollback');
-  t.true((await rolledBack.reader.verify()).ok);
+  t.true(verifyAuditEntries(entriesOf(values)).ok);
 
   // A longer rollback cannot be mistaken for a single prepared append.
   values.delete('codex-audit-session-3-00000000000000000001');
@@ -407,8 +364,13 @@ test('petstore journals do not cross-select overlapping head prefixes', async t 
   });
   await short.writer.append('short-entry');
   await overlapping.writer.append('overlapping-entry');
-  t.true((await short.reader.verify()).ok);
-  t.true((await overlapping.reader.verify()).ok);
+  const reopened = makeStoredAuditJournal(powers, {
+    journalId: 'short',
+    sessionId: 'a',
+    anchorPowers,
+  });
+  await reopened.writer.append('after-overlap');
+  t.is(values.get('codex-audit-a-00000000000000000001').kind, 'after-overlap');
 });
 
 test('petstore audit journal rejects one capability for entries and heads', t => {
@@ -438,7 +400,7 @@ test('petstore audit journal rejects one capability for entries and heads', t =>
   );
 });
 
-test('concurrent readers share one recovery of a prepared append', async t => {
+test('concurrent appends share one recovery of a prepared append', async t => {
   const values = new Map();
   const anchors = new Map();
   let entryWrites = 0;
@@ -477,23 +439,23 @@ test('concurrent readers share one recovery of a prepared append', async t => {
   values.delete(tail);
   entryWrites = 0;
 
-  // Two readers arrive at once — an operator health check racing the next
-  // append. Both used to take the replay branch and both call appendEntry.
+  // Concurrent appends must repair the prepared entry only once.
   const reopened = makeStoredAuditJournal(powers, {
     journalId: 'operator-journal',
     sessionId: 'session-4',
     anchorPowers,
   });
-  const [verification, entries] = await Promise.all([
-    reopened.reader.verify(),
-    reopened.reader.entries(),
+  await Promise.all([
+    reopened.writer.append('next'),
+    reopened.writer.append('last'),
   ]);
-  t.true(verification.ok, 'the integrity check reports rather than throwing');
+  const entries = entriesOf(values);
+  t.true(verifyAuditEntries(entries).ok);
   t.deepEqual(
     entries.map(entry => entry.sequence),
-    [0n],
+    [0n, 1n, 2n],
   );
-  t.is(entryWrites, 1, 'the prepared entry is replayed exactly once');
+  t.is(entryWrites, 3, 'one repair and two new appends');
 });
 
 const makeMapPowers = valuesMap =>
@@ -541,8 +503,8 @@ test('a journal has no lifetime ceiling, and the anchor store keeps only the new
     anchorPowers: makeMapPowers(anchors),
   });
   await revived.writer.append('session-closed');
-  t.true((await revived.reader.verify()).ok);
-  t.is((await revived.reader.entries(300, 1))[0].kind, 'session-closed');
+  t.true(verifyAuditEntries(entriesOf(values)).ok);
+  t.is(entriesOf(values)[300].kind, 'session-closed');
 });
 
 test('a stale head a failed discard left behind is read past, never trusted over the newest', async t => {
@@ -566,8 +528,8 @@ test('a stale head a failed discard left behind is read past, never trusted over
     anchorPowers,
   });
   await revived.writer.append('three');
-  t.true((await revived.reader.verify()).ok);
-  t.is((await revived.reader.entries()).length, 3);
+  t.true(verifyAuditEntries(entriesOf(values)).ok);
+  t.is(entriesOf(values).length, 3);
 });
 
 test('a large payload field is stored by reference, attested by its hash, once per content', async t => {
@@ -582,7 +544,7 @@ test('a large payload field is stored by reference, attested by its hash, once p
   const big = 'result '.repeat(1000);
   await journal.writer.append('tool-result', { small: 'ok', result: big });
   await journal.writer.append('tool-result', { result: big });
-  const [first, second] = await journal.reader.entries();
+  const [first, second] = entriesOf(values);
   t.is(first.payload.small, 'ok', 'a small field stays inline');
   t.like(first.payload.result, { bytes: big.length });
   t.regex(first.payload.result.ref, /^sha256:[0-9a-f]{64}$/);
@@ -593,14 +555,13 @@ test('a large payload field is stored by reference, attested by its hash, once p
     1,
     'the same content is stored once',
   );
-  t.is(await journal.reader.content(first.payload.result.ref), big);
-  // The chain covers the reference, and the reference covers the content.
-  t.true((await journal.reader.verify()).ok);
   const name = [...values.keys()].find(key => key.includes('-content-'));
-  values.set(name, `${big}tampered`);
-  await t.throwsAsync(journal.reader.content(first.payload.result.ref), {
-    message: /does not match its reference/,
-  });
+  t.is(values.get(name), big);
+  t.is(
+    first.payload.result.ref,
+    `sha256:${createHash('sha256').update(values.get(name)).digest('hex')}`,
+  );
+  t.true(verifyAuditEntries(entriesOf(values)).ok);
   // A journal with nowhere to put content refuses the field rather than
   // attesting a reference to nothing.
   const durable = [];

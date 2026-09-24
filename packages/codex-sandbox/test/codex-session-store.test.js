@@ -17,6 +17,7 @@ import path from 'node:path';
 import {
   canonicalAuditJson,
   makeStoredAuditJournal,
+  verifyAuditEntries,
   parseCanonicalAuditJson,
 } from '../src/audit-journal.js';
 import {
@@ -247,11 +248,17 @@ test('the journal runs on a directory exactly as it did on a petstore', async t 
   });
   await journal.writer.append('session-opened', harden({ turn: 1 }));
   await journal.writer.append('turn-admitted', harden({ turn: 2n }));
-  const entries = await journal.reader.entries();
+  const readEntries = async () =>
+    Promise.all(
+      [...(await session.entries.list())]
+        .sort()
+        .map(name => session.entries.lookup(name)),
+    );
+  const entries = await readEntries();
   t.is(entries.length, 2);
-  t.is(entries[0].kind, 'session-opened');
-  t.is(entries[1].sequence, 1n);
-  t.like(await journal.reader.verify(), { ok: true });
+  t.like(entries[0], { kind: 'session-opened' });
+  t.like(entries[1], { sequence: 1n });
+  t.like(verifyAuditEntries(entries), { ok: true });
 
   // Reopening reads the same chain back off disk.
   const reopened = makeStoredAuditJournal(session.entries, {
@@ -259,9 +266,10 @@ test('the journal runs on a directory exactly as it did on a petstore', async t 
     sessionId: 'abc',
     anchorPowers: session.anchors,
   });
-  t.like(await reopened.reader.verify(), { ok: true });
   await reopened.writer.append('session-closed', harden({}));
-  t.is((await reopened.reader.entries()).length, 3);
+  const reopenedEntries = await readEntries();
+  t.is(reopenedEntries.length, 3);
+  t.like(verifyAuditEntries(reopenedEntries), { ok: true });
 });
 
 test('entries and anchors are distinct stores, as the journal requires', async t => {

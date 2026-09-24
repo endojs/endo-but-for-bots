@@ -26,6 +26,7 @@
 
 import { Fail, b, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
+import { makeResourceRegistry as makeSessionRegistry } from '@endo/sandbox/resource-registry.js';
 import path from 'node:path';
 
 import {
@@ -34,7 +35,6 @@ import {
   HostedTurnBackendInterface,
 } from './hosted-backend.js';
 import { assertSessionId } from './session-plan.js';
-import { makeSessionRegistry } from './session-registry.js';
 
 /** @import { DeclaredSubscription } from './subscription-lister.js' */
 

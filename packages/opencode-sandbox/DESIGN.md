@@ -633,7 +633,7 @@ New package `packages/opencode-sandbox/`.
 | `@endo/hosted-agent/mcp-bridge.js`, `@endo/hosted-agent/mcp-stdio-bridge.js`, `src/mcp-socket-server.js` | Shared protocol core + relay; opencode config generator | hosted-agent |
 | `src/managed-credentials*.js` | SecretBlob-backed cap; **ported from `f13c7cbd9`** | `f13c7cbd9:…/managed-credentials.js` |
 | `src/opencode-agent-config.js` | Host-side `OPENCODE_CONFIG_CONTENT` builder: hard-coded `provider.openrouter` block (baseURL, `models`, `whitelist`), agent `prompt`/`disable:false`/`mode`, MCP, permissions | new |
-| `src/parse-rootfs.js` (adapter default over `@endo/hosted-agent/parse-rootfs.js`), `src/opencode-hosted-policy.js` (mount table + `assertContainerMounts`) | small shared helpers; `current-specifier.js` is imported from `@endo/hosted-agent` directly | claude/codex-sandbox |
+| `src/opencode-hosted-policy.js` (mount table + `assertContainerMounts`) | Adapter policy declarations; pinned rootfs parsing and current specifiers come directly from hosted-agent. The unused default-image selection parser is retired. | hosted-agent |
 | `oci/Containerfile`, `oci/Containerfile.source`, `oci/build-reproducible.sh` | Prebuilt and in-image fork builds (Bun 1.3.14, pinned commit + recorded digest); obsolete direct-credential spike harness removed | codex-sandbox `oci/` |
 | `test/*.test.js` | see Testing | claude/codex tests |
 

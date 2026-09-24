@@ -26,8 +26,8 @@ one long-lived app-server process per session.
    `thread/inject_items`.
 6. `audit-journal.js` provides an append-only, hash-chained writer, an
    independently held head capability that detects entry-store rollback or
-   suffix deletion, and a reader API. The current native controller uses only
-   the writer; it does not publish a session audit-reader capability.
+   suffix deletion. The native controller uses only the writer; the unused
+   audit-reader facet has been removed.
    `codex-session-store.js` supplies host-private file-backed entry and anchor
    stores, not an Endo petstore. Both reside beneath the same host-owned state
    directory; separate capabilities are not protection against a host filesystem
@@ -61,8 +61,7 @@ runtime's policy anchor is a different mechanism, not this audit head.
 
 Retain the unique transport evidence until a replacement diagnostic path and its
 failure semantics are defined and tested. This does not establish that the
-current hash-chain, full-history recovery walk, or unused-in-production reader
-surface is the simplest implementation. Those are distinct simplification
+current hash-chain or full-history recovery walk is the simplest implementation. Those are distinct simplification
 questions; do not solve them by deleting the thread checkpoint or silently
 making required evidence writes best-effort.
 

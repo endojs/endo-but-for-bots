@@ -4,11 +4,10 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makePromiseKit } from './_promise-kit.js';
 
 import {
-  applyTranscript,
-  diffTranscript,
   makeSessionListWatch,
   makeSessionWatch,
 } from '../src/session-watch.js';
+import { applyTranscript, diffTranscript } from '../src/transcript-delta.js';
 
 const user = text => harden({ role: 'user', content: text });
 const reply = text => harden({ role: 'assistant', content: text });

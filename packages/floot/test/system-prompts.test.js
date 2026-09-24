@@ -8,7 +8,6 @@ import {
   PROVIDER_PROMPT_ENVIRONMENT,
   UNDECLARED_HOSTED_PROMPT_ENVIRONMENT,
   composePresetPrompt,
-  legacyPromptContext,
   normalizePromptContext,
   toolNameIn,
 } from '../src/system-prompt.js';
@@ -318,16 +317,20 @@ const hostedControl = composePresetPrompt({
   context: { environment: claude, containerMounts: true },
 });
 
-test('an entry with no prompt of its own falls back to what such sessions ran', t => {
-  // Sessions recorded before contexts existed were spoken and ran behind the
-  // provider API. Only the two control presets ever described the mount
-  // tools, and only hypothetically.
+test('provider prompt composition honors explicit voice and mount capabilities', t => {
+  const compose = presetId =>
+    composePresetPrompt({
+      presetId,
+      context: {
+        environment: PROVIDER_PROMPT_ENVIRONMENT,
+        spoken: true,
+        containerMounts:
+          presetId === 'full-control' || presetId === 'machine-admin',
+      },
+    });
   for (const presetId of PROMPT_PRESET_IDS) {
-    const prompt = getPreset(presetId).systemPrompt;
-    t.is(
-      prompt,
-      composePresetPrompt({ presetId, context: legacyPromptContext(presetId) }),
-    );
+    const prompt = compose(presetId);
+    t.false(Object.hasOwn(getPreset(presetId), 'systemPrompt'));
     t.true(prompt.includes('Your replies are spoken aloud'), presetId);
     t.false(prompt.includes('Where you run'), presetId);
     t.false(prompt.includes('appears as'), presetId);
@@ -339,14 +342,12 @@ test('an entry with no prompt of its own falls back to what such sessions ran', 
     );
   }
   t.true(
-    getPreset('full-control').systemPrompt.includes(
+    compose('full-control').includes(
       'When your session runs in\na sandbox that supports it',
     ),
   );
   // A session with no workspace directory is never told it has one.
-  t.false(
-    getPreset('new-project').systemPrompt.includes('already\n  a directory'),
-  );
+  t.false(compose('new-project').includes('already\n  a directory'));
 });
 
 test('a workspace is called a directory only where the backend mounts one', t => {

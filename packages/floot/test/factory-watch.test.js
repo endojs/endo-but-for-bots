@@ -6,7 +6,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
-import { applyTranscript } from '../src/session-watch.js';
+import { applyTranscript } from '../src/transcript-delta.js';
 
 /**
  * A factory over an in-memory host with one hosted session, `one`, whose

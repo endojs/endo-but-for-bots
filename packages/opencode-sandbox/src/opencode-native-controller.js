@@ -30,7 +30,6 @@ import {
   DEFAULT_SOCKET_NAME,
   makeMcpSocketServer,
 } from './mcp-socket-server.js';
-import { rootfsLabel } from './parse-rootfs.js';
 import { readSessionPlan } from './opencode-session-plan.js';
 
 /** The CLI's home on the slice's own tmpfs; its store is in memory. */
@@ -218,7 +217,7 @@ export const makeOpencodeNativeController = ({
           policy: { assertHostedAgentPolicyV1, hostedPolicyFromSlice },
         },
       );
-      const { slice, rootfs } = envelope;
+      const { slice } = envelope;
       return makeClient({
         sessionId: approved.sessionId,
         createdAt: '',
@@ -227,7 +226,7 @@ export const makeOpencodeNativeController = ({
         workspacePath: WORKSPACE_PATH,
         statePath: `${OPENCODE_HOME}/.local/share`,
         backend: 'podman',
-        rootfsLabel: rootfsLabel(rootfs),
+        rootfsLabel: approved.rootfs,
         model: approved.model,
         systemPrompt: approved.systemPrompt,
       });

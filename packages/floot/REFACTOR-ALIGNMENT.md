@@ -35,7 +35,7 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 | One host-owned conversation/effect authority; native stores are projections | Floot journal feeds context/history; native restoration translates host-selected records; tree-based Floot state is refused rather than silently migrated | Aligned ownership direction. Codex's separate native audit/checkpoint evidence has a different claimed purpose and still needs a scoped retention justification |
 | Shared framing, admission and cancellation semantics | Shared turn channel exists, but three client admission state machines remain; recent Claude/OpenCode pre-admission cancellation defects needed parallel fixes | Partial: common behavioral conformance is warranted before deciding whether more implementation sharing is useful |
 | Bounded resident memory for long healthy work | `context-transcript.js` pages archived metadata but accumulates active/exception record arrays; without a checkpoint it selects all eligible nonpending history | Not complete. Per-value/per-turn bounds do not bound the whole context; direct Fae has no automatic compaction producer |
-| Runtime/provider/account/model are separate concepts | Explicit session identity and discriminated runtime configuration exist; hosted plans carry account authority | Partial: account status discovery still uses runtime-derived pet names and keys in `floot/agent.js:2663` onward |
+| Runtime/provider/account/model are separate concepts | Explicit session identity and runtime configuration; hosted account authority; published logical account bindings and exact reset identities | Discovery/presentation aligned in `a297668b2`; session-level account reporting still needs the scoped correction identified in the simplification audit |
 | Smaller common implementation; delete superseded paths | Vendor packages shrank, shared implementation grew substantially; generic sandbox `nativeProfile` path has now been retired locally with operator approval | Simplicity target not demonstrated. Removing this obsolete mode is progress, not proof of the overall target |
 | One current set of guarantees and final conformance | Design contains overlapping historical status blocks; host revision pin is older than application HEAD | Not complete. Rebaseline documentation and candidate, then perform coordinated deployment and current cross-backend acceptance |
 
@@ -57,7 +57,26 @@ The next review should list current owners and remaining parallel mechanisms,
 identify removable code, and justify retained complexity by the stated goals.
 Do not add another broad framework to satisfy a line-count target.
 
-Concrete candidates:
+Current simplification pass (2026-09-24): the
+[mechanism inventory and decisions](SIMPLIFICATION-AUDIT.md) distinguish owners,
+record safe deletions and enumerate the remaining non-minimal contracts.
+This is a current-source audit, not a demand to review every superseded PR commit.
+The deletion slice removes 291 net lines of runtime JavaScript (comments included;
+tests and documentation excluded), without adding a replacement framework.
+Independent adversarial review approves the rootfs/registry, MCP, audit-reader and
+Floot preset/transcript changes.
+Full suites pass: hosted-agent 742 (one skipped), Claude 417, Codex 424,
+OpenCode 302 and Floot 708.
+Scoped lint has no errors; source type checks pass where separately configured.
+The root documentation/API gate passes against the current source surfaces.
+Test-inclusive type checks retain unrelated fixture errors, not a green overall gate.
+The full-suite run also exposed incomplete setup mocks from RA-03: the three backend
+fixtures now assert explicit account publications, rather than swallowing failed
+discovery or expecting retired account/admin aliases.
+The correction is a separate reviewed test-only commit.
+No deployment is claimed; remaining decisions are listed in the linked audit.
+
+Concrete candidates and historical completion evidence:
 
 - Backward-compatibility cleanup is explicitly in scope (operator, 2026-09-24):
   obsolete internal option/property names, state formats and old-image shims need

@@ -40,13 +40,6 @@ const AuditWriterInterface = M.interface('AgentAuditWriter', {
   help: M.call().returns(M.string()),
 });
 
-const AuditReaderInterface = M.interface('AgentAuditReader', {
-  entries: M.call().optional(M.number(), M.number()).returns(M.promise()),
-  content: M.call(M.string()).returns(M.promise()),
-  verify: M.call().returns(M.promise()),
-  help: M.call().returns(M.string()),
-});
-
 /**
  * Canonically encode capability-free audit data: the shared encoder, under the
  * name the journal's entries and their decoder below have always used.
@@ -197,8 +190,7 @@ export const verifyAuditEntries = (entries, expected = {}) => {
 harden(verifyAuditEntries);
 
 /**
- * Make an append-only, hash-chained audit journal with separated writer and
- * reader facets. The storage callbacks are held only by this trusted object.
+ * Make an append-only, hash-chained audit journal writer. The storage callbacks are held only by this trusted object.
  *
  * `appendEntry` must reject an existing sequence rather than overwrite it.
  * Every append is awaited and serialized before the caller may continue.
@@ -218,7 +210,6 @@ harden(verifyAuditEntries);
  *   Store a payload field too large to keep inline. Without it a field beyond
  *   `inlineBytes` is refused, because a journal that cannot store the content
  *   cannot attest a reference to it.
- * @param {(name: string) => Promise<unknown>} [options.readContent]
  * @param {() => string} [options.now]
  * @param {number} [options.maxEntryBytes]
  * @param {number} [options.inlineBytes]
@@ -233,7 +224,6 @@ export const makeAuditJournal = ({
   writeHead,
   discardHead,
   storeContent,
-  readContent,
   now = () => new Date().toISOString(),
   maxEntryBytes = MAX_VALUE_BYTES,
   inlineBytes = INLINE_BYTES,
@@ -265,7 +255,7 @@ export const makeAuditJournal = ({
     }
   };
 
-  const recoverOnce = async () => {
+  const recover = async () => {
     await null;
     if (recovered) return;
     const loaded = [...(await readEntries())];
@@ -326,36 +316,8 @@ export const makeAuditJournal = ({
     nextSequence = verification.sequence;
   };
 
-  /**
-   * Recovery is idempotent only if it happens once.
-   *
-   * `recovered` is set at the end of a long asynchronous walk, so two readers
-   * that both arrive before it flips — a health check racing the next append,
-   * say — each took the write-ahead replay branch and each called
-   * `appendEntry` for the same head entry. Against a strict entry store the
-   * second rejects, and because `verify()` wraps only the head read, that
-   * rejection escaped as a throw instead of the `{ ok: false }` record its
-   * contract promises. Memoizing the in-flight promise makes concurrent
-   * callers share one recovery; a failure clears it so a later call retries.
-   *
-   * @type {Promise<void> | undefined}
-   */
-  let recovering;
-  const recover = () => {
-    if (recovered) return Promise.resolve();
-    if (!recovering) {
-      recovering = recoverOnce().finally(() => {
-        recovering = undefined;
-      });
-    }
-    return recovering;
-  };
-
-  // Every append, and every read, takes its turn on one chain. A reader that
-  // merely waited for the appends already queued could still interleave with
-  // one issued a moment later, and between that append's anchor write and its
-  // entry write the store shows a head one ahead of the entries: a legitimate
-  // append reported as a corrupt journal to an operator's health check.
+  // The writer is the only recovery caller. Serializing complete appends also
+  // prevents concurrent replay of an anchor-prepared entry.
   /**
    * @template T
    * @param {() => Promise<T>} operation
@@ -458,68 +420,7 @@ export const makeAuditJournal = ({
     },
   });
 
-  const reader = makeExo('AgentAuditReader', AuditReaderInterface, {
-    async entries(start = 0, limit = 1000) {
-      (Number.isInteger(start) && start >= 0) || Fail`invalid audit page start`;
-      (Number.isInteger(limit) && limit > 0 && limit <= 1000) ||
-        Fail`invalid audit page limit`;
-      return inChainOrder(async () => {
-        await recover();
-        const loaded = [...(await readEntries())];
-        const verification = verifyAuditEntries(loaded, {
-          journalId,
-          sessionId,
-          maxEntryBytes,
-        });
-        verification.ok || Fail`audit journal failed verification`;
-        const head = await readHead();
-        if (verification.sequence !== 0n || head !== undefined) {
-          assertHead(head, verification, loaded.at(-1));
-        }
-        return harden(loaded.slice(start, start + limit));
-      });
-    },
-    async content(ref) {
-      /^sha256:[0-9a-f]{64}$/.test(ref) ||
-        Fail`invalid audit content reference`;
-      if (!readContent) throw Fail`this journal stores no content`;
-      const text = await readContent(ref);
-      (typeof text === 'string' &&
-        `sha256:${createHash('sha256').update(text).digest('hex')}` === ref) ||
-        Fail`audit content does not match its reference`;
-      return text;
-    },
-    async verify() {
-      return inChainOrder(async () => {
-        await recover();
-        const loaded = [...(await readEntries())];
-        const verification = verifyAuditEntries(loaded, {
-          journalId,
-          sessionId,
-          maxEntryBytes,
-        });
-        if (!verification.ok) return verification;
-        try {
-          const head = await readHead();
-          if (verification.sequence !== 0n || head !== undefined) {
-            assertHead(head, verification, loaded.at(-1));
-          }
-          return verification;
-        } catch {
-          return harden({
-            ok: false,
-            sequence: verification.sequence,
-            previousHash: verification.previousHash,
-          });
-        }
-      });
-    },
-    help() {
-      return 'Read and verify the durable, hash-chained agent audit journal.';
-    },
-  });
-
-  return harden({ writer, reader });
+  return harden({ writer });
 };
 harden(makeAuditJournal);
 
@@ -532,8 +433,7 @@ harden(makeAuditJournal);
  * one; keeping a journal out of the host agent's naming authority is what
  * replaced that, and nothing here had to change.
  *
- * Pass factory or operator powers, never session guest powers. The returned
- * reader must likewise remain outside the model-facing object graph.
+ * Pass factory or operator powers, never session guest powers.
  *
  * @param {any} powers
  * @param {object} options
@@ -599,7 +499,6 @@ export const makeStoredAuditJournal = (
     if (await E(powers).has(name)) return;
     await E(powers).storeValue(text, name);
   };
-  const readContent = async ref => E(powers).lookup(contentName(ref));
   const headNames = async () => {
     const names = await E(anchorPowers).list();
     const headPrefix = `${prefix}-head-`;
@@ -640,7 +539,6 @@ export const makeStoredAuditJournal = (
     writeHead,
     discardHead,
     storeContent,
-    readContent,
     ...(now ? { now } : {}),
     ...(maxEntryBytes ? { maxEntryBytes } : {}),
     ...(inlineBytes ? { inlineBytes } : {}),
