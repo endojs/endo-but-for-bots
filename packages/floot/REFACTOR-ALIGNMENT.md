@@ -178,8 +178,20 @@ summary. Reproduce with `codex app-server generate-json-schema --experimental
 --out <temporary-directory>`. Do not synthesize a canonical summary from these
 notifications. Faithful capture needs an authoritative replacement-context export
 or a deliberately designed opaque checkpoint contract. This is schema evidence,
-not an actual container compaction run. Claude's pinned protocol still needs a
-dummy-data capture before claiming its summary/retained-tail mapping is known.
+not an actual container compaction run.
+
+Claude's pinned `2.1.233` image was subsequently exercised on Tokyo against a
+loopback synthetic API in a disposable, network-disabled container, without
+credentials or host mounts. Manual compaction emits a boundary with retained
+UUIDs, then a separate synthetic user summary matching its anchor UUID. The next
+request demonstrably uses the summary plus an older retained assistant message;
+that message precedes the boundary in the physical transcript. A suffix-only or
+summary-only capture would therefore lose context. Stream and file metadata use
+different field spelling. See endo-host's
+`ops/claude-compaction-probe-20260924.md` and companion reproduction script.
+Both containers were removed; no daemon deployment or session mutation occurred.
+Automatic compaction, retained tool pairs, repeated/interrupted capture and
+durable replay remain implementation/acceptance gates, not proved by this probe.
 
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
