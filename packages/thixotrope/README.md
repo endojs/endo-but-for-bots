@@ -1,14 +1,14 @@
 # `@endo/thixotrope`
 
-A prototype distributed ocap machine with purely orthogonal persistence.
+A prototype distributed ocap machine with orthogonally persistent JavaScript guests.
 
 A thixotrope daemon is a simpler cousin of the Endo daemon: it spins up
 workers whose guest state is preserved by XS heap snapshots or the
 Ironhorse SQLite heap store rather
 than by explicit formula-based persistence.
-Guests never observe their own suspension, restoration, or the
-daemon's restarts — persistence is orthogonal to the guest programming
-model.
+Guest heap state survives suspension and restoration without application-written serialization.
+External resource lifetimes remain explicit: a pending host-operation answer can reject on restart,
+and installed resource managers receive a startup notification to recreate their native adapters.
 Application upgrades are not yet implemented; candidate mechanisms are described separately.
 
 The machine speaks the OCapN p2p wire protocol end to end, and the
@@ -55,18 +55,19 @@ They distinguish intended behavior from current implementation gaps.
   Unix netlayers.
 - `store/`: durable worker and session stores, validators, and string
   atoms.
-- `alarms/`: the guest clock, its host timer index, and the timer
-  resource.
+- `alarms/`: the guest clock, its host deadline/outcome ledger, and the timer resource.
 - `mail/`: the guest mail protocol, contacts, and address book.
 - `tui/`: the terminal views the CLI opens over a control connection.
 - `observable-map.js`: the string-keyed observable Map that backs both the
   workspace inventory and the conventional `contacts` address book.
 - `native/`: directory installation and disposable native process integration.
-- `resources/http/`: installable durable HTTP manager and native adapter.
 - `ironhorse/`: Ironhorse and XS worker engines and their guest
   fixtures.
 - `platform/`: capability interfaces, and `platform/node/` for the Node
   implementations of them.
+
+The package-level `resources/http/` directory contains the installable durable HTTP manager and
+native adapter.
 
 Each module directly under `platform/` names one capability — `timers`,
 `random`, `files`, `processes`, `sockets`, and so on — whose methods take
@@ -112,16 +113,14 @@ Piped input works too, and evaluation failures produce a nonzero exit status.
 A lost connection reports an uncertain evaluation outcome and never retries it.
 
 The workspace has `E`, `Far`, `harden`, and a `vats` controller.
-For example, enter each of these as one line:
+For example, enter each of these as one line and wait for its result before entering the next.
+`E` accepts both capabilities and promises for capabilities, so the stored results can be used directly.
 
+<!-- prettier-ignore -->
 ```js
-(async () => {
-  globalThis.other = await E(vats).createWorker('counter');
-})()(async () => {
-  globalThis.counter = await E(other).evaluate(
-    "(() => { let count = 0n; return Far('Counter', { incr: () => ++count }); })()",
-  );
-})();
+globalThis.other = E(vats).createWorker('counter');
+globalThis.source = "(() => { let count = 0n; return Far('Counter', { incr: () => ++count }); })()";
+globalThis.counter = E(other).evaluate(source);
 E(counter).incr();
 ```
 
@@ -277,12 +276,12 @@ thix alarms ./private-state
 thix attach ./private-state
 ```
 
-In the attached workspace, schedule a reminder using the clock's Unix milliseconds:
+In the attached workspace, enter each line separately to schedule a reminder using Unix milliseconds:
 
+<!-- prettier-ignore -->
 ```js
-E(inventory.get('clock'))
-  .now()
-  .then(now => E(E(apps).get('reminders')).arm(now + 60000n, 'check the oven'));
+globalThis.clock = inventory.get('clock');
+E(clock).now().then(now => E(E(apps).get('reminders')).arm(now + 60000n, 'check the oven'));
 E(E(apps).get('reminders')).status();
 ```
 
@@ -298,7 +297,8 @@ It records the outcome before notifying the clock, and deletes it only after the
 recording its own settlement.
 Interrupted acknowledgements retry; other cleanup failures retry on the next clock operation.
 OS timers are disposable, and there is no periodic scan of a guest clock vat.
-`alarms` reports pending deadlines, retained ledger rows, and materialized promise resources.
+`alarms` reports `pending` deadlines, `materialised` promise resources, and `stopped` status.
+Its legacy `observations` field is always zero; the command does not expose the retained-outcome count.
 
 This version supports one-shot absolute deadlines, with up to 1,024 pending or unacknowledged rows.
 Deadlines are nonnegative signed 64-bit bigint milliseconds.
@@ -430,7 +430,9 @@ Nine additional reliability scenarios in `test/ironhorse/reliability.js` cover
 four actual daemon SIGKILL boundaries, competing supervisors, runtime identity,
 inspection of quarantined workers, custom heap-path refusal, and ownership-helper
 loss during worker startup.
-The suite is selected by `ava.ironhorse.config.mjs`; it runs the two files serially.
+`ava.ironhorse.config.mjs` selects the complete native lane and runs its files serially.
+In addition to those scenarios, it covers configurable limits, remote delivery, reachability,
+supervisor lifecycle, capability mail, HTTP, and alarms, including separate HTTP and alarm crash suites.
 It requires the real binary and bundles: missing artifacts fail the lane instead
 of skipping tests.
 Each scenario owns an independent directory and tears down its daemon and workers.
@@ -446,9 +448,11 @@ They do not simulate hardware power loss or storage devices that ignore fsync.
 bootstrapBudget, slotCeiling, chunkCeiling, requestTimeoutMs })` implements the existing WorkerEngine interface. The
 bootstrap uses the real SES shim and compartments. Native `async` functions,
 ordinary promises, closures, and retained capabilities persist in SQLite without guest-side
-serialization. Suspended async activations use the new `ASYN` snapshot atom
-and store schema 24; their saved frames and promise references are validated
-on restoration.
+serialization.
+Suspended async activations use the `ASYN` snapshot atom; their saved frames and promise references
+are validated on restoration.
+The engine owns snapshot-format and store-schema versions; see
+[`versions.rs`](../../rust/engine/ironhorse-snapshot/src/versions.rs) for their compatibility roles.
 
 Every completed crank commits an incremental SQLite checkpoint before a reply
 leaves the process. Snapshot references identify immutable, content-addressed
@@ -517,9 +521,9 @@ refused by the engine's persistence gate. The bootstrap carries the full
 `Iterator` surface — the five lazy helpers are implemented, so it no longer
 omits them — and uses SES's minimal override-taming profile.
 This keeps the array iterator as a frozen native data property, as required by
-Ironhorse's current typed-array copy path. The loopback netlayer is a testing transport;
-a fixed public listener, service installation, and remote authentication UX are
-not part of this CLI.
+Ironhorse's current typed-array copy path.
+The standalone demos use a loopback testing netlayer; the `thix` supervisor provides the workspace
+and installation commands described above.
 
 ### Compatibility and recovery
 
@@ -529,7 +533,7 @@ The worker's SQLite signature includes the code identity digest, excluding mutab
 The supervisor validates this manifest under its lease before restoring heaps or
 cleaning abandoned incarnations, and executes private checked copies throughout
 its lifetime so edits to the original paths cannot change a later wake.
-This release also advances the engine boot-layout signature to 21.
+The engine also validates its own boot-layout signature when restoring a stored image.
 
 Use `demo:ironhorse:counter status PATH` (or the promise variant) for administrative
 worker metadata without sending messages to guest capabilities.
@@ -594,14 +598,14 @@ const daemon = await makeThixotropeDaemon(powers, {
 const worker = await daemon.createWorker({ debugLabel: 'counter' });
 const counter = await worker.evaluate(`
   (() => {
-    let count = 0;
-    return Far('Counter', { incr: () => (count += 1) });
+    let count = 0n;
+    return Far('Counter', { incr: () => ++count });
   })()
 `);
 const secret = daemon.publish(counter);
 // Any OCapN peer can now mint a sturdy ref from (daemon.location, secret)
 // and call the counter — across worker sleeps and daemon restarts.
-console.log(await E(counter).incr()); // 1, via the in-process endpoint
+console.log(await E(counter).incr()); // 1n, via the in-process endpoint
 
 await daemon.shutdown(); // parks every worker; the store resumes it all
 ```
@@ -686,9 +690,10 @@ Promises are not special anywhere: an `op:listen` forwards like any
 delivery, and a settlement frame toward a sleeping worker wakes it
 through its transport.
 
-Exactly one session reifies values: the **endpoint**, an in-process
-OCapN client hosting the daemon's genuine objects — system resources
-and the worker controller — and the embedder's admin route.
+The durable host **endpoint** is an in-process OCapN client hosting system resources,
+the worker controller, and the embedder's admin route.
+Disposable host clients and native adapters have separate reifying endpoints; routed traffic
+between other sessions is handled by the hub without reifying its values.
 Its session records shrink to resource descriptions (re-instantiated
 by name at recorded positions) and at-most-once answer obligations —
 the one kind of pending obligation that genuinely dies with the
@@ -698,7 +703,8 @@ replay.
 A daemon restart is: reload hub tables, reattach worker transports
 (asleep), restore the endpoint session, and let remote peers resume by
 rebinding their ducts.
-Nothing is re-seated because nothing was reified.
+Routed guest references remain hub rows; host resources are re-created from their recorded descriptions.
+Native adapters are replaced through their durable managers.
 A promise minted in worker A and held in worker B settles after a
 daemon restart with both workers starting asleep — the subscription is
 nothing but rows and a wire subscription in A's heap.
@@ -707,7 +713,10 @@ holders' calls break loudly instead of jamming.
 
 ## Engines
 
-`makeXsEngine` is the engine: each incarnation is a `thixotrope-xs-worker`
+`makeIronhorseEngine` is the supervisor's default engine, backed by SQLite heaps.
+Its build commands and configuration are described in [Ironhorse demos and CI tests](#ironhorse-demos-and-ci-tests).
+
+`makeXsEngine` is an alternative heap-snapshot engine: each incarnation is a `thixotrope-xs-worker`
 process (rust/thixotrope-xs-worker, a minimal runner on the `xsnap` crate)
 evaluating the worker peer bundle inside an XS machine, with real heap
 snapshots streamed into a content-addressed store.
@@ -754,18 +763,22 @@ own heap and the daemon as the relay:
 
 ```js
 const controller = daemon.makeResource('worker-controller');
-await parent.evaluate(
+const parent = await daemon.createWorker({ debugLabel: 'parent' });
+const parentRoot = await parent.evaluate(
   `
   Far('Parent', {
     setup: async () => {
       const child = await E(controller).createWorker('child');
       const shared = Far('Shared', { secret: () => 'from-parent' });
-      return E(child).evaluate(childSource, harden({ shared }));
+      const source = "Far('Child', { read: () => E(shared).secret() })";
+      return E(child).evaluate(source, { shared });
     },
   })
   `,
   { controller },
 );
+const child = await E(parentRoot).setup();
+console.log(await E(child).read()); // 'from-parent'
 ```
 
 Cross-worker links are durable at the session-record layer: the
@@ -894,14 +907,13 @@ import { makeTimerResource } from '@endo/thixotrope';
 
 const daemon = await makeThixotropeDaemon(powers, {
   // ...
-  resources: { timer: description => makeTimerResource(powers, description) },
+  resources: { timer: description => makeTimerResource(powers.timers, description) },
 });
 const worker = await daemon.createWorker({ debugLabel: 'clock' });
 const timer = daemon.makeResource('timer');
 const clock = await worker.evaluate(
   `Far('Clock', { read: () => E(timer).now() })`,
-  ['timer'],
-  [timer],
+  { timer },
 );
 ```
 
