@@ -35,6 +35,8 @@ export const iterateBytesWriter = (bytesWriterRef, options = {}) => {
   // Create synchronize chain - we hold the resolver
   const { promise: synHead, resolve: initialSynResolve } = makePromiseKit();
   let synResolve = initialSynResolve;
+  /** @type {Promise<unknown>} */
+  let synTail = synHead;
 
   // Call stream() - returns a promise for the acknowledge (flow-control) chain head
   /** @type {Promise<StreamNode<undefined, TWriteReturn>>} */
@@ -56,10 +58,18 @@ export const iterateBytesWriter = (bytesWriterRef, options = {}) => {
     }
   };
 
+  // Abort by rejecting the syn tail rather than closing it. A close
+  // (`promise: null`) sends the responder pump down its `return()` path, and a
+  // sink whose `return()` commits buffered frames (a file or xattr writer)
+  // would then commit a prefix the initiator abandoned. A rejection reaches
+  // the pump's abort path, which calls the sink's `throw()` instead.
   const fail = error => {
     if (!terminalPromise) {
       setTerminalError(error);
-      synResolve(harden({ value: undefined, promise: null }));
+      // The rejection is delivered to the responder; locally it is expected.
+      synTail.catch(() => undefined);
+      ackPromise.catch(() => undefined);
+      synResolve(Promise.reject(error));
     }
     // terminalPromise is guaranteed to be set after setTerminalError
     return /** @type {Promise<IteratorResult<undefined, TWriteReturn>>} */ (
@@ -84,6 +94,7 @@ export const iterateBytesWriter = (bytesWriterRef, options = {}) => {
       const { promise, resolve } = makePromiseKit();
       synResolve(harden({ value: passableValue, promise }));
       synResolve = resolve;
+      synTail = promise;
       if (preBufferRemaining > 0) {
         preBufferRemaining -= 1;
         return harden({ done: false, value: undefined });

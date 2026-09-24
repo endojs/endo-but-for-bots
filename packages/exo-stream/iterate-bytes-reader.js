@@ -48,12 +48,15 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
   // Create synchronize chain - we hold the resolver
   const { promise: synHead, resolve: initialSynResolve } = makePromiseKit();
   let synResolve = initialSynResolve;
+  /** @type {Promise<unknown>} */
+  let synTail = synHead;
 
   // Pre-resolve 'buffer' synchronize nodes to prime the pump
   for (let i = 0; i < buffer; i += 1) {
     const { promise, resolve } = makePromiseKit();
     synResolve(freeze({ value: undefined, promise }));
     synResolve = resolve;
+    synTail = promise;
   }
 
   // Call stream() - returns a promise for the acknowledge chain head
@@ -76,10 +79,15 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
     }
   };
 
+  // Abort by rejecting the syn tail, as `iterateBytesWriter` does, so the
+  // responder can tell an abort from an early close.
   const fail = error => {
     if (!terminalPromise) {
       setTerminalError(error);
-      synResolve(freeze({ value: undefined, promise: null }));
+      // The rejection is delivered to the responder; locally it is expected.
+      synTail.catch(() => undefined);
+      nodePromise.catch(() => undefined);
+      synResolve(Promise.reject(error));
     }
     // terminalPromise is guaranteed to be set after setTerminalError
     return /** @type {Promise<IteratorResult<Uint8Array, TReadReturn>>} */ (
@@ -110,6 +118,7 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
         const { promise, resolve } = makePromiseKit();
         synResolve(freeze({ value: undefined, promise }));
         synResolve = resolve;
+        synTail = promise;
       }
 
       // Await the current node
@@ -155,6 +164,7 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
         const { promise, resolve } = makePromiseKit();
         synResolve(freeze({ value: undefined, promise }));
         synResolve = resolve;
+        synTail = promise;
       }
 
       // Store the next node promise for next iteration
@@ -203,12 +213,7 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
         },
 
         async throw(error) {
-          setTerminalError(error);
-          // Abort: signal close and propagate error
-          synResolve(freeze({ value: undefined, promise: null }));
-          return /** @type {Promise<IteratorResult<Uint8Array, TReadReturn>>} */ (
-            /** @type {unknown} */ (terminalPromise)
-          );
+          return fail(error);
         },
 
         [Symbol.asyncIterator]() {

@@ -557,3 +557,69 @@ test('bytes writer round-trip preserves arbitrary chunk sequences', async t => {
   );
   t.pass();
 });
+
+// An abort the initiator starts must reach the sink as `throw()` as well, so
+// the sink can tell it apart from a close and discard what it buffered.
+
+test('bytes writer delivers an initiator throw() to the sink as throw()', async t => {
+  const calls = [];
+  const { promise: aborted, resolve: resolveAborted } = makePromiseKit();
+  const sink = {
+    async next(value) {
+      calls.push(['next', value.length]);
+      return harden({ done: false, value: undefined });
+    },
+    async return(value) {
+      calls.push(['return']);
+      resolveAborted(undefined);
+      return harden({ done: true, value });
+    },
+    async throw(error) {
+      calls.push(['throw', error.message]);
+      resolveAborted(undefined);
+      return harden({ done: true, value: undefined });
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+  const writer = iterateBytesWriter(bytesWriterFromIterator(sink));
+  await writer.next(new Uint8Array([1, 2]));
+  await t.throwsAsync(() => writer.throw(Error('abort')), {
+    message: 'abort',
+  });
+  await aborted;
+  t.deepEqual(calls, [
+    ['next', 2],
+    ['throw', 'abort'],
+  ]);
+});
+
+test('bytes writer delivers a non-bytes next() to the sink as throw()', async t => {
+  const calls = [];
+  const { promise: aborted, resolve: resolveAborted } = makePromiseKit();
+  const sink = {
+    async next(value) {
+      calls.push(['next', value.length]);
+      return harden({ done: false, value: undefined });
+    },
+    async return(value) {
+      calls.push(['return']);
+      resolveAborted(undefined);
+      return harden({ done: true, value });
+    },
+    async throw() {
+      calls.push(['throw']);
+      resolveAborted(undefined);
+      return harden({ done: true, value: undefined });
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+  const writer = iterateBytesWriter(bytesWriterFromIterator(sink));
+  await writer.next(new Uint8Array([1, 2]));
+  await t.throwsAsync(() => writer.next(/** @type {any} */ ('not bytes')));
+  await aborted;
+  t.deepEqual(calls, [['next', 2], ['throw']]);
+});

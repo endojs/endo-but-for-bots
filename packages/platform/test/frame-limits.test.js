@@ -206,3 +206,53 @@ test('File.write rejects a non-bytes frame and leaves the file unchanged', async
   );
   t.is(fromUtf8(await readFile(root, 's.bin')), 'original');
 });
+
+// ---------- initiator-side aborts ----------
+
+// The abort above starts on the responder. An abort the initiator starts, by
+// calling `throw()` or by passing `next()` a value that is not bytes, travels
+// down the syn chain instead, and must not commit the buffered prefix either.
+
+const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+
+/**
+ * @param {any} writerRef
+ * @param {(writer: any) => Promise<unknown>} abort
+ */
+const abortAfterPrefix = async (writerRef, abort) => {
+  const writer = iterateBytesWriter(writerRef);
+  await writer.next(utf8('PARTIAL'));
+  await abort(writer).catch(() => undefined);
+  await settle();
+};
+
+const abortByThrow = writer => writer.throw(Error('abort'));
+const abortByNonBytes = writer => writer.next('not bytes');
+
+for (const [label, abort] of [
+  ['throw()', abortByThrow],
+  ['a non-bytes next()', abortByNonBytes],
+]) {
+  test(`File.write aborted by the initiator's ${label} leaves the file unchanged`, async t => {
+    const root = await makeFile('i.bin', 'original');
+    const file = await E(root).lookup('i.bin');
+    await abortAfterPrefix(await E(file).write(), abort);
+    t.is(fromUtf8(await readFile(root, 'i.bin')), 'original');
+  });
+
+  test(`OpenFile.write aborted by the initiator's ${label} leaves the file unchanged`, async t => {
+    const root = await makeFile('j.bin', 'original');
+    const oh = await E(await E(root).lookup('j.bin')).open({ write: true });
+    await abortAfterPrefix(await E(oh).write(0n), abort);
+    await E(oh).close();
+    t.is(fromUtf8(await readFile(root, 'j.bin')), 'original');
+  });
+
+  test(`Xattrs.set aborted by the initiator's ${label} keeps the old value`, async t => {
+    const root = await makeFile('k.txt', 'data');
+    const xattrs = await E(await E(root).lookup('k.txt')).xattrs();
+    await setXattr(xattrs, 'user.x', [utf8('old')]);
+    await abortAfterPrefix(await E(xattrs).set('user.x', {}), abort);
+    t.is(fromUtf8(await getXattr(xattrs, 'user.x')), 'old');
+  });
+}

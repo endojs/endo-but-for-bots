@@ -354,7 +354,7 @@ test('iterateBytesReader return() closes syn chain', async t => {
   t.is(synNode.value, 'bye');
 });
 
-test('iterateBytesReader throw() closes syn chain', async t => {
+test('iterateBytesReader throw() rejects the syn chain', async t => {
   const { promise: streamCalled, resolve: resolveStreamCalled } =
     makePromiseKit();
   /** @type {ERef<StreamNode<Passable, undefined>> | undefined} */
@@ -383,9 +383,9 @@ test('iterateBytesReader throw() closes syn chain', async t => {
     message: 'boom',
   });
 
-  const synNode = await capturedSynHead;
-  t.is(synNode.promise, null);
-  t.is(synNode.value, undefined);
+  // An abort is distinct from an early close: the syn tail rejects with the
+  // error instead of carrying a `promise: null` node.
+  await t.throwsAsync(async () => capturedSynHead, { message: 'boom' });
 });
 
 test('iterateBytesReader rejects a non-byte-array and repeats the error', async t => {
