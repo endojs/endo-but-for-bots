@@ -1,10 +1,12 @@
 # Current repository alignment with the hosted sandbox refactor
 
 Date: 2026-09-24. Priority audit requested by the operator.
-Application snapshot: `61e5375288ce9772b31c9a4997efb5e3809b6bff`.
+Initial application snapshot: `61e5375288ce9772b31c9a4997efb5e3809b6bff`.
 Initial host snapshot: `60ee154`; the manifest integration was then uncommitted.
 Follow-up host `62a1077` completes it with reviewed dependency wiring and tests.
-No deployment or live-machine inspection was performed for this audit.
+The initial source audit did not deploy or inspect the live machine.
+Subsequent isolated Tokyo protocol probes are identified below; they do not
+constitute production deployment or current-release acceptance.
 
 ## Verdict
 
@@ -760,6 +762,26 @@ hash, unique-leaf, byte-prefix, prompt and frame checks remain.
 Independent review approves; 173 focused coverage/client tests pass, with source
 types and scoped lint passing. The full Claude suite passes 418 tests and the
 repository documentation gate passes. No new durable owner or format is introduced.
+
+The journal durability check now includes an actual daemon/worker formula restart,
+not only local object reconstruction. A test-only hosted backend emits a large
+synthetic opaque checkpoint through the production Floot agent after a real
+mediated test-tool execution. The payload is externalized into private immutable
+storage; a completed checkpoint is archived through the normal journal threshold.
+After restart, exact transcript, history and turn records survive; the backend
+receives the same native bytes, and the test effect is not repeated.
+A sealed failed turn retains its native checkpoint and failure notice.
+A turn with no required checkpoint remains readable for inspection but refuses
+inference even when the new incarnation omits `nativeContextFormat` from its options.
+This covers the existing journal/formula boundary, not real native signatures,
+Podman restoration, abrupt process loss or current-release Tokyo acceptance.
+No runtime ownership or storage schema changes are needed for this regression.
+The test repeats daemon stop/start after continuation and verifies the new dialogue
+and failed restoration attempt remain durable, again with zero reconstruction-time
+backend sends and unchanged effect counts.
+Independent adversarial review approves; the new daemon regression and nine existing
+Floot daemon lifecycle/journal regressions pass. The daemon's test-inclusive
+TypeScript project, scoped lint, formatting and repository documentation gate pass.
 
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the

@@ -156,6 +156,17 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Current retained-code durability audit — required, in progress
 
+Native-context journal follow-up (2026-09-24): a real daemon/worker reconstruction
+regression now exercises the production Floot agent and private immutable storage
+with an inert hosted backend. It verifies exact externalized native payloads,
+an archived successful checkpoint, a sealed failed checkpoint, persisted format
+requirements despite omission from new options, and no repeated mediated test effect.
+Turns missing checkpoints stay visible for inspection but cannot restore model context.
+This is evidence for the journal/formula boundary, not real-provider opaque-content
+acceptance, native process recovery, Podman behavior or deployment.
+See `packages/daemon/test/floot-native-context.test.js` and the current alignment
+document for validation and remaining gates.
+
 Next work is finding-driven, not chronological commit mapping: the hosted
 acceptance manifest correction is now committed in host `62a1077`; assess
 outstanding findings against current source, retained formula references, and the required
