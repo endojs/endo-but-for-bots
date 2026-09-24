@@ -55,7 +55,7 @@ What stands in the way, in order of severity:
 | B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors | toolchain / engine | **hard** |
 | B7 | Heap admission, unadmitted host allocations, `usize` arithmetic and snapshot decoding depend on the target, so native and wasm32 diverge in results and metering; one tiny program crashes wasm32 | engine | **hard (consensus)** |
 | B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
-| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for string heaps, unbounded for arrays and side tables; a host memory cap turns deterministic `HeapExhausted` into a host-dependent trap | engine / host | **hard under a 128 MB cap** |
+| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for string heaps, unbounded for arrays and side tables; a host memory cap turns deterministic `HeapExhausted` into a host-dependent trap or an early `HeapExhausted` | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
 | B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
@@ -376,13 +376,19 @@ the ceilings before allocating.
   some target cannot honor, whatever the history.
   The `isize::MAX` wall alone allows at most 2^30 bytes of chunks and 44,739,242 slots
   (`floor((2^31 - 1) / 48)`), but wasm32's 4 GiB address space binds sooner.
-  At a 2^30 chunk ceiling, B8's doubling program halts natively and traps on wasm32 when
+  At a 2^30 chunk ceiling, B8's 1M-unit doubling program halts natively and traps on wasm32 when
   `units_to_be16` cannot allocate 1 GiB.
   At 2^29 both targets halt identically, but with the slot ceiling at 44,739,242, 44,000,000
   kept objects take 3.23 GB of wasm32 linear memory, and the same doubling after them traps on
   wasm32 again.
   The two caps must be chosen together, so that both arenas' worst-case footprint (B8) fits in
-  4 GiB.
+  4 GiB with room left for a checkpoint, which holds several more copies of the heap until the
+  encoder streams (see "Checkpointing needs several copies of the heap" above).
+  The 44,000,000 kept objects above run identically on both targets, but checkpointing them
+  aborts on wasm32 at 4.11 GB of linear memory, when the encoder cannot allocate 880 MB, while
+  native writes the 880 MB snapshot.
+  At a 2^29 chunk ceiling, writing a 503 MB snapshot of strings took wasm32 from 1.10 GB to
+  3.11 GB of linear memory.
 - **`json_escape_string` (`natives/json.rs:81`)** sizes its output in `usize`, but no guest can
   build a large enough string on wasm32 today.
 - **The host floating-point environment.**
@@ -585,7 +591,13 @@ heaps dominated by arrays or side tables no ceiling bounds it.
 Wasm linear memory never shrinks.
 On a host whose memory cap is below that footprint, `memory.grow` fails before the engine's
 deterministic `HeapExhausted`.
-The result is an allocator abort and trap, which again depends on the host.
+An infallible allocation then aborts and traps, as `units_to_be16` does in the doubling program.
+A fallible one, such as the chunk and slot arenas' growth or `reserved_vec`, halts with a
+`HeapExhausted` that the embedder cannot tell from a deterministic one.
+Under a 128 MiB Wasmtime memory limit, a loop that keeps 40 strings of 1M units halted that way
+at 2,359,889 computrons, where native and uncapped wasm32 return `40` at 10,488,433.
+Either way the outcome depends on the host; a distinct halt for host allocation failure, which
+the embedder never commits, would make the second case visible.
 Cloudflare's 128 MB isolate cap is far below the default footprint.
 Ceilings for such a host must be set so that the *worst-case* footprint fits, and the ratio
 must be measured per build.
