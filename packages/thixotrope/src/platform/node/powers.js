@@ -42,13 +42,28 @@ import { makeTerminalPowers } from './terminal.js';
  * convenience for entry points, never a parameter to core.
  */
 export const makeNodePowers = () => {
+  /** @type {Map<TimerHandle, NodeJS.Timeout>} */
+  const timers = new Map();
   const timerPowers = makeTimerPowers({
     now: () => Date.now(),
     monotonicNow: () => performance.now(),
-    setTimer: (callback, delayMs) => nodeTimers.setTimeout(callback, delayMs),
-    clearTimer: handle =>
-      nodeTimers.clearTimeout(/** @type {NodeJS.Timeout} */ (handle)),
-    unrefTimer: handle => /** @type {NodeJS.Timeout} */ (handle).unref?.(),
+    setTimer: (callback, delayMs) => {
+      const token = harden({});
+      const timer = nodeTimers.setTimeout(() => {
+        timers.delete(token);
+        callback();
+      }, delayMs);
+      timers.set(token, timer);
+      return token;
+    },
+    clearTimer: token => {
+      const timer = timers.get(token);
+      if (timer !== undefined) nodeTimers.clearTimeout(timer);
+      timers.delete(token);
+    },
+    unrefTimer: token => {
+      timers.get(token)?.unref();
+    },
   });
   const random = makeRandomPowers({
     randomBytes: length => new Uint8Array(crypto.randomBytes(length)),
@@ -68,7 +83,7 @@ export const makeNodePowers = () => {
     resolve: (...parts) => path.resolve(...parts),
     isAbsolute: p => path.isAbsolute(p),
     fileURLToPath: u => url.fileURLToPath(u),
-    pathToFileURL: p => url.pathToFileURL(p),
+    pathToFileURL: p => url.pathToFileURL(p).href,
   });
   const files = makeFilePowers({
     fsp,
@@ -104,7 +119,7 @@ export const makeNodePowers = () => {
       ]);
       const bundlerPowers = makeBundlerPowers({
         readPowers: makeReadPowers({ fs, path, url, crypto }),
-        pathToFileURL: p => url.pathToFileURL(p),
+        pathToFileURL: paths.pathToFileURL,
         resolve: (...parts) => path.resolve(...parts),
         sha256Hex: hashes.sha256Hex,
       });
