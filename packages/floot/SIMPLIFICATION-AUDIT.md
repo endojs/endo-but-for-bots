@@ -167,3 +167,31 @@ separate new-session grant admission loses its inner diagnostic reasons.
 These remaining protocol/restoration findings require scoped follow-up, not a
 silent relaxation of context coverage or expansion into the deferred process-loss
 design. The refactor's cross-backend live acceptance is not complete.
+
+### Claude validation follow-up, September 25
+
+Generation 174 deployed `696e06289`: context comparison now ignores JSON object
+property order while retaining exact values/key sets, and message deltas accept
+the provider's nullable `container` and `stop_details` fields only when null.
+All 449 Claude tests passed, with independent adversarial review.
+Fresh live tests still failed: the tool turn at assistant-block equality, and
+the short response later in native capture.
+These fixes therefore do not establish the full cause or successful acceptance.
+
+Reviewed diagnostic revision `3b4575efd` adds fixed-field mismatch categories and
+static local capture rejection reasons, never transcript values or unknown keys.
+All 454 Claude tests pass; no acceptance predicate is relaxed by diagnostics.
+Read-only inspection of the retained short transcript identifies unsupported
+`agent_listing_delta` and `skill_listing` attachments.
+They contain actual model-visible guidance, not merely accounting metadata.
+The pinned Claude CLI omits these attachments from the public event stream;
+its initialization catalog does not attest their complete contents.
+Because the native JSONL is model-writable, parsing or retaining those records
+does not establish their origin under the current stream-coverage contract.
+Do not silently add them to the inert-attachment allowlist.
+A follow-up design decision must either obtain trusted request-side context
+evidence or explicitly define a weaker contract for advisory native metadata.
+The former preserves the current coverage goal; neither is a small parser fix.
+Native tool blocks also carry `caller`, but without the original partial stream
+that is only a candidate explanation for the tool mismatch, not a proven cause.
+No failed inference was replayed and no uncertainty marker was cleared.
