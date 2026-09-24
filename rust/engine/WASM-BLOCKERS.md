@@ -55,7 +55,7 @@ What stands in the way, in order of severity:
 | B1 | Stable Rust cannot link a wasm artifact with `panic=unwind`; the engine requires unwinding, including for guest-catchable errors | toolchain / engine | **hard** |
 | B7 | Heap admission, unadmitted host allocations, `usize` arithmetic and snapshot decoding depend on the target, so native and wasm32 diverge in results and metering; one tiny program crashes wasm32 | engine | **hard (consensus)** |
 | B3 | The native-recursion budget assumes an 8 MiB stack; smaller wasm stacks overflow **before** the budget halts, sometimes on programs the engine accepts natively | engine / host | configuration for Wasmtime and Node, **hard in browsers and workerd** |
-| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for string heaps, unbounded for arrays and side tables; a host memory cap turns deterministic `HeapExhausted` into a host-dependent trap or an early `HeapExhausted` | engine / host | **hard under a 128 MB cap** |
+| B8 | The ceilings do not bound memory: up to 4–5× the chunk ceiling for a running string heap and about 6× while a snapshot of it is written, unbounded for arrays and side tables; a cap that fails `memory.grow` makes programs trap or halt early with `HeapExhausted` where native completes or halts later, and Cloudflare replaces the whole isolate instead | engine / host | **hard under a 128 MB cap** |
 | B2 | Wasm exception-handling encoding: LLVM emits the legacy form by default, and Wasmtime accepts only the standard `exnref` form | toolchain / host | configuration |
 | B4 | Default-feature builds diverge between native and wasm in `Math` results and therefore in metering | engine features | configuration (use `consensus`) |
 | B5 | The worker binary depends on threads, `flock`, bundled C SQLite and POSIX files; `FileStore` does not work on WASI | worker / store | port work |
@@ -339,7 +339,10 @@ the ceilings before allocating.
   A machine with 16 million Map entries runs identically on both targets.
   Natively it then checkpoints into a 640 MB snapshot.
   On wasm32 the encoder's doubling buffer fails to allocate 1 GiB and aborts.
-  Streaming the encoder, or pre-sizing one exact buffer, removes the copies.
+  `snapshot_image` first copies the arenas into a `MachineImage`, and `encode_heap` then builds
+  the HEAP payload in two more buffers before copying it into the output.
+  Encoding each atom straight from the live arenas into the sink, whether a file, a hasher or
+  one exact pre-sized buffer, removes the copies; pre-sizing the output buffer alone does not.
 - **`manifest.chunk_len` is truncated** (`ironhorse-snapshot/src/store.rs:605`, narrowed with
   `as usize` at `machine.rs:1379`, `store.rs:2931`, `store.rs:3262`).
   A crafted store with `chunk_len = 2^32 + 65536` makes every chunk allocation halt natively.
@@ -584,22 +587,30 @@ Measured:
   Ten million `a.push(0)` calls grew linear memory to 583 MB while the chunk arena held 12 KB.
   Native repros reached about 4–6.6 GiB of RSS under the default ceilings (B7).
 
-So for heaps dominated by strings the footprint is up to 4–5× the chunk ceiling (doubling a
-large string is the worst case measured; push loops of strings halted at 2.1–2.2×), and for
-heaps dominated by arrays or side tables no ceiling bounds it.
+So for heaps dominated by strings the running footprint is up to 4–5× the chunk ceiling
+(doubling a large string is the worst case measured while running; push loops of strings halted
+at 2.1–2.2×), and for heaps dominated by arrays or side tables no ceiling bounds it.
+A whole-heap snapshot adds several copies (B7), and the worst-case footprint must count them:
+under the default ceilings, writing a 252 MB snapshot of strings took wasm32 from 557 MB to
+1.56 GB of linear memory, 5.8× the chunk ceiling, and at 2^29 the same pattern reached 3.11 GB.
+The Thixotrope worker's per-crank `checkpoint_to_store` costs less: on the same heap, into an
+in-memory store that keeps its own copy, it reached 787 MB.
 
 Wasm linear memory never shrinks.
-On a host whose memory cap is below that footprint, `memory.grow` fails before the engine's
-deterministic `HeapExhausted`.
-An infallible allocation then aborts and traps, as `units_to_be16` does in the doubling program.
+On a host that enforces its memory cap by failing `memory.grow`, as Wasmtime's store limits do,
+growth fails before the engine's deterministic `HeapExhausted` whenever the cap is below that
+footprint.
+An infallible allocation then aborts and traps, as `units_to_be16` does in the 1M-unit doubling
+program, and as array items do.
 A fallible one, such as the chunk and slot arenas' growth or `reserved_vec`, halts with a
 `HeapExhausted` that the embedder cannot tell from a deterministic one.
 Under a 128 MiB Wasmtime memory limit, a loop that keeps 40 strings of 1M units halted that way
 at 2,359,889 computrons, where native and uncapped wasm32 return `40` at 10,488,433.
 Either way the outcome depends on the host; a distinct halt for host allocation failure, which
 the embedder never commits, would make the second case visible.
-Cloudflare's 128 MB isolate cap is far below the default footprint.
-Ceilings for such a host must be set so that the *worst-case* footprint fits, and the ratio
+Cloudflare's 128 MB isolate cap is far below the default footprint, and the documentation
+describes a different enforcement: the isolate is replaced (see the Cloudflare section).
+Ceilings for these hosts must be set so that the *worst-case* footprint fits, and the ratio
 must be measured per build.
 
 Node's `node:wasi` is also unreliable at these sizes.
@@ -756,6 +767,8 @@ Firefox and Safari were not available to test.
   Mobile browsers typically cap lower (*inferred*).
   The engine's default ceilings allow a footprint above 1 GB, so browser ceilings must be set
   from the memory cap, not left at the defaults.
+  As on Cloudflare, ceilings alone are not enough: array items and side tables must also be
+  admitted against them (B7, B8).
 - **No threads.**
   The engine is single-threaded, so it needs no `SharedArrayBuffer` and no cross-origin
   isolation headers (COOP/COEP).
@@ -841,6 +854,10 @@ documentation, not measured.
   Cloudflare's 128 MB limit is per isolate, "including the JavaScript heap and WebAssembly
   allocations", and one isolate can host several Durable Objects (Workers limits and Durable
   Object in-memory-state documentation).
+  Past the limit, the runtime "lets in-flight requests complete and creates a new isolate for
+  subsequent requests" (Workers limits), which resets every Durable Object in the isolate.
+  No halt inside the engine reports that, and local workerd enforces no limit, so whether
+  production also fails `memory.grow` first, as a capped Wasmtime does, is not known.
   Ceilings for Cloudflare must be set well below the defaults, but ceilings alone are not
   enough: array items and side tables must also be admitted against them first (B7, B8).
   The instance should be recycled when its linear memory passes a threshold, since it never
