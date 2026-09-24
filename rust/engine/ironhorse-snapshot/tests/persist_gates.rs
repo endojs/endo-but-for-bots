@@ -27,6 +27,7 @@
 #[path = "common/compile.rs"]
 mod guest_compile;
 use guest_compile::compile;
+use ironhorse_snapshot::CommitToken;
 
 use ironhorse_snapshot::machine::MachineSnapshotError;
 use ironhorse_snapshot::machine::{
@@ -1007,7 +1008,7 @@ fn a_stored_unregistered_key_id_refuses_adoption_or_publication() {
     assert!(from_snapshot_bytes(&write_machine_unchecked(&image), &sig()).is_err());
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
     const REFUSAL: &str = "stored property id outside the name and symbol-key tables";
     assert_eq!(

@@ -1,12 +1,17 @@
-//! Stable small-state section identities and incremental integrity primitives.
+//! Stable small-state section identities, framing, and the per-section
+//! digests a checkpoint compares to send only the sections that changed.
 //!
-//! Schema 28 binds the 32 payloads independently. Older schemas retain their
-//! monolithic leaf until the verified migration restamps the manifest.
-use crate::store::{build_class_tree, class_tree_root, leaf_hash, update_class_tree, StoreError};
+//! Schema 28 stores the 32 payloads independently. An older store keeps its
+//! small state framed whole until migration splits it. The digests are
+//! change detection: nothing takes one as evidence about its payload (the
+//! store-seam design's trust model).
+use crate::store::StoreError;
 use crate::SnapshotError;
 
-const LEAF_SECTION: u8 = b'T';
-const TREE_SMALL: u8 = b'm';
+/// The digest domain tag, unchanged since schema 28: the digests a store
+/// holds agree with the ones a session computes, whichever build stored
+/// them, so a first checkpoint after an upgrade skips unchanged sections.
+const SECTION_DIGEST_TAG: u8 = b'T';
 
 macro_rules! define_small_sections {
     ($($name:ident = $id:literal,)*) => {
@@ -71,13 +76,18 @@ pub fn split_small_state(bytes: &[u8]) -> Result<[&[u8]; SMALL_SECTION_COUNT], S
     Ok(sections)
 }
 
+/// A section's digest: SHA-256 over the domain tag, the big-endian section
+/// id, and the payload bytes.
 pub fn section_hash(section: SmallSection, bytes: &[u8]) -> [u8; 32] {
-    leaf_hash(LEAF_SECTION, section.id(), bytes)
+    section_digest(section.id(), bytes)
 }
 
-/// Root of a complete schema-28 small state, preserving its exact payload bytes.
-pub fn framed_root(bytes: &[u8]) -> Result<[u8; 32], StoreError> {
-    Ok(SectionLeaves::from_payloads(&split_small_state(bytes)?).root())
+fn section_digest(id: u32, bytes: &[u8]) -> [u8; 32] {
+    let mut h = crate::sha256::Sha256::new();
+    h.update(&[SECTION_DIGEST_TAG]);
+    h.update(&id.to_be_bytes());
+    h.update(bytes);
+    h.finalize()
 }
 
 /// Canonical legacy framing, also used by explicit whole-state export adapters.
@@ -114,20 +124,6 @@ pub fn validate_updates(updates: &[SectionUpdate], initial: bool) -> Result<(), 
         return Err(corrupt("missing initial small sections"));
     }
     Ok(())
-}
-
-/// Canonical sparse sealing input. Identity sorting makes caller order irrelevant.
-pub fn encode_updates(updates: &[SectionUpdate]) -> Vec<u8> {
-    let mut ordered: Vec<_> = updates.iter().collect();
-    ordered.sort_by_key(|u| u.section.id());
-    let mut bytes = Vec::new();
-    bytes.extend_from_slice(&(ordered.len() as u64).to_be_bytes());
-    for update in ordered {
-        bytes.extend_from_slice(&update.section.id().to_be_bytes());
-        bytes.extend_from_slice(&(update.bytes.len() as u64).to_be_bytes());
-        bytes.extend_from_slice(&update.bytes);
-    }
-    bytes
 }
 
 pub fn validate_batch(
@@ -216,39 +212,29 @@ pub fn merge_framed(
     }
 }
 
-/// Only changed payloads are hashed. The fixed-width tree binds each identity.
-#[derive(Clone, Debug)]
+/// The 32 section digests. Only changed payloads are hashed again.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SectionLeaves {
     leaves: [[u8; 32]; SMALL_SECTION_COUNT],
-    levels: Vec<Vec<[u8; 32]>>,
 }
 impl SectionLeaves {
     pub fn from_payloads(sections: &[&[u8]; SMALL_SECTION_COUNT]) -> Self {
-        let leaves = std::array::from_fn(|id| leaf_hash(LEAF_SECTION, id as u32, sections[id]));
-        Self::from_hashes(leaves)
+        Self::from_hashes(std::array::from_fn(|id| {
+            section_digest(id as u32, sections[id])
+        }))
     }
     pub fn from_hashes(leaves: [[u8; 32]; SMALL_SECTION_COUNT]) -> Self {
-        Self {
-            levels: build_class_tree(TREE_SMALL, &leaves),
-            leaves,
-        }
+        Self { leaves }
     }
     pub fn hashes(&self) -> &[[u8; 32]; SMALL_SECTION_COUNT] {
         &self.leaves
     }
-    pub fn root(&self) -> [u8; 32] {
-        class_tree_root(TREE_SMALL, &self.leaves, &self.levels)
-    }
     pub fn apply(&mut self, updates: &[SectionUpdate]) -> Result<(), StoreError> {
         validate_updates(updates, false)?;
-        let mut dirty = Vec::with_capacity(updates.len());
         for update in updates {
             let id = update.section.id();
-            self.leaves[id as usize] = leaf_hash(LEAF_SECTION, id, &update.bytes);
-            dirty.push(id);
+            self.leaves[id as usize] = section_digest(id, &update.bytes);
         }
-        dirty.sort_unstable();
-        update_class_tree(TREE_SMALL, &self.leaves, &mut self.levels, &dirty);
         Ok(())
     }
 }
@@ -403,7 +389,8 @@ mod tests {
         let signature = crate::Signature::new("ironhorse-worker-v1");
         let machine = ironhorse_vm::Interp::new();
         let image = crate::machine::MachineSnapshot::snapshot_image(&machine, &signature).unwrap();
-        let mut batch = crate::store::image_to_batch_unchecked(&image, 1, "");
+        let mut batch =
+            crate::store::image_to_batch_unchecked(&image, 1, crate::store::CommitToken::ZERO);
         assert!(!batch.small.is_empty());
         batch.small_updates = Some(vec![]);
         assert!(matches!(
@@ -414,20 +401,26 @@ mod tests {
         ));
     }
 
+    /// The digest formula is the one schemas 28 through 35 used: this pins
+    /// one value, so a change to it is deliberate.
+    #[test]
+    fn section_digest_is_stable() {
+        let mut h = crate::sha256::Sha256::new();
+        h.update(b"T");
+        h.update(&7u32.to_be_bytes());
+        h.update(b"payload");
+        assert_eq!(
+            section_hash(SmallSection::Collections, b"payload"),
+            h.finalize()
+        );
+        assert_eq!(SmallSection::Collections.id(), 7);
+    }
+
     #[test]
     fn incremental_hashes_match_full_rebuilds_and_bind_section_identity() {
         let mut payloads = sample_payloads();
         let refs = std::array::from_fn(|id| payloads[id].as_slice());
         let mut leaves = SectionLeaves::from_payloads(&refs);
-        let original = leaves.root();
-        assert_ne!(
-            original,
-            leaf_hash(
-                crate::store::LEAF_SMALL,
-                0,
-                &frame_small_state(&refs).unwrap()
-            )
-        );
         for round in 0..100 {
             let mut updates = Vec::new();
             for section in SmallSection::ALL {
@@ -440,18 +433,17 @@ mod tests {
             updates.reverse(); // callers need not sort dirty sections
             leaves.apply(&updates).unwrap();
             let refs = std::array::from_fn(|id| payloads[id].as_slice());
-            assert_eq!(leaves.root(), SectionLeaves::from_payloads(&refs).root());
+            assert_eq!(leaves, SectionLeaves::from_payloads(&refs));
         }
-        let before = leaves.root();
-        let before_hashes = *leaves.hashes();
+        let before = leaves.clone();
         leaves.apply(&[]).unwrap();
-        assert_eq!(before_hashes, *leaves.hashes());
+        assert_eq!(before, leaves);
         let update = SectionUpdate {
             section: SmallSection::Arrays,
             bytes: vec![],
         };
         assert!(leaves.apply(&[update.clone(), update.clone()]).is_err());
-        assert_eq!(before, leaves.root(), "invalid updates must be atomic");
+        assert_eq!(before, leaves, "invalid updates must be atomic");
         assert!(validate_updates(&[update], true).is_err());
         let all: Vec<_> = SmallSection::ALL
             .into_iter()
@@ -463,18 +455,27 @@ mod tests {
         validate_updates(&all, true).unwrap();
         leaves.apply(&all).unwrap();
         assert_ne!(
-            before,
-            leaves.root(),
+            before, leaves,
             "explicit empty payloads change section hashes"
         );
+        // A digest binds its section's identity: equal payloads in two
+        // sections digest differently, so swapping them is a change.
         let mut swapped = sample_payloads();
+        swapped[SmallSection::Arrays.id() as usize] = b"same".to_vec();
+        swapped[SmallSection::Collections.id() as usize] = b"other".to_vec();
         let refs = std::array::from_fn(|id| swapped[id].as_slice());
-        let before = SectionLeaves::from_payloads(&refs).root();
+        let before = SectionLeaves::from_payloads(&refs);
         swapped.swap(
             SmallSection::Arrays.id() as usize,
             SmallSection::Collections.id() as usize,
         );
         let refs = std::array::from_fn(|id| swapped[id].as_slice());
-        assert_ne!(before, SectionLeaves::from_payloads(&refs).root());
+        let after = SectionLeaves::from_payloads(&refs);
+        assert_ne!(before, after);
+        let (arrays, collections) = (
+            SmallSection::Arrays.id() as usize,
+            SmallSection::Collections.id() as usize,
+        );
+        assert_ne!(before.hashes()[arrays], after.hashes()[collections]);
     }
 }

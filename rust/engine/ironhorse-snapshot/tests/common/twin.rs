@@ -113,7 +113,7 @@ pub fn twin_with_rigor(
     if rigor.validate {
         validate_store(store, &sig()).expect("initial store validates");
     }
-    let initial_root = store.manifest().expect("manifest").root;
+    let initial_export = ironhorse_snapshot::store::root_hash(store).expect("export");
     let mut eager = resume_from_store(store, &sig()).expect("eager resume");
     let actual: Vec<_> = observations
         .iter()
@@ -139,9 +139,9 @@ pub fn twin_with_rigor(
                 .expect("begin lazy store"),
         );
         assert_eq!(
-            lazy_store.borrow().manifest().expect("lazy manifest").root,
-            initial_root,
-            "lazy and eager checks start from the same authenticated state"
+            ironhorse_snapshot::store::root_hash(&*lazy_store.borrow()).expect("lazy export"),
+            initial_export,
+            "lazy and eager checks start from the same state"
         );
         let mut lazy = resume_from_store_lazy(lazy_store.clone(), &sig()).expect("lazy resume");
         let actual: Vec<_> = observations

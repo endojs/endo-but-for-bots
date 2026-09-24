@@ -4,6 +4,7 @@ use ironhorse_snapshot::format::{Signature, HEAP, STAC};
 use ironhorse_snapshot::image::{
     read_machine, write_machine_unchecked, MachineImage, SymbolKeyImage,
 };
+use ironhorse_snapshot::CommitToken;
 use ironhorse_snapshot::{AtomReader, AtomWriter, SnapshotError};
 use ironhorse_vm::{ChunkArena, SlotArena};
 
@@ -55,6 +56,8 @@ fn wire_record_counts_refuse_32_bit_overflow() {
 #[test]
 fn manifest_parent_length_refuses_32_bit_overflow() {
     use ironhorse_snapshot::store::{image_to_batch_unchecked, StoreError, StoreManifest};
+    // The parent seal is a field of the layouts before store schema 36,
+    // which migration still reads.
     let image = MachineImage::from_arenas(
         Signature::new("manifest-overflow"),
         &SlotArena::new(),
@@ -64,10 +67,13 @@ fn manifest_parent_length_refuses_32_bit_overflow() {
         vec![],
         SymbolKeyImage::default(),
     );
-    let manifest = image_to_batch_unchecked(&image, 1, "").manifest;
+    let manifest = StoreManifest {
+        store_schema: 35,
+        ..image_to_batch_unchecked(&image, 1, CommitToken::ZERO).manifest
+    };
     let mut bytes = manifest.encode();
     assert_eq!(StoreManifest::decode(&bytes).unwrap(), manifest);
-    assert!(manifest.parent_seal.is_empty());
+    // This build writes the legacy layout with an empty parent seal, last.
     let length_at = bytes.len() - 4;
     assert_eq!(&bytes[length_at..], &[0; 4]);
     bytes[length_at..].copy_from_slice(&u32::MAX.to_be_bytes());

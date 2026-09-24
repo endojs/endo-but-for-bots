@@ -117,6 +117,16 @@ impl BackingCommitAuthority {
     }
 }
 
+/// A store session's acknowledgement of a [`SlotArena`]'s free list, from
+/// [`SlotArena::acknowledge_free_list`]: the list as it stood then is the
+/// list the store holds. Only the arena that issued it honors it, and only
+/// until its next acknowledgement, so neither a replaced arena nor a stray
+/// acknowledgement can make a checkpoint believe the list did not change.
+#[derive(Clone, Debug)]
+pub struct FreeListAck {
+    identity: Rc<()>,
+}
+
 /// The lazy backing of a [`SlotArena`]: the page source plus one
 /// residency bit per attach-time page. `Cell` residency bits let the
 /// by-value read path fault through `&self`; pages past the
@@ -638,6 +648,17 @@ pub struct SlotArena {
     /// branched on, so eager machines keep their exact pre-H1 path.
     slots: Vec<Cell<Slot>>,
     free: Vec<u32>,
+    /// The free list's low-water mark: the shortest the list has been
+    /// since the last [`SlotArena::acknowledge_free_list`], or since the
+    /// arena was built, when it starts at the list's length. The list
+    /// changes only at its end — the LIFO pop in [`SlotArena::alloc`] and
+    /// the pushes in [`SlotArena::free`] and the sweep — so every entry
+    /// below the mark is as it was then, and a checkpoint ships only the
+    /// segments from the mark on.
+    free_low: usize,
+    /// The identity the current [`FreeListAck`] carries, replaced by each
+    /// acknowledgement. A new arena's is carried by none.
+    free_ack: Rc<()>,
     /// Twin of `free` as one bit per record, kept in exact sync by
     /// every free-list writer: `free` keeps the LIFO reuse order the
     /// snapshot serializes; this bitmap answers "is `i` free?" in O(1).
@@ -660,8 +681,8 @@ pub struct SlotArena {
     /// Host bookkeeping only — nothing observable reads it, the same
     /// determinism firewall as the cost recorder. `free`/`sweep`/`mark`
     /// do not set bits: they never change record bytes (the free list
-    /// travels in the checkpoint's small state, and mark bits are
-    /// transient).
+    /// travels in its own segment rows, tracked by the low-water mark,
+    /// and mark bits are transient).
     dirty: Vec<bool>,
     /// One bit per page: does this arena's lazy backing NOT hold the
     /// page's current content?
@@ -736,6 +757,8 @@ impl SlotArena {
             property_index: RefCell::default(),
             slots: Vec::new(),
             free: Vec::new(),
+            free_low: 0,
+            free_ack: Rc::default(),
             free_marks: Vec::new(),
             marks: Vec::new(),
             live: 0,
@@ -778,7 +801,9 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: Vec::new(),
+            free_low: free.len(),
             free,
+            free_ack: Rc::default(),
             free_marks,
             marks: vec![false; slot_count as usize],
             live,
@@ -1017,6 +1042,7 @@ impl SlotArena {
         self.snapshot_dirt.liveness();
         self.live += 1;
         if let Some(i) = self.free.pop() {
+            self.free_low = self.free_low.min(self.free.len());
             self.property_index.get_mut().free(SlotIndex(i));
             // Fault the page first: overwriting one record of a
             // non-resident page and then marking nothing would let a
@@ -1345,6 +1371,39 @@ impl SlotArena {
         &self.free
     }
 
+    /// Acknowledge the free list as the store now holds it, after a
+    /// successful commit, and restart the low-water mark at the list's
+    /// length. Earlier acknowledgements stop being honored. An arena just
+    /// restored from the store is adopted with
+    /// [`SlotArena::free_list_baseline`] instead.
+    pub fn acknowledge_free_list(&mut self) -> FreeListAck {
+        self.free_low = self.free.len();
+        self.free_ack = Rc::new(());
+        FreeListAck {
+            identity: self.free_ack.clone(),
+        }
+    }
+
+    /// An acknowledgement of the list as the arena was built, for a session
+    /// adopting an arena just restored from the store: unlike
+    /// [`SlotArena::acknowledge_free_list`], it keeps the low-water mark, so
+    /// whatever restore itself popped (a layout migration that allocates)
+    /// still reaches the next checkpoint. Only sound on an arena whose list
+    /// was built from the stored one and has not been acknowledged since.
+    pub fn free_list_baseline(&self) -> FreeListAck {
+        FreeListAck {
+            identity: self.free_ack.clone(),
+        }
+    }
+
+    /// How many leading free-list entries are unchanged since `ack`: the
+    /// low-water mark. `None` when this arena did not issue `ack`, or has
+    /// acknowledged again since, and the caller must treat the whole list
+    /// as changed.
+    pub fn free_list_unchanged_prefix(&self, ack: &FreeListAck) -> Option<usize> {
+        Rc::ptr_eq(&ack.identity, &self.free_ack).then_some(self.free_low)
+    }
+
     /// Rebuild an arena from a serialized image: the flat record array, the
     /// free list, and the live count. Marks are reset (a snapshot is taken
     /// on a quiescent machine, outside any collection — design § Snapshots
@@ -1371,7 +1430,9 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             slots: slots.into_iter().map(Cell::new).collect(),
+            free_low: free.len(),
             free,
+            free_ack: Rc::default(),
             free_marks,
             marks,
             live,
@@ -2911,6 +2972,71 @@ mod dirty_tests {
         assert_eq!(arena.resident_extent_count(), 0);
         assert!(arena.dirty_extents().is_empty());
         assert!(arena.unbacked.iter().all(|flag| !flag));
+    }
+
+    /// The free-list low-water mark: pops lower it, pushes (a free, a
+    /// sweep) leave it, and an acknowledgement restarts it at the list's
+    /// length. The acknowledgement is honored only by the arena that issued
+    /// it and only until the next one.
+    #[test]
+    fn free_list_low_water_mark_tracks_the_unchanged_prefix() {
+        let mut a = SlotArena::new();
+        let slots: Vec<SlotIndex> = (0..6).map(|i| a.alloc(Slot::integer(i))).collect();
+        for &slot in &slots[..4] {
+            a.free(slot);
+        }
+        let ack = a.acknowledge_free_list();
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(4));
+
+        // Pushes leave the prefix alone.
+        a.free(slots[4]);
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(4));
+        // Pops lower it, even when a push restores the length.
+        a.alloc(Slot::integer(7));
+        a.alloc(Slot::integer(8));
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(3));
+        a.free(slots[5]);
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(3));
+        assert_eq!(a.free_list().len(), 4);
+        // A sweep's pushes leave it too.
+        a.clear_marks();
+        assert!(a.sweep() > 0);
+        assert_eq!(a.free_list_unchanged_prefix(&ack), Some(3));
+
+        // A second acknowledgement restarts the mark and retires the first.
+        let next = a.acknowledge_free_list();
+        assert_eq!(a.free_list_unchanged_prefix(&ack), None);
+        assert_eq!(
+            a.free_list_unchanged_prefix(&next),
+            Some(a.free_list().len())
+        );
+
+        // Another arena, even one with the same list, honors neither.
+        let twin = SlotArena::from_image(a.records(), a.free_list().to_vec(), a.live_count());
+        assert_eq!(twin.free_list_unchanged_prefix(&next), None);
+        assert_eq!(twin.free_list_unchanged_prefix(&ack), None);
+    }
+
+    /// An arena adopted as restored keeps the mark it was built with, so
+    /// what restore itself pops still counts as changed even when a push
+    /// restores the length; an acknowledgement would restart the mark.
+    #[test]
+    fn a_free_list_baseline_keeps_the_build_time_mark() {
+        let mut a = SlotArena::new();
+        let slots: Vec<SlotIndex> = (0..5).map(|i| a.alloc(Slot::integer(i))).collect();
+        for &slot in &slots[..3] {
+            a.free(slot);
+        }
+        let mut restored =
+            SlotArena::from_image(a.records(), a.free_list().to_vec(), a.live_count());
+        restored.alloc(Slot::integer(9));
+        restored.free(slots[3]);
+        assert_eq!(restored.free_list().len(), 3);
+        let baseline = restored.free_list_baseline();
+        assert_eq!(restored.free_list_unchanged_prefix(&baseline), Some(2));
+        let ack = restored.acknowledge_free_list();
+        assert_eq!(restored.free_list_unchanged_prefix(&ack), Some(3));
+        assert_eq!(restored.free_list_unchanged_prefix(&baseline), None);
     }
 
     #[test]

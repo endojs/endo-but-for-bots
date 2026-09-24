@@ -25,6 +25,7 @@ use ironhorse_snapshot::machine::{
     MachineSnapshot,
 };
 use ironhorse_snapshot::store::{image_to_batch_unchecked, validate_store, MemoryStore};
+use ironhorse_snapshot::CommitToken;
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::snapshot_api::FromAsyncRow;
 use ironhorse_vm::{Interp, Slot};
@@ -296,7 +297,7 @@ fn refusal(
     let mut store = MemoryStore::new();
     if ironhorse_snapshot::store::HeapStoreCommit::commit(
         &mut store,
-        &image_to_batch_unchecked(&image, 1, ""),
+        &image_to_batch_unchecked(&image, 1, CommitToken::ZERO),
     )
     .is_ok()
     {
