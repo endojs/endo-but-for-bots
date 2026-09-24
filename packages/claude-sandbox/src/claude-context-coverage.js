@@ -7,6 +7,84 @@ const isUuid = value =>
   /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const same = (left, right) => JSON.stringify(left) === JSON.stringify(right);
 
+// Anthropic SDKRateLimitEvent / SDKRateLimitInfo is a capacity notification,
+// not dialogue or a terminal result. Closed shape prevents hidden message or
+// tool payloads from being silently treated as inert framing.
+// https://app.unpkg.com/@anthropic-ai/claude-agent-sdk@0.3.185/files/sdk.d.ts
+const isRateLimitEvent = event => {
+  const info = event.rate_limit_info;
+  const status = value =>
+    ['allowed', 'allowed_warning', 'rejected'].includes(value);
+  const numeric = [
+    'resetsAt',
+    'utilization',
+    'overageResetsAt',
+    'surpassedThreshold',
+  ];
+  const boolean = [
+    'isUsingOverage',
+    'overageInUse',
+    'canUserPurchaseCredits',
+    'hasChargeableSavedPaymentMethod',
+  ];
+  const fields = [
+    'status',
+    'rateLimitType',
+    'overageStatus',
+    'overageDisabledReason',
+    'errorCode',
+    ...numeric,
+    ...boolean,
+  ];
+  return (
+    Object.keys(event).every(name =>
+      ['type', 'rate_limit_info', 'uuid', 'session_id'].includes(name),
+    ) &&
+    isUuid(event.uuid) &&
+    info &&
+    typeof info === 'object' &&
+    !Array.isArray(info) &&
+    Object.keys(info).every(name => fields.includes(name)) &&
+    status(info.status) &&
+    numeric.every(
+      name =>
+        info[name] === undefined ||
+        (typeof info[name] === 'number' &&
+          Number.isFinite(info[name]) &&
+          info[name] >= 0),
+    ) &&
+    boolean.every(
+      name => info[name] === undefined || typeof info[name] === 'boolean',
+    ) &&
+    (info.rateLimitType === undefined ||
+      [
+        'five_hour',
+        'seven_day',
+        'seven_day_opus',
+        'seven_day_sonnet',
+        'overage',
+      ].includes(info.rateLimitType)) &&
+    (info.overageStatus === undefined || status(info.overageStatus)) &&
+    (info.errorCode === undefined || info.errorCode === 'credits_required') &&
+    (info.overageDisabledReason === undefined ||
+      [
+        'overage_not_provisioned',
+        'org_level_disabled',
+        'org_level_disabled_until',
+        'out_of_credits',
+        'seat_tier_level_disabled',
+        'member_level_disabled',
+        'seat_tier_zero_credit_limit',
+        'group_zero_credit_limit',
+        'member_zero_credit_limit',
+        'org_service_level_disabled',
+        'no_limits_configured',
+        'fetch_error',
+        'unknown',
+      ].includes(info.overageDisabledReason))
+  );
+};
+
 /**
  * Conservative coverage proof for the pinned CLI's mainline partial stream.
  * This does not establish signature validity, effect settlement, or producer
@@ -100,8 +178,7 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
           'assistant',
           'user',
           'stream_event',
-          // Pinned CLI protocol identifiers, for diagnostics only. These
-          // remain unsupported below; naming them does not certify coverage.
+          // Named protocol categories do not themselves certify coverage.
           'rate_limit_event',
           'tool_progress',
           'tool_use_summary',
@@ -140,6 +217,12 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         return;
       }
       requireValue(initialized);
+      if (event.type === 'rate_limit_event') {
+        requireValue(isRateLimitEvent(event));
+        // Never advances frames, block state, terminal state or success. Even
+        // rejected capacity is not a replacement for the producer's result.
+        return;
+      }
       if (boundary && frames.length === boundaryPosition) {
         requireValue(
           event.type === 'user' &&

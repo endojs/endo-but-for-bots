@@ -40,7 +40,7 @@ test('coverage terminal refusal identifies outcome stage without widening accept
   t.regex(error.message, /phase=outcome, check=1/);
 });
 
-for (const type of ['rate_limit_event', 'tool_progress', 'tool_use_summary']) {
+for (const type of ['tool_progress', 'tool_use_summary']) {
   test(`known unsupported ${type} is named but remains refused`, t => {
     const coverage = makeCoverage();
     coverage.observe({
@@ -96,6 +96,93 @@ const checkCompaction = f => {
     outcome: 'success',
   });
 };
+const capacityEvent = () => ({
+  type: 'rate_limit_event',
+  uuid: id(99),
+  session_id: sessionId,
+  rate_limit_info: { status: 'allowed', utilization: 0.2 },
+});
+test('capacity notification never establishes a terminal result', t => {
+  const coverage = makeCoverage();
+  coverage.observe({ type: 'system', subtype: 'init', session_id: sessionId });
+  for (const status of ['allowed', 'allowed_warning', 'rejected']) {
+    t.notThrows(() =>
+      coverage.observe({ ...capacityEvent(), rate_limit_info: { status } }),
+    );
+  }
+  t.throws(() => coverage.assertOutcome('success'));
+});
+test('validated capacity notifications interleave without changing exact compaction coverage', async t => {
+  const f = await compactionFixture();
+  const events = [];
+  for (const event of f.events) {
+    events.push(event);
+    if (event.type !== 'result')
+      events.push({ ...capacityEvent(), session_id: f.sessionId });
+  }
+  f.events = events;
+  t.notThrows(() => checkCompaction(f));
+});
+for (const [name, change] of [
+  [
+    'extra dialogue',
+    event => {
+      event.message = { role: 'assistant', content: 'hidden' };
+    },
+  ],
+  [
+    'extra nested payload',
+    event => {
+      event.rate_limit_info.message = 'hidden';
+    },
+  ],
+  [
+    'invalid status',
+    event => {
+      event.rate_limit_info.status = 'done';
+    },
+  ],
+  [
+    'invalid numeric',
+    event => {
+      event.rate_limit_info.utilization = '0.2';
+    },
+  ],
+  [
+    'array info',
+    event => {
+      event.rate_limit_info = [];
+    },
+  ],
+  [
+    'invalid uuid',
+    event => {
+      event.uuid = 'invalid';
+    },
+  ],
+  [
+    'wrong session',
+    event => {
+      event.session_id = id(98);
+    },
+  ],
+]) {
+  test(`capacity event refuses ${name}`, t => {
+    const coverage = makeCoverage();
+    coverage.observe({
+      type: 'system',
+      subtype: 'init',
+      session_id: sessionId,
+    });
+    const event = capacityEvent();
+    change(event);
+    t.throws(() => coverage.observe(event));
+    t.throws(() => coverage.assertOutcome('success'));
+  });
+}
+test('capacity event before initialization remains refused', t => {
+  t.throws(() => makeCoverage().observe(capacityEvent()));
+});
 test('actual partial-stream auto compaction certifies prompt, retained tool frames and summary', async t => {
   const f = await compactionFixture();
   t.notThrows(() => checkCompaction(f));
