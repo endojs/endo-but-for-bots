@@ -15,8 +15,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use ironhorse_snapshot::machine::{
-    begin_store_session, catch_store_fault, checkpoint_to_store, resume_from_store,
-    resume_from_store_lazy,
+    begin_store_session, catch_store_fault, resume_from_store, resume_from_store_lazy,
 };
 use ironhorse_snapshot::store::{
     chunk_extent_count, slot_page_count, validate_store, validate_store_content, HeapStore,
@@ -178,66 +177,6 @@ fn structural_row_damage_fails_closed_where_it_is_decoded() {
     }
 }
 
-/// Open and the fault read no leaf hash, so damage to the leaf rows is
-/// found by both validator levels and by the first checkpoint after a
-/// resume, which rebuilds its root ledger from them.
-#[test]
-fn leaf_row_damage_is_refused_by_the_validators_and_the_next_checkpoint() {
-    for (case, sql, refusal) in [
-        (
-            "leaf-gap",
-            "DELETE FROM leaf_hashes WHERE kind = 0 AND idx = 0",
-            StoreError::MissingRow("slot page leaf", 0),
-        ),
-        (
-            "leaf-count",
-            "DELETE FROM leaf_hashes WHERE kind = 0 \
-             AND idx = (SELECT MAX(idx) FROM leaf_hashes WHERE kind = 0)",
-            StoreError::Snapshot(SnapshotError::Corrupt(
-                "store leaf-hash inventory disagrees with geometry",
-            )),
-        ),
-    ] {
-        let dir = common::TempDir::new(&format!("ih-row-leaf-{case}"));
-        let path = dir.join("heap.sqlite");
-        damaged_store(&path, case, sql);
-        // One handle at a time: the store takes an exclusive lock.
-        drop(
-            resume_from_store_lazy(
-                Rc::new(RefCell::new(SqliteHeapStore::open(&path).unwrap())),
-                &sig(),
-            )
-            .expect("lazy resume reads no leaf"),
-        );
-        let mut store = SqliteHeapStore::open(&path).unwrap();
-        assert_eq!(
-            validate_store(&store, &sig()).err(),
-            Some(refusal),
-            "{case}"
-        );
-        assert!(validate_store_content(&store, &sig()).is_err(), "{case}");
-        let mut session = resume_from_store(&store, &sig()).expect("eager resume reads no leaf");
-        let checkpoint = checkpoint_to_store(&mut session, &sig(), &mut store).err();
-        match case {
-            "leaf-gap" => assert_eq!(
-                checkpoint,
-                Some(StoreError::MissingRow("slot page leaf", 0))
-            ),
-            _ => assert_eq!(
-                checkpoint,
-                Some(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "prior leaf tables disagree with the prior manifest geometry"
-                ))),
-            ),
-        }
-        assert_eq!(
-            store.manifest().unwrap().epoch,
-            1,
-            "{case}: nothing committed"
-        );
-    }
-}
-
 /// Derived state is what open trusts without re-deriving it: the
 /// metadata-scale validator does not read it either, and the full
 /// validator re-derives each piece from its source.
@@ -295,4 +234,120 @@ fn derived_state_damage_is_refused_by_the_full_validator() {
         Err(StoreError::SummaryMismatch { .. }) => {}
         other => panic!("expected a summary mismatch, got {other:?}"),
     }
+}
+
+/// Under the trust model a well-formed edit at rest is the machine the
+/// store now describes. A length-preserving edit of a string's bytes in its
+/// chunk extent, made through a second connection between opens (an edit
+/// stage 1 stopped refusing), passes both validator levels and resumes,
+/// eagerly and lazily, as a machine holding the edited string: the store
+/// keeps no row digest to disagree with it.
+#[test]
+fn a_well_formed_edit_at_rest_resumes_as_the_machine_it_describes() {
+    let dir = common::TempDir::new("ih-row-well-formed-edit");
+    let path = dir.join("heap.sqlite");
+    let (bytecode, names) = compile("var edited = 'before-edit-XYZ'; 0");
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&bytecode).completed);
+    let mut store = SqliteHeapStore::open(&path).unwrap();
+    drop(
+        begin_store_session(machine, &sig(), &mut store)
+            .map_err(|(_, e)| e)
+            .expect("fixture persists"),
+    );
+    store.close().unwrap();
+
+    // Guest strings are UTF-16 big-endian code units in the chunk arena.
+    let utf16be = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_be_bytes).collect() };
+    let (before, after) = (utf16be("before-edit-XYZ"), utf16be("after--edit-XYZ"));
+    let conn = Connection::open(&path).unwrap();
+    let (ext, mut bytes, at) = {
+        let mut rows = conn.prepare("SELECT ext, bytes FROM chunk_exts").unwrap();
+        let found = rows
+            .query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .find_map(|(ext, bytes)| {
+                let at = bytes.windows(before.len()).position(|w| w == before)?;
+                Some((ext, bytes, at))
+            });
+        found.expect("the string lies inside one extent")
+    };
+    bytes[at..at + after.len()].copy_from_slice(&after);
+    conn.execute(
+        "UPDATE chunk_exts SET bytes = ?1 WHERE ext = ?2",
+        rusqlite::params![bytes, ext],
+    )
+    .unwrap();
+    conn.close().unwrap();
+
+    let store = SqliteHeapStore::open(&path).unwrap();
+    validate_store(&store, &sig()).expect("metadata-scale validation");
+    validate_store_content(&store, &sig()).expect("full validation");
+    let (probe, probe_names) = compile("var edited; edited");
+    let mut eager = resume_from_store(&store, &sig()).expect("eager resume");
+    let code = eager
+        .machine_mut()
+        .relink_crank(&probe, &probe_names)
+        .unwrap();
+    assert_eq!(eager.machine_mut().run(&code).result, "after--edit-XYZ");
+    drop(eager);
+    let store = Rc::new(RefCell::new(store));
+    let mut lazy = resume_from_store_lazy(store, &sig()).expect("lazy resume");
+    let code = lazy
+        .machine_mut()
+        .relink_crank(&probe, &probe_names)
+        .unwrap();
+    assert_eq!(lazy.machine_mut().run(&code).result, "after--edit-XYZ");
+}
+
+/// The shared consistent-edit suite (a slot's integer payload, a string's
+/// characters, two free-list entries swapped, a property renamed in its small
+/// section with the digest beside it recomputed, the crank counter advanced
+/// in the manifest), each row edited through a second connection between
+/// opens.
+#[test]
+fn consistent_edits_at_rest_resume_as_the_machine_they_describe() {
+    use ironhorse_snapshot::store_sections::{section_hash, SmallSection};
+    use rusqlite::params;
+    let dir = common::TempDir::new("ih-row-consistent-edits");
+    let path = dir.join("heap.sqlite");
+    ironhorse_snapshot::store_suite::consistent_edits_resume(
+        SqliteHeapStore::open(&path).unwrap(),
+        |store, kind, index, _old, new| {
+            store.close().unwrap();
+            let conn = Connection::open(&path).unwrap();
+            let changed = match kind {
+                "slot page" => conn.execute(
+                    "UPDATE slot_pages SET bytes = ?1 WHERE page = ?2",
+                    params![new, index],
+                ),
+                "chunk extent" => conn.execute(
+                    "UPDATE chunk_exts SET bytes = ?1 WHERE ext = ?2",
+                    params![new, index],
+                ),
+                "free segment" => conn.execute(
+                    "UPDATE free_segs SET bytes = ?1 WHERE seg = ?2",
+                    params![new, index],
+                ),
+                "small section" => conn.execute(
+                    "UPDATE small_sections SET bytes = ?1, hash = ?2 WHERE id = ?3",
+                    params![
+                        new,
+                        &section_hash(SmallSection::ALL[index as usize], new)[..],
+                        index
+                    ],
+                ),
+                "manifest" => conn.execute(
+                    "UPDATE meta SET value = ?1 WHERE key = 'manifest'",
+                    params![new],
+                ),
+                other => panic!("no {other} rows here"),
+            };
+            assert_eq!(changed.unwrap(), 1);
+            conn.close().unwrap();
+            SqliteHeapStore::open(&path).unwrap()
+        },
+    );
 }

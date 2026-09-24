@@ -16,7 +16,7 @@ use std::rc::Rc;
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, full_collect, resume_from_store_lazy,
 };
-use ironhorse_snapshot::store::{check_stored_digests, export_to_container};
+use ironhorse_snapshot::store::{export_to_container, validate_store_content};
 use ironhorse_snapshot::store_file::FileStore;
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::{parse_symbols, Interp};
@@ -99,10 +99,10 @@ pub const STAGE1_PROBE: (&str, &str) = (
 
 /// Write the stage-1 history into a fresh file store at `path`: epoch 1
 /// by a full write, then a lazy resume on a fresh handle, the first
-/// checkpoint after it (which rebuilds the root ledger from the stored
-/// metadata), a full collection, and incremental checkpoints, ending at
-/// epoch 4. Also run by `tests/migration.rs` into a scratch directory, so
-/// the digests of what this history writes are checked on every run.
+/// checkpoint after it (which reads the stored section digests), a full
+/// collection, and incremental checkpoints, ending at epoch 4. Also run by
+/// `tests/migration.rs` into a scratch directory, so every store this
+/// history writes is validated on every run.
 pub fn write_stage1_file_store(path: &std::path::Path) {
     let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
         STAGE1_CRANKS.iter().map(|s| compile(s)).collect();
@@ -130,12 +130,13 @@ pub fn write_stage1_file_store(path: &std::path::Path) {
         assert!(o.completed);
         assert_eq!(o.result, STAGE1_RESULTS[i]);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
-        check_stored_digests(&*store.borrow()).expect("stage 1 writes consistent digests");
+        validate_store_content(&*store.borrow(), &sig()).expect("the history's stores validate");
         if i == 1 {
             full_collect(&mut session, &*store.borrow()).expect("collects");
             checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut())
                 .expect("checkpoint after the collection");
-            check_stored_digests(&*store.borrow()).expect("stage 1 writes consistent digests");
+            validate_store_content(&*store.borrow(), &sig())
+                .expect("the history's stores validate");
         }
     }
     assert_eq!(session.epoch(), 4);
@@ -149,14 +150,19 @@ pub fn write_stage1_file_store(path: &std::path::Path) {
 }
 
 /// The stage-1 fixture: a schema-35 store written by stage 1 of the
-/// store-seam design's phase 13, which stops checking the store's
-/// digests but keeps writing them for the build before it, which still
-/// verifies them at open. Frozen for stage 2, which migrates it. Written
-/// beside the fixture and renamed into place, so a reader never copies a
-/// half-written file.
+/// store-seam design's phase 13, in the file store's layout before schema
+/// 36. Frozen for stage 2, which migrates it: only a schema-35 build can
+/// write it, so a later build refuses rather than overwrite it with a
+/// current-schema store. Written beside the fixture and renamed into place,
+/// so a reader never copies a half-written file.
 #[test]
 #[ignore]
 fn regenerate_stage1_file_store_fixture() {
+    assert_eq!(
+        ironhorse_snapshot::store::STORE_SCHEMA_VERSION,
+        35,
+        "the stage-1 fixture is frozen at store schema 35"
+    );
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
     std::fs::create_dir_all(&dir).unwrap();
     let staging = dir.join(".store-v35-stage1.ihstore.staging");

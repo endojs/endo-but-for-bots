@@ -169,8 +169,8 @@ The [SQLite backend](../../../rust/endo/ironhorse-store-sqlite/src/lib.rs) store
 | `chunk_exts` | BLOB extents of the chunk arena, including variable-sized payloads. |
 | `small_state` | Before schema 28: the encoded small state as one row (names and keys, collections, function metadata and code segments, private elements, generators, promises, and suspended async activations). |
 | `small_sections` | From schema 28: the same state as 32 section payloads, each beside its digest (change detection that must follow an edited payload). |
-| `meta` | Encoded manifest with geometry, versions, expected runtime signature, and epoch; until the store seam's [trust model](../../../designs/ironhorse-snapshot-store-seam.md) lands, also a content root and commit seal. |
-| `page_edges`, `free_segs` | Reachability and allocation metadata that must agree with the edited state. The `leaf_hashes` integrity table goes with the trust model. |
+| `meta` | Encoded manifest with geometry, versions, expected runtime signature, epoch and commit token; before store schema 36 (the store seam's [trust model](../../../designs/ironhorse-snapshot-store-seam.md)), a content root and commit seal in place of the token. |
+| `page_edges`, `free_segs` | Reachability and allocation metadata that must agree with the edited state. The `leaf_hashes` integrity table went with the trust model, whose migration drops it. |
 | `edge_pairs` | Derived page-level adjacency index, maintained from `page_edges` by each commit; open rebuilds it only when `meta.edge_pairs_epoch` does not name the committed epoch. |
 | `side_tables` | A declared table in the schema; it is not currently a relational function/property interface. The tested heap had no rows here. |
 
@@ -209,8 +209,8 @@ No user heap was edited.
 | Delete all `edge_pairs` rows on a separate copy | Restore succeeded with the original value; open rebuilt all nine derived edges. This is index repair, not an application upgrade. Since [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330) a current build performs this repair only when the `edge_pairs_epoch` marker is missing or stale; on a heap it last checkpointed, the copy would keep its empty index, which the partial and generational collectors would trust, unless the marker were deleted too. |
 
 The two refusals came from the row hashes and content root that the store seam's trust model
-(2026-09-24) removes: the resident store is trusted as the canonical machine, so once its phase 13
-lands the same compatible edit is no longer refused, and the store resumes as the machine it now
+(2026-09-24) removes: the resident store is trusted as the canonical machine, so since its phase 13
+the same compatible edit is no longer refused, and the store resumes as the machine it now
 describes.
 The probe also confirmed that inspection connections must be closed before the worker takes its
 exclusive SQLite lock.
@@ -229,12 +229,12 @@ SQL could select and join those views, while an engine-aware writer applies a va
 No such views or SQL functions exist yet.
 
 A staged writer must update all affected representations: slot and chunk geometry, allocation data,
-property ids, side-state sections and their change-detection digests, reachability summaries, the
-indexes derived from them, and, until the store seam's trust model lands, row hashes, the content
-root and the commit seal.
-Passing the store validator's full level (a trust-model addition; today's `validate_store` reads no
-slot or chunk content) would establish that the edited state is well formed and self-consistent,
-not that the edited program is correct.
+property ids, side-state sections and their change-detection digests, reachability summaries, and
+the indexes derived from them; since the store seam's trust model there are no row hashes, content
+root or commit seal to reseal.
+Passing the store validator's full level (`validate_store_content`, a trust-model addition that
+decodes every slot page and chunk extent) would establish that the edited state is well formed and
+self-consistent, not that the edited program is correct.
 The store authenticates nothing, the owner's intent included.
 The editor needs explicit host authority and a separate migration audit record.
 

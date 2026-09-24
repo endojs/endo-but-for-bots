@@ -17,7 +17,8 @@ use ironhorse_snapshot::machine::{
     resume_from_store_lazy,
 };
 use ironhorse_snapshot::store::{
-    check_stored_digests, validate_store_content, HeapStore, StoreError,
+    migrate_store, validate_store, validate_store_content, HeapStore, StoreError, StoreManifest,
+    STORE_SCHEMA_VERSION,
 };
 use ironhorse_snapshot::{Signature, SnapshotError};
 use ironhorse_store_sqlite::SqliteHeapStore;
@@ -96,9 +97,9 @@ fn stage1_fixture() -> std::path::PathBuf {
 
 /// Write the stage-1 history into a fresh SQLite store at `path`: epoch
 /// 1 by a full write, then a lazy resume on a fresh connection, the first
-/// checkpoint after it (which rebuilds both root ledgers from the stored
-/// metadata), a full collection, and incremental checkpoints, ending at
-/// epoch 4 with the store closed (the WAL folded in).
+/// checkpoint after it (which reads the stored section digests), a full
+/// collection, and incremental checkpoints, ending at epoch 4 with the
+/// store closed (the WAL folded in).
 fn write_stage1_sqlite_store(path: &std::path::Path) {
     let compiled: Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> =
         STAGE1_CRANKS.iter().map(|s| compile(s)).collect();
@@ -126,12 +127,13 @@ fn write_stage1_sqlite_store(path: &std::path::Path) {
         assert!(o.completed);
         assert_eq!(o.result, STAGE1_RESULTS[i]);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
-        check_stored_digests(&*store.borrow()).expect("stage 1 writes consistent digests");
+        validate_store_content(&*store.borrow(), &sig()).expect("the history's stores validate");
         if i == 1 {
             full_collect(&mut session, &*store.borrow()).expect("collects");
             checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut())
                 .expect("checkpoint after the collection");
-            check_stored_digests(&*store.borrow()).expect("stage 1 writes consistent digests");
+            validate_store_content(&*store.borrow(), &sig())
+                .expect("the history's stores validate");
         }
     }
     assert_eq!(session.epoch(), 4);
@@ -144,14 +146,18 @@ fn write_stage1_sqlite_store(path: &std::path::Path) {
 }
 
 /// The stage-1 fixture: a schema-35 store written by stage 1 of the
-/// store-seam design's phase 13, which stops checking the store's
-/// digests but keeps writing them for the build before it, which still
-/// verifies them at open. Frozen for stage 2, which migrates it. Written
-/// beside the fixture and renamed into place, so a reader never copies a
-/// half-written file.
+/// store-seam design's phase 13, with its `leaf_hashes` table. Frozen for
+/// stage 2, which migrates it: only a schema-35 build can write it, so a
+/// later build refuses rather than overwrite it with a current-schema
+/// store. Written beside the fixture and renamed into place, so a reader
+/// never copies a half-written file.
 #[test]
 #[ignore]
 fn regenerate_stage1_sqlite_store_fixture() {
+    assert_eq!(
+        STORE_SCHEMA_VERSION, 35,
+        "the stage-1 fixture is frozen at store schema 35"
+    );
     let path = stage1_fixture();
     let staging = path.with_file_name(".store-v35-stage1.sqlite.staging");
     let _ = std::fs::remove_file(&staging);
@@ -160,37 +166,64 @@ fn regenerate_stage1_sqlite_store_fixture() {
     println!("fixture written at {} — commit it", path.display());
 }
 
-/// The committed stage-1 fixture keeps the digests the build before the
-/// store-seam design's phase 13 verifies at open, passes both validator
-/// levels (including the edge-index parity hook), and resumes where it
-/// stopped; a checkpoint of the resumed machine keeps the digests
-/// consistent too. The fixture's history is frozen, so a build whose boot
-/// layout or cost table differs from the one that wrote it cannot resume
-/// it: the deterministic-math provider skips the rest after the digest
-/// checks, and any other build fails until the fixture is regenerated.
+/// The committed stage-1 fixture, a schema-35 SQLite store with its
+/// `leaf_hashes` table, migrates in place: the table is dropped, the store
+/// passes both validator levels (including the edge-index parity hook), and
+/// it resumes where it stopped and checkpoints. The fixture's history is
+/// frozen, so a build whose boot layout or cost table differs from the one
+/// that wrote it cannot migrate it: the migration refuses before writing,
+/// which the deterministic-math provider checks instead, and any other
+/// build fails.
 #[test]
-fn stage1_sqlite_fixture_keeps_its_digests_and_resumes() {
+fn stage1_sqlite_fixture_migrates_and_resumes() {
     let dir = TempDir::new("ih-stage1-sqlite-fixture");
     let path = dir.join("heap.sqlite");
     std::fs::copy(stage1_fixture(), &path).unwrap();
+    let before = std::fs::read(&path).unwrap();
+    // Between opens: the store holds an exclusive lock while it is open.
+    let leaf_tables = |path: &std::path::Path| -> i64 {
+        rusqlite::Connection::open(path)
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'leaf_hashes'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    assert_eq!(leaf_tables(&path), 1, "stage 1 kept the leaf table");
     let mut store = SqliteHeapStore::open(&path).unwrap();
-    assert_eq!(store.manifest().unwrap().store_schema, 35);
-    check_stored_digests(&store).expect("stage 1 wrote consistent digests");
-    match validate_store_content(&store, &sig()) {
-        Ok(_) => {}
+    let old = store.manifest().unwrap();
+    assert_eq!(old.store_schema, 35);
+    match migrate_store(&mut store, &sig()) {
+        Ok(ran) => assert!(ran),
         // The fixture was written under the platform math provider, whose
-        // boot layout the deterministic-math lane does not share; any other
-        // build that refuses it needs the fixture regenerated.
+        // boot layout the deterministic-math lane does not share.
         Err(StoreError::Snapshot(
             SnapshotError::BootLayoutMismatch { .. } | SnapshotError::CostTableMismatch { .. },
-        )) if ironhorse_vm::MATH_PROVIDER != "platform" => return,
-        Err(other) => panic!(
-            "the fixture must validate (regenerate it if the boot layout or cost table \
-             changed): {other:?}"
-        ),
+        )) if ironhorse_vm::MATH_PROVIDER != "platform" => {
+            store.close().unwrap();
+            assert_eq!(std::fs::read(&path).unwrap(), before);
+            return;
+        }
+        Err(other) => panic!("the fixture must migrate: {other:?}"),
     }
+    store.close().unwrap();
+    assert_eq!(leaf_tables(&path), 0, "migration drops the leaf table");
+    let mut store = SqliteHeapStore::open(&path).unwrap();
+    let migrated = store.manifest().unwrap();
+    assert_eq!(
+        migrated,
+        StoreManifest {
+            store_schema: STORE_SCHEMA_VERSION,
+            ..old
+        },
+        "the token is the stored seal's first half; nothing else moves"
+    );
+    validate_store(&store, &sig()).expect("metadata-scale validation");
+    validate_store_content(&store, &sig()).expect("full validation");
     let mut session = resume_from_store(&store, &sig()).expect("the fixture resumes");
-    assert_eq!(session.epoch(), 4);
+    assert_eq!((session.epoch(), session.token()), (4, migrated.token));
     let (bytecode, names) = compile(STAGE1_PROBE.0);
     let code = session
         .machine_mut()
@@ -199,15 +232,18 @@ fn stage1_sqlite_fixture_keeps_its_digests_and_resumes() {
     let o = session.machine_mut().run(&code);
     assert!(o.completed, "{:?}", o.halt);
     assert_eq!(o.result, STAGE1_PROBE.1);
-    checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoints");
-    check_stored_digests(&store).expect("the checkpoint keeps the digests consistent");
+    assert_eq!(
+        checkpoint_to_store(&mut session, &sig(), &mut store).expect("checkpoints"),
+        5
+    );
+    validate_store_content(&store, &sig()).expect("validates after the checkpoint");
 }
 
-/// The stage-1 history, written fresh on every run, leaves consistent
-/// digests after each checkpoint and a store that passes the full
-/// validator.
+/// The stage-1 fixture's history, written fresh on every run at the current
+/// schema, leaves a store that passes the full validator after each
+/// checkpoint.
 #[test]
-fn stage1_history_writes_consistent_digests() {
+fn stage1_history_writes_valid_stores() {
     let dir = TempDir::new("ih-stage1-sqlite-history");
     let path = dir.join("heap.sqlite");
     write_stage1_sqlite_store(&path);

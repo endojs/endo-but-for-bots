@@ -105,7 +105,7 @@ validation, and edits more direct and reduce whole-section rewrites.
 Today these rows travel inside `small_state`; a full typed decode/re-encode makes the experiments
 possible but is not an incremental editing algorithm.
 Any authoritative row split needs versioned migration and coverage by the store's validator (the
-row hashes that cover rows today go with the store seam's phase 13).
+store seam's phase 13 removed the row hashes that used to cover rows).
 We have not benchmarked it and do not yet have evidence to justify normalizing the entire heap.
 
 Finally, this work prepares candidate images only.

@@ -264,16 +264,8 @@ impl ironhorse_snapshot::store::HeapStore for FailingNthRead {
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), ironhorse_snapshot::store::StoreError> {
         self.inner.inventory()
     }
-    fn leaf_hashes(
-        &self,
-    ) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), ironhorse_snapshot::store::StoreError> {
-        self.inner.leaf_hashes()
-    }
     fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, ironhorse_snapshot::store::StoreError> {
         self.inner.read_free_seg(seg)
-    }
-    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, ironhorse_snapshot::store::StoreError> {
-        self.inner.free_leaf_hashes()
     }
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, ironhorse_snapshot::store::StoreError> {
         self.inner.page_edges()

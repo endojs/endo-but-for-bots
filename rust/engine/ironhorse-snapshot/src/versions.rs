@@ -24,9 +24,10 @@
 //!
 //! [`crate::store::STORE_SCHEMA_VERSION`] governs the paged-store representation,
 //! manifest and small-state layout. A change needs a schema bump plus a verified
-//! migration step or explicit refusal. [`crate::store::migrate_store`] authenticates
-//! old state before restamping and advances monotonically through supported schemas.
-//! It does not translate execution semantics across meter releases.
+//! migration step or explicit refusal. [`crate::store::migrate_store`] advances
+//! monotonically through supported schemas in memory and checks the result against
+//! the stored rows before its one write. It does not translate execution semantics
+//! across meter releases.
 //!
 //! [`ironhorse_vm::snapshot_api::ROW_SCHEMA_VERSION`] owns the capture/restore
 //! declarations. `tests/row_schema.rs` fingerprints row fields, order, aliases

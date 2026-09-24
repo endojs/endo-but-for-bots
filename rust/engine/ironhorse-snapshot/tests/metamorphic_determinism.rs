@@ -69,11 +69,11 @@ fn file_store_twins_agree_after_a_boundary_collection() {
 /// comparison in the suite is self-referential within one process, so
 /// a latent host-endianness or map-iteration dependency would cancel
 /// out in-process yet break the cross-host resume claim. These
-/// constants pin the canonical blob bytes and the seal chain; an
+/// constants pin the canonical blob bytes and the store's manifest; an
 /// intentional format or cost-table change updates them consciously,
 /// with a commit message saying why.
 #[test]
-fn golden_vector_pins_canonical_bytes_and_seal() {
+fn golden_vector_pins_canonical_bytes_and_manifest() {
     use ironhorse_snapshot::machine::{begin_store_session, checkpoint_to_store, MachineSnapshot};
     use ironhorse_snapshot::sha256::hex_sha256;
     use ironhorse_snapshot::store::HeapStore;
@@ -118,14 +118,14 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
     // The private lockdown-completion slot moves all identities again, even
     // though this fixture never calls lockdown and the slot remains false.
     // Naming those three globals moves all five AGAIN, plus the blob and the
-    // seal: `create_hardened_globals` switched from `alloc_method` (which
+    // then-pinned seal: `create_hardened_globals` switched from `alloc_method` (which
     // hard-codes an empty name chunk) to `alloc_named_method`, so `harden`,
     // `lockdown` and `petrify` now carry real name chunks and real arities in
     // the boot heap. Same kind of move as the ones above -- boot-heap content,
     // not format -- so every marker restamps the same changed heap. The blob
-    // and seal asserts at the end of this fixture branch on
+    // assert at the end of this fixture branches on
     // `ironhorse_vm::MATH_PROVIDER`; BOTH arms were re-measured, each under
-    // its own provider.
+    // its own provider (the manifest pins below it are the same for both).
     // `%Iterator.prototype%`'s five lazy helpers (map/filter/take/drop/flatMap)
     // stopped halting and gained a real implementation, which adds
     // `%IteratorHelperPrototype%` and its `next`/`return` to the boot heap.
@@ -434,265 +434,56 @@ fn golden_vector_pins_canonical_bytes_and_seal() {
         },
         "canonical final blob hash"
     );
-    // Seal re-pinned 2026-08-11 as the schema evolved, once per
-    // format commit: v3 (row-hash tree root), v3+phase 6 (page-edge
-    // summaries in the seal, including the NULL-edge exclusion), v4
-    // (segmented free list: free_len in the manifest, free rows in
-    // the seal), and v5 (summaries folded into the root; counts
-    // header and length-prefixed edge entries in root and seal).
-    // The blob hash above was unchanged by ALL of those format
-    // commits — the container/store independence this vector proves.
-    // Both pins moved together on 2026-08-18 for a CONTENT reason,
-    // not a format one: the boot heap deliberately changed (native
-    // function instances chain to %Function.prototype% now).
-    // Seal re-pinned again 2026-08-18 for schema v6 (class-tree
-    // root: the manifest root formula changed from the flat v5
-    // combine to per-class Merkle trees, and the seal signs the
-    // manifest). The blob hash above did NOT move — v6 changed the
-    // root formula only, never the container format.
-    // Seal re-pinned again 2026-08-24 for schema v7 (the side-table
-    // ledger: the small state grew the arrays/collections/registry
-    // sections, so every small leaf — and thus root and seal —
-    // moved). The blob hash above did NOT move: this machine carries
-    // no side-table state, and the ledger atoms are emitted only
-    // when non-empty, which is precisely the container-stability
-    // property the two-pin split exists to prove.
-    // Seal re-pinned again 2026-08-25 for schema v8 (the durable
-    // completed-crank counter): the seal signs the whole manifest, and
-    // the manifest grew a `u64` tail. The blob hash above did NOT move
-    // — the counter is store metadata and the container carries no
-    // manifest at all, which is the same two-pin split again.
-    // BOTH pins re-pinned 2026-08-26 for the llm rebase: a CONTENT
-    // move (the language-completion boot heap: Intl, Temporal, the
-    // test262 host, and the boot-link name-table appends), not a
-    // format one — the container grammar, store schema 8, and the
-    // canonical-empty SYMB/KEYS encodings are all unchanged.
-    // Seal re-pinned again 2026-08-27, three times, for the ledger
-    // carries: schema v9 (the error-data row: the ERRD section),
-    // schema v10 (the typed-array family: ABUF/TARR/DVIW), and schema
-    // v11 (the data-only language rows: WRAP/REGX/ARGB/TMPR) — each
-    // grows the small state and stamps the manifest, so every small
-    // leaf — and thus root and seal — moved. The blob hash above did
-    // NOT move any time: this machine holds none of those rows, and
-    // the ledger atoms are emitted only when non-empty — the same
-    // container-stability property the two-pin split proves.
-    // BOTH pins re-pinned 2026-08-28 for schema v12: the small state
-    // grew the intl and name-floor sections, and — the one deliberate
-    // exception to the container-stability rule — the blob gained the
-    // `NFLR` atom, because the installed-names floor is real machine
-    // state every linked machine holds (see the blob pin's comment).
-    // Seal re-pinned again 2026-08-28 for schema v13 (the iterator
-    // cursors: the ITER section) — the small state grew and stamped
-    // the manifest, so every small leaf — and thus root and seal —
-    // moved. The blob hash did NOT move: this machine holds no
-    // cursors, and the atom is emitted only when non-empty — the
-    // container-stability property the two-pin split proves, restored
-    // after v12's deliberate exception.
+    // The epoch-3 commit seal was pinned here beside the blob from schema 3
+    // until schema 36 retired it (the store-seam design's phase 13), and every
+    // schema, format and boot-heap move re-pinned it; this file's history
+    // records each one. What it pinned beyond the blob is the store's
+    // manifest, which is now pinned field by field below, the rows, which
+    // the store exports as exactly the pinned blob, and the state derived
+    // from them (page-edge summaries, section digests), which the full
+    // validator re-derives from those rows.
     assert_eq!(
-        store.manifest().unwrap().seal,
-        // Both pins moved again at the second llm rebase (2026-08-28):
-        // the mainline boot-heap growth above — content, not format.
-        // And again for the format-version bump (review finding 1):
-        // the manifest embeds the `VERS` stamp, so the seal moves with
-        // the blob — the one other deliberate exception to the two-pin
-        // independence, exercised by a version field doing its job.
-        // Re-pinned with the blob after the 2026-08-29 llm rebase.
-        // Re-pinned with the blob again for the guest `lockdown()` global: a
-        // third `create_hardened_globals` native is boot-heap content, so the
-        // blob moved and the manifest that stamps it moved with it.
-        // Re-pinned for schema 14 and format 3: the manifest and small
-        // state gain the Date carry, while VERS marks its atom.
-        // Re-pinned for schema 15 and format 4: the small state gains
-        // the atomic function section and VERS marks `FUNC`.
-        // Re-pinned for schema 16 and format 5: the small state gains
-        // proxy records and VERS marks `PROX`.
-        // Re-pinned for schema 17 and format 6: the small state gains
-        // guest accessor mappings and VERS marks `ACCS`.
-        // Re-pinned for schema 18 and format 7: the small state gains
-        // Intl bound-function links and VERS marks `IBFN`.
-        // Re-pinned for schema 19 and format 8: the small state gains
-        // private elements and VERS marks `PRIV`.
-        // Re-pinned for schema 20 and format 9: the small state gains
-        // disposable stacks and VERS marks `DISP`.
-        // Re-pinned for schema 21 and format 10: the small state gains
-        // synchronous generator activations and VERS marks `GENR`.
-        // Re-pinned 2026-08-31 with the blob, for the same boot-heap
-        // content move: three link-time `@@iterator` mints became boot
-        // mints, so the page rows carrying the boot heap moved and the
-        // root and seal move with them. Schema and format unchanged.
-        // Re-pinned with the blob at the 2026-08-31 llm rebase: the
-        // mainline boot heap moved the page rows, and schema 22 adds
-        // the (empty here) error-frames section to the small state, so
-        // the small leaf, the root and the seal all move.
-        // Re-pinned for schema 23 and format 12: the small state gains
-        // the (empty here) promise-cluster section and VERS marks
-        // `PRMS`, so the small leaf, the root and the seal all move.
-        // Re-pinned with the blob on 2026-09-01: Array's intrinsic
-        // iterator/values identity changes the boot page rows, so the
-        // manifest root and seal move with that content.
-        // Re-pinned with the blob for the complete `%BigInt%` boot-heap
-        // content addition. Schema and format remain unchanged.
-        // Re-pinned with the blob for String.prototype.split's standard
-        // name and arity and Math's standard Symbol.toStringTag. Schema
-        // and format remain unchanged.
-        // Re-pinned with the blob for the OrdinaryToPrimitive fallback
-        // names now linked into every boot heap. Schema and format
-        // remain unchanged.
-        // Re-pinned with the blob because callable
-        // `%Function.prototype%` and the boot-minted identity for its lazy
-        // `@@hasInstance` method move the boot page rows. Schema and format
-        // remain unchanged.
-        // Re-pinned with the blob for the abstract `%TypedArray%` constructor
-        // and prototype boot-heap addition. Schema and format remain unchanged.
-        // Re-pinned with the blob for the tagged-template cache boot object;
-        // its new page content moves the manifest root and seal. Schema and
-        // format remain unchanged.
-        // Re-pinned with the blob for the completed shared `%TypedArray%`
-        // boot surface. Schema and format remain unchanged.
-        // Re-pinned with the blob for `%TypedArray%.prototype.join`; its
-        // boot-native row moves the manifest root and seal. Schema and format
-        // remain unchanged.
-        // Re-pinned with the blob for the shared TypedArray iterator and
-        // readonly method natives. Schema and format remain unchanged.
-        // Re-pinned with the blob for the shared TypedArray allocating and
-        // sort method natives. Schema and format remain unchanged.
-        // Re-pinned with the blob for the locale-string natives. Schema and
-        // format remain unchanged.
-        // Re-pinned with the blob for Array sort/toSorted's standard function
-        // metadata. Schema and format remain unchanged.
-        // Re-pinned with the blob for Array with/toReversed/toSpliced's
-        // standard function metadata. Schema and format remain unchanged.
-        // Re-pinned with the blob for Array.prototype.slice's standard
-        // function metadata. Schema and format remain unchanged.
-        // Re-pinned with the blob for Array.prototype.concat's standard
-        // function metadata. Schema and format remain unchanged.
-        // Re-pinned with the blob for Array.prototype.push and pop's standard
-        // function metadata. Schema and format remain unchanged.
-        // Re-pinned with the blob for Array.prototype.shift and unshift's
-        // standard function metadata. Schema and format remain unchanged.
-        // Re-pinned with the blob for Array.prototype.flat and flatMap's
-        // standard function metadata. Schema and format remain unchanged.
-        // Re-pinned with the blob for the boot-minted
-        // Symbol.prototype[Symbol.toPrimitive] method. Schema and format
-        // remain unchanged.
-        // Re-pinned with the blob for the Date setter native functions.
-        // Schema and format remain unchanged.
-        // Re-pinned with the blob for the implicit Array.prototype.join
-        // installation. Schema and format remain unchanged.
-        // Re-pinned with the blob for Date's locale aliases and
-        // `@@toPrimitive` identity. Schema and format remain unchanged.
-        // Re-pinned with the blob for the persisted arguments-layout marker.
-        // Schema and format remain unchanged.
-        // Re-pinned with the blob for eager installation of the standard own
-        // Symbol.prototype and Date.prototype `@@toPrimitive` properties.
-        // Schema and format remain unchanged.
-        // Re-pinned for the engine-owned boot-layout signature generation.
-        // Re-pinned with the blob for Object.assign/Object.hasOwn and boot
-        // generation 3.
-        // Re-pinned with the blob for JSON.parse/stringify's standard function
-        // metadata and boot-layout signature generation 4. Schema and format
-        // remain unchanged.
-        // Re-pinned with the blob for Promise method metadata and the
-        // `@@species` getter. Schema and format remain unchanged.
-        // Re-pinned with the blob for the `%Iterator.prototype%` accessors and
-        // boot-layout signature generation 5. Schema and format remain
-        // unchanged.
-        // Re-pinned with the blob for generator inheritance from
-        // `%Iterator.prototype%` and boot-layout signature generation 6.
-        // Schema and format remain unchanged.
-        // Re-pinned with the blob for `%WrapForValidIteratorPrototype%` and
-        // boot-layout signature generation 7. Schema and format remain
-        // unchanged.
-        // Re-pinned with the blob for Array.of's standard name metadata and
-        // boot-layout signature generation 8. Schema and format remain
-        // unchanged.
-        // Re-pinned with the blob for String built-in metadata and boot-layout
-        // signature generation 9. Schema and format remain unchanged.
-        // Re-pinned with the blob for String.prototype.normalize and boot
-        // generation 10. Schema and format remain unchanged.
-        // Re-pinned with the blob for String.prototype.replaceAll, RegExp
-        // @@replace, and boot generation 11. Schema and format remain
-        // unchanged.
-        // Re-pinned with the blob for RegExp `@@match`/`@@search` and boot
-        // generation 14. Schema and format remain unchanged.
-        // Re-pinned with the blob for RegExp `@@split` and boot generation 15.
-        // Schema and format remain unchanged.
-        // Re-pinned with the blob for ArrayBuffer `slice` metadata,
-        // `@@species`, and `@@toStringTag`, with boot generation 16.
-        // Schema and format remain unchanged.
-        // Re-pinned with the blob for ArrayBuffer transfer methods and
-        // fixed-buffer accessors, with boot generation 17. Schema and format
-        // remain unchanged.
-        // Re-pinned with the blob on 2026-09-06 for the removal of the
-        // test262 `$262` host object from the boot heap (harness-only now),
-        // with boot generation 18, and again at this merge for the same
-        // one-byte guest-heap move the blob records (`var x = 5;` now creates
-        // a non-configurable global property). Schema and format unchanged.
-        // Re-pinned with the blob on 2026-09-07 for the boot-minted
-        // `get Symbol.prototype.description` accessor function, with boot
-        // generation 19. Schema and format remain unchanged.
-        // Re-pinned with the blob for format 13 and boot generation 21,
-        // plus schema 24 adding the async-activation small-state section.
-        // Re-pinned with the blob for W1's eagerly linked, non-enumerable
-        // Error prototype data. Schema and format remain unchanged.
-        // Re-pinned with the blob for format 14 (`IDXP`) and schema 25,
-        // which appends the index-props small-state section.
-        // Format 15 / store schema 27 bind CESU-8 names and section leaves.
-        // W4: METR digest changes each committed small-state hash.
-        // Format 16 also travels in the manifest signed by each seal.
-        // The structured boot signature also travels in the manifest.
-        // Combined W3 authenticated manifest and W4 meter identity.
-        // Schema 28 replaces only the small-state leaf with a section tree;
-        // container bytes and raw execution charges above remain unchanged.
-        // Format 17 travels in every epoch's manifest and changes the chain.
-        // Store29 and FUNC native-name rows change the authenticated state.
-        // Schema30 and format19 authenticate the saved-handler layout.
-        // Schema31 / format20 authenticate the rejection-report suffix.
-        // Schema32 / format21 authenticate shared Machine state.
-        // Schema33 / format22 authenticate host-function recipes.
-        // Re-pinned for a boot-heap CONTENT move, not a format change:
-        // `%TypedArray%.prototype` gained `at`, so the shared prototype
-        // carries one more method and every boot's canonical bytes move
-        // together. `Array.prototype.at` and `String.prototype.at` were
-        // already present; only the TypedArray one was missing, and an
-        // emulated immutable view answers no other read
-        // (`typed_array_at.rs`, `test262:ironhorse-host`'s `ses-hosts.js`).
-        // Re-pinned for a boot-heap CONTENT move, not a format change:
-        // `%TypedArray%.prototype` gained `findLast` and `findLastIndex`,
-        // the last two absences in its readonly family, so the shared
-        // prototype carries two more methods and every boot's canonical
-        // bytes move together (`typed_array_find_last.rs`). Both provider
-        // arms below move, and both are re-pinned here.
-        if ironhorse_vm::MATH_PROVIDER == "platform" {
-            // Re-pinned for format version 23 / store schema v34 (the async
-            // generator carry, architecture review F127): the manifest embeds
-            // the `VERS` stamp and the schema, so the seal moves with the blob
-            // while the small state itself is unchanged (this machine holds no
-            // async generator).
-            // Re-pinned again for format version 24 / store schema v35 (the
-            // `Array.fromAsync` carry, F127's last clause), for the same
-            // reason: the stamp and the schema are in the manifest, and this
-            // machine holds no accumulation. Re-measured on top of the guest
-            // `lockdown()` work, which moves the boot heap the seal covers.
-            "5650174c951d2822bd011090b66ab6ef6a746c38bc6c304dd222edd3d6b08730"
-        } else {
-            // Re-pinned for format version 23 / store schema v34 alongside
-            // the platform pin, and again for format version 24 / store
-            // schema v35. BOTH arms moved together, as the warning below
-            // requires.
-            // Reached ONLY under the deterministic provider, so a golden
-            // run under the default provider alone never evaluates this arm
-            // and cannot tell you it is stale. A re-pin that moves the
-            // platform arm above and leaves this one behind therefore looks
-            // green locally and turns ci.yml:842 red. Move both arms
-            // together, and run the golden test under BOTH providers.
-            // The digest below carries the guest `lockdown()` boot move AND
-            // format version 24, measured under this provider rather than
-            // copied from the platform arm, for the reason given on the blob's
-            // else-arm above.
-            "239cac172418b30259d12e2c5f29589b983b2821c1c02380da922bbce5686705"
-        },
-        "epoch-3 seal chain"
+        ironhorse_snapshot::store::root_hash(&store).unwrap(),
+        hex_sha256(&blob),
+        "the store exports the pinned blob"
+    );
+    ironhorse_snapshot::store::validate_store_content(&store, &sig)
+        .expect("the derived state agrees with the pinned rows");
+    let manifest = store.manifest().unwrap();
+    assert_eq!(
+        (
+            &manifest.version,
+            manifest.store_schema,
+            &manifest.signature,
+            manifest.epoch,
+            (
+                manifest.cranks,
+                manifest.collect_every,
+                manifest.collections
+            ),
+        ),
+        (
+            &ironhorse_snapshot::Version::current(),
+            36,
+            &sig,
+            3,
+            (0, 0, 0)
+        ),
+        "epoch-3 manifest identity"
+    );
+    assert_eq!(
+        (
+            manifest.creation.initial_slot_count,
+            manifest.creation.initial_chunk_bytes,
+            manifest.slot_count,
+            manifest.slot_live,
+            manifest.chunk_len,
+            manifest.free_len,
+        ),
+        // The same under both math providers: the boot heap's shape does
+        // not depend on the provider, only the signature's fingerprint does.
+        (905, 12264, 905, 905, 12264, 0),
+        "epoch-3 manifest geometry"
     );
 }
 

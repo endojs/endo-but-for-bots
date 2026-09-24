@@ -3790,7 +3790,7 @@ pub(crate) fn decode_intl(p: &[u8]) -> Result<IntlTables, SnapshotError> {
             // `BTreeMap` in strictly-ascending key order, so a
             // duplicated or unordered key can only be crafted — and
             // silently accepting it re-canonicalizes, breaking the
-            // write(read(bytes)) == bytes identity the seals pin.
+            // write(read(bytes)) == bytes identity the golden pins hold.
             if prev_key.as_ref().is_some_and(|p| k <= *p) {
                 return Err(SnapshotError::Corrupt(
                     "intl side table: unicode keys not strictly ascending",

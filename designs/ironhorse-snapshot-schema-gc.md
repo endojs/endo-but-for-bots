@@ -48,7 +48,7 @@ Backend vacuuming and retained-artifact policy require their own measurements an
 | Partial GC               | At a clean checkpoint boundary, traces persisted page summaries from VM roots and side-state reference pages, then frees unreachable pages. | A reachable page retains co-resident garbage. Treating side-state references as roots also retains values of dead owners until a more precise pass.        |
 | Generational summary GC  | Reverse-edge seeds plus reachability restricted to pages changed since the session's last collection.                                       | `gen_dirty` is session-local and resets on resume. The code explicitly says it is test-only and must not replace scheduled collection until this is fixed. |
 | SQLite graph queries     | `edge_pairs(target,page)` plus a forward index support indexed reachability and incoming-edge queries.                                      | Reduced result transfer does not bound internal query work. Open trusts the index on its epoch marker without re-deriving it (GC-8).                       |
-| Maintained state         | Page summaries, free-list segments, `free_len`, the epoch; the store seam's phase 13 drops row hashes and root, and swaps seals for a token.| Collection must keep these consistent; free-list order affects future allocation and canonical state.                                                      |
+| Maintained state         | Page summaries, free-list segments, `free_len`, the epoch and commit token (the store seam's phase 13 dropped row hashes, root and seals).| Collection must keep these consistent; free-list order affects future allocation and canonical state.                                                      |
 | Side-state storage       | Arrays, collections, functions, promises and continuations are represented in decoded VM tables and encoded small-state sections.           | The store does not offer independently keyed persistence/query operations for each of these semantic rows.                                                 |
 
 These statements follow the implementation, not every historical aspiration in the large
@@ -107,7 +107,7 @@ Current `derive_page_edges` visits all encoded slot records without an allocatio
 Because freeing a slot leaves its bytes unchanged, stale edges in free records on a reachable page
 can also retain other pages.
 An occupancy-aware summary would need allocation-state changes, not just payload writes, to trigger
-recomputation (and, until the store seam's phase 13 lands, integrity updates).
+recomputation.
 
 ### GC-3: Make incremental collection state survive suspension
 
@@ -199,11 +199,11 @@ Its suspected cause is not yet a proven schema defect or an argument for a parti
 For each derived structure, name its source, schema version, maintenance and invalidation rule,
 rebuild procedure, and the validator check that re-derives it from its source.
 The resident store is trusted (the
-[store seam's trust model](ironhorse-snapshot-store-seam.md), decided 2026-09-24 and being
+[store seam's trust model](ironhorse-snapshot-store-seam.md), decided 2026-09-24 and
 implemented by its phase 13).
-Once that lands, open verifies no derived state and re-derives only the SQLite edge index, when its
-marker is stale, so a derived structure is correct only if it is maintained in the same
-transaction as its source.
+Open verifies no derived state and re-derives only the SQLite edge index, when its marker is
+stale, so a derived structure is correct only if it is maintained in the same transaction as its
+source.
 The `page_edges` summaries are derived from slot pages at checkpoint and travel in the commit that
 writes those pages; SQLite `edge_pairs` is derived from the summaries in each commit transaction and
 protected from competing writers while the store is in use.
@@ -221,8 +221,8 @@ read-and-write pass) only when the marker is missing or stale, as it is for a st
 by a build that does not keep the marker.
 The marker says which epoch the index was maintained for, not that its rows are right, so a bug in
 commit-time maintenance persists across reopens.
-Deleting the marker from a closed store forces the next open to rebuild it, and once phase 13
-lands, the validator's full level compares the index with the summaries.
+Deleting the marker from a closed store forces the next open to rebuild it, and the validator's
+full level compares the index with the summaries.
 An offline edit of a source row must likewise rebuild or invalidate what derives from it.
 Bulk side-state normalization must bring corresponding ownership, mutation and consistency rules.
 
@@ -301,8 +301,7 @@ Full relational normalization remains a candidate implementation, not the requir
 - [Store collectors](../rust/engine/ironhorse-snapshot/src/machine.rs): `partial_collect`,
   `generational_collect` and the documented resume restriction.
 - [Logical store](../rust/engine/ironhorse-snapshot/src/store.rs): `HeapStore`, `CheckpointBatch`,
-  `derive_page_edges`, free-segment records and, until the store seam's phase 13 lands, integrity
-  roots.
+  `derive_page_edges`, free-segment records and the commit token.
 - [SQLite implementation](../rust/endo/ironhorse-store-sqlite/src/lib.rs): graph indexes, atomic batches and derived-index rebuilding.
 
 ## Prompt

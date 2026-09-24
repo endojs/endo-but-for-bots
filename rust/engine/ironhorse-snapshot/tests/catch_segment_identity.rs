@@ -1,12 +1,12 @@
 //! Saved catch targets retain code identity through encoding, migration and GC.
+use ironhorse_snapshot::CommitToken;
 use ironhorse_snapshot::{
     image::{read_machine, write_machine_unchecked, MachineImage},
     machine::{from_snapshot_bytes, resume_from_store, MachineSnapshot},
     store::{
-        compute_root, image_to_batch_unchecked, migrate_store, seal_commit, validate_store,
-        HeapStore, HeapStoreCommit, MemoryStore, STORE_SCHEMA_VERSION,
+        image_to_batch_unchecked, migrate_store, store_to_image, validate_store, HeapStore,
+        HeapStoreCommit, MemoryStore, StoreManifest,
     },
-    store_sections::framed_root,
     Signature, SnapshotError,
 };
 use ironhorse_vm::Interp;
@@ -132,88 +132,36 @@ fn foreign_handler_segments_are_refused_in_both_frame_families() {
         );
         let mut store = MemoryStore::new();
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap();
         assert!(validate_store(&store, &signature).is_err());
     }
 }
 
 #[test]
-fn schema29_migration_preserves_payloads_and_authenticates_the_seal_link() {
+fn schema29_migration_preserves_payloads() {
     let signature = Signature::new("catch-segment-identity");
     let mut continuous = suspended();
     let mut image = continuous.snapshot_image_for_testing(&signature).unwrap();
     legacy(&mut image);
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
     let small = store.read_small_state().unwrap();
-    let (pages, exts) = store.leaf_hashes().unwrap();
-    let frees = store.free_leaf_hashes().unwrap();
-    let edges = store.page_edges().unwrap();
-    let mut manifest = store.manifest().unwrap();
-    manifest.store_schema = 29;
-    manifest.root = compute_root(
-        &manifest,
-        &framed_root(&small).unwrap(),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    manifest.seal = seal_commit(&manifest.parent_seal, &manifest, &[], &[], &[], &[], &[]);
-    for root_tamper in [false, true] {
-        let mut corrupt = manifest.clone();
-        if root_tamper {
-            corrupt.root = "00".repeat(32);
-            corrupt.seal = seal_commit(&corrupt.parent_seal, &corrupt, &[], &[], &[], &[], &[]);
-        } else {
-            corrupt.seal = "00".repeat(32);
-        }
-        store.replace_manifest_for_migration(&corrupt).unwrap();
-        assert!(migrate_store(&mut store, &signature).is_err());
-        assert_eq!(store.manifest().unwrap(), corrupt);
-        assert_eq!(store.read_small_state().unwrap(), small);
-        assert_eq!(store.leaf_hashes().unwrap(), (pages.clone(), exts.clone()));
-    }
-    store.replace_manifest_for_migration(&manifest).unwrap();
+    let rows = store_to_image(&store).unwrap();
+    let current = store.manifest().unwrap();
+    let old = StoreManifest {
+        store_schema: 29,
+        ..current.clone()
+    };
+    store.replace_for_migration(&current, &old, &small).unwrap();
     assert!(migrate_store(&mut store, &signature).unwrap());
-    let migrated = store.manifest().unwrap();
-    assert_eq!(migrated.store_schema, STORE_SCHEMA_VERSION);
-    // Every identity migration authenticates the immediately preceding seal.
-    // Schema 31 adds another step after the original 29 -> 30 migration.
-    let mut predecessor = manifest.clone();
-    for version in 30..STORE_SCHEMA_VERSION {
-        predecessor.parent_seal = predecessor.seal.clone();
-        predecessor.store_schema = version;
-        predecessor.root = compute_root(
-            &predecessor,
-            &framed_root(&small).unwrap(),
-            &pages,
-            &exts,
-            &frees,
-            &edges,
-        );
-        predecessor.seal = seal_commit(
-            &predecessor.parent_seal,
-            &predecessor,
-            &[],
-            &[],
-            &[],
-            &[],
-            &[],
-        );
-    }
-    assert_eq!(migrated.parent_seal, predecessor.seal);
-    assert_eq!(
-        (migrated.epoch, migrated.cranks),
-        (manifest.epoch, manifest.cranks)
-    );
+    // Every step from 29 on is an identity restamp: the manifest comes back
+    // at the current schema with its epoch, counters and token.
+    assert_eq!(store.manifest().unwrap(), current);
     assert_eq!(store.read_small_state().unwrap(), small);
-    assert_eq!(store.leaf_hashes().unwrap(), (pages, exts));
-    assert_eq!(store.free_leaf_hashes().unwrap(), frees);
-    assert_eq!(store.page_edges().unwrap(), edges);
+    assert_eq!(store_to_image(&store).unwrap(), rows);
     assert!(!migrate_store(&mut store, &signature).unwrap());
     let mut resumed = resume_from_store(&store, &signature).unwrap();
     assert_eq!(finish(resumed.machine_mut()), finish(&mut continuous));

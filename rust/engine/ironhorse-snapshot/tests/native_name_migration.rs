@@ -1,10 +1,10 @@
+use ironhorse_snapshot::CommitToken;
 use ironhorse_snapshot::{
     machine::{checkpoint_to_store, resume_from_store, MachineSnapshot},
     store::{
-        compute_root, image_to_batch_unchecked, migrate_store, seal_commit, HeapStore,
-        HeapStoreCommit, MemoryStore, STORE_SCHEMA_VERSION,
+        image_to_batch_unchecked, migrate_store, store_to_image, validate_store_content, HeapStore,
+        HeapStoreCommit, MemoryStore, StoreManifest,
     },
-    store_sections::framed_root,
     Signature,
 };
 use ironhorse_vm::Interp;
@@ -18,30 +18,22 @@ fn schema28_native_name_defaults_migrate_without_rewriting_heap() {
     image.function_state.native_names = None;
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
     let small = store.read_small_state().unwrap();
-    let mut manifest = store.manifest().unwrap();
-    manifest.store_schema = 28;
-    let (pages, exts) = store.leaf_hashes().unwrap();
-    let frees = store.free_leaf_hashes().unwrap();
-    let edges = store.page_edges().unwrap();
-    manifest.root = compute_root(
-        &manifest,
-        &framed_root(&small).unwrap(),
-        &pages,
-        &exts,
-        &frees,
-        &edges,
-    );
-    manifest.seal = seal_commit(&manifest.parent_seal, &manifest, &[], &[], &[], &[], &[]);
-    store.replace_manifest_for_migration(&manifest).unwrap();
+    let rows = store_to_image(&store).unwrap();
+    let current = store.manifest().unwrap();
+    let old = StoreManifest {
+        store_schema: 28,
+        ..current.clone()
+    };
+    store.replace_for_migration(&current, &old, &small).unwrap();
 
     assert!(migrate_store(&mut store, &signature).unwrap());
-    assert_eq!(store.manifest().unwrap().store_schema, STORE_SCHEMA_VERSION);
-    ironhorse_snapshot::store::check_stored_digests(&store).unwrap();
+    assert_eq!(store.manifest().unwrap(), current);
+    validate_store_content(&store, &signature).unwrap();
     assert_eq!(store.read_small_state().unwrap(), small);
-    assert_eq!(store.leaf_hashes().unwrap(), (pages, exts));
+    assert_eq!(store_to_image(&store).unwrap(), rows);
     assert!(!migrate_store(&mut store, &signature).unwrap());
     let mut resumed = resume_from_store(&store, &signature).unwrap();
     let (code, symbols) = ironhorse_compile::compile_atoms("Proxy.revocable.name").unwrap();

@@ -800,6 +800,8 @@ jobs:
             ${{ runner.os }}-thixotrope-ironhorse-
       - name: Build real SQLite worker
         run: cargo build --locked --release -p thixotrope-ironhorse-worker
+      - name: Test the worker's heap opening and crank admission
+        run: cargo test --locked --release -p thixotrope-ironhorse-worker
       - name: Bundle SES and OCapN peer
         run: corepack yarn workspace @endo/thixotrope build:ironhorse-bundles
       - name: Test two demos and twelve adversarial persistence scenarios

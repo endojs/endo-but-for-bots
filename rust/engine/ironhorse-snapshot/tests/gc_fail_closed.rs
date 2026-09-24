@@ -1,4 +1,5 @@
 //! Restore refuses corrupt chunk coordinates through every snapshot path.
+use ironhorse_snapshot::CommitToken;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -52,7 +53,7 @@ fn native_names_must_reference_complete_allocated_chunks_on_every_restore_path()
         // admission, rather than merely detecting a mismatched content hash.
         let mut store = MemoryStore::new();
         store
-            .commit(&image_to_batch_unchecked(&bad, 1, ""))
+            .commit(&image_to_batch_unchecked(&bad, 1, CommitToken::ZERO))
             .unwrap();
         assert!(resume_from_store(&store, &sig).is_err(), "eager: {damage}");
         assert!(

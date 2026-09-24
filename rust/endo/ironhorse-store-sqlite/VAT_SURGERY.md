@@ -84,7 +84,7 @@ They also compare the complete decoded images: only the selected scalar payload 
   This is privileged offline owner tooling and can bypass guest immutability restrictions.
   It does not identify protected runtime slots or prove application invariants.
   Do not interpret successful eager restore as permission to install a candidate.
-- A canonical container has no resident-store epoch/seal or host journal cutover record.
+- A canonical container has no resident-store epoch, commit token or host journal cutover record.
   Importing a candidate into a fresh store establishes fresh store history.
   Replacing a managed vat still needs host authority, protocol-obligation checks, and coordinated
   journal/hub publication; those operations are outside this experiment.

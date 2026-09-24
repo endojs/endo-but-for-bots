@@ -3,6 +3,7 @@
 
 use ironhorse_snapshot::{
     machine::{begin_store_session, checkpoint_to_store, resume_from_store, StoreSession},
+    store::migrate_store,
     Signature,
 };
 use ironhorse_store_sqlite::SqliteHeapStore;
@@ -223,6 +224,25 @@ fn supervise_lock(state: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Open the worker's heap. A new heap starts a session on a fresh machine;
+/// an existing one is first upgraded in place to the current store schema,
+/// as the daemon's opener does, since resume refuses an older schema.
+fn open_heap(
+    path: &str,
+    signature: &Signature,
+) -> Result<(SqliteHeapStore, StoreSession, bool), String> {
+    let fresh = !std::path::Path::new(path).exists();
+    let mut store = SqliteHeapStore::open(path).map_err(|e| format!("open: {e:?}"))?;
+    let session = if fresh {
+        begin_store_session(Interp::new(), signature, &mut store)
+            .map_err(|(_, e)| format!("begin: {e:?}"))?
+    } else {
+        migrate_store(&mut store, signature).map_err(|e| format!("migrate: {e:?}"))?;
+        resume_from_store(&store, signature).map_err(|e| format!("restore: {e:?}"))?
+    };
+    Ok((store, session, fresh))
+}
+
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
     let path = args
@@ -237,15 +257,8 @@ fn run() -> Result<(), String> {
         std::path::Path::new(&active_path),
         rustix::fs::FlockOperation::LockShared,
     )?;
-    let fresh = !std::path::Path::new(&path).exists();
     let signature = Signature::new(&profile);
-    let mut store = SqliteHeapStore::open(&path).map_err(|e| format!("open: {e:?}"))?;
-    let mut session = if fresh {
-        begin_store_session(Interp::new(), &signature, &mut store)
-            .map_err(|(_, e)| format!("begin: {e:?}"))?
-    } else {
-        resume_from_store(&store, &signature).map_err(|e| format!("restore: {e:?}"))?
-    };
+    let (mut store, mut session, fresh) = open_heap(&path, &signature)?;
     if fresh {
         for boot in args {
             let source = std::fs::read_to_string(&boot).map_err(|e| e.to_string())?;
@@ -361,5 +374,60 @@ mod tests {
         );
         assert_eq!(session.machine_mut().meter_index() - start, 32 << 16);
         assert!(session.machine_mut().program_symbol_names().is_empty());
+    }
+
+    /// A heap at an older store schema is upgraded in place before it
+    /// resumes. The heap is written by this build and restamped as schema
+    /// 35, the last schema before the commit token, whose small state is
+    /// laid out as the current one.
+    #[test]
+    fn an_older_schema_heap_is_migrated_before_it_resumes() {
+        use ironhorse_snapshot::store::{HeapStore, StoreManifest, STORE_SCHEMA_VERSION};
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "thixotrope-worker-migrate-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = Cleanup(dir.clone());
+        let path = dir.join("heap.sqlite");
+        let path = path.to_str().unwrap();
+        let signature = Signature::new("worker-migration-test");
+
+        let (mut store, mut session, fresh) = open_heap(path, &signature).unwrap();
+        assert!(fresh);
+        assert_eq!(eval(&mut session, "var n = 7; n", 1_000_000).unwrap(), "7");
+        checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
+        drop(session);
+        let current = store.manifest().unwrap();
+        let older = StoreManifest {
+            store_schema: 35,
+            ..current.clone()
+        };
+        let small = store.read_small_state().unwrap();
+        store
+            .replace_for_migration(&current, &older, &small)
+            .unwrap();
+        store.close().unwrap();
+
+        let (store, mut session, fresh) = open_heap(path, &signature).unwrap();
+        assert!(!fresh);
+        assert_eq!(
+            store.manifest().unwrap(),
+            StoreManifest {
+                store_schema: STORE_SCHEMA_VERSION,
+                ..current
+            }
+        );
+        assert_eq!(eval(&mut session, "var n; n + 1", 1_000_000).unwrap(), "8");
     }
 }

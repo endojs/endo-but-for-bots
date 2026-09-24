@@ -1,5 +1,6 @@
 //! All nested stored Slot positions participate in the same visitor.
 use ironhorse_snapshot::image::SymbolKeyImage;
+use ironhorse_snapshot::CommitToken;
 use ironhorse_snapshot::{MachineImage, Signature};
 use ironhorse_vm::snapshot_api::{
     AccessorRow, AsyncRow, BoundFunctionRow, CombinatorRow, DisposableStackRow, DisposalRecordRow,
@@ -260,7 +261,7 @@ fn newly_covered_holders_refuse_unregistered_ids_at_container_boundary() {
     assert!(read_validated_machine(&write_machine_unchecked(&image), &signature).is_ok());
     let mut honest_store = MemoryStore::new();
     honest_store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
     assert!(store_to_image(&honest_store).is_ok());
     assert!(validate_store(&honest_store, &signature).is_ok());
@@ -292,7 +293,7 @@ fn newly_covered_holders_refuse_unregistered_ids_at_container_boundary() {
         // small-state references even without a container decode.
         let mut store = MemoryStore::new();
         store
-            .commit(&image_to_batch_unchecked(&forged, 1, ""))
+            .commit(&image_to_batch_unchecked(&forged, 1, CommitToken::ZERO))
             .unwrap();
         assert!(matches!(
             store_to_image(&store),

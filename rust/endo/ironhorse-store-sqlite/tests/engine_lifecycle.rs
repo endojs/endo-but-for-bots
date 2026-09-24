@@ -703,9 +703,10 @@ fn side_tables_survive_sqlite_sleep_cycles() {
 /// exercised only against the reference backends and the shared
 /// metamorphic suite, which holds ONE connection open for a whole
 /// scenario — so nothing ran a carried row through a
-/// last-connection close, WAL folding, `SqliteHeapStore::init`, a lost
-/// and reconstructed `root_cache`, an `edge_pairs` trusted on its epoch
-/// marker, and a lazy read after reopen.
+/// last-connection close, WAL folding, `SqliteHeapStore::init`, section
+/// digests read back from the store by the first checkpoint after a
+/// resume, an `edge_pairs` trusted on its epoch marker, and a lazy read
+/// after reopen.
 ///
 /// `run_scenario` is that lifecycle, and its locks are the strong ones:
 /// every crank's value against an uninterrupted baseline, the final

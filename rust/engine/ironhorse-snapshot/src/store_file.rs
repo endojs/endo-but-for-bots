@@ -31,10 +31,8 @@
 //! [4]  slot-page count   [4] chunk-extent count
 //! [page directory: count × (u64 offset, u32 length)]
 //! [extent directory: count × (u64 offset, u32 length)]
-//! [page leaf hashes: count × 32]  [extent leaf hashes: count × 32]
 //! [page edges: count × (u32 len, len × u32 targets)]
 //! [free segments: u32 count, then count × (u32 len, len bytes)]
-//! [free leaf hashes: count × 32]
 //! [blobs, in directory order]
 //! ```
 //!
@@ -42,6 +40,13 @@
 //! size — the malformed-count discipline) at open; reads then seek by
 //! directory entry. A missing file is an [`StoreError::Empty`] store,
 //! not an error, so `open` serves both the create and reopen paths.
+//!
+//! The layout before store schema 36, [`LEGACY_FILE_MAGIC`], also carried
+//! the row-leaf hashes: 32 bytes per slot page and then per chunk extent
+//! after the directories, and 32 per free segment after the segments.
+//! `open` reads it, skipping the hashes, so that
+//! [`crate::store::migrate_store`] can upgrade the file, which it rewrites
+//! in the current layout. Nothing writes it.
 
 #[cfg(test)]
 use crate::store::HeapStoreCommit;
@@ -52,20 +57,23 @@ use std::path::PathBuf;
 
 use crate::format::SnapshotError;
 use crate::store::{
-    chunk_extent_count, slot_page_count, CommitVerifier, HeapStore, RootLedger, StoreError,
-    StoreManifest,
+    check_migration_baseline, chunk_extent_count, slot_page_count, CommitVerifier, HeapStore,
+    StoreError, StoreManifest,
 };
 
 /// The file-format discriminator — the LAYOUT version. A layout
 /// change (sections, directories) is a new magic and a reader fails
-/// closed on one it does not know. The STORE SCHEMA no longer rides
-/// the magic: since the v5→v6 root-formula bump it travels in the
-/// manifest's `store_schema` field, gated by the supported range and
-/// migrated forward in place by [`crate::store::migrate_store`], which
-/// the opener runs explicitly (it gates the restamp on the
-/// callback-table signature `open` does not know); the "5" suffix is
-/// historical — the last time the LAYOUT changed.
-pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE5";
+/// closed on one it does not know. The STORE SCHEMA does not ride
+/// the magic: it travels in the manifest's `store_schema` field, gated by
+/// the supported range and migrated forward in place by
+/// [`crate::store::migrate_store`], which the opener runs explicitly (it
+/// gates the restamp on the callback-table signature `open` does not
+/// know). "6" is the layout without row-leaf hashes (store schema 36).
+pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE6";
+
+/// The layout of store schemas 5 through 35, with row-leaf hashes. Read
+/// for migration only; see the module docs.
+pub const LEGACY_FILE_MAGIC: [u8; 8] = *b"IHSTORE5";
 
 /// Temp files are uniquely named per process and per commit
 /// (`.tmp-{pid}-{n}`), so two writers can never interleave bytes in a
@@ -73,7 +81,7 @@ pub const FILE_MAGIC: [u8; 8] = *b"IHSTORE5";
 /// (`open` never reads them).
 /// Cross-process last-rename-wins remains bounded by the documented
 /// single-writer-per-path model plus the durable succession check —
-/// a lost lineage is detected at its next commit via the seal chain,
+/// a lost lineage is detected at its next commit by its commit token,
 /// never silently merged.
 static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -90,11 +98,109 @@ struct Loaded {
     small: Vec<u8>,
     pages: Vec<DirEntry>,
     extents: Vec<DirEntry>,
-    leaf_pages: Vec<[u8; 32]>,
-    leaf_exts: Vec<[u8; 32]>,
     edges: Vec<Vec<u32>>,
     free_segs: Vec<Vec<u8>>,
-    leaf_frees: Vec<[u8; 32]>,
+}
+
+/// Where one slot page or chunk extent of a file being written comes
+/// from: bytes in hand, or a row of the durable previous file.
+enum Row<'a> {
+    New(&'a [u8]),
+    Prior(DirEntry),
+}
+
+impl Row<'_> {
+    fn len(&self) -> u32 {
+        match self {
+            // The writers bound new rows with `row_len` first.
+            Row::New(bytes) => bytes.len() as u32,
+            Row::Prior(entry) => entry.length,
+        }
+    }
+}
+
+/// Everything one store file holds, in the current layout. Commit and
+/// migration both write through this, so their layouts cannot drift.
+struct Layout<'a> {
+    manifest: Vec<u8>,
+    small: &'a [u8],
+    pages: Vec<Row<'a>>,
+    extents: Vec<Row<'a>>,
+    edges: &'a [Vec<u32>],
+    free_segs: &'a [Vec<u8>],
+}
+
+impl Layout<'_> {
+    /// Write the file to `out`, streaming each prior row from `prior`.
+    fn write(&self, out: &mut File, prior: Option<&RefCell<File>>) -> Result<(), StoreError> {
+        let rows = || self.pages.iter().chain(&self.extents);
+        let edges_bytes: u64 = self.edges.iter().map(|ts| 4 + 4 * ts.len() as u64).sum();
+        let free_bytes: u64 = 4 + self
+            .free_segs
+            .iter()
+            .map(|b| 4 + b.len() as u64)
+            .sum::<u64>();
+        // Directory offsets are absolute, so the header's length comes
+        // first.
+        let n_rows = (self.pages.len() + self.extents.len()) as u64;
+        let header_len = 8
+            + 4
+            + self.manifest.len() as u64
+            + 4
+            + self.small.len() as u64
+            + 4
+            + 4
+            + 12 * n_rows
+            + edges_bytes
+            + free_bytes;
+        out.write_all(&FILE_MAGIC).map_err(io_err)?;
+        out.write_all(&(self.manifest.len() as u32).to_be_bytes())
+            .map_err(io_err)?;
+        out.write_all(&self.manifest).map_err(io_err)?;
+        out.write_all(&(self.small.len() as u32).to_be_bytes())
+            .map_err(io_err)?;
+        out.write_all(self.small).map_err(io_err)?;
+        out.write_all(&(self.pages.len() as u32).to_be_bytes())
+            .map_err(io_err)?;
+        out.write_all(&(self.extents.len() as u32).to_be_bytes())
+            .map_err(io_err)?;
+        let mut cursor = header_len;
+        for row in rows() {
+            out.write_all(&cursor.to_be_bytes()).map_err(io_err)?;
+            out.write_all(&row.len().to_be_bytes()).map_err(io_err)?;
+            cursor += row.len() as u64;
+        }
+        for ts in self.edges {
+            out.write_all(&(ts.len() as u32).to_be_bytes())
+                .map_err(io_err)?;
+            for t in ts {
+                out.write_all(&t.to_be_bytes()).map_err(io_err)?;
+            }
+        }
+        out.write_all(&(self.free_segs.len() as u32).to_be_bytes())
+            .map_err(io_err)?;
+        for b in self.free_segs {
+            out.write_all(&(b.len() as u32).to_be_bytes())
+                .map_err(io_err)?;
+            out.write_all(b).map_err(io_err)?;
+        }
+        for row in rows() {
+            match row {
+                Row::New(bytes) => out.write_all(bytes).map_err(io_err)?,
+                Row::Prior(entry) => {
+                    // Stream the clean row from the durable previous file.
+                    let file = prior.expect("a prior row implies a prior file");
+                    let mut f = file.borrow_mut();
+                    f.seek(SeekFrom::Start(entry.offset)).map_err(io_err)?;
+                    let mut buf = vec![0u8; entry.length as usize];
+                    f.read_exact(&mut buf).map_err(io_err)?;
+                    drop(f);
+                    out.write_all(&buf).map_err(io_err)?;
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The single-file reference store. See the module docs.
@@ -122,12 +228,15 @@ fn file_corrupt(what: &'static str) -> StoreError {
 }
 
 impl FileStore {
-    /// Write `bytes` as the store file through the commit path's
-    /// exact durability discipline — unique temp, fsync, rename,
-    /// directory sync — then reload the in-memory view from the
-    /// renamed file. The migration writes share this so their
-    /// atomicity can never drift from commit's.
-    fn atomic_replace_and_reload(&mut self, bytes: &[u8]) -> Result<(), StoreError> {
+    /// Write a whole store file through `layout` — unique temp, fsync,
+    /// rename, directory sync — then reload the in-memory view from the
+    /// renamed file. Commit and migration share this, so their atomicity
+    /// cannot drift.
+    fn replace_file(
+        &mut self,
+        layout: &Layout<'_>,
+        prior: Option<&RefCell<File>>,
+    ) -> Result<(), StoreError> {
         let tmp_path = {
             let mut os = self.path.clone().into_os_string();
             os.push(format!(
@@ -137,9 +246,12 @@ impl FileStore {
             ));
             PathBuf::from(os)
         };
+        // Stage the whole new file; on ANY failure remove the temp so
+        // a flaky disk does not accumulate `.tmp-*` litter beside the
+        // store. Leftovers are inert but can accumulate across retries.
         let write_tmp = || -> Result<(), StoreError> {
             let mut tmp = File::create(&tmp_path).map_err(io_err)?;
-            tmp.write_all(bytes).map_err(io_err)?;
+            layout.write(&mut tmp, prior)?;
             tmp.sync_all().map_err(io_err)?;
             Ok(())
         };
@@ -148,18 +260,42 @@ impl FileStore {
             return Err(e);
         }
         if let Err(e) = std::fs::rename(&tmp_path, &self.path) {
+            // A failed RENAME must clean up like a failed write does:
+            // the tmp file is inert litter (opens ignore it) but
+            // unbounded across retries. See
+            // `failed_rename_removes_the_temp_file`.
             let _ = std::fs::remove_file(&tmp_path);
             return Err(io_err(e));
         }
+        // The rename is the commit point, and it is durable only once
+        // the containing directory is synced: an acknowledged checkpoint
+        // must not roll back on crash.
+        // `Path::parent()` returns `Some("")` for a bare relative
+        // filename, and opening "" fails ENOENT AFTER the rename — a
+        // durable commit misreported as failed, wedging the session
+        // one epoch behind its own file. An empty parent means the
+        // current directory.
         let dir = match self.path.parent() {
             Some(p) if !p.as_os_str().is_empty() => p,
             _ => std::path::Path::new("."),
         };
         File::open(dir).and_then(|d| d.sync_all()).map_err(io_err)?;
+        // Reopen and re-decode: the in-memory view always reflects the
+        // durable file, never a shadow copy that could drift.
         let mut file = File::open(&self.path).map_err(io_err)?;
         let loaded = Self::load(&mut file)?;
         self.state = Some((loaded, RefCell::new(file)));
         Ok(())
+    }
+
+    /// The durable file, decoded afresh, or `None` when there is none.
+    fn load_durable(&self) -> Result<Option<(Loaded, RefCell<File>)>, StoreError> {
+        if !self.path.exists() {
+            return Ok(None);
+        }
+        let mut f = File::open(&self.path).map_err(io_err)?;
+        let l = Self::load(&mut f)?;
+        Ok(Some((l, RefCell::new(f))))
     }
 
     /// Open the store at `path`. An absent file is a valid empty store
@@ -193,7 +329,8 @@ impl FileStore {
         file.seek(SeekFrom::Start(0)).map_err(io_err)?;
         file.read_exact(&mut header)
             .map_err(|_| file_corrupt("file store header truncated"))?;
-        if header != FILE_MAGIC {
+        let legacy = header == LEGACY_FILE_MAGIC;
+        if !legacy && header != FILE_MAGIC {
             return Err(file_corrupt("file store magic"));
         }
 
@@ -217,6 +354,17 @@ impl FileStore {
             let mut buf = vec![0u8; len];
             file.read_exact(&mut buf).map_err(|_| file_corrupt(what))?;
             Ok(buf)
+        };
+        // The legacy layout's leaf hashes: skipped, but they must be
+        // there, 32 bytes per row.
+        let skip_leaves = |file: &mut File, n: u64, what: &'static str| -> Result<(), StoreError> {
+            let len = n * 32;
+            let at = file.stream_position().map_err(io_err)?;
+            if at.checked_add(len).is_none_or(|end| end > file_len) {
+                return Err(file_corrupt(what));
+            }
+            file.seek(SeekFrom::Current(len as i64)).map_err(io_err)?;
+            Ok(())
         };
 
         let manifest_bytes = read_block(file, "file store manifest block")?;
@@ -250,24 +398,9 @@ impl FileStore {
         };
         let pages = read_dir(n_pages)?;
         let extents = read_dir(n_exts)?;
-
-        // The row-leaf hashes, 32 bytes per row; the same
-        // reservation clamp discipline as the directories.
-        if (n_pages + n_exts) * 32 > file_len {
-            return Err(file_corrupt("file store leaf hashes truncated"));
+        if legacy {
+            skip_leaves(file, n_pages + n_exts, "file store leaf hashes truncated")?;
         }
-        let mut read_leaves = |n: u64| -> Result<Vec<[u8; 32]>, StoreError> {
-            let mut out = Vec::with_capacity(n as usize);
-            for _ in 0..n {
-                let mut b = [0u8; 32];
-                file.read_exact(&mut b)
-                    .map_err(|_| file_corrupt("file store leaf hashes truncated"))?;
-                out.push(b);
-            }
-            Ok(out)
-        };
-        let leaf_pages = read_leaves(n_pages)?;
-        let leaf_exts = read_leaves(n_exts)?;
 
         // Page-edge summaries: u32 length + targets per
         // page, with the same clamp discipline. The OUTER vector
@@ -288,8 +421,8 @@ impl FileStore {
             edges.push(ts);
         }
 
-        // Free-list segments and their leaves, clamp-checked;
-        // outer vectors grow against real reads (see the edges note).
+        // Free-list segments, clamp-checked; the outer vector grows
+        // against real reads (see the edges note).
         let n_frees = read_u32(file)? as u64;
         if n_frees * 4 > file_len {
             return Err(file_corrupt("file store free segments truncated"));
@@ -305,15 +438,8 @@ impl FileStore {
                 .map_err(|_| file_corrupt("file store free segments truncated"))?;
             free_segs.push(b);
         }
-        if n_frees * 32 > file_len {
-            return Err(file_corrupt("file store free leaf hashes truncated"));
-        }
-        let mut leaf_frees: Vec<[u8; 32]> = Vec::with_capacity(n_frees as usize);
-        for _ in 0..n_frees {
-            let mut b = [0u8; 32];
-            file.read_exact(&mut b)
-                .map_err(|_| file_corrupt("file store free leaf hashes truncated"))?;
-            leaf_frees.push(b);
+        if legacy {
+            skip_leaves(file, n_frees, "file store free leaf hashes truncated")?;
         }
 
         // The directories must cover exactly the manifest's geometry —
@@ -342,11 +468,8 @@ impl FileStore {
             small,
             pages,
             extents,
-            leaf_pages,
-            leaf_exts,
             edges,
             free_segs,
-            leaf_frees,
         })
     }
 
@@ -390,125 +513,27 @@ impl HeapStore for FileStore {
         Ok(Self::load(&mut file)?.manifest)
     }
 
-    fn replace_manifest_for_migration(
+    /// Rewrites the whole file in the current layout: `to` and `small`,
+    /// the durable file's rows, summaries and free segments, and no leaf
+    /// hashes. The comparison with `from` runs against the file as it is
+    /// on disk, under the single-writer discipline the module documents.
+    fn replace_for_migration(
         &mut self,
-        manifest: &StoreManifest,
-    ) -> Result<(), StoreError> {
-        // The manifest is length-prefixed at the file's front and
-        // every directory offset is absolute, so this write is only
-        // sound when the replacement encodes to the SAME length. It
-        // does for v5 → v6 (the schema stamp is a fixed-width u32 and
-        // the root a fixed 64-hex string); a future step that changes
-        // the length must rewrite the layout instead, and the guard
-        // makes that unmissable.
-        //
-        // The caller verified the OLD root against the cached view
-        // (`self.state`, loaded at open) while this re-reads the durable
-        // file. Those agree under the store's single-writer discipline —
-        // no other process rewrites the file between open and migrate —
-        // which is the same assumption the whole in-place migration
-        // rests on. A multi-writer backend would have
-        // to reload-then-verify instead.
-        if self.state.is_none() {
-            return Err(StoreError::Empty);
-        }
-        let mut bytes = std::fs::read(&self.path).map_err(io_err)?;
-        let old_len = u32::from_be_bytes(bytes.get(8..12).and_then(|b| b.try_into().ok()).ok_or(
-            StoreError::Snapshot(SnapshotError::Corrupt("store file header truncated")),
-        )?) as usize;
-        let new_manifest = manifest.encode();
-        if new_manifest.len() != old_len {
-            return Err(StoreError::Unsupported(
-                "migrate a manifest whose encoded length changed; a full rewrite is required",
-            ));
-        }
-        // The header's manifest length is trusted only after the file
-        // is proven long enough to hold it: an externally truncated
-        // file (header intact, body cut) must fail closed here, not
-        // panic on the splice. The replacement of manifest and small
-        // state below bounds every offset the same way; see
-        // `migration_splices_refuse_truncation_and_offset_overflow`.
-        let man_end = 12usize
-            .checked_add(old_len)
-            .filter(|&end| end <= bytes.len())
-            .ok_or(StoreError::Snapshot(SnapshotError::Corrupt(
-                "store file manifest region truncated",
-            )))?;
-        bytes[12..man_end].copy_from_slice(&new_manifest);
-        self.atomic_replace_and_reload(&bytes)
-    }
-
-    fn replace_manifest_and_small_for_migration(
-        &mut self,
-        manifest: &StoreManifest,
+        from: &StoreManifest,
+        to: &StoreManifest,
         small: &[u8],
     ) -> Result<(), StoreError> {
-        // The length-changing ladder write (6→7 grows the small state,
-        // 7→8 grows the manifest): unlike the manifest-only splice
-        // above this rebuilds the header region and shifts every
-        // directory offset by the COMBINED length delta — the
-        // directories' offsets are absolute and every blob sits after
-        // both sections. Leaf hashes, edges, free segments, and blob
-        // bytes copy verbatim.
-        if self.state.is_none() {
-            return Err(StoreError::Empty);
-        }
-        let old = std::fs::read(&self.path).map_err(io_err)?;
-        let truncated =
-            || StoreError::Snapshot(SnapshotError::Corrupt("store file header truncated"));
-        let read_u32 = |at: usize| -> Result<usize, StoreError> {
-            Ok(u32::from_be_bytes(
-                old.get(at..at + 4)
-                    .and_then(|b| b.try_into().ok())
-                    .ok_or_else(truncated)?,
-            ) as usize)
+        let (durable, file) = self.load_durable()?.ok_or(StoreError::Empty)?;
+        check_migration_baseline(&durable.manifest, from)?;
+        let layout = Layout {
+            manifest: to.encode(),
+            small,
+            pages: durable.pages.iter().map(|e| Row::Prior(*e)).collect(),
+            extents: durable.extents.iter().map(|e| Row::Prior(*e)).collect(),
+            edges: &durable.edges,
+            free_segs: &durable.free_segs,
         };
-        let man_len = read_u32(8)?;
-        let new_manifest = manifest.encode();
-        // Unlike the manifest-only splice above, this write rebuilds the
-        // header region, so BOTH sections may change length — the 6→7
-        // step grows the small state, the 7→8 step grows the manifest.
-        // Every directory offset is absolute and every blob sits after
-        // both sections, so the shift below is their COMBINED delta.
-        let man_end = 12usize.checked_add(man_len).ok_or_else(truncated)?;
-        let old_small_len = read_u32(man_end)?;
-        let small_end = man_end
-            .checked_add(4)
-            .and_then(|x| x.checked_add(old_small_len))
-            .ok_or_else(truncated)?;
-        let n_pages = read_u32(small_end)?;
-        let n_exts = read_u32(small_end + 4)?;
-        let dirs_start = small_end + 8;
-        let dirs_len = n_pages
-            .checked_add(n_exts)
-            .and_then(|n| n.checked_mul(12))
-            .ok_or_else(truncated)?;
-        let dirs_end = dirs_start.checked_add(dirs_len).ok_or_else(truncated)?;
-        if dirs_end > old.len() {
-            return Err(truncated());
-        }
-        let delta = (new_manifest.len() as i64 - man_len as i64)
-            + (small.len() as i64 - old_small_len as i64);
-
-        let mut out = Vec::with_capacity(old.len().saturating_add_signed(delta as isize));
-        out.extend_from_slice(&old[0..8]);
-        out.extend_from_slice(&(new_manifest.len() as u32).to_be_bytes());
-        out.extend_from_slice(&new_manifest);
-        out.extend_from_slice(&(small.len() as u32).to_be_bytes());
-        out.extend_from_slice(small);
-        out.extend_from_slice(&old[small_end..dirs_start]);
-        for row in old[dirs_start..dirs_end].chunks_exact(12) {
-            let offset = u64::from_be_bytes(row[0..8].try_into().unwrap());
-            let shifted = offset
-                .checked_add_signed(delta)
-                .ok_or(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "store file directory offset overflow",
-                )))?;
-            out.extend_from_slice(&shifted.to_be_bytes());
-            out.extend_from_slice(&row[8..12]);
-        }
-        out.extend_from_slice(&old[dirs_end..]);
-        self.atomic_replace_and_reload(&out)
+        self.replace_file(&layout, Some(&file))
     }
 
     fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
@@ -535,13 +560,6 @@ impl HeapStore for FileStore {
         ))
     }
 
-    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
-        self.state
-            .as_ref()
-            .map(|(l, _)| (l.leaf_pages.clone(), l.leaf_exts.clone()))
-            .ok_or(StoreError::Empty)
-    }
-
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
         self.state
             .as_ref()
@@ -560,13 +578,6 @@ impl HeapStore for FileStore {
             .ok_or(StoreError::MissingRow("free segment", seg))
     }
 
-    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
-        self.state
-            .as_ref()
-            .map(|(l, _)| l.leaf_frees.clone())
-            .ok_or(StoreError::Empty)
-    }
-
     fn commit_verified(&mut self, verify: &mut CommitVerifier<'_>) -> Result<(), StoreError> {
         // Reload the durable file: the cached view can be stale if
         // another handle on this path committed. Both the succession
@@ -574,116 +585,68 @@ impl HeapStore for FileStore {
         // disk, so a forked handle fails closed with
         // EpochMismatch/BaselineMismatch instead of resurrecting its
         // stale baseline over the other's commit.
-        let durable: Option<(Loaded, RefCell<File>)> = if self.path.exists() {
-            let mut f = File::open(&self.path).map_err(io_err)?;
-            let l = Self::load(&mut f)?;
-            Some((l, RefCell::new(f)))
-        } else {
-            None
-        };
-        let ledger = match durable.as_ref() {
-            Some((loaded, _))
-                if loaded.manifest.store_schema < crate::store::STORE_SCHEMA_VERSION =>
-            {
-                RootLedger::build(
-                    &loaded.small,
-                    loaded.leaf_pages.clone(),
-                    loaded.leaf_exts.clone(),
-                    loaded.leaf_frees.clone(),
-                    &loaded.edges,
-                )
-            }
-            Some((loaded, _)) => RootLedger::build_sectioned(
-                &loaded.small,
-                loaded.leaf_pages.clone(),
-                loaded.leaf_exts.clone(),
-                loaded.leaf_frees.clone(),
-                &loaded.edges,
-            )?,
-            None => RootLedger::build(&[], Vec::new(), Vec::new(), Vec::new(), &[]),
-        };
-        let (batch, ledger) =
-            verify(durable.as_ref().map(|(l, _)| &l.manifest), ledger)?.into_parts();
+        let durable = self.load_durable()?;
+        let batch = verify(durable.as_ref().map(|(l, _)| &l.manifest))?.batch();
         let small = crate::store_sections::merge_framed(
             durable.as_ref().map(|(l, _)| l.small.as_slice()),
             batch,
         )?;
-        let (leaf_pages, leaf_exts, leaf_frees) = ledger.into_leaf_vectors();
+        let n_pages = slot_page_count(batch.manifest.slot_count);
+        let n_exts = chunk_extent_count(batch.manifest.chunk_len);
         let mut edges = durable
             .as_ref()
             .map(|(l, _)| l.edges.clone())
             .unwrap_or_default();
-        edges.resize(
-            slot_page_count(batch.manifest.slot_count) as usize,
-            Vec::new(),
-        );
+        edges.resize(n_pages as usize, Vec::new());
         for (page, targets) in &batch.page_edges {
             edges[*page as usize] = targets.clone();
         }
 
-        let n_pages = slot_page_count(batch.manifest.slot_count);
-        let n_exts = chunk_extent_count(batch.manifest.chunk_len);
-
         // Resolve every row of the NEW geometry: a batch row wins;
         // otherwise the previous file must hold it (a grown row that is
         // not in the batch is a caller bug, refused as MissingRow).
-        // Dirty sources are indices into the batch's own vectors so no
-        // borrow outlives this frame.
         use std::collections::HashMap;
-        let dirty_pages: HashMap<u32, usize> = batch
+        let dirty_pages: HashMap<u32, &[u8]> = batch
             .slot_pages
             .iter()
-            .enumerate()
-            .map(|(i, (p, _))| (*p, i))
+            .map(|(p, b)| (*p, b.as_slice()))
             .collect();
-        let dirty_exts: HashMap<u32, usize> = batch
+        let dirty_exts: HashMap<u32, &[u8]> = batch
             .chunk_extents
             .iter()
-            .enumerate()
-            .map(|(i, (e, _))| (*e, i))
+            .map(|(e, b)| (*e, b.as_slice()))
             .collect();
-
-        enum Source {
-            DirtyPage(usize),
-            DirtyExtent(usize),
-            Prior(DirEntry),
-        }
-
-        let mut sources: Vec<Source> = Vec::with_capacity((n_pages + n_exts) as usize);
-        let mut lengths: Vec<u32> = Vec::with_capacity((n_pages + n_exts) as usize);
+        let mut pages = Vec::with_capacity(n_pages as usize);
         for page in 0..n_pages {
-            if let Some(&i) = dirty_pages.get(&page) {
-                sources.push(Source::DirtyPage(i));
-                lengths.push(row_len(
-                    batch.slot_pages[i].1.len(),
-                    "file store slot page row exceeds u32",
-                )?);
-            } else {
-                let entry = durable
-                    .as_ref()
-                    .and_then(|(l, _)| l.pages.get(page as usize))
-                    .copied()
-                    .ok_or(StoreError::MissingRow("slot page", page))?;
-                sources.push(Source::Prior(entry));
-                lengths.push(entry.length);
-            }
+            pages.push(match dirty_pages.get(&page) {
+                Some(bytes) => {
+                    row_len(bytes.len(), "file store slot page row exceeds u32")?;
+                    Row::New(bytes)
+                }
+                None => Row::Prior(
+                    durable
+                        .as_ref()
+                        .and_then(|(l, _)| l.pages.get(page as usize))
+                        .copied()
+                        .ok_or(StoreError::MissingRow("slot page", page))?,
+                ),
+            });
         }
+        let mut extents = Vec::with_capacity(n_exts as usize);
         for ext in 0..n_exts {
-            if let Some(&i) = dirty_exts.get(&ext) {
-                sources.push(Source::DirtyExtent(i));
-                lengths.push(row_len(
-                    batch.chunk_extents[i].1.len(),
-                    "file store chunk extent row exceeds u32",
-                )?);
-            } else {
-                let entry = durable
-                    .as_ref()
-                    .and_then(|(l, _)| l.extents.get(ext as usize))
-                    .copied()
-                    .ok_or(StoreError::MissingRow("chunk extent", ext))?;
-                sources.push(Source::Prior(entry));
-                lengths.push(entry.length);
-            }
+            extents.push(match dirty_exts.get(&ext) {
+                Some(bytes) => {
+                    row_len(bytes.len(), "file store chunk extent row exceeds u32")?;
+                    Row::New(bytes)
+                }
+                None => Row::Prior(
+                    durable
+                        .as_ref()
+                        .and_then(|(l, _)| l.extents.get(ext as usize))
+                        .copied()
+                        .ok_or(StoreError::MissingRow("chunk extent", ext))?,
+                ),
+            });
         }
 
         let n_free_segs = crate::store::free_seg_count(batch.manifest.free_len) as usize;
@@ -698,136 +661,16 @@ impl HeapStore for FileStore {
             }
         }
         free_segs.truncate(n_free_segs);
-        let free_bytes: u64 =
-            4 + free_segs.iter().map(|b| 4 + b.len() as u64).sum::<u64>() + 32 * n_free_segs as u64;
-        let edges_bytes: u64 = edges.iter().map(|ts| 4 + 4 * ts.len() as u64).sum();
 
-        // Lay the file out: header, manifest, small, counts, dirs,
-        // blobs. Directory offsets are computable before writing.
-        let manifest_bytes = batch.manifest.encode();
-        let header_len = 8
-            + 4
-            + manifest_bytes.len() as u64
-            + 4
-            + small.len() as u64
-            + 4
-            + 4
-            + 12 * (n_pages as u64 + n_exts as u64)
-            + 32 * (n_pages as u64 + n_exts as u64)
-            + edges_bytes
-            + free_bytes;
-        let mut offsets: Vec<u64> = Vec::with_capacity(lengths.len());
-        let mut cursor = header_len;
-        for len in &lengths {
-            offsets.push(cursor);
-            cursor += *len as u64;
-        }
-
-        let tmp_path = {
-            let mut os = self.path.clone().into_os_string();
-            os.push(format!(
-                ".tmp-{}-{}",
-                std::process::id(),
-                TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            ));
-            PathBuf::from(os)
+        let layout = Layout {
+            manifest: batch.manifest.encode(),
+            small: &small,
+            pages,
+            extents,
+            edges: &edges,
+            free_segs: &free_segs,
         };
-        // Stage the whole new file; on ANY failure remove the temp so
-        // a flaky disk does not accumulate `.tmp-*` litter beside the
-        // store. Leftovers are inert but can accumulate across retries.
-        let write_tmp = || -> Result<(), StoreError> {
-            let mut tmp = File::create(&tmp_path).map_err(io_err)?;
-            tmp.write_all(&FILE_MAGIC).map_err(io_err)?;
-            tmp.write_all(&(manifest_bytes.len() as u32).to_be_bytes())
-                .map_err(io_err)?;
-            tmp.write_all(&manifest_bytes).map_err(io_err)?;
-            tmp.write_all(&(small.len() as u32).to_be_bytes())
-                .map_err(io_err)?;
-            tmp.write_all(&small).map_err(io_err)?;
-            tmp.write_all(&n_pages.to_be_bytes()).map_err(io_err)?;
-            tmp.write_all(&n_exts.to_be_bytes()).map_err(io_err)?;
-            for (offset, length) in offsets.iter().zip(&lengths) {
-                tmp.write_all(&offset.to_be_bytes()).map_err(io_err)?;
-                tmp.write_all(&length.to_be_bytes()).map_err(io_err)?;
-            }
-            for l in &leaf_pages {
-                tmp.write_all(l).map_err(io_err)?;
-            }
-            for l in &leaf_exts {
-                tmp.write_all(l).map_err(io_err)?;
-            }
-            for ts in &edges {
-                tmp.write_all(&(ts.len() as u32).to_be_bytes())
-                    .map_err(io_err)?;
-                for t in ts {
-                    tmp.write_all(&t.to_be_bytes()).map_err(io_err)?;
-                }
-            }
-            tmp.write_all(&(free_segs.len() as u32).to_be_bytes())
-                .map_err(io_err)?;
-            for b in &free_segs {
-                tmp.write_all(&(b.len() as u32).to_be_bytes())
-                    .map_err(io_err)?;
-                tmp.write_all(b).map_err(io_err)?;
-            }
-            for l in &leaf_frees {
-                tmp.write_all(l).map_err(io_err)?;
-            }
-            for source in &sources {
-                match source {
-                    Source::DirtyPage(i) => {
-                        tmp.write_all(&batch.slot_pages[*i].1).map_err(io_err)?
-                    }
-                    Source::DirtyExtent(i) => {
-                        tmp.write_all(&batch.chunk_extents[*i].1).map_err(io_err)?
-                    }
-                    Source::Prior(entry) => {
-                        // Stream the clean row from the durable previous file.
-                        let (_, file) = durable.as_ref().expect("prior row implies prior file");
-                        let mut f = file.borrow_mut();
-                        f.seek(SeekFrom::Start(entry.offset)).map_err(io_err)?;
-                        let mut buf = vec![0u8; entry.length as usize];
-                        f.read_exact(&mut buf).map_err(io_err)?;
-                        drop(f);
-                        tmp.write_all(&buf).map_err(io_err)?;
-                    }
-                }
-            }
-            tmp.sync_all().map_err(io_err)?;
-            Ok(())
-        };
-        if let Err(e) = write_tmp() {
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(e);
-        }
-        if let Err(e) = std::fs::rename(&tmp_path, &self.path) {
-            // A failed RENAME must clean up like a failed write does:
-            // the tmp file is inert litter (opens ignore it) but
-            // unbounded across retries. See
-            // `failed_rename_removes_the_temp_file`.
-            let _ = std::fs::remove_file(&tmp_path);
-            return Err(io_err(e));
-        }
-        // The rename is the commit point, and it is durable only once
-        // the containing directory is synced: an acknowledged checkpoint
-        // must not roll back on crash.
-        // `Path::parent()` returns `Some("")` for a bare relative
-        // filename, and opening "" fails ENOENT AFTER the rename — a
-        // durable commit misreported as failed, wedging the session
-        // one epoch behind its own file. An empty parent means the
-        // current directory.
-        let dir = match self.path.parent() {
-            Some(p) if !p.as_os_str().is_empty() => p,
-            _ => std::path::Path::new("."),
-        };
-        File::open(dir).and_then(|d| d.sync_all()).map_err(io_err)?;
-
-        // Reopen and re-decode: the in-memory view always reflects the
-        // durable file, never a shadow copy that could drift.
-        let mut file = File::open(&self.path).map_err(io_err)?;
-        let loaded = Self::load(&mut file)?;
-        self.state = Some((loaded, RefCell::new(file)));
-        Ok(())
+        self.replace_file(&layout, durable.as_ref().map(|(_, f)| f))
     }
 }
 
@@ -840,7 +683,7 @@ mod tests {
     use crate::store::CheckpointBatch;
     use crate::store::{
         export_to_container, image_to_batch_unchecked, import_from_container, store_to_image,
-        validate_store,
+        validate_store, CommitToken,
     };
     use ironhorse_vm::Interp;
 
@@ -909,7 +752,7 @@ mod tests {
         let image = ran_image();
         assert!(
             store
-                .commit(&image_to_batch_unchecked(&image, 1, ""))
+                .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
                 .is_err(),
             "renaming a file onto a non-empty directory fails"
         );
@@ -962,16 +805,16 @@ mod tests {
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap();
 
         // Mutate one record on page 0 and commit only that page.
         let mut changed = image.clone();
         changed.slots[0] = ironhorse_vm::Slot::integer(424242);
-        let prev = store.manifest().unwrap().seal;
-        let full = image_to_batch_unchecked(&changed, 2, &prev);
-        let mut one_page = CheckpointBatch {
-            prev_seal: prev.clone(),
+        let prev = store.manifest().unwrap().token;
+        let full = image_to_batch_unchecked(&changed, 2, prev);
+        let one_page = CheckpointBatch {
+            prev_token: prev,
             manifest: full.manifest.clone(),
             small: full.small.clone(),
             small_updates: None,
@@ -990,10 +833,6 @@ mod tests {
                 .cloned()
                 .collect(),
         };
-        // The dirty-only batch seals over exactly its own rows (the
-        // legitimate producer's shape); the full batch's seal covered
-        // every page and must not be reused.
-        crate::store::reseal_batch(&mut one_page);
         store.commit(&one_page).unwrap();
 
         // The merged store now equals the changed image exactly.
@@ -1012,7 +851,7 @@ mod tests {
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap();
         drop(store);
 
@@ -1020,16 +859,16 @@ mod tests {
         // Replaying epoch 1 into a store already at epoch 1 is refused.
         assert_eq!(
             store
-                .commit(&image_to_batch_unchecked(&image, 1, ""))
+                .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
                 .unwrap_err(),
             StoreError::EpochMismatch {
                 expected: 2,
                 found: 1
             }
         );
-        let prev = store.manifest().unwrap().seal;
+        let prev = store.manifest().unwrap().token;
         store
-            .commit(&image_to_batch_unchecked(&image, 2, &prev))
+            .commit(&image_to_batch_unchecked(&image, 2, prev))
             .unwrap();
     }
 
@@ -1039,7 +878,11 @@ mod tests {
         let path = dir.join("heap.ihstore");
         let mut store = FileStore::open(&path).unwrap();
         store
-            .commit(&image_to_batch_unchecked(&ran_image(), 1, ""))
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
             .unwrap();
         drop(store);
         let bytes = std::fs::read(&path).unwrap();
@@ -1116,171 +959,305 @@ mod tests {
     fn file_metadata_has_exact_refusals() {
         let dir = tmp_dir("metadata-refusals");
         let path = dir.join("heap.ihstore");
-        let mut manifest = image_to_batch_unchecked(&ran_image(), 1, "").manifest;
+        let mut manifest = image_to_batch_unchecked(&ran_image(), 1, CommitToken::ZERO).manifest;
         manifest.slot_count = 1;
         manifest.chunk_len = 1;
         manifest.free_len = 1;
-        // This fixture tests open-time framing, not authenticated row validity.
-        // Zero-length directory entries keep later truncations from first failing
-        // the independent directory-range guard.
-        let encode = |manifest: &StoreManifest| {
+        // This fixture tests open-time framing, not row validity. Zero-length
+        // directory entries keep later truncations from first failing the
+        // independent directory-range guard. The legacy layout adds the leaf
+        // hashes.
+        let encode = |manifest: &StoreManifest, legacy: bool| {
             let encoded = manifest.encode();
-            let mut bytes = FILE_MAGIC.to_vec();
+            let mut bytes = if legacy {
+                LEGACY_FILE_MAGIC
+            } else {
+                FILE_MAGIC
+            }
+            .to_vec();
             bytes.extend_from_slice(&(encoded.len() as u32).to_be_bytes());
             bytes.extend_from_slice(&encoded);
             bytes.extend_from_slice(&0u32.to_be_bytes()); // small state
             bytes.extend_from_slice(&1u32.to_be_bytes()); // pages
             bytes.extend_from_slice(&1u32.to_be_bytes()); // extents
             bytes.extend_from_slice(&[0; 24]); // directories
-            bytes.extend_from_slice(&[0; 64]); // row leaves
+            if legacy {
+                bytes.extend_from_slice(&[0; 64]); // row leaves
+            }
             bytes.extend_from_slice(&0u32.to_be_bytes()); // page edges
             bytes.extend_from_slice(&1u32.to_be_bytes()); // free segments
             bytes.extend_from_slice(&4u32.to_be_bytes()); // segment length
             bytes.extend_from_slice(&0u32.to_be_bytes()); // free index
-            bytes.extend_from_slice(&[0; 32]); // free leaf
+            if legacy {
+                bytes.extend_from_slice(&[0; 32]); // free leaf
+            }
             bytes
         };
-        let bytes = encode(&manifest);
-        std::fs::write(&path, &bytes).unwrap();
-        FileStore::open(&path).unwrap();
         let open = |contents: &[u8]| {
             std::fs::write(&path, contents).unwrap();
             FileStore::open(&path).unwrap_err()
         };
-        let free_leaf = bytes.len() - 32;
-        let free_body = free_leaf - 4;
-        let free_length = free_body - 4;
-        let free_count = free_length - 4;
-        let edges = free_count - 4;
-        let leaves = edges - 64;
-        for end in leaves..edges {
-            assert_eq!(
-                open(&bytes[..end]),
-                StoreError::Snapshot(SnapshotError::Corrupt("file store leaf hashes truncated"))
-            );
-        }
-        let mut invalid = bytes.clone();
-        invalid[edges..edges + 4].copy_from_slice(&u32::MAX.to_be_bytes());
-        assert_eq!(
-            open(&invalid),
-            StoreError::Snapshot(SnapshotError::Corrupt("file store page edges truncated"))
-        );
-        for offset in [free_count, free_length] {
-            invalid = bytes.clone();
-            invalid[offset..offset + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+        for legacy in [false, true] {
+            let bytes = encode(&manifest, legacy);
+            std::fs::write(&path, &bytes).unwrap();
+            FileStore::open(&path).unwrap();
+            let free_leaf = bytes.len() - if legacy { 32 } else { 0 };
+            let free_body = free_leaf - 4;
+            let free_length = free_body - 4;
+            let free_count = free_length - 4;
+            let edges = free_count - 4;
+            if legacy {
+                for end in edges - 64..edges {
+                    assert_eq!(
+                        open(&bytes[..end]),
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "file store leaf hashes truncated"
+                        ))
+                    );
+                }
+                for end in free_leaf..bytes.len() {
+                    assert_eq!(
+                        open(&bytes[..end]),
+                        StoreError::Snapshot(SnapshotError::Corrupt(
+                            "file store free leaf hashes truncated"
+                        ))
+                    );
+                }
+            }
+            let mut invalid = bytes.clone();
+            invalid[edges..edges + 4].copy_from_slice(&u32::MAX.to_be_bytes());
             assert_eq!(
                 open(&invalid),
-                StoreError::Snapshot(SnapshotError::Corrupt("file store free segments truncated"))
+                StoreError::Snapshot(SnapshotError::Corrupt("file store page edges truncated"))
             );
-        }
-        for end in free_body..free_leaf {
+            for offset in [free_count, free_length] {
+                invalid = bytes.clone();
+                invalid[offset..offset + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+                assert_eq!(
+                    open(&invalid),
+                    StoreError::Snapshot(SnapshotError::Corrupt(
+                        "file store free segments truncated"
+                    ))
+                );
+            }
+            for end in free_body..free_leaf {
+                assert_eq!(
+                    open(&bytes[..end]),
+                    StoreError::Snapshot(SnapshotError::Corrupt(
+                        "file store free segments truncated"
+                    ))
+                );
+            }
+            let mut wrong = manifest.clone();
+            wrong.slot_count = 0;
             assert_eq!(
-                open(&bytes[..end]),
-                StoreError::Snapshot(SnapshotError::Corrupt("file store free segments truncated"))
-            );
-        }
-        for end in free_leaf..bytes.len() {
-            assert_eq!(
-                open(&bytes[..end]),
+                open(&encode(&wrong, legacy)),
                 StoreError::Snapshot(SnapshotError::Corrupt(
-                    "file store free leaf hashes truncated"
+                    "file store page directory disagrees with geometry"
                 ))
             );
+            wrong = manifest.clone();
+            wrong.chunk_len = 0;
+            assert_eq!(
+                open(&encode(&wrong, legacy)),
+                StoreError::Snapshot(SnapshotError::Corrupt(
+                    "file store extent directory disagrees with geometry"
+                ))
+            );
+            wrong = manifest.clone();
+            wrong.free_len = 0;
+            assert_eq!(
+                open(&encode(&wrong, legacy)),
+                StoreError::Snapshot(SnapshotError::Corrupt(
+                    "file store free segments disagree with geometry"
+                ))
+            );
+            std::fs::write(&path, &bytes).unwrap();
+            FileStore::open(&path).unwrap();
         }
-        let mut wrong = manifest.clone();
-        wrong.slot_count = 0;
-        assert_eq!(
-            open(&encode(&wrong)),
-            StoreError::Snapshot(SnapshotError::Corrupt(
-                "file store page directory disagrees with geometry"
-            ))
-        );
-        wrong = manifest.clone();
-        wrong.chunk_len = 0;
-        assert_eq!(
-            open(&encode(&wrong)),
-            StoreError::Snapshot(SnapshotError::Corrupt(
-                "file store extent directory disagrees with geometry"
-            ))
-        );
-        wrong = manifest.clone();
-        wrong.free_len = 0;
-        assert_eq!(
-            open(&encode(&wrong)),
-            StoreError::Snapshot(SnapshotError::Corrupt(
-                "file store free segments disagree with geometry"
-            ))
-        );
-        std::fs::write(&path, &bytes).unwrap();
-        FileStore::open(&path).unwrap();
     }
 
+    /// The same file in the legacy layout: zero leaf hashes after the
+    /// directories and after the free segments, every directory offset
+    /// shifted past them.
+    fn to_legacy_layout(bytes: &[u8]) -> Vec<u8> {
+        let at = |i: usize| u32::from_be_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+        let small_header = 12 + at(8);
+        let counts = small_header + 4 + at(small_header);
+        let (n_pages, n_exts) = (at(counts), at(counts + 4));
+        let dirs = counts + 8;
+        let dirs_end = dirs + 12 * (n_pages + n_exts);
+        let mut edges_end = dirs_end;
+        for _ in 0..n_pages {
+            edges_end += 4 + 4 * at(edges_end);
+        }
+        let n_frees = at(edges_end);
+        let mut frees_end = edges_end + 4;
+        for _ in 0..n_frees {
+            frees_end += 4 + at(frees_end);
+        }
+        let shift = (32 * (n_pages + n_exts + n_frees)) as u64;
+        let mut out = LEGACY_FILE_MAGIC.to_vec();
+        out.extend_from_slice(&bytes[8..dirs]);
+        for row in bytes[dirs..dirs_end].chunks_exact(12) {
+            let offset = u64::from_be_bytes(row[..8].try_into().unwrap());
+            out.extend_from_slice(&(offset + shift).to_be_bytes());
+            out.extend_from_slice(&row[8..]);
+        }
+        out.extend(std::iter::repeat_n(0u8, 32 * (n_pages + n_exts)));
+        out.extend_from_slice(&bytes[dirs_end..frees_end]);
+        out.extend(std::iter::repeat_n(0u8, 32 * n_frees));
+        out.extend_from_slice(&bytes[frees_end..]);
+        out
+    }
+
+    /// A file in the legacy layout reads as the same store, and the
+    /// migration write rewrites it in the current layout: byte for byte
+    /// the file this build would have written.
     #[test]
-    fn migration_splices_refuse_truncation_and_offset_overflow() {
-        let dir = tmp_dir("migration-splice-refusals");
+    fn legacy_layout_reads_and_the_migration_write_upgrades_it() {
+        let dir = tmp_dir("legacy-layout");
         let path = dir.join("heap.ihstore");
+        let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
         store
-            .commit(&image_to_batch_unchecked(&ran_image(), 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+            .unwrap();
+        let manifest = store.manifest().unwrap();
+        let small = store.read_small_state().unwrap();
+        drop(store);
+        let current = std::fs::read(&path).unwrap();
+        let legacy = to_legacy_layout(&current);
+        assert_ne!(legacy, current);
+        std::fs::write(&path, &legacy).unwrap();
+        let mut store = FileStore::open(&path).unwrap();
+        assert_eq!(store_to_image(&store).unwrap(), image);
+        validate_store(&store, &sig()).unwrap();
+        store
+            .replace_for_migration(&manifest, &manifest, &small)
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), current);
+        assert_eq!(store_to_image(&store).unwrap(), image);
+    }
+
+    /// The migration write compares the durable manifest with the one the
+    /// migration read, and refuses without writing when they differ or
+    /// the file does not decode.
+    #[test]
+    fn migration_write_refuses_a_moved_or_damaged_file() {
+        let dir = tmp_dir("migration-write-refusals");
+        let path = dir.join("heap.ihstore");
+        let mut store = FileStore::open(&path).unwrap();
+        assert_eq!(
+            store.replace_for_migration(
+                &image_to_batch_unchecked(&ran_image(), 1, CommitToken::ZERO).manifest,
+                &image_to_batch_unchecked(&ran_image(), 1, CommitToken::ZERO).manifest,
+                &[],
+            ),
+            Err(StoreError::Empty)
+        );
+        store
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
             .unwrap();
         let manifest = store.manifest().unwrap();
         let small = store.read_small_state().unwrap();
         let bytes = std::fs::read(&path).unwrap();
-        store.replace_manifest_for_migration(&manifest).unwrap();
-        store
-            .replace_manifest_and_small_for_migration(&manifest, &small)
-            .unwrap();
+        let mut moved = manifest.clone();
+        moved.epoch += 1;
+        assert!(matches!(
+            store.replace_for_migration(&moved, &manifest, &small),
+            Err(StoreError::BaselineMismatch { .. })
+        ));
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
-        let manifest_end = 12 + manifest.encode().len();
         for cut in [0, 8, 11] {
             std::fs::write(&path, &bytes[..cut]).unwrap();
-            assert_eq!(
-                store.replace_manifest_for_migration(&manifest),
-                Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "store file header truncated"
-                )))
-            );
-            assert_eq!(
-                store.replace_manifest_and_small_for_migration(&manifest, &small),
-                Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "store file header truncated"
-                )))
-            );
+            assert!(store
+                .replace_for_migration(&manifest, &manifest, &small)
+                .is_err());
             assert_eq!(std::fs::read(&path).unwrap(), bytes[..cut]);
-        }
-        for cut in [12, manifest_end - 1] {
-            std::fs::write(&path, &bytes[..cut]).unwrap();
-            assert_eq!(
-                store.replace_manifest_for_migration(&manifest),
-                Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "store file manifest region truncated"
-                )))
-            );
-            assert_eq!(std::fs::read(&path).unwrap(), bytes[..cut]);
-        }
-        let directory = manifest_end + 4 + small.len() + 8;
-        assert!(u32::from_be_bytes(bytes[directory - 8..directory - 4].try_into().unwrap()) > 0);
-        for grow in [false, true] {
-            let mut invalid = bytes.clone();
-            let offset = if grow { u64::MAX } else { 0 };
-            invalid[directory..directory + 8].copy_from_slice(&offset.to_be_bytes());
-            let mut changed = small.clone();
-            if grow {
-                changed.push(0);
-            } else {
-                changed.pop().unwrap();
-            }
-            std::fs::write(&path, &invalid).unwrap();
-            assert_eq!(
-                store.replace_manifest_and_small_for_migration(&manifest, &changed),
-                Err(StoreError::Snapshot(SnapshotError::Corrupt(
-                    "store file directory offset overflow"
-                )))
-            );
-            assert_eq!(std::fs::read(&path).unwrap(), invalid);
         }
         std::fs::write(&path, &bytes).unwrap();
+        store
+            .replace_for_migration(&manifest, &manifest, &small)
+            .unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
         validate_store(&FileStore::open(&path).unwrap(), &sig()).unwrap();
+    }
+
+    /// The shared consistent-edit suite on the file store, editing the row's
+    /// bytes in the file itself.
+    #[test]
+    fn consistent_edits_resume_on_the_file_store() {
+        let dir = tmp_dir("consistent-edits");
+        let path = dir.join("heap.ihstore");
+        crate::store_suite::consistent_edits_resume(
+            FileStore::open(&path).unwrap(),
+            |store, _kind, _index, old, new| {
+                drop(store);
+                let mut bytes = std::fs::read(&path).unwrap();
+                let at: Vec<usize> = (0..=bytes.len() - old.len())
+                    .filter(|&at| bytes[at..at + old.len()] == *old)
+                    .collect();
+                assert_eq!(at.len(), 1, "the row is stored once");
+                bytes[at[0]..at[0] + old.len()].copy_from_slice(new);
+                std::fs::write(&path, &bytes).unwrap();
+                FileStore::open(&path).unwrap()
+            },
+        );
+    }
+
+    /// A handle serves the small state and rows it loaded, so its view falls
+    /// behind the file when another handle writes. The migration reads them
+    /// through the handle and refuses one that is behind, rather than write
+    /// the durable rows beside a stale small state; a handle that reloads
+    /// migrates.
+    #[test]
+    fn migration_refuses_a_handle_behind_the_file() {
+        use crate::store::migrate_store;
+        let dir = tmp_dir("migration-stale-handle");
+        let path = dir.join("heap.ihstore");
+        let mut writer = FileStore::open(&path).unwrap();
+        writer
+            .commit(&image_to_batch_unchecked(
+                &ran_image(),
+                1,
+                CommitToken::ZERO,
+            ))
+            .unwrap();
+        let current = writer.manifest().unwrap();
+        let small = writer.read_small_state().unwrap();
+        let older = StoreManifest {
+            store_schema: 35,
+            ..current.clone()
+        };
+        writer
+            .replace_for_migration(&current, &older, &small)
+            .unwrap();
+        let mut stale = FileStore::open(&path).unwrap();
+        let moved = StoreManifest {
+            epoch: older.epoch + 1,
+            ..older.clone()
+        };
+        writer
+            .replace_for_migration(&older, &moved, &small)
+            .unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(
+            migrate_store(&mut stale, &sig()),
+            Err(StoreError::BaselineMismatch {
+                expected: format!("schema 35 epoch 2 token {}", moved.token),
+                found: format!("schema 35 epoch 1 token {}", older.token),
+            })
+        );
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        assert_eq!(
+            migrate_store(&mut FileStore::open(&path).unwrap(), &sig()),
+            Ok(true)
+        );
     }
 
     #[test]
@@ -1301,7 +1278,7 @@ mod tests {
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap();
         drop(store);
 
@@ -1320,16 +1297,16 @@ mod tests {
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap();
         drop(store);
 
         std::fs::write(dir.join("heap.ihstore.tmp"), b"half a checkpoint").unwrap();
         let mut store = FileStore::open(&path).unwrap();
         assert_eq!(store_to_image(&store).unwrap(), image);
-        let prev = store.manifest().unwrap().seal;
+        let prev = store.manifest().unwrap().token;
         store
-            .commit(&image_to_batch_unchecked(&image, 2, &prev))
+            .commit(&image_to_batch_unchecked(&image, 2, prev))
             .unwrap();
         assert_eq!(store.manifest().unwrap().epoch, 2);
     }
@@ -1343,7 +1320,7 @@ mod tests {
         let image = ran_image();
         let mut store = FileStore::open(&path).unwrap();
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap();
 
         let mut grown = image.clone();
@@ -1351,10 +1328,9 @@ mod tests {
             7u8,
             crate::store::CHUNK_EXTENT_BYTES as usize,
         ));
-        let prev = store.manifest().unwrap().seal;
-        let mut batch = image_to_batch_unchecked(&grown, 2, &prev);
+        let prev = store.manifest().unwrap().token;
+        let mut batch = image_to_batch_unchecked(&grown, 2, prev);
         batch.chunk_extents.pop(); // drop the newest extent's row
-        crate::store::reseal_batch(&mut batch);
         match store.commit(&batch) {
             // Wrapped: a row missing from the caller's batch is a rejected
             // request, not a poisoned store.

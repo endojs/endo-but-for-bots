@@ -55,12 +55,11 @@ fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
 /// on everything the other three fields see.
 type CrankResult = (bool, String, String, Option<String>);
 
-/// Every store the suite writes keeps the digests the build before the
-/// store-seam design's phase 13 verifies at open (the root, the seal, the
-/// row leaves and the section digests), since stage 1 still writes them
-/// for that build to read; see `check_stored_digests`.
-fn assert_digests(store: &dyn HeapStore) {
-    crate::store::check_stored_digests(store).expect("the store's digests describe its content");
+/// Every store the suite writes passes the full validator, which also
+/// checks the small-state section digests that change detection relies on
+/// against the payloads they were derived from.
+fn assert_valid(store: &dyn HeapStore) {
+    crate::store::validate_store_content(store, &sig()).expect("the store validates");
 }
 
 fn crank_result(o: &ironhorse_vm::RunOutcome) -> CrankResult {
@@ -228,7 +227,7 @@ fn run_store_scheduled<S: HeapStore + 'static>(
     let mut session = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
         .expect("begin session");
-    assert_digests(&*store.borrow());
+    assert_valid(&*store.borrow());
 
     let mut evictions = 0u32;
     for (i, (bytecode, names)) in compiled.iter().enumerate().skip(1) {
@@ -285,7 +284,7 @@ fn run_store_scheduled<S: HeapStore + 'static>(
         results.push(crank_result(&o));
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
-        assert_digests(&*store.borrow());
+        assert_valid(&*store.borrow());
         if let Resume::LazyAdversarialEvict = mode {
             // Evict AFTER the session's own checkpoint too: the rows
             // this commit rewrote are clean again — evictable — and
@@ -338,7 +337,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
     let mut session: StoreSession = begin_store_session(m, &sig(), &mut *store.borrow_mut())
         .map_err(|(_, e)| e)
         .expect("begin session");
-    assert_digests(&*store.borrow());
+    assert_valid(&*store.borrow());
 
     for (bytecode, names) in compiled.iter().skip(1) {
         let code = session
@@ -349,7 +348,7 @@ fn run_checkpoint_every_crank<S: HeapStore + 'static>(
         results.push(crank_result(&o));
         computrons.push(o.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
-        assert_digests(&*store.borrow());
+        assert_valid(&*store.borrow());
     }
     drop(session);
     let resumed = resume_from_store_lazy(store.clone(), &sig()).expect("final lazy resume");
@@ -441,7 +440,7 @@ fn halting_crank_scenario<S: HeapStore + 'static>(fresh: &mut dyn FnMut() -> S) 
         let mut session = begin_store_session(worker, &sig(), &mut *store.borrow_mut())
             .map_err(|(_, error)| error)
             .unwrap();
-        assert_digests(&*store.borrow());
+        assert_valid(&*store.borrow());
         let manifest = store.borrow().manifest().unwrap();
         if resume_before {
             drop(session);
@@ -472,7 +471,7 @@ fn halting_crank_scenario<S: HeapStore + 'static>(fresh: &mut dyn FnMut() -> S) 
         assert_eq!(crank_result(&actual), crank_result(&expected));
         assert_eq!(actual.computrons, expected.computrons);
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).unwrap();
-        assert_digests(&*store.borrow());
+        assert_valid(&*store.borrow());
         assert_eq!(
             export_to_container(&*store.borrow()).unwrap(),
             baseline.write_snapshot(&sig()).unwrap()
@@ -770,7 +769,7 @@ pub fn boundary_collection_twins<S: HeapStore + 'static>(mut fresh: impl FnMut()
                 .map_err(|(_, e)| e)
                 .unwrap_or_else(|e| panic!("{name}: begin: {e:?}")),
         );
-        assert_digests(&*store.borrow());
+        assert_valid(&*store.borrow());
         let mut resumed = resume_from_store(&*store.borrow(), &sig())
             .unwrap_or_else(|e| panic!("{name}: resume: {e:?}"));
         let twin = resumed.machine_mut();
@@ -827,7 +826,7 @@ pub fn lazy_working_set_bound<S: HeapStore + 'static>(fresh: impl FnOnce() -> S)
             .map_err(|(_, e)| e)
             .unwrap(),
     );
-    assert_digests(&*store.borrow());
+    assert_valid(&*store.borrow());
     let total_pages = slot_page_count(store.borrow().manifest().unwrap().slot_count);
     assert!(total_pages > 12, "fixture must be genuinely wide");
 
@@ -856,7 +855,7 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
         .map_err(|(_, e)| panic!("begin: {e:?}"))
         .unwrap();
     assert_eq!(session.epoch(), 1);
-    assert_digests(store);
+    assert_valid(store);
     assert_eq!(
         store_to_image(store).unwrap(),
         session
@@ -876,7 +875,7 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
     assert!(session.machine_mut().run(&progs[1].0).completed);
     let epoch = checkpoint_to_store(&mut session, &sig(), store).expect("incremental");
     assert_eq!(epoch, 2);
-    assert_digests(store);
+    assert_valid(store);
     crate::store::validate_store_content(store, &sig())
         .expect("a store the suite wrote passes the full validator");
     assert_eq!(
@@ -941,7 +940,7 @@ pub fn resume_equals_uninterrupted(store: &mut dyn HeapStore) {
     let s1 = begin_store_session(m1, &sig(), store)
         .map_err(|(_, e)| panic!("begin: {e:?}"))
         .unwrap();
-    assert_digests(store);
+    assert_valid(store);
     let epoch = s1.epoch();
     drop(s1); // the suspended worker's machine is gone
 
@@ -969,14 +968,15 @@ fn real_progs() -> Vec<(Vec<u8>, Vec<ironhorse_vm::SymbolName>)> {
 /// owned handle and return a newly opened handle on the same medium.
 /// Every refusal must preserve both the manifest and complete logical content.
 pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> S) -> S {
-    use crate::store::{image_to_batch, reseal_batch};
+    use crate::format::SnapshotError;
+    use crate::store::{image_to_batch, CommitToken, StoreError};
     let mut machine = Interp::new();
     let proof = machine.snapshot_image(&sig()).unwrap();
-    let genesis = image_to_batch(&proof, 1, "");
+    let genesis = image_to_batch(&proof, 1, CommitToken::ZERO);
     store.commit(&genesis).expect("genesis commits");
     store = reopen(store);
     assert_eq!(store.manifest().unwrap(), genesis.manifest);
-    assert_digests(&store);
+    assert_valid(&store);
     let before = export_to_container(&store).unwrap();
     assert_eq!(before, crate::image::write_machine(&proof).unwrap());
 
@@ -988,19 +988,65 @@ pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> 
     machine.link_intrinsics(&symbols);
     assert!(machine.run(&code).completed);
     let grown = machine.snapshot_image(&sig()).unwrap();
-    let successor = image_to_batch(&grown, 2, &genesis.manifest.seal);
+    let successor = image_to_batch(&grown, 2, genesis.manifest.token);
     let mut wrong_parent = successor.clone();
-    wrong_parent.prev_seal.push('0');
-    wrong_parent.manifest.parent_seal = wrong_parent.prev_seal.clone();
-    reseal_batch(&mut wrong_parent);
+    wrong_parent.prev_token = CommitToken([0xab; 16]);
     let mut missing = successor.clone();
-    missing.slot_pages.pop();
+    let dropped = missing.slot_pages.pop().unwrap().0;
     missing.page_edges.pop();
-    reseal_batch(&mut missing);
-    let mut corrupt = successor.clone();
-    *corrupt.chunk_extents[0].1.last_mut().unwrap() ^= 1;
-    for bad in [genesis.clone(), wrong_parent, missing, corrupt] {
-        assert!(store.commit(&bad).is_err(), "invalid commit must refuse");
+    let mut zero_token = successor.clone();
+    zero_token.manifest.token = CommitToken::ZERO;
+    let mut repeated_token = successor.clone();
+    repeated_token.manifest.token = repeated_token.prev_token;
+    // An empty row and summary past the geometry pass the length and
+    // summary checks, so only the range check keeps a backend that writes
+    // rows by index from storing them.
+    let mut out_of_range = successor.clone();
+    let past = slot_page_count(successor.manifest.slot_count);
+    out_of_range.slot_pages.push((past, Vec::new()));
+    out_of_range.page_edges.push((past, Vec::new()));
+    let rejected = |error: StoreError| StoreError::BatchRejected(Box::new(error));
+    for (bad, refusal) in [
+        (
+            genesis.clone(),
+            StoreError::EpochMismatch {
+                expected: 2,
+                found: 1,
+            },
+        ),
+        (
+            wrong_parent,
+            StoreError::BaselineMismatch {
+                expected: genesis.manifest.token.to_hex(),
+                found: CommitToken([0xab; 16]).to_hex(),
+            },
+        ),
+        (
+            missing,
+            rejected(StoreError::MissingRow("slot page", dropped)),
+        ),
+        (
+            zero_token,
+            rejected(StoreError::Snapshot(SnapshotError::Corrupt(
+                "commit token must be nonzero",
+            ))),
+        ),
+        (
+            repeated_token,
+            rejected(StoreError::Snapshot(SnapshotError::Corrupt(
+                "commit token must differ from its predecessor",
+            ))),
+        ),
+        (
+            out_of_range,
+            rejected(StoreError::MissingRow("slot page", past)),
+        ),
+    ] {
+        assert_eq!(
+            store.commit(&bad).err(),
+            Some(refusal),
+            "invalid commit must refuse"
+        );
         store = reopen(store);
         assert_eq!(store.manifest().unwrap(), genesis.manifest);
         assert_eq!(export_to_container(&store).unwrap(), before);
@@ -1010,7 +1056,7 @@ pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> 
         .expect("valid successor after refusals");
     store = reopen(store);
     assert_eq!(store.manifest().unwrap(), successor.manifest);
-    assert_digests(&store);
+    assert_valid(&store);
     assert_eq!(
         export_to_container(&store).unwrap(),
         crate::image::write_machine(&grown).unwrap()
@@ -1018,10 +1064,146 @@ pub fn commit_contract<S: HeapStore>(mut store: S, mut reopen: impl FnMut(S) -> 
     store
 }
 
+/// Consistent at-rest edits resume as the machine they describe (the
+/// store-seam design's trust model, phase 13): a slot page with one integer
+/// payload rewritten, a chunk extent with one string's characters rewritten,
+/// a free-list segment with two entries swapped, a small-state section with
+/// a property renamed, and a manifest with its crank counter advanced. The
+/// store passes both validator levels, and eager and lazy resume both run
+/// the edited machine.
+///
+/// `edit_row(store, kind, index, old, new)` rewrites one row at rest the way
+/// the backend stores it and returns the store, reopened if the edit had to
+/// close it. `kind` is "slot page", "chunk extent", "free segment", "small
+/// section" (whose digest the edit must store beside it, as the design's
+/// offline-edit rule asks) or "manifest" (index 0), and `old` is the row's
+/// current bytes.
+pub fn consistent_edits_resume<S: HeapStore + 'static>(
+    mut store: S,
+    mut edit_row: impl FnMut(S, &'static str, u32, &[u8], &[u8]) -> S,
+) -> S {
+    use crate::slot_codec::{decode_slots, encode_slots};
+    use crate::store::{free_seg_count, StoreManifest};
+    use ironhorse_vm::Payload;
+    const BEFORE: i32 = 40414243;
+    const AFTER: i32 = 40414250;
+    let once = |haystack: &[u8], needle: &[u8]| -> Vec<usize> {
+        (0..haystack.len().saturating_sub(needle.len() - 1))
+            .filter(|&at| haystack[at..].starts_with(needle))
+            .collect()
+    };
+    // Guest strings are UTF-16 big-endian code units in the chunk arena.
+    let utf16be = |s: &str| -> Vec<u8> { s.encode_utf16().flat_map(u16::to_be_bytes).collect() };
+
+    let (code, names) = compile(
+        "var keep = 0; var g = 0; var i = 0; \
+         keep = { zqxalpha: 40414243, s: 'before-edit-XYZ' }; \
+         for (i = 0; i < 40; i = i + 1) { g = { v: i }; } g = 0; 0",
+    );
+    let mut machine = Interp::new();
+    machine.link_intrinsics(&names);
+    assert!(machine.run(&code).completed);
+    machine.collect_garbage().unwrap();
+    drop(
+        begin_store_session(machine, &sig(), &mut store)
+            .map_err(|(_, error)| error)
+            .expect("begin"),
+    );
+    let manifest = store.manifest().unwrap();
+
+    // One integer payload, in whichever page holds it.
+    let (page, old, new) = (0..slot_page_count(manifest.slot_count))
+        .find_map(|page| {
+            let old = store.read_slot_page(page).unwrap();
+            let mut slots = decode_slots(&old).unwrap();
+            let slot = slots
+                .iter_mut()
+                .find(|slot| slot.value == Payload::Integer(BEFORE))?;
+            slot.value = Payload::Integer(AFTER);
+            Some((page, old, encode_slots(&slots)))
+        })
+        .expect("the integer is stored");
+    store = edit_row(store, "slot page", page, &old, &new);
+
+    // One string's characters, in whichever extent holds them.
+    let (before, after) = (utf16be("before-edit-XYZ"), utf16be("after--edit-XYZ"));
+    let (ext, old, new) = (0..chunk_extent_count(manifest.chunk_len))
+        .find_map(|ext| {
+            let old = store.read_chunk_extent(ext).unwrap();
+            let at = once(&old, &before);
+            assert!(at.len() < 2, "the string is stored once");
+            let mut new = old.clone();
+            new[*at.first()?..][..after.len()].copy_from_slice(&after);
+            Some((ext, old, new))
+        })
+        .expect("the string lies inside one extent");
+    store = edit_row(store, "chunk extent", ext, &old, &new);
+
+    // The last two entries of the free list, swapped.
+    let mut free = crate::store::store_to_image(&store).unwrap().slot_free;
+    let last = free.len() - 1;
+    free.swap(last - 1, last);
+    let seg = free_seg_count(manifest.free_len) - 1;
+    let old = store.read_free_seg(seg).unwrap();
+    assert!(old.len() >= 8, "two entries to swap");
+    let mut new = old.clone();
+    let at = new.len() - 8;
+    new[at..].rotate_left(4);
+    store = edit_row(store, "free segment", seg, &old, &new);
+
+    // A property renamed in the section that names it.
+    let small = store.read_small_state().unwrap();
+    let sections = crate::store_sections::split_small_state(&small).unwrap();
+    let named: Vec<(usize, usize)> = sections
+        .iter()
+        .enumerate()
+        .flat_map(|(id, payload)| {
+            once(payload, b"zqxalpha")
+                .into_iter()
+                .map(move |at| (id, at))
+        })
+        .collect();
+    assert_eq!(named.len(), 1, "one stored name to rename");
+    let (id, at) = named[0];
+    let mut renamed = sections[id].to_vec();
+    renamed[at..at + 8].copy_from_slice(b"zqxomega");
+    store = edit_row(store, "small section", id as u32, sections[id], &renamed);
+
+    // The crank counter.
+    let edited = StoreManifest {
+        cranks: manifest.cranks + 1000,
+        ..manifest.clone()
+    };
+    store = edit_row(store, "manifest", 0, &manifest.encode(), &edited.encode());
+    assert_eq!(store.manifest().unwrap(), edited);
+
+    crate::store::validate_store(&store, &sig()).expect("metadata-scale validation");
+    crate::store::validate_store_content(&store, &sig()).expect("full validation");
+    let (probe, probe_names) = compile("var keep; var g; var i; keep.zqxomega + ':' + keep.s");
+    let check = |mut session: StoreSession| {
+        assert_eq!(session.cranks(), edited.cranks);
+        assert_eq!(session.machine().slots().free_list(), &free[..]);
+        let code = session
+            .machine_mut()
+            .relink_crank(&probe, &probe_names)
+            .expect("probe relinks");
+        let outcome = session.machine_mut().run(&code);
+        assert!(outcome.completed, "{:?}", outcome.halt);
+        assert_eq!(outcome.result, format!("{AFTER}:after--edit-XYZ"));
+    };
+    check(resume_from_store(&store, &sig()).expect("eager resume"));
+    let shared = Rc::new(RefCell::new(store));
+    check(resume_from_store_lazy(shared.clone(), &sig()).expect("lazy resume"));
+    match Rc::try_unwrap(shared) {
+        Ok(store) => store.into_inner(),
+        Err(_) => panic!("the lazy session released the store"),
+    }
+}
+
 /// Sparse section protocol locks, shared by all three storage backends.
 pub fn sparse_section_acceptance<S: HeapStore>(mut fresh: impl FnMut() -> S) {
-    use crate::store::{image_to_batch, reseal_batch, RootLedger};
-    use crate::store_sections::{batch_updates, SectionLeaves, SectionUpdate, SmallSection};
+    use crate::store::{image_to_batch, CommitToken};
+    use crate::store_sections::{batch_updates, SectionUpdate, SmallSection};
     let image_of = |source: &str| {
         let mut machine = Interp::new();
         let (code, names) = compile(source);
@@ -1036,52 +1218,41 @@ pub fn sparse_section_acceptance<S: HeapStore>(mut fresh: impl FnMut() -> S) {
     let empty = image_of("0");
     assert!(!populated.arrays.is_empty());
     assert!(empty.arrays.is_empty());
-    let first = image_to_batch(&populated, 1, "");
+    let first = image_to_batch(&populated, 1, CommitToken::ZERO);
     let mut initial = first.clone();
     initial.small_updates = Some(batch_updates(&initial).unwrap());
     initial.small.clear();
-    reseal_batch(&mut initial);
-    assert_eq!(
-        initial.manifest.seal, first.manifest.seal,
-        "the manifest seal binds the same complete state"
-    );
+    // Update order is irrelevant.
     let mut reverse = initial.clone();
     reverse.small_updates.as_mut().unwrap().reverse();
-    reseal_batch(&mut reverse);
-    assert_eq!(
-        reverse.manifest.seal, initial.manifest.seal,
-        "canonical update order"
-    );
     let mut store = fresh();
     let mut missing = initial.clone();
     missing.small_updates.as_mut().unwrap().pop();
-    reseal_batch(&mut missing);
     assert!(store.commit(&missing).is_err());
     assert!(matches!(
         store.manifest(),
         Err(crate::store::StoreError::Empty)
     ));
     store.commit(&reverse).unwrap();
-    assert_digests(&store);
+    assert_valid(&store);
     assert_eq!(&store_to_image(&store).unwrap(), populated.image());
 
     // Full -> unchanged sparse -> explicit empty table -> full again.
     let mut store = fresh();
     store.commit(&first).unwrap();
-    assert_digests(&store);
-    let mut unchanged = image_to_batch(&populated, 2, &first.manifest.seal);
+    assert_valid(&store);
+    let mut unchanged = image_to_batch(&populated, 2, first.manifest.token);
     unchanged.small.clear();
     unchanged.small_updates = Some(Vec::new());
     unchanged.slot_pages.clear();
     unchanged.chunk_extents.clear();
     unchanged.free_segs.clear();
     unchanged.page_edges.clear();
-    reseal_batch(&mut unchanged);
     store.commit(&unchanged).unwrap();
-    assert_digests(&store);
+    assert_valid(&store);
     assert_eq!(&store_to_image(&store).unwrap(), populated.image());
     let prior = store.manifest().unwrap();
-    let next = image_to_batch(&populated, 3, &prior.seal);
+    let next = image_to_batch(&populated, 3, prior.token);
     let meter = batch_updates(&next)
         .unwrap()
         .into_iter()
@@ -1104,34 +1275,22 @@ pub fn sparse_section_acceptance<S: HeapStore>(mut fresh: impl FnMut() -> S) {
         section: SmallSection::Arrays,
         bytes: Vec::new(), // Empty arrays require the canonical count header.
     }]);
-    for mut bad in [duplicate, conflict, malformed, noncanonical] {
-        reseal_batch(&mut bad);
+    for bad in [duplicate, conflict, malformed, noncanonical] {
         assert!(store.commit(&bad).is_err());
         assert_eq!(store.manifest().unwrap(), prior);
         assert_eq!(&store_to_image(&store).unwrap(), populated.image());
     }
-    let mut clear = image_to_batch(&empty, 3, &prior.seal);
+    let mut clear = image_to_batch(&empty, 3, prior.token);
     let updates = batch_updates(&clear).unwrap();
     clear.small.clear();
     clear.small_updates = Some(updates);
-    let (pages, exts) = store.leaf_hashes().unwrap();
-    let mut ledger = RootLedger::build_from_sections(
-        SectionLeaves::from_hashes(store.small_section_hashes().unwrap()),
-        pages,
-        exts,
-        store.free_leaf_hashes().unwrap(),
-        &store.page_edges().unwrap(),
-    );
-    assert_eq!(ledger.root(&prior), prior.root);
-    clear.manifest.root = ledger.apply_checkpoint(&clear).unwrap();
-    reseal_batch(&mut clear);
     store.commit(&clear).unwrap();
-    assert_digests(&store);
+    assert_valid(&store);
     assert_eq!(&store_to_image(&store).unwrap(), empty.image());
     let restored = resume_from_store(&store, &sig()).unwrap();
     assert_eq!(restored.machine().snapshot_image(&sig()).unwrap(), empty);
-    let full = image_to_batch(&populated, 4, &clear.manifest.seal);
+    let full = image_to_batch(&populated, 4, clear.manifest.token);
     store.commit(&full).unwrap();
-    assert_digests(&store);
+    assert_valid(&store);
     assert_eq!(&store_to_image(&store).unwrap(), populated.image());
 }

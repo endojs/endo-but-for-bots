@@ -3,8 +3,8 @@
 //! the store equals the bound machine exactly; incremental commits
 //! write only the dirty rows; a resume from the store continues result
 //! AND computron count identically to an uninterrupted machine; and
-//! the succession guards (epoch + commit-seal lineage, owning
-//! sessions) fail closed. Machine-level locks run against both
+//! the succession guards (epoch + commit token, owning sessions) fail
+//! closed. Machine-level locks run against both
 //! reference backends.
 
 use ironhorse_snapshot::machine::{
@@ -13,10 +13,10 @@ use ironhorse_snapshot::machine::{
 };
 use ironhorse_snapshot::store::HeapStoreCommit;
 use ironhorse_snapshot::store::{
-    image_to_batch_unchecked, seal_commit, slot_page_count, store_to_image, HeapStore, MemoryStore,
-    StoreError,
+    image_to_batch_unchecked, slot_page_count, store_to_image, HeapStore, MemoryStore, StoreError,
 };
 use ironhorse_snapshot::store_file::FileStore;
+use ironhorse_snapshot::CommitToken;
 use ironhorse_snapshot::Signature;
 use ironhorse_vm::Interp;
 
@@ -178,7 +178,7 @@ fn begin_on_a_nonempty_store_is_refused() {
 
 /// The succession guards: a session may only checkpoint into the store
 /// holding its own previous commit — wrong store (empty), advanced
-/// store (epoch), and equal-epoch foreign store (seal) all fail closed.
+/// store (epoch), and equal-epoch foreign store (token) all fail closed.
 #[test]
 fn checkpoint_pairing_guards_fail_closed() {
     let mut store = MemoryStore::new();
@@ -194,7 +194,7 @@ fn checkpoint_pairing_guards_fail_closed() {
     );
 
     // Equal-epoch FOREIGN store: a different machine's epoch-1 store.
-    // The bare epoch matches the session; the seal lineage does not
+    // The bare epoch matches the session; the commit token does not
     // (the adversarial review's fork finding).
     let mut foreign = MemoryStore::new();
     let mut fm = Interp::new();
@@ -221,7 +221,7 @@ fn checkpoint_pairing_guards_fail_closed() {
 /// session over the copy cannot checkpoint into the original even when
 /// the epochs align (the file-copy split-brain the review traced).
 #[test]
-fn forked_file_store_fails_closed_on_seal() {
+fn forked_file_store_fails_closed_on_the_token() {
     let (mut store, dir) = file_store("fork");
     let path = dir.join("heap.ihstore");
     let copy_path = dir.join("copy.ihstore");
@@ -232,9 +232,9 @@ fn forked_file_store_fails_closed_on_seal() {
     std::fs::copy(&path, &copy_path).unwrap();
 
     // Both lineages advance once with DIFFERENT cranks: equal heights,
-    // divergent content, divergent seals. (An identical-content fork
-    // has an identical seal and converges harmlessly — the states are
-    // indistinguishable; only divergence is the corruption case.)
+    // divergent content, divergent tokens. (Every commit mints its own
+    // token, so even an identical-content fork diverges now; with the
+    // retired seal, it converged.)
     assert!(session.machine_mut().run(&PROG_B).completed);
     checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
 
@@ -244,7 +244,7 @@ fn forked_file_store_fails_closed_on_seal() {
     checkpoint_to_store(&mut copy_session, &sig(), &mut copy).unwrap();
 
     // The copy's session lands on the ORIGINAL: epoch aligns (2 == 2),
-    // the seal does not.
+    // the token does not.
     match checkpoint_to_store(&mut copy_session, &sig(), &mut store) {
         Err(StoreError::BaselineMismatch { .. }) => {}
         other => panic!("expected BaselineMismatch across the fork, got {other:?}"),
@@ -289,11 +289,11 @@ fn replayed_batch_is_refused() {
     assert!(m.run(&PROG_A).completed);
     let image = m.snapshot_image_for_testing(&sig()).expect("gated image");
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
     assert_eq!(
         store
-            .commit(&image_to_batch_unchecked(&image, 1, ""))
+            .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
             .unwrap_err(),
         StoreError::EpochMismatch {
             expected: 2,
@@ -325,42 +325,39 @@ fn resume_after_incremental_checkpoint_reads_merged_state() {
     );
 }
 
-/// The two seal findings from the third review pass, locked: a seal
-/// binds the COMPLETE manifest identity (same rows under a different
-/// host signature seal differently), and a batch whose rows no longer
-/// combine to its root is refused before any backend persists it (the
-/// commit writes a root only over the leaves it writes).
+/// The commit token pairs a batch with the store state it was built on and
+/// says nothing about its content. Of two batches built on the same state,
+/// the first commits and the second, whose predecessor is gone, is refused;
+/// rebuilt on the current state, its changed content commits as given,
+/// because the store keeps no digest a changed row could disagree with.
 #[test]
-fn seal_binds_full_manifest_identity_and_forgeries_are_refused() {
+fn a_batch_pairs_with_the_state_it_was_built_on() {
     let mut m = Interp::new();
     assert!(m.run(&PROG_A).completed);
     let image = m.snapshot_image_for_testing(&sig()).expect("gated image");
-    let batch = image_to_batch_unchecked(&image, 1, "");
-
-    let mut foreign = batch.manifest.clone();
-    foreign.signature = Signature::new("some-other-host-v9");
-    let foreign_seal = seal_commit(
-        "",
-        &foreign,
-        &batch.small,
-        &batch.slot_pages,
-        &batch.chunk_extents,
-        &batch.free_segs,
-        &batch.page_edges,
-    );
-    assert_ne!(
-        batch.manifest.seal, foreign_seal,
-        "identical rows under a different signature must not share a seal"
-    );
-
-    let mut forged = image_to_batch_unchecked(&image, 1, "");
-    forged.manifest.seal = batch.manifest.seal.clone();
-    *forged.chunk_extents[0].1.last_mut().unwrap() ^= 1; // valid geometry, changed content
     let mut store = MemoryStore::new();
-    match store.commit(&forged) {
-        Err(StoreError::BaselineMismatch { .. }) => {}
-        other => panic!("expected the root-agreement refusal, got {other:?}"),
-    }
+    store
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
+        .unwrap();
+    let base = store.manifest().unwrap().token;
+    let first = image_to_batch_unchecked(&image, 2, base);
+    let mut second = image_to_batch_unchecked(&image, 3, base);
+    *second.chunk_extents[0].1.last_mut().unwrap() ^= 1; // valid geometry, changed content
+    store.commit(&first).unwrap();
+    assert_eq!(
+        store.commit(&second),
+        Err(StoreError::BaselineMismatch {
+            expected: first.manifest.token.to_hex(),
+            found: base.to_hex(),
+        })
+    );
+    assert_eq!(store.manifest().unwrap(), first.manifest);
+    second.prev_token = first.manifest.token;
+    store.commit(&second).unwrap();
+    assert_eq!(
+        store.read_chunk_extent(0).unwrap(),
+        second.chunk_extents[0].1
+    );
 }
 
 /// Phase 6: reachability over the persisted summaries is answered
@@ -392,17 +389,11 @@ fn reachability_query_reads_no_row_content() {
         fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
             self.inner.inventory()
         }
-        fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
-            self.inner.leaf_hashes()
-        }
         fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
             self.inner.page_edges()
         }
         fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
             self.inner.read_free_seg(seg)
-        }
-        fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
-            self.inner.free_leaf_hashes()
         }
         fn commit_verified(
             &mut self,
@@ -606,16 +597,17 @@ fn evict_after_a_twin_store_checkpoint_keeps_the_modified_body() {
             > 1
     );
 
-    // The twin is a byte-identical copy of the pinned store, so the
-    // commit succeeds on succession — it is a legitimate operation, and
-    // the pin deliberately stays put.
+    // The twin is a copy of the pinned store, commit token included, so
+    // the commit succeeds on succession — it is a legitimate operation,
+    // and the pin deliberately stays put.
     let mut twin = MemoryStore::new();
-    twin.commit(&image_to_batch_unchecked(
+    let mut seed = image_to_batch_unchecked(
         &store_to_image(&*store.borrow()).expect("export the pinned store"),
         1,
-        "",
-    ))
-    .expect("seed the twin");
+        CommitToken::ZERO,
+    );
+    seed.manifest.token = store.borrow().manifest().unwrap().token;
+    twin.commit(&seed).expect("seed the twin");
     checkpoint_to_store(&mut session, &sig(), &mut twin).expect("twin checkpoint");
 
     // Reference bytes with everything resident.
@@ -798,17 +790,11 @@ impl HeapStore for FailOnceStore {
     fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
         self.inner.inventory()
     }
-    fn leaf_hashes(&self) -> Result<(Vec<[u8; 32]>, Vec<[u8; 32]>), StoreError> {
-        self.inner.leaf_hashes()
-    }
     fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
         self.inner.page_edges()
     }
     fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
         self.inner.read_free_seg(seg)
-    }
-    fn free_leaf_hashes(&self) -> Result<Vec<[u8; 32]>, StoreError> {
-        self.inner.free_leaf_hashes()
     }
     fn commit_verified(
         &mut self,
@@ -821,12 +807,12 @@ impl HeapStore for FailOnceStore {
     }
 }
 
-/// V6-c recovery lock: a failed commit drops the session's root
-/// ledger (never advancing it past a store that did not move), the
-/// NEXT checkpoint takes the slow path — it rebuilds the ledger from
-/// the stored metadata — and succeeds, and the one after that is back
-/// on the fast path. Every surviving epoch must validate and resume
-/// identically to an unbroken history.
+/// Recovery lock: a failed commit leaves the session where it was (never
+/// advancing it past a store that did not move), so the NEXT checkpoint
+/// re-offers the same dirt, sections and free-list suffix against the
+/// unchanged store and succeeds, and so does the one after it. Every
+/// surviving epoch must validate and resume identically to an unbroken
+/// history.
 #[test]
 fn checkpoint_recovers_through_a_failed_commit() {
     let mut store = FailOnceStore {
@@ -848,9 +834,8 @@ fn checkpoint_recovers_through_a_failed_commit() {
     assert_eq!(store.manifest().unwrap().epoch, 1, "store did not move");
     assert_eq!(session.epoch(), 1, "session did not move");
 
-    // Slow-path retry: the SAME dirt commits (nothing was cleared by
-    // the failure), the ledger rebuilds, and the store equals the
-    // machine exactly.
+    // Retry: the SAME dirt commits (nothing was cleared by the failure),
+    // and the store equals the machine exactly.
     let epoch = checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
     assert_eq!(epoch, 2);
     assert_eq!(
@@ -862,15 +847,12 @@ fn checkpoint_recovers_through_a_failed_commit() {
         "retried checkpoint equals the live machine"
     );
 
-    // Fast path again on the next crank; the chain stays valid and
+    // And again on the next crank; the chain stays valid and
     // resumable.
     assert!(session.machine_mut().run(&PROG_A).completed);
     let epoch = checkpoint_to_store(&mut session, &sig(), &mut store).unwrap();
     assert_eq!(epoch, 3);
-    ironhorse_snapshot::store::validate_store(&store, &sig()).unwrap();
-    // The recovery path keeps the digests the build before stage 1
-    // verifies at open.
-    ironhorse_snapshot::store::check_stored_digests(&store).unwrap();
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).unwrap();
     let resumed = resume_from_store(&store, &sig()).unwrap();
     assert_eq!(
         resumed

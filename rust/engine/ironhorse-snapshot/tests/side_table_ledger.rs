@@ -17,6 +17,7 @@
 mod carry;
 mod common;
 use carry::{compile, sig, twin};
+use ironhorse_snapshot::CommitToken;
 
 use common::TempDir;
 use ironhorse_snapshot::store::HeapStoreCommit;
@@ -519,7 +520,7 @@ fn the_persistence_audit_reads_the_image_not_the_mint_counter() {
     // the id onward.
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&poisoned, 1, ""))
+        .commit(&image_to_batch_unchecked(&poisoned, 1, CommitToken::ZERO))
         .expect("the raw commit models an older writer");
     assert_eq!(
         ironhorse_snapshot::store::validate_store_content(&store, &sig()).err(),

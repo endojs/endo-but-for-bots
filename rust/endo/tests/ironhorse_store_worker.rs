@@ -15,6 +15,7 @@ use endo::ironhorse_engine::engine::{
 };
 use endo::supervisor::Supervisor;
 use ironhorse_snapshot::format::SnapshotError;
+use ironhorse_snapshot::store::{CommitToken, StoreManifest};
 
 #[test]
 fn store_backed_worker_lifecycle_through_the_supervisor() {
@@ -603,8 +604,9 @@ fn the_collect_schedule_survives_a_suspend() {
     }
 
     // Same durable state, reached through completely different suspend
-    // histories. Roots are the store-native identity; free_len is the
-    // collector's own footprint, and is what forked before the fix.
+    // histories. The canonical export's hash is the store's identity;
+    // free_len is the collector's own footprint, and is what forked before
+    // the fix.
     let ma = read_manifest(&path_a);
     let mb = read_manifest(&path_b);
     // The fork assertions come FIRST so a regression names the property
@@ -614,8 +616,24 @@ fn the_collect_schedule_survives_a_suspend() {
         "the collect schedule forked across the suspend (free lists differ)"
     );
     assert_eq!(
-        ma.root, mb.root,
-        "the collect schedule forked across the suspend (roots differ)"
+        read_identity(&path_a),
+        read_identity(&path_b),
+        "the collect schedule forked across the suspend (heaps differ)"
+    );
+    // Field for field, apart from the token each commit mints at random and
+    // the epoch, which counts commits rather than the schedule.
+    assert_eq!(
+        StoreManifest {
+            token: CommitToken::ZERO,
+            epoch: 0,
+            ..ma.clone()
+        },
+        StoreManifest {
+            token: CommitToken::ZERO,
+            epoch: 0,
+            ..mb.clone()
+        },
+        "the collect schedule forked across the suspend (manifests differ)"
     );
     // And the counter that carries the schedule really is durable.
     assert_eq!(ma.cranks, CRANKS as u64, "A recorded every completed crank");
@@ -624,10 +642,17 @@ fn the_collect_schedule_survives_a_suspend() {
 }
 
 /// Read a store's manifest without going through a machine.
-fn read_manifest(path: &std::path::Path) -> ironhorse_snapshot::store::StoreManifest {
+fn read_manifest(path: &std::path::Path) -> StoreManifest {
     use ironhorse_snapshot::store::HeapStore;
     let store = ironhorse_store_sqlite::SqliteHeapStore::open(path).expect("open for manifest");
     store.manifest().expect("manifest")
+}
+
+/// A store's logical identity, the SHA-256 of its canonical export,
+/// without going through a machine.
+fn read_identity(path: &std::path::Path) -> String {
+    let store = ironhorse_store_sqlite::SqliteHeapStore::open(path).expect("open for identity");
+    ironhorse_snapshot::store::root_hash(&store).expect("identity")
 }
 
 #[test]
@@ -656,7 +681,11 @@ fn collection_policy_and_events_are_durable_and_reopen_refuses_drift() {
     machine.close().unwrap();
     let explicit = read_manifest(&options.path);
     assert_eq!(explicit.collections, 2);
-    assert_ne!(scheduled.root, explicit.root);
+    assert_eq!(
+        explicit.epoch,
+        scheduled.epoch + 1,
+        "the explicit collection committed once"
+    );
     options.cadence.collect_every = 3;
     assert!(matches!(
         PersistentMachine::open(&options),

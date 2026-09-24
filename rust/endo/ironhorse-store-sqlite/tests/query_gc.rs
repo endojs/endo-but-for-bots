@@ -74,8 +74,8 @@ fn build_store(store: Rc<RefCell<SqliteHeapStore>>) {
     // complete while silently changing the graph this suite builds.
     assert_eq!(o.result, "8", "crank-2 symbol binding pinned");
     checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
-    ironhorse_snapshot::store::check_stored_digests(&*store.borrow())
-        .expect("digests stay consistent");
+    ironhorse_snapshot::store::validate_store_content(&*store.borrow(), &sig())
+        .expect("the store validates");
 }
 
 /// Build the fixture store at `path`, close it fully, and return its
@@ -342,8 +342,8 @@ fn stale_store_rebuilds_before_its_first_commit_attests_the_index() {
     assert_eq!(o.result, "9");
     let committed =
         checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
-    ironhorse_snapshot::store::check_stored_digests(&*store.borrow())
-        .expect("digests stay consistent");
+    ironhorse_snapshot::store::validate_store_content(&*store.borrow(), &sig())
+        .expect("the store validates");
     assert_eq!(committed, epoch + 1);
     drop(session);
     Rc::try_unwrap(store)
@@ -472,13 +472,15 @@ fn generational_collect_equivalent_across_backends() {
             .expect("begin");
         let _ = partial_collect(&mut session, store).expect("boundary collect");
         checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint");
-        ironhorse_snapshot::store::check_stored_digests(store).expect("digests stay consistent");
+        ironhorse_snapshot::store::validate_store_content(store, &sig())
+            .expect("the store validates");
         let (b2, n2) = &compiled[1];
         let b2 = session.machine_mut().relink_crank(b2, n2).expect("relink");
         let o = session.machine_mut().run(&b2);
         assert!(o.completed, "halt: {:?}", o.halt);
         checkpoint_to_store(&mut session, &sig(), store).expect("checkpoint");
-        ironhorse_snapshot::store::check_stored_digests(store).expect("digests stay consistent");
+        ironhorse_snapshot::store::validate_store_content(store, &sig())
+            .expect("the store validates");
         let freed = generational_collect(&mut session, store).expect("generational");
         (freed, session.machine().slots().free_list().len())
     };

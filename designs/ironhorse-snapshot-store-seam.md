@@ -9,15 +9,12 @@
 | **Builds on** | designs/ironhorse-engine.md (§ Snapshots, requirement 1c) |
 
 **The resident store is trusted (decided 2026-09-24).**
-*This entry describes the target of phase 13, in progress in
-[#1331](https://github.com/endojs/endo-but-for-bots/pull/1331) (§ Phased Implementation).
-Stage 1 is implemented; until stage 2 lands, the machinery it removes (the leaf hashes, the root,
-the seal and the root ledgers) still exists and is still written, and the random commit token, the
-low-water mark and the in-memory migration below do not exist yet.*
-Phase 13 lands in two stages, each reviewed before it lands.
-Stage 1 takes the checks off the run-time path without changing the store format: a store it
-writes still opens and verifies on the previous build, so it could ship alone.
-Stage 2 removes the machinery behind a store schema bump and migration.
+*This entry describes phase 13, implemented in
+[#1331](https://github.com/endojs/endo-but-for-bots/pull/1331) (§ Phased Implementation).*
+Phase 13 landed in two stages, each reviewed before it landed.
+Stage 1 took the checks off the run-time path without changing the store format: a store it wrote
+still opened and verified on the previous build, so it could have shipped alone.
+Stage 2 removed the machinery behind a store schema bump (schema 36) and migration.
 
 A heap store is the canonical representation of the machine it holds, and Ironhorse trusts it as
 such.
@@ -66,9 +63,11 @@ That refused a session checkpointing or collecting against a different store at 
 copy that has since diverged or a caller that routes a session to the wrong store, which would
 otherwise splice two machines' rows and free lists or free live pages on the other store's
 summaries.
-From stage 2, a random token minted at every commit keeps that pairing without hashing:
+Since stage 2, a random token minted at every commit keeps that pairing without hashing:
 byte-identical copies still pair, and a diverged copy does not; forks with identical content, which
 shared a seal and converged, no longer pair.
+Stores migrated from the same schema-35 state share a token, the first half of their common seal,
+until either commits.
 The pin's re-checks also caught, at the machine's next fault, a second session committing on the
 same store handle, or on the store a machine was unbound from while it still faults from it; that
 guard is given up.
@@ -100,12 +99,12 @@ What stays is what makes a store usable, not what would make it tamper-evident:
   from a crank or a collection, which the host then rewinds, so a store with a missing row is
   refused where the row is needed rather than crash-looping the worker.
 - **Cheap guards against engine and caller bugs**: the session/store pairing at checkpoint and
-  collection (on epoch and seal, and from stage 2 on epoch and commit token), the commit's batch
-  geometry checks (with a row-index range check from stage 2) and its succession rules (epoch,
-  cadence, counter monotonicity, schema), one check that each section payload the commit writes is
-  canonical (resume refuses a non-canonical one, so an engine bug there would otherwise write a
-  store its own resume cannot read), the collectors' summary-count check, epoch overflow, and the
-  bounds checks that run inside a decode.
+  collection (on epoch and commit token since stage 2, on epoch and seal before it), the commit's
+  batch geometry checks (with a row-index range check since stage 2) and its succession rules
+  (epoch, cadence, counter monotonicity, schema), one check that each section payload the commit
+  writes is canonical (resume refuses a non-canonical one, so an engine bug there would otherwise
+  write a store its own resume cannot read), the collectors' summary-count check, epoch overflow,
+  and the bounds checks that run inside a decode.
   Each fault checks its row's exact length and its records' references (W6-14), against the live
   free map instead of the backing-generation copy and against the geometry last committed.
   It catches a reference to a slot that is free when the page faults, including one freed earlier
@@ -126,16 +125,18 @@ What stays is what makes a store usable, not what would make it tamper-evident:
   `validate_store` stops being the gate both resume paths run and becomes an explicit check of a
   store's content, at two levels, each starting with the manifest gates.
   The metadata-scale level checks the manifest's and small state's own invariants (a nonzero epoch,
-  the symbol-key counter above the name table, an empty stack), the row inventory, the live/free
-  accounting, the free list, the small state's semantic bounds and the summary count.
+  the symbol-key counter above the name table, an empty stack, and since stage 2 a nonzero commit
+  token), the row inventory, the live/free accounting, the free list, the small state's semantic
+  bounds and the summary count.
   The full level also decodes and bounds-checks every row, audits stored property ids, re-derives
   each page summary from its rows and each small-state section digest from its payload, and
   compares a backend's derived indexes with their sources, through a new `HeapStore` hook that the
   SQLite backend implements for `edge_pairs`.
   Both check by decoding and cross-checking, the first over metadata and the small state and the
   second over everything; neither takes a stored digest as evidence about the content.
-  Tests and fuzz targets run either level, and a migration that ran ends with the metadata-scale
-  level.
+  Tests and fuzz targets run either level.
+  In stage 1 a migration that ran ended with the metadata-scale level; since stage 2 a migration
+  runs its checks on the migrated result before the one write that stores it.
 
 Change detection uses flags and counters, plus one hash kept for performance, the small-state
 section digest; § Incremental checkpoint has the detail.
@@ -343,7 +344,7 @@ A follow-up automated review pass (PR #963 Copilot review,
   other's staging file; the single-writer-per-path model itself is
   documented at the type, and the second-handle lock stays the seal
   chain (the epoch and commit-token check against the durable file,
-  once phase 13 retires the seal).
+  since phase 13 retired the seal).
 - **Recorded trade — placeholder allocation at lazy attach.** A lazy
   resume allocates the full dense `Cell` arrays (slots and residency
   bits) up front: O(slot_count) zero-fill before any fault. The
@@ -1648,14 +1649,14 @@ and retired KEYS by unifying string keys into the NAME table, so the
 remainder is the Pending rows), and phase 12 (demand-gated, gate
 measured). Entries without a checkbox are stances
 rather than work items.
-A fourth box opened on 2026-09-24 for work, not a gate: phase 13,
+A fourth box opened on 2026-09-24 for work, not a gate, and is closed: phase 13,
 which retires the integrity machinery under the trust model.
 
 *Seam and daemon:*
 
-- [ ] Phase 13, trust the resident store (stages 1 and 2, in
-  [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331); stage 1 is implemented); see
-  the 2026-09-24 entry at the top and § Phased Implementation.
+- [x] Phase 13, trust the resident store (stages 1 and 2, implemented in
+  [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331)); see the 2026-09-24 entry at
+  the top and § Phased Implementation.
 - [ ] The Ironhorse worker ENVELOPE protocol (`endor worker -e
   ironhorse`): DEPENDENCY-GATED on ironhorse-engine.md roadmap
   stages 4 (host-function surface) and 7 (SES boot bundle) — this
@@ -4165,8 +4166,9 @@ time.
    From stage 1 a failed row read after open, I/O included, is a store
    error the host rewinds on rather than worker death.
    Checking that a store's content is well-formed is the explicit
-   validator's job, run by tests, and at its metadata-scale level after
-   migration.
+   validator's job, run by tests, and at its metadata-scale level by a
+   migration (after its writes in stage 1; since stage 2 on the migrated
+   result, before its one write).
    Containers keep their fail-closed reader (Requirement 2), because
    the interchange format can come from elsewhere.
 
@@ -4265,7 +4267,7 @@ so the store introduces no second codec:
 | Slot page `p` | `SLOTS_PER_PAGE` × 20-byte `slot_codec` records, index order | a fixed span of the `HEAP` record array |
 | Chunk extent `e` | `CHUNK_EXTENT_BYTES` raw bytes of the chunk arena (header discipline included) | a fixed span of `BLOC` |
 | Small state | stack (`STAC`), live count (`HEAP` header), keys/names/symbols (`KEYS`/`NAME`/`SYMB`), meter (`METR`); since phase 9 the free list lives in its own segment rows (leafed until phase 13) and small state's free section is empty | the small atoms, verbatim |
-| Manifest | `VERS` + `SIGN` + `CREA` + store schema version + geometry + epoch | the header atoms |
+| Manifest | `VERS` + `SIGN` + `CREA` + store schema version + geometry + epoch + durable counters + commit token (schema 36; root and seals before it) | the header atoms |
 | Side tables | one keyed row set per ledger row, as each `Pending` atom lands | the future side-table atoms |
 
 Starting geometry (to be calibrated in phase 2): `SLOTS_PER_PAGE` =
@@ -4302,9 +4304,8 @@ CREATE TABLE chunk_exts  (ext  INTEGER PRIMARY KEY, bytes BLOB NOT NULL);
 CREATE TABLE small_state (name TEXT    PRIMARY KEY, bytes BLOB NOT NULL); -- before schema 28
 CREATE TABLE side_tables (name TEXT NOT NULL, key BLOB NOT NULL,
                           bytes BLOB NOT NULL, PRIMARY KEY (name, key));
--- phases 5-10 and schema 28 (see the landed blocks):
-CREATE TABLE leaf_hashes (kind INTEGER NOT NULL, idx INTEGER NOT NULL,
-                          hash BLOB NOT NULL, PRIMARY KEY (kind, idx)); -- goes in phase 13
+-- phases 6-10 and schema 28 (see the landed blocks); schemas 5 through 35 also kept
+-- leaf_hashes (kind, idx, hash), which the schema-36 migration drops:
 CREATE TABLE page_edges  (page INTEGER PRIMARY KEY, targets BLOB NOT NULL);
 CREATE TABLE free_segs   (seg  INTEGER PRIMARY KEY, bytes BLOB NOT NULL);
 CREATE TABLE edge_pairs  (target INTEGER NOT NULL, page INTEGER NOT NULL,
@@ -4343,8 +4344,9 @@ CREATE TABLE small_sections (id INTEGER PRIMARY KEY, bytes BLOB NOT NULL,
   for an edited slot page and delete the `edge_pairs` marker, and recompute the digest
   (`section_hash`) of an edited section, which the validator's full level re-derives (SQLite
   checked it on every read before stage 1).
-  An edit that leaves the seal or a leaf hash stale opens on stage 1, but the build before it
-  refuses the store at open or at the first fault.
+  Since stage 2 there is no seal or leaf hash to keep current; in a stage-1 store, an edit that
+  left them stale opened on stage 1, but the build before it refused the store at open or at the
+  first fault.
 - Full close before any state-directory suspension or handoff, per the
   shutdown-checkpoint contract, after which the worker-heap DB is a
   single self-contained file.
@@ -4432,16 +4434,16 @@ At any crank boundary the supervisor (or the suspend verb) may call
 2. Encode small state whole (stack empty at quiescence, meter
    counters); diff the free-list segments against the stored leaves
    so only changed segments travel (phase 9).
-   *Amended by phase 13:* segments at or above the arena's free-list
-   low-water mark travel instead, so unchanged segments are neither
-   re-encoded nor hashed.
+   *Amended by phase 13:* the segments from the one holding the arena's
+   free-list low-water mark on travel instead (never from past the stored
+   length), so unchanged segments are neither re-encoded nor hashed.
 3. `store.commit(batch)` — one transaction, epoch bumped.
 
 *Change detection under phase 13 (the 2026-09-24 trust model).*
 It uses flags and counters, plus one hash kept for performance.
 The flags and counters are the arena dirty bitmaps, section dirt and the epoch; from stage 2 the
-free-list diff, which encodes and hashes every segment at every checkpoint to compare it with the
-previous leaf, becomes a low-water mark that the slot arena keeps on its free list between
+free-list diff, which encoded and hashed every segment at every checkpoint to compare it with the
+previous leaf, became a low-water mark that the slot arena keeps on its free list between
 acknowledged commits, so a checkpoint ships the touched suffix of the list.
 The hash is each small-state section's digest (`section_hash`, an identity-bound SHA-256 and the one
 leaf hash that stays), which lets a checkpoint skip writing a section the VM marked dirty whose
@@ -4449,6 +4451,8 @@ bytes did not change.
 It saves the write, not the extraction and encoding.
 SQLite stores the digest beside the payload in the commit that writes it, the memory store keeps it
 beside the payload, and the file store recomputes it.
+A session keeps the digests it last committed, so a checkpoint reads none from the store except the
+first one after a resume.
 The digest is kept rather than added, because section dirt is coarse.
 `PersistentMachine` always runs a shared realm, and a machine with shared compartments marks every
 section dirty at every checkpoint, as does any machine after a full collection and at its first
@@ -4557,8 +4561,8 @@ the per-crank computron vector, and the final canonical blob bytes.
   the one content hash that identifies a heap, and it is computed only
   at interchange.
   It is what a consumer signs or checks when a heap crosses a trust
-  boundary; the resident store itself carries no tamper-evidence once
-  phase 13 lands (the 2026-09-24 trust model).
+  boundary; the resident store itself carries no tamper-evidence since
+  phase 13 (the 2026-09-24 trust model).
 
 ### Side tables: the ledger governs the schema
 
@@ -4787,9 +4791,8 @@ queries, so collection cost tracks the mutation set, not the heap:
 Phase 13 (added 2026-09-24) mostly removes machinery rather than adding it;
 the 2026-09-24 trust-model entry at the top records the decision:
 
-13. **Trust the resident store.** *In progress in
-    [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331): stage 1 is implemented,
-    stage 2 is not yet.*
+13. **Trust the resident store.** *Implemented in
+    [#1331](https://github.com/endojs/endo-but-for-bots/pull/1331), both stages.*
     Stage 1 takes the checks off the run-time path and leaves the store format alone, so a store
     it writes still opens and verifies on the previous build.
     Open runs the compatibility gates, the decoding restore needs and the bounds checks that run
@@ -4811,19 +4814,19 @@ the 2026-09-24 trust-model entry at the top records the decision:
     batch once, keeps the canonical-payload check in release and moves the summary re-derivation
     to debug builds; SQLite stops re-hashing the small state on read.
     `validate_store` becomes the explicit validator, at a metadata-scale level and a full level,
-    with a `HeapStore` hook for derived-index parity, and a migration that ran ends with its
-    metadata-scale level.
+    with a `HeapStore` hook for derived-index parity, and in stage 1 a migration that ran ended
+    with its metadata-scale level.
     Starting a session on an existing machine detaches its old backing once it has read what it
     needs, which the pin's epoch and seal used to fence; a commit to the old store between
     unbinding and that point falls under the second-session case given up in the trust-model
     entry.
-    Leaf hashes, roots and seals are still written, and seals still pair sessions by equality,
-    but nothing on the run-time path verifies a stored one against the content until stage 2
-    removes them.
-    For the previous build's sake a commit still checks that the root it writes combines from the
-    leaves it writes and that its seal derives from its manifest, migration still checks an old
-    store's root and seal before restamping it, and the first checkpoint after a resume still
-    reads the stored leaves to build the hash trees.
+    In stage 1, leaf hashes, roots and seals were still written, and seals still paired sessions
+    by equality, but nothing on the run-time path verified a stored one against the content;
+    stage 2 removed them.
+    For the previous build's sake a stage-1 commit still checked that the root it wrote combined
+    from the leaves it wrote and that its seal derived from its manifest, migration still checked
+    an old store's root and seal before restamping it, and the first checkpoint after a resume
+    still read the stored leaves to build the hash trees.
     *Stage 1 bar:* no open of a current store, fault or checkpoint verifies a stored digest or
     root against content (the seal's equality check as a pairing token, and the migration steps'
     checks, stay until stage 2); a test-only check of the roots, leaves, seals and digests over
@@ -4841,17 +4844,18 @@ the 2026-09-24 trust-model entry at the top records the decision:
     A random commit token replaces the seal in succession and in the session and collector
     pairing.
     It is minted for every commit, epoch 1 included, by whoever builds the batch (the session, or
-    `import_from_container`) from an injected source, is named by the next batch, and must be
-    nonzero and differ from its predecessor.
-    The free-list diff becomes a low-water mark on the arena's free list, updated at its pops and
-    pushes, starting at the list's length when an arena is built, and reset only by a
-    session-owned acknowledgement, so a replaced arena or a stray acknowledgement cannot claim that
-    nothing changed.
+    `import_from_container`), is named by the next batch, and must be nonzero and differ from its
+    predecessor.
+    The free-list diff becomes a low-water mark on the arena's free list, lowered at its pops,
+    starting at the list's length when an arena is built, and reset only by a session-owned
+    acknowledgement, so a replaced arena or a stray acknowledgement cannot claim that nothing
+    changed.
     Migration runs the ladder in memory over the manifest and small state (no step touches rows),
     seeds the first token from the seal stored before the ladder ran, validates the result against
     the store's rows, and writes it once through a new atomic hook that compares the manifest it
     read and empties the leaf storage.
-    The small-state section digests stay, as change detection that nothing verifies.
+    The small-state section digests stay, as change detection that nothing on the run-time path
+    verifies (the full validator re-derives them).
     *Stage 2 bar:* no production open, fault or checkpoint computes a slot-page, chunk-extent,
     free-segment or root digest (the small-state section digests excepted); checkpoint work stays
     proportional to dirty rows, with the free-list term the touched suffix instead of the O(free
@@ -4860,6 +4864,45 @@ the 2026-09-24 trust-model entry at the top records the decision:
     fixtures keep refusing on their boot layout as they do today; the golden pins that fixed the
     store's seals move to the export hash and explicit manifest fields; and the well-formed,
     consistent edits the retired integrity suites planted resume as the machine they describe.
+    *As implemented (store schema 36).*
+    The manifest ends in the 16-byte `CommitToken`; a manifest of an older schema still decodes,
+    in its own layout, for migration, and yields the first half of its seal as the token.
+    `CheckpointBatch::prev_token` names the predecessor, `check_succession` pairs it with the
+    stored token (zero for an empty store) and refuses a zero token or one equal to its
+    predecessor, and the metadata-scale validator refuses a zero stored token.
+    Tokens come from a `CommitTokenSource`: `RandomTokens` (SipHash under the standard library's
+    randomly seeded keys, over a process-wide counter, the clock and the process id), which
+    `import_from_container`, `image_to_batch` and every session use; `mint_token` draws again on
+    zero or the predecessor, and a batch whose own token is zero or its predecessor's is rejected
+    as the caller's defect (`BatchRejected`).
+    A session's `set_token_source`, for tests that need reproducible manifests, exists only in tests
+    and under the `unchecked-tooling` feature, since the pairing relies on tokens being distinct
+    across every store a session could be pointed at.
+    A session retains the section digests it last committed and reads them from the store only at
+    its first checkpoint after a resume; the pairing check keeps them exact across a failed commit,
+    since a checkpoint proceeds only while the store holds the state the session last committed.
+    The slot arena's `acknowledge_free_list` and `free_list_unchanged_prefix` implement the
+    low-water mark, with the acknowledgement an `Rc` identity the arena replaces at each
+    acknowledgement, as `SnapshotBaseline` does.
+    Resume adopts a restored arena with `free_list_baseline`, which keeps the mark the arena was
+    built with, so what restore itself pops still travels; a checkpoint ships the segments from the
+    mark on (and never from past the stored length), and none when the list is the stored one.
+    The migration write is `HeapStore::replace_for_migration(from, to, small)`, which replaces
+    both migration writers; `check_migration_baseline` is the comparison every backend makes, and
+    `migrate_store` makes it first against the handle's own view, since it reads the small state
+    and rows through a handle (a `FileStore`'s cache) that may be behind the durable manifest.
+    The file store's layout is `IHSTORE6`, without the three leaf sections; it still reads
+    `IHSTORE5`, and the migration write rewrites the file in the current layout.
+    SQLite stops creating `leaf_hashes`, and the migration write drops the table in the IMMEDIATE
+    transaction that restamps the manifest.
+    The state corpus's store column holds a digest of the manifest with its token zeroed, beside
+    the export hash; the metamorphic golden vector pins the epoch-3 manifest's fields, checks that
+    the store exports the pinned blob, and runs the full validator over the derived state.
+    A shared suite, `store_suite::consistent_edits_resume`, edits a slot page's integer payload, a
+    string's characters in its chunk extent, a free segment's order, a property name in its
+    small-state section (with the digest beside it, where the backend stores one) and the
+    manifest's crank counter, each through the backend's own rows at rest, and every backend
+    resumes the edited machine, eagerly and lazily, after both validator levels pass.
 
 ### Plan: counted side-table ref-page accessors (phase 10 remainder, its own PR)
 
@@ -4951,9 +4994,10 @@ the dispatch loop's suspend arms; hot-path neutrality is held by the
 recorded benchmark gates (detached dispatch unchanged; attached
 ×1.009).
 Phase 13 changes the seam again: it removes the two leaf methods, adds
-a derived-index hook and an atomic migration hook, takes `RootLedger`
-out of `commit_verified` and its verifier, and replaces the batch's
-`prev_seal` with the commit token.
+a derived-index hook and an atomic migration hook (`replace_for_migration`,
+in place of the two migration writers), takes `RootLedger` out of
+`commit_verified` and its verifier, and replaces the batch's `prev_seal`
+with the commit token.
 
 *Future work beyond phase 12 (out of scope until a consumer demands
 it):* structural sharing of pages across forked workers; store
@@ -5004,7 +5048,7 @@ compaction/vacuum policy.
 6. **Identity is logical, not file bytes.** A store state's identity
    is the SHA-256 of its canonical export, preserving CAS-grade
    content addressing over a non-canonical database file.
-   *Reaffirmed 2026-09-24:* once phase 13 removes phase 5's manifest
+   *Reaffirmed 2026-09-24:* since phase 13 removed phase 5's manifest
    root, this is the only identity a heap has, computed on demand.
 7. **Fail closed at open, ~~crash the crank on later I/O~~.** ~~Exhaustive
    open-time validation (manifest + page inventory) confines runtime
@@ -5031,8 +5075,8 @@ compaction/vacuum policy.
    writer who can recompute them, and accidental damage belongs to
    the storage layer.
    Correctness validation stays as an explicit operation, run by tests
-   and after migration, and checks well-formedness without relying on
-   stored digests.
+   and by migration over its result, and checks well-formedness without
+   relying on stored digests.
    In the resident store, hashing stays only where it pays for itself
    as a performance device (the small-state section digests), and a
    consumer that needs authentication signs the canonical export.

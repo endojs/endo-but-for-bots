@@ -8,6 +8,7 @@ use ironhorse_snapshot::machine::{
 };
 use ironhorse_snapshot::store::HeapStoreCommit;
 use ironhorse_snapshot::store::{image_to_batch_unchecked, store_to_image, MemoryStore};
+use ironhorse_snapshot::CommitToken;
 use ironhorse_snapshot::{Signature, SnapshotError};
 use ironhorse_vm::Interp;
 use std::cell::RefCell;
@@ -42,7 +43,7 @@ fn sealed_buffer_length_cannot_cross_or_shorten_its_allocation() {
         assert!(from_snapshot_bytes(&bytes, &signature()).is_err());
         let mut store = MemoryStore::new();
         store
-            .commit(&image_to_batch_unchecked(&forged, 1, ""))
+            .commit(&image_to_batch_unchecked(&forged, 1, CommitToken::ZERO))
             .unwrap();
         assert!(store_to_image(&store).is_err());
         assert!(resume_from_store(&store, &signature()).is_err());
@@ -165,7 +166,7 @@ fn detached_buffer_keeps_backing_allocation_but_exposes_zero_length() {
     );
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
     let lazy = resume_from_store_lazy(Rc::new(RefCell::new(store)), &signature()).unwrap();
     assert_eq!(
@@ -225,7 +226,11 @@ fn normal_writers_accept_live_and_decoded_proofs() {
     assert_eq!(ironhorse_snapshot::write_machine(&decoded).unwrap(), bytes);
     let mut store = MemoryStore::new();
     store
-        .commit(&ironhorse_snapshot::image_to_batch(&proof, 1, ""))
+        .commit(&ironhorse_snapshot::image_to_batch(
+            &proof,
+            1,
+            CommitToken::ZERO,
+        ))
         .unwrap();
     assert_eq!(
         ironhorse_snapshot::store::export_to_container(&store).unwrap(),
@@ -242,7 +247,7 @@ fn store_export_cannot_mint_proof_for_unregistered_property_keys() {
     assert_eq!(image.stored_unregistered_key_id(), Some(60000));
     let mut store = MemoryStore::new();
     store
-        .commit(&image_to_batch_unchecked(&image, 1, ""))
+        .commit(&image_to_batch_unchecked(&image, 1, CommitToken::ZERO))
         .unwrap();
     assert!(matches!(
         ironhorse_snapshot::store::export_to_container(&store),
