@@ -104,8 +104,7 @@ const profileNameFor = handleName => `profile-for-${handleName}`;
  * @param {number} options.depth - Delegation depth of the agent being created.
  * @param {number} options.maxDepth
  * @param {string} [options.authSecretLocator] - `SecretBlob` holding the
- *   provider auth token. Absent when the deployment still carries a plaintext
- *   token in the provider config.
+ *   provider auth token. Absent only for tokenless providers.
  * @param {string} [options.systemPrompt] - Replaces the standing prompt. Only
  *   the factory passes this: it acts with the authority of whoever set the
  *   deployment up.

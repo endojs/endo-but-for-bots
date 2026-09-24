@@ -87,8 +87,7 @@ export const main = async agent => {
     }
     await E(factoryPowers).storeLocator(AUTH_SECRET_PETNAME, secretLocator);
   } else if (await E(factoryPowers).has(AUTH_SECRET_PETNAME)) {
-    // A provider that reverted to a plaintext token must not keep silently
-    // reading a stale blob, which the resolver would prefer.
+    // Switching to a tokenless provider withdraws the factory's old binding.
     await E(factoryPowers).remove(AUTH_SECRET_PETNAME);
   }
 

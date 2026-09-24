@@ -480,6 +480,7 @@ export const main = async (host, { exec } = {}) => {
     providerId: 'codex',
     flootDir,
     backendId: 'codex',
+    accountAuthority,
     ...(subscriptionIds === undefined ? {} : { subscriptionIds }),
     // ChatGPT plans bank rate-limit resets; an operator redeems them here.
     resetCredits: true,

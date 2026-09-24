@@ -55,6 +55,20 @@ test('free router preserves the provider prefix and uses no paid small model', t
   ]);
 });
 
+test('free router catalog observations preserve the OpenRouter vendor', t => {
+  const config = makeOpencodeConfig({
+    model: 'openrouter/openrouter/free',
+    models: {
+      'openrouter/free': { limit: { context: 200_000 } },
+    },
+  });
+  t.deepEqual(config.provider.openrouter.whitelist, ['openrouter/free']);
+  t.deepEqual(config.provider.openrouter.models['openrouter/free'].limit, {
+    context: 200_000,
+  });
+  t.is(config.small_model, 'openrouter/openrouter/free');
+});
+
 test('whitelists both models when the small model differs', t => {
   const config = makeOpencodeConfig({
     model: 'openrouter/deepseek/deepseek-v4.1-flash',
@@ -88,11 +102,11 @@ test('context observations do not invent output limits or other model limits', t
   );
 });
 
-test('accepts full refs as catalog keys and whitelists the whole catalog', t => {
+test('preserves provider-scoped catalog keys and whitelists the whole catalog', t => {
   const config = makeOpencodeConfig({
     model: 'openrouter/mistralai/mistral-large-3',
     models: {
-      'openrouter/mistralai/mistral-large-3': {
+      'mistralai/mistral-large-3': {
         name: 'Caller name',
         limit: { context: 200_000, output: 4000 },
       },
@@ -346,17 +360,18 @@ test('rejects invalid inputs', t => {
       message: /must be <vendor>\/<model>/,
     },
   );
-  t.throws(
-    () =>
-      makeOpencodeConfig({
-        model: DEFAULT_MODEL,
-        models: {
-          'vendor/model': { name: 'a' },
-          'openrouter/vendor/model': { name: 'b' },
-        },
-      }),
-    { message: /duplicate entry/ },
-  );
+});
+
+test('catalog keys are exact provider ids, not aliases of full refs', t => {
+  const config = makeOpencodeConfig({
+    model: DEFAULT_MODEL,
+    models: {
+      'vendor/model': { name: 'a' },
+      'openrouter/vendor/model': { name: 'b' },
+    },
+  });
+  t.is(config.provider.openrouter.models['vendor/model'].name, 'a');
+  t.is(config.provider.openrouter.models['openrouter/vendor/model'].name, 'b');
 });
 
 test('partial observed limits remain independent without fabricated fields or ordering', t => {

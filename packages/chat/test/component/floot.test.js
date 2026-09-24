@@ -2218,7 +2218,9 @@ test.serial(
       Date.now() + 3 * 86_400_000 + 3_600_000,
     ).toISOString();
     const account = usedPercent => ({
-      backendId: 'provider',
+      accountId: 'provider-account',
+      providerId: 'openrouter',
+      uses: [{ backendId: 'provider' }],
       title: 'Fae',
       plan: {
         planId: 'pro',
@@ -2271,7 +2273,9 @@ test.serial(
       /** @type {string} */ backendId,
       /** @type {number} */ usedPercent,
     ) => ({
-      backendId,
+      accountId: `account-${backendId}`,
+      providerId: backendId,
+      uses: [{ backendId }],
       title: backendId,
       plan: {
         planId: 'pro',
@@ -2339,9 +2343,10 @@ test.serial(
   'a banked reset is redeemed only when a person presses and confirms',
   async t => {
     const account = reset => ({
-      key: 'codex:work',
-      backendId: 'codex',
-      subscriptionId: 'work',
+      accountId: 'codex-account',
+      providerId: 'openai',
+      uses: [{ backendId: 'codex', subscriptionId: 'work' }],
+      resetKey: '["codex-account","reset-admin"]',
       label: 'Work',
       title: 'Codex',
       plan: {
@@ -2397,7 +2402,7 @@ test.serial(
       ).includes('unconfirmed'),
     );
     // A redeem, and said to be one: never a replay.
-    t.deepEqual(daemon.redeems(), [{ key: 'codex:work' }]);
+    t.deepEqual(daemon.redeems(), [{ key: '["codex-account","reset-admin"]' }]);
 
     // The daemon says a redeem is pending: the button asks again instead.
     daemon.setAccounts([
@@ -2416,10 +2421,24 @@ test.serial(
     button('Ask again')?.click();
     await waitFor(() => daemon.redeems().length === 2);
     // Asking again says so, so the daemon can never take it for a new redeem.
-    t.deepEqual(daemon.redeems()[1], { key: 'codex:work', replay: true });
+    t.deepEqual(daemon.redeems()[1], {
+      key: '["codex-account","reset-admin"]',
+      replay: true,
+    });
     button('Give up')?.click();
     await waitFor(() => daemon.redeems().length === 3);
-    t.deepEqual(daemon.redeems()[2], { key: 'codex:work', abandon: true });
+    t.deepEqual(daemon.redeems()[2], {
+      key: '["codex-account","reset-admin"]',
+      abandon: true,
+    });
+    // Retaining a stale reading does not retain the reset authority.
+    daemon.setAccounts([
+      { ...account({ pending: null, last: null }), resetKey: undefined },
+    ]);
+    await waitFor(
+      () =>
+        !button('Redeem a reset') && !button('Ask again') && !button('Give up'),
+    );
     t.is(daemon.accountRefreshes(), 1);
   },
 );

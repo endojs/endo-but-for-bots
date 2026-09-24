@@ -206,7 +206,9 @@ const PresetModal = ({
   const supportsInternet = networkPolicies.includes('public-internet');
   const note =
     discoveryNote(backendCatalog) ||
-    (discoveryError ? `Model discovery could not be read: ${discoveryError}` : '');
+    (discoveryError
+      ? `Model discovery could not be read: ${discoveryError}`
+      : '');
   return h(
     'div',
     { class: 'floot-modal-backdrop', onClick: onClose },
@@ -408,8 +410,8 @@ const PresetModal = ({
                   setSubscription(chosen);
                   // The model must be one the chosen account lists, and
                   // one the search still shows.
-                  const listed = offeredOf(backend, chosen).filter(
-                    candidate => matchesModel(candidate, modelQuery),
+                  const listed = offeredOf(backend, chosen).filter(candidate =>
+                    matchesModel(candidate, modelQuery),
                   );
                   if (!listed.some(candidate => candidate.id === model)) {
                     const next = firstChoice(listed);
@@ -543,9 +545,7 @@ export const FlootApp = ({ controller }) => {
       ? sessionAccounts
           .map(entry => {
             const chip = accountChip(entry, accountNow);
-            return chip
-              ? `${entry.label || entry.subscriptionId}: ${chip}`
-              : '';
+            return chip ? `${entry.label || entry.title}: ${chip}` : '';
           })
           .filter(Boolean)
           .join(' | ')

@@ -194,7 +194,7 @@ test('verified Claude failure journals native context and restores without becom
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'Test',
-    { nativeContextFormat: 'claude-code-jsonl-v1' },
+    { journalPowers: f.powers, nativeContextFormat: 'claude-code-jsonl-v1' },
   );
   t.teardown(() => agent.shutdown());
   await t.throwsAsync(
@@ -237,7 +237,7 @@ test('verified Claude failure journals native context and restores without becom
     undefined,
     { kind: 'hosted', provideHostedClient: () => next },
     'Test',
-    { nativeContextFormat: 'claude-code-jsonl-v1' },
+    { journalPowers: f.powers, nativeContextFormat: 'claude-code-jsonl-v1' },
   );
   t.teardown(() => revived.shutdown());
   await t.throwsAsync(revived.converse('continue', makeReplyChannel().writer), {
@@ -277,6 +277,7 @@ test('first native-required failure stays readable but cannot resume portably af
   /** @type {{kind: 'hosted', provideHostedClient: () => any}} */
   const runtime = { kind: 'hosted', provideHostedClient: () => client };
   const agent = await makeStreamingAgent(f.powers, undefined, runtime, 'Test', {
+    journalPowers: f.powers,
     nativeContextFormat: 'claude-code-jsonl-v1',
   });
   t.teardown(() => agent.shutdown());
@@ -304,6 +305,7 @@ test('first native-required failure stays readable but cannot resume portably af
     undefined,
     runtime,
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => revived.shutdown());
   await t.throwsAsync(
@@ -335,6 +337,7 @@ for (const fault of ['beforeStore', 'afterStore']) {
         provideProvider: () => provider,
       },
       'Test',
+      { journalPowers: f.powers },
     );
     t.teardown(() => agent.shutdown());
     const mail = harden({ from: 'sender', messageNumber: '123' });
@@ -355,6 +358,7 @@ for (const fault of ['beforeStore', 'afterStore']) {
         provideProvider: () => provider,
       },
       'Test',
+      { journalPowers: f.powers },
     );
     t.teardown(() => revived.shutdown());
     const turns = await revived.getTurns();
@@ -387,6 +391,7 @@ test('oversized backend token is refused before successful journal settlement or
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => agent.shutdown());
   await t.throwsAsync(agent.converse('Hello', makeReplyChannel().writer), {
@@ -423,6 +428,7 @@ test('cancelled hosted thinking is journaled after the interrupt barrier', async
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => agent.shutdown());
   const writer = makeReplyChannel().writer;
@@ -444,6 +450,7 @@ test('cancelled hosted thinking is journaled after the interrupt barrier', async
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => revived.shutdown());
   const [turn] = await revived.getTurns();
@@ -489,6 +496,7 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'abort']) {
       undefined,
       { kind: 'hosted', provideHostedClient: () => hostedClient },
       'Test',
+      { journalPowers: f.powers },
     );
     t.teardown(() => agent.shutdown());
     const result = agent.converse('Hello', makeReplyChannel().writer);
@@ -501,6 +509,7 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'abort']) {
       undefined,
       { kind: 'hosted', provideHostedClient: () => hostedClient },
       'Test',
+      { journalPowers: f.powers },
     );
     t.teardown(() => revived.shutdown());
     const [turn] = await revived.getTurns();
@@ -550,6 +559,7 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
       undefined,
       { kind: 'hosted', provideHostedClient: () => hostedClient },
       'Test',
+      { journalPowers: f.powers },
     );
     t.teardown(() => agent.shutdown());
     const result = agent.converse('Hello', makeReplyChannel().writer);
@@ -572,6 +582,7 @@ for (const fault of ['none', 'beforeStore', 'afterStore', 'ack']) {
       undefined,
       { kind: 'hosted', provideHostedClient: () => hostedClient },
       'Test',
+      { journalPowers: f.powers },
     );
     t.teardown(() => revived.shutdown());
     const [turn] = await revived.getTurns();
@@ -620,6 +631,7 @@ for (const treeName of ['ct-leaf', 'ct-root', 'ct-obsolete-node']) {
           provideProvider: () => provider,
         },
         'Test',
+        { journalPowers: f.powers },
       ),
       {
         message:
@@ -654,6 +666,7 @@ test('journal checkpoint survives a later partial turn without conversation tree
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => agent.shutdown());
   await agent.converse('First', makeReplyChannel().writer);
@@ -666,6 +679,7 @@ test('journal checkpoint survives a later partial turn without conversation tree
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => revived.shutdown());
   await revived.converse('Continue', makeReplyChannel().writer);
@@ -721,6 +735,7 @@ test('checkpoint recovery orders archived evidence by turn rather than publicati
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => agent.shutdown());
   await agent.converse('Continue', makeReplyChannel().writer);
@@ -745,6 +760,7 @@ test('cancellation during transcript sealing does not commit a successful turn',
       provideProvider: () => provider,
     },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => agent.shutdown());
   await agent.converse(
@@ -773,6 +789,7 @@ test('cancellation during transcript sealing does not commit a successful turn',
       provideProvider: () => provider,
     },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => revived.shutdown());
   t.deepEqual(await revived.getTranscript(), before);
@@ -827,6 +844,7 @@ test('parallel identical calls keep distinct results after partial transcript pu
     },
     'Test',
     {
+      journalPowers: f.powers,
       extraTools: new Map([
         [
           'effect',
@@ -865,6 +883,7 @@ test('parallel identical calls keep distinct results after partial transcript pu
       provideProvider: () => provider,
     },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => revived.shutdown());
   const transcript = await revived.getTranscript();
@@ -914,6 +933,7 @@ for (const missingId of [false, true]) {
       },
       'Test',
       {
+        journalPowers: f.powers,
         extraTools: new Map([
           [
             'effect',
@@ -947,6 +967,7 @@ for (const missingId of [false, true]) {
         provideProvider: () => provider,
       },
       'Test',
+      { journalPowers: f.powers },
     );
     t.teardown(() => revived.shutdown());
     t.deepEqual(await revived.getTranscript(), transcript);
@@ -994,6 +1015,7 @@ for (const phase of ['beforeStore', 'afterStore']) {
         },
         'Test',
         {
+          journalPowers: f.powers,
           extraTools: new Map([
             [
               'effect',
@@ -1020,6 +1042,7 @@ for (const phase of ['beforeStore', 'afterStore']) {
           provideProvider: () => provider,
         },
         'Test',
+        { journalPowers: f.powers },
       );
       t.teardown(() => revived.shutdown());
       const transcript = await revived.getTranscript();
@@ -1081,6 +1104,7 @@ for (const boundary of ['transcript-record', 'tool-intent']) {
       },
       'Test',
       {
+        journalPowers: f.powers,
         extraTools: new Map([
           [
             'effect',
@@ -1146,6 +1170,7 @@ test('direct dialogue prefix survives a later provider failure and reconstructio
     },
     'Test',
     {
+      journalPowers: f.powers,
       extraTools: new Map([
         [
           'effect',
@@ -1188,6 +1213,7 @@ test('direct dialogue prefix survives a later provider failure and reconstructio
       ),
     },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => revived.shutdown());
   t.deepEqual(await revived.getTranscript(), before);
@@ -1231,6 +1257,7 @@ test('direct provider refuses effects when its dialogue cannot be journaled', as
     },
     'Test',
     {
+      journalPowers: f.powers,
       extraTools: new Map([
         [
           'effect',
@@ -1280,6 +1307,7 @@ test('recorded compaction survives reconstruction into direct-provider context',
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => agent.shutdown());
   await agent.converse('superseded request', makeReplyChannel().writer);
@@ -1306,6 +1334,7 @@ test('recorded compaction survives reconstruction into direct-provider context',
       provideProvider: () => provider,
     },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => revived.shutdown());
   t.deepEqual(await revived.getTranscript(), transcript);
@@ -1395,7 +1424,7 @@ test('end-of-turn compaction restores retained tools and final answer exactly on
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
-    tools,
+    { journalPowers: f.powers, ...tools },
   );
   t.teardown(() => agent.shutdown());
   await agent.converse('Change it', makeReplyChannel().writer);
@@ -1420,7 +1449,7 @@ test('end-of-turn compaction restores retained tools and final answer exactly on
         }),
     },
     'Test',
-    tools,
+    { journalPowers: f.powers, ...tools },
   );
   t.teardown(() => revived.shutdown());
   t.deepEqual(await revived.getTranscript(), transcript);
@@ -1490,6 +1519,7 @@ for (const failure of ['empty', 'HTTP 503']) {
         provideProvider: () => provider,
       },
       'Test',
+      { journalPowers: f.powers },
     );
     t.teardown(() => agent.shutdown());
     await t.throwsAsync(
@@ -1516,6 +1546,7 @@ for (const failure of ['empty', 'HTTP 503']) {
         provideProvider: () => provider,
       },
       'Test',
+      { journalPowers: f.powers },
     );
     t.teardown(() => revived.shutdown());
     t.deepEqual(await revived.getTurns(), before);
@@ -1554,6 +1585,7 @@ test('provider usage notifications and returned totals are not double counted', 
       }),
     },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => agent.shutdown());
   await agent.converse('Hello', makeReplyChannel().writer);
@@ -1596,6 +1628,7 @@ test('usage context follows dispatch order across late archive publication', asy
       )(harden({ chatStream: async () => completed() })),
     },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => agent.shutdown());
   f.beforeLookup(name => {
@@ -1666,6 +1699,7 @@ for (const backend of ['provider', 'hosted']) {
         undefined,
         config,
         'Test',
+        { journalPowers: f.powers },
       );
       t.teardown(() => agent.shutdown());
       await t.throwsAsync(agent.converse('Go', makeReplyChannel().writer));
@@ -1677,6 +1711,7 @@ for (const backend of ['provider', 'hosted']) {
         undefined,
         config,
         'Test',
+        { journalPowers: f.powers },
       );
       t.teardown(() => revived.shutdown());
       t.deepEqual(await revived.getUsage(), {
@@ -1725,6 +1760,7 @@ test('usage projection failure cannot undo successful journal settlement', async
       ),
     },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => agent.shutdown());
   let updates = 0;
@@ -1778,7 +1814,13 @@ for (const backend of ['provider', 'hosted']) {
                 },
               }),
           };
-    const agent = await makeStreamingAgent(f.powers, undefined, config, 'Test');
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      config,
+      'Test',
+      { journalPowers: f.powers },
+    );
     t.teardown(() => agent.shutdown());
     t.deepEqual(await agent.getUsage(), {
       ...usageCounts({}),
@@ -1803,6 +1845,7 @@ for (const backend of ['provider', 'hosted']) {
       undefined,
       config,
       'Test',
+      { journalPowers: f.powers },
     );
     t.teardown(() => revived.shutdown());
     t.deepEqual(await revived.getUsage(), await agent.getUsage());
@@ -1838,6 +1881,7 @@ test('archived failures remain in UI history and direct-provider context', async
       provideProvider: () => provider,
     },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => agent.shutdown());
   await t.throwsAsync(
@@ -1885,6 +1929,7 @@ test('archived failures remain in UI history and direct-provider context', async
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   t.teardown(() => revived.shutdown());
   await revived.converse('New hosted request', makeReplyChannel().writer);
@@ -1934,6 +1979,7 @@ test('direct-provider recovery hydrates full input and tool evidence, not UI pre
     },
     'Test',
     {
+      journalPowers: f.powers,
       extraTools: new Map([['effect', effectTool(async () => result)]]),
     },
   );
@@ -1994,7 +2040,7 @@ test('direct tools persist intent before effects and failed effects remain in la
       provideProvider: () => provider,
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   await t.throwsAsync(agent.converse('Change it', makeReplyChannel().writer), {
     message: /disconnected after effect/,
@@ -2043,7 +2089,7 @@ test('direct tools persist intent before effects and failed effects remain in la
       provideProvider: () => provider,
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   t.deepEqual(await revived.getHistory(), await agent.getHistory());
   t.deepEqual(
@@ -2077,6 +2123,7 @@ test('failed hosted turn preserves reported partial usage across revival without
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   await t.throwsAsync(
     agent.converse('Metered attempt', makeReplyChannel().writer),
@@ -2087,6 +2134,7 @@ test('failed hosted turn preserves reported partial usage across revival without
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   const [turn] = await revived.getTurns();
   t.is(turn.state, 'failed');
@@ -2146,7 +2194,7 @@ test('hosted snapshot tools durably authorize effects and preserve failures with
         }),
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   await t.throwsAsync(
     agent.converse('Change hosted resource', makeReplyChannel().writer),
@@ -2227,7 +2275,7 @@ test('aliased backend observations retain distinct execution evidence without cl
         }),
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   await t.throwsAsync(
     agent.converse('Apply effect', makeReplyChannel().writer),
@@ -2282,7 +2330,7 @@ test('failed mail turns restore journaled receipt and tool evidence after reviva
       provideProvider: () => provider,
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   await t.throwsAsync(
     first.converse('Mail request', makeReplyChannel().writer, {
@@ -2308,7 +2356,7 @@ test('failed mail turns restore journaled receipt and tool evidence after reviva
       provideProvider: () => provider,
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   t.deepEqual(await revived.getHistory(), history);
   await revived.converse(
@@ -2373,7 +2421,7 @@ test('repeated typed receipt hides only duplicate display input, not new admissi
       provideProvider: () => provider,
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   t.teardown(() => agent.shutdown());
   const meta = harden({
@@ -2423,7 +2471,7 @@ test('repeated typed receipt hides only duplicate display input, not new admissi
       provideProvider: () => provider,
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   t.teardown(() => revived.shutdown());
   t.deepEqual(await revived.getHistory(), history);
@@ -2466,7 +2514,7 @@ test('lost result writes poison dispatch; revival permits unrelated work without
       provideProvider: () => provider,
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   await t.throwsAsync(first.converse('Apply once', makeReplyChannel().writer), {
     message: /uncertain storage/,
@@ -2499,7 +2547,7 @@ test('lost result writes poison dispatch; revival permits unrelated work without
       provideProvider: () => safeProvider,
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   const [uncertain] = await revived.getTurns();
   t.is(uncertain.state, 'outcome-unknown');
@@ -2544,7 +2592,7 @@ test('failed intent persistence never dispatches the actual Endo tool', async t 
       )(harden({ chatStream: async () => callEffect() })),
     },
     'Test',
-    { extraTools },
+    { journalPowers: f.powers, extraTools },
   );
   await t.throwsAsync(
     agent.converse('Do not execute without intent', makeReplyChannel().writer),
@@ -2589,6 +2637,7 @@ test('native activity without result remains unknown while unrelated later work 
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   await t.throwsAsync(
     agent.converse('Native operation', makeReplyChannel().writer),
@@ -2669,6 +2718,7 @@ test('interrupt closes hosted tool admission before backend acknowledgement and 
     },
     'Test',
     {
+      journalPowers: f.powers,
       extraTools: new Map([
         [
           'effect',
@@ -2764,6 +2814,7 @@ test('a turn stopped before its backend sized the window keeps the size already 
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'Test',
+    { journalPowers: f.powers },
   );
   await agent.converse('first', makeReplyChannel().writer);
   await t.throwsAsync(agent.converse('second', makeReplyChannel().writer), {

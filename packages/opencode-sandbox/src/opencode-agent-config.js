@@ -123,20 +123,6 @@ export const parseModelRef = (ref, label = 'model') => {
 harden(parseModelRef);
 
 /**
- * Accept either a provider-scoped id or a full ref as a catalog key and return
- * the canonical provider-scoped id.
- *
- * @param {string} key
- * @param {string} label
- */
-const normalizeCatalogModelId = (key, label) => {
-  const id = key.startsWith(`${OPENROUTER_PROVIDER_ID}/`)
-    ? key.slice(OPENROUTER_PROVIDER_ID.length + 1)
-    : key;
-  return assertProviderModelId(id, label);
-};
-
-/**
  * @param {unknown} baseUrl
  * @param {string} label
  * @param {{ allowLoopbackHttp?: boolean }} [options]
@@ -346,7 +332,7 @@ const normalizeMcpServers = (servers, label) => {
  * @param {string} [options.smallModel] ref used for titles/summaries; defaults to `model`
  * @param {string} [options.agentName]
  * @param {string} [options.systemPrompt]
- * @param {Record<string, { name?: string, limit?: { context?: number, output?: number } }>} [options.models]
+ * @param {Record<string, { name?: string, limit?: { context?: number, output?: number } }>} [options.models] Provider-scoped catalog keys, never full OpenCode refs.
  * @param {string} [options.baseUrl]
  * @param {boolean} [options.allowLoopbackHttp] - Permit the broker-only
  *   loopback endpoint form. Only the broker transport sets this.
@@ -384,9 +370,7 @@ export const makeOpencodeConfig = ({
     entries.length <= MAX_MODEL_ENTRIES || Fail`models has too many entries`;
     for (const [rawKey, entry] of entries) {
       const key = assertSafeKey(rawKey, 'models key');
-      const id = normalizeCatalogModelId(key, `models[${q(rawKey)}]`);
-      Object.hasOwn(catalog, id) &&
-        Fail`models has a duplicate entry for ${q(id)}`;
+      const id = assertProviderModelId(key, `models[${q(rawKey)}]`);
       catalog[id] = normalizeModelEntry(entry, `models[${q(rawKey)}]`);
     }
   }

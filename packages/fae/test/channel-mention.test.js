@@ -24,6 +24,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import { start, stop, purge, makeEndoClient } from '@endo/daemon';
+import { provideAuthSecret } from '../src/credentials.js';
 
 const dirname = url.fileURLToPath(new URL('..', import.meta.url)).toString();
 const { raw } = String;
@@ -207,11 +208,19 @@ test.serial('agent replies to channel mention (not inbox)', async t => {
 
   // 2. Set up LLM provider config as a stored value
   t.log('Storing LLM provider config...');
+  const credential = llmConfig.authToken
+    ? await provideAuthSecret({
+        hostAgent: host,
+        name: 'channel-test-auth',
+        description: 'Manual channel test credential',
+        token: llmConfig.authToken,
+      })
+    : undefined;
   await E(host).storeValue(
     harden({
       host: llmConfig.host,
       model: llmConfig.model,
-      authToken: llmConfig.authToken,
+      ...(credential ? { authSecretName: credential.secretName } : {}),
     }),
     'llm-provider',
   );

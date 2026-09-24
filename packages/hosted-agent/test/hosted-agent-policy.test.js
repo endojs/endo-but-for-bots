@@ -7,12 +7,32 @@ import {
   HOSTED_AGENT_POLICY_V1,
   HOSTED_ANCHOR_ARGV,
   HOSTED_SLICE_RESOURCES,
+  hostedSliceResources,
   assertFixedMounts,
   makeHostedAgentPolicyVerifier,
   sliceWritableBytes,
 } from '../src/hosted-agent-policy.js';
 
 const imageDigest = `sha256:${'a'.repeat(64)}`;
+
+test('trusted two-operation profile preserves aggregate resource ceilings', t => {
+  t.is(hostedSliceResources(), HOSTED_SLICE_RESOURCES);
+  t.is(hostedSliceResources().maxConcurrentOperations, 1);
+  const two = hostedSliceResources(2);
+  t.is(two.maxConcurrentOperations, 2);
+  t.true(two.memoryBytes * 3n <= HOSTED_SLICE_RESOURCES.memoryBytes * 2n);
+  t.true(two.pids * 3 <= HOSTED_SLICE_RESOURCES.pids * 2);
+  t.true(two.cpuCores * 3 <= HOSTED_SLICE_RESOURCES.cpuCores * 2);
+  t.true(two.shmBytes * 3n <= HOSTED_SLICE_RESOURCES.shmBytes * 2n);
+  t.throws(() => hostedSliceResources(/** @type {any} */ (3)), {
+    message: /Unsupported hosted operation budget/,
+  });
+  const original = [{ kind: 'tmpfs', sizeBytes: 1024n ** 3n }];
+  const split = [{ kind: 'tmpfs', sizeBytes: (2n * 1024n ** 3n) / 3n }];
+  t.true(
+    sliceWritableBytes(split, two.shmBytes, 2) <= sliceWritableBytes(original),
+  );
+});
 
 /**
  * A second adapter's profile, deliberately unlike Codex's: its CLI home is

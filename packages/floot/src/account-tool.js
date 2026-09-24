@@ -1,9 +1,5 @@
 // @ts-check
 
-import { E } from '@endo/eventual-send';
-import { formatMicroUnits } from '@endo/hosted-agent/account.js';
-import { priceableUsage } from '@endo/hosted-agent/token-usage.js';
-
 /**
  * Render a snapshot's provenance the way a model should read it: what the
  * figure is, when it was taken, and how much to trust it.
@@ -35,12 +31,9 @@ const renderCount = count => (count === null ? 'unpublished' : `${count}`);
  * the number.
  *
  * @param {{ plan: any, rateLimits: any, rateCard: any }} snapshot
- * @param {{ inputTokens: bigint, outputTokens: bigint, cachedInputTokens?: bigint } | undefined} [usage]
- * @param {any} [cost]
- * @param {string} [modelId] - Named in the "cannot be priced" explanation.
  */
-export const renderAccountStatus = (snapshot, usage, cost, modelId = '') => {
-  const { plan, rateLimits, rateCard } = snapshot;
+export const renderAccountStatus = snapshot => {
+  const { plan, rateLimits } = snapshot;
   const lines = [];
   lines.push(
     `Plan: ${plan.title || plan.planId || '(unnamed)'} on ${plan.providerId} — state ${plan.state}${
@@ -65,54 +58,19 @@ export const renderAccountStatus = (snapshot, usage, cost, modelId = '') => {
       );
     }
   }
-  if (usage) {
-    lines.push(
-      usage.cachedInputTokens
-        ? `This session has used ${usage.inputTokens} input, ${usage.cachedInputTokens} cached input and ${usage.outputTokens} output tokens.`
-        : `This session has used ${usage.inputTokens} input and ${usage.outputTokens} output tokens.`,
-    );
-    if (cost && cost.currency) {
-      lines.push(
-        `At the ${rateCard.source} list price that is about ${formatMicroUnits(
-          cost.microUnits,
-          cost.currency,
-        )}${
-          cost.missing.length
-            ? ` — a floor, since the rate card does not price ${cost.missing.join(', ')}`
-            : ''
-        }.`,
-      );
-    } else if (rateCard.rates.length === 0) {
-      lines.push(`No list price is configured, so the cost is unknown.`);
-    } else {
-      // A rate card exists but this session's model is not on it, or the
-      // session runs a model nobody named. Say which, rather than leaving the
-      // cost line silently absent.
-      lines.push(
-        modelId
-          ? `The rate card does not price "${modelId}", so the cost is unknown.`
-          : `This session's model is not identified, so the cost cannot be priced.`,
-      );
-    }
-  }
   return lines.join('\n');
 };
 harden(renderAccountStatus);
 
 /**
- * A tool that lets the model answer "which plan am I on, how much quota is
- * left, and what is this costing?" — the questions a user asks mid-conversation
- * and that nothing else in the session can answer.
+ * Report configured accounts and quota without claiming billing attribution.
  *
- * It carries no authority over the account: the oracle it holds is read-only
- * and cannot reach the credential it describes.
+ * The callback returns data only, never credential or reset capabilities.
  *
  * @param {object} options
- * @param {any} options.oracle - A `HostedAccount` capability.
- * @param {() => Promise<{ inputTokens: number, outputTokens: number }>} [options.getUsage]
- * @param {() => string} [options.getModelId]
+ * @param {(refresh?: boolean) => Promise<any>} options.readAccounts
  */
-export const makeAccountStatusTool = ({ oracle, getUsage, getModelId }) =>
+export const makeAccountStatusTool = ({ readAccounts }) =>
   harden({
     schema: () =>
       harden({
@@ -120,8 +78,8 @@ export const makeAccountStatusTool = ({ oracle, getUsage, getModelId }) =>
         function: {
           name: 'accountStatus',
           description:
-            'Report the subscription plan behind this session, how much of ' +
-            'each rate limit is left, and what this session has cost so far. ' +
+            'Report explicitly configured accounts and their quotas. ' +
+            'Candidates are not proof of which account paid for previous turns. ' +
             'Every figure says whether it was read from the provider, ' +
             'declared by the operator, or remembered from an earlier reading — ' +
             'pass that on rather than presenting a declared figure as measured.',
@@ -142,33 +100,31 @@ export const makeAccountStatusTool = ({ oracle, getUsage, getModelId }) =>
       }),
     async execute(args) {
       const { refresh } = /** @type {{ refresh?: boolean }} */ (args || {});
-      await null;
-      if (refresh) {
-        await E(oracle).refresh();
+      const report = await readAccounts(refresh);
+      const lines = [
+        `Account selection: ${report.selection}. These are configured accounts, not proof of runtime eligibility or the payer for previous turns.`,
+        ...(report.complete
+          ? []
+          : [
+              'Account discovery is incomplete; some published sources are unavailable.',
+            ]),
+        ...(report.accounts.length
+          ? []
+          : ['No matching account is currently published.']),
+      ];
+      for (const account of report.accounts) {
+        lines.push(`Account: ${account.title} (${account.accountId}).`);
+        lines.push(renderAccountStatus(account));
       }
-      const [plan, rateLimits, rateCard] = await Promise.all([
-        E(oracle).getPlan(),
-        E(oracle).getRateLimits(),
-        E(oracle).getRateCard(),
-      ]);
-      let usage;
-      let cost;
-      const modelId = getModelId ? getModelId() : '';
-      if (getUsage) {
-        const totals = await getUsage();
-        usage = priceableUsage(totals);
-        if (modelId) {
-          cost = await E(oracle).estimateCost(harden({ modelId, ...usage }));
-        }
+      if (report.usage) {
+        lines.push(
+          `This session has used ${report.usage.inputTokens} input and ${report.usage.outputTokens} output tokens (not attributed to individual accounts).`,
+        );
       }
-      return renderAccountStatus(
-        { plan, rateLimits, rateCard },
-        usage,
-        cost,
-        modelId,
-      );
+      lines.push(report.costUnavailable);
+      return lines.join('\n');
     },
     help: () =>
-      'Report the subscription plan, remaining rate limits, and this session’s token cost.',
+      'Report configured accounts, remaining quotas, and unattributed session usage. No billing attribution or reset authority.',
   });
 harden(makeAccountStatusTool);

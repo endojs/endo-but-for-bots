@@ -1,6 +1,7 @@
 // @ts-check
 
 import { createProvider } from '@endo/lal/providers/index.js';
+import { Fail } from '@endo/errors';
 
 /**
  * A provider that follows the credential instead of pinning it.
@@ -18,8 +19,8 @@ import { createProvider } from '@endo/lal/providers/index.js';
  *
  * @param {object} options
  * @param {{ provider?: any, host?: string, model?: string, authToken?: string }} options.config
- * @param {() => Promise<string>} [options.provideAuthToken] - Absent when the
- *   deployment still carries a plaintext token in its provider config.
+ * @param {() => Promise<string>} [options.provideAuthToken] - Secret resolver;
+ *   absent only for tokenless or explicitly injected providers.
  * @param {(env: Record<string, string | undefined>) => any} [options.buildProvider]
  * @returns {() => Promise<any>}
  */
@@ -28,6 +29,8 @@ export const makeRotatingProvider = ({
   provideAuthToken,
   buildProvider = createProvider,
 }) => {
+  !Object.hasOwn(config, 'authToken') ||
+    Fail`Inline provider authToken is unsupported; use a Secrets resolver`;
   /** @type {any} */
   let cachedProvider = config.provider;
   /** @type {string | undefined} */
@@ -40,9 +43,7 @@ export const makeRotatingProvider = ({
     /** @type {string | undefined} */
     let authToken;
     try {
-      authToken = provideAuthToken
-        ? await provideAuthToken()
-        : config.authToken;
+      authToken = provideAuthToken ? await provideAuthToken() : '';
     } catch (error) {
       // A revoked secret must not leave the token it replaced sitting in this
       // closure, nor a provider still holding it: drop both and fail the call.

@@ -317,7 +317,11 @@ test('a mail turn blocked on askSubagent still observes the reply', async t => {
       provideProvider: () => provider,
     },
     'test prompt',
-    harden({ spawner: stubSpawner, timers: inertTimers }),
+    {
+      journalPowers: mailbox.powers,
+      spawner: stubSpawner,
+      timers: inertTimers,
+    },
   );
   agent.startInbox();
   t.teardown(async () => {
@@ -365,7 +369,7 @@ test('a partial message does not swallow its settled revision', async t => {
       provideProvider: () => provider,
     },
     'test prompt',
-    harden({ timers: inertTimers }),
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   agent.startInbox();
   t.teardown(async () => {
@@ -483,7 +487,7 @@ test('unrelated queued mail proceeds after UI uncertainty without resolving or r
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test',
-    { timers: inertTimers },
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   t.teardown(async () => {
     first.push({ type: 'end' });
@@ -546,7 +550,7 @@ test('acknowledging an admitted mail turn with unknown effects never replays it'
     undefined,
     { kind: 'hosted', provideHostedClient: () => hostedClient },
     'test',
-    { timers: inertTimers },
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   t.teardown(async () => {
     mailbox.close();
@@ -596,7 +600,7 @@ test('a backlog larger than any bound is answered, not declined', async t => {
       provideProvider: () => provider,
     },
     'test prompt',
-    harden({ timers: inertTimers }),
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   agent.startInbox();
   t.teardown(async () => {
@@ -645,7 +649,7 @@ test('a completed turn is answered even if shutdown starts mid-drain', async t =
       provideProvider: () => provider,
     },
     'test prompt',
-    harden({ timers: inertTimers }),
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   agent.startInbox();
   t.teardown(() => mailbox.close());
@@ -689,7 +693,7 @@ test('a session with a quiet inbox shuts down without waiting for it', async t =
       provideProvider: () => provider,
     },
     'test prompt',
-    harden({ timers: inertTimers }),
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   agent.startInbox();
   // Let the pump reach its parked read.
@@ -744,7 +748,7 @@ test('workflow requests reach Floot as tasks and settle with typed verdicts', as
       provideProvider: () => provider,
     },
     'Reviewer',
-    harden({ timers: inertTimers }),
+    { journalPowers: mailbox.powers, timers: inertTimers },
   );
   t.teardown(async () => {
     mailbox.close();
@@ -807,7 +811,7 @@ for (const acknowledge of [false, true]) {
         )(makeScriptedProvider(acknowledge ? [answer, fail] : [fail])),
       },
       'Originating conversation',
-      harden({ timers: inertTimers }),
+      { journalPowers: mailbox.powers, timers: inertTimers },
     );
     t.teardown(async () => {
       mailbox.close();
@@ -852,7 +856,7 @@ for (const acknowledge of [false, true]) {
           ),
         },
         'Originating conversation',
-        harden({ timers: inertTimers }),
+        { journalPowers: mailbox.powers, timers: inertTimers },
       );
       t.teardown(async () => {
         mailbox.close();

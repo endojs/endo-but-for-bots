@@ -479,6 +479,7 @@ test('activation acquires the scope, the broker grant, state, workspace mount, a
   const plan = planFor('a');
   await E(controller).activate(JSON.stringify(plan), f.resolver);
   t.is(f.clients.length, 1);
+  t.is(f.clients[0].rootfsLabel, plan.rootfs);
   t.false(f.events.some(event => Array.isArray(event) && event[0] === 'send'));
   const options = sliceOptions(f);
   // The attested table. The workspace is the 9P projection this controller

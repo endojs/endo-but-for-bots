@@ -15,7 +15,9 @@ import {
 const NOW = Date.parse('2026-09-20T12:00:00.000Z');
 
 const codex = {
-  backendId: 'codex',
+  accountId: 'account-codex',
+  providerId: 'openai',
+  uses: [{ backendId: 'codex' }],
   title: 'Codex',
   plan: { planId: 'pro', title: 'Pro', state: 'active', source: 'observed' },
   windows: [
@@ -166,7 +168,7 @@ test('the chip leads with the long window', t => {
 test('the panel words each window, credits, banked resets and the age of the figures', t => {
   t.deepEqual(accountSections([codex], NOW), [
     {
-      id: 'codex',
+      id: 'account-codex',
       title: 'Codex',
       rows: [
         ['Plan', 'Pro'],
@@ -220,7 +222,9 @@ test('a drained window says when it is back, and a reading ages past its reset',
 
 test('counts are shown when the provider publishes them', t => {
   const openrouter = {
-    backendId: 'opencode',
+    accountId: 'account-openrouter',
+    providerId: 'openrouter',
+    uses: [{ backendId: 'opencode' }, { backendId: 'provider' }],
     title: 'OpenCode',
     plan: {
       planId: 'pay-as-you-go',
@@ -301,17 +305,22 @@ test('the provider’s word that the limit is reached ages by what the reading n
 test('a session shows the account it is pinned to, or every account of its backend', t => {
   const work = {
     ...codex,
-    key: 'codex:work',
-    subscriptionId: 'work',
+    accountId: 'account-work',
+    uses: [{ backendId: 'codex', subscriptionId: 'work' }],
     label: 'Work Pro',
   };
   const home = {
     ...codex,
-    key: 'codex:home',
-    subscriptionId: 'home',
+    accountId: 'account-home',
+    uses: [{ backendId: 'codex', subscriptionId: 'home' }],
     label: 'Home Plus',
   };
-  const other = { ...codex, backendId: 'claude', key: 'claude' };
+  const other = {
+    ...codex,
+    accountId: 'account-claude',
+    providerId: 'anthropic',
+    uses: [{ backendId: 'claude' }],
+  };
   const accounts = [work, home, other];
   t.deepEqual(
     accountsOfSession(accounts, { backendId: 'codex', subscription: 'home' }),
@@ -331,17 +340,21 @@ test('a session shows the account it is pinned to, or every account of its backe
       section.title,
     ]),
     [
-      ['codex:work', 'Codex — Work Pro'],
-      ['codex:home', 'Codex — Home Plus'],
+      ['account-work', 'Codex — Work Pro'],
+      ['account-home', 'Codex — Home Plus'],
     ],
   );
 });
 
 test('a redeem is offered where there is an admin and a credit, and asks again while one is unconfirmed', t => {
   t.is(accountRedeem(codex), null);
-  const idle = { ...codex, reset: { pending: null, last: null } };
+  const idle = {
+    ...codex,
+    resetKey: '["account-codex","admin-1"]',
+    reset: { pending: null, last: null },
+  };
   t.like(accountRedeem(idle), {
-    key: 'codex',
+    key: '["account-codex","admin-1"]',
     label: 'Redeem a reset',
     pending: false,
   });
@@ -357,7 +370,7 @@ test('a redeem is offered where there is an admin and a credit, and asks again w
 
   const pending = {
     ...codex,
-    key: 'codex:work',
+    resetKey: '["account-codex","admin-2"]',
     label: 'Work',
     resetCredits: { availableCount: 0, credits: [] },
     reset: {
@@ -372,7 +385,7 @@ test('a redeem is offered where there is an admin and a credit, and asks again w
   };
   // Even with no credit showing: the unconfirmed one may be why.
   t.like(accountRedeem(pending), {
-    key: 'codex:work',
+    key: '["account-codex","admin-2"]',
     label: 'Ask again',
     pending: true,
   });
@@ -434,4 +447,63 @@ test('a redeem is offered where there is an admin and a credit, and asks again w
     'Last redeem',
     'answered in words this does not know 1h ago',
   ]);
+});
+
+test('shared accounts render once and session pins match within the same use', t => {
+  const shared = {
+    ...codex,
+    accountId: 'shared',
+    providerId: 'openrouter',
+    uses: [
+      { backendId: 'provider', subscriptionId: 'direct' },
+      { backendId: 'opencode', subscriptionId: 'hosted' },
+    ],
+  };
+  t.is(accountSections([shared], NOW).length, 1);
+  t.deepEqual(
+    accountsOfSession([shared], {
+      backendId: 'provider',
+      subscription: 'direct',
+    }),
+    [shared],
+  );
+  t.deepEqual(
+    accountsOfSession([shared], {
+      backendId: 'opencode',
+      subscription: 'hosted',
+    }),
+    [shared],
+  );
+  t.deepEqual(
+    accountsOfSession([shared], {
+      backendId: 'opencode',
+      subscription: 'direct',
+    }),
+    [],
+  );
+  t.deepEqual(
+    accountsOfSession([shared], {
+      backendId: 'provider',
+      subscription: 'auto',
+    }),
+    [shared],
+  );
+});
+
+test('display changes never retarget reset actions and stale authority offers none', t => {
+  const reset = { pending: null, last: null };
+  const bound = { ...codex, reset, resetKey: '["account-codex","admin-a"]' };
+  t.is(
+    accountRedeem({ ...bound, title: 'Renamed', label: 'Other label' })?.key,
+    bound.resetKey,
+  );
+  t.is(
+    accountSections([{ ...bound, title: 'Renamed' }], NOW)[0].id,
+    codex.accountId,
+  );
+  t.is(accountRedeem({ ...bound, resetKey: undefined }), null);
+  t.is(
+    accountRedeem({ ...bound, resetKey: '["account-codex","admin-b"]' })?.key,
+    '["account-codex","admin-b"]',
+  );
 });

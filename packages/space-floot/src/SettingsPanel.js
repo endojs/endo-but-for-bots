@@ -153,9 +153,7 @@ export const SettingsPanel = ({ state, controller }) => {
   const nowMs = Date.now();
   const sections = accountSections(state.accounts, nowMs);
   const capacityRows = section => {
-    const account = state.accounts?.find(
-      item => (item.key || item.backendId) === section.id,
-    );
+    const account = state.accounts?.find(item => item.accountId === section.id);
     if (!account) return [];
     return accountCapacity(account, nowMs).map(({ title, remaining, note }) =>
       h(
@@ -244,7 +242,7 @@ export const SettingsPanel = ({ state, controller }) => {
                     },
                   },
                   state.accountAction?.busy === true &&
-                    state.accountAction.key === section.id
+                    state.accountAction.key === section.redeem.key
                     ? 'Asking…'
                     : section.redeem.label,
                 ),
@@ -256,10 +254,11 @@ export const SettingsPanel = ({ state, controller }) => {
                         class: 'floot-settings-refresh',
                         disabled: state.accountAction?.busy === true,
                         onClick: () => {
-                          const abandon = section.redeem?.abandon;
-                          if (abandon) {
+                          const { redeem } = section;
+                          const abandon = redeem?.abandon;
+                          if (redeem && abandon) {
                             controller.redeemAccountReset?.(
-                              section.id,
+                              redeem.key,
                               abandon.confirm,
                               'abandon',
                             );
@@ -269,7 +268,7 @@ export const SettingsPanel = ({ state, controller }) => {
                       section.redeem.abandon.label,
                     )
                   : null,
-                state.accountAction?.key === section.id &&
+                state.accountAction?.key === section.redeem.key &&
                   state.accountAction.message
                   ? h(
                       'span',

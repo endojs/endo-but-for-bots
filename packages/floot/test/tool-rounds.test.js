@@ -91,7 +91,7 @@ test('a turn ends on the tool-step fallback at the configured ceiling', async t 
       provideProvider: () => insatiable.provider,
     },
     'test prompt',
-    harden({ maxToolRounds: 3 }),
+    { journalPowers: makeFakePowers(), maxToolRounds: 3 },
   );
   const events = await say(agent, 'loop forever');
   // Exactly the ceiling: one provider call per round, and no call after the
@@ -117,6 +117,7 @@ test('the ceiling defaults to a coding-sized budget, not a voice-sized one', asy
       provideProvider: () => insatiable.provider,
     },
     'test prompt',
+    { journalPowers: makeFakePowers() },
   );
   await say(agent, 'loop forever');
   t.is(insatiable.calls(), 48);

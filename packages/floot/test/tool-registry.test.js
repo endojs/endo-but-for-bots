@@ -147,9 +147,22 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
     refresh: async () => undefined,
   });
   const withOracle = await makeFlootToolRegistry(powers, {
-    accountOracle: oracle,
-    getUsage: async () => harden({ inputTokens: 1200, outputTokens: 340 }),
-    getModelId: () => 'm',
+    readAccounts: async () =>
+      harden({
+        accounts: [
+          {
+            accountId: 'test',
+            title: 'Test',
+            plan: await oracle.getPlan(),
+            rateLimits: await oracle.getRateLimits(),
+            rateCard: await oracle.getRateCard(),
+          },
+        ],
+        complete: true,
+        selection: 'eligible-accounts',
+        usage: { inputTokens: 1200, outputTokens: 340 },
+        costUnavailable: 'No per-account usage attribution.',
+      }),
   }).snapshot();
   t.true(withOracle.names.includes('accountStatus'));
   t.not(plain.toolSetId, withOracle.toolSetId);
@@ -159,7 +172,7 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
   t.regex(report, /declared by the operator/);
   t.regex(report, /750 of 1000 remaining \(25% used\)/);
   t.regex(report, /1200 input and 340 output tokens/);
-  t.regex(report, /No list price is configured/);
+  t.regex(report, /No per-account usage attribution/);
 });
 
 test('a stored caplet tool is located with the path as separate name arguments', async t => {

@@ -465,6 +465,7 @@ test('native controller construction is inert; activation uses copy paths and no
   const plan = planFor('a');
   await E(controller).activate(JSON.stringify(plan), f.resolver);
   t.is(f.clients.length, 1);
+  t.is(f.clients[0].rootfsLabel, plan.rootfs);
   t.false(Object.hasOwn(f.clients[0], 'initialPrompt'));
   t.false(f.events.some(event => Array.isArray(event) && event[0] === 'send'));
   const [, , options] = f.events.find(

@@ -74,11 +74,11 @@ test('a revoked secret fails the turn rather than falling back', async t => {
   await t.throwsAsync(currentProvider(), { message: /SECRET_REVOKED/ });
 });
 
-test('without a token thunk the configured plaintext token is used once', async t => {
+test('without a token thunk a tokenless provider is cached', async t => {
   /** @type {string[]} */
   const built = [];
   const currentProvider = makeRotatingProvider({
-    config: { host: 'h', model: 'm', authToken: 'legacy' },
+    config: { host: 'http://localhost:11434', model: 'm' },
     buildProvider: env => {
       built.push(`${env.LAL_AUTH_TOKEN}`);
       return harden({});
@@ -86,5 +86,18 @@ test('without a token thunk the configured plaintext token is used once', async 
   });
   await currentProvider();
   await currentProvider();
-  t.deepEqual(built, ['legacy']);
+  t.deepEqual(built, ['']);
+});
+
+test('inline authToken is rejected even beside a Secret resolver', t => {
+  for (const authToken of ['legacy', '', undefined]) {
+    t.throws(
+      () =>
+        makeRotatingProvider({
+          config: { authToken },
+          provideAuthToken: async () => 'secret',
+        }),
+      { message: /Inline provider authToken is unsupported/ },
+    );
+  }
 });

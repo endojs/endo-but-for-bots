@@ -386,6 +386,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     providerId: 'openrouter',
     flootDir,
     backendId: 'opencode',
+    accountAuthority,
   });
   // The broker as a Subscription, which shares are made over
   // (`provideSubscriptionShare`); re-minted here so they follow a new broker.

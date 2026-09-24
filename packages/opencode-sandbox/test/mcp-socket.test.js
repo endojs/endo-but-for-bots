@@ -18,22 +18,20 @@ import { join } from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline';
 
-import {
-  makeMcpSocketServer,
-  startMcpSocketServer,
-} from '../src/mcp-socket-server.js';
+import { makeMcpSocketServer } from '../src/mcp-socket-server.js';
 
 test('installs the shared standalone relay with OpenCode config and private permissions', async t => {
   t.timeout(5000);
   const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
-  const server = await startMcpSocketServer({
+  const server = makeMcpSocketServer({
     socketDir: directory,
     bridge: {
       handleMessage: async message => ({ id: message.id, result: 'ok' }),
     },
   });
   t.teardown(() => server.close());
+  await server.start();
   const configPath = join(directory, server.configFileName);
   const config = JSON.parse(await readFile(configPath, 'utf8'));
   t.deepEqual(config, {
@@ -89,7 +87,7 @@ test('failed socket-file cleanup can retry; a successful close cannot unlink a s
   t.timeout(5000);
   const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-retry-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
-  const server = await startMcpSocketServer({
+  const server = makeMcpSocketServer({
     socketDir: directory,
     bridge: { handleMessage: async () => undefined },
   });
@@ -99,6 +97,7 @@ test('failed socket-file cleanup can retry; a successful close cannot unlink a s
     // has closed. Still release all real resources when that assertion fails.
     await server.close().catch(() => {});
   });
+  await server.start();
   // A directory cannot be removed by the wrapper's nonrecursive unlink.
   // The listener remains owned even after its socket name has been removed.
   await rm(server.socketPath);

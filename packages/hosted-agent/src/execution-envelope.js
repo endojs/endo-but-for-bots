@@ -33,7 +33,7 @@ import { assertCopyData } from './copy-data.js';
 import {
   HOSTED_AGENT_POLICY_V1,
   HOSTED_ANCHOR_ARGV,
-  HOSTED_SLICE_RESOURCES,
+  hostedSliceResources,
   sliceWritableBytes,
 } from './hosted-agent-policy.js';
 import { assertProviderGrantV1 } from './provider-grant.js';
@@ -102,8 +102,14 @@ const expectedEvidence = (
  * @param {string} context.imageDigest
  * @param {string} context.networkNamespaceId
  * @param {readonly any[]} context.mounts
+ * @param {1 | 2} context.maxConcurrentOperations
  */
-const expectedAttestation = ({ imageDigest, networkNamespaceId, mounts }) =>
+const expectedAttestation = ({
+  imageDigest,
+  networkNamespaceId,
+  mounts,
+  maxConcurrentOperations,
+}) =>
   harden({
     version: 'SlicePolicyAttestationV1',
     profile: SLICE_POLICY_PROFILE,
@@ -123,8 +129,12 @@ const expectedAttestation = ({ imageDigest, networkNamespaceId, mounts }) =>
     descendantReaping: true,
     namespaces: HOSTED_AGENT_POLICY_V1.namespaces,
     limits: {
-      ...HOSTED_SLICE_RESOURCES,
-      writableBytes: sliceWritableBytes(mounts),
+      ...hostedSliceResources(maxConcurrentOperations),
+      writableBytes: sliceWritableBytes(
+        mounts,
+        hostedSliceResources(maxConcurrentOperations).shmBytes,
+        maxConcurrentOperations,
+      ),
     },
     mounts: mounts.map(mount => ({
       role: mount.role,
@@ -140,6 +150,7 @@ const expectedAttestation = ({ imageDigest, networkNamespaceId, mounts }) =>
 /**
  * @typedef {object} EnvelopeAdapter
  * @property {string} label The adapter's name for messages.
+ * @property {1 | 2} [maxConcurrentOperations] Fixed trusted runner operation budget.
  * @property {Record<string, string>} [env] Trusted native runner configuration
  *   for the session's mounter.
  * @property {typeof makeDefaultMounter} [makeMounter]
@@ -182,6 +193,7 @@ export const activateExecutionEnvelope = async (
   { own, assertOpen },
   {
     label,
+    maxConcurrentOperations = 1,
     env = {},
     makeMounter = makeDefaultMounter,
     makeFilesystem,
@@ -326,7 +338,10 @@ export const activateExecutionEnvelope = async (
       mode: 'rw',
     },
     ...binds({ plan, prepared, tools }),
-    ...TEMPORARY_MOUNTS,
+    ...TEMPORARY_MOUNTS.map(mount => ({
+      ...mount,
+      sizeBytes: (mount.sizeBytes * 2n) / BigInt(maxConcurrentOperations + 1),
+    })),
     ...attaches(plan).map(attach => ({
       role: `attach-${attach.key}`,
       kind: 'attach',
@@ -348,8 +363,12 @@ export const activateExecutionEnvelope = async (
       gid: HOSTED_AGENT_POLICY_V1.gid,
       brokerSidecar: { container: evidence.brokerSidecar.container },
       resources: {
-        ...HOSTED_SLICE_RESOURCES,
-        writableBytes: sliceWritableBytes(mounts),
+        ...hostedSliceResources(maxConcurrentOperations),
+        writableBytes: sliceWritableBytes(
+          mounts,
+          hostedSliceResources(maxConcurrentOperations).shmBytes,
+          maxConcurrentOperations,
+        ),
       },
       mounts,
       // The parents of this session's own directories: the roots this
@@ -377,6 +396,7 @@ export const activateExecutionEnvelope = async (
         imageDigest,
         networkNamespaceId: grant.networkNamespaceId,
         mounts,
+        maxConcurrentOperations,
       }),
     ) ||
     Fail`${b(label)} raw slice attestation differs from the approved placement`;

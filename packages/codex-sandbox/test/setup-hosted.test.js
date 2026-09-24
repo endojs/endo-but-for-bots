@@ -9,6 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { renewableCredentialsSpecifier } from '@endo/hosted-agent/managed-renewable-credentials.js';
+import { makeAccountId } from '@endo/hosted-agent/account-bindings.js';
 
 import { main } from '../setup-hosted.js';
 import {
@@ -52,6 +53,19 @@ const makeFakeHost = ({
   const powersIds = new Map();
   const valuesById = new Map();
   const secrets = new Map();
+  const capabilities = new Map();
+  const guests = new Map();
+  const publications = new Map();
+  const directories = new Set();
+  const profile = Far('Controller profile', {
+    has: async (...parts) => directories.has(key(...parts)),
+    makeDirectory: async name => {
+      directories.add(key(name));
+    },
+    storeValue: async (value, ...parts) => {
+      publications.set(key(...parts), value);
+    },
+  });
   const secretFor = name => {
     if (!secrets.has(name)) secrets.set(name, Far(`Secret ${name}`, {}));
     return secrets.get(name);
@@ -155,6 +169,8 @@ const makeFakeHost = ({
     },
     async lookup(pathOrName) {
       const parts = Array.isArray(pathOrName) ? pathOrName : [pathOrName];
+      if (key(...parts) === key('floot', 'controller-profile')) return profile;
+      if (guests.has(key(...parts))) return guests.get(key(...parts));
       if (parts[0] === '@secrets') {
         return harden({
           adminFor: async secret => {
@@ -170,7 +186,40 @@ const makeFakeHost = ({
       if (parts[0] === 'secrets') return secretFor(parts[1]);
       if (key(...parts) === key('codex-sandbox', 'credential'))
         return credential;
-      return harden({ name: key(...parts) });
+      const id = bindings.get(key(...parts));
+      if (!capabilities.has(id)) capabilities.set(id, Far(`Formula ${id}`, {}));
+      return capabilities.get(id);
+    },
+    async locate(...parts) {
+      return `locator:${bindings.get(key(...parts))}`;
+    },
+    async provideGuest(handleName, { agentName }) {
+      const values = new Map();
+      guests.set(
+        key(agentName),
+        Far('Guest powers', {
+          has: async name => values.has(name),
+          storeValue: async (value, name) => {
+            values.set(name, value);
+          },
+          storeLocator: async (name, locator) => {
+            values.set(name, locator);
+          },
+          lookup: async name => values.get(name),
+        }),
+      );
+      bindings.set(key(handleName), `${handleName}-id`);
+      bindings.set(key(agentName), `${agentName}-id`);
+    },
+    async move(from, to) {
+      const source = key(...from);
+      const target = key(...to);
+      bindings.set(target, bindings.get(source));
+      bindings.delete(source);
+      if (guests.has(source)) {
+        guests.set(target, guests.get(source));
+        guests.delete(source);
+      }
     },
     async storeValue(value, name) {
       stored.push({ value, name });
@@ -218,6 +267,7 @@ const makeFakeHost = ({
     secretFor,
     valuesById,
     powersIds,
+    publications,
   };
 };
 
@@ -291,6 +341,17 @@ test.serial(
     const base = await baseEnv(t);
     const fake = makeFakeHost();
     await main(fake.host, { exec: noExec });
+    const publication = fake.publications.get(
+      key('account-bindings', 'codex-sandbox'),
+    );
+    t.is(publication.version, 1);
+    t.false(Object.hasOwn(publication, 'unavailable'));
+    t.is(publication.accounts.length, 1);
+    t.is(
+      publication.accounts[0].accountId,
+      makeAccountId({ providerId: 'codex', accountAuthority: 'codex-main' }),
+    );
+    t.deepEqual(publication.accounts[0].uses, [{ backendId: 'codex' }]);
     const credential = fake.mints.find(
       mint => mint.specifier === renewableCredentialsSpecifier,
     );
@@ -667,19 +728,41 @@ test.serial(
     });
     // The names used while making the namespace are tucked away.
     t.false(fake.bindings.has(key('codex-sandbox.broker-powers')));
-    // Each member's admin, through which an operator redeems a banked reset,
-    // is bound for Floot beside its account, and into nothing else.
-    for (const id of ['work', 'home']) {
-      t.true(
-        fake.bindings.has(
-          key('floot', 'controller-profile', `codex-admin-${id}`),
-        ),
-      );
-    }
-    t.deepEqual(
-      [...fake.bindings.keys()].filter(name => /codex-admin/.test(name)).length,
-      2,
+    // The complete explicit publication binds each logical account to its
+    // existing observer/admin, not inferred runtime-named profile entries.
+    const publication = fake.publications.get(
+      key(['account-bindings', 'codex-sandbox']),
     );
+    t.is(publication.version, 1);
+    t.false(Object.hasOwn(publication, 'unavailable'));
+    t.is(publication.accounts.length, 2);
+    await Promise.all(
+      ['work', 'home'].map(async (id, index) => {
+        const entry = publication.accounts[index];
+        t.is(
+          entry.accountId,
+          makeAccountId({
+            providerId: 'codex',
+            accountAuthority: 'codex-main',
+            subscriptionId: id,
+          }),
+        );
+        t.deepEqual(entry.uses, [{ backendId: 'codex', subscriptionId: id }]);
+        t.is(
+          entry.oracle,
+          await fake.host.lookup(['codex-sandbox', `account-oracle-${id}`]),
+        );
+        t.is(
+          entry.admin,
+          await fake.host.lookup(['codex-sandbox', `subscription-admin-${id}`]),
+        );
+        t.is(
+          entry.adminId,
+          await fake.host.identify('codex-sandbox', `subscription-admin-${id}`),
+        );
+      }),
+    );
+    t.false([...fake.bindings.keys()].some(name => /codex-admin/.test(name)));
 
     // The next start: the set is stored over the old one and never removed
     // first, since that is also when sessions are restored and the broker

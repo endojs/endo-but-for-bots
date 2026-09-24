@@ -313,15 +313,17 @@ An agent reads the token afresh for every turn, so replacing the bytes
 (`SecretAdmin.replaceBase64`) rotates every running agent at once and revoking
 the secret stops the next turn rather than merely the next provisioning.
 The provider is rebuilt only when the bytes actually change.
-A deployment still carrying a plaintext `authToken` in its provider config keeps
-working, with a warning: that arrangement cannot be rotated, revoked, or
-audited.
+Provider configs containing an `authToken` field are rejected, even beside a
+Secret capability. Import credentials into Secrets and remove the obsolete
+field before use. A failed Secret import does not publish a provider config.
+Tokenless local providers remain supported.
 
-Going the other way — replacing a managed secret with a plaintext token — takes
-more than re-running setup.
-Setup drops the factory's own `llm-auth-secret`, so newly created agents get
-none, but every agent already provisioned holds the `SecretBlob` in its own
-namespace and the resolver prefers a capability over a config value.
+The form's optional raw-token input is an explicit import into Secrets, not a
+fallback. The daemon stores form submissions before the factory processes them;
+use an existing Secret name to avoid placing credentials in form messages.
+These changes do not erase historical form or provider records.
+
+Removing a credential binding does not revoke copies already delegated.
 A `SecretBlob` hands its holder the bytes by design, so the way to stop those
 agents using the old token is to **revoke the secret**, which is what the secret
 manager is for; removing the pet name from the provider config is not a

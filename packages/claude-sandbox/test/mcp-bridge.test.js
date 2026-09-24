@@ -15,7 +15,7 @@ import {
 
 import { makeMcpBridge } from '@endo/hosted-agent/mcp-bridge.js';
 
-import { startMcpSocketServer } from '../src/mcp-socket-server.js';
+import { makeMcpSocketServer } from '../src/mcp-socket-server.js';
 
 const toolFor = (name, description = '') =>
   harden({
@@ -39,13 +39,14 @@ test('socket server relays JSON-RPC over a Unix socket and installs the bridge +
     tools: catalogOf(toolFor('exec')),
     execute: async () => 'ok',
   });
-  const server = await startMcpSocketServer({
+  const server = makeMcpSocketServer({
     socketDir: dir,
     bridge,
     innerDir: '/endo-mcp',
     serverName: 'endo',
   });
   t.teardown(() => server.close());
+  await server.start();
 
   // The stdio relay and MCP config land in the directory that gets mounted.
   await t.notThrowsAsync(() => stat(path.join(dir, server.stdioBridgeName)));
@@ -103,12 +104,13 @@ test('socket frames are handled concurrently and an unbounded frame drops the pe
       return name;
     },
   });
-  const server = await startMcpSocketServer({
+  const server = makeMcpSocketServer({
     socketDir: dir,
     bridge,
     maxFrameLength: 256,
   });
   t.teardown(() => server.close());
+  await server.start();
 
   const socket = net.connect(server.socketPath);
   t.teardown(() => socket.destroy());
@@ -159,7 +161,7 @@ test('failed socket-file cleanup can retry; a successful close cannot unlink a s
   t.timeout(5000);
   const directory = await mkdtemp(path.join(os.tmpdir(), 'claude-mcp-retry-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
-  const server = await startMcpSocketServer({
+  const server = makeMcpSocketServer({
     socketDir: directory,
     bridge: { handleMessage: async () => undefined },
   });
@@ -169,6 +171,7 @@ test('failed socket-file cleanup can retry; a successful close cannot unlink a s
     // has closed. Still release all real resources when that assertion fails.
     await server.close().catch(() => {});
   });
+  await server.start();
   // A directory cannot be removed by the wrapper's nonrecursive unlink.
   // The listener remains owned even after its socket name has been removed.
   await rm(server.socketPath);

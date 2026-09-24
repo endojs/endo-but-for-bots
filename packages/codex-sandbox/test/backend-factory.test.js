@@ -20,6 +20,12 @@ import {
 const validPolicy = () =>
   harden({
     ...HOSTED_AGENT_POLICY_V1,
+    limits: {
+      ...HOSTED_AGENT_POLICY_V1.limits,
+      memoryBytes: 4 * 1024 ** 3 - 1,
+      pids: 510,
+      cpuCores: 3,
+    },
     sessionId: 'session-1',
     networkNamespaceId: 'netns-session-1',
     imageDigest: `sha256:${'a'.repeat(64)}`,

@@ -73,6 +73,7 @@ test('a session resolves its provider per turn, so a rotation reaches it', async
       },
     },
     'test prompt',
+    { journalPowers: makeFakePowers() },
   );
 
   const first = await say(agent, 'hello');

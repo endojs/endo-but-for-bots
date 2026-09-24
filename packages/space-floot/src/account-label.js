@@ -14,8 +14,9 @@ import harden from '@endo/harden';
  *   limit: string | null, used: string | null, remaining: string | null,
  * }} AccountWindow
  * @typedef {{
- *   backendId: string, title: string,
- *   key?: string, subscriptionId?: string, label?: string,
+ *   accountId: string, providerId: string, title: string,
+ *   uses: Array<{backendId: string, subscriptionId?: string}>,
+ *   resetKey?: string, label?: string,
  *   plan: { planId: string, title: string, state: string, source: string },
  *   windows: AccountWindow[], limitReached: boolean,
  *   credits: { balance: string | null, hasCredits: boolean, unlimited: boolean } | null,
@@ -45,11 +46,11 @@ const RESET_OUTCOMES = {
  * @returns {{ key: string, label: string, pending: boolean, confirm: string, abandon: { label: string, confirm: string } | null } | null}
  */
 export const accountRedeem = account => {
-  if (!account.reset) return null;
-  const key = account.key || account.backendId;
+  if (!account.reset || !account.resetKey) return null;
+  const key = account.resetKey;
   const name = account.label
-    ? `${account.title || account.backendId} (${account.label})`
-    : account.title || account.backendId;
+    ? `${account.title} (${account.label})`
+    : account.title;
   if (account.reset.pending) {
     return {
       key,
@@ -85,15 +86,15 @@ export const accountRedeem = account => {
  */
 export const accountsOfSession = (accounts, session) => {
   if (!session) return [];
-  const ofBackend = (accounts ?? []).filter(
-    account => account.backendId === (session.backendId || 'provider'),
+  return (accounts ?? []).filter(account =>
+    account.uses.some(
+      use =>
+        use.backendId === (session.backendId || 'provider') &&
+        (!session.subscription ||
+          session.subscription === 'auto' ||
+          use.subscriptionId === session.subscription),
+    ),
   );
-  if (session.subscription && session.subscription !== 'auto') {
-    return ofBackend.filter(
-      account => account.subscriptionId === session.subscription,
-    );
-  }
-  return ofBackend;
 };
 
 /**
@@ -362,11 +363,11 @@ export const accountSections = (accounts, nowMs) =>
     ]);
     return {
       redeem: accountRedeem(account),
-      id: account.key || account.backendId,
-      // A backend with several subscriptions is told apart by their labels.
+      id: account.accountId,
+      // Presentation may change without changing account or reset authority.
       title: account.label
-        ? `${account.title || account.backendId} — ${account.label}`
-        : account.title || account.backendId,
+        ? `${account.title} — ${account.label}`
+        : account.title,
       rows,
     };
   });

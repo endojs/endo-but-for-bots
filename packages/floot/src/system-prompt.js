@@ -66,25 +66,6 @@ export const UNDECLARED_HOSTED_PROMPT_ENVIRONMENT = harden({
  */
 
 /**
- * What a session recorded before contexts existed ran under: spoken, behind
- * the provider API. The two control presets described the mount tools to every
- * such session ("when your session runs in a sandbox that supports it"); the
- * other two never mentioned them. Kept only for preset catalog examples,
- * never for reconstructing a registry entry's missing prompt or context.
- *
- * @param {string} presetId
- * @returns {PromptContext}
- */
-export const legacyPromptContext = presetId =>
-  harden({
-    environment: PROVIDER_PROMPT_ENVIRONMENT,
-    spoken: true,
-    containerMounts:
-      presetId === 'full-control' || presetId === 'machine-admin',
-  });
-harden(legacyPromptContext);
-
-/**
  * The name a model sees an Endo tool under.
  *
  * @param {PromptEnvironment} environment

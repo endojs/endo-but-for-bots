@@ -1,5 +1,5 @@
 // @ts-check
-import { Fail } from '@endo/errors';
+import { Fail, b } from '@endo/errors';
 
 const LIMIT = 16 * 1024 * 1024;
 const isUuid = value =>
@@ -37,10 +37,15 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
   /** @type {Array<{uuid: string, role: string, content: any, messageId?: string, model?: string, messageType?: string}>} */
   const frames = [];
   const frameIds = new Set();
+  let diagnosticPhase = 'initial';
+  let diagnosticCheck = 0;
   const requireValue = condition => {
+    diagnosticCheck += 1;
     if (!condition) {
       refused = true;
-      throw Fail`Claude native context coverage unavailable`;
+      // Only static phase names and a local check ordinal. Never include
+      // producer text, arguments, identifiers, payloads, or unknown event names.
+      throw Fail`Claude native context coverage unavailable (${b(`phase=${diagnosticPhase}, check=${diagnosticCheck}`)})`;
     }
   };
   const guarded = operation => {
@@ -84,14 +89,30 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
   /** @param {any} event */
   const observe = event =>
     guarded(() => {
+      diagnosticPhase = 'observe';
+      diagnosticCheck = 0;
       charge(event);
       requireValue(event && typeof event === 'object');
+      if (
+        ['system', 'result', 'assistant', 'user', 'stream_event'].includes(
+          event.type,
+        )
+      ) {
+        diagnosticPhase = `observe/${event.type}`;
+      }
       // Subagent events are not mainline dialogue. They cannot certify coverage.
       if (event.parent_tool_use_id) return;
       requireValue(!terminal && isUuid(event.session_id));
       if (session === undefined) session = event.session_id;
       requireValue(event.session_id === session);
       if (event.type === 'system') {
+        if (
+          ['init', 'compact_boundary', 'status', 'thinking_tokens'].includes(
+            event.subtype,
+          )
+        ) {
+          diagnosticPhase = `observe/system/${event.subtype}`;
+        }
         if (event.subtype === 'init') {
           requireValue(!initialized && frames.length === 0 && !message);
           initialized = true;
@@ -191,6 +212,18 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       requireValue(event.type === 'stream_event');
       const stream = event.event;
       requireValue(stream && typeof stream === 'object');
+      if (
+        [
+          'message_start',
+          'content_block_start',
+          'content_block_delta',
+          'content_block_stop',
+          'message_delta',
+          'message_stop',
+        ].includes(stream.type)
+      ) {
+        diagnosticPhase = `observe/stream/${stream.type}`;
+      }
       if (stream.type === 'message_start') {
         requireValue(
           !message &&
@@ -279,6 +312,8 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
   /** @param {'success'|'failure'} expected */
   const assertOutcome = expected =>
     guarded(() => {
+      diagnosticPhase = 'outcome';
+      diagnosticCheck = 0;
       requireValue(
         initialized &&
           terminal &&
@@ -501,6 +536,8 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
    */
   const assertCaptured = (nativeTranscript, cut) =>
     guarded(() => {
+      diagnosticPhase = 'capture';
+      diagnosticCheck = 0;
       const {
         sessionId,
         beforeUuid,
@@ -510,6 +547,8 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         outcome: expectedOutcome,
       } = cut;
       assertOutcome(expectedOutcome);
+      diagnosticPhase = 'capture';
+      diagnosticCheck = 0;
       requireValue(
         isUuid(sessionId) &&
           sessionId === session &&

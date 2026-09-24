@@ -17,11 +17,14 @@ Uncertain storage writes fence the incarnation; revival reads durable evidence.
 
 This boundary excludes ordinary guests, not administrators: full-control and
 machine-admin presets deliberately receive factory-host powers. Standalone
-`makeStreamingAgent` callers must supply separate `journalPowers` for isolation;
-the compatibility default uses cooperative guest storage.
+`makeStreamingAgent` callers must explicitly supply `journalPowers`; omission
+or null is refused before guest storage or backend access.
+Callers are responsible for keeping this storage private from the session guest;
+capability identity alone cannot establish isolation.
+Journal status reports `storage: 'explicit'`, not an inferred privacy guarantee.
 
 `getJournalStatus()` reports the event count as a decimal string, the retained and
-archived turn counts, and `private` or `legacy` storage. There is no event limit:
+archived turn counts, and explicit storage provision. There is no event limit:
 long text is stored by reference (`getTurnContent`), replay is bounded by
 snapshots, and settled turns beyond the retained window are archived
 (`getArchivedTurns`). Outcome acknowledgement consumes an event.
@@ -247,22 +250,34 @@ read once and would otherwise need a restart.
 
 ## Plan and rate limits
 
-`getAccount(refresh?)` on the factory, and on each session facet, reports the
-subscription plan behind this deployment's credential, how much of each rate
-limit is left, and — per session — what the conversation has cost at the current
-list price.
-A provider-backed session also gets an `accountStatus` tool, so the model can
-answer those questions where the user asked them.
-A session on a hosted backend does not: it runs the backend's own tool loop over
-a tool set projected before the session agent exists.
-`getAccount(refresh?)` answers the same questions to a UI either way.
+`getAccount(refresh?)` on the factory reports the configured direct-provider
+oracle's subscription plan and rate limits.
+On a session, it instead reports explicitly published accounts matching the
+session's backend and optional subscription pin, plus separate session usage
+when the session is already open.
+Otherwise `usageUnavailable` explains the omission: account inspection does not
+open a session agent or acquire a backend solely to read usage.
+`accounts` contains data only; `selection` is `subscription-pin` or
+`configured-accounts`, and `complete: false` identifies unavailable sources.
+Automatic pools can list several configured accounts; these mappings do not
+prove current runtime eligibility, routing, or which account paid for past turns.
+No aggregate session cost is estimated without per-account usage attribution.
+Both provider-backed and hosted factory sessions expose the same read-only
+`accountStatus` tool over this session-specific report.
 
 Every figure carries `observedAt` and a source of `observed`, `declared`,
 `remembered`, or `unavailable`, so a declared figure is never mistaken for a
 measured one.
-Provision it by pointing `FLOOT_ACCOUNT_PROFILE` at a JSON profile when running
-setup; without one, `getAccount()` reports that no oracle is available and the
-tool is absent.
+Provision it by pointing `FLOOT_ACCOUNT_PROFILE` at a JSON profile and setting
+`FLOOT_ACCOUNT_AUTHORITY` to the operator's explicit account identifier when running
+setup; without a profile, the factory's `getAccount()` reports no direct oracle.
+Session reports and tools return no matching accounts when none are published,
+without falling back to the factory's direct-provider oracle.
+Account discovery identifies accounts by provider, declared authority and optional
+pool member, separately from runtime names and read-only observer formulas.
+Multiple runtimes sharing that declared identity share one capacity card.
+Setup publishes these bindings in the controller profile, without another
+credential or renewal owner.
 See [@endo/hosted-agent's ACCOUNT-ORACLE.md](../hosted-agent/ACCOUNT-ORACLE.md).
 
 ## Design → implementation → review

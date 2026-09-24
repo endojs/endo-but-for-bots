@@ -31,6 +31,11 @@ import {
   toCurrentSpecifier,
 } from './current-specifier.js';
 import { assertAccountAuthority } from './account-authority.js';
+import {
+  invalidateAccountBindings,
+  makeAccountId,
+  publishAccountBindings,
+} from './account-bindings.js';
 
 /**
  * Read one immutable formula by the ID captured from its current binding.
@@ -879,61 +884,8 @@ export const provideSubscriptionShare = async (
 harden(provideSubscriptionShare);
 
 /**
- * @param {any} hostAgent
- * @param {{ label: string, dir: string, flootDir: string, backendId: string, subscriptionId?: string }} options
- */
-const publishSubscriptionAdmin = async (
-  hostAgent,
-  { label, dir, flootDir, backendId, subscriptionId },
-) => {
-  await null;
-  const adminName =
-    subscriptionId === undefined
-      ? `${backendId}-admin`
-      : `${backendId}-admin-${subscriptionId}`;
-  try {
-    const adminPath = await provideSubscriptionAdmin(hostAgent, {
-      label,
-      dir,
-      brokerPath: [dir, 'broker-service'],
-      specifier: moduleSpecifier('./subscription-admin-module.js'),
-      redeemerSpecifier: moduleSpecifier('./reset-redeemer-module.js'),
-      ...(subscriptionId === undefined ? {} : { subscriptionId }),
-    });
-    if (
-      adminPath === undefined &&
-      (await E(hostAgent).has(flootDir, 'controller-profile', adminName))
-    ) {
-      // This broker redeems nothing (any more): Floot must not go on
-      // offering a button over an admin whose redeemer is gone.
-      await E(hostAgent).remove(flootDir, 'controller-profile', adminName);
-    }
-    if (
-      adminPath !== undefined &&
-      (await E(hostAgent).has(flootDir, 'controller-profile'))
-    ) {
-      await E(hostAgent).copy(adminPath, [
-        flootDir,
-        'controller-profile',
-        adminName,
-      ]);
-      console.log(
-        `Bound "${adminName}" into "${flootDir}/controller-profile".`,
-      );
-    }
-  } catch (error) {
-    console.error(
-      `${label} subscription admin "${adminName}" was not provided; sessions are unaffected:`,
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-};
-harden(publishSubscriptionAdmin);
-
-/**
- * Provide an adapter's account oracle over its `<dir>/broker-service` and bind
- * it into Floot's profile beside the backend, as `<backend id>-account`, which
- * is the name Floot looks for (`watchAccounts()`).
+ * Provide existing account owners over the broker, then atomically publish a
+ * complete discovery source. Preparation failure leaves the source unavailable.
  *
  * Status is an observation: a deployment whose oracle could not be provided
  * still runs sessions. The failure is reported and setup goes on.
@@ -945,12 +897,12 @@ harden(publishSubscriptionAdmin);
  * @param {string} options.providerId
  * @param {string} options.flootDir
  * @param {string} options.backendId The hosted backend's descriptor id.
+ * @param {string} options.accountAuthority The operator's explicit account identity.
  * @param {string[]} [options.subscriptionIds] For a broker over several
- *   subscriptions: one oracle each, bound as `<backend id>-account-<id>`.
+ *   subscriptions: one oracle each, explicitly associated with its member ID.
  * @param {boolean} [options.resetCredits] The provider banks rate-limit
  *   resets (Codex): also provide each subscription's admin, through which an
- *   operator redeems one, bound as `<backend id>-admin` or
- *   `<backend id>-admin-<id>`. Floot's profile is the only place it is bound.
+ *   operator redeems one. Only the trusted Floot profile receives these caps.
  */
 export const publishAccountOracle = async (
   hostAgent,
@@ -960,19 +912,23 @@ export const publishAccountOracle = async (
     providerId,
     flootDir,
     backendId,
+    accountAuthority,
     subscriptionIds,
     resetCredits,
   },
 ) => {
   await null;
-  // One subscription's oracle failing must not cost the others theirs.
-  for (const subscriptionId of subscriptionIds ?? [undefined]) {
-    const accountName =
-      subscriptionId === undefined
-        ? `${backendId}-account`
-        : `${backendId}-account-${subscriptionId}`;
-    try {
-      // eslint-disable-next-line no-await-in-loop
+  try {
+    const profile = (await E(hostAgent).has(flootDir, 'controller-profile'))
+      ? await E(hostAgent).lookup([flootDir, 'controller-profile'])
+      : undefined;
+    if (profile) await invalidateAccountBindings(profile, { source: dir });
+    makeAccountId({ providerId, accountAuthority });
+    /** @type {import('./account-bindings.js').AccountBinding[]} */
+    const accounts = [];
+    // Setup is sequential: keep the existing owners and publication ordering.
+    /* eslint-disable no-await-in-loop */
+    for (const subscriptionId of subscriptionIds ?? [undefined]) {
       const oraclePath = await provideAccountOracle(hostAgent, {
         label,
         dir,
@@ -982,35 +938,50 @@ export const publishAccountOracle = async (
         sourceSpecifier: moduleSpecifier('./account-source-module.js'),
         ...(subscriptionId === undefined ? {} : { subscriptionId }),
       });
-      // eslint-disable-next-line no-await-in-loop
-      if (await E(hostAgent).has(flootDir, 'controller-profile')) {
-        // copy overwrites an existing binding, as the backend's does.
-        // eslint-disable-next-line no-await-in-loop
-        await E(hostAgent).copy(oraclePath, [
-          flootDir,
-          'controller-profile',
-          accountName,
-        ]);
-        console.log(
-          `Bound "${accountName}" into "${flootDir}/controller-profile".`,
-        );
-      }
-    } catch (error) {
-      console.error(
-        `${label} account oracle "${accountName}" was not provided; sessions are unaffected:`,
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-    if (resetCredits === true) {
-      // eslint-disable-next-line no-await-in-loop
-      await publishSubscriptionAdmin(hostAgent, {
-        label,
-        dir,
-        flootDir,
-        backendId,
-        ...(subscriptionId === undefined ? {} : { subscriptionId }),
+      const adminPath =
+        resetCredits === true
+          ? await provideSubscriptionAdmin(hostAgent, {
+              label,
+              dir,
+              brokerPath: [dir, 'broker-service'],
+              specifier: moduleSpecifier('./subscription-admin-module.js'),
+              redeemerSpecifier: moduleSpecifier('./reset-redeemer-module.js'),
+              ...(subscriptionId === undefined ? {} : { subscriptionId }),
+            })
+          : undefined;
+      accounts.push({
+        accountId: makeAccountId({
+          providerId,
+          accountAuthority,
+          subscriptionId,
+        }),
+        providerId,
+        title: label,
+        ...(subscriptionId === undefined ? {} : { label: subscriptionId }),
+        oracle: await E(hostAgent).lookup(oraclePath),
+        ...(adminPath === undefined
+          ? {}
+          : {
+              adminId: await E(hostAgent).identify(...adminPath),
+              admin: await E(hostAgent).lookup(adminPath),
+            }),
+        uses: [
+          {
+            backendId,
+            ...(subscriptionId === undefined ? {} : { subscriptionId }),
+          },
+        ],
       });
     }
+    /* eslint-enable no-await-in-loop */
+    if (profile) {
+      await publishAccountBindings(profile, { source: dir, accounts });
+    }
+  } catch (error) {
+    console.error(
+      `${label} account discovery was not published; sessions are unaffected:`,
+      error instanceof Error ? error.message : String(error),
+    );
   }
 };
 harden(publishAccountOracle);

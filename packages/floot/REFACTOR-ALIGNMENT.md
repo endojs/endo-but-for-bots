@@ -35,7 +35,7 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 | One host-owned conversation/effect authority; native stores are projections | Floot journal feeds context/history; native restoration translates host-selected records; tree-based Floot state is refused rather than silently migrated | Aligned ownership direction. Codex's separate native audit/checkpoint evidence has a different claimed purpose and still needs a scoped retention justification |
 | Shared framing, admission and cancellation semantics | Shared turn channel exists, but three client admission state machines remain; recent Claude/OpenCode pre-admission cancellation defects needed parallel fixes | Partial: common behavioral conformance is warranted before deciding whether more implementation sharing is useful |
 | Bounded resident memory for long healthy work | `context-transcript.js` pages archived metadata but accumulates active/exception record arrays; without a checkpoint it selects all eligible nonpending history | Not complete. Per-value/per-turn bounds do not bound the whole context; direct Fae has no automatic compaction producer |
-| Runtime/provider/account/model are separate concepts | Explicit session identity and discriminated runtime configuration exist; hosted plans carry account authority | Partial: account status discovery still uses runtime-derived pet names and keys in `floot/agent.js:2663` onward |
+| Runtime/provider/account/model are separate concepts | Explicit session identity and runtime configuration; hosted account authority; logical account bindings and exact reset identities | Session reports now select configured accounts by backend and subscription pin; automatic pools do not imply payer attribution or eligibility. Factory direct-provider reporting stays separate. |
 | Smaller common implementation; delete superseded paths | Vendor packages shrank, shared implementation grew substantially; generic sandbox `nativeProfile` path has now been retired locally with operator approval | Simplicity target not demonstrated. Removing this obsolete mode is progress, not proof of the overall target |
 | One current set of guarantees and final conformance | Design contains overlapping historical status blocks; host revision pin is older than application HEAD | Not complete. Rebaseline documentation and candidate, then perform coordinated deployment and current cross-backend acceptance |
 
@@ -57,7 +57,39 @@ The next review should list current owners and remaining parallel mechanisms,
 identify removable code, and justify retained complexity by the stated goals.
 Do not add another broad framework to satisfy a line-count target.
 
-Concrete candidates:
+Current simplification pass (2026-09-24): the
+[mechanism inventory and decisions](SIMPLIFICATION-AUDIT.md) distinguish owners,
+record safe deletions and enumerate the remaining non-minimal contracts.
+This is a current-source audit, not a demand to review every superseded PR commit.
+The deletion slice removes 291 net lines of runtime JavaScript (comments included;
+tests and documentation excluded), without adding a replacement framework.
+Independent adversarial review approves the rootfs/registry, MCP, audit-reader and
+Floot preset/transcript changes.
+Full suites pass: hosted-agent 742 (one skipped), Claude 417, Codex 424,
+OpenCode 302 and Floot 708.
+Scoped lint has no errors; source type checks pass where separately configured.
+The root documentation/API gate passes against the current source surfaces.
+Test-inclusive type checks retain unrelated fixture errors, not a green overall gate.
+The full-suite run also exposed incomplete setup mocks from RA-03: the three backend
+fixtures now assert explicit account publications, rather than swallowing failed
+discovery or expecting retired account/admin aliases.
+The correction is a separate reviewed test-only commit.
+No deployment is claimed; remaining decisions are listed in the linked audit.
+
+Follow-up items 1, 2, 4 and 5 in that inventory are complete: session account
+selection is publication-based and passive, runtime credentials require Secrets,
+the unused Codex state locator is removed, and Codex diagnostics use the simpler
+V2 writer. Independent adversarial reviews approve each slice. Full suites pass
+Floot 713, Codex 423, and Fae 174 with two expected failures; two real-daemon
+durability regressions also pass. Scoped lint and the root documentation/API gate
+pass; unrelated test-fixture type errors remain. Old anchored Codex diagnostic
+layouts require deliberate session retirement before deployment.
+Item 3 now requires explicit journal storage at the streaming-agent boundary;
+the factory retains its existing private adapter and durable owner unchanged.
+Missing/null storage refuses before guest access, and standalone fixtures opt in
+explicitly. Fae compaction remains on hold.
+
+Concrete candidates and historical completion evidence:
 
 - Backward-compatibility cleanup is explicitly in scope (operator, 2026-09-24):
   obsolete internal option/property names, state formats and old-image shims need
@@ -120,21 +152,22 @@ Concrete candidates:
   This removes an intentionally retired public mode, not merely unreachable code.
   External callers/retained formulas must be retired before activation; no live
   inventory or deployment is claimed.
-- Codex creates its private audit journal/anchors in
-  `codex-sandbox/src/codex-native-controller.js`. The current consumer audit is
-  recorded in [Codex's design](../codex-sandbox/DESIGN.md#journal-and-checkpoint-responsibilities).
-  Only the writer is wired into production; event semantics do not drive
-  recovery, but chain/head verification gates appends and required write failure
-  fences the session. Raw native identifiers, approval/denial observations and
-  late-result diagnostics are not interchangeable with Floot's mediated effects.
-  The separate thread checkpoint does drive reconciliation and must not be
-  mistaken for duplicate history. Retain unique evidence pending a replacement
-  diagnostic contract; the hash-chain/reader surface is not thereby justified
-  as minimal. Entries and anchors share host filesystem authority, so separate
-  capabilities do not defend against a host writer controlling both. The audit
-  head and the runtime policy anchor are different mechanisms. No deletion,
-  bounded-memory, live recovery or process-loss guarantee follows from this
-  source-level ownership inventory.
+- Codex now uses the V2 required diagnostic writer described in
+  [Codex's design](../codex-sandbox/DESIGN.md#journal-and-checkpoint-responsibilities).
+  Native identifiers, approval/denial observations and late-result diagnostics
+  remain; hash chains, independent anchors and prepared-head replay are removed.
+  The existing atomic file store publishes each complete entry.
+  Writes stay serialized and awaited; any rejected write permanently fences that
+  writer instance, including writes that landed without acknowledgement.
+  Reconstruction validates contiguous names and the last entry's binding/version,
+  not every historical payload.
+  Historical tamper and suffix-deletion detection are no longer promised.
+  Old layouts require deliberate session retirement rather than migration.
+  Floot's effects journal, the operational thread checkpoint, and the unrelated
+  runtime policy anchor are unchanged.
+  This introduces neither a new durable owner nor process-loss recovery (#1323).
+  The unused `locateSessionDirectory` API is also retired; current controllers
+  already prepare host records before reading their checkpoint.
 - Attachment-driven recreation in `floot/agent.js:2930` onward coordinates
   declared mounts, live incarnation forwarding and cleanup retries. It is not
   proven to be a duplicate durable owner. Its string-matched
@@ -1009,7 +1042,7 @@ Expose account-authority/member identity and status capabilities explicitly from
 discovery, without creating another credential owner. Runtime-specific model
 admission remains separate. This extends FA-07's current ontology work.
 
-Proposed implementation boundary (2026-09-24; not landed): each trusted setup
+Implemented boundary (2026-09-24): each trusted setup
 producer atomically publishes one complete source record in the existing profile's
 `account-bindings` directory. Records carry the existing oracle identity and
 capability, provider metadata, explicit runtime/member uses, and an optional
@@ -1021,16 +1054,42 @@ both account and admin identity so a stale UI cannot target a replacement admin.
 The direct provider uses the same publication contract; backend descriptions
 remain capability-free model/runtime metadata.
 
-Permission review paused the production identity/reset-authority rewrite pending
-explicit operator approval. Preparatory publication/discovery code and a daemon
-restart regression are uncommitted drafts, not deployed or certified. Keep this
-slice separate from independently authorized cancellation conformance work.
-The draft is preserved in local Git stash
-`5e3145554e77402d23f8dc9debeafe881b4e241c`, named
-`RA03 account binding draft awaiting explicit approval`, not in the candidate
-working tree. Its incomplete setup conversion caused one full-suite setup test
-failure before isolation; do not treat that draft as validated or apply it without
-the pending approval.
+The operator approved completing this slice on 2026-09-24 and explicitly put
+direct-Fae compaction on hold.
+Logical account IDs use the declared provider, account authority and optional pool
+member, not the observer formula ID: separate runtimes can have separate observers
+of one account.
+Setup withdraws discovery authority before rebinding observers or administrators;
+failed setup leaves an unavailable source, not old reset controls.
+Consumers merge explicit runtime uses and select one read-only observer, while
+conflicting administrators refuse discovery rather than guessing ownership.
+The UI uses account identity for cards and an exact account/admin pair for actions.
+Independent adversarial reviews approved the publishers, discovery/watch/reset
+boundary, UI and tests.
+Validation passes: 745 hosted-agent tests (one skipped), 708 Floot tests, 54 UI
+tests, 61 chat component tests, hosted-agent and UI types, scoped lint and root docs.
+The changed Floot source and tests have no type errors; the whole Floot type suite
+still reports unrelated existing test errors.
+A real daemon restart regression with GC enabled preserves exact published
+capabilities after their old pet names are replaced or removed.
+This proves publication durability, not provider credential validity or live Tokyo
+acceptance; deployment is still pending.
+Direct-Fae oracle setup now requires `FLOOT_ACCOUNT_AUTHORITY` when an oracle is
+configured, and old inferred discovery names are no longer consumed.
+
+Follow-up: session `getAccount()` and its `accountStatus` tool now read current
+explicit account bindings, matching backend and optional subscription on the same
+use record.
+Automatic pools report configured candidates, not actual routing or past billing.
+Session usage is reported separately, without attributing it to a direct-provider
+rate card.
+Account reads use an already loaded agent for usage; otherwise usage is explicitly
+unavailable, rather than acquiring a backend just to answer a status query.
+Unknown publications mark discovery incomplete, and returned observations must be
+copy data: no nested observer or reset capabilities may reach the session.
+The factory's direct-provider oracle API is unchanged.
+There is no new durable state owner; each read observes the current session record
+and existing profile publication.
 
 ### RA-04 — Verify common turn-admission behavior
 

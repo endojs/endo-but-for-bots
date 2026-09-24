@@ -3,10 +3,11 @@
 import { E } from '@endo/eventual-send';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeLatestTopic } from '@endo/hosted-agent/latest-topic.js';
+import { accountResetKey } from './account-discovery.js';
 
 /**
  * What Floot tells a view about the accounts its backends spend: for each
- * backend that has an account oracle, the plan, the rate-limit windows with
+ * declared account identity that has an oracle, the plan, rate-limit windows with
  * how full they are and when they reset, credits, and banked resets.
  *
  * A view subscribes (`factory.watchAccounts()`) and is told the whole list
@@ -33,11 +34,12 @@ import { makeLatestTopic } from '@endo/hosted-agent/latest-topic.js';
 
 /**
  * @typedef {object} AccountView
- * @property {string} key `backendId`, or `backendId:subscriptionId`
- * @property {string} backendId
- * @property {string} [subscriptionId] when the backend holds several
+ * @property {string} accountId Explicit provider/authority/member identity
+ * @property {string} providerId
+ * @property {Array<{backendId: string, subscriptionId?: string}>} uses
+ * @property {string} [resetKey] Exact account/admin pair, never a label
  * @property {string} [label] the operator's name for that subscription
- * @property {string} title the backend's title
+ * @property {string} title the account's display title
  * @property {{ planId: string, title: string, state: string, source: string }} plan
  * @property {AccountWindowView[]} windows
  * @property {boolean} limitReached
@@ -55,7 +57,7 @@ const text = value =>
   value === null || value === undefined ? null : `${value}`;
 
 /**
- * @param {{ backendId: string, title: string, key?: string, subscriptionId?: string, label?: string }} backend
+ * @param {{ accountId: string, providerId: string, uses: Array<{backendId: string, subscriptionId?: string}>, title: string, adminId?: string, admin?: any, label?: string }} backend
  * @param {any} snapshot `{ plan, rateLimits, rateCard }` from an oracle
  * @param {any} [reset] the subscription admin's `getResetState()`, if any
  * @returns {AccountView}
@@ -65,14 +67,13 @@ export const projectAccount = (backend, snapshot, reset) => {
   const limits = snapshot?.rateLimits ?? {};
   const windows = Array.isArray(limits.windows) ? limits.windows : [];
   return harden({
-    key: backend.key ?? backend.backendId,
-    backendId: backend.backendId,
-    ...(backend.subscriptionId === undefined
+    accountId: backend.accountId,
+    providerId: backend.providerId,
+    uses: backend.uses,
+    ...(backend.label === undefined ? {} : { label: backend.label }),
+    ...(backend.admin === undefined
       ? {}
-      : {
-          subscriptionId: backend.subscriptionId,
-          label: backend.label ?? backend.subscriptionId,
-        }),
+      : { resetKey: accountResetKey(backend.accountId, backend.adminId) }),
     title: backend.title,
     plan: {
       planId: `${plan.planId ?? ''}`,
@@ -146,21 +147,20 @@ export const projectAccount = (backend, snapshot, reset) => {
 harden(projectAccount);
 
 /**
- * One account oracle to follow. `key` tells a backend's subscriptions apart;
- * a backend over one credential has none and is keyed by its id.
+ * One explicitly published account oracle to follow, independent of its uses.
  *
  * `admin` is the subscription's admin where the provider banks rate-limit
  * resets; it is asked for its state (which calls no provider) and, when an
  * operator says so, to redeem.
  *
- * @typedef {{ backendId: string, title: string, oracle: any, admin?: any, key?: string, subscriptionId?: string, label?: string }} OracleEntry
+ * @typedef {import('@endo/hosted-agent/account-bindings.js').AccountBinding & {sources: string[]}} OracleEntry
  */
 
 /**
  * @param {object} powers
  * @param {() => Promise<{ entries: OracleEntry[], unknown: string[] }>} powers.listOracles
- *   The account oracles bound now, and the backend ids that could not be
- *   looked up this time (whose followers are left alone). Asked again
+ *   The published account bindings and source names that could not be
+ *   validated (whose prior display, not capabilities, is retained). Asked again
  *   whenever a view subscribes: an adapter binds its oracle after Floot has
  *   started.
  * @param {(callback: () => void, ms: number) => unknown} [powers.setTimer]
@@ -208,6 +208,8 @@ export const makeAccountsWatch = ({
   let reconciling = Promise.resolve();
   /** @type {Map<string, { entry: OracleEntry, snapshot: any }>} */
   const held = new Map();
+  /** @type {Map<string, OracleEntry>} */
+  const bindings = new Map();
   /** @type {Map<string, any>} account key to its subscription admin */
   const admins = new Map();
   /** @type {Map<string, any>} account key to the admin's last reset state */
@@ -219,7 +221,7 @@ export const makeAccountsWatch = ({
       harden({
         type: 'accounts',
         accounts: [...accounts.values()].sort((a, b) =>
-          a.key.localeCompare(b.key),
+          a.accountId.localeCompare(b.accountId),
         ),
       }),
     );
@@ -259,7 +261,7 @@ export const makeAccountsWatch = ({
   /** @param {OracleEntry} entry */
   const follow = entry => {
     if (closed) return;
-    const key = entry.key ?? entry.backendId;
+    const key = entry.accountId;
     following.set(key, entry.oracle);
     const run = async () => {
       let reader;
@@ -294,8 +296,10 @@ export const makeAccountsWatch = ({
             return;
           }
           outages.delete(key);
-          held.set(key, { entry, snapshot });
-          accounts.set(key, projectAccount(entry, snapshot, resets.get(key)));
+          const current = bindings.get(key);
+          if (!current || current.oracle !== entry.oracle) return;
+          held.set(key, { entry: current, snapshot });
+          accounts.set(key, projectAccount(current, snapshot, resets.get(key)));
           publish();
           // A reading can settle a pending redeem (the credit reads redeemed).
           void readReset(key);
@@ -339,49 +343,70 @@ export const makeAccountsWatch = ({
     });
   };
 
+  const disableResets = () => {
+    admins.clear();
+    resets.clear();
+    for (const [key, entry] of bindings) {
+      const { admin: _admin, adminId: _adminId, ...display } = entry;
+      bindings.set(key, display);
+      const previous = held.get(key);
+      if (previous) {
+        held.set(key, { entry: display, snapshot: previous.snapshot });
+        accounts.set(key, projectAccount(display, previous.snapshot));
+      }
+    }
+    publish();
+  };
+
   const reconcile = () => {
     reconciling = reconciling
       .then(async () => {
         if (closed) return;
+        // No old UI key can spend while this discovery is unvalidated.
+        disableResets();
         const { entries, unknown } = await listOracles();
         if (closed) return;
-        const keyOf = (/** @type {OracleEntry} */ entry) =>
-          entry.key ?? entry.backendId;
-        const present = new Set(entries.map(keyOf));
-        // A backend that could not be looked up this time keeps what it had,
-        // every subscription of it: one failed lookup must not drop a working
-        // follower.
-        const kept = (/** @type {string} */ key) =>
+        const present = new Set(entries.map(entry => entry.accountId));
+        const kept = key =>
           present.has(key) ||
-          unknown.some(
-            backendId => key === backendId || key.startsWith(`${backendId}:`),
-          );
-        for (const key of [...following.keys()]) {
+          bindings.get(key)?.sources.some(source => unknown.includes(source));
+        for (const key of [...bindings.keys()]) {
+          if (!present.has(key)) following.delete(key);
           if (!kept(key)) {
             following.delete(key);
             accounts.delete(key);
-          }
-        }
-        for (const key of [...accounts.keys()]) {
-          if (!kept(key)) {
-            accounts.delete(key);
             held.delete(key);
-            admins.delete(key);
-            resets.delete(key);
+            bindings.delete(key);
+            outages.delete(key);
           }
         }
         for (const entry of entries) {
-          const key = keyOf(entry);
-          if (entry.admin === undefined) {
-            admins.delete(key);
+          const key = entry.accountId;
+          // An unreadable source might conflict with a known account. Keep
+          // useful display but withhold all reset authority until validated.
+          const { admin: _admin, adminId: _adminId, ...display } = entry;
+          /** @type {OracleEntry} */
+          const current = unknown.length ? display : entry;
+          const previous = bindings.get(key);
+          if (previous && previous.oracle !== entry.oracle) {
+            held.delete(key);
+            accounts.delete(key);
             resets.delete(key);
-          } else if (admins.get(key) !== entry.admin) {
-            admins.set(key, entry.admin);
+            outages.delete(key);
+          }
+          bindings.set(key, current);
+          const reading = held.get(key);
+          if (reading) {
+            held.set(key, { entry: current, snapshot: reading.snapshot });
+            accounts.set(key, projectAccount(current, reading.snapshot));
+          }
+          if (current.admin !== undefined) {
+            admins.set(key, current.admin);
             void readReset(key);
           }
           const outage = outages.get(key);
-          if (following.get(key) !== entry.oracle && !outage?.pending) {
-            follow(entry);
+          if (following.get(key) !== current.oracle && !outage?.pending) {
+            follow(current);
           }
         }
         for (const reader of readers) {
@@ -397,12 +422,35 @@ export const makeAccountsWatch = ({
         publish();
       })
       .catch(error => {
+        disableResets();
+        following.clear();
+        for (const reader of readers) {
+          void track(reader.close()).catch(closeError => {
+            log(
+              '[floot-factory] unvalidated account reader cleanup failed:',
+              closeError,
+            );
+          });
+        }
         log(
           '[floot-factory] could not list account oracles:',
           error instanceof Error ? error.message : String(error),
         );
       });
     return track(reconciling);
+  };
+
+  const resetTarget = resetKey => {
+    for (const [accountId, entry] of bindings) {
+      if (
+        entry.admin !== undefined &&
+        accountResetKey(accountId, entry.adminId) === resetKey &&
+        admins.get(accountId) === entry.admin
+      ) {
+        return { accountId, admin: entry.admin };
+      }
+    }
+    throw Error(`No banked reset can be redeemed for ${resetKey}`);
   };
 
   return harden({
@@ -440,15 +488,12 @@ export const makeAccountsWatch = ({
     redeemReset: admit(async (key, options = {}) => {
       await reconcile();
       assertOpen();
-      const admin = admins.get(key);
-      if (admin === undefined) {
-        throw Error(`No banked reset can be redeemed for ${key}`);
-      }
+      const { accountId, admin } = resetTarget(key);
       try {
         return await E(admin).consumeResetCredit(harden({ ...options }));
       } finally {
         // Settled, refused or unconfirmed: the views are told which.
-        await readReset(key);
+        await readReset(accountId);
       }
     }),
     /**
@@ -459,14 +504,11 @@ export const makeAccountsWatch = ({
     abandonReset: admit(async key => {
       await reconcile();
       assertOpen();
-      const admin = admins.get(key);
-      if (admin === undefined) {
-        throw Error(`No banked reset can be redeemed for ${key}`);
-      }
+      const { accountId, admin } = resetTarget(key);
       try {
         return await E(admin).abandonResetIntent();
       } finally {
-        await readReset(key);
+        await readReset(accountId);
       }
     }),
     close: async () => {
@@ -497,6 +539,7 @@ export const makeAccountsWatch = ({
       admins.clear();
       resets.clear();
       held.clear();
+      bindings.clear();
       accounts.clear();
     },
   });

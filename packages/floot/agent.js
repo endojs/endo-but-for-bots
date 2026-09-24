@@ -43,16 +43,14 @@ import {
   makeOpenRouterModelRead,
   modelsFromOpenRouterCatalog,
 } from '@endo/hosted-agent/openrouter-model-read.js';
-import {
-  addUsage,
-  priceableUsage,
-  projectUsage,
-} from '@endo/hosted-agent/token-usage.js';
+import { addUsage, projectUsage } from '@endo/hosted-agent/token-usage.js';
 
 import { createStreamingProvider } from './providers/index.js';
 import { makeFactoryOwnership } from './src/factory-ownership.js';
 import { projectJournalTurnHistory } from './src/journal-history.js';
 import { readContextTranscript } from './src/context-transcript.js';
+import { discoverAccounts } from './src/account-discovery.js';
+import { readSessionAccounts } from './src/session-account.js';
 import { assertRuntimeConfig } from './src/runtime-config.js';
 import {
   assertSessionIdentity,
@@ -70,7 +68,6 @@ import {
   PROVIDER_PROMPT_ENVIRONMENT,
   UNDECLARED_HOSTED_PROMPT_ENVIRONMENT,
   composePresetPrompt,
-  legacyPromptContext,
   normalizePromptContext,
 } from './src/system-prompt.js';
 import { makeEndoToolSet, makeFlootToolRegistry } from './src/tool-registry.js';
@@ -254,12 +251,9 @@ const FlootSessionInterface = M.interface('FlootSession', {
 
 // The prompts themselves are composed in src/system-prompt.js from a standard
 // base plus sections chosen by how a session is driven, where its model runs,
-// and its preset. The preset catalog also exposes a spoken provider-context
-// example; it is not used to reconstruct a session's captured prompt.
-const legacyPresetPrompt = presetId =>
-  composePresetPrompt({ presetId, context: legacyPromptContext(presetId) });
+// and its preset.
 
-// Catalog of session presets. Each preset pairs a system prompt with a set of
+// Catalog of session presets. Each preset declares a set of
 // objects to provision (idempotently) into the session guest's petstore the
 // first time the session's agent is built. Provisioned objects are referenced
 // ONLY by the session guest, so the daemon's GC reaps them (and their on-disk
@@ -269,7 +263,6 @@ const PRESETS = [
     id: 'general',
     title: 'General assistant',
     description: 'A blank session with no project workspace.',
-    systemPrompt: legacyPresetPrompt('general'),
     objects: [],
   },
   {
@@ -277,7 +270,6 @@ const PRESETS = [
     title: 'New project',
     description:
       'Start a project with a writable, git-backed workspace ready to populate.',
-    systemPrompt: legacyPresetPrompt('new-project'),
     objects: [{ kind: 'git-workspace', petName: 'workspace' }],
   },
   {
@@ -285,7 +277,6 @@ const PRESETS = [
     title: 'Full Endo control',
     description:
       'Full control of the Endo daemon via an "endo" host reference. High access — handle with care.',
-    systemPrompt: legacyPresetPrompt('full-control'),
     objects: [
       { kind: 'host-powers', petName: 'endo' },
       { kind: 'code-mount', petName: 'endo-src', required: false },
@@ -296,7 +287,6 @@ const PRESETS = [
     title: 'Machine admin (NixOS)',
     description:
       "Full Endo control PLUS proposing this host's NixOS configuration changes and Endo releases through operator-approved deploy workflows. Root-equivalent machine control — handle with extreme care.",
-    systemPrompt: legacyPresetPrompt('machine-admin'),
     objects: [
       { kind: 'host-powers', petName: 'endo' },
       { kind: 'code-mount', petName: 'endo-src', required: false },
@@ -483,15 +473,15 @@ const provisionPresetObjects = async (
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Absent for a
  *   session at the delegation bound, which withholds the subagent tools.
- * @param {any} [options.accountOracle] - A read-only `HostedAccount`. Absent
- *   when the deployment has provisioned no oracle, which withholds
- *   `accountStatus`.
- * @param {string} [options.modelId] - The model this session runs, used to
- *   price its usage.
+ * @param {(refresh?: boolean) => Promise<any>} [options.readAccounts] - Current
+ *   explicitly published configured accounts; no reset authority.
+ * @param {string} [options.modelId] - The model this session runs.
  * @param {string} [options.backendId] - Durable backend selection.
  * @param {string} [options.nativeContextFormat] - Required hosted restoration format, recorded before dispatch.
  * @param {string} [options.reasoningEffort] - Pinned reasoning selection.
- * @param {any} [options.journalPowers] - Factory-private journal storage. Standalone callers that omit this retain cooperative guest storage.
+ * @param {any} options.journalPowers - Explicit journal storage. The caller must
+ *   supply private storage not exposed to the session guest. Capability identity
+ *   alone does not establish that confinement.
  * @param {number} [options.maxToolRounds] - Provider calls one turn may make
  *   before the tool-step fallback. Defaults to `DEFAULT_MAX_TOOL_ROUNDS`.
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
@@ -533,7 +523,7 @@ export const makeStreamingAgent = async (
   systemPrompt,
   {
     spawner,
-    accountOracle,
+    readAccounts,
     modelId,
     backendId,
     nativeContextFormat,
@@ -541,11 +531,14 @@ export const makeStreamingAgent = async (
     timers,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
     extraTools,
-    journalPowers = powers,
+    journalPowers,
     onChange,
-  } = {},
+  } = { journalPowers: undefined },
 ) => {
   assertRuntimeConfig(runtime);
+  if (journalPowers === undefined || journalPowers === null) {
+    throw Error('Explicit journalPowers storage is required');
+  }
   const runtimeKind = runtime.kind;
   const provideProvider =
     runtime.kind === 'provider' ? runtime.provideProvider : undefined;
@@ -742,13 +735,13 @@ export const makeStreamingAgent = async (
     settledMail,
     ...(extraTools ? { extraTools } : {}),
     ...(spawner ? { spawner, delegations } : {}),
-    ...(accountOracle
+    ...(readAccounts
       ? {
-          accountOracle,
-          // The oracle prices what this session actually spent, so the tool
-          // reads the same totals the UI shows rather than a second tally.
-          getUsage: () => getUsage(),
-          getModelId: () => modelId || '',
+          readAccounts: async refresh =>
+            harden({
+              ...(await readAccounts(refresh)),
+              usage: await getUsage(),
+            }),
         }
       : {}),
   });
@@ -1898,7 +1891,7 @@ export const makeStreamingAgent = async (
   const getJournalStatus = async () =>
     harden({
       ...(await turnJournal.status()),
-      storage: journalPowers === powers ? 'legacy' : 'private',
+      storage: 'explicit',
     });
   const resolveTurn = (turnId, note) =>
     turnChain.then(async () => {
@@ -2610,111 +2603,10 @@ export const make = async (
     }
     return accountOracleP;
   };
-
-  // What the accounts behind the backends have left, for a view to subscribe
-  // to. Floot's own oracle describes its provider credential; each hosted
-  // adapter binds its subscription's oracle beside its backend, as
-  // `<backend id>-account`. They are looked up when a view subscribes, not
-  // captured: the adapters bind theirs after this factory has started.
-  const listAccountOracles = async () => {
-    /** @type {Array<{ backendId: string, key: string, title: string, subscriptionId?: string, label?: string, oracle: any }>} */
-    const entries = [];
-    /** @type {string[]} */
-    const unknown = [];
-    try {
-      const own = await getAccountOracle();
-      if (own) {
-        entries.push({
-          backendId: 'provider',
-          key: 'provider',
-          title: 'Fae',
-          oracle: own,
-        });
-      }
-    } catch {
-      unknown.push('provider');
-    }
-    // By pet name and one at a time, not through `getHostedBackends()`, which
-    // fails as a whole when any one backend cannot describe itself. A backend
-    // bound as `<id>-backend` has its account bound as `<id>-account`, or,
-    // when it holds several subscriptions, one each as
-    // `<id>-account-<subscription>`.
-    for (const backendName of [...new Set(configuredBackendNames)]) {
-      const backendId = backendName.replace(/-backend$/, '');
-      try {
-        if (await E(powers).has(backendName)) {
-          let title = backendId;
-          /** @type {Array<{ id: string, label: string }>} */
-          let subscriptions = [];
-          try {
-            const described = assertHostedBackendDescriptor(
-              await E(await E(powers).lookup(backendName)).describe(),
-            );
-            title = described.title;
-            subscriptions = described.subscriptions || [];
-          } catch {
-            // Without a description there is no telling which subscriptions
-            // it has: whatever is followed for this backend stays, and the
-            // one-credential binding is still tried.
-            unknown.push(backendId);
-          }
-          const accounts =
-            subscriptions.length > 0
-              ? subscriptions.map(subscription => ({
-                  name: `${backendId}-account-${subscription.id}`,
-                  adminName: `${backendId}-admin-${subscription.id}`,
-                  key: `${backendId}:${subscription.id}`,
-                  subscriptionId: subscription.id,
-                  label: subscription.label,
-                }))
-              : [
-                  {
-                    name: `${backendId}-account`,
-                    adminName: `${backendId}-admin`,
-                    key: backendId,
-                    subscriptionId: undefined,
-                    label: undefined,
-                  },
-                ];
-          for (const account of accounts) {
-            if (await E(powers).has(account.name)) {
-              // Where the provider banks rate-limit resets, setup binds the
-              // subscription's admin beside its account: `-admin` for
-              // `-account`.
-              /** @type {any} */
-              let admin;
-              try {
-                if (await E(powers).has(account.adminName)) {
-                  admin = await E(powers).lookup(account.adminName);
-                }
-              } catch {
-                // Status does not wait on it; there is then no redeem button.
-              }
-              entries.push({
-                backendId,
-                key: account.key,
-                title,
-                ...(account.subscriptionId === undefined
-                  ? {}
-                  : {
-                      subscriptionId: account.subscriptionId,
-                      label: account.label,
-                    }),
-
-                ...(admin === undefined ? {} : { admin }),
-                oracle: await E(powers).lookup(account.name),
-              });
-            }
-          }
-        }
-      } catch {
-        // Not resolvable this time; whatever is followed for it stays.
-        unknown.push(backendId);
-      }
-    }
-    return { entries, unknown };
-  };
-  const accountsWatch = makeAccountsWatch({ listOracles: listAccountOracles });
+  // Setup publishes exact oracle/admin identities independently of adapters.
+  const accountsWatch = makeAccountsWatch({
+    listOracles: () => discoverAccounts(powers),
+  });
 
   // The shared static asset server, an operator-endowed capability the hosted
   // setup binds into this factory's profile so a new-project session can
@@ -4061,7 +3953,6 @@ export const make = async (
         // spawner is rebuilt on every revival rather than persisted, so the
         // durable record of the tree is the session registry alone.
         const sessionDepth = Number(entry?.subagentDepth) || 0;
-        const oracle = await getAccountOracle();
         const agent = await makeStreamingAgent(
           sessionGuest,
           undefined,
@@ -4109,9 +4000,10 @@ export const make = async (
             ...(sessionDepth < maxSubagentDepth
               ? { spawner: makeSessionSpawner(id, sessionDepth + 1) }
               : {}),
-            ...(oracle
-              ? { accountOracle: oracle, modelId: await sessionModelId(entry) }
-              : {}),
+            readAccounts: async refresh => {
+              const current = await assertSessionReady(id);
+              return readSessionAccounts(powers, current, refresh);
+            },
           }),
         );
         constructedAgent = agent;
@@ -4531,43 +4423,28 @@ export const make = async (
           return agent.getUsage();
         },
         /**
-         * This session's share of the account: the deployment-wide plan and
-         * rate limits, plus what this conversation has spent at the current
-         * list price. Reported per session because that is the granularity a
-         * user asks about ("what is this chat costing?").
+         * Explicit configured accounts, not attribution of past usage.
+         * Session totals have no per-account billing provenance.
          *
          * @param {boolean} [refresh]
          */
         async getAccount(refresh) {
           const entry = await assertSessionReady(id);
-          const oracle = await getAccountOracle();
-          if (!oracle) {
-            return harden({
-              available: false,
-              reason: `No account oracle is bound to "${accountOracleName}".`,
-            });
-          }
-          if (refresh) await E(oracle).refresh();
-          const agent = await getAgent(id, { observeOnly: true });
-          const [plan, rateLimits, rateCard, usage] = await Promise.all([
-            E(oracle).getPlan(),
-            E(oracle).getRateLimits(),
-            E(oracle).getRateCard(),
-            agent.getUsage(),
-          ]);
-          const modelId = await sessionModelId(entry);
-          const cost = modelId
-            ? await E(oracle).estimateCost(
-                harden({ modelId, ...priceableUsage(usage) }),
-              )
+          const accounts = await readSessionAccounts(powers, entry, refresh);
+          await assertSessionReady(id);
+          const existingAgent = agents.get(id);
+          const usage = existingAgent
+            ? await (await existingAgent).getUsage()
             : undefined;
+          await assertSessionReady(id);
           return harden({
-            available: true,
-            plan,
-            rateLimits,
-            rateCard,
-            usage,
-            ...(cost ? { cost } : {}),
+            ...accounts,
+            ...(usage === undefined
+              ? {
+                  usageUnavailable:
+                    'Session is not open; account inspection does not open an agent or acquire a backend.',
+                }
+              : { usage }),
           });
         },
         help(methodName) {
@@ -4609,7 +4486,7 @@ export const make = async (
             return 'getJournalStatus() — Journal event count, retained and archived turn counts, and storage isolation profile. Private storage excludes ordinary guests, not administrators with factory-host authority.';
           if (methodName === 'resolveTurn')
             return 'resolveTurn(turnId, note) — On an idle session, acknowledge an unknown outcome after independently checking external effects. Preserves evidence and never replays work.';
-          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens, reasoningOutputTokens, turns, incompleteTurns, context? } — the five counts are disjoint (a token is in exactly one) and include turns that failed or were stopped, which `incompleteTurns` counts, while `turns` counts completed ones; `context` is { usedTokens, windowTokens }, what the last model request put in the model’s window and the window’s size (0 when the backend does not say), also published by watch() as "usage"; getAccount(refresh?) returns the plan, rate limits, and this session’s estimated cost; getInfo() returns { id, title, createdAt }.';
+          return 'Floot session: startTurn(input) returns a FlootTurn — getStatus(), watch() for a disposable view stream, speak(ttsServer, options?) for a spoken view (the audio stream a TtsServer synthesizes from the reply; call again to restart with other options), cancel(), whenFinished() — that runs on the daemon whether or not anyone is watching; getCurrentTurn() recovers { input, turn, history } or null; one UI turn may be outstanding; watch() subscribes to the session’s state (see help("watch")) — prefer it to calling getHistory() on a timer; enqueue(text) queues a message durably and runs it in turn (see help("enqueue")), with listPending(), editPending(), cancelPending() and sendPending(); getHistory() replays the conversation; getUsage() returns cumulative { inputTokens, outputTokens, cachedInputTokens, cacheWriteInputTokens, reasoningOutputTokens, turns, incompleteTurns, context? } — the five counts are disjoint (a token is in exactly one) and include turns that failed or were stopped, which `incompleteTurns` counts, while `turns` counts completed ones; `context` is { usedTokens, windowTokens }, what the last model request put in the model’s window and the window’s size (0 when the backend does not say), also published by watch() as "usage"; getAccount(refresh?) returns configured accounts and quotas, discovery completeness, and optional unattributed usage for an already-open session (otherwise usageUnavailable); it does not open a backend, identify the payer, or estimate aggregate cost; getInfo() returns { id, title, createdAt }.';
         },
       });
       facets.set(id, facet);

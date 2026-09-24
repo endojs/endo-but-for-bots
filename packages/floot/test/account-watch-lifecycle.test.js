@@ -5,7 +5,14 @@ import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { makePromiseKit } from './_promise-kit.js';
 import { makeAccountsWatch } from '../src/account-watch.js';
 
-const entry = oracle => ({ backendId: 'test', title: 'Test', oracle });
+const entry = oracle => ({
+  accountId: 'test',
+  providerId: 'test',
+  uses: [{ backendId: 'test' }],
+  sources: ['test'],
+  title: 'Test',
+  oracle,
+});
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
 test('historical stream failure does not replace reader cleanup acknowledgement', async t => {
@@ -161,11 +168,11 @@ test('close drains an admitted reset and preserves its result', async t => {
   });
   const watch = makeAccountsWatch({
     listOracles: async () => ({
-      entries: [{ ...entry(oracle), admin }],
+      entries: [{ ...entry(oracle), admin, adminId: 'admin-1' }],
       unknown: [],
     }),
   });
-  const resetting = watch.redeemReset('test');
+  const resetting = watch.redeemReset(JSON.stringify(['test', 'admin-1']));
   await entered.promise;
   let done = false;
   const closing = watch.close().then(() => {
@@ -173,7 +180,9 @@ test('close drains an admitted reset and preserves its result', async t => {
   });
   await tick();
   t.false(done);
-  t.throws(() => watch.redeemReset('test'), { message: /closed/ });
+  t.throws(() => watch.redeemReset(JSON.stringify(['test', 'admin-1'])), {
+    message: /closed/,
+  });
   gate.resolve(undefined);
   t.is(await resetting, 'redeemed');
   await closing;

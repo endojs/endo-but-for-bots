@@ -11,11 +11,6 @@
  * checkout and is re-minted on every setup run, and durable state must not be
  * re-created — or lose its markers — each time it is.
  *
- * `locateSessionDirectory` is the one method the shared storage does not
- * publish. Codex reads a thread checkpoint before it provisions anything, and
- * `prepareSessionDirectory` would create the directory to answer that, leaving
- * a state directory behind for a session that never started.
- *
  * @module
  */
 
@@ -29,7 +24,6 @@ export const CodexStateProviderInterface = M.interface('CodexStateProvider', {
   prepareSessionDirectory: M.call(M.string()).returns(M.promise()),
   prepareCliDirectory: M.call(M.string()).returns(M.promise()),
   removeSessionDirectory: M.call(M.string()).returns(M.promise()),
-  locateSessionDirectory: M.call(M.string()).returns(M.promise()),
   help: M.call().returns(M.string()),
 });
 
@@ -78,11 +72,6 @@ export const makeCodexStateProvider = ({ stateRoot }) => {
       await cli.assertOwnedDirectory(sessionId);
       await cli.removeSessionDirectory(sessionId);
       await records.removeSessionDirectory(sessionId);
-    },
-    /** @param {string} sessionId */
-    locateSessionDirectory: async sessionId => {
-      const directory = await records.assertOwnedDirectory(sessionId);
-      return directory === undefined ? harden({}) : harden({ directory });
     },
     help: () =>
       'Owns separate host records and guest-writable CLI home directories for each Codex session. Only the CLI home may enter the sandbox. Removal refuses unowned directories and requires the caller to have stopped native work.',
