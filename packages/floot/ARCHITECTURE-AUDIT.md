@@ -2249,6 +2249,16 @@ of 2026-09-21 (generation 157) after the retirement below.
 
 ## FA-04 — Delete obsolete OpenCode machinery, not merely its duplication
 
+Current-state dead-code deletion (2026-09-24, local): removed OpenCode's exported
+phase-one `container-mount-bridge.js` refusal facade and obsolete design inventory
+row. No tracked production/test importer, setup producer, or local host-config
+reference remains. The current shared backend factory already refuses unsupported
+mount attachments; no supported mounting behavior was removed. This does not
+establish complete live formula reachability. Retire obsolete externally minted
+instances deliberately before deployment; preserve Secrets and workspace roots.
+All 302 OpenCode package tests pass; independent source review approves the
+deletion. No deployment or live formula inventory is claimed.
+
 ### Prompt admission after pre-execution cancellation — 2026-09-24
 
 Claude had the same admission gap across asynchronous provisioning and transcript

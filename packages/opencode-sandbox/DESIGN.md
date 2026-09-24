@@ -624,7 +624,6 @@ New package `packages/opencode-sandbox/`.
 | `setup-hosted.js` | Session dirs, credential provisioning, mint `opencode-sandbox/backend`, bind at `floot/controller-profile/opencode-backend` | `claude-sandbox/setup-hosted.js:223-256`; Tokyo `provideManagedCredentials` |
 | `src/opencode-backend-factory.js` | `HostedBackendFactoryInterface`; lifecycle ordering, live ownership, teardown barriers | `claude-backend-factory.js` |
 | `src/opencode-backend-module.js` | Records each session's plan and exact dependencies with the daemon session owner (`provideSessionOwner`) and starts the native controller; no per-session formulas | replaces the deleted per-session provisioner |
-| `src/container-mount-bridge.js` | `provideContainerMountBridge`/`release…` (refused in phase 1) | `claude-sandbox/src/container-mount-bridge.js` |
 | `src/opencode-session-plan.js`, `src/opencode-session-storage.js` | OpenCode's field list over the shared primitives in `@endo/hosted-agent/session-plan.js`; the storage owner is `@endo/hosted-agent/session-storage.js` over that parser, bound to `<root>/<sandboxSessionId>` | new; the client-formula creation module is deleted |
 | `src/opencode-native-controller.js` | Activate the recorded plan, acquire scopes, project the workspace, configure MCP and the slice, and construct the protocol client under the shared supervisor | `@endo/hosted-agent/session-supervisor.js` |
 | `src/opencode-client.js` | Spawn/command the bridge; session-id handoff; pending-call count; terminal barrier | `codex-client.js` + `claude-client.js` |

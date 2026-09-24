@@ -57,6 +57,14 @@ Do not add another broad framework to satisfy a line-count target.
 
 Concrete candidates:
 
+- Removed locally: OpenCode's unused `src/container-mount-bridge.js` phase-one
+  refusal facade and package export. Current setup neither imports nor mints it,
+  and the shared backend factory already rejects unsupported container mounts.
+  This deletes an obsolete entrypoint, not functional mount support. Repository
+  and local host-source checks do not prove absence of every external persisted
+  formula; obsolete instances require deliberate retirement before activation.
+  All 302 OpenCode package tests pass; independent source review approves the
+  deletion. No deployment or live formula inventory is claimed.
 - Generic sandbox native-profile machinery remains in `sandbox/src/factory.js:579`
   and `sandbox/src/drivers/podman.js:566`. Establish public and retained-formula
   obligations before deletion; no compatibility framework is required.
