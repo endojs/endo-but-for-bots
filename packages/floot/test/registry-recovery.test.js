@@ -18,6 +18,7 @@ const entries = harden([
     executionState: 'stopped',
     backendId: 'provider',
     modelId: '',
+    systemPrompt: 'Captured prompt.',
   },
 ]);
 const snapshot = (sessions = entries, sequence = 0n) =>
@@ -67,6 +68,56 @@ test('fresh registry is empty without creating a snapshot', async t => {
   const store = new Map();
   t.deepEqual(await E(make(makeHost(store))).listSessions(), []);
   t.deepEqual([...store.keys()], []);
+});
+
+for (const systemPrompt of [undefined, '', '  ', 7]) {
+  test(`registry refuses missing or invalid captured prompt before acquisition: ${JSON.stringify(systemPrompt)}`, async t => {
+    const invalid = { ...entries[0], systemPrompt };
+    const store = new Map([[journalName(0n), snapshot(harden([invalid]))]]);
+    const before = [...store.entries()];
+    const reads = [];
+    const host = makeHost(store, {
+      beforeLookup: name => reads.push(name),
+      beforeStore: () => t.fail('Unexpected prompt reconstruction'),
+      beforeRemove: () => t.fail('Unexpected retirement'),
+    });
+    await t.throwsAsync(E(make(host)).listSessions(), {
+      message: /lacks a captured system prompt/,
+    });
+    t.deepEqual([...store.entries()], before);
+    t.deepEqual(reads, [journalName(0n)]);
+  });
+}
+
+test('restoration preserves captured admin, custom and delegated prompts without rewriting the registry', async t => {
+  const saved = harden([
+    {
+      ...entries[0],
+      presetId: 'machine-admin',
+      systemPrompt: 'Original admin instructions.',
+    },
+    {
+      ...entries[0],
+      id: 'custom',
+      presetId: 'machine-admin',
+      systemPrompt: 'Operator custom instructions.',
+    },
+    {
+      ...entries[0],
+      id: 'child',
+      presetId: 'machine-admin',
+      parentSessionId: 'saved',
+      systemPrompt: 'Parent-delegated instructions.',
+    },
+  ]);
+  const store = new Map([[journalName(0n), snapshot(saved)]]);
+  const before = [...store.entries()];
+  const host = makeHost(store, {
+    beforeStore: () => t.fail('Unexpected prompt migration'),
+    beforeRemove: () => t.fail('Unexpected retirement'),
+  });
+  t.is((await E(make(host)).listSessions()).length, 3);
+  t.deepEqual([...store.entries()], before);
 });
 
 for (const identity of [

@@ -250,13 +250,11 @@ export const main = async agent => {
       'FLOOT_MODEL must be an organization-qualified OpenRouter model ID.',
     );
   }
-  const systemPrompt = env('FLOOT_SYSTEM_PROMPT');
   const codePath = resolveCodePath();
   // The factory reads its per-deployment knobs from the caplet env. Optional
   // ones are forwarded only when set, so the factory's defaults apply
   // otherwise and a bad value is rejected where the factory parses it.
   const factoryEnv = harden({
-    FLOOT_SYSTEM_PROMPT: systemPrompt,
     FLOOT_CODE_PATH: codePath,
     ...(env('FLOOT_MAX_TOOL_ROUNDS')
       ? { FLOOT_MAX_TOOL_ROUNDS: env('FLOOT_MAX_TOOL_ROUNDS') }

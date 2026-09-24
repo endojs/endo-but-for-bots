@@ -198,6 +198,7 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
           id: 'one',
           title: 'One',
           createdAt: 1,
+          systemPrompt: 'Captured fixture prompt.',
           presetId: 'general',
           lifecycle: 'ready',
           backendId: 'test',

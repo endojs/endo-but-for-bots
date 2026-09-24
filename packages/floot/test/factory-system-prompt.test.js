@@ -325,6 +325,22 @@ test('an operator prompt replaces the preset’s and is not recomposed', async t
   t.is(await world.promptOf(session), 'Be a poet.');
 });
 
+test('invalid custom prompts cannot publish an unrestorable session', async t => {
+  t.timeout(10_000);
+  const world = makeWorld({ promptEnvironment: sandboxed });
+  t.teardown(world.close);
+  const before = [...world.hostStore.entries()];
+  for (const systemPrompt of ['', '  \n\t', null, false, 7, {}]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      E(world.factory).createSession({ ...hosted, systemPrompt }),
+      { message: /systemPrompt must be a nonblank string/ },
+    );
+  }
+  t.deepEqual(await E(world.factory).listSessions(), []);
+  t.deepEqual([...world.hostStore.entries()], before);
+});
+
 test('an explicit spoken record retains the setup session voice rules', async t => {
   t.timeout(10_000);
   const world = makeWorld({ promptEnvironment: sandboxed });

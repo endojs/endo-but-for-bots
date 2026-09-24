@@ -85,8 +85,19 @@ Concrete candidates:
   vocabulary. All 321 Codex tests pass, including 99 focused client/tool tests;
   scoped lint passes with 13 warnings. Independent source review approves. No
   durable state or owner changes, and no deployment, are claimed.
-  Current-source follow-up: preset-prompt version migration is not yet removed
-  by this record.
+  Removed preset-prompt version migration and missing-prompt reconstruction.
+  Registry recovery requires the captured nonblank prompt and does not rewrite
+  it from today's preset, creation metadata or deployment environment. Custom
+  and delegated prompts remain exact snapshots. The unused recovery-only
+  `FLOOT_SYSTEM_PROMPT` setup setting and migration markers are removed. Preset
+  catalog examples remain descriptive, not a recovery source. Creation rejects
+  blank custom prompts before registry work, preventing a new session from
+  violating the recovery contract. Full Floot tests pass (677 with the separate
+  cache cleanup); scoped lint has no errors. Independent review caught and
+  prompted correction of the initial creation/recovery mismatch.
+  The test-inclusive typecheck reports 99 fixture errors, none in changed
+  production source or the new registry regressions; it is not a green gate.
+  No deployment is claimed.
 - Removed locally: OpenCode's unused `src/container-mount-bridge.js` phase-one
   refusal facade and package export. Current setup neither imports nor mints it,
   and the shared backend factory already rejects unsupported container mounts.
@@ -118,6 +129,12 @@ Concrete candidates:
 
 ### RA-02 — Finish the bounded-context requirement
 
+Operator priority clarification (2026-09-24): defer storage scaling and an
+unresolved-evidence admission budget until actual pressure warrants them; the
+system is still experimental. Preserve the limitations below, but do not add
+inference refusals or a paged-evidence storage redesign as speculative scaling.
+This does not establish bounded memory or resolve model-context compaction.
+
 `floot/src/context-transcript.js:41` accumulates active and exception groups;
 lines 75–129 reconstruct and flatten them. Its own read-view comment explicitly
 states that archive I/O and active output still grow with history. Checkpoints
@@ -129,9 +146,19 @@ restoration from a supplied checkpoint is not proof of capturing native changes.
 
 There is a second bound to address: `turn-journal.js:451` deliberately excludes
 unresolved outcomes from archival. Repeated unresolved turns can exceed the
-settled-turn window, despite the module header's unconditional bounded-memory
-claim. Preserve that evidence; correct the claim and provide bounded storage/read
-access rather than deleting uncertainty to meet a numerical limit.
+settled-turn window. The module header's earlier unconditional bounded-memory
+claim is now corrected. Preserve that evidence; storage/read redesign is
+deferred rather than deleting uncertainty to meet a numerical limit.
+
+The journal also retains every event/content/archive name in a lifetime Set.
+Its private storage wrapper separately retained a copy of all factory host names
+per open session. The latter duplicate cache is now removed locally: serialized
+scoped existence checks enforce immutability, while explicit listings fetch and
+filter current names. The same owner, namespace and failed-write poison remain;
+no schema or inference policy changes. Independent review approves; 21 focused
+tests and 676 full Floot tests pass, scoped lint has no errors (nine warnings).
+Transient full listings, the journal's own name Set and the daemon's pet-name
+index remain; this is simplification, not a claim of globally bounded memory.
 
 This is the existing FA-01/FA-02 requirement, not a new historical-audit task.
 Define the context/compaction policy and prove bounded assembly on long sessions,

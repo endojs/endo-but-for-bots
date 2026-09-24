@@ -254,9 +254,8 @@ const FlootSessionInterface = M.interface('FlootSession', {
 
 // The prompts themselves are composed in src/system-prompt.js from a standard
 // base plus sections chosen by how a session is driven, where its model runs,
-// and its preset. What this file keeps is each preset's prompt as sessions
-// recorded before that composition existed ran it (spoken, on the provider
-// API): the fallback for a registry entry that carries no prompt of its own.
+// and its preset. The preset catalog also exposes a spoken provider-context
+// example; it is not used to reconstruct a session's captured prompt.
 const legacyPresetPrompt = presetId =>
   composePresetPrompt({ presetId, context: legacyPromptContext(presetId) });
 
@@ -294,16 +293,6 @@ const PRESETS = [
   },
   {
     id: 'machine-admin',
-    // Unlike ordinary persona edits, deploy-authority changes must reach
-    // existing admin sessions: an older prompt would keep driving the raw
-    // root-equivalent caplet, or name recipes this tree does not implement.
-    // Bump only for a deliberate, reviewed migration; refreshPresetEntry
-    // snapshots the new text into each matching registry entry exactly once.
-    // v1 was the first workflow-routed prompt, on the deployment this preset
-    // was ported from; v2 is this tree's re-derivation (segment paths and
-    // `entry()` tokens, `sleep(ms)` in exec, run re-reach through the deploy
-    // connection rather than the workflow service).
-    promptVersion: 2,
     title: 'Machine admin (NixOS)',
     description:
       "Full Endo control PLUS proposing this host's NixOS configuration changes and Endo releases through operator-approved deploy workflows. Root-equivalent machine control — handle with extreme care.",
@@ -341,46 +330,6 @@ export const getPreset = id =>
     PRESETS.find(p => p.id === DEFAULT_PRESET_ID)
   );
 harden(getPreset);
-
-/**
- * Apply an explicitly versioned preset-prompt migration to one session
- * registry entry. Ordinary preset text remains snapshotted forever; only a
- * preset carrying a newer `promptVersion` opts into changing live sessions,
- * and only sessions that run the preset's own prompt: a session whose
- * operator supplied a custom prompt keeps it, and a delegated session keeps
- * the composition its parent wrote (the parent's part is not stored on its
- * own, so it could not be recomposed).
- *
- * @param {{ presetId?: string, systemPrompt?: string, presetPromptVersion?: number, parentSessionId?: string, customPrompt?: boolean } & Record<string, any>} entry
- * @returns {typeof entry}
- */
-export const refreshPresetEntry = entry => {
-  const preset = getPreset(entry.presetId || DEFAULT_PRESET_ID);
-  const promptVersion =
-    'promptVersion' in preset ? preset.promptVersion : undefined;
-  if (
-    promptVersion === undefined ||
-    (entry.presetPromptVersion || 0) >= promptVersion ||
-    entry.parentSessionId !== undefined ||
-    entry.customPrompt === true
-  ) {
-    return entry;
-  }
-  // Compose the new text for the place and the driver this session was
-  // created for. An entry that recorded neither predates contexts, and ran
-  // the one prompt every session of its preset ran.
-  return harden({
-    ...entry,
-    systemPrompt: entry.promptContext
-      ? composePresetPrompt({
-          presetId: preset.id,
-          context: entry.promptContext,
-        })
-      : preset.systemPrompt,
-    presetPromptVersion: promptVersion,
-  });
-};
-harden(refreshPresetEntry);
 
 // The models selectable for a new session are what each backend's accounts
 // list now, read from the provider: the direct provider's under Floot's own
@@ -2224,7 +2173,6 @@ export const make = async (
     makeExo(name, iface, ownership.methods(methods));
   /** @type {any} */
   const powers = hostPowers;
-  const systemPrompt = env?.FLOOT_SYSTEM_PROMPT || undefined;
   // Absolute host path to the Endo codebase, mounted read-only into full-control
   // sessions (see the `code-mount` preset object). Resolved by the setup script
   // and passed through env; empty when the daemon host has no source on disk.
@@ -3225,7 +3173,7 @@ export const make = async (
 
   // In-memory session registry, mirrored to the factory's petstore. Loaded
   // lazily so make() never awaits.
-  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt?: string, presetPromptVersion?: number, customPrompt?: boolean, backendId: string, modelId: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
+  /** @type {Array<{ id: string, title: string, createdAt: number, presetId?: string, systemPrompt: string, backendId: string, modelId: string, reasoningEffort?: string, subscription?: string, lifecycle?: string, executionState?: string, publication?: { id: string, url?: string, pending?: boolean } }> | undefined} */
   let registry;
   let registryLoadP;
   let registrySequence = 0n;
@@ -3254,7 +3202,17 @@ export const make = async (
           ) {
             throw Error('Floot lifecycle registry journal is corrupt');
           }
-          for (const entry of stored.sessions) assertSessionIdentity(entry);
+          for (const entry of stored.sessions) {
+            assertSessionIdentity(entry);
+            if (
+              typeof entry.systemPrompt !== 'string' ||
+              entry.systemPrompt.trim() === ''
+            ) {
+              throw Error(
+                'Floot session lacks a captured system prompt; retire legacy sessions with the previous release',
+              );
+            }
+          }
           registry = [...stored.sessions];
           registrySequence = stored.sequence + 1n;
         } else if (
@@ -3269,20 +3227,6 @@ export const make = async (
           );
         } else {
           registry = [];
-        }
-        // A versioned preset-prompt migration (refreshPresetEntry) lands
-        // here, before any session agent is rebuilt, and persists at once,
-        // so this release and every later incarnation agree on the exact
-        // prompt snapshot each session runs.
-        const loaded = registry;
-        const refreshed = loaded.map(refreshPresetEntry);
-        if (refreshed.some((entry, index) => entry !== loaded[index])) {
-          registry = refreshed;
-          // A failed write is already logged by saveRegistry and must not
-          // fail the load (which would leave every inbox unrevived this
-          // boot): the refreshed entries are in memory, the next lifecycle
-          // save persists them, and a crash before that re-derives them.
-          await saveRegistry().catch(() => undefined);
         }
         return registry;
       })().catch(error => {
@@ -3924,8 +3868,7 @@ export const make = async (
           (entry?.executionState && entry.executionState !== 'running');
         if (suspended && !observeOnly) assertSessionAdmission(id);
         const preset = getPreset(entry?.presetId || DEFAULT_PRESET_ID);
-        const sessionPrompt =
-          entry?.systemPrompt || systemPrompt || preset.systemPrompt;
+        const sessionPrompt = entry.systemPrompt;
         await provisionPresetObjects(
           host,
           agentName,
@@ -4882,6 +4825,13 @@ export const make = async (
    * @returns {Promise<string>} the new session id
    */
   const provisionSession = async options => {
+    if (
+      options.systemPrompt !== undefined &&
+      (typeof options.systemPrompt !== 'string' ||
+        options.systemPrompt.trim() === '')
+    ) {
+      throw Error('createSession systemPrompt must be a nonblank string');
+    }
     if (Object.hasOwn(options, 'model')) {
       throw Error(
         'createSession option "model" is unsupported; use backendId and modelId',
@@ -5032,26 +4982,17 @@ export const make = async (
       requestedPrompt: options.systemPrompt,
       delegated,
     });
+    if (typeof sessionPrompt !== 'string' || sessionPrompt.trim() === '') {
+      throw Error('Floot session requires a captured nonblank system prompt');
+    }
     const entry = harden({
       id,
       title: options.title || 'New chat',
       createdAt: Date.now(),
       presetId: preset.id,
       systemPrompt: sessionPrompt,
-      // What the prompt above was composed from, so a versioned migration can
-      // compose its successor for the same place and driver.
+      // Creation context is descriptive metadata, not a migration recipe.
       promptContext,
-      // A versioned preset records which prompt revision this session runs,
-      // and a prompt the operator supplied is marked so no later migration
-      // replaces it with the preset's (refreshPresetEntry). Entries that
-      // predate the marker are safe to migrate: the deployment this preset
-      // was ported from took no caller prompt at all.
-      ...('promptVersion' in preset
-        ? { presetPromptVersion: preset.promptVersion }
-        : {}),
-      ...(options.systemPrompt && parentSessionId === undefined
-        ? { customPrompt: true }
-        : {}),
       lifecycle: 'creating',
       ...delegationFields,
       backendId,
