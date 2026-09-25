@@ -228,3 +228,13 @@ Generation 176 then exposed one more capture gap: the CLI's `ai-title` row
 two-turn probes pass for a greeting, three no-argument Endo tools, and two shell
 commands with arguments; each follow-up answers from the prior turn's context.
 Restart restoration and the cross-backend matrix were not rerun.
+
+Both open items above are now addressed (`88f9deb23`, `66511734c`,
+`3f611a638`). A backend declaring `continuity: 'transcript'` (Claude) resumes
+portably after a failed capture: the checkpoint's portable context, later
+records, and every piece of evidence the native bytes could not cover, until
+the next turn captures a new checkpoint. This deliberately reverses the earlier
+"no lossy fallback" choice for such backends: evidence is never hidden, but
+native reasoning continuity is lost for that stretch. Codex
+(`opaque-reconciled`) still refuses. Failed turns now read plainly in the UI,
+with the raw reason under Details; model context keeps the raw detail.
