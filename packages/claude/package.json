@@ -1,0 +1,88 @@
+{
+  "name": "@endo/claude",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Confined `claude -p` inference for an Endo guest from a Claude subscription: a hermetically sandboxed Claude Code process whose only capability surface is the Model Context Protocol projection of one guest formula's granted facet.",
+  "keywords": [
+    "endo",
+    "exo",
+    "claude",
+    "inference",
+    "mcp",
+    "confinement",
+    "ocap"
+  ],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/endojs/endo/blob/master/packages/claude/README.md",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/claude"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./index.js",
+  "bin": {
+    "endo-claude-shim": "./src/shim.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./claude.types.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "prepack": "tsc --build tsconfig.build.json",
+    "postpack": "git clean -fX -e node_modules/ dist",
+    "cover": "c8 ava",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "eslint --fix .",
+    "lint:eslint": "eslint .",
+    "lint:types": "tsc",
+    "test": "ava",
+    "test:xs": "exit 0"
+  },
+  "dependencies": {
+    "@endo/errors": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo": "workspace:^",
+    "@endo/pass-style": "workspace:^",
+    "@endo/patterns": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/init": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "c8": "catalog:dev",
+    "eslint": "catalog:dev",
+    "fast-check": "^4.9.0",
+    "typescript": "catalog:dev"
+  },
+  "files": [
+    "./*.d.ts",
+    "./*.js",
+    "./*.map",
+    "LICENSE*",
+    "SECURITY*",
+    "dist",
+    "lib",
+    "src"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "120s"
+  },
+  "typeCoverage": {
+    "atLeast": 90
+  }
+}
