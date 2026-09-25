@@ -238,3 +238,11 @@ the next turn captures a new checkpoint. This deliberately reverses the earlier
 native reasoning continuity is lost for that stretch. Codex
 (`opaque-reconciled`) still refuses. Failed turns now read plainly in the UI,
 with the raw reason under Details; model context keeps the raw detail.
+
+Operator follow-ups the same day: capture accepts the CLI's `task_reminder`
+attachment, and coverage lets a built-in (non-`mcp__`) tool's stored input
+carry CLI schema defaults such as Edit's `replace_all` (`3cf0031c9`; MCP tools,
+Endo's host tools among them, still match exactly). Capture failures after a
+covered, successful reply are no longer fatal (`adf25f948`): the turn completes
+without a checkpoint and the next one restores portably; operators see a static
+warning. Deployed as generations 179 and 180 with live probes passing.
