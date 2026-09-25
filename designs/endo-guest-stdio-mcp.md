@@ -5,11 +5,29 @@
 | **Created** | 2026-09-08 |
 | **Updated** | 2026-09-24 |
 | **Author** | endolinbot (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 
 ## Status
 
-Not started. A single stdio MCP server, spawned by `claude` from `--mcp-config`,
+In progress. The single-tenant, server-held-connection shape is implemented:
+the transport-free projection (static catalog guard, dispatch check, error
+taxonomy, logging facet) in `packages/agent-tools/src/adapters/mcp.js`, and the
+`endo-mcp-stdio` command, the static agent interface (`src/agent-interface.js`:
+names, files, locators, search over held mounts, evaluators, mail, and bounded
+pulls from followed streams), the harness-side
+`--mcp-config`/`--allowedTools` renderers, and the `stream-json` signal parser in
+`packages/agent-mcp-stdio`. The confined shape's harness-owned connection (the
+broker or scoped bootstrap outside the sandbox slice) and its structural
+socket-denial test remain to be built with [endo-claude](endo-claude.md) and
+[endo-posix-sandbox](endo-posix-sandbox.md); `makeGuestMcpServer` is the entry
+point that shape binds to a facet it already holds.
+
+The design's 64-hex formula id is the daemon's formula *number*; the daemon's
+full identifier is `<number>:<node>`. The server accepts either form and
+qualifies a bare number with the local node (read from the host's own
+identifier) before `lookupById`.
+
+A single stdio MCP server, spawned by `claude` from `--mcp-config`,
 that speaks for exactly one Endo guest: it receives the guest's 64-hex formula id
 out of band, resolves that one guest's facet through a daemon connection, and
 serves **all** `tools/list`/`tools/call` traffic against that facet and no other.
@@ -372,17 +390,22 @@ infer, enumerate, or synthesize the catalog.
   operation needs a capability the guest lacks fails through that guest interface;
   its absence does not reshape `tools/list`. Grant changes therefore affect what a
   call can do, not which method names exist.
-- **The declaration contains no ambient escape tools.** Code-evaluation operations
-  such as `evaluate`, `eval`, and `define` are not members of this interface. Names
-  containing `__`, dunder/reserved-property names (`__proto__`, `constructor`,
-  `prototype`, `__getMethodNames__`), malformed names, and duplicate or
-  case-confusable names are rejected when the declaration is loaded. This is a
-  build-time/interface invariant, not pruning of a guest-shaped value.
+- **Evaluators are deliberately present.** `evaluate` and `define` are members
+  of this interface. Endo's sandbox is designed to evaluate arbitrary code in the
+  presence of the guest's capabilities, so an evaluator reaches no authority the
+  guest does not already hold. Names containing `__`, dunder/reserved-property
+  names (`__proto__`, `constructor`, `prototype`, `__getMethodNames__`), malformed
+  names, and duplicate or case-confusable names are rejected when the declaration
+  is loaded. This is a build-time/interface invariant, not pruning of a
+  guest-shaped value.
 - **Arguments remain scoped by the guest interface.** Petname-designating
   operations resolve petnames through the bound guest's own fail-closed petstore,
-  and path operations rely on the bound mount or git capability. An out-of-scope
-  designation returns the visible `-32001` `tool-not-permitted` error with
-  `data.reason = argument-scope`; it is never silently narrowed.
+  and path operations rely on the bound mount or git capability. Arguments
+  outside the tool's declared schema (an undeclared key, a value of the wrong
+  shape) return the visible `-32001` `tool-not-permitted` error with
+  `data.reason = argument-scope`. A well-formed designation that the facet
+  refuses (a petname it does not hold) reaches the facet and returns the
+  facet-threw result below; neither case is ever silently narrowed.
 
 `tools.listChanged` is **false** and the server emits no
 `notifications/tools/list_changed`: the interface is versioned with the package,
@@ -515,7 +538,7 @@ class carries its own JSON-RPC error, not one undifferentiated error:
 |---|---|---|
 | Malformed frame / not valid JSON-RPC | `-32700` parse error / `-32600` invalid request | client bug: fix and resend |
 | Unknown method (not `tools/list`/`tools/call`) | `-32601` method not found | no |
-| Policy rejection (name outside the static interface or arguments outside the facet scope) | application code `-32001` `tool-not-permitted`, `data.reason` = `name-scope` \| `argument-scope` | no (the surface will not widen) |
+| Policy rejection (name outside the static interface or arguments outside the tool's declared schema) | application code `-32001` `tool-not-permitted`, `data.reason` = `name-scope` \| `argument-scope` | no (the surface will not widen) |
 | Daemon connection down (the harness-side `bridge-down`) | application code `-32010` `bridge-down`, `data.detail` mirroring the harness's `{type: 'bridge-down', detail}` | transient (the harness may respawn on the next call) |
 | **Facet method threw** (an in-catalog, in-scope `tools/call` that *reached* the facet and the target application code raised, for example `readText` on a missing path) | **not** a JSON-RPC error: a successful `tools/call` **result** with `isError: true` and the failure in the result `content`, the standard MCP "the tool ran and failed" shape; the harness settles it to `{type: 'facet-threw', method, error}` ([endo-claude](endo-claude.md) Design Decision 8), carrying `error: toPassableError(caught)` | application-level: up to the model, given the surfaced error |
 
@@ -564,34 +587,31 @@ These are properties of the versioned interface itself and are testable without 
 guest or daemon connection.
 
 What the guard deliberately does **not** do is fail construction on a bare-name
-collision against a *different* MCP server's reserved namespace. The flat naming
-convention (interface-native camelCase, no transport/category prefix) is shared with
-`kriscendobot/minion.town` PR
-[#79](https://github.com/kriscendobot/minion.town/pull/79) (approved in PR
-[#77](https://github.com/kriscendobot/minion.town/pull/77)), whose load-time guard
-reserves names like `submit`, `invite`, `listReminders`, and `cancelReminder` ahead
-of minion.town's *own* future facets. But this server's label is the fixed literal
-`endo`, and Claude Code namespaces every tool as `mcp__endo__<tool>`, so a bare name
-shared with minion.town's `endo`-**un**prefixed manifest cannot produce a wire-level
-collision. Keying a **security-critical construction throw** on an **unmerged,
-externally-owned** reservation list would let a new reserved name landed by
-minion.town make an otherwise-correct Endo confinement server refuse to construct: an
-availability failure whose root cause sits entirely outside this design's change
-surface. So collision against minion.town's prospective reservations is demoted to a
+collision against a *different* MCP server's reserved namespace. This layer is
+general purpose; an application that serves its own MCP tools beside it may
+reserve names for them, and it passes that list to `makeToolCatalog` as
+`advisoryReservedNames`. The adapter carries no reserved-name list of its own.
+Claude Code namespaces every tool as `mcp__endo__<tool>`, so a bare name shared
+with another server cannot produce a wire-level collision, and keying a
+security-critical construction throw on a list owned outside this change surface
+would turn a new reservation into an availability failure. So a collision is a
 **construction-time warning**, not a throw. The warning carries the **same
 discriminated shape** as the construction throws — `{ reason:
 'reserved-name-collision', level: 'warning', names: [...] }` — with the explicit
-`level: 'warning'` marking it advisory rather than fatal, written to stderr where the
-harness reads it. The convention is adopted; the foreign reservation list is
-advisory, not a gate.
+`level: 'warning'` marking it advisory rather than fatal, written to stderr where
+the harness reads it.
 
 ## Package shape and code home
 
 The **projection** is the `@endo/agent-tools` MCP adapter (the declared stub at
 `packages/agent-tools/src/adapters/mcp.js`); implementing it is the
-adapter-implementation prerequisite [endo-claude](endo-claude.md) already names. The
-**stdio server** (the claude-spawned command named by `--mcp-config`) is a single
-process that, at startup: reads and validates `ENDO_GUEST_FORMULA_ID` from its
+adapter-implementation prerequisite [endo-claude](endo-claude.md) already names.
+The stdio server ships as the package `@endo/agent-mcp-stdio` (binary
+`endo-mcp-stdio`), named for the agent tool interface it serves
+(`src/agent-interface.js`) rather than for the guest it binds; this design keeps
+its original `endo-guest-stdio-mcp` slug.
+The **stdio server** (the claude-spawned command named by `--mcp-config`) is a
+single process that, at startup: reads and validates `ENDO_GUEST_FORMULA_ID` from its
 environment, opens a daemon session with the usual client, resolves the one guest's
 facet at the bootstrap root host (`E(host).lookupById(formulaId)`), imports the
 static guest-agent declaration, then runs the MCP framing loop: decoding
@@ -671,10 +691,12 @@ positive-confinement test. An implementation is accepted only when these pass.
   (a code-eval name, a `__`-containing name, or an unknown name) returns the
   `-32001` `tool-not-permitted` error with `data.reason = name-scope`, and never
   reaches the facet.
-- **Argument-scope rejection.** A `tools/call` for an in-catalog petname-designating
-  tool whose *arguments* designate a petname/path outside the facet's own attenuated
-  surface returns `-32001` with `data.reason = argument-scope`: a visible rejection,
-  never a silently narrowed success.
+- **Argument-scope rejection.** A `tools/call` for an in-catalog tool whose
+  *arguments* fall outside the tool's declared schema returns `-32001` with
+  `data.reason = argument-scope`, and never reaches the facet.
+  A schema-conforming petname or path that the facet's own attenuated surface
+  refuses reaches the facet and returns the facet-threw result: a visible failure
+  either way, never a silently narrowed success.
 - **Fail-closed construction.** Construction throws (the server never serves
   `initialize`) for: a missing/non-64-hex/unresolvable formula id
   (`invalid-formula-id`); an unreachable daemon (`daemon-unreachable`); an empty
@@ -682,8 +704,8 @@ positive-confinement test. An implementation is accepted only when these pass.
   malformed name (`malformed-name`); and a declaration carrying an internally
   duplicate or case-confusable name (`catalog-name-conflict`) — the two
   well-formedness classes asserted as **distinct** discriminant values, not one
-  collapsed `malformed-catalog`. A bare-name collision against minion.town's reserved
-  list produces a **warning** record (`{ reason: 'reserved-name-collision', level:
+  collapsed `malformed-catalog`. A bare-name collision against a caller-supplied
+  reserved list produces a **warning** record (`{ reason: 'reserved-name-collision', level:
   'warning', names: [...] }`), not a throw, and construction still succeeds.
 - **Fail-closed at request and on connection loss.** A malformed frame returns
   `-32700`/`-32600`; an unknown method returns `-32601`; a daemon connection drop
@@ -765,6 +787,20 @@ positive-confinement test. An implementation is accepted only when these pass.
    event stream and its single terminal prompt result, and retains structured usage,
    availability, and `rate_limit_event` quota fields. Missing telemetry remains
    unknown rather than being read as availability or zero quota use.
+7. **The agent-tools MCP adapter is a separate core from the claude-sandbox
+   bridge, on purpose.** `packages/claude-sandbox/src/mcp-bridge.js` already
+   speaks `initialize`/`tools/list`/`tools/call` over a dynamic `HostedToolSet`.
+   `@endo/agent-tools/adapters/mcp.js` does not compose over it because its
+   contract is stronger: a static catalog pinned at construction, an
+   `argumentsShape` pattern checked on every call, and a `-32001`
+   `tool-not-permitted` refusal (the MCP 2025-06-18 tools section shows
+   `-32602` for an unknown tool; this design keeps policy refusals distinct
+   from malformed parameters). The two cores also differ on tool names: the
+   bridge admits `[A-Za-z0-9][A-Za-z0-9_-]{0,127}`, and the adapter admits
+   only camelCase `[a-z][A-Za-z0-9]{0,63}`, the interface-native form of
+   § *Naming*. Factoring the shared JSON-RPC envelope (error codes, `ok` and
+   `fail`, one name policy) into a module both compose over is a follow-up;
+   until then the divergence is this decision, not an oversight.
 
 ## Open Questions
 
