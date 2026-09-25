@@ -652,6 +652,18 @@ test('agent and skill listings are preserved as native-only context', t => {
   t.notThrows(() => listingCase([agentListing, skillListing]).assert());
 });
 
+// Observed live on 2026-09-25: the CLI's to-do reminder.
+const taskReminder = { type: 'task_reminder', content: [], itemCount: 0 };
+test('a task reminder is preserved as native-only context', t => {
+  t.notThrows(() => listingCase([taskReminder]).assert());
+  t.throws(() => listingCase([{ ...taskReminder, content: 'x' }]).assert(), {
+    message: /native context coverage unavailable/,
+  });
+  t.throws(() => listingCase([{ ...taskReminder, extra: 1 }]).assert(), {
+    message: /native context coverage unavailable/,
+  });
+});
+
 for (const [label, attachment] of [
   ['an extra key', { ...agentListing, extra: true }],
   ['non-string agent lines', { ...agentListing, addedLines: [1] }],
@@ -721,31 +733,41 @@ test('tool frames and captured blocks accept only object-property reordering', t
   t.notThrows(() => f.assert());
 });
 
-for (const input of [
-  { items: [2, 1], value: null },
-  { items: [1, 2] },
-  { items: [1, 2], value: false },
-  { items: [1, 2], value: null, extra: 1 },
-  { items: { 0: 1, 1: 2 }, value: null },
-  { items: [1, '2'], value: null },
-]) {
-  test(`structural tool equality still rejects changed JSON ${JSON.stringify(input)}`, t => {
-    const f = fixture();
-    f.start();
-    t.throws(() =>
-      f.block(
-        { type: 'tool_use', id: 'call', name: 'Bash', input: {} },
-        [
-          {
-            type: 'input_json_delta',
-            partial_json: '{"items":[1,2],"value":null}',
-          },
-        ],
-        { type: 'tool_use', id: 'call', name: 'Bash', input },
-      ),
-    );
-    t.throws(() => f.assert());
-  });
+for (const name of ['mcp__endo__exec', 'Bash']) {
+  for (const input of [
+    { items: [2, 1], value: null },
+    { items: [1, 2] },
+    { items: [1, 2], value: false },
+    { items: [1, 2], value: null, extra: 1 },
+    { items: { 0: 1, 1: 2 }, value: null },
+    { items: [1, '2'], value: null },
+  ]) {
+    test(`structural tool equality still rejects changed JSON ${name} ${JSON.stringify(input)}`, t => {
+      const extra = Object.hasOwn(input, 'extra');
+      // Exact equality for MCP tools, Endo's host effects among them. A
+      // built-in tool may gain CLI schema defaults: claude-context-cli-defaults.
+      const f = fixture();
+      f.start();
+      const attempt = () =>
+        f.block(
+          { type: 'tool_use', id: 'call', name, input: {} },
+          [
+            {
+              type: 'input_json_delta',
+              partial_json: '{"items":[1,2],"value":null}',
+            },
+          ],
+          { type: 'tool_use', id: 'call', name, input },
+        );
+      if (name === 'Bash' && extra) {
+        // Only an added key, and only for a built-in tool.
+        t.notThrows(attempt);
+      } else {
+        t.throws(attempt);
+        t.throws(() => f.assert());
+      }
+    });
+  }
 }
 
 test('deep JSON comparison uses bounded traversal depth without recursive calls', t => {

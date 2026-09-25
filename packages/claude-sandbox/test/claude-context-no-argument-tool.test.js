@@ -9,13 +9,13 @@ import { makeClaudeContextCoverage } from '../src/claude-context-coverage.js';
 // carries no input JSON for an empty input.
 const uuid = n => `${String(n).padStart(8, '0')}-1111-4111-8111-111111111111`;
 
-const run = (deltas, finalInput) => {
+const run = (deltas, finalInput, name = 'mcp__endo__list') => {
   const coverage = makeClaudeContextCoverage({
     sha256: text => createHash('sha256').update(text).digest('hex'),
   });
   const observe = event => coverage.observe({ ...event, session_id: uuid(1) });
   const stream = event => observe({ type: 'stream_event', event });
-  const start = { type: 'tool_use', id: 'call', name: 'list', input: {} };
+  const start = { type: 'tool_use', id: 'call', name, input: {} };
   observe({ type: 'system', subtype: 'init' });
   stream({
     type: 'message_start',
@@ -64,6 +64,13 @@ test('an argument missing from the stream is still refused', t => {
   t.throws(() => run([], { path: '/' }), {
     message: /native context coverage unavailable/,
   });
+});
+
+// A built-in CLI tool runs inside the guest's sandbox, and its stored input
+// may carry schema defaults the model never streamed; see
+// claude-context-cli-defaults.test.js. Only MCP tools must match exactly.
+test('a built-in tool may carry keys the stream did not show', t => {
+  t.notThrows(() => run([], { path: '/' }, 'Read'));
 });
 
 test('streamed arguments still must match the completed block', t => {

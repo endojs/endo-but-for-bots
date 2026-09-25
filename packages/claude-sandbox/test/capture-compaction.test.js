@@ -331,6 +331,29 @@ for (const coverage of [false, true]) {
   });
 }
 
+test('capture preserves a task reminder attachment', async t => {
+  const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };
+  const reminder = {
+    uuid: id(10),
+    parentUuid: root.uuid,
+    sessionId: session,
+    type: 'attachment',
+    attachment: { type: 'task_reminder', content: [], itemCount: 0 },
+  };
+  const result = JSON.parse(
+    (
+      await run(t, [root, reminder], {
+        type: 'endo_capture',
+        session_id: session,
+      })
+    ).stdout,
+  );
+  t.is(
+    result.nativeContext.transcript,
+    `${JSON.stringify(root)}\n${JSON.stringify(reminder)}\n`,
+  );
+});
+
 test('capture preserves agent and skill listing attachments in order', async t => {
   const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };
   const agents = {
@@ -371,6 +394,10 @@ for (const [label, attachment] of [
   ['skill listing with a string count', { ...skillListing, skillCount: '1' }],
   ['skill listing without names', { ...skillListing, names: undefined }],
   ['skill listing with non-string content', { ...skillListing, content: 1 }],
+  [
+    'task reminder with non-array content',
+    { type: 'task_reminder', content: 'x', itemCount: 0 },
+  ],
 ]) {
   test(`capture refuses ${label}`, async t => {
     const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };

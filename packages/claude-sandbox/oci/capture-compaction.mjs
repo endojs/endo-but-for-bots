@@ -55,6 +55,14 @@ const nativeAttachment = attachment =>
     strings(attachment.removedTypes) &&
     typeof attachment.isInitial === 'boolean' &&
     typeof attachment.showConcurrencyNote === 'boolean') ||
+  (attachment?.type === 'task_reminder' &&
+    exactKeys(attachment, ['type', 'content', 'itemCount']) &&
+    Array.isArray(attachment.content) &&
+    attachment.content.every(
+      item => item !== null && typeof item === 'object' && !Array.isArray(item),
+    ) &&
+    Number.isSafeInteger(attachment.itemCount) &&
+    attachment.itemCount >= 0) ||
   (attachment?.type === 'skill_listing' &&
     exactKeys(attachment, [
       'type',

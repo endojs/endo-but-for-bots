@@ -328,7 +328,40 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
           );
           requireValue(Array.isArray(content) && content.length === 1);
           const completed = completedBlock();
-          const matches = same(content[0], completed);
+          // The CLI stores a built-in tool's input as its own schema parsed
+          // it, with defaults filled in (Edit's `replace_all: false`). Built-in
+          // tools are guest-controlled, not host-certified: they may change
+          // the workspace, but nothing treats their frames as host evidence.
+          // Every streamed key must still match; the CLI may add keys. MCP
+          // tools (Endo's host tools among them) must match exactly.
+          const extendsStreamedInput = (actual, streamed) => {
+            if (
+              streamed.type !== 'tool_use' ||
+              actual?.type !== 'tool_use' ||
+              typeof streamed.name !== 'string' ||
+              streamed.name.startsWith('mcp__')
+            )
+              return false;
+            const rest = value =>
+              Object.fromEntries(
+                Object.entries(value).filter(([key]) => key !== 'input'),
+              );
+            const input = actual.input;
+            return (
+              same(rest(actual), rest(streamed)) &&
+              input !== null &&
+              typeof input === 'object' &&
+              !Array.isArray(input) &&
+              Object.keys(streamed.input).every(
+                key =>
+                  Object.hasOwn(input, key) &&
+                  same(input[key], streamed.input[key]),
+              )
+            );
+          };
+          const matches =
+            same(content[0], completed) ||
+            extendsStreamedInput(content[0], completed);
           if (!matches) {
             // Describe only a fixed protocol field and mismatch category,
             // never producer values, tool arguments or unknown field names.
@@ -562,6 +595,17 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         strings(attachment.removedTypes) &&
         typeof attachment.isInitial === 'boolean' &&
         typeof attachment.showConcurrencyNote === 'boolean'
+      );
+    if (attachment?.type === 'task_reminder')
+      return (
+        keys(['type', 'content', 'itemCount']) &&
+        Array.isArray(attachment.content) &&
+        attachment.content.every(
+          item =>
+            item !== null && typeof item === 'object' && !Array.isArray(item),
+        ) &&
+        Number.isSafeInteger(attachment.itemCount) &&
+        Number(attachment.itemCount) >= 0
       );
     if (attachment?.type === 'skill_listing')
       return (
