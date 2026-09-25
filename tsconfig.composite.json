@@ -3,6 +3,9 @@
   "files": [],
   "references": [
     {
+      "path": "packages/agent-mcp-stdio/tsconfig.composite.json"
+    },
+    {
       "path": "packages/agent-tools/tsconfig.composite.json"
     },
     {

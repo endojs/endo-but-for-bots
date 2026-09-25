@@ -57,9 +57,11 @@ values.get('answer'); // 42
 The daemon host always advertises `resultName` and forwards it to the daemon's
 `evaluate`, where formula capture keeps the named value durable.
 
-The MCP adapter gap remains separate.
-This package still does not map the tool record to MCP `outputSchema` or
-`structuredContent`; an MCP protocol adapter will own that mapping.
+The MCP adapter (`@endo/agent-tools/adapters/mcp.js`) projects a static tool
+declaration to an MCP catalog and answers JSON-RPC 2.0 messages against one
+bound target; `@endo/agent-mcp-stdio` hosts it over stdio.
+It renders tool results as text content only: it does not map the tool record
+to MCP `outputSchema` or `structuredContent`.
 
 ## Layout
 
@@ -69,7 +71,7 @@ This package still does not map the tool record to MCP `outputSchema` or
 | `src/json-tools/` | Parked JSON wrappers for Git, mounts, filesystem, shell, and HTTP. |
 | `src/code-mode/` | Evaluation tool, Compartment host, daemon host, and declaration formatting. |
 | `src/code-mode-globals/` | Per-capability global descriptor factories for the local filesystem, Shell, HTTP, Git, and GitRemote, plus the workspace seam helpers. |
-| `src/adapters/` | Pi and SmallCaps bridges; MCP, Codex, and Claude Code shapes are planned. |
+| `src/adapters/` | Pi, SmallCaps, and MCP bridges; Codex and Claude Code shapes are planned. |
 | `generated/code-mode-globals/` | Checked-in generated declaration artifacts. |
 
 The code-generation extractors currently read the checked-in
@@ -115,6 +117,11 @@ import { makeHttpGlobal } from '@endo/agent-tools/code-mode-globals/http.js';
 import { makeShellGlobal } from '@endo/agent-tools/code-mode-globals/shell.js';
 import { toPiAgentTool } from '@endo/agent-tools/pi';
 import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
+import {
+  makeMcpToolServer,
+  makeToolCatalog,
+  renderAllowedTools,
+} from '@endo/agent-tools/adapters/mcp.js';
 ```
 
 The Pi packages remain optional peer dependencies.
@@ -127,10 +134,9 @@ repository workspace, while `makeFilesystemGlobal` describes the local
 The Shell, HTTP, Git, and GitRemote factories likewise carry no provisioning,
 attenuation, credential, or controller authority.
 
-Planned adapter modules have shape only in this release.
-The MCP adapter is not implemented, including its `outputSchema` and
-`structuredContent` mapping, and Codex and Claude Code adapters are future
-provider bridges over the same tool records.
+The MCP adapter does not yet map `outputSchema` or `structuredContent`, and
+Codex and Claude Code adapters are future provider bridges over the same tool
+records.
 
 ## Choosing a workspace backing
 

@@ -399,3 +399,76 @@ export interface HistoryToolsGrant {
 export declare function provisionHistoryTools(
   grant: HistoryToolsGrant,
 ): Promise<ToolRecord[]>;
+
+// #region MCP adapter (`@endo/agent-tools/adapters/mcp.js`)
+
+/** The discriminant of a construction error thrown by the MCP adapter. */
+export type ConstructionReason =
+  'empty-interface' | 'malformed-name' | 'catalog-name-conflict';
+
+/**
+ * An Error carrying a construction discriminant. A consumer that mints its own
+ * discriminants widens `R`.
+ */
+export type ConstructionError<R extends string = ConstructionReason> = Error & {
+  reason: R;
+  names?: string[];
+};
+
+/**
+ * One entry of a static tool declaration. The declaration is the whole
+ * interface: nothing about it is discovered from the bound target.
+ */
+export interface ToolDeclaration<T = unknown> {
+  /** Flat camelCase tool name. */
+  name: string;
+  /** One-line description for the model. */
+  description: string;
+  /** JSON Schema for the arguments object. */
+  inputSchema: object;
+  /**
+   * `@endo/patterns` matcher for the decoded arguments record. A mismatch is
+   * an `argument-scope` rejection.
+   */
+  argumentsShape: Pattern;
+  /**
+   * Optional refinement after `argumentsShape` matches (for example decimal
+   * message numbers to bigints). A throw is an `argument-scope` rejection.
+   */
+  normalizeArguments?: (
+    toolArguments: Record<string, any>,
+  ) => Record<string, any>;
+  /** Performs the operation against the one bound target. */
+  invoke: (target: T, toolArguments: Record<string, any>) => unknown;
+}
+
+export interface CatalogWarning {
+  reason: 'reserved-name-collision';
+  level: 'warning';
+  names: string[];
+}
+
+/** One entry of the `tools/list` projection. */
+export interface McpTool {
+  name: string;
+  description: string;
+  inputSchema: object;
+}
+
+export interface ToolCatalog<T = unknown> {
+  /** The `tools/list` projection. */
+  tools: McpTool[];
+  names: string[];
+  /** Null-prototype index. */
+  byName: Record<string, ToolDeclaration<T>>;
+  warnings: CatalogWarning[];
+}
+
+export interface JsonRpcResponse {
+  jsonrpc: '2.0';
+  id: string | number | null;
+  result?: unknown;
+  error?: { code: number; message: string; data?: unknown };
+}
+
+// #endregion

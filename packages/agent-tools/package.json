@@ -109,7 +109,7 @@
       "default": "./src/adapters/smallcaps.js"
     },
     "./adapters/mcp.js": {
-      "types": "./src/adapters/mcp.js",
+      "types": "./adapters/mcp.types.d.ts",
       "default": "./src/adapters/mcp.js"
     },
     "./generated/code-mode-globals/git-declarations.js": {
@@ -159,6 +159,7 @@
     "timeout": "2m"
   },
   "dependencies": {
+    "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo-git": "workspace:^",
     "@endo/exo-http-client": "workspace:^",
@@ -173,9 +174,11 @@
     "@earendil-works/pi-agent-core": "^0.85.1",
     "@earendil-works/pi-ai": "^0.85.1",
     "@endo/daemon": "workspace:^",
+    "@endo/exo": "workspace:^",
     "@endo/git": "workspace:^",
     "@endo/host-spawner": "workspace:^",
     "@endo/init": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ajv": "^8.17.1",
     "ava": "catalog:dev",

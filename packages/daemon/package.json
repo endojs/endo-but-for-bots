@@ -28,6 +28,7 @@
       "default": "./index.js"
     },
     "./iroh.js": "./src/networks/iroh.js",
+    "./formula-identifier.js": "./src/formula-identifier.js",
     "./locator.js": "./locator.js",
     "./pet-name.js": "./src/pet-name.js",
     "./type-guards.js": "./src/type-guards.js",
