@@ -988,6 +988,26 @@ const makePatternKit = () => {
     getRankCover: (_kind, _encodePassable) => getPassStyleCover('tagged'),
   });
 
+  /** @type {MatchHelper<[]>} */
+  const matchSafeIntegerHelper = Far('match:safeInteger helper', {
+    confirmMatches: (specimen, _payload, reject) =>
+      confirmKind(specimen, 'number', reject) &&
+      (Number.isSafeInteger(specimen) ||
+        (reject && reject`${specimen} - Must be a safe integer`)),
+
+    confirmIsWellFormed: (payload, reject) =>
+      confirmNestedMatches(
+        payload,
+        harden([]),
+        'match:safeInteger payload',
+        reject,
+      ),
+
+    getRankCover: (_matchPayload, _encodePassable) =>
+      // TODO Could be more precise
+      getPassStyleCover('number'),
+  });
+
   /** @type {MatchHelper<[Limits?]>} */
   const matchBigintHelper = Far('match:bigint helper', {
     confirmMatches: (specimen, [limits = undefined], reject) => {
@@ -1911,6 +1931,7 @@ const makePatternKit = () => {
     'match:pattern': matchPatternHelper,
     'match:kind': matchKindHelper,
     'match:tagged': matchTaggedHelper,
+    'match:safeInteger': matchSafeIntegerHelper,
     'match:bigint': matchBigintHelper,
     'match:nat': matchNatHelper,
     'match:string': matchStringHelper,
@@ -1948,6 +1969,7 @@ const makePatternKit = () => {
   const PatternShape = makeMatcher('match:pattern', undefined);
   const BooleanShape = makeKindMatcher('boolean');
   const NumberShape = makeKindMatcher('number');
+  const SafeIntegerShape = makeTagged('match:safeInteger', []);
   const BigIntShape = makeTagged('match:bigint', []);
   const NatShape = makeTagged('match:nat', []);
   const StringShape = makeTagged('match:string', []);
@@ -2029,6 +2051,7 @@ const makePatternKit = () => {
         makeMatcher('match:tagged', harden([tagPatt, payloadPatt])),
       boolean: () => BooleanShape,
       number: () => NumberShape,
+      safeInteger: () => SafeIntegerShape,
       bigint: (limits = undefined) =>
         limits ? makeLimitsMatcher('match:bigint', [limits]) : BigIntShape,
       nat: (limits = undefined) =>

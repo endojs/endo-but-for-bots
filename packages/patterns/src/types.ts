@@ -352,6 +352,14 @@ export type PatternMatchers = {
   number: <T extends number = number>() => MatcherOf<'number', T>;
 
   /**
+   * Matches a number that is a safe integer, as `Number.isSafeInteger`
+   * decides: an integer from `-(2 ** 53 - 1)` to `2 ** 53 - 1` inclusive.
+   * Rejects `NaN`, either signed Infinity, and fractions.
+   * Compose with `M.gte` and `M.lte` to bound the range.
+   */
+  safeInteger: <T extends number = number>() => MatcherOf<'safeInteger', T>;
+
+  /**
    * Matches any bigint, subject to limits.
    */
   bigint: <T extends bigint = bigint>(

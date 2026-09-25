@@ -110,6 +110,37 @@ const defineTests = (successCase, failCase) => {
     failCase(specimen, M.tagged(), 'Expected tagged object, not "number": 3');
   }
   {
+    const specimen = 3;
+    successCase(specimen, M.safeInteger());
+    successCase(0, M.safeInteger());
+    successCase(-0, M.and(M.safeInteger(), M.gte(0)));
+    successCase(-7, M.safeInteger());
+    successCase(Number.MAX_SAFE_INTEGER, M.safeInteger());
+    successCase(Number.MIN_SAFE_INTEGER, M.safeInteger());
+    successCase(5, M.and(M.safeInteger(), M.gte(1), M.lte(256)));
+    successCase(1.5, M.not(M.safeInteger()));
+
+    failCase(1.5, M.safeInteger(), '1.5 - Must be a safe integer');
+    failCase(NaN, M.safeInteger(), '"[NaN]" - Must be a safe integer');
+    failCase(
+      Infinity,
+      M.safeInteger(),
+      '"[Infinity]" - Must be a safe integer',
+    );
+    failCase(
+      Number.MAX_SAFE_INTEGER + 1,
+      M.safeInteger(),
+      '9007199254740992 - Must be a safe integer',
+    );
+    failCase(3n, M.safeInteger(), 'bigint "[3n]" - Must be a number');
+    failCase('3', M.safeInteger(), 'string "3" - Must be a number');
+    failCase(
+      300,
+      M.and(M.safeInteger(), M.gte(1), M.lte(256)),
+      '300 - Must be <= 256',
+    );
+  }
+  {
     const specimen = 0n;
     successCase(specimen, 0n);
     const yesMethods = ['bigint', 'any', 'and', 'scalar', 'key', 'pattern'];
