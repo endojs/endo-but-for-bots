@@ -12,6 +12,7 @@ import {
 import { makeMarshal } from '../src/marshal.js';
 
 import { roundTripPairs } from '../tools/marshal-test-data.js';
+import { passablesEqual } from './passables-equal.js';
 
 const {
   freeze,
@@ -46,14 +47,7 @@ test('smallcaps serialize unserialize round trip half pairs', t => {
   for (const [plain, _] of roundTripPairs) {
     const { body } = serialize(plain);
     const decoding = unserialize({ body, slots: [] });
-    if (passStyleOf(plain) === 'byteArray') {
-      t.deepEqual(
-        [.../** @type {Uint8Array} */ (decoding)],
-        [.../** @type {Uint8Array} */ (plain)],
-      );
-    } else {
-      t.deepEqual(decoding, plain);
-    }
+    passablesEqual(t, decoding, plain);
     t.assert(isFrozen(decoding));
   }
 });
