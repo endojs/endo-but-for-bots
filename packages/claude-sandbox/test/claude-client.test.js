@@ -887,7 +887,10 @@ test('ordinary capture runs inside the slice and publishes only after clean comp
 });
 
 for (const failure of ['empty', 'extra', 'malformed', 'exit']) {
-  test(`failed ${failure} capture never publishes a checkpoint`, async t => {
+  // A reply that streamed and passed coverage stands when only capture fails
+  // (live 2026-09-25: completed replies were shown as failed turns). No
+  // checkpoint is published; the next turn restores from the host journal.
+  test(`failed ${failure} capture never publishes a checkpoint and keeps the reply`, async t => {
     let waits = 0;
     const outputs =
       failure === 'empty'
@@ -912,9 +915,38 @@ for (const failure of ['empty', 'extra', 'malformed', 'exit']) {
     t.teardown(() => client.terminate());
     const events = await drain(await client.send('hello'));
     t.false(events.some(event => event.type === 'endo_native_context'));
-    t.is(events.at(-1).type, 'abort');
+    t.is(events.at(-1).type, 'end');
+    // The helper is stopped; the finished claude process is left alone.
+    t.true(procKilled.get(fake.spawned[1]) === true);
   });
 }
+
+test('a non-fatal capture failure logs a static reason, never transcript content', async t => {
+  /** @type {string[]} */
+  const warnings = [];
+  const fake = makeFakeSlice([
+    nativeWire().output,
+    [enc.encode('{"type":"endo_context","SECRET_TRANSCRIPT_TEXT":')],
+  ]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStderrIterable: () =>
+        bytesIterable([
+          enc.encode(
+            'Claude compaction capture failed: Unsupported context attachment\nSECRET_STDERR_TEXT\n',
+          ),
+        ]),
+      warn: message => warnings.push(message),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('hello'));
+  t.is(events.at(-1).type, 'end');
+  const logged = warnings.join('\n');
+  t.regex(logged, /native context not captured/);
+  t.regex(logged, /Unsupported context attachment/);
+  t.false(logged.includes('SECRET'));
+});
 
 for (const captureSucceeds of [false, true]) {
   test(`next turn restores host context after ${captureSucceeds ? 'successful' : 'failed'} capture`, async t => {

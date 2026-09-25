@@ -243,6 +243,8 @@ const defaultStderrIterable = proc =>
  *   - Adapter from a `ProcessHandle` to its stderr byte stream, read
  *   best-effort to enrich an `abort` reason. Injectable for tests;
  *   defaults to the `@endo/exo-stream` reader.
+ * @property {(message: string) => void} [warn] - Operator diagnostics, such as a
+ *   native context that was not captured. Never passed transcript content.
  * @property {number} [stderrReadLimit] - Stop after at least this many decoded
  *   UTF-16 code units from captured stderr. Defaults to 16384.
  * @property {number} [stderrTailLength] - Maximum UTF-16 code unit length of the
@@ -294,6 +296,8 @@ export const makeClaudeClient = args => {
       iterateBytesWriter(/** @type {any} */ (await E(processHandle).stdin()), {
         buffer: 0,
       }),
+    // Operator diagnostics; never passed transcript content.
+    warn = (/** @type {string} */ message) => console.warn(message),
     stderrReadLimit = 16_384,
     stderrTailLength = 2000,
     stderrReadTimeoutMs = 1000,
@@ -901,93 +905,153 @@ export const makeClaudeClient = args => {
             throw Error(
               'Claude native session differs from restoration receipt',
             );
-          const { slice: activeSlice } = await ensureProvisioned();
-          if (closed || terminated) throw Error('Claude capture cancelled');
-          // The file is guest-writable. Read it inside the existing sandbox,
-          // never by following a guest-controlled path from the host worker.
-          proc = await E(activeSlice).spawn(
-            harden([
-              'node',
-              '/opt/endo/capture-compaction.mjs',
-              JSON.stringify({
-                type: 'endo_capture',
-                session_id: compactBoundary?.session_id ?? nativeSessionId,
-                // Keep argv bounded independently of retained history size.
-                expected_boundary_uuid: compactBoundary?.uuid,
-                coverage_before_uuid: contextCut.beforeUuid,
-              }),
-            ]),
-            harden({
-              cwd: workspacePath,
-              env: { ...env },
-              captureStdout: true,
-              captureStderr: true,
-            }),
-          );
-          inFlight = proc;
-          if (closed || terminated) throw Error('Claude capture cancelled');
-          // Bound this new data-only transfer, not transcript storage or a
-          // session's lifetime. No partial checkpoint is ever published.
-          const captureProc = proc;
-          const captureBytes = async function* () {
-            let bytes = 0;
-            for await (const chunk of makeStdoutIterable(captureProc)) {
-              bytes += chunk.byteLength;
-              if (bytes > 16 * 1024 * 1024) {
-                throw Error(
-                  'Claude compaction capture exceeds transport limit',
-                );
-              }
-              yield chunk;
-            }
-          };
+          // Capture reads the CLI's own file after a reply that streamed and
+          // passed coverage. If only this step fails, the reply stands: the
+          // turn ends without a native checkpoint and the next turn restores
+          // from the host journal instead. That includes divergence the helper
+          // itself detects: nothing it produced is used. Cancellation, a
+          // failed reply, and a captured transcript that differs from the
+          // stream (assertCaptured, below) stay failures.
           let captured;
           let compactionWitness;
-          for await (const event of parseStreamJsonLines(captureBytes())) {
-            if (
-              captured ||
-              !['endo_compaction', 'endo_context'].includes(event?.type)
-            ) {
-              throw Error('Invalid Claude compaction capture');
+          /** @type {any} */
+          let helper;
+          let stage = 'helper not spawned';
+          try {
+            const { slice: activeSlice } = await ensureProvisioned();
+            if (closed || terminated) throw Error('Claude capture cancelled');
+            // The file is guest-writable. Read it inside the existing sandbox,
+            // never by following a guest-controlled path from the host worker.
+            proc = await E(activeSlice).spawn(
+              harden([
+                'node',
+                '/opt/endo/capture-compaction.mjs',
+                JSON.stringify({
+                  type: 'endo_capture',
+                  session_id: compactBoundary?.session_id ?? nativeSessionId,
+                  // Keep argv bounded independently of retained history size.
+                  expected_boundary_uuid: compactBoundary?.uuid,
+                  coverage_before_uuid: contextCut.beforeUuid,
+                }),
+              ]),
+              harden({
+                cwd: workspacePath,
+                env: { ...env },
+                captureStdout: true,
+                captureStderr: true,
+              }),
+            );
+            inFlight = proc;
+            helper = proc;
+            stage = 'stream unreadable';
+            if (closed || terminated) throw Error('Claude capture cancelled');
+            // Bound this new data-only transfer, not transcript storage or a
+            // session's lifetime. No partial checkpoint is ever published.
+            const captureProc = proc;
+            const captureBytes = async function* () {
+              let bytes = 0;
+              for await (const chunk of makeStdoutIterable(captureProc)) {
+                bytes += chunk.byteLength;
+                if (bytes > 16 * 1024 * 1024) {
+                  throw Error(
+                    'Claude compaction capture exceeds transport limit',
+                  );
+                }
+                yield chunk;
+              }
+            };
+            for await (const event of parseStreamJsonLines(captureBytes())) {
+              if (
+                captured ||
+                !['endo_compaction', 'endo_context'].includes(event?.type)
+              ) {
+                throw Error('Invalid Claude compaction capture');
+              }
+              stage = 'record rejected';
+              captured = assertTranscriptRecord({
+                kind: 'native-context',
+                format: event.nativeContext?.format,
+                payload: event.nativeContext?.transcript,
+                context: [
+                  ...(event.type === 'endo_compaction'
+                    ? [{ kind: 'compaction', summary: event.summary }]
+                    : []),
+                  ...(event.retainedTail ?? []),
+                ],
+              });
+              compactionWitness = event.compactionWitness;
+              stage = 'stream unreadable';
             }
-            captured = assertTranscriptRecord({
-              kind: 'native-context',
-              format: event.nativeContext?.format,
-              payload: event.nativeContext?.transcript,
-              context: [
-                ...(event.type === 'endo_compaction'
-                  ? [{ kind: 'compaction', summary: event.summary }]
-                  : []),
-                ...(event.retainedTail ?? []),
-              ],
+            const captureStatus = await E(proc).wait();
+            if (
+              !captured ||
+              captureStatus?.code !== 0 ||
+              captured.kind !== 'native-context' ||
+              captured.format !== 'claude-code-jsonl-v1' ||
+              captureStatus?.signal ||
+              closed ||
+              terminated
+            ) {
+              throw Error('Claude compaction capture did not complete');
+            }
+          } catch (error) {
+            if (closed || terminated || nativeReportedFailure) throw error;
+            // The helper, never the finished claude process.
+            let stderrText = '';
+            if (helper) {
+              await E(helper)
+                .kill()
+                .catch(() => {});
+              stderrText = await readStderrBrief(helper);
+            }
+            // Operators see why, never transcript content: only this module's
+            // own static messages, and the helper's first stderr line, which
+            // carries only its static local reasons.
+            const message = error instanceof Error ? error.message : '';
+            const reason = [
+              'Invalid Claude compaction capture',
+              'Claude compaction capture did not complete',
+              'Claude compaction capture exceeds transport limit',
+            ].includes(message)
+              ? message
+              : stage;
+            const helperLine = stderrText
+              ? stderrText.split('\n', 1)[0].slice(0, 200)
+              : '';
+            try {
+              warn(
+                `ClaudeClient(${sessionId}): native context not captured${
+                  compactBoundary
+                    ? ' after a compaction; the next turn rebuilds the uncompacted history'
+                    : ''
+                }; the next turn restores from the host journal (${reason}${
+                  /^Claude compaction capture failed: [A-Za-z ]+$/.test(
+                    helperLine,
+                  )
+                    ? `; ${helperLine}`
+                    : ''
+                })`,
+              );
+            } catch {
+              // Diagnostics never fail the turn.
+            }
+            captured = undefined;
+          }
+          if (captured) {
+            coverage.assertCaptured(captured.payload, {
+              sessionId: nativeSessionId,
+              beforeUuid: contextCut.beforeUuid,
+              prefixSha256: contextCut.prefixSha256,
+              beforePayload: contextCut.beforePayload,
+              compactionWitness,
+              prompt: String(prompt),
+              outcome: nativeReportedFailure ? 'failure' : 'success',
             });
-            compactionWitness = event.compactionWitness;
+            await channel.write({
+              type: 'endo_native_context',
+              checkpoint: captured,
+            });
           }
-          const captureStatus = await E(proc).wait();
-          if (
-            !captured ||
-            captureStatus?.code !== 0 ||
-            captured.kind !== 'native-context' ||
-            captured.format !== 'claude-code-jsonl-v1' ||
-            captureStatus?.signal ||
-            closed ||
-            terminated
-          ) {
-            throw Error('Claude compaction capture did not complete');
-          }
-          coverage.assertCaptured(captured.payload, {
-            sessionId: nativeSessionId,
-            beforeUuid: contextCut.beforeUuid,
-            prefixSha256: contextCut.prefixSha256,
-            beforePayload: contextCut.beforePayload,
-            compactionWitness,
-            prompt: String(prompt),
-            outcome: nativeReportedFailure ? 'failure' : 'success',
-          });
-          await channel.write({
-            type: 'endo_native_context',
-            checkpoint: captured,
-          });
         }
         push(
           producerFailureReason

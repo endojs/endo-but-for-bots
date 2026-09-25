@@ -373,6 +373,52 @@ test('a transcript-continuity backend resumes portably after a failed native cap
   );
 });
 
+test('a completed turn without a native checkpoint resumes portably with its reply', async t => {
+  // A Claude reply that streamed and passed coverage, whose capture failed,
+  // now completes without a checkpoint (live 2026-09-25).
+  t.timeout(10_000);
+  const f = fixture();
+  /** @type {any[]} */
+  const supplied = [];
+  let sends = 0;
+  const client = harden({
+    async send(_prompt, opts) {
+      sends += 1;
+      supplied.push(opts?.transcript);
+      const channel = makeBufferedReader();
+      channel.push({
+        type: 'text-delta',
+        text: sends === 1 ? 'full answer' : 'follow-up answer',
+      });
+      channel.push({ type: 'end' });
+      return channel.reader;
+    },
+    async terminate() {
+      // This fixture owns no native process or other external resource.
+    },
+  });
+  /** @type {{kind: 'hosted', provideHostedClient: () => any}} */
+  const runtime = { kind: 'hosted', provideHostedClient: () => client };
+  const agent = await makeStreamingAgent(f.powers, undefined, runtime, 'Test', {
+    journalPowers: f.powers,
+    nativeContextFormat: 'claude-code-jsonl-v1',
+    portableContextFallback: true,
+  });
+  t.teardown(() => agent.shutdown());
+  await agent.converse('first', makeReplyChannel().writer);
+  await agent.converse('second', makeReplyChannel().writer);
+  t.deepEqual(
+    supplied[1]
+      .filter(record => record.kind === 'message')
+      .map(record => [record.role, record.content]),
+    [
+      ['user', 'first'],
+      ['assistant', 'full answer'],
+    ],
+  );
+  t.false((await agent.getHistory()).some(message => message.meta?.turnStatus));
+});
+
 for (const fault of ['beforeStore', 'afterStore']) {
   test(`mail dispatch publication ${fault} failure prevents inference and preserves committed receipt`, async t => {
     const f = fixture();
