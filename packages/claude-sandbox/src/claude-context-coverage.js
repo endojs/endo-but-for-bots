@@ -163,6 +163,8 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
   /** @type {Array<{uuid: string, role: string, content: any, messageId?: string, model?: string, messageType?: string}>} */
   const frames = [];
   const frameIds = new Set();
+  const completedToolIds = new Set();
+  const receivedToolResults = new Set();
   let diagnosticPhase = 'initial';
   let diagnosticCheck = 0;
   const requireValue = condition => {
@@ -207,8 +209,10 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
   };
   const completedBlock = () => {
     if (block.value.type !== 'tool_use') return block.value;
-    requireValue(block.json !== '');
-    const input = JSON.parse(block.json);
+    // A tool called with no arguments streams no input JSON at all (or only
+    // empty fragments). Its start block already carried exactly `{}`, which
+    // the completed assistant block must still match field for field.
+    const input = block.json === '' ? {} : JSON.parse(block.json);
     requireValue(input && typeof input === 'object' && !Array.isArray(input));
     return { ...block.value, input };
   };
@@ -357,10 +361,39 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
             }
           }
           requireValue(matches);
+          if (completed.type === 'tool_use') {
+            requireValue(!completedToolIds.has(completed.id));
+            completedToolIds.add(completed.id);
+          }
           block.matched = true;
         } else {
-          requireValue(!message && !block);
+          // Claude drains completed tools while other assistant blocks stream.
+          // Such results must name an already completed tool, without consuming
+          // or closing the still-open message/block. This is context, not proof
+          // of a host effect; authoritative reconciliation remains separate.
+          if (message || block) {
+            requireValue(
+              Array.isArray(content) &&
+                content.length > 0 &&
+                content.every(
+                  item =>
+                    item.type === 'tool_result' &&
+                    completedToolIds.has(item.tool_use_id) &&
+                    !receivedToolResults.has(item.tool_use_id),
+                ) &&
+                new Set(content.map(item => item.tool_use_id)).size ===
+                  content.length,
+            );
+          }
           validateUserContent(content);
+          if (Array.isArray(content)) {
+            for (const item of content) {
+              if (item.type === 'tool_result') {
+                requireValue(!receivedToolResults.has(item.tool_use_id));
+                receivedToolResults.add(item.tool_use_id);
+              }
+            }
+          }
         }
         frameIds.add(event.uuid);
         // Copy so a caller cannot mutate an observation after acceptance.
@@ -504,16 +537,49 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
       );
     });
 
-  // Only these loader-generated attachments are known inert context. They do
-  // not certify a tool result or settle an effect.
-  const inert = row =>
-    row.type === 'attachment' &&
-    (row.attachment?.type === 'total_tokens_reminder' ||
-      (row.attachment?.type === 'max_turns_reached' &&
-        [row.attachment.maxTurns, row.attachment.turnCount].every(
+  // Native-only context is preserved byte-for-byte, not certified as streamed
+  // dialogue or host effect evidence. The guest may alter its own context.
+  const nativeAttachment = row => {
+    if (row.type !== 'attachment') return false;
+    const attachment = row.attachment;
+    const strings = value =>
+      Array.isArray(value) && value.every(item => typeof item === 'string');
+    const keys = expected =>
+      Object.keys(attachment).length === expected.length &&
+      expected.every(key => Object.hasOwn(attachment, key));
+    if (attachment?.type === 'agent_listing_delta')
+      return (
+        keys([
+          'type',
+          'addedTypes',
+          'addedLines',
+          'removedTypes',
+          'isInitial',
+          'showConcurrencyNote',
+        ]) &&
+        strings(attachment.addedTypes) &&
+        strings(attachment.addedLines) &&
+        strings(attachment.removedTypes) &&
+        typeof attachment.isInitial === 'boolean' &&
+        typeof attachment.showConcurrencyNote === 'boolean'
+      );
+    if (attachment?.type === 'skill_listing')
+      return (
+        keys(['type', 'content', 'skillCount', 'isInitial', 'names']) &&
+        typeof attachment.content === 'string' &&
+        strings(attachment.names) &&
+        typeof attachment.skillCount === 'number' &&
+        typeof attachment.isInitial === 'boolean'
+      );
+    return (
+      attachment?.type === 'total_tokens_reminder' ||
+      (attachment?.type === 'max_turns_reached' &&
+        [attachment.maxTurns, attachment.turnCount].every(
           value =>
             typeof value === 'number' && Number.isInteger(value) && value > 0,
-        )));
+        ))
+    );
+  };
   const ordinaryFlags = row =>
     ['isCompactSummary', 'isVisibleInTranscriptOnly', 'isMeta'].every(
       key => row[key] === undefined || row[key] === false,
@@ -571,7 +637,7 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
     for (const row of rows) {
       requireValue(row.parentUuid === parent && ordinaryFlags(row));
       parent = row.uuid;
-      if (!inert(row)) {
+      if (!nativeAttachment(row)) {
         requireValue(matches(row, expectedFrames[position]));
         position += 1;
       }
@@ -671,7 +737,9 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
     requireValue(same([...retained.keys()], preserved.all_uuids));
     for (const [uuid, row] of retained) {
       requireValue(
-        (row.type === 'user' || row.type === 'assistant' || inert(row)) &&
+        (row.type === 'user' ||
+          row.type === 'assistant' ||
+          nativeAttachment(row)) &&
           known.has(uuid) &&
           same(identity(row), identity(known.get(uuid))),
       );
@@ -789,17 +857,7 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         ids.add(row.uuid);
         parent = row.uuid;
         if (row.type === 'attachment') {
-          const attachment = row.attachment;
-          requireValue(
-            attachment?.type === 'total_tokens_reminder' ||
-              (attachment?.type === 'max_turns_reached' &&
-                [attachment.maxTurns, attachment.turnCount].every(
-                  value =>
-                    typeof value === 'number' &&
-                    Number.isInteger(value) &&
-                    value > 0,
-                )),
-          );
+          requireValue(nativeAttachment(row));
         } else {
           const frame = frames[position];
           requireValue(

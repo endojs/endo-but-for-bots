@@ -25,18 +25,54 @@ const uuid = value => {
 const requireValue = (condition, message) => {
   if (!condition) throw diagnosticError(message);
 };
+const strings = value =>
+  Array.isArray(value) && value.every(item => typeof item === 'string');
+const exactKeys = (value, expected) =>
+  Object.keys(value).length === expected.length &&
+  expected.every(key => Object.hasOwn(value, key));
+// Loader-generated context the pinned CLI writes to its transcript but not to
+// its public stream. The native payload keeps each one byte for byte and in
+// order; none of them is dialogue or evidence that a host effect happened.
+// Keep in step with `nativeAttachment` in src/claude-context-coverage.js.
+const nativeAttachment = attachment =>
+  attachment?.type === 'total_tokens_reminder' ||
+  (attachment?.type === 'max_turns_reached' &&
+    Number.isInteger(attachment.maxTurns) &&
+    attachment.maxTurns > 0 &&
+    Number.isInteger(attachment.turnCount) &&
+    attachment.turnCount > 0) ||
+  (attachment?.type === 'agent_listing_delta' &&
+    exactKeys(attachment, [
+      'type',
+      'addedTypes',
+      'addedLines',
+      'removedTypes',
+      'isInitial',
+      'showConcurrencyNote',
+    ]) &&
+    strings(attachment.addedTypes) &&
+    strings(attachment.addedLines) &&
+    strings(attachment.removedTypes) &&
+    typeof attachment.isInitial === 'boolean' &&
+    typeof attachment.showConcurrencyNote === 'boolean') ||
+  (attachment?.type === 'skill_listing' &&
+    exactKeys(attachment, [
+      'type',
+      'content',
+      'skillCount',
+      'isInitial',
+      'names',
+    ]) &&
+    typeof attachment.content === 'string' &&
+    strings(attachment.names) &&
+    typeof attachment.skillCount === 'number' &&
+    typeof attachment.isInitial === 'boolean');
 const projection = row => {
   if (row.type === 'attachment') {
-    // Omitted only from portable dialogue; the native payload preserves this
-    // exact historical token-budget attachment for Claude restoration.
-    const attachment = row.attachment;
+    // Omitted only from portable dialogue; the native payload preserves the
+    // exact attachment for Claude restoration.
     requireValue(
-      attachment?.type === 'total_tokens_reminder' ||
-        (attachment?.type === 'max_turns_reached' &&
-          Number.isInteger(attachment.maxTurns) &&
-          attachment.maxTurns > 0 &&
-          Number.isInteger(attachment.turnCount) &&
-          attachment.turnCount > 0),
+      nativeAttachment(row.attachment),
       'Unsupported context attachment',
     );
     return [];

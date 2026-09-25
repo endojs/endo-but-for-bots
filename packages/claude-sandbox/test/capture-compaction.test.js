@@ -271,6 +271,82 @@ test('capture preserves observed max-turns attachment without inventing portable
   );
 });
 
+// Observed live on 2026-09-25 (pinned CLI): the transcript carries the agent
+// and skill catalogs the public stream omits. They are model-visible context,
+// kept exactly, never portable dialogue.
+const agentListing = {
+  type: 'agent_listing_delta',
+  addedTypes: ['general'],
+  addedLines: ['- general: synthetic agent line'],
+  removedTypes: [],
+  isInitial: true,
+  showConcurrencyNote: false,
+};
+const skillListing = {
+  type: 'skill_listing',
+  content: '- synthetic: synthetic skill line',
+  skillCount: 1,
+  isInitial: true,
+  names: ['synthetic'],
+};
+
+test('capture preserves agent and skill listing attachments in order', async t => {
+  const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };
+  const agents = {
+    uuid: id(10),
+    parentUuid: root.uuid,
+    sessionId: session,
+    type: 'attachment',
+    attachment: agentListing,
+  };
+  const skills = {
+    uuid: id(11),
+    parentUuid: agents.uuid,
+    sessionId: session,
+    type: 'attachment',
+    attachment: skillListing,
+  };
+  const notice = { type: 'endo_capture', session_id: session };
+  const result = JSON.parse(
+    (await run(t, [root, agents, skills], notice)).stdout,
+  );
+  t.deepEqual(result.retainedTail, [
+    { kind: 'message', role: 'user', content: 'hello' },
+  ]);
+  t.is(result.nativeContext.leafUuid, skills.uuid);
+  t.is(
+    result.nativeContext.transcript,
+    `${[root, agents, skills].map(row => JSON.stringify(row)).join('\n')}\n`,
+  );
+});
+
+for (const [label, attachment] of [
+  ['agent listing with an extra key', { ...agentListing, extra: true }],
+  ['agent listing with non-string lines', { ...agentListing, addedLines: [1] }],
+  [
+    'agent listing with a non-string type',
+    { ...agentListing, addedTypes: [1] },
+  ],
+  ['skill listing with a string count', { ...skillListing, skillCount: '1' }],
+  ['skill listing without names', { ...skillListing, names: undefined }],
+  ['skill listing with non-string content', { ...skillListing, content: 1 }],
+]) {
+  test(`capture refuses ${label}`, async t => {
+    const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };
+    const row = {
+      uuid: id(10),
+      parentUuid: root.uuid,
+      sessionId: session,
+      type: 'attachment',
+      attachment: JSON.parse(JSON.stringify(attachment)),
+    };
+    const error = await t.throwsAsync(
+      run(t, [root, row], { type: 'endo_capture', session_id: session }),
+    );
+    t.regex(String(error?.stderr), /Unsupported context attachment/);
+  });
+}
+
 test('capture preserves summary wrapper, retained tool pair and completed tail', async t => {
   const { stdout } = await run(t, records());
   const { nativeContext, ...portable } = JSON.parse(stdout);

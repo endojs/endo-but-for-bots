@@ -605,6 +605,67 @@ test('thinking/signature and tool JSON deltas must match complete frames', t => 
   t.notThrows(() => f.assert());
 });
 
+// Observed live on 2026-09-25: the pinned CLI writes its agent and skill
+// catalogs to the transcript but not to the public stream. They are preserved
+// as native context only; they never stand in for dialogue or tool evidence.
+const agentListing = {
+  type: 'agent_listing_delta',
+  addedTypes: ['general'],
+  addedLines: ['- general: synthetic agent line'],
+  removedTypes: [],
+  isInitial: true,
+  showConcurrencyNote: false,
+};
+const skillListing = {
+  type: 'skill_listing',
+  content: '- synthetic: synthetic skill line',
+  skillCount: 1,
+  isInitial: true,
+  names: ['synthetic'],
+};
+const listingCase = attachments => {
+  const f = fixture();
+  f.start();
+  f.block({ type: 'text', text: '' }, [{ type: 'text_delta', text: 'ok' }], {
+    type: 'text',
+    text: 'ok',
+  });
+  f.stop();
+  let parentUuid = f.rows.at(-1).uuid;
+  for (const [index, attachment] of attachments.entries()) {
+    const uuid = id(20 + index);
+    f.rows.push(
+      /** @type {any} */ ({
+        type: 'attachment',
+        sessionId,
+        uuid,
+        parentUuid,
+        attachment,
+      }),
+    );
+    parentUuid = uuid;
+  }
+  return f;
+};
+
+test('agent and skill listings are preserved as native-only context', t => {
+  t.notThrows(() => listingCase([agentListing, skillListing]).assert());
+});
+
+for (const [label, attachment] of [
+  ['an extra key', { ...agentListing, extra: true }],
+  ['non-string agent lines', { ...agentListing, addedLines: [1] }],
+  ['a string skill count', { ...skillListing, skillCount: '1' }],
+  ['non-string skill names', { ...skillListing, names: [1] }],
+  ['an unknown attachment', { type: 'world-fact', text: 'unsupported' }],
+]) {
+  test(`listing attachments refuse ${label}`, t => {
+    t.throws(() => listingCase([attachment]).assert(), {
+      message: /native context coverage unavailable/,
+    });
+  });
+}
+
 for (const [name, complete, category] of [
   ['text', { type: 'text', text: 'SECRET_CHANGED' }, 'text-value'],
   [
