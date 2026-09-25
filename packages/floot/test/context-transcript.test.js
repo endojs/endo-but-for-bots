@@ -87,6 +87,305 @@ test('native-required dispatch cannot fall back to portable history before its f
   );
 });
 
+// Live 2026-09-25: one failed Claude capture made every later turn in the
+// session refuse. A backend that rebuilds its conversation from supplied
+// records every turn (`continuity: 'transcript'`) gets portable records
+// instead, with the evidence the native bytes could not cover. Nothing is
+// hidden; only native fidelity is lost.
+const fallback = { portableFallback: true };
+const failedCapture = (turnId, records, extra = {}) =>
+  turn(turnId, records, {
+    state: 'failed',
+    transcriptComplete: false,
+    nativeContextFormat: 'claude-code-jsonl-v1',
+    ...extra,
+  });
+const PREFIX_NOTICE =
+  '[Recovered a durable transcript prefix. The remaining streamed text or events may be missing; do not assume the turn completed.]';
+const EVIDENCE_NOTICE =
+  '[Recovered durable tool evidence. Its position relative to the streamed text is unknown; it does not imply another execution. Verify uncertain outcomes before retrying.]';
+const user = content => ({ kind: 'message', role: 'user', content });
+
+test('portable fallback carries a failed first turn instead of refusing', async t => {
+  const attempted = failedCapture(1, [message('partial answer')]);
+  t.deepEqual(
+    await projectContextTranscript([attempted], noRead, undefined, fallback),
+    [
+      user('input 1'),
+      message('partial answer'),
+      message(PREFIX_NOTICE),
+      message('[Floot turn failed.]'),
+    ],
+  );
+  await t.throwsAsync(projectContextTranscript([attempted], noRead), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+});
+
+const hostOnly = {
+  callId: 'host-only',
+  name: 'effect',
+  args: '{}',
+  settled: true,
+  result: 'ran',
+  sequence: '21',
+  resultSequence: '22',
+};
+
+test('portable fallback replaces a native checkpoint with its portable context and keeps later evidence', async t => {
+  const native = nativeCheckpoint();
+  const turns = [
+    turn(10, [native], { nativeContextFormat: native.format }),
+    failedCapture(20, [message('reported')], { tools: [hostOnly] }),
+  ];
+  const selected = await projectContextTranscript(
+    turns,
+    noRead,
+    undefined,
+    fallback,
+  );
+  t.false(selected.some(record => record.kind === 'native-context'));
+  t.deepEqual(selected, [
+    ...native.context,
+    user('input 20'),
+    message('reported'),
+    message(EVIDENCE_NOTICE),
+    call('recovered:20:host-only', 'effect'),
+    result('recovered:20:host-only', 'ran'),
+    message(PREFIX_NOTICE),
+    message('[Floot turn failed.]'),
+  ]);
+  await t.throwsAsync(projectContextTranscript(turns, noRead), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+});
+
+test('a later captured checkpoint restores native context after a fallback without host-only evidence', async t => {
+  const native = nativeCheckpoint();
+  const later = { ...native, payload: 'later native payload' };
+  const turns = [
+    turn(10, [native], { nativeContextFormat: native.format }),
+    failedCapture(20, [message('reported')]),
+    turn(30, [later], { nativeContextFormat: native.format }),
+  ];
+  // No fallback needed: the failed turn left no evidence outside the new
+  // checkpoint, so the session is native again.
+  t.deepEqual(await projectContextTranscript(turns, noRead), [later]);
+  t.deepEqual(
+    await projectContextTranscript(turns, noRead, undefined, fallback),
+    [later],
+  );
+});
+
+test('host-only evidence before a later checkpoint keeps the fallback portable, never hidden', async t => {
+  const native = nativeCheckpoint();
+  const later = { ...native, payload: 'later native payload' };
+  const turns = [
+    turn(10, [native], { nativeContextFormat: native.format }),
+    failedCapture(20, [message('reported')], { tools: [hostOnly] }),
+    turn(30, [later], { nativeContextFormat: native.format }),
+  ];
+  t.deepEqual(
+    await projectContextTranscript(turns, noRead, undefined, fallback),
+    [
+      ...later.context,
+      message(EVIDENCE_NOTICE),
+      call('recovered-context_20_0', 'effect'),
+      result('recovered-context_20_0', 'ran'),
+    ],
+  );
+  await t.throwsAsync(projectContextTranscript(turns, noRead), {
+    message: /cannot conceal unresolved or recovered tool evidence/,
+  });
+});
+
+test('fallback swaps only the selected checkpoint, never duplicating its turn', async t => {
+  // An ordinary Claude capture has no leading summary; its turn's own tool
+  // records precede the checkpoint and are superseded by it.
+  const context = [
+    user('input 10'),
+    call('toolu_A', 'effect'),
+    result('toolu_A', 'done'),
+    message('ten'),
+  ];
+  const native = {
+    kind: 'native-context',
+    format: 'claude-code-jsonl-v1',
+    payload: 'opaque native payload',
+    context,
+  };
+  const selected = await projectContextTranscript(
+    [
+      turn(
+        10,
+        [
+          call('toolu_A', 'effect'),
+          result('toolu_A', 'done'),
+          message('ten'),
+          native,
+        ],
+        { nativeContextFormat: native.format },
+      ),
+      failedCapture(20, [message('reported')]),
+    ],
+    noRead,
+    undefined,
+    fallback,
+  );
+  t.deepEqual(selected, [
+    ...context,
+    user('input 20'),
+    message('reported'),
+    message(PREFIX_NOTICE),
+    message('[Floot turn failed.]'),
+  ]);
+  const ids = selected
+    .filter(record => record.kind === 'tool-call')
+    .map(record => record.id);
+  t.is(new Set(ids).size, ids.length);
+  t.is(selected[0].role, 'user');
+});
+
+test('fallback repeats no evidence a later checkpoint already holds', async t => {
+  const native = nativeCheckpoint();
+  // A checkpoint that holds the `recovered-context_…` copy verbatim. Live, the
+  // first checkpoint after the failure holds turn-evidence's own id for the
+  // call instead, so this copy reaches a checkpoint one turn later: the model
+  // sees the call at most twice, and the count stops there.
+  const later = {
+    ...native,
+    payload: 'later native payload',
+    context: [
+      ...native.context,
+      user('input 20'),
+      message('reported'),
+      message(EVIDENCE_NOTICE),
+      call('recovered-context_20_0', 'effect'),
+      result('recovered-context_20_0', 'ran'),
+    ],
+  };
+  const turns = [
+    turn(10, [native], { nativeContextFormat: native.format }),
+    failedCapture(20, [message('reported')], { tools: [hostOnly] }),
+    turn(30, [later], { nativeContextFormat: native.format }),
+  ];
+  t.deepEqual(
+    await projectContextTranscript(turns, noRead, undefined, fallback),
+    later.context,
+  );
+});
+
+test('an unsafe checkpoint turn resumes portably with its uncovered evidence', async t => {
+  const native = nativeCheckpoint();
+  const selected = await projectContextTranscript(
+    [
+      turn(10, [native], {
+        nativeContextFormat: native.format,
+        tools: [{ ...hostOnly, sequence: '11', resultSequence: '12' }],
+      }),
+    ],
+    noRead,
+    undefined,
+    fallback,
+  );
+  t.false(selected.some(record => record.kind === 'native-context'));
+  t.deepEqual(selected.slice(0, native.context.length), native.context);
+  // The host-only call is never dropped; it follows as recovered evidence.
+  t.true(
+    selected.some(
+      record => record.kind === 'tool-result' && record.content === 'ran',
+    ),
+  );
+  await t.throwsAsync(
+    projectContextTranscript(
+      [
+        turn(10, [native], {
+          nativeContextFormat: native.format,
+          tools: [{ ...hostOnly, sequence: '11', resultSequence: '12' }],
+        }),
+      ],
+      noRead,
+    ),
+    { message: /cannot conceal unresolved or recovered tool evidence/ },
+  );
+});
+
+for (const [label, tool, expected] of [
+  [
+    'host-settled result',
+    { settled: true, result: 'host result', resultSequence: '13' },
+    /host result/,
+  ],
+  ['unsettled call', { settled: false }, /outcome unknown/i],
+]) {
+  test(`a checkpoint turn's ${label} before the checkpoint stays paired in the fallback`, async t => {
+    const native = nativeCheckpoint();
+    const selected = await projectContextTranscript(
+      [
+        turn(10, [call('toolu_X', 'effect'), native], {
+          nativeContextFormat: native.format,
+          tools: [
+            {
+              callId: 'toolu_X',
+              name: 'effect',
+              args: '{}',
+              sequence: '11',
+              ...tool,
+            },
+          ],
+        }),
+      ],
+      noRead,
+      undefined,
+      fallback,
+    );
+    // A result without its call would be dropped by the writer: the call
+    // must come with it.
+    const { pairs } = pairToolCalls(selected);
+    t.true(
+      pairs.some(
+        pair =>
+          pair.call.name === 'effect' &&
+          pair.call.id !== 'native' &&
+          expected.test(pair.result?.content ?? ''),
+      ),
+    );
+  });
+}
+
+test('the held-evidence match survives the writer and capture re-serializing arguments', async t => {
+  const native = nativeCheckpoint();
+  const spaced = { ...hostOnly, args: '{ "path" : "/" }' };
+  const later = {
+    ...native,
+    payload: 'later native payload',
+    context: [
+      ...native.context,
+      message(EVIDENCE_NOTICE),
+      {
+        kind: 'tool-call',
+        id: 'recovered-context_20_0',
+        name: 'effect',
+        args: '{"path":"/"}',
+      },
+      result('recovered-context_20_0', 'ran'),
+    ],
+  };
+  t.deepEqual(
+    await projectContextTranscript(
+      [
+        turn(10, [native], { nativeContextFormat: native.format }),
+        failedCapture(20, [message('reported')], { tools: [spaced] }),
+        turn(30, [later], { nativeContextFormat: native.format }),
+      ],
+      noRead,
+      undefined,
+      fallback,
+    ),
+    later.context,
+  );
+});
+
 test('native context remains atomic with its suffix and refuses direct-provider conversion', async t => {
   const native = nativeCheckpoint();
   const selected = await projectContextTranscript(
@@ -373,7 +672,7 @@ test('mixed old pairs preserve only late canonical results and unresolved calls'
 });
 
 test('recovered context IDs cannot alias a retained native call', async t => {
-  const nativeId = 'recovered-context:1:0';
+  const nativeId = 'recovered-context_1_0';
   const tail = [
     call(nativeId, 'retained'),
     result(nativeId, 'retained result'),

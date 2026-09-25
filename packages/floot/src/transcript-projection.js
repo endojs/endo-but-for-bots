@@ -311,7 +311,9 @@ export const recoverTurnTranscript = async (
         row.settledBy === 'host' ||
         lateResult
       ) {
-        const id = `recovered-context:${turn.turnId}:${index}`;
+        // The Messages API alphabet, so a native store rebuilt from these
+        // records keeps the id verbatim and later projections can match it.
+        const id = `recovered-context_${turn.turnId}_${index}`;
         evidence.push(
           assertTranscriptRecord({
             kind: 'tool-call',
