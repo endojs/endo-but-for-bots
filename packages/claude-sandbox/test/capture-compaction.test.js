@@ -133,6 +133,21 @@ test('compaction coverage retains only current preboundary context', async t => 
   t.false(Object.hasOwn(without, 'compactionWitness'));
 });
 
+test('compaction coverage witness leaves out the CLI ai-title row', async t => {
+  const entries = records();
+  const title = { type: 'ai-title', aiTitle: 'Cats', sessionId: session };
+  entries.splice(2, 0, title);
+  const { stdout } = await run(t, entries, {
+    ...boundary,
+    coverage_before_uuid: id(9),
+  });
+  const witness = JSON.parse(stdout)
+    .compactionWitness.trimEnd()
+    .split('\n')
+    .map(JSON.parse);
+  t.deepEqual(witness, [entries[1], entries[3]]);
+});
+
 test('fresh compaction coverage includes the initial prompt', async t => {
   const entries = records();
   const { stdout } = await run(t, entries, {
@@ -289,6 +304,32 @@ const skillListing = {
   isInitial: true,
   names: ['synthetic'],
 };
+
+// Observed live on 2026-09-25: the CLI writes its generated session title
+// as an `ai-title` row with no uuid, among the context rows.
+for (const coverage of [false, true]) {
+  test(`capture skips the CLI's ai-title row (coverage cut ${coverage})`, async t => {
+    const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };
+    const title = { type: 'ai-title', aiTitle: 'Greeting', sessionId: session };
+    const reply = {
+      ...contextRow(10, 'assistant', 'hi'),
+      parentUuid: root.uuid,
+    };
+    const notice = {
+      type: 'endo_capture',
+      session_id: session,
+      ...(coverage ? { coverage_before_uuid: null } : {}),
+    };
+    const result = JSON.parse(
+      (await run(t, [root, title, reply], notice)).stdout,
+    );
+    t.is(result.nativeContext.leafUuid, reply.uuid);
+    t.is(
+      result.nativeContext.transcript,
+      `${JSON.stringify(root)}\n${JSON.stringify(reply)}\n`,
+    );
+  });
+}
 
 test('capture preserves agent and skill listing attachments in order', async t => {
   const root = { ...contextRow(9, 'user', 'hello'), parentUuid: null };

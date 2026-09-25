@@ -192,6 +192,17 @@ const frames = async function* (file) {
   requireValue(line === '', 'Incomplete transcript frame');
 };
 
+// CLI operations and state, not conversation context. One list for both the
+// coverage witness and context selection, so they cannot drift apart.
+const operationalRows = new Set([
+  'queue-operation',
+  'last-prompt',
+  'file-history-snapshot',
+  'progress',
+  'mode',
+  // The CLI's generated session title: display metadata, no uuid.
+  'ai-title',
+]);
 const main = async () => {
   requireValue(process.argv.length === 3, 'Expected boundary record');
   let expected = JSON.parse(process.argv[2]);
@@ -333,16 +344,7 @@ const main = async () => {
         return;
       }
       if (!foundCoverageCut || row.uuid === boundary) return;
-      if (
-        [
-          'queue-operation',
-          'last-prompt',
-          'file-history-snapshot',
-          'progress',
-          'mode',
-        ].includes(row.type)
-      )
-        return;
+      if (operationalRows.has(row.type)) return;
       requireValue(row.sessionId === session, 'Coverage session mismatch');
       witnessBytes += Buffer.byteLength(text) + 1;
       requireValue(witnessBytes <= LIMIT, 'Coverage exceeds capture limit');
@@ -410,16 +412,7 @@ const main = async () => {
         // Validate the leaf, but do not import operational loader metadata.
         return;
       }
-      if (
-        !needed &&
-        [
-          'queue-operation',
-          'last-prompt',
-          'file-history-snapshot',
-          'progress',
-          'mode',
-        ].includes(row.type)
-      ) {
+      if (!needed && operationalRows.has(row.type)) {
         // These are CLI operations/state, not conversation context. Replaying
         // queued prompts or file-history snapshots is not authorized by capture.
         return;
