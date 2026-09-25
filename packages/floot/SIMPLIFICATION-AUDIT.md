@@ -186,12 +186,38 @@ Read-only inspection of the retained short transcript identifies unsupported
 They contain actual model-visible guidance, not merely accounting metadata.
 The pinned Claude CLI omits these attachments from the public event stream;
 its initialization catalog does not attest their complete contents.
-Because the native JSONL is model-writable, parsing or retaining those records
-does not establish their origin under the current stream-coverage contract.
-Do not silently add them to the inert-attachment allowlist.
-A follow-up design decision must either obtain trusted request-side context
-evidence or explicitly define a weaker contract for advisory native metadata.
-The former preserves the current coverage goal; neither is a small parser fix.
+The approved guest-domain design permits native context mutation; provider
+authenticity is not a prerequisite for preservation (see the scope correction in
+[refactor alignment](REFACTOR-ALIGNMENT.md)).
+Support must preserve these context-bearing records and their ordering without
+silently treating them as inert or using them to certify host tool effects.
+The earlier proposed request-side authenticity gate was outside that scope.
 Native tool blocks also carry `caller`, but without the original partial stream
 that is only a candidate explanation for the tool mismatch, not a proven cause.
 No failed inference was replayed and no uncertainty marker was cleared.
+
+### Claude user-acceptance findings, September 25
+
+Operator testing on generation 175 found every Claude session unusable after
+its first message. Three independent causes, plus one deployment gap:
+
+- Generation 175's Claude setup refused the new image: the retained broker
+  pins its image, so sessions kept the generation-170 image and its capture
+  helper. The broker name was retired with the Claude sessions (operator
+  approved) and setup minted a broker on the configured image.
+- Tools called with no arguments stream no input JSON. The coverage check
+  treated that as missing input (`observe/assistant, check=10`); it now means
+  the start block's exact `{}`, still compared against the completed block.
+- `agent_listing_delta` and `skill_listing` attachments are now accepted, with
+  exact key sets, by both the daemon validator and the in-image capture helper.
+  They are preserved in order as native-only context, never as dialogue or
+  tool-effect evidence.
+- Completed tool results may interleave a still-streaming assistant block only
+  when each names a completed, not yet answered tool call.
+- The prompt process's stdin is ended at spawn. The open pipe cost three seconds
+  per turn and put a CLI warning into user-visible failure text.
+
+Still open: after any failed capture, Floot refuses every later turn in that
+session ("Native context cannot conceal unresolved or recovered tool evidence"),
+including after a turn with no tools. That permanence is a design decision, not
+a parser defect, and is not changed here. Failure text is also shown raw.
