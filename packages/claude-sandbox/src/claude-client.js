@@ -623,6 +623,15 @@ export const makeClaudeClient = args => {
         captureStderr: true,
       }),
     );
+    // The prompt travels in argv. Left open, the piped stdin makes the CLI
+    // wait three seconds for input and print a warning into stderr, which a
+    // failed turn then shows the user. End it, but never make the handoff of
+    // `proc` wait on that: until it is returned, cancellation cannot reach it.
+    // A failure here is not a turn failure; at worst the CLI waits itself.
+    void Promise.resolve()
+      .then(() => makeStdinWriter(proc))
+      .then(writer => writer.return())
+      .catch(() => {});
     return proc;
   };
 

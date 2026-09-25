@@ -271,6 +271,57 @@ test('ordinary completed native turn captures covered context without a compacti
   t.is(events.at(-1).type, 'end');
 });
 
+test('prompt process stdin is ended at spawn without writing', async t => {
+  // Live 2026-09-25: an open stdin pipe made the CLI wait 3 s and print a
+  // warning that a failed turn then showed the user.
+  const wire = nativeWire();
+  const fake = makeFakeSlice([wire.output, [jsonBytes(wire.captured)]]);
+  /** @type {Array<{ argv: string[], wrote: number, ended: boolean }>} */
+  const pipes = [];
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStdinWriter: async proc => {
+        const pipe = { argv: proc.argv, wrote: 0, ended: false };
+        pipes.push(pipe);
+        return {
+          next: async () => {
+            pipe.wrote += 1;
+            return { done: false };
+          },
+          return: async () => {
+            pipe.ended = true;
+            return { done: true };
+          },
+        };
+      },
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('hello'));
+  t.is(events.at(-1).type, 'end');
+  const prompt = pipes.filter(pipe => pipe.argv[0] === 'claude');
+  t.is(prompt.length, 1);
+  t.deepEqual(
+    { wrote: prompt[0].wrote, ended: prompt[0].ended },
+    { wrote: 0, ended: true },
+  );
+});
+
+test('a stdin that cannot be ended does not fail the turn', async t => {
+  const wire = nativeWire();
+  const fake = makeFakeSlice([wire.output, [jsonBytes(wire.captured)]]);
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      makeStdinWriter: async () => {
+        throw Error('stdin already closed');
+      },
+    }),
+  );
+  t.teardown(() => client.terminate());
+  const events = await drain(await client.send('hello'));
+  t.is(events.at(-1).type, 'end');
+});
+
 for (const witnessMode of ['valid', 'missing', 'changed']) {
   test(`pinned compaction ${witnessMode} witness is verified but never journaled`, async t => {
     const f = JSON.parse(
