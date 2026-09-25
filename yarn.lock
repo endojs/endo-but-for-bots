@@ -1349,6 +1349,29 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/agent-mcp-stdio@workspace:packages/agent-mcp-stdio":
+  version: 0.0.0-use.local
+  resolution: "@endo/agent-mcp-stdio@workspace:packages/agent-mcp-stdio"
+  dependencies:
+    "@endo/agent-tools": "workspace:^"
+    "@endo/daemon": "workspace:^"
+    "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
+    "@endo/exo-stream": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/patterns": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/where": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
+    ava: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  bin:
+    endo-mcp-stdio: ./bin/endo-mcp-stdio.js
+  languageName: unknown
+  linkType: soft
+
 "@endo/agent-tools@workspace:^, @endo/agent-tools@workspace:packages/agent-tools":
   version: 0.0.0-use.local
   resolution: "@endo/agent-tools@workspace:packages/agent-tools"
@@ -1356,7 +1379,9 @@ __metadata:
     "@earendil-works/pi-agent-core": "npm:^0.85.1"
     "@earendil-works/pi-ai": "npm:^0.85.1"
     "@endo/daemon": "workspace:^"
+    "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
+    "@endo/exo": "workspace:^"
     "@endo/exo-git": "workspace:^"
     "@endo/exo-http-client": "workspace:^"
     "@endo/exo-shell": "workspace:^"
@@ -1368,6 +1393,7 @@ __metadata:
     "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     ajv: "npm:^8.17.1"
     ava: "catalog:dev"
