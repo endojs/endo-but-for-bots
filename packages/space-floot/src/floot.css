@@ -1430,3 +1430,25 @@
   margin-top: 0;
   color: var(--fl-amber);
 }
+
+/* A turn that ended without finishing: a plain line, its raw reason folded. */
+.floot-msg.floot-turn-status {
+  color: var(--fl-text-muted);
+  font-style: italic;
+}
+.floot-turn-status-detail {
+  margin-top: 0.35rem;
+  font-style: normal;
+}
+.floot-turn-status-detail > summary {
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.85rem;
+}
+.floot-turn-status-detail pre {
+  max-height: 16rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+}

@@ -26,7 +26,7 @@ export {};
  *   pending?: boolean,
  *   pendingId?: number | string,
  *   pendingState?: 'queued' | 'sending' | 'interrupted',
- *   meta?: { mail?: { from?: string } },
+ *   meta?: { mail?: { from?: string }, turnStatus?: boolean, turnState?: string },
  * }} FlootMessage
  */
 
