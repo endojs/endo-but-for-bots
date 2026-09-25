@@ -221,3 +221,10 @@ Still open: after any failed capture, Floot refuses every later turn in that
 session ("Native context cannot conceal unresolved or recovered tool evidence"),
 including after a turn with no tools. That permanence is a design decision, not
 a parser defect, and is not changed here. Failure text is also shown raw.
+
+Generation 176 then exposed one more capture gap: the CLI's `ai-title` row
+(session title, no uuid) failed the helper's identity check. Generation 177
+(`aadc49ce4`) skips it with the other operational rows. On generation 177, live
+two-turn probes pass for a greeting, three no-argument Endo tools, and two shell
+commands with arguments; each follow-up answers from the prior turn's context.
+Restart restoration and the cross-backend matrix were not rerun.
