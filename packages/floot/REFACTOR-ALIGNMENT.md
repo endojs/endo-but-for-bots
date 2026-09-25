@@ -1,6 +1,6 @@
 # Current repository alignment with the hosted sandbox refactor
 
-Date: 2026-09-24. Priority audit requested by the operator.
+Date: 2026-09-24, revalidated 2026-09-25. Priority audit requested by the operator.
 Initial application snapshot: `61e5375288ce9772b31c9a4997efb5e3809b6bff`.
 Initial host snapshot: `60ee154`; the manifest integration was then uncommitted.
 Follow-up host `62a1077` completes it with reviewed dependency wiring and tests.
@@ -24,6 +24,33 @@ Older dated design/audit paragraphs are evidence of earlier states, not reliable
 descriptions of today's source. This summary takes precedence for current status;
 the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
+## Status validation, 2026-09-25
+
+Revalidated against the plan at `4caded3fc` (deployed code `adf25f948`, Tokyo
+generation 180, host `688f5e3`), with the live acceptance recorded in
+endo-host `ops/explicit-journal-deployment-20260924.md`.
+
+| Item | Status | Evidence |
+|---|---|---|
+| RA-01 simplification | Removals done; target regressed | Every removal named below is in source. The four backend/shared packages measure 42,185 lines (was 39,713 at the snapshot), and the vendor packages 19,028 (was 16,718), mostly new native-context capture/restore code (Claude coverage and helpers, Codex context transport) that the retained-mechanism inventory does not yet cover. The attachment allowlist exists twice, in `claude-context-coverage.js` and `oci/capture-compaction.mjs`, synchronized by hand |
+| RA-02 bounded context | Open | No whole-context bound, no Fae compaction producer, no policy. The portable fallback (`88f9deb23`) and non-fatal capture (`adf25f948`) reverse RA-02's "refuse rather than fall back" for Claude (the transcript-continuity backend with native checkpoints; OpenCode has none to refuse on): a failed, stopped or uncaptured turn now projects the checkpoint's portable context plus everything after it, so bounding relies on the CLI's own compaction until the next Claude checkpoint. Codex still refuses |
+| RA-03 account identity | Done in source; in the deployed code | Explicit bindings, exact-authority merging, reset pairing; not separately accepted live |
+| RA-04 admission conformance | Partial | The shared harness covers cancellation before/during preparation and during restoration on all three adapters. Cancel at the write, after dispatch, and failure-then-next-turn are per-adapter only; Codex's successor disposition deliberately differs |
+| RA-05 rebaseline and accept | Partial; Codex blocked by quota | Paired deployment done. Claude and OpenCode pass the hosted matrix (create, tools, network policy, cancel, delete) and restart recall; Fae passes its matrix and restart recall; the Claude pin is now restoration-verified. Codex could not run: both subscriptions returned `usage_limit_reached` until 2026-09-30/10-01. The generation-173 Codex owner stop and opaque grant-admission refusal remain open. The matrix's Claude seed logged one non-fatal capture failure ("Divergent or missing suffix ancestry"), an unseen native record chain still to reproduce |
+
+**Divergence: per-backend concurrent-session caps.** Hosted Codex is capped at
+two concurrent sessions (endo-host `codexSandbox.maxSessions = 2`, also the
+module default; mapped to the listener runtime's `maxListeners`). Claude and
+OpenCode have no host option and run at the runtime default of 16. The design
+requires each numeric limit to be justified by capacity, parser, provider or
+budget rather than copied, and no justification for two is recorded; it likely
+survives from the retired project-id scheme. Codex setup refuses a changed
+retained configuration, so raising it means retiring the Codex broker; if an
+option is added for Claude and OpenCode, it must also join their
+retained-configuration checks, which today compare only authority, credential
+kind and images. Align the three (one option, a justified shared default) as part of
+RA-04/RA-05.
+
 ## Requirements and current evidence
 
 | Intended end state | Current evidence | Verdict |
@@ -36,8 +63,8 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 | Shared framing, admission and cancellation semantics | Shared turn channel exists, but three client admission state machines remain; recent Claude/OpenCode pre-admission cancellation defects needed parallel fixes | Partial: common behavioral conformance is warranted before deciding whether more implementation sharing is useful |
 | Bounded resident memory for long healthy work | `context-transcript.js` pages archived metadata but accumulates active/exception record arrays; without a checkpoint it selects all eligible nonpending history | Not complete. Per-value/per-turn bounds do not bound the whole context; direct Fae has no automatic compaction producer |
 | Runtime/provider/account/model are separate concepts | Explicit session identity and runtime configuration; hosted account authority; logical account bindings and exact reset identities | Session reports now select configured accounts by backend and subscription pin; automatic pools do not imply payer attribution or eligibility. Factory direct-provider reporting stays separate. |
-| Smaller common implementation; delete superseded paths | Vendor packages shrank, shared implementation grew substantially; generic sandbox `nativeProfile` path has now been retired locally with operator approval | Simplicity target not demonstrated. Removing this obsolete mode is progress, not proof of the overall target |
-| One current set of guarantees and final conformance | Design contains overlapping historical status blocks; host revision pin is older than application HEAD | Not complete. Rebaseline documentation and candidate, then perform coordinated deployment and current cross-backend acceptance |
+| Smaller common implementation; delete superseded paths | Vendor packages shrank and shared implementation grew substantially by the audit snapshot; since then the vendor packages grew back (16,718 to 19,028 lines) with native-context work while shared code stayed flat; generic sandbox `nativeProfile` path has been retired with operator approval | Simplicity target not demonstrated. Removing this obsolete mode is progress, not proof of the overall target |
+| One current set of guarantees and final conformance | Design contains overlapping historical status blocks; the host pin matches the deployed code (`adf25f948`, generation 180) | Not complete. Codex acceptance, RA-02 and RA-04 remain; see the 2026-09-25 validation above |
 
 ## Priority findings
 
@@ -1144,7 +1171,9 @@ Not deployed; Tokyo's prepared `63aa1a8c4` candidate predates this fix.
 
 ### RA-05 — Rebaseline and accept the actual candidate
 
-`endo-host/endo.rev:1` pins `d5d943d`, not this application snapshot. Historical
+(2026-09-25: `endo.rev` now pins the deployed `adf25f948`; see the status
+validation above for what acceptance remains.) At the audit, `endo-host/endo.rev:1`
+pinned `d5d943d`, not this application snapshot. Historical
 generations and prior green tests cannot certify the current branch. Before
 deploying, reconcile retirement/preservation gates and unfinished host acceptance
 runner changes. Preserve Secrets, renewal owners, host, and workspaces.

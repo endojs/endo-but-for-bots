@@ -3,28 +3,33 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-24 |
+| **Updated** | 2026-09-25 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
 
 ## Implementation status
 
-### Native context ownership — 2026-09-24
+### Native context ownership — 2026-09-24, updated 2026-09-25
 
 Claude ordinary-turn native checkpoints now use the Floot journal as authority,
 with exact restored-prefix and current-stream coverage checked before publication.
 The host-side `makeTranscriptResume` scanner and ambient `--continue` fallback
 are removed; all continuation is projected from supplied journal records.
 The persistent config mount has not yet moved to tmpfs.
-Durable dispatch records require Claude's native format so failed capture cannot
-silently restore a plain-text-only conversation after journal reconstruction.
+Durable dispatch records require Claude's native format. Since 2026-09-25 a
+turn that failed, was stopped, or completed without a captured checkpoint is
+followed by a portable restoration from the journal instead of a refusal. When
+only capture fails on a completed turn, the host logs a static "native context
+not captured" warning. Native reasoning continuity resumes at the next
+checkpoint. Codex still refuses.
 Forensic history remains readable.
 Verified terminal failures can now publish complete native checkpoints while
 retaining their failed outcome and diagnostics; partial or unconfirmed failures
 cannot.
-Compaction, cancelled native capture, real-provider signature acceptance,
-and coordinated deployment remain open; see the current
+Coordinated deployment is done (Tokyo generation 180, 2026-09-25); compaction,
+cancelled native capture, real-provider signature acceptance and Codex live
+acceptance remain open; see the current
 [refactor alignment audit](../packages/floot/REFACTOR-ALIGNMENT.md).
 Older sections below describe intermediate plans and are not current acceptance.
 
