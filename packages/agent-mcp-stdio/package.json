@@ -1,0 +1,68 @@
+{
+  "name": "@endo/agent-mcp-stdio",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A stdio MCP server that exposes exactly one Endo guest's static tool-call surface to a confined claude -p",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/agent-mcp-stdio"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "bin": {
+    "endo-mcp-stdio": "./bin/endo-mcp-stdio.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./types-index.types.d.ts",
+      "default": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava",
+    "lint": "yarn lint:types && yarn lint:eslint",
+    "lint-fix": "eslint --fix .",
+    "lint:eslint": "eslint .",
+    "lint:types": "tsc"
+  },
+  "dependencies": {
+    "@endo/agent-tools": "workspace:^",
+    "@endo/daemon": "workspace:^",
+    "@endo/eventual-send": "workspace:^",
+    "@endo/exo-stream": "workspace:^",
+    "@endo/init": "workspace:^",
+    "@endo/patterns": "workspace:^",
+    "@endo/where": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/exo": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
+    "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev",
+    "typescript": "catalog:dev"
+  },
+  "files": [
+    "./*.js",
+    "./*.types.d.ts",
+    "bin",
+    "src",
+    "LICENSE*",
+    "SECURITY*"
+  ],
+  "ava": {
+    "files": [
+      "test/**/*.test.*"
+    ],
+    "timeout": "2m"
+  }
+}
