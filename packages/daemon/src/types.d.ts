@@ -219,6 +219,8 @@ export type GuestFormula = {
   mailboxStore: FormulaIdentifier;
   mailHub: FormulaIdentifier;
   worker: FormulaIdentifier;
+  /** Creator-endowed special names, including an optional @main replacement. */
+  specialNames?: Record<string, FormulaIdentifier>;
   networks: FormulaIdentifier;
   planes: FormulaIdentifier;
 };
@@ -1438,6 +1440,12 @@ export type MakeHostOptions = {
 export type MakeGuestOptions = MakeHostOptions & {
   /** Immutable named capability graph for a retained guest. */
   authority?: EndoGuestAuthority;
+  /**
+   * Host names to indelible guest special names. This is accepted only while
+   * creating a retained guest with `authority`; a repeat must resolve to the
+   * same formula identifiers.
+   */
+  endowSpecialNames?: Record<string, string>;
 };
 
 export type MakeCapletOptions = {
@@ -2462,6 +2470,7 @@ type FormulateNumberedGuestParams = {
   mailboxStoreId: FormulaIdentifier;
   mailHubId: FormulaIdentifier;
   workerId: FormulaIdentifier;
+  specialNames: Record<string, FormulaIdentifier>;
   networksDirectoryId: FormulaIdentifier;
   planesDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
@@ -2615,6 +2624,7 @@ export interface DaemonCore {
     hostHandleId: FormulaIdentifier,
     deferredTasks: DeferredTasks<AgentDeferredTaskParams>,
     workerLabel?: string,
+    specialNames?: Record<string, FormulaIdentifier>,
   ) => FormulateResult<EndoGuest>;
 
   /**
@@ -2628,6 +2638,7 @@ export interface DaemonCore {
     hostAgentId: FormulaIdentifier,
     hostHandleId: FormulaIdentifier,
     workerLabel?: string,
+    specialNames?: Record<string, FormulaIdentifier>,
   ) => Promise<Readonly<FormulateNumberedGuestParams>>;
 
   formulateChannel: (

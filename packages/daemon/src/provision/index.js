@@ -2,7 +2,7 @@
 /// <reference types="ses"/>
 
 /** @import { EndoGuestAuthority, EndoGuestAuthorityPolicy, HostProvisionPowers, NormalizedGitProvision, NormalizedGitRemoteProvision, NormalizedMountProvision, ResolvedCredential } from './types.js' */
-/** @import { EndoGuest, NameOrPath } from '../types.js' */
+/** @import { EndoGuest, FormulaIdentifier, NameOrPath } from '../types.js' */
 /** @typedef {{ audience: () => string }} GitCredential */
 /** @typedef {{ inspect: () => Promise<{ available: boolean, revoked: boolean }> }} GitCredentialController */
 
@@ -445,12 +445,43 @@ export const makeGuestAuthorityProvider = powers => {
   };
 
   /**
+   * Resolve special endowments once. Unlike ordinary introductions, a missing
+   * source is fatal because an indelible name cannot be repaired later.
+   * @param {Record<string, string>} endowSpecialNames
+   */
+  const resolveSpecialEndowments = async endowSpecialNames => {
+    const entries = await allInOrder(
+      Object.entries(endowSpecialNames)
+        .sort(([left], [right]) => compareStrings(left, right))
+        .map(async ([hostName, specialName]) => {
+          const identifier = await identify(hostName);
+          if (identifier === undefined) {
+            throw makeError(
+              X`ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE: No host name ${q(hostName)} for special name ${q(specialName)}`,
+              Error,
+              { code: 'ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE' },
+            );
+          }
+          return [specialName, identifier];
+        }),
+    );
+    return harden(Object.fromEntries(entries));
+  };
+
+  /**
    * @param {string[]} guestPath
    * @param {EndoGuestAuthority | undefined} authority
    * @param {Record<string, string> | undefined} introducedNames
-   * @param {() => Promise<EndoGuest>} makeGuest
+   * @param {Record<string, string> | undefined} endowSpecialNames
+   * @param {(specialNames: Record<string, FormulaIdentifier>) => Promise<EndoGuest>} makeGuest
    */
-  const run = async (guestPath, authority, introducedNames, makeGuest) => {
+  const run = async (
+    guestPath,
+    authority,
+    introducedNames,
+    endowSpecialNames,
+    makeGuest,
+  ) => {
     await null;
     const controllerPath = harden(['provisioned-guests', ...guestPath]);
     const policyPath = harden([...controllerPath, 'authority']);
@@ -460,9 +491,11 @@ export const makeGuestAuthorityProvider = powers => {
     let credentials;
     /** @type {Record<string, string>} */
     let retainedIntroductions;
+    /** @type {Record<string, FormulaIdentifier>} */
+    let retainedSpecialNames;
     if (await hasNamePath(policyPath)) {
       const retained =
-        /** @type {{ policy: EndoGuestAuthorityPolicy, credentialIds: Record<string, string>, introducedNames: Record<string, string> }} */ (
+        /** @type {{ policy: EndoGuestAuthorityPolicy, credentialIds: Record<string, string>, introducedNames: Record<string, string>, specialNames?: Record<string, FormulaIdentifier> }} */ (
           await lookup(policyPath)
         );
       if (authority === undefined) {
@@ -487,6 +520,10 @@ export const makeGuestAuthorityProvider = powers => {
                 ),
               ),
             );
+      retainedSpecialNames =
+        endowSpecialNames === undefined
+          ? (retained.specialNames ?? harden({}))
+          : await resolveSpecialEndowments(endowSpecialNames);
       if (
         !keyEQ(
           retained,
@@ -494,6 +531,7 @@ export const makeGuestAuthorityProvider = powers => {
             policy,
             credentialIds,
             introducedNames: retainedIntroductions,
+            specialNames: retainedSpecialNames,
           }),
         )
       ) {
@@ -526,6 +564,9 @@ export const makeGuestAuthorityProvider = powers => {
           ),
         ),
       );
+      retainedSpecialNames = await resolveSpecialEndowments(
+        endowSpecialNames ?? {},
+      );
       for (let length = 1; length <= controllerPath.length; length += 1) {
         // Directory ancestors must be created in order.
         // eslint-disable-next-line no-await-in-loop
@@ -538,6 +579,7 @@ export const makeGuestAuthorityProvider = powers => {
           policy,
           credentialIds,
           introducedNames: retainedIntroductions,
+          specialNames: retainedSpecialNames,
         }),
         policyPath,
       );
@@ -625,7 +667,7 @@ export const makeGuestAuthorityProvider = powers => {
       remotes.set(binding, remoteCap);
     }
 
-    const guest = await makeGuest();
+    const guest = await makeGuest(retainedSpecialNames);
     for (const [hostName, guestName] of Object.entries(retainedIntroductions)) {
       const id = introductionIds[hostName];
       if (id !== null) {
@@ -660,12 +702,13 @@ export const makeGuestAuthorityProvider = powers => {
     guestPath,
     authority,
     introducedNames,
+    endowSpecialNames,
     makeGuest,
   ) => {
     const key = guestPath.join('/');
     const tail = tailByGuestPath.get(key) ?? Promise.resolve();
     const result = tail.then(() =>
-      run(guestPath, authority, introducedNames, makeGuest),
+      run(guestPath, authority, introducedNames, endowSpecialNames, makeGuest),
     );
     tailByGuestPath.set(
       key,

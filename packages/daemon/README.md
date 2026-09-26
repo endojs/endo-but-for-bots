@@ -61,6 +61,7 @@ const guest = await E(host).provideGuest('documentation-agent', {
     },
   },
   introducedNames: { 'calendar-service': 'calendar' },
+  endowSpecialNames: { 'documentation-worker': '@main' },
 });
 ```
 
@@ -90,6 +91,14 @@ Reacquire the guest with `provideGuest('documentation-agent')`; the host reloads
 the retained policy and revalidates credential references and audiences.
 Callers do not persist or resubmit a normalized authority record.
 Changing or widening a retained policy fails closed.
+
+Every freshly provisioned guest receives its own worker at `@main`.
+The creating host may replace that binding, or add another non-daemon-reserved
+special name, with `endowSpecialNames: { hostName: '@special-name' }` while it
+first supplies retained authority. Endowments resolve the host name to a formula
+identifier once and persist that identity in the guest formula. A guest cannot
+remove or rebind a special name, a bare reacquisition preserves the original
+policy, and a later provisioning call that differs is rejected.
 
 `introducedNames` keeps the existing `provideGuest` direction and missing-source
 behavior: each host `Name` key maps to the guest pet name that receives it, and

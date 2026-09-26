@@ -113,7 +113,7 @@ export const helpTextEntries = harden([
       storeValue:
         'storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) with a name.\n- storeValue(42, "answer") stores the number 42\n- storeValue({x: 1, y: 2}, "point") stores a record',
       provideGuest:
-        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest("my-guest") creates/retrieves a named guest\nOptions: { introducedNames: { hostName: guestName }, authority?: { mount, git, gitRemote } }\nEach singular authority category is an object whose keys become guest binding\nnames. Missing introduced host names are ignored.',
+        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest("my-guest") creates/retrieves a named guest\nOptions: { introducedNames: { hostName: guestName }, endowSpecialNames?: { hostName: "@specialName" }, authority?: { mount, git, gitRemote } }\nEach singular authority category is an object whose keys become guest binding\nnames. Missing introduced host names are ignored. A retained guest defaults to\nits own `@main` worker; endowSpecialNames is creator-only and can replace it.',
       provideHost:
         'provideHost(petName?, options?) -> Promise<EndoHost>\nCreate or retrieve another host agent.\n- provideHost() creates an anonymous host\n- provideHost("my-host") creates/retrieves a named host',
       provideWorker:

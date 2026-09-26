@@ -24,6 +24,7 @@ import {
   assertPetNamePath,
   isName,
   isPetName,
+  isSpecialName,
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
@@ -80,7 +81,7 @@ const assertPowersNameOrPath = nameOrPath => {
 /**
  * Normalizes host or guest options, providing default values.
  * @param {MakeGuestOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, authority?: import('./provision/types.js').EndoGuestAuthority }}
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, authority?: import('./provision/types.js').EndoGuestAuthority, endowSpecialNames?: Record<Name, string> }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
@@ -90,6 +91,11 @@ const normalizeHostOrGuestOptions = opts => {
     ),
     ...(agentName !== undefined && { agentName }),
     ...(opts?.authority !== undefined && { authority: opts.authority }),
+    ...(opts?.endowSpecialNames !== undefined && {
+      endowSpecialNames: /** @type {Record<Name, string>} */ (
+        opts.endowSpecialNames
+      ),
+    }),
   };
 };
 
@@ -1903,12 +1909,16 @@ export const makeHostMaker = ({
 
     /**
      * @param {NameOrPath} [handleName]
-     * @param {MakeGuestOptions} [opts]
+     * @param {MakeGuestOptions & { specialNames?: Record<string, FormulaIdentifier> }} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoGuest>}>}
      */
     const makeGuest = async (
       handleName,
-      { introducedNames = Object.create(null), agentName = undefined } = {},
+      {
+        introducedNames = Object.create(null),
+        agentName = undefined,
+        specialNames: endowedSpecialNames = Object.create(null),
+      } = {},
     ) => {
       // An explicit agent name is the stable capability identity; the handle
       // name remains a separate lifecycle artifact.
@@ -1932,6 +1942,7 @@ export const makeHostMaker = ({
               /** @type {NameOrPath | undefined} */ (agentName),
             ),
             guestLabel,
+            endowedSpecialNames,
           );
         guest = { value: Promise.resolve(value), id };
       } else if (handleName !== undefined) {
@@ -1974,6 +1985,14 @@ export const makeHostMaker = ({
         petNamePathFrom(petName);
       }
       const normalizedOpts = normalizeHostOrGuestOptions(opts);
+      if (
+        normalizedOpts.endowSpecialNames !== undefined &&
+        (petName === undefined || normalizedOpts.authority === undefined)
+      ) {
+        throw makeError(
+          X`endowSpecialNames requires retained guest authority and a host pet name`,
+        );
+      }
       if (petName === undefined) {
         if (normalizedOpts.authority !== undefined) {
           throw makeError(
@@ -2025,11 +2044,39 @@ export const makeHostMaker = ({
               );
             }
           }
+          const endowments = Object.entries(
+            normalizedOpts.endowSpecialNames ?? {},
+          );
+          const endowmentNames = new Set(endowments.map(([, name]) => name));
+          if (endowmentNames.size !== endowments.length) {
+            throw makeError(
+              X`endowSpecialNames must not map multiple host names to one guest special name`,
+            );
+          }
+          for (const [hostName, specialName] of endowments) {
+            if (
+              !isName(hostName) ||
+              !isSpecialName(specialName) ||
+              [
+                '@agent',
+                '@self',
+                '@host',
+                '@mail',
+                '@nets',
+                '@planes',
+              ].includes(specialName)
+            ) {
+              throw makeError(
+                X`endowSpecialNames must map host names to guest special names other than daemon-reserved names`,
+              );
+            }
+          }
           return provideGuestAuthority(
             namePath,
             normalizedOpts.authority,
             opts?.introducedNames,
-            async () => {
+            opts?.endowSpecialNames,
+            async endowedSpecialNames => {
               const { value } = await makeGuest(
                 /** @type {NameOrPath} */ (
                   harden(['provisioned-guests', ...namePath, 'guest-handle'])
@@ -2037,6 +2084,7 @@ export const makeHostMaker = ({
                 harden({
                   ...normalizedOpts,
                   introducedNames: {},
+                  specialNames: endowedSpecialNames,
                   agentName:
                     normalizedOpts.agentName ??
                     /** @type {NameOrPath} */ (petName),

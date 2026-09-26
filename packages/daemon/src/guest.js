@@ -62,6 +62,7 @@ export const makeGuestMaker = ({
    * @param {FormulaIdentifier} mainWorkerId
    * @param {FormulaIdentifier} networksDirectoryId
    * @param {FormulaIdentifier} planesDirectoryId
+   * @param {Record<string, FormulaIdentifier> | undefined} introducedSpecialNames
    * @param {Context} context
    */
   const makeGuest = async (
@@ -76,6 +77,7 @@ export const makeGuestMaker = ({
     mainWorkerId,
     networksDirectoryId,
     planesDirectoryId,
+    introducedSpecialNames,
     context,
   ) => {
     context.thisDiesIfThatDies(hostHandleId);
@@ -88,6 +90,9 @@ export const makeGuestMaker = ({
     context.thisDiesIfThatDies(mainWorkerId);
     context.thisDiesIfThatDies(networksDirectoryId);
     context.thisDiesIfThatDies(planesDirectoryId);
+    for (const specialId of Object.values(introducedSpecialNames ?? {})) {
+      context.thisDiesIfThatDies(specialId);
+    }
 
     const baseController = await provideStoreController(petStoreId);
     const mailboxController = await provideStoreController(mailboxStoreId);
@@ -95,12 +100,14 @@ export const makeGuestMaker = ({
       '@agent': guestId,
       '@self': handleId,
       '@host': hostHandleId,
+      '@main': mainWorkerId,
     };
     if (mailHubId !== undefined) {
       specialNames['@mail'] = mailHubId;
     }
     specialNames['@nets'] = networksDirectoryId;
     specialNames['@planes'] = planesDirectoryId;
+    Object.assign(specialNames, introducedSpecialNames);
     const specialStore = makePetSitter(baseController, specialNames);
 
     const getNetworkAddresses = () =>

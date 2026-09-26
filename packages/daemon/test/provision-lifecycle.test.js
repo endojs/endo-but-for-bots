@@ -164,6 +164,88 @@ test.serial('provideGuest retains a neutral named authority graph', async t => {
 });
 
 test.serial(
+  'provideGuest endows immutable special names and defaults @main',
+  async t => {
+    t.timeout(120_000);
+    const fixture = await makeProvisioningFixture(t);
+    const host = await fixture.connectHost('special-name-host');
+    const authority = harden({});
+
+    const defaultGuest = await E(host).provideGuest('default-special', {
+      authority,
+    });
+    const defaultMainId = await E(defaultGuest).identify('@main');
+    t.truthy(defaultMainId, 'every freshly provisioned guest has @main');
+
+    await E(host).provideWorker('alternate-worker');
+    const alternateId = await E(host).identify('alternate-worker');
+    const guest = await E(host).provideGuest('special-session', {
+      authority,
+      endowSpecialNames: { 'alternate-worker': '@main' },
+    });
+    const guestId = await E(host).identify('special-session');
+    t.is(await E(guest).identify('@main'), alternateId);
+    const graph = await E(E(host).diagnostics()).getFormulaGraph();
+    t.true(
+      graph.edges.some(
+        edge =>
+          edge.sourceId === guestId &&
+          edge.targetId === alternateId &&
+          edge.label === 'special:@main',
+      ),
+      'the guest formula retains the overridden @main worker identity',
+    );
+
+    await t.throwsAsync(
+      E(host).provideGuest('special-session', {
+        authority,
+        endowSpecialNames: { absent: '@main' },
+      }),
+      { message: /SPECIAL_NAME_SOURCE_UNAVAILABLE/ },
+    );
+    await t.throwsAsync(
+      E(host).provideGuest('special-session', {
+        authority,
+        endowSpecialNames: { 'alternate-worker': '@agent' },
+      }),
+      { message: /other than daemon-reserved names/ },
+    );
+    await t.throwsAsync(
+      E(defaultGuest).provideGuest('attempted-escalation', {
+        endowSpecialNames: { '@main': '@main' },
+      }),
+      { message: /target has no method "provideGuest"/ },
+    );
+    await t.throwsAsync(E(guest).remove('@main'), {
+      message: /Invalid pet name "@main"/,
+    });
+    await E(host).provideWorker('replacement-worker');
+    await t.throwsAsync(
+      E(host).provideGuest('duplicate-special', {
+        authority,
+        endowSpecialNames: {
+          'alternate-worker': '@meter',
+          'replacement-worker': '@meter',
+        },
+      }),
+      { message: /multiple host names to one guest special name/ },
+    );
+
+    await fixture.restartDaemon();
+    const restartedHost = await fixture.connectHost('special-name-restart');
+    const recovered = await E(restartedHost).provideGuest('special-session');
+    t.is(await E(recovered).identify('@main'), alternateId);
+    await t.throwsAsync(
+      E(restartedHost).provideGuest('special-session', {
+        authority,
+        endowSpecialNames: { 'replacement-worker': '@main' },
+      }),
+      { message: /cannot widen or change retained authority/ },
+    );
+  },
+);
+
+test.serial(
   'guest authority fails closed at dependency and path boundaries',
   async t => {
     t.timeout(120_000);

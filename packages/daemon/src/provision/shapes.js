@@ -69,6 +69,7 @@ export const MakeGuestOptionsShape = M.splitRecord(
   {
     agentName: NameOrPathShape,
     introducedNames: M.recordOf(M.string(), M.string()),
+    endowSpecialNames: M.recordOf(M.string(), M.string()),
     authority: EndoGuestAuthorityShape,
   },
   {},
