@@ -366,6 +366,7 @@ LLM-agent stack).*
 | [daemon-commands-as-messages](daemon-commands-as-messages.md) | 2026-03-11 | 2026-03-11 | Not Started |
 | [daemon-capability-bank](daemon-capability-bank.md) | 2026-02-15 | 2026-09-03 | Not Started |
 | [daemon-secret-manager](daemon-secret-manager.md) | 2026-09-03 | 2026-09-09 | Implemented (local backend) |
+| [daemon-host-held-id-for-ref](daemon-host-held-id-for-ref.md) | 2026-09-26 | 2026-09-26 | Not Started |
 | [daemon-checkin-checkout](daemon-checkin-checkout.md) | 2026-03-17 | 2026-05-19 | **Complete** |
 | [daemon-capability-filesystem](daemon-capability-filesystem.md) | 2026-02-15 | 2026-05-19 | Reference |
 | [daemon-content-store-gc](daemon-content-store-gc.md) | 2026-03-20 | 2026-05-08 | **Complete** |
@@ -619,6 +620,16 @@ landed with #1115 and its wiring with #1203 — so it adds no remaining work and
 does not change the milestone's critical path. See the addendum under the
 summary table for why the bucket counts are left to a separate pass.
 
+The 2026-09-26 update adds
+[daemon-host-held-id-for-ref](daemon-host-held-id-for-ref.md) (Not Started)
+to M10, capturing kriskowal's direction on the #1306 review that `idForRef`
+resolve for every formula-generated object (read-only directory views, mount
+sub-views and files, read-only Git faces, function values) while staying
+host-held. It depends on the mount capabilities and the host-only `getFormula`
+from [formula-inspector](formula-inspector.md), and feeds
+[daemon-capability-bank](daemon-capability-bank.md). The design count increases
+by one; bucket counts are left to the same separate pass.
+
 ## Roadmap
 
 ### Execution lead: Minion Town federation experiment
@@ -867,6 +878,7 @@ flowchart TD
         dpers[daemon-capability-persona]
         dsecret["daemon-secret-manager<br/><i>IMPLEMENTED (LOCAL)</i>"]
         dbank[daemon-capability-bank]
+        didref[daemon-host-held-id-for-ref]
         icancel[inventory-cancel-and-liveness]
         dmkar[daemon-make-archive<br/><i>IN PROGRESS</i>]
         dwimp[daemon-worker-import-from-mount<br/><i>integration layer</i>]
@@ -901,6 +913,9 @@ flowchart TD
         enetfetch --> dgitremote
         dmount --> dcsgc
         dsecret --> dbank
+        dmcap --> didref
+        finsp --> didref
+        didref --> dbank
         dsand --> dbank
         dfs --> dbank
         dpers --> dbank
@@ -1506,6 +1521,7 @@ ecosystem.
 | daemon-capability-persona | Not Started | Epithets and delegation |
 | daemon-secret-manager | Implemented (local backend) | Singleton manager for arbitrary secret bytes; management under `@secrets`, read capabilities in the ordinary `secrets` pet store, existing lookup/marshal formulas, live inventory-path metadata, replacement, revocation, post-revocation deletion with retained audit, and a value-blind Secret Blobs Space; no ACL |
 | daemon-capability-bank | Not Started | Integrates all capability categories |
+| daemon-host-held-id-for-ref | Not Started | Every face a formula mints (read-only directory views, mount sub-views and files, read-only Git faces, function values) becomes a deterministic daemon-local derived formula, so `getIdForRef` resolves it; ref-to-id stays host-held with a tested no-guest-exposure invariant; retires `mountRecords` and the read-only view liveness flag. Unblocks #1306's read-only `networks` option. From kriskowal's #1306 review (2026-09-19) |
 | endoclaw-browser | Not Started | Playwright-backed `Browser` exo with origin allowlist |
 | endoclaw-channel-bridges | Not Started | `chat` SDK (Vercel) adapters for Slack, Telegram, Discord, etc. |
 | endoclaw-skill-registry | Not Started | Skills directory — capability-aware plugin index |
@@ -1885,6 +1901,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | daemon-capability-persona | S-M | 3 days | 10 | Handle extension, epithet tracking |
 | daemon-secret-manager | XL | 4-6 weeks | 10 | Endo-native singleton for arbitrary secret bytes, pluggable durable backend, `@secrets` management directory, ordinary `secrets` pet store, existing lookup/marshal formulas, audit, replacement, revocation, restart durability with a recorded crash-reconciliation gap, canary leak tests, and the Secret Blobs Space; capability possession is the only authorization; decomposes the secret-storage slice already included in daemon-capability-bank, so this estimate is not additive to that row |
 | daemon-capability-bank | XL | 4-6 weeks | 10 | Integrates all capabilities (XL bumped 1.3x as conservative pending data) |
+| daemon-host-held-id-for-ref | M | 1-2 weeks | 10 | Four phases, each its own PR: function registration plus the guest-invariant tests (S); `formulateDerived` and `readable-directory` (S-M); `mount-view`/`mount-file` with host-method path walking and `mountRecords` removal (M); `git-view` (S) |
 | endoclaw-browser | M-L | 1.5 weeks | 10 | Playwright-backed, origin-confined; smallest cut in PR #106 |
 | endoclaw-channel-bridges | M | 4-5 days | 10 | Vercel `chat` SDK adapters |
 | endoclaw-skill-registry | S-M | 3 days | 10 | Skills directory with capability declarations; PR #105 open |
@@ -1930,7 +1947,7 @@ date of this pass.
 | M7: Weblets & Integrations (was M3) | 12 (`familiar-unified-weblet-server`, `familiar-chat-weblet-hosting`, `cli-store-verb-text-modes`, `cli-edit-verb`, `daemon-weblet-application`, `exo-zip-package`, `endoclaw-oauth`, `exo-google-sheets`, `endoclaw-proactive-messages`, `endoclaw-notifications`, `endoclaw-webhooks`, `endoclaw-voice`) | 6-8 weeks | 8-11 weeks |
 | M8: Peer App Sharing (was Milestone A) | 3 net-new (`familiar-deep-link-invitations`, `endo-app-sharing`, `familiar-app-ui-hosting`); existing constituents counted under M3/M4/M7 | 2-3 weeks | 3-5 weeks |
 | M9: UX & Tooling (was M4) | 13 (`chat-pending-commands`, `chat-slot-slash-commands`, `daemon-commands-as-messages`, `inventory-cancel-and-liveness`, `inventory-grouping-by-type`, `inventory-drag-and-drop`, `formula-inspector`, `workers-panel`, `daemon-retention-paths`, `chat-edit-message-ui`, `chat-inventory-create-menu`, `lal-transcript-memory-management`, `namehub-interface-unification`) | 9-12 weeks | 11-14 weeks |
-| M10: Confinement & Ecosystem (was M5) | 7 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 14-20 weeks | 16-22 weeks |
+| M10: Confinement & Ecosystem (was M5) | 8 (`endo-posix-sandbox`, `daemon-capability-persona`, `daemon-secret-manager`, `daemon-capability-bank`, `daemon-host-held-id-for-ref`, `endoclaw-browser`, `endoclaw-channel-bridges`, `endoclaw-skill-registry`) | 15-22 weeks | 17-24 weeks |
 | M11: Rust Daemon (`endor`) (was M6) | 6 (`endor-git-bindings`, `endor-registry-proxy-worker`, `daemon-endor-sqlite-iterate-streaming`, `endor-tui`, `endor-bus-tui`, `endor-native-zip-xs`) | 15-22 weeks | 17-24 weeks |
 | **Total remaining** | **65** + 7 M5 rows (4 in-flight + 3 design gaps) + 2 M6 own-work rows | **~61-83 weeks** + M5 4-6 weeks + M6 ~3-3.5 weeks | **~74-101 weeks** |
 
