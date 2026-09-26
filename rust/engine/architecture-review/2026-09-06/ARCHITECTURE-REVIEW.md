@@ -1744,7 +1744,7 @@ Part of the claim is now closed; what remains is stated here.
 What still holds: The padStart/padEnd half is closed; the repeat half is not.
 `"abcdefgh".repeat(2**30)` still reserves a 16 GiB Vec<u16> with no bound on
 the PRODUCT: interp.rs:41063 caps only the repetition count (`if n >
-0x7FFF_FFFF as f64 { … RangeError }`, a bound that already existed at
+0x7FFF_FFFF as f64 { ... RangeError }`, a bound that already existed at
 6c1e1d6b), and interp.rs:41079 then does `Vec::with_capacity(content.len() *
 count as usize)` with no check on `content.len() * count`, so the reservation
 failure still reaches handle_alloc_error and aborts the process.
@@ -4558,7 +4558,7 @@ test262 could not have found it, which is the argument for auditing at all.
 The corpus holds exactly one DIRECTLY nested function-declaration-in-catch
 case, `language/statements/try/early-catch-function.js`, and that one is a
 `negative: parse` fixture: the parser rejects it before the coder runs.
-The roughly twenty `annexB` `if-decl-…-try` cases nest theirs inside an `if`,
+The roughly twenty `annexB` `if-decl-...-try` cases nest theirs inside an `if`,
 and the parser rejects those too.
 The single corpus case covering the shape is the one that cannot reach the
 site, and the sweep was green before the fix and is green after.
@@ -6105,7 +6105,7 @@ three wrappers (`array_from_try` 62, `call_any_catching_throw` 9,
 `Step::Threw`, unwinds the stack/call/jump floors and clears `self.exception`.
 But three patterns still coexist and a new native still picks among them.
 (1) Ten sites hand-roll the fence as `let saved = mem::take(&mut self.jumps);
-… self.jumps = saved;` around an `_inner` that classifies for itself:
+... self.jumps = saved;` around an `_inner` that classifies for itself:
 step_async_generator (:21024), step_async (:21247), which must, because they
 install a suspended frame rather than call a closure, plus eight ordinary
 built-in seams that need not: array_from (:27726), array_of (:27743), the
@@ -6138,7 +6138,7 @@ classifies `Step::Threw`, converts an escaping `Step::Unwound` into
 stack/call floors via `unwind_native_try` (29248).
 But three patterns still coexist and a new native still picks among them.
 (1) TEN sites still hand-roll the fence as `let saved = std::mem::take(&mut
-self.jumps); … self.jumps = saved;` around an `_inner` that classifies for
+self.jumps); ... self.jumps = saved;` around an `_inner` that classifies for
 itself: `step_async_generator` (:21923) and `step_async` (:22146), which must,
 because they install a suspended frame rather than call a closure, plus eight
 ordinary built-in seams that need not: `array_from` (:28707), `array_of`
@@ -6212,7 +6212,7 @@ JavaScript coercion compatibility`. Now at
 RESOLVED since the previous revision.
 Part of the claim is now closed; what remains is stated here.
 What still holds for F093: `render_uncaught` still re-enters guest code
-(`to_primitive` → the thrown object's `toString`/`valueOf` → `run_callback` →
+(`to_primitive` -> the thrown object's `toString`/`valueOf` -> `run_callback` ->
 `dispatch_at`) from `Interp::run` after the crank's halt is already decided,
 and still discards whatever `Halt` that nested dispatch returns (the bare
 `Err(_)` arm at interp.rs:13701).
@@ -6298,7 +6298,7 @@ Slots and chunks the coercion allocated, and any promise job it queued, remain
 in the halted machine: `run_promise_jobs` runs only for `step ==
 Step::Returned` (interp.rs:14966-14972), decided BEFORE `finish_step`, and the
 next `run`'s entry sweep (interp.rs:14904-14955) explicitly keeps queued jobs
-unchanged ("Keep queued jobs, metering, poison latches … unchanged").
+unchanged ("Keep queued jobs, metering, poison latches ... unchanged").
 The metering half stays closed: the whole `Meter` is cloned on entry (:14755)
 and restored on BOTH the Ok and Err arms (:14764, :14780), so the rendering is
 entirely unmetered.
@@ -7133,20 +7133,10 @@ bump the table; today the table is pinned to a 2023 XS fork by the test suite
 while the design says parity is a non-goal.
 This is a build-system constraint on the engine's evolution, not documentation
 drift.
-**Fix.** Decide, and make the code say it: either demote `gate_meter_exact` to an
-advisory drift report and delete it from the two CI test gates, or amend the
-design to state that XS computron parity is this release's acceptance bar so
-`ironhorse-meter-1` means "XS 8.2.3-equivalent" and divergence becomes an
-explicit `ironhorse-meter-2` project.
+**Fix.** Demote `gate_meter_exact` to an advisory drift report and delete it
+from the two CI test gates.
 **Known.** Ledger item 10 records the doctrine drift; the CI-gate consequence and
 the case counts are new.
-
-> **Resolution (2026-09-15, maintainer directive).** Decided: the first arm
-> — demotion — is done, and the second arm (amending the design to make XS
-> computron parity the acceptance bar) is **rejected permanently**, so do
-> not implement it from this record. XS-computron parity is a non-goal, not
-> a deferred goal; XS cost drift is advisory everywhere, and the meter's
-> gates are Iron Horse's own frozen-cost determinism pins.
 
 #### F131 - The string-op cost unit is inconsistent within one release [medium, high]
 
@@ -8185,7 +8175,7 @@ Carried cost: Four things the engine now carries.
 (1) A consensus-visible meter bump: charging before allocation changed
 charging points, so ironhorse-meter-4 was appended purely for that
 (releases.rs:17 "W2 changes admission/charging points, retaining the shared
-weights"), and releases 3, 4 and 5 share one digest `039b2277…`, the SHA-256
+weights"), and releases 3, 4 and 5 share one digest `039b2277...`, the SHA-256
 identity no longer distinguishes charging policy, only weights, so METR's
 digest alone cannot tell a validator which admission regime produced a
 computron count.
@@ -8297,7 +8287,7 @@ move it.
 CI cost grew by a third lane (macos-latest) and by running all 1,712 committed
 corpus cases three times.
 The digest covers WEIGHTS only: releases ironhorse-meter-4 and -5 deliberately
-reuse release 3's digest 039b2277…, so a charging-point move (where a weight
+reuse release 3's digest 039b2277..., so a charging-point move (where a weight
 is applied, not its value) is caught only when one of the 82 golden cases
 happens to exercise it, and the version literal must still be bumped by hand.
 Now at `.github/workflows/ci.yml:883`.
@@ -9184,7 +9174,7 @@ one more silent wrong value of this family is closed.
 The finding's status is unchanged; this records a defect at its own seam that
 the `0b25cdba9` fix INTRODUCED and that was live through `e1038c189`.
 `to_raw_fixed` decided a carry from a cut below the leading digit by asking
-`round_to_significant(_, 0, …)`, which decides at the leading SIGNIFICANT
+`round_to_significant(_, 0, ...)`, which decides at the leading SIGNIFICANT
 digit.
 For 0.09 that reads 9, rounds up, and
 `new Intl.NumberFormat('en', { maximumFractionDigits: 0 }).format(0.09)`
@@ -10730,7 +10720,7 @@ declared exactly-one-encoding upheld, which this falsifies at the payload level.
 previous revision.
 Part of the claim is now closed; what remains is stated here.
 What still holds: The persist gate is now ON the data path, `snapshot_image`
-is the crate's only machine→image verb and it runs quiescence, the Pending-row
+is the crate's only machine->image verb and it runs quiescence, the Pending-row
 refusal and the stored-key-id audit, and `persist_gate` is a required trait
 method with no permissive default.
 What remains of the finding is the constructor half:
@@ -11175,7 +11165,7 @@ Resolved by `c932b565 test(ironhorse): sweep GC and persistence interruption
 boundaries`.
 Pinned by `rust/engine/ironhorse-snapshot/tests/metamorphic_determinism.rs`,
 `rust/endo/ironhorse-store-sqlite/tests/store_suite.rs`.
-Carried cost: `suspend_subset_scenario` multiplies the suite: 16 masks × (1
+Carried cost: `suspend_subset_scenario` multiplies the suite: 16 masks x (1
 baseline + 3 variants) over a 5-crank real-JS workload, compiling 5 programs
 per mask and allocating a fresh store per store-backed variant (32 stores per
 backend), and it runs for every backend instantiation including SQLite
@@ -12416,7 +12406,7 @@ previous revision.
 Part of the claim is now closed; what remains is stated here.
 What still holds: The documentary half only, unchanged from 6c1e1d6b.
 designs/ironhorse-engine.md:499-506 still asserts the seven-method `Machine`
-metering API is "preserved verbatim … without supervisor changes", and the
+metering API is "preserved verbatim ... without supervisor changes", and the
 reconciliation row at :848 still declares the daemon-xs-worker-metering
 design's `Machine` metering API "unchanged".
 The seam that actually landed is a different API, a `MeterBounds` policy on
@@ -14135,7 +14125,7 @@ points by appending a release and updating the literal version pin and golden
 corpus in the same commit'), and a second identity to keep consistent,
 releases 4 and 5 now share release 3's digest, so name and digest no longer
 determine one another and the digest alone cannot distinguish three charging
-policies. boot_fingerprint() is derived from `format!("{:?}", …)` of
+policies. boot_fingerprint() is derived from `format!("{:?}", ...)` of
 interpreter structures, so a Debug-impl or variant rename in unrelated code
 conservatively refuses previously-resumable snapshots (the code acknowledges
 this: 'A variant rename may conservatively refuse compatibility').
@@ -14240,7 +14230,7 @@ What still holds: The cost-channel half is fully fixed.
 What still holds is the wiring half, verbatim: rust/endo depends on
 ironhorse-compile and calls it directly (compile_atoms_with re-exported at
 ironhorse_engine.rs:34, compile_atoms_with_meter called at :406) but never
-calls Interp::set_source_compiler, so guest eval("…") and new Function(…) on
+calls Interp::set_source_compiler, so guest eval("...") and new Function(...) on
 the `endor run -e ironhorse` path still abort the whole crank with
 Halt::NotImplemented("eval:no-compiler") rather than compiling.
 Changed by `c3ade910 feat(ironhorse)!: charge and bound compilation on the
@@ -14306,7 +14296,7 @@ What still holds for F138: `interp` is still `pub mod` (lib.rs:31) over a
 67,312-line file carrying 649 `pub` declarations, and lib.rs still re-exports
 the wire-format row structs (`AccessorRow`, `BoundFunctionRow`, `FunctionRow`,
 `SavedFrameRow`, `SavedJumpRow`, `ProxyRow`, `PromiseRow`, `AsyncRow`,
-`IndexPropsSnapshot`, …) that ironhorse-snapshot builds its on-disk format on.
+`IndexPropsSnapshot`, ...) that ironhorse-snapshot builds its on-disk format on.
 There is still no `snapshot_api` module and no `ROW_SCHEMA_VERSION`, so no
 internal reorganisation of interp.rs is compiler-checked as private, and a
 *Row field change still does not force `IRONHORSE_FORMAT_VERSION` (16) or
@@ -14334,7 +14324,7 @@ an append-only ledger, so any weight change now requires a release entry and a
 golden-corpus regeneration in the same commit, real discipline, but also a
 second identity to keep in sync with three golden TSV corpora.
 And the digest is a WEAKER identity than its name suggests: releases
-`ironhorse-meter-3`, `-4` and `-5` all share the digest `039b2277…`, because 4
+`ironhorse-meter-3`, `-4` and `-5` all share the digest `039b2277...`, because 4
 and 5 changed admission/charging policy without changing weights.
 The digest identifies the weight table, not the charging behaviour; only the
 release NAME distinguishes those.
@@ -14817,7 +14807,7 @@ it does not close the finding: `Intrinsics` now carries interior mutability
 keyed on the EXACT symbol-name vector, so a caller supplying a different
 symbol set per evaluation rebuilds and replaces the whole template every time
 (the comment at :114-115 acknowledges this bounds growth, not cost); and
-`BootTemplate::instantiate` (interp/boot.rs:56-…) is a second hand-mirrored
+`BootTemplate::instantiate` (interp/boot.rs:56-...) is a second hand-mirrored
 full-`Interp` enumeration, compiler-checked but one more place every future
 field needs a deliberate decision, which is F052's problem arriving on the
 seam work, exactly as the finding predicted for host functions.
