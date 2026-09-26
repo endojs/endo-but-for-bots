@@ -1,19 +1,19 @@
 # `@endo/thixotrope`
 
-A prototype distributed ocap machine with purely orthogonal persistence.
+A prototype distributed ocap machine with orthogonally persistent JavaScript guests.
 
 A thixotrope daemon is a simpler cousin of the Endo daemon: it spins up
 workers whose guest state is preserved by XS heap snapshots or the
 Ironhorse SQLite heap store rather
 than by explicit formula-based persistence.
-Guests never observe their own suspension, restoration, or the
-daemon's restarts — persistence is orthogonal to the guest programming
-model.
+Guest heap state survives suspension and restoration without application-written serialization.
+External resource lifetimes remain explicit: a pending host-operation answer can reject on restart,
+and installed resource managers receive a startup notification to recreate their native adapters.
 Application upgrades are not yet implemented; candidate mechanisms are described separately.
 
 The machine speaks the OCapN p2p wire protocol end to end, and the
 daemon is mostly a forwarding and slot-rewriting hub
-(`src/hub.js`): workers and remote peers are hub sessions, and
+(`src/net/hub.js`): workers and remote peers are hub sessions, and
 every message between them is structurally transcoded through
 persisted c-list tables — the daemon reifies no presences, no
 promises, no subscriptions for routed traffic.
@@ -43,6 +43,48 @@ The [potential designs](designs/README.md) record the current hypotheses for use
 upgrade, delivery responsibility, host-directed vat retirement, and crossing persistence regimes.
 They distinguish intended behavior from current implementation gaps.
 
+## Source layout and host powers
+
+`src/` groups modules by responsibility:
+
+- `core/`: the daemon, worker peers and transports, session records,
+  replay engines, and reachability inspection.
+- `control/`: the supervisor composition root, local admin socket, and
+  application bundle/install helpers.
+- `net/`: the OCapN hub, the in-host pipe network, and the durable and
+  Unix netlayers.
+- `store/`: durable worker and session stores, validators, and string
+  atoms.
+- `alarms/`: the guest clock, its host deadline/outcome ledger, and the timer resource.
+- `mail/`: the guest mail protocol, contacts, and address book.
+- `tui/`: the terminal views the CLI opens over a control connection.
+- `observable-map.js`: the string-keyed observable Map that backs both the
+  workspace inventory and the conventional `contacts` address book.
+- `native/`: directory installation and disposable native process integration.
+- `ironhorse/`: Ironhorse and XS worker engines and their guest
+  fixtures.
+- `platform/`: capability interfaces, and `platform/node/` for the Node
+  implementations of them.
+
+The package-level `resources/http/` directory contains the installable durable HTTP manager and
+native adapter.
+
+Each module directly under `platform/` names one capability — `timers`,
+`random`, `files`, `processes`, `sockets`, and so on — whose methods take
+and return plain data, so no host API or host handle type reaches core.
+Only `platform/node/` imports Node built-ins, and `platform/node/powers.js`
+composes those adapters into the record an entry point passes in. Every
+other module receives just the capability objects it names; the root ESLint
+configuration enforces both rules.
+
+The `logging` power carries three channels — `log` for a view's own output,
+`info` for protocol tracing, and `error` for diagnostics — and a `sub(...path)`
+that prefixes each line with a bracketed subsystem path such as
+`[thixotrope:daemon:netlayer]`, so a log can be filtered by substring.
+Whether tracing is emitted at all is the host's decision, made once in
+`platform/node/powers.js`: set `THIXOTROPE_TRACE` to send OCapN's per-frame
+`info` channel to stderr. No module in between silently drops a channel.
+
 ## Local supervisor and workspace
 
 Build the Ironhorse worker and bundles as described below, then run:
@@ -71,12 +113,15 @@ Piped input works too, and evaluation failures produce a nonzero exit status.
 A lost connection reports an uncertain evaluation outcome and never retries it.
 
 The workspace has `E`, `Far`, `harden`, and a `vats` controller.
-For example, enter each of these as one line:
+For example, enter each of these as one line and wait for its result before entering the next.
+`E` accepts both capabilities and promises for capabilities, so the stored results can be used directly.
 
+<!-- prettier-ignore -->
 ```js
-(async () => { globalThis.other = await E(vats).createWorker('counter'); })()
-(async () => { globalThis.counter = await E(other).evaluate("(() => { let count = 0n; return Far('Counter', { incr: () => ++count }); })()"); })()
-E(counter).incr()
+globalThis.other = E(vats).createWorker('counter');
+globalThis.source = "(() => { let count = 0n; return Far('Counter', { incr: () => ++count }); })()";
+globalThis.counter = E(other).evaluate(source);
+E(counter).incr();
 ```
 
 Detach, stop and restart the supervisor, then attach and call `E(counter).incr()` again.
@@ -96,9 +141,9 @@ yarn workspace @endo/thixotrope thix inventory ./private-state
 Then use `attach` to modify it:
 
 ```js
-inventory.set('counter', counter)
-inventory.set('note', 'hello')
-inventory.delete('note')
+inventory.set('counter', counter);
+inventory.set('note', 'hello');
+inventory.delete('note');
 ```
 
 The TUI redraws from subscribed snapshots and displays object/capability placeholders;
@@ -173,6 +218,152 @@ it does not cancel work or revoke references already held elsewhere.
 Unused application vats become eligible for ordinary vat collection.
 This initial version provides installation, not live code upgrades.
 
+## Persistent applications serving HTTP
+
+Install the native resource into this daemon's workspace inventory, then grant its registration
+facet to an application:
+
+```sh
+thix install-native ./private-state web ./resources/http
+thix install ./private-state site ./examples/http-counter.js http=web
+# In `thix attach ./private-state`:
+# await E(E(apps).get('site')).start(8080)
+curl -X POST http://127.0.0.1:8080/incr
+curl http://127.0.0.1:8080/read
+```
+
+A trusted native-resource directory supplies `durable.js` and `ephemeral.js`.
+Each installation runs its durable module in a dedicated manager vat with its own heap and limits.
+The ephemeral module runs in a separate Node process with native platform APIs.
+The workspace retains installation bookkeeping and the public registration reference.
+Each manager receives its own daemon startup notification, independently of workspace execution.
+The primary daemon only loads directory metadata and bundles the durable module, launches and
+connects the native process, and manages its lifetime.
+It contains no HTTP listener implementation or HTTP-specific installation commands.
+
+Installation stores only the public registration facet in the requested inventory slot.
+An interrupted installation resumes when the same directory and name are installed again.
+The retry reuses the manager vat; it does not rerun a completed durable factory attempt.
+The HTTP facet provides `register(port, handler, policy?)`; the returned handle provides
+`status()` and `close()`.
+An unavailable port still returns a handle; `status()` retries binding and reports an error
+while inactive, and `close()` withdraws the desired registration.
+The application implements `handle({method, path, body})`, returning `{status, body}`.
+Its counter and the manager's desired registrations survive in their respective durable heaps.
+Sockets, request buffers, deadlines, and response handling live entirely in the native adapter.
+A closed registration cannot close a later registration that reuses its port.
+
+The initial HTTP profile uses ports 1024–65535 on IPv4 loopback, text bodies up to 64 KiB,
+16 concurrent requests, and a five-second deadline.
+Daemon restart creates a fresh adapter and reconstructs desired listeners, never pending requests.
+After an adapter exits while the daemon stays alive, its replacement is created on the next
+registration, status, or close operation; there is no autonomous restart monitor.
+Already accepted calls into durable application vats may still complete.
+A failed port bind does not prevent other registrations from being restored.
+
+Native installation pins the directory's complete file contents and the durable bundle digest.
+Changing installed source requires a new explicit installation; the old manager will refuse to
+launch an adapter with different code.
+Dependencies outside the resource directory use ordinary Node module resolution and must remain
+compatible with the installed durable bundle.
+The selected state directory currently identifies the daemon's single user workspace.
+See [native resource installation](designs/native-resource-installation.md) for the module contract.
+
+## Durable alarms and reminders
+
+Grant the public clock to an application:
+
+```sh
+thix clock-grant ./private-state clock
+thix install ./private-state reminders ./examples/reminder.js clock=clock
+thix alarms ./private-state
+thix attach ./private-state
+```
+
+In the attached workspace, enter each line separately to schedule a reminder using Unix milliseconds:
+
+<!-- prettier-ignore -->
+```js
+globalThis.clock = inventory.get('clock');
+E(clock).now().then(now => E(E(apps).get('reminders')).arm(now + 60000n, 'check the oven'));
+E(E(apps).get('reminders')).status();
+```
+
+Applications receive `now()`, `when(deadline)`, and `arm(deadline)`.
+The last returns `{settlement, canceller}`, with `E(canceller).cancel()` cancelling that alarm.
+The clock lives in the workspace and gives applications guest-owned promises.
+The reminder example attaches its listener in another guest vat; both survive restart.
+If a deadline passes while the supervisor is down, restart delivers the overdue alarm to the
+original promise and listener.
+
+The host retains each deadline and its eventual fulfillment time or cancellation in an alarm ledger.
+It records the outcome before notifying the clock, and deletes it only after the clock acknowledges
+recording its own settlement.
+Interrupted acknowledgements retry; other cleanup failures retry on the next clock operation.
+OS timers are disposable, and there is no periodic scan of a guest clock vat.
+`alarms` reports `pending` deadlines, `materialised` promise resources, and `stopped` status.
+Its legacy `observations` field is always zero; the command does not expose the retained-outcome count.
+
+This version supports one-shot absolute deadlines, with up to 1,024 pending or unacknowledged rows.
+Deadlines are nonnegative signed 64-bit bigint milliseconds.
+The host checks wall-clock time before firing, so this is not a precise timer.
+A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
+Recurring scheduling, per-application quotas, and notification UI remain future work.
+
+Workspace metadata version 4 is required for dedicated native manager vats and includes the alarm
+acknowledgement protocol introduced in version 3.
+Older workspaces require migration or a fresh state directory because persisted registry and clock
+closures cannot be updated by loading new source; startup rejects them before restoring workers.
+See [alarm settlement](designs/alarm-settlement.md) for recovery and cleanup details.
+
+## Local introductions and capability mail
+
+Each supervisor also listens on `peers.sock`, a private Unix socket.
+This initial transport connects supervisors owned by the same OS user on one machine.
+It checks the destination directory's ownership and permissions before sending a resumption token.
+It is not a transport for connections between machines or mutually untrusted OS users.
+Logical messages are split into Unix fragments of at most one MiB and reassembled before durable acceptance.
+Incomplete messages are discarded on socket loss and retried by the delivery layer.
+This fragment limit does not bound total message or outbox memory.
+
+Run two supervisors with different private state directories, then use these commands
+(shown as `thix`; from the repository root use `node packages/thixotrope/bin/thix.js`):
+
+```sh
+thix invite ./alice bob
+# Copy the JSON invitation into Bob's command, quoted as one argument:
+thix connect ./bob alice '<invitation JSON>'
+thix contacts ./alice
+thix contacts ./bob
+thix send ./alice bob 'Try this counter' counter
+thix mail ./bob
+```
+
+The last argument to `send` selects one capability from Alice's inventory.
+For example, install the counter example and use `attach` to run
+`E(apps).get('counter').then(counter => { inventory.set('counter', counter); })`.
+Bob's mailbox view supports `r` to refresh, `take <id> <inventory-key>`,
+`discard <id>`, and `q` to disconnect.
+`inbox`, `outbox`, and `contacts` provide the same descriptions as JSON for scripts.
+`take` copies a capability into the inventory; `discard` releases only the mailbox's reference.
+The view never receives the offered capabilities themselves and creates no guest subscriptions.
+
+Contact names are local labels, not claims of authenticated human identity.
+Possession of an invitation permits one reciprocal exchange of inbox capabilities.
+A different receiver cannot redeem the same invitation again.
+`revoke-invite ./alice '<invitation JSON>'` cancels future redemption and removes its publication;
+it does not revoke an already established contact or capabilities previously sent.
+Treat invitations as secrets and share them only with the intended recipient.
+
+The mailbox is a separate persistent guest vat, created on first use.
+Its ordinary Maps retain contacts, offers, and delivery statuses without a special GC policy.
+The workspace holds its owner capability; remote contacts receive only their own submission facet.
+Connect while the destination is online and wait for contact status `ready` before sending.
+Once established, calls use durable sessions: a send while the recipient is offline can remain
+`sending` until reconnect, including after both supervisors restart.
+The guest issues one invocation per send; the node owns delivery retries after admission.
+This does not yet provide a separate application admission API or user-space retry proxy.
+An interrupted introduction command can have an uncertain outcome; inspect `contacts` before retrying.
 
 ## Ironhorse demos and CI tests
 
@@ -244,7 +435,9 @@ Nine additional reliability scenarios in `test/ironhorse/reliability.js` cover
 four actual daemon SIGKILL boundaries, competing supervisors, runtime identity,
 inspection of quarantined workers, custom heap-path refusal, and ownership-helper
 loss during worker startup.
-The suite is selected by `ava.ironhorse.config.mjs`; it runs the two files serially.
+`ava.ironhorse.config.mjs` selects the complete native lane and runs its files serially.
+In addition to those scenarios, it covers configurable limits, remote delivery, reachability,
+supervisor lifecycle, capability mail, HTTP, and alarms, including separate HTTP and alarm crash suites.
 It requires the real binary and bundles: missing artifacts fail the lane instead
 of skipping tests.
 Each scenario owns an independent directory and tears down its daemon and workers.
@@ -256,13 +449,15 @@ These tests verify exactly one counter increment after a fresh process restores 
 They do not simulate hardware power loss or storage devices that ignore fsync.
 `THIXOTROPE_IRONHORSE_WORKER` can select a different binary.
 
-`makeIronhorseEngine({ workerBinary, bootPaths, storePath, crankBudget,
-requestTimeoutMs })` implements the existing WorkerEngine interface. The
+`makeIronhorseEngine(powers, { workerBinary, bootPaths, storePath, crankBudget,
+bootstrapBudget, slotCeiling, chunkCeiling, requestTimeoutMs })` implements the existing WorkerEngine interface. The
 bootstrap uses the real SES shim and compartments. Native `async` functions,
 ordinary promises, closures, and retained capabilities persist in SQLite without guest-side
-serialization. Suspended async activations use the new `ASYN` snapshot atom
-and store schema 24; their saved frames and promise references are validated
-on restoration.
+serialization.
+Suspended async activations use the `ASYN` snapshot atom; their saved frames and promise references
+are validated on restoration.
+The engine owns snapshot-format and store-schema versions; see
+[`versions.rs`](../../rust/engine/ironhorse-snapshot/src/versions.rs) for their compatibility roles.
 
 Every completed crank commits an incremental SQLite checkpoint before a reply
 leaves the process. Snapshot references identify immutable, content-addressed
@@ -284,6 +479,42 @@ failure in worker metadata, and retires the logical comms session so pending
 calls reject. Other vats continue to run. Failed vats do not replay the same
 poison input after a restart; inspection does not retry that input.
 
+Configure the daemon-wide defaults when starting `thix serve`:
+
+```sh
+THIXOTROPE_CRANK_BUDGET=20000000 \
+THIXOTROPE_BOOTSTRAP_BUDGET=1500000000 \
+THIXOTROPE_SLOT_CEILING=2000000 \
+THIXOTROPE_CHUNK_CEILING=536870912 \
+THIXOTROPE_REQUEST_TIMEOUT_MS=90000 \
+thix serve ./private-state
+```
+
+`thix status ./private-state` reports the effective settings under `ironhorse`.
+Per-vat overrides are not implemented yet.
+
+| Setting | Unit | Default | Supported range |
+| --- | --- | --- | --- |
+| `THIXOTROPE_CRANK_BUDGET` | computrons per guest crank | 10,000,000 | 1 to 2^64−1 |
+| `THIXOTROPE_BOOTSTRAP_BUDGET` | computrons per bootstrap script or peer initialization | 1,000,000,000 | 1 to 2^64−1 |
+| `THIXOTROPE_SLOT_CEILING` | slot records | 1,000,000 | 1 to 2^32−1 |
+| `THIXOTROPE_CHUNK_CEILING` | chunk address-space bytes | 268,435,456 | 1 to 2^32−1 |
+| `THIXOTROPE_REQUEST_TIMEOUT_MS` | milliseconds per worker request | 60,000 | 1 to 2^31−1 |
+
+Supply positive decimal integers; zero does not mean unlimited.
+The engine API also accepts bigint budgets; numeric inputs must fit unsigned 32 bits.
+Status reports computron budgets as decimal strings to preserve precision.
+Heap ceilings are arena limits, not per-crank allowances or total process memory limits.
+
+Execution and heap limits may increase on restart while preserving the workspace.
+Decreases are rejected before workers start; repeat raised settings on subsequent starts so omitted
+settings do not revert to lower defaults.
+The watchdog timeout may change in either direction.
+Raising limits does not automatically retry an already failed vat.
+Older runtime manifests require migration or a fresh directory; the increase policy applies to
+version-2 manifests.
+See [the limits design](designs/ironhorse-limits.md) for compatibility details.
+
 This remains an experimental, local, single-supervisor MVP.
 A kernel-backed directory lease refuses concurrent supervisors.
 Workers hold shared incarnation leases until they exit; a replacement supervisor
@@ -295,20 +526,19 @@ refused by the engine's persistence gate. The bootstrap carries the full
 `Iterator` surface — the five lazy helpers are implemented, so it no longer
 omits them — and uses SES's minimal override-taming profile.
 This keeps the array iterator as a frozen native data property, as required by
-Ironhorse's current typed-array copy path. The loopback netlayer is a testing transport;
-a fixed public listener, service installation, and remote authentication UX are
-not part of this CLI.
-
+Ironhorse's current typed-array copy path.
+The standalone demos use a loopback testing netlayer; the `thix` supervisor provides the workspace
+and installation commands described above.
 
 ### Compatibility and recovery
 
 `runtime.json` records the worker executable hash, ordered bootstrap hashes,
-crank budget, and host delivery protocol.
-The worker's SQLite signature includes the resulting profile digest.
+host delivery protocol, and the current execution limits.
+The worker's SQLite signature includes the code identity digest, excluding mutable limits.
 The supervisor validates this manifest under its lease before restoring heaps or
 cleaning abandoned incarnations, and executes private checked copies throughout
 its lifetime so edits to the original paths cannot change a later wake.
-This release also advances the engine boot-layout signature to 21.
+The engine also validates its own boot-layout signature when restoring a stored image.
 
 Use `demo:ironhorse:counter status PATH` (or the promise variant) for administrative
 worker metadata without sending messages to guest capabilities.
@@ -320,7 +550,7 @@ An inspection of a running store is not a transactional backup.
 
 Recovery is deliberately explicit:
 
-- After process death, reopen with the same runtime and budget; leases release
+- After process death, reopen with the same runtime and equal or higher execution limits; leases release
   when their owning processes exit, and the new supervisor recovers image plus journal.
 - On an identity mismatch, restore the matching executable and bootstrap bytes.
   Do not edit the manifest to bypass the check.
@@ -336,6 +566,12 @@ There is no bootstrap priming workaround for `Symbol.unscopables`.
 
 ## Example
 
+Host factories take their platform powers explicitly as their first argument.
+The Node composition entry creates filesystem, socket, subprocess, timer, entropy, and diagnostic
+capabilities; the core never imports that entry or acquires platform authority by default.
+The alarm host primitive receives a `SyncStringAtom` for metadata.
+Each installed native-resource manager keeps its durable state in its own vat heap.
+
 ```js
 // The daemon runs under Hardened JavaScript: lock down first.
 import '@endo/init';
@@ -343,11 +579,18 @@ import '@endo/init';
 import { E } from '@endo/eventual-send';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
-import { makeFsStore, makeThixotropeDaemon, makeXsEngine } from '@endo/thixotrope';
+import {
+  makeFsStore,
+  makeThixotropeDaemon,
+  makeXsEngine,
+} from '@endo/thixotrope';
+import { makeNodePowers } from '@endo/thixotrope/node-powers.js';
 
-const daemon = await makeThixotropeDaemon({
-  store: makeFsStore('/var/lib/thixotrope'),
-  engine: makeXsEngine({
+const powers = makeNodePowers();
+
+const daemon = await makeThixotropeDaemon(powers, {
+  store: makeFsStore(powers, '/var/lib/thixotrope'),
+  engine: makeXsEngine(powers, {
     workerBinary: 'target/release/thixotrope-xs-worker',
     bootPath: 'dist-xs/boot.js',
     bundlePath: 'dist-xs/worker-peer.js',
@@ -360,14 +603,14 @@ const daemon = await makeThixotropeDaemon({
 const worker = await daemon.createWorker({ debugLabel: 'counter' });
 const counter = await worker.evaluate(`
   (() => {
-    let count = 0;
-    return Far('Counter', { incr: () => (count += 1) });
+    let count = 0n;
+    return Far('Counter', { incr: () => ++count });
   })()
 `);
 const secret = daemon.publish(counter);
 // Any OCapN peer can now mint a sturdy ref from (daemon.location, secret)
 // and call the counter — across worker sleeps and daemon restarts.
-console.log(await E(counter).incr()); // 1, via the in-process endpoint
+console.log(await E(counter).incr()); // 1n, via the in-process endpoint
 
 await daemon.shutdown(); // parks every worker; the store resumes it all
 ```
@@ -380,13 +623,13 @@ pick a fresh ephemeral port.
 ## Worker sessions
 
 Each worker runs a full (reduced-profile) OCapN peer —
-`src/worker-peer.js`, a persistent `Compartment` behind an OCapN
+`src/core/worker-peer.js`, a persistent `Compartment` behind an OCapN
 client whose evaluate facet is fetched from the worker's own locator
 under the well-known swissnum `shell`.
 The daemon's side of the session is a durable worker transport
-(`src/durable-worker-transport.js`), the durability envelope of the
+(`src/core/durable-worker-transport.js`), the durability envelope of the
 worker's hub session: no wire handshake, no client — the OCapN hub
-owns routing, and attaching the transport is the *same* operation for
+owns routing, and attaching the transport is the _same_ operation for
 a fresh worker, a wake from snapshot, and a daemon restart.
 
 Durability is snapshot-keyed frame retention:
@@ -408,11 +651,39 @@ A crash without sleep restarts from the last snapshot plus the full
 journal suffix; clean shutdown is an optimization, not a correctness
 requirement.
 
+### Durable, transient, and view sessions
+
+Three kinds of session reach the hub, and they differ in what survives.
+
+A **durable session** is what a worker or a remote peer holds.
+Its c-list rows, answer routes, and delivery obligations are persisted, so the session
+outlives its socket, its worker process, and the daemon itself.
+
+A **transient client** is a disposable host-side OCapN session, opened by
+`daemon.openEphemeralClient()` and implemented in `src/net/ephemeral-hub-client.js`.
+The host uses one to make administrative calls into the workspace.
+Calls it delivers are durable once accepted, but its own pending answers and imported
+references end with the client.
+Session keys are never reused, including across restarts, so a reference from a dead
+transient client can never designate anything again.
+Daemon shutdown drains client creation and closes the outstanding clients before
+releasing the store.
+
+A native adapter also has a transient session, attached directly to its process pipes.
+For HTTP, one session belongs to the adapter incarnation; requests do not create sessions.
+The adapter calls application handlers through this session, without a host-side HTTP observer.
+
+A **view connection** is a control-socket session held by a terminal view in `src/tui/`.
+It exists so the supervisor has something to release: closing the terminal, losing the
+socket, or restarting the supervisor cancels that view's ephemeral subscriptions and
+nothing else.
+Durable guest listeners registered through it are unaffected.
+
 ## The hub, and how daemon restarts work
 
 Thixotrope owns the hub, its persistence transactions, delivery queues, and session lifecycle.
 OCapN supplies protocol codecs, descriptor helpers, and signature operations.
-The hub (`src/hub.js`) holds only per-session c-lists (position ↔
+The hub (`src/net/hub.js`) holds only per-session c-lists (position ↔
 reference row), answer routes, and publications — plain JSON tables,
 written through to the store before any frame that names them exists.
 Every message is decoded with the ordinary wire codecs against a
@@ -424,9 +695,10 @@ Promises are not special anywhere: an `op:listen` forwards like any
 delivery, and a settlement frame toward a sleeping worker wakes it
 through its transport.
 
-Exactly one session reifies values: the **endpoint**, an in-process
-OCapN client hosting the daemon's genuine objects — system resources
-and the worker controller — and the embedder's admin route.
+The durable host **endpoint** is an in-process OCapN client hosting system resources,
+the worker controller, and the embedder's admin route.
+Disposable host clients and native adapters have separate reifying endpoints; routed traffic
+between other sessions is handled by the hub without reifying its values.
 Its session records shrink to resource descriptions (re-instantiated
 by name at recorded positions) and at-most-once answer obligations —
 the one kind of pending obligation that genuinely dies with the
@@ -436,7 +708,8 @@ replay.
 A daemon restart is: reload hub tables, reattach worker transports
 (asleep), restore the endpoint session, and let remote peers resume by
 rebinding their ducts.
-Nothing is re-seated because nothing was reified.
+Routed guest references remain hub rows; host resources are re-created from their recorded descriptions.
+Native adapters are replaced through their durable managers.
 A promise minted in worker A and held in worker B settles after a
 daemon restart with both workers starting asleep — the subscription is
 nothing but rows and a wire subscription in A's heap.
@@ -445,12 +718,15 @@ holders' calls break loudly instead of jamming.
 
 ## Engines
 
-`makeXsEngine` is the engine: each incarnation is a `thixotrope-xs-worker`
+`makeIronhorseEngine` is the supervisor's default engine, backed by SQLite heaps.
+Its build commands and configuration are described in [Ironhorse demos and CI tests](#ironhorse-demos-and-ci-tests).
+
+`makeXsEngine` is an alternative heap-snapshot engine: each incarnation is a `thixotrope-xs-worker`
 process (rust/thixotrope-xs-worker, a minimal runner on the `xsnap` crate)
 evaluating the worker peer bundle inside an XS machine, with real heap
 snapshots streamed into a content-addressed store.
 Binary OCapN frames ride the binary's ASCII NDJSON duct base64-encoded
-(`src/worker-peer-xs.js` is the bundle entry; `dist-xs/worker-peer.js`
+(`src/core/worker-peer-xs.js` is the bundle entry; `dist-xs/worker-peer.js`
 the artifact).
 Build it with:
 
@@ -474,9 +750,9 @@ shared intrinsics inside a native `Compartment`.
 
 The engine seam stays open for future JS engines with other heap
 snapshot mechanisms: any object satisfying the `WorkerEngine` type in
-`src/worker-engine.js` (`canSnapshot`, `start`, optional
+`src/core/worker-engine.js` (`canSnapshot`, `start`, optional
 `releaseSnapshot`) plugs in.
-Two internal replay engines (`src/peer-replay-engine.js`) implement
+Two internal replay engines (`src/core/peer-replay-engine.js`) implement
 the same contract deterministically without an XS build; they are test
 doubles for the daemon's persistence logic, deliberately not part of
 the public API.
@@ -492,18 +768,22 @@ own heap and the daemon as the relay:
 
 ```js
 const controller = daemon.makeResource('worker-controller');
-await parent.evaluate(
+const parent = await daemon.createWorker({ debugLabel: 'parent' });
+const parentRoot = await parent.evaluate(
   `
   Far('Parent', {
     setup: async () => {
       const child = await E(controller).createWorker('child');
       const shared = Far('Shared', { secret: () => 'from-parent' });
-      return E(child).evaluate(childSource, harden({ shared }));
+      const source = "Far('Child', { read: () => E(shared).secret() })";
+      return E(child).evaluate(source, { shared });
     },
   })
   `,
   { controller },
 );
+const child = await E(parentRoot).setup();
+console.log(await E(child).read()); // 'from-parent'
 ```
 
 Cross-worker links are durable at the session-record layer: the
@@ -526,10 +806,10 @@ session — and every live remote reference in it — survives
 transparently:
 
 ```js
-const daemon = await makeThixotropeDaemon({
+const daemon = await makeThixotropeDaemon(powers, {
   // ...
   makeNetlayer: ({ handlers, logger, resumption }) =>
-    makeDurableNetLayer({
+    makeDurableNetLayer(powers, {
       handlers,
       logger,
       resumption,
@@ -630,16 +910,15 @@ endowments:
 ```js
 import { makeTimerResource } from '@endo/thixotrope';
 
-const daemon = await makeThixotropeDaemon({
+const daemon = await makeThixotropeDaemon(powers, {
   // ...
-  resources: { timer: makeTimerResource },
+  resources: { timer: description => makeTimerResource(powers.timers, description) },
 });
 const worker = await daemon.createWorker({ debugLabel: 'clock' });
 const timer = daemon.makeResource('timer');
 const clock = await worker.evaluate(
   `Far('Clock', { read: () => E(timer).now() })`,
-  ['timer'],
-  [timer],
+  { timer },
 );
 ```
 
@@ -661,7 +940,7 @@ settle normally across restarts.
 
 ## API
 
-`makeThixotropeDaemon({ store, engine, codec, makeNetlayer, resources?, idleSleepMs?, verbose? })`
+`makeThixotropeDaemon(powers, { store, engine, codec, makeNetlayer, resources?, idleSleepMs?, verbose? })`
 resolves to a daemon (`idleSleepMs` parks any worker that has seen no
 deliveries for that long; workers run to quiescence per delivery and
 have no timer queue, so frame silence is exact dormancy):

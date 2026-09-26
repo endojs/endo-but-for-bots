@@ -1,9 +1,16 @@
 # Potential Thixotrope designs
 
 The [main design](../../../designs/thixotrope.md) describes the architecture and current runtime.
-This directory holds potential designs and experiments, not additional implemented guarantees.
+This directory includes focused implementation notes alongside potential designs and experiments.
+[Native resource installation](native-resource-installation.md), [alarm settlement](alarm-settlement.md),
+and [Ironhorse limits](ironhorse-limits.md) describe the current implemented contracts.
+Other proposals below remain exploratory.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
+[What a host service has to write](host-service-template.md) records what registering a host
+resource costs today and asks whether the repeated parts are worth factoring.
+[Manual persistence vats](manual-persistence-vats.md) explores moving those services into user-space
+vats that reconstruct their own OS resources, and the restorable host promise that lets one wait.
 
 This document records the current hypotheses, requirements, and open questions.
 It is not a claim that the implementation satisfies them.
@@ -226,17 +233,19 @@ Direction matters:
   subscription and release of that callback when the UI closes.
 - A durable object can initiate and manage an ephemeral resource, such as a child process or listening
   web server.
-  The lifecycle, recovery, and authority model for this direction has not yet been established.
+  Directory-installed native resources now exercise this direction: a dedicated manager vat retains
+  desired state, and a separate disposable process owns the platform resources.
+  The workspace retains installation bookkeeping and the registration capability in its inventory.
 
-A durable resource manager might hold a recreation recipe, a reference to a live incarnation, and
-pending operations whose outcomes differ after failure.
-That is a candidate abstraction, not permission to replay arbitrary process launches or I/O.
+The adapter keeper serializes creation and replacement and restores the manager's desired state.
+An incarnation's references break permanently when its process exits.
+Replacement occurs on the next manager use or daemon startup, and pending external operations
+are never replayed into the replacement.
 Recreating a listener does not recreate its accepted sockets, and restarting a process does not
 establish whether a previous request produced an external effect.
 
-Experiments should cover normal close, process death, daemon restart, and failure during creation.
-They should determine whether stale references break or reconnect, how pending promises settle,
-what cleanup occurs, and whether recovery needs renewed user authority.
+Current tests cover normal close, process death, daemon restart, and failure during creation.
+Future resource packages must specify their own operation outcomes and restoration policy.
 Generation identity must prevent an old operation from silently targeting a replacement resource
 when its meaning would change.
 

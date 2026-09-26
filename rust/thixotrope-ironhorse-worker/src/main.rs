@@ -160,6 +160,10 @@ fn eval(session: &mut StoreSession, source: &str, budget: u64) -> Result<String,
     if !outcome.completed {
         return Err(format!("guest crank halted: {:?}", outcome.halt));
     }
+    // Reclaim completed-crank garbage before persisting the next heap image.
+    // Collection is deterministic and runs only after a successful crank;
+    // an exhausted or otherwise halted crank must remain a fatal failure.
+    m.collect_garbage();
     Ok(outcome.result)
 }
 
@@ -223,16 +227,57 @@ fn supervise_lock(state: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// JSON computron budgets are decimal strings so JS never rounds a u64.
+fn positive_integer(value: &Value, name: &str) -> Result<u64, String> {
+    let amount = match value {
+        Value::String(text) if !text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()) => {
+            text.parse::<u64>().ok()
+        }
+        Value::Number(number) => number.as_u64(),
+        _ => None,
+    };
+    amount
+        .filter(|n| *n > 0)
+        .ok_or_else(|| format!("{name} must be a positive u64 integer"))
+}
+
+struct WorkerLimits {
+    crank_budget: u64,
+    bootstrap_budget: u64,
+    slot_ceiling: u32,
+    chunk_ceiling: u32,
+}
+
+impl WorkerLimits {
+    fn parse(text: &str) -> Result<Self, String> {
+        let value: Value = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        Ok(Self {
+            crank_budget: positive_integer(&value["crankBudget"], "crankBudget")?,
+            bootstrap_budget: positive_integer(&value["bootstrapBudget"], "bootstrapBudget")?,
+            slot_ceiling: u32::try_from(positive_integer(&value["slotCeiling"], "slotCeiling")?)
+                .map_err(|_| "slotCeiling exceeds the u32 address space")?,
+            chunk_ceiling: u32::try_from(positive_integer(&value["chunkCeiling"], "chunkCeiling")?)
+                .map_err(|_| "chunkCeiling exceeds the u32 address space")?,
+        })
+    }
+
+    fn apply(&self, machine: &mut Interp) {
+        machine.set_slot_ceiling(self.slot_ceiling);
+        machine.set_chunk_ceiling(self.chunk_ceiling as usize);
+    }
+}
+
 fn run() -> Result<(), String> {
     let mut args = std::env::args().skip(1);
-    let path = args
-        .next()
-        .ok_or("usage: thixotrope-ironhorse-worker heap.sqlite [boot.js ...]")?;
+    let path = args.next().ok_or(
+        "usage: thixotrope-ironhorse-worker heap.sqlite profile lease limits-json [boot.js ...]",
+    )?;
     if path == "--lock-state" {
         return supervise_lock(&args.next().ok_or("state directory required")?);
     }
     let profile = args.next().ok_or("runtime profile required")?;
     let active_path = args.next().ok_or("worker lease path required")?;
+    let limits = WorkerLimits::parse(&args.next().ok_or("worker limits required")?)?;
     let _active = lock_file(
         std::path::Path::new(&active_path),
         rustix::fs::FlockOperation::LockShared,
@@ -241,15 +286,20 @@ fn run() -> Result<(), String> {
     let signature = Signature::new(&profile);
     let mut store = SqliteHeapStore::open(&path).map_err(|e| format!("open: {e:?}"))?;
     let mut session = if fresh {
-        begin_store_session(Interp::new(), &signature, &mut store)
+        let mut machine = Interp::new();
+        limits.apply(&mut machine);
+        begin_store_session(machine, &signature, &mut store)
             .map_err(|(_, e)| format!("begin: {e:?}"))?
     } else {
         resume_from_store(&store, &signature).map_err(|e| format!("restore: {e:?}"))?
     };
+    // Arena policy is not snapshot state. Reapply it after every restoration.
+    limits.apply(session.machine_mut());
     if fresh {
         for boot in args {
             let source = std::fs::read_to_string(&boot).map_err(|e| e.to_string())?;
-            eval(&mut session, &source, 1_000_000_000).map_err(|e| format!("boot {boot}: {e}"))?;
+            eval(&mut session, &source, limits.bootstrap_budget)
+                .map_err(|e| format!("boot {boot}: {e}"))?;
         }
         checkpoint_to_store(&mut session, &signature, &mut store)
             .map_err(|e| format!("boot checkpoint: {e:?}"))?;
@@ -268,7 +318,11 @@ fn run() -> Result<(), String> {
         let result = match eval(
             &mut session,
             source,
-            request["budget"].as_u64().unwrap_or(10_000_000),
+            if request["budget"].is_null() {
+                limits.crank_budget
+            } else {
+                positive_integer(&request["budget"], "budget")?
+            },
         ) {
             Ok(result) => result,
             Err(error) => {
@@ -316,6 +370,93 @@ fn main() {
 mod tests {
     use super::*;
     use ironhorse_snapshot::store::MemoryStore;
+
+    fn test_limits() -> WorkerLimits {
+        WorkerLimits::parse(r#"{"crankBudget":"100000000","bootstrapBudget":"1000000000","slotCeiling":2000000,"chunkCeiling":536870912}"#).unwrap()
+    }
+
+    #[test]
+    fn configured_heap_above_default_survives_restore() {
+        let limits = test_limits();
+        let signature = Signature::new("configured-heap");
+        let mut store = MemoryStore::new();
+        let mut machine = Interp::new();
+        limits.apply(&mut machine);
+        let mut session = begin_store_session(machine, &signature, &mut store)
+            .map_err(|(_, error)| error)
+            .unwrap();
+        assert_eq!(
+            eval(
+                &mut session,
+                "globalThis.kept = null; for (var i = 0; i < 350000; i++) kept = {n:i, next:kept}; kept.n",
+                limits.crank_budget
+            )
+            .unwrap(),
+            "349999"
+        );
+        assert!(
+            session.machine_mut().slots().capacity() > ironhorse_vm::value::DEFAULT_SLOT_CEILING
+        );
+        checkpoint_to_store(&mut session, &signature, &mut store).unwrap();
+        drop(session);
+        let mut restored = resume_from_store(&store, &signature).unwrap();
+        limits.apply(restored.machine_mut());
+        assert_eq!(
+            restored.machine_mut().slots().ceiling(),
+            limits.slot_ceiling
+        );
+        assert_eq!(
+            restored.machine_mut().chunks().ceiling(),
+            limits.chunk_ceiling as usize
+        );
+        assert_eq!(
+            eval(&mut restored, "kept.n", limits.crank_budget).unwrap(),
+            "349999"
+        );
+    }
+
+    #[test]
+    fn configured_heap_and_meter_failures_remain_distinct() {
+        for heap_failure in [false, true] {
+            let signature = Signature::new("configured-refusal");
+            let mut store = MemoryStore::new();
+            let mut session = begin_store_session(Interp::new(), &signature, &mut store)
+                .map_err(|(_, error)| error)
+                .unwrap();
+            // Link builtins before restricting subsequent guest allocation.
+            eval(&mut session, "globalThis.kept = []", 1000000).unwrap();
+            let budget = if heap_failure {
+                let ceiling = session.machine_mut().slots().capacity() + 100;
+                session.machine_mut().set_slot_ceiling(ceiling);
+                10000000
+            } else {
+                1000
+            };
+            let error = eval(
+                &mut session,
+                "for (var i = 0; i < 10000; i++) kept.push({i}); kept.length",
+                budget,
+            )
+            .unwrap_err();
+            assert!(
+                error.contains(if heap_failure {
+                    "HeapExhausted"
+                } else {
+                    "MeterAbort"
+                }),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn worker_limits_preserve_u64_budgets_and_validate_ceilings() {
+        let limits = WorkerLimits::parse(r#"{"crankBudget":"9007199254740993","bootstrapBudget":"18446744073709551615","slotCeiling":2000000,"chunkCeiling":536870912}"#).unwrap();
+        assert_eq!(limits.crank_budget, 9_007_199_254_740_993);
+        assert_eq!(limits.bootstrap_budget, u64::MAX);
+        assert!(positive_integer(&json!(0), "budget").is_err());
+        assert!(positive_integer(&json!("18446744073709551616"), "budget").is_err());
+    }
 
     #[test]
     fn worker_compilation_is_charged_without_changing_script_semantics() {

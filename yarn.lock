@@ -3687,6 +3687,7 @@ __metadata:
     "@endo/ironhorse-prelude": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/ocapn": "workspace:^"
+    "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
     "@noble/hashes": "npm:^2.4.0"
