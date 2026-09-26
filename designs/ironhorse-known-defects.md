@@ -316,22 +316,13 @@ The rest are listed here as they stood.
 
 ### Snapshot migration and boot versioning
 
-8 open, 4 of them P1.
+7 open, 4 of them P1.
 
 - `F068` **P1** Do not use a considered `join` as the arguments-layout version (partial)
 - `F069` **P1** Encode the boot generation outside the legacy signature namespace
 - `F071` **P2** Keep legacy migration-fixture generators on the legacy signature
 - `F072` **P2** Treat a null `@@toPrimitive` method as absent
 - `F073` **P2** Preserve the pinned missing-key behavior
-- `F074` ~~**P1** Make the new coercion tests enforce computron parity~~
-  **RETIRED 2026-09-15 (not fixed — rejected).** This item was a live work
-  order for the XS-computron-parity myth: it instructed a future contributor
-  to add tests asserting Iron Horse's computron counts equal XS's, which the
-  accuracy-over-parity doctrine ([ironhorse-engine § Metering](ironhorse-engine.md))
-  names an explicit non-goal. The coercion tests keep their **result**
-  assertions and Iron Horse's own determinism pins; no parity enforcement
-  will be added. Retired explicitly rather than silently dropped so the
-  ledger records *why* it is gone.
 - `F078` **P1** Canonicalize intrinsic ordering for prototypes and namespaces too
 - `F079` **P2** Move a deleted-and-recreated intrinsic property to the end
 
@@ -442,18 +433,11 @@ The rest are listed here as they stood.
 
 ### String delete, boxing, ArrayBuffer slice and transfer
 
-10 open, 6 of them P1.
+9 open, 6 of them P1.
 
 - `F161` **P1** Route delete opcodes through String exotic `[[Delete]]`
 - `F162` **P1** Meter sloppy String, Symbol, and BigInt boxing
 - `F163` **P1** Calibrate each ArrayBuffer slice protocol branch
-- `F164` ~~**P2** Make the slice suite enforce the project's meter-parity contract~~
-  **RETIRED 2026-09-15 (not fixed — rejected).** There is no "meter-parity
-  contract": XS-computron parity is a non-goal
-  ([ironhorse-engine § Metering](ironhorse-engine.md)). The slice suite's
-  bar is result agreement plus Iron Horse's own meter determinism; if a
-  slice branch under-charges real work, file that as an own-cost-model
-  fidelity defect (like `F163`), not as parity enforcement.
 - `F165` **P1** Reject transfer of a petrified ArrayBuffer
 - `F166` **P1** Charge the transfer frame and result allocation
 - `F167` **P1** Release inaccessible backing chunks when detaching
