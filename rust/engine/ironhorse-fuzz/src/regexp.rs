@@ -379,4 +379,22 @@ mod tests {
         assert_eq!(case.3, 2);
         assert_eq!(differential_check_regexp(&case), Ok(true));
     }
+
+    #[test]
+    fn finding_13b68e2edb67861a_regexp_meter_overflow_agrees() {
+        // Fuzz finding 13b68e2edb67861a: the 12-byte input `3b 2b bc…bc`
+        // folds into a backreference-heavy (`\1`/`\3`/`\4`) nested
+        // alternation, flags `i`, over "\n\n\n0 "@2 that backtracks
+        // 91920681 metered steps (raw meter 6024113750016 > u32::MAX). The
+        // pre-c8497fd8 oracle wrapped the pin's meter to 32 bits; with the
+        // widened oracle both engines agree bit-exact.
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-13b68e2edb67861a.input.bin");
+        assert_eq!(data.len(), 12);
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "i");
+        assert_eq!(case.2, "\n\n\n0 ");
+        assert_eq!(case.3, 2);
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
 }
