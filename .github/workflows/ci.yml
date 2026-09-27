@@ -53,6 +53,9 @@ jobs:
 
       # end macro
 
+      - name: Test mixed-case file-name linter
+        run: yarn test:lint-file-names
+
       - name: Run yarn build
         run: yarn build
 
