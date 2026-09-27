@@ -1,15 +1,15 @@
 //! Pure acceptance policy, testable without building XS. A cost gap is data,
 //! never a conformance failure; release vectors pin IronHorse's own costs.
 
-use ironhorse_vm::value::number_to_ecma_string;
-
 /// The IronHorse observation is `(completed, rendered result, computrons)`.
-/// The oracle observation is `(completed, rendered result, exact double,
-/// computrons)`: its third field is the completion's exact IEEE-754 double
-/// when the completion was a Number, and `None` otherwise, so the computrons
-/// sit at `.3` on the oracle side and `.2` on the IronHorse side.
+/// The oracle observation is `(completed, rendered result, spec spelling,
+/// computrons)`: its third field is ECMA-262 `Number::toString` of the
+/// completion's exact IEEE-754 double when the completion was a Number, and
+/// `None` otherwise, so the computrons sit at `.3` on the oracle side and `.2`
+/// on the IronHorse side. The caller derives the spec spelling (this module
+/// stays dependency-free so CI can test it with a bare `rustc --test`).
 pub(crate) fn compare_observations(
-    oracle: (bool, &str, Option<f64>, u64),
+    oracle: (bool, &str, Option<&str>, u64),
     ironhorse: (bool, &str, u64),
 ) -> Result<Option<(u64, u64)>, String> {
     if oracle.0 != ironhorse.0 {
@@ -55,18 +55,18 @@ pub(crate) fn compare_observations(
 /// a tie that round-half-even parses back to `...336`. ironhorse (like V8, and
 /// as ECMA-262 §6.1.6.1.20 requires, since `𝔽(s × 10^(n−k))` must be `x`)
 /// needs all 17 digits and prints `51298827675632344`. So when the oracle
-/// reports its completion's exact double (`oracle_number`), the oracle's
-/// spelling is ignored and a finite Number must be spelled exactly as
-/// ECMA-262 `Number::toString` spells that double
-/// ([`number_to_ecma_string`]). That stops the ambiguous tie from masking a
-/// genuine one-ulp divergence, and, because the oracle is known to break
-/// §6.1.6.1.20 here, it checks IronHorse's spelling against the spec rather
-/// than merely checking that it parses back to the same value: a
-/// non-minimal, exponent-form, or `"-0"` spelling of the right double is
-/// still a divergence.
-pub(crate) fn results_agree(oracle: &str, oracle_number: Option<f64>, ironhorse: &str) -> bool {
-    if let Some(x) = oracle_number.filter(|x| x.is_finite()) {
-        return ironhorse == number_to_ecma_string(x);
+/// reports its completion's exact double, the oracle's spelling is ignored and
+/// a Number must be spelled exactly as ECMA-262 `Number::toString` spells that
+/// double (`oracle_spelling`, which the caller derives from the oracle's
+/// exact double with `ironhorse_vm::value::number_to_ecma_string`). That stops
+/// the ambiguous tie from masking a genuine one-ulp divergence, and, because
+/// the oracle is known to break §6.1.6.1.20 here, it checks IronHorse's
+/// spelling against the spec rather than merely checking that it parses back
+/// to the same value: a non-minimal, exponent-form, or `"-0"` spelling of the
+/// right double is still a divergence.
+pub(crate) fn results_agree(oracle: &str, oracle_spelling: Option<&str>, ironhorse: &str) -> bool {
+    if let Some(spec) = oracle_spelling {
+        return ironhorse == spec;
     }
     if oracle == ironhorse {
         return true;
@@ -161,72 +161,75 @@ mod tests {
     #[test]
     fn oracle_double_overrides_a_non_round_tripping_spelling() {
         // Finding 05264cccae42245a: XS spells 51298827675632344 as
-        // "51298827675632340", which parses to 51298827675632336.
-        let x = 51298827675632344.0_f64;
-        assert_ne!("51298827675632340".parse::<f64>().unwrap(), x);
+        // "51298827675632340", which parses to 51298827675632336. The spec
+        // spelling of the oracle's exact double is all 17 digits.
+        assert_ne!(
+            "51298827675632340".parse::<f64>().unwrap(),
+            51298827675632344.0_f64
+        );
+        let spec = Some("51298827675632344");
         assert!(results_agree(
             "51298827675632340",
-            Some(x),
+            spec,
             "51298827675632344"
         ));
         // The same ambiguous spelling no longer masks a one-ulp divergence.
         assert!(!results_agree(
             "51298827675632340",
-            Some(x),
+            spec,
             "51298827675632340"
         ));
         assert!(!results_agree(
             "51298827675632340",
-            Some(x),
+            spec,
             "51298827675632336"
         ));
-        // -0 renders as "0" on both engines.
-        assert!(results_agree("0", Some(-0.0), "0"));
         // A right-valued but non-canonical spelling is still a divergence.
-        assert!(!results_agree("0", Some(0.0), "-0"));
-        assert!(!results_agree("0", Some(-0.0), "-0"));
         assert!(!results_agree(
             "51298827675632340",
-            Some(x),
+            spec,
             "5.1298827675632344e16"
         ));
         assert!(!results_agree(
             "51298827675632340",
-            Some(x),
+            spec,
             "51298827675632344.0"
         ));
         // XS's non-minimal exact-integer spelling is not the spec spelling.
-        let d = 57632001481506816.0_f64;
+        let spec = Some("57632001481506820");
         assert!(results_agree(
             "57632001481506816",
-            Some(d),
+            spec,
             "57632001481506820"
         ));
         assert!(!results_agree(
             "57632001481506816",
-            Some(d),
+            spec,
             "57632001481506816"
         ));
+        // -0 and +0 both spell "0"; "-0" never agrees.
+        assert!(results_agree("0", Some("0"), "0"));
+        assert!(!results_agree("0", Some("0"), "-0"));
         // Exponent-form extremes: only the spec spelling agrees.
+        let spec = Some("1.7976931348623157e+308");
         assert!(results_agree(
             "1.7976931348623157e+308",
-            Some(f64::MAX),
+            spec,
             "1.7976931348623157e+308"
         ));
         assert!(!results_agree(
             "1.7976931348623157e+308",
-            Some(f64::MAX),
+            spec,
             "1.7976931348623157e308"
         ));
-        let min_subnormal = f64::from_bits(1);
-        assert!(results_agree("5e-324", Some(min_subnormal), "5e-324"));
-        assert!(!results_agree("5e-324", Some(min_subnormal), "4.9e-324"));
-        assert!(!results_agree("5e-324", Some(min_subnormal), "0"));
+        assert!(results_agree("5e-324", Some("5e-324"), "5e-324"));
+        assert!(!results_agree("5e-324", Some("5e-324"), "4.9e-324"));
+        assert!(!results_agree("5e-324", Some("5e-324"), "0"));
         // A Number completion never agrees with a non-numeric one.
-        assert!(!results_agree("1", Some(1.0), "true"));
-        // Non-finite Numbers still compare by spelling.
-        assert!(results_agree("Infinity", Some(f64::INFINITY), "Infinity"));
-        assert!(results_agree("NaN", Some(f64::NAN), "NaN"));
-        assert!(!results_agree("NaN", Some(f64::NAN), "Infinity"));
+        assert!(!results_agree("1", Some("1"), "true"));
+        // Non-finite Numbers spell as the spec does.
+        assert!(results_agree("Infinity", Some("Infinity"), "Infinity"));
+        assert!(results_agree("NaN", Some("NaN"), "NaN"));
+        assert!(!results_agree("NaN", Some("NaN"), "Infinity"));
     }
 }

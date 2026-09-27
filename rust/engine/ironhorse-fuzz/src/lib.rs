@@ -1692,6 +1692,15 @@ fn halt_precheck(source: &str, halt: &ironhorse_vm::Halt) -> Option<Result<(), D
     }
 }
 
+/// ECMA-262 `Number::toString` of the oracle's exact double when its
+/// completion was a Number: the spelling [`results_agree`] holds IronHorse to,
+/// since XS's own `fx_dtoa` spelling is not always shortest or round-tripping.
+fn oracle_spec_spelling(oracle: &xs_oracle::OracleOutcome) -> Option<String> {
+    oracle
+        .result_number()
+        .map(ironhorse_vm::value::number_to_ecma_string)
+}
+
 /// Target 1 body: run `source` on both engines, returning `Err` on any
 /// completion / result divergence. XS computrons are advisory. `Ok(())` also covers the
 /// legitimate "ironhorse reached an opcode outside the stage-1 subset" case
@@ -1714,7 +1723,7 @@ pub fn differential_check(source: &str) -> Result<(), Divergence> {
         (
             oracle.completed,
             &oracle.result,
-            oracle.result_number(),
+            oracle_spec_spelling(&oracle).as_deref(),
             oracle.computrons,
         ),
         (ironhorse.completed, &ironhorse.result, ironhorse.computrons),
@@ -1785,7 +1794,7 @@ fn differential_check_symbols_mode(source: &str) -> Result<(), Divergence> {
         (
             oracle.completed,
             &oracle.result,
-            oracle.result_number(),
+            oracle_spec_spelling(&oracle).as_deref(),
             oracle.computrons,
         ),
         (ironhorse.completed, &ironhorse.result, ironhorse.computrons),
@@ -1828,7 +1837,12 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
             ),
         });
     }
-    if oracle.completed && !results_agree(&oracle.result, oracle.result_number(), &ironhorse.result)
+    if oracle.completed
+        && !results_agree(
+            &oracle.result,
+            oracle_spec_spelling(&oracle).as_deref(),
+            &ironhorse.result,
+        )
     {
         return Err(Divergence {
             source: source.to_string(),
