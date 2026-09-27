@@ -58,7 +58,9 @@ pub(crate) fn compare_observations(
 /// reports its completion's exact double, the oracle's spelling is ignored and
 /// a Number must be spelled exactly as ECMA-262 `Number::toString` spells that
 /// double (`oracle_spelling`, which the caller derives from the oracle's
-/// exact double with `ironhorse_vm::value::number_to_ecma_string`). That stops
+/// exact double with the oracle-side, Ryu-backed
+/// `xs_oracle::number_to_ecma_string`). Keeping that formatter independent of
+/// IronHorse means the differential still detects a VM dtoa regression. This stops
 /// the ambiguous tie from masking a genuine one-ulp divergence, and, because
 /// the oracle is known to break §6.1.6.1.20 here, it checks IronHorse's
 /// spelling against the spec rather than merely checking that it parses back
@@ -229,7 +231,29 @@ mod tests {
         assert!(!results_agree("1", Some("1"), "true"));
         // Non-finite Numbers spell as the spec does.
         assert!(results_agree("Infinity", Some("Infinity"), "Infinity"));
+        assert!(results_agree("-Infinity", Some("-Infinity"), "-Infinity"));
+        assert!(!results_agree("-Infinity", Some("-Infinity"), "Infinity"));
         assert!(results_agree("NaN", Some("NaN"), "NaN"));
         assert!(!results_agree("NaN", Some("NaN"), "Infinity"));
+        // ECMA-262 switches to exponent notation at 10^21 and below 10^-6.
+        assert!(results_agree("1e+21", Some("1e+21"), "1e+21"));
+        assert!(!results_agree(
+            "1e+21",
+            Some("1e+21"),
+            "1000000000000000000000"
+        ));
+        assert!(results_agree("1e-7", Some("1e-7"), "1e-7"));
+        assert!(!results_agree("1e-7", Some("1e-7"), "0.0000001"));
+        // The exact-integer transition at 2^53 stays explicit as well.
+        assert!(results_agree(
+            "9007199254740992",
+            Some("9007199254740992"),
+            "9007199254740992"
+        ));
+        assert!(!results_agree(
+            "9007199254740992",
+            Some("9007199254740992"),
+            "9007199254740994"
+        ));
     }
 }

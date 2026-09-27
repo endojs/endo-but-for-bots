@@ -266,6 +266,76 @@ impl OracleOutcome {
     }
 }
 
+/// Oracle-side ECMA-262 `Number::toString` spelling for an exact double.
+///
+/// This deliberately does not call IronHorse's formatter: differential
+/// acceptance must retain an independent spelling oracle or a future VM dtoa
+/// regression would agree with itself. The shortest digits come from Ryu and
+/// are then placed using ECMA-262's fixed/exponential thresholds.
+pub fn number_to_ecma_string(number: f64) -> String {
+    if number.is_nan() {
+        return "NaN".to_string();
+    }
+    if number.is_infinite() {
+        return if number.is_sign_negative() {
+            "-Infinity"
+        } else {
+            "Infinity"
+        }
+        .to_string();
+    }
+    if number == 0.0 {
+        return "0".to_string();
+    }
+
+    let sign = if number.is_sign_negative() { "-" } else { "" };
+    let mut buffer = ryu::Buffer::new();
+    let shortest = buffer.format_finite(number.abs());
+    let (mantissa, exponent) = shortest
+        .split_once(['e', 'E'])
+        .map_or((shortest, 0), |(mantissa, exponent)| {
+            (mantissa, exponent.parse::<i32>().unwrap_or(0))
+        });
+    let decimal_position = mantissa.find('.').unwrap_or(mantissa.len()) as i32;
+    let mut digits: String = mantissa
+        .bytes()
+        .filter(|byte| *byte != b'.')
+        .map(char::from)
+        .collect();
+    let leading_zeroes = digits.bytes().take_while(|byte| *byte == b'0').count();
+    digits.drain(..leading_zeroes);
+    let point = decimal_position + exponent - leading_zeroes as i32;
+    while digits.ends_with('0') {
+        digits.pop();
+    }
+    debug_assert!(!digits.is_empty());
+    let digit_count = digits.len() as i32;
+
+    let body = if digit_count <= point && point <= 21 {
+        let mut output = digits;
+        output.push_str(&"0".repeat((point - digit_count) as usize));
+        output
+    } else if 0 < point && point <= 21 {
+        format!(
+            "{}.{}",
+            &digits[..point as usize],
+            &digits[point as usize..]
+        )
+    } else if -6 < point && point <= 0 {
+        format!("0.{}{}", "0".repeat((-point) as usize), digits)
+    } else {
+        let exponent = point - 1;
+        let exponent_sign = if exponent >= 0 { "+" } else { "-" };
+        let significand = if digit_count == 1 {
+            digits
+        } else {
+            format!("{}.{}", &digits[..1], &digits[1..])
+        };
+        format!("{significand}e{exponent_sign}{}", exponent.abs())
+    };
+    format!("{sign}{body}")
+}
+
 /// Whether an explicit XS abort status means memory or stack exhaustion.
 /// Guest unhandled exceptions/rejections and ordinary throws are excluded.
 pub fn is_resource_abort(status: i32) -> bool {
@@ -533,6 +603,8 @@ pub struct ModuleRunOutcome {
     /// `globalThis.result`, `String()`-coerced (valid when `completed`;
     /// `"undefined"` when the fixture set none).
     pub result: String,
+    /// The exact IEEE-754 bits when `result` came from a Number completion.
+    pub result_number_bits: Option<u64>,
     /// The rejection reason stringified (valid when `!completed`).
     pub error: String,
     /// meterIndex over the whole import+drain. Parse of the graph is
@@ -544,6 +616,13 @@ pub struct ModuleRunOutcome {
     pub meter_raw: u32,
     /// Original XS machine abort status; zero for ordinary guest exceptions.
     pub exit_status: i32,
+}
+
+impl ModuleRunOutcome {
+    /// The module fixture's exact Number result, before XS stringified it.
+    pub fn result_number(&self) -> Option<f64> {
+        self.result_number_bits.map(f64::from_bits)
+    }
 }
 
 /// Link and evaluate the module rooted at `dir`/`main_rel` on XS and
@@ -577,6 +656,7 @@ pub fn run_module_dir(dir: &std::path::Path, main_rel: &str) -> Option<ModuleRun
     let outcome = ModuleRunOutcome {
         completed: raw.ok != 0,
         result: cstr_field(&raw.result),
+        result_number_bits: (raw.result_is_number != 0).then_some(raw.result_number.to_bits()),
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
@@ -595,6 +675,22 @@ fn cstr_field(buf: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_number_spelling_matches_ecma_boundaries() {
+        assert_eq!(number_to_ecma_string(f64::NAN), "NaN");
+        assert_eq!(number_to_ecma_string(f64::INFINITY), "Infinity");
+        assert_eq!(number_to_ecma_string(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(number_to_ecma_string(-0.0), "0");
+        assert_eq!(number_to_ecma_string(1e21), "1e+21");
+        assert_eq!(number_to_ecma_string(1e20), "100000000000000000000");
+        assert_eq!(number_to_ecma_string(1e-7), "1e-7");
+        assert_eq!(number_to_ecma_string(1e-6), "0.000001");
+        assert_eq!(
+            number_to_ecma_string(51298827675632344.0),
+            "51298827675632344"
+        );
+    }
 
     /// Regression for continuous-fuzz finding `493390fc03979205`: a completion
     /// value longer than the old 1024-byte capture buffer used to be silently
@@ -657,6 +753,16 @@ mod tests {
         assert!(o.completed, "graph should fulfill, err={:?}", o.error);
         assert_eq!(o.result, "42");
         assert!(o.computrons > 0, "evaluating a graph costs computrons");
+    }
+
+    #[test]
+    fn module_run_captures_number_before_xs_stringifies_it() {
+        let expression = "((((226492416 + 27.27) << (838860800 << 226492416)) * ((226492416 + 27.27) << (838860800 << 226492416))) + (((27.27 * 27.27) + (838860800 << 226492416)) << ((226492416 + 27.27) << (838860800 << 226492416))))";
+        let source = format!("globalThis.result = {expression};");
+        let outcome = run_module_graph("number-tie", &[("main.mjs", &source)], "main.mjs");
+        assert!(outcome.completed, "module should fulfill: {outcome:?}");
+        assert_eq!(outcome.result, "51298827675632340");
+        assert_eq!(outcome.result_number(), Some(51298827675632344.0));
     }
 
     #[test]

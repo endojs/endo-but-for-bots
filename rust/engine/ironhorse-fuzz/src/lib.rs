@@ -1696,9 +1696,7 @@ fn halt_precheck(source: &str, halt: &ironhorse_vm::Halt) -> Option<Result<(), D
 /// completion was a Number: the spelling [`results_agree`] holds IronHorse to,
 /// since XS's own `fx_dtoa` spelling is not always shortest or round-tripping.
 fn oracle_spec_spelling(oracle: &xs_oracle::OracleOutcome) -> Option<String> {
-    oracle
-        .result_number()
-        .map(ironhorse_vm::value::number_to_ecma_string)
+    oracle.result_number().map(xs_oracle::number_to_ecma_string)
 }
 
 /// Target 1 body: run `source` on both engines, returning `Err` on any

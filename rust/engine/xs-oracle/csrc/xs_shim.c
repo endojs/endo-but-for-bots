@@ -983,6 +983,7 @@ int xs_oracle_run_module(const char *dir, const char *mainRel,
 				out->ok = 1;
 				mxPush(mxGlobal);
 				fxGetID(the, fxID(the, "result"));
+				endor_capture_number(the->stack, out);
 				fxToString(the, the->stack);
 				if (the->stack->value.string) {
 					out->result_len = (txU4)c_strlen(the->stack->value.string);
