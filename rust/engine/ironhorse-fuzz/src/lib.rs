@@ -3083,6 +3083,33 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `c9eaa7b5ae02437a` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
+    /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The exact 27-byte input
+    /// folds into a `new RegExp(...).exec("1aaaaaa")` program with nested
+    /// quantifiers and a lookbehind. Both engines complete with the same match
+    /// array; only the old XS-parity meter check differed (oracle 208 vs
+    /// IronHorse 209 computrons).
+    ///
+    /// Commit `de16989204` corrected the harness policy: IronHorse owns its
+    /// release-pinned cost table, so an XS-computron difference is advisory
+    /// while completion and result agreement remain mandatory.
+    #[test]
+    fn finding_c9eaa7b5ae02437a_regexp_exec_cost_gap_is_advisory() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-c9eaa7b5ae02437a.input.bin");
+        let program = gen_stage3b_regexp_program(data);
+        assert!(
+            program.contains("(?<=") && program.ends_with(".exec(\"1aaaaaa\")"),
+            "finding program is the lookbehind RegExp.exec surface case: {}",
+            program
+        );
+        match differential_check_meter_v4(&program) {
+            Ok(()) => {}
+            Err(d) => panic!("finding c9eaa7b5ae02437a must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `1cd4ddc72d5801c4` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
     /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 10-byte input folds
