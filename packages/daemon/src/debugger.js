@@ -63,6 +63,11 @@ harden(DebuggerInterface);
 /**
  * Create a Debugger exo wrapping a DebugSession.
  *
+ * NOTE: `setExceptionBreakMode('uncaught')` is not yet honored by any shipping
+ * engine; on the current C-XS/xsnap engine it *disables* exception breaking
+ * (see debug-session.js `setExceptionBreakMode`). It goes live only against an
+ * Ironhorse-backed session.
+ *
  * @param {DebugSession} session
  * @returns {import('@endo/exo').Guarded<{
  *   help(): string,
