@@ -3090,6 +3090,42 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `bc9529ac5818aa24` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
+    /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 11-byte input folds
+    /// into `new RegExp("(?:(?:(?:\\s+?0*\\s*){1,2}…", "s").toString()`, a
+    /// large nested whitespace/digit alternation whose `toString()` completion
+    /// value is longer than 1 KiB.
+    ///
+    /// At the finding SHA the XS shim still captured the completion value into
+    /// a fixed 1024-byte buffer, so the pin's result was cut at 1023 bytes and
+    /// the (complete, correct) ironhorse result looked divergent. The oracle
+    /// buffer is now 16 KiB with an honest `result_truncated` flag, so this
+    /// input agrees and no port change is warranted.
+    #[test]
+    fn finding_bc9529ac5818aa24_regexp_to_string_long_result_agrees() {
+        // The exact minimized fuzz input (sha256
+        // c4b0b8c2b5ccf49a2608eab08cc79e770fbe892697379f8a91d99f49e11b12e4).
+        let data: &[u8] =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-bc9529ac5818aa24.input.bin");
+        let program = gen_stage3b_regexp_program(data);
+        assert!(
+            program.starts_with("new RegExp(") && program.ends_with(".toString()"),
+            "finding program is the RegExp.toString surface case: {}",
+            program
+        );
+        let oracle = xs_oracle::run(&program).expect("oracle runs the program");
+        assert!(
+            !oracle.result_truncated && oracle.result.len() > 1023,
+            "the oracle must capture the full >1 KiB result, got {} bytes",
+            oracle.result.len()
+        );
+        match differential_check_meter_v4(&program) {
+            Ok(()) => {}
+            Err(d) => panic!("finding bc9529ac5818aa24 must not diverge: {:?}", d),
+        }
+    }
+
     #[test]
     fn generated_programs_agree_with_oracle() {
         // Sweep a spread of seeds; every generated subset program must
