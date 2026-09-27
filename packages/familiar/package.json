@@ -50,7 +50,7 @@
     "@electron/packager": "^20.3.0",
     "@endo/compartment-mapper": "workspace:^",
     "@endo/init": "workspace:^",
-    "@lavamoat/allow-scripts": "^3.4.1",
+    "@lavamoat/allow-scripts": "^5.1.0",
     "appdmg": "^0.6.6",
     "ava": "catalog:dev",
     "electron": "^43.4.1",

@@ -17,7 +17,7 @@
     "@endo/nat": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "@jessie.js/eslint-plugin": "^0.4.2",
-    "@lavamoat/allow-scripts": "^3.4.3",
+    "@lavamoat/allow-scripts": "^5.1.0",
     "@lavamoat/preinstall-always-fail": "^3.0.0",
     "@octokit/core": "^7.0.8",
     "@types/node": "^26.5.1",
