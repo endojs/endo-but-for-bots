@@ -649,11 +649,11 @@ export const spawnWorkerLoop = async (
       //  1. If replyTo matches a node in the tree, branch from there
       //  2. Otherwise continue from the last leaf (preserves context)
       let parentId = lastLeafId;
-        if (typeof replyTo === 'string') {
-          const existingNode = await tree.getNode(replyTo);
-          if (existingNode !== null) {
-            parentId = replyTo;
-          }
+      if (typeof replyTo === 'string') {
+        const existingNode = await tree.getNode(replyTo);
+        if (existingNode !== null) {
+          parentId = replyTo;
+        }
       }
 
       const userNode = await tree.addNode(
