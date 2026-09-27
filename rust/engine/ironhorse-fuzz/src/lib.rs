@@ -2535,6 +2535,32 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `9edaa2277fb90f03` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 4-byte input
+    /// `2d 1c 7e 5c` folds into a quotient of products whose value is
+    /// `234881024 * 234881024`, the double `55169095435288576`. XS's `fx_dtoa`
+    /// printed `55169095435288576` and ironhorse printed the shortest
+    /// round-tripping `55169095435288580`. That is the same double, so this is
+    /// the dtoa-spelling class again. It reproduced only at the fuzzed SHA
+    /// 38ca1d18. At the standing tip it is suppressed by comparing against the
+    /// oracle's exact double (`fdb9fef6e0`).
+    #[test]
+    fn finding_9edaa2277fb90f03_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 3add41810a522cd14a50ab2b5c48b49e76625f9b82dc4cef0b85841efb4891d2).
+        let data: &[u8] = &[0x2d, 0x1c, 0x7e, 0x5c];
+        let program = gen_program(data);
+        assert!(
+            program.contains('/'),
+            "finding program is a quotient: {}",
+            program
+        );
+        match differential_check(&program) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 9edaa2277fb90f03 must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `8adaa3bbc9cda1ce` (target
     /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
     /// `fc 03 bd` folds into a quotient of products of `2113929216 / 1585446912`
