@@ -2657,6 +2657,34 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `ecae051e6e8f5a27` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 10-byte
+    /// input folds into a product whose value is the double
+    /// `-396980243939421632`. XS's `fx_dtoa` printed `-396980243939421600` (a
+    /// different double) and ironhorse printed the shortest round-tripping
+    /// `-396980243939421630`, as V8 does. This is the dtoa-spelling class again.
+    /// It reproduced only at the fuzzed SHA 38ca1d18. At the standing tip the
+    /// harness checks Number spelling against the spec (`4b95dc199e`).
+    #[test]
+    fn finding_ecae051e6e8f5a27_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 08008aee2c5d688bdab03d295c367c457bba1ed3706e802ff7ec2c6cd2e40c7d).
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ecae051e6e8f5a27.input.bin");
+        let program = gen_program(data);
+        assert!(
+            program.contains('*'),
+            "finding program is a product: {}",
+            program
+        );
+        let oracle = xs_oracle::run(&program).expect("oracle machine");
+        assert_eq!(oracle.result_number(), Some(-396980243939421632.0));
+        match differential_check(&program) {
+            Ok(()) => {}
+            Err(d) => panic!("finding ecae051e6e8f5a27 must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `aaa423e9c5d56067` (target
     /// `differential_source`, toolchain `nightly-2026-08-15`). The 5-byte input
     /// folds into a product whose value is the double `-31032616836661248`.
