@@ -35,6 +35,7 @@
     "./src/bootstrap.js": "./src/bootstrap.js",
     "./src/proof-of-possession.js": "./src/proof-of-possession.js",
     "./src/node-crypto-powers.js": "./src/node-crypto-powers.js",
+    "./src/user-daemon.js": "./src/user-daemon.js",
     "./package.json": "./package.json"
   },
   "scripts": {
