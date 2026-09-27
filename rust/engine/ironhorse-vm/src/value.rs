@@ -631,10 +631,6 @@ pub struct SlotArena {
     ceiling: u32,
     pub(crate) snapshot_dirt: Rc<crate::snapshot_dirty::ArenaDirt>,
     property_index: RefCell<crate::property_index::PropertyIndex>,
-    /// Monotonic sealed/frozen/hardened facts derived from authoritative slot
-    /// flags. Slot reuse clears its entry; snapshot construction deliberately
-    /// creates an empty cache so restore never trusts serialized derived state.
-    integrity_cache: RefCell<Vec<IntegrityCacheEntry>>,
     /// The DENSE record storage of an eagerly built machine. `Cell`
     /// (identical layout to `Slot`, zero runtime bookkeeping) is what
     /// lets shared-reference paths write records in
@@ -690,6 +686,12 @@ pub struct SlotArena {
     /// path pays one always-false branch. Residency is **grow-only**:
     /// pages fault in and stay (design decision 3).
     lazy: Option<SlotBacking>,
+    /// Monotonic sealed/frozen/hardened facts derived from authoritative slot
+    /// flags. Keep this cold state after the arena's established hot GC fields
+    /// so an empty cache does not perturb their layout. Slot reuse clears its
+    /// entry; snapshot construction deliberately creates an empty cache so
+    /// restore never trusts serialized derived state.
+    integrity_cache: RefCell<Vec<IntegrityCacheEntry>>,
 }
 
 impl Default for SlotArena {
