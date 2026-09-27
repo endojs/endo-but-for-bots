@@ -2207,6 +2207,30 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `67ca18e4febe7a34` (target
+    /// `differential_source`). The exact 3-byte minimized input folds into
+    /// `(226492416 * 226492416)`, whose exactly representable double value is
+    /// `51298814505517056`. XS prints that exact integer while ironhorse emits
+    /// the shortest round-tripping `51298814505517060`; the numeric
+    /// `results_agree` comparison must recognize that both spellings denote
+    /// the identical Number.
+    #[test]
+    fn finding_67ca18e4febe7a34_large_integer_dtoa_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-67ca18e4febe7a34-input.bin");
+        let program = gen_program(data);
+        assert_eq!(program, "(226492416 * 226492416)");
+        match differential_check(&program) {
+            Ok(()) => {}
+            Err(divergence) => {
+                panic!(
+                    "finding 67ca18e4febe7a34 must not diverge: {:?}",
+                    divergence
+                )
+            }
+        }
+    }
+
     /// Regression for continuous-fuzz finding `daf6694aec7856aa` (target
     /// `differential_source`). The 3-byte input `1b 1b 74` folds into
     /// `(226492416 * 226492416)` — the byte-identical program of the earlier
