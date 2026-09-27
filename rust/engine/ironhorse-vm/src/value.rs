@@ -56,11 +56,6 @@ struct IntegrityCacheEntry {
     own_keys_metering: u64,
 }
 
-struct HardenedEdgeRoster {
-    edges: Box<[SlotIndex]>,
-    properties: Box<[SlotIndex]>,
-}
-
 pub(crate) const INTEGRITY_SEALED: u8 = 1;
 pub(crate) const INTEGRITY_FROZEN: u8 = 2;
 pub(crate) const INTEGRITY_HARDENED: u8 = 4;
@@ -640,8 +635,6 @@ pub struct SlotArena {
     /// flags. Slot reuse clears its entry; snapshot construction deliberately
     /// creates an empty cache so restore never trusts serialized derived state.
     integrity_cache: RefCell<Vec<IntegrityCacheEntry>>,
-    hardened_edge_rosters: RefCell<Vec<Option<HardenedEdgeRoster>>>,
-    hardened_property_owner: RefCell<Vec<SlotIndex>>,
     /// The DENSE record storage of an eagerly built machine. `Cell`
     /// (identical layout to `Slot`, zero runtime bookkeeping) is what
     /// lets shared-reference paths write records in
@@ -751,8 +744,6 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             integrity_cache: RefCell::default(),
-            hardened_edge_rosters: RefCell::default(),
-            hardened_property_owner: RefCell::default(),
             slots: Vec::new(),
             free: Vec::new(),
             free_marks: Vec::new(),
@@ -797,8 +788,6 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             integrity_cache: RefCell::default(),
-            hardened_edge_rosters: RefCell::default(),
-            hardened_property_owner: RefCell::default(),
             slots: Vec::new(),
             free,
             free_marks: free_marks.clone(),
@@ -1195,64 +1184,6 @@ impl SlotArena {
         if let Some(entry) = self.integrity_cache.get_mut().get_mut(index.0 as usize) {
             *entry = IntegrityCacheEntry::default();
         }
-        let owner = self
-            .hardened_property_owner
-            .get_mut()
-            .get(index.0 as usize)
-            .copied()
-            .filter(|owner| !owner.is_null())
-            .unwrap_or(index);
-        if let Some(roster) = self
-            .hardened_edge_rosters
-            .get_mut()
-            .get_mut(owner.0 as usize)
-            .and_then(Option::take)
-        {
-            let owners = self.hardened_property_owner.get_mut();
-            for property in roster.properties.iter().copied() {
-                if let Some(entry) = owners.get_mut(property.0 as usize) {
-                    *entry = SlotIndex::NULL;
-                }
-            }
-        }
-    }
-
-    pub(crate) fn cache_hardened_edges(
-        &self,
-        owner: SlotIndex,
-        properties: &[SlotIndex],
-        edges: Vec<SlotIndex>,
-    ) {
-        let mut rosters = self.hardened_edge_rosters.borrow_mut();
-        if rosters.len() <= owner.0 as usize {
-            rosters.resize_with(owner.0 as usize + 1, || None);
-        }
-        rosters[owner.0 as usize] = Some(HardenedEdgeRoster {
-            edges: edges.into_boxed_slice(),
-            properties: properties.into(),
-        });
-        let mut owners = self.hardened_property_owner.borrow_mut();
-        if let Some(last) = properties.iter().map(|property| property.0).max() {
-            if owners.len() <= last as usize {
-                owners.resize(last as usize + 1, SlotIndex::NULL);
-            }
-        }
-        for property in properties {
-            owners[property.0 as usize] = owner;
-        }
-    }
-
-    /// Replace immutable ordinary-property chain traversal with its derived
-    /// direct edge roster. Returns whether the slot was roster-covered.
-    pub(crate) fn append_hardened_edges(&self, index: SlotIndex, out: &mut Vec<SlotIndex>) -> bool {
-        if let Some(Some(roster)) = self.hardened_edge_rosters.borrow().get(index.0 as usize) {
-            out.extend_from_slice(&roster.edges);
-            return true;
-        }
-        self.hardened_property_owner
-            .borrow()
-            .get(index.0 as usize)
-            .is_some_and(|owner| !owner.is_null())
     }
 
     /// Total slot records ever allocated (live + free). The collector
@@ -1442,8 +1373,6 @@ impl SlotArena {
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
             integrity_cache: RefCell::default(),
-            hardened_edge_rosters: RefCell::default(),
-            hardened_property_owner: RefCell::default(),
             slots: slots.into_iter().map(Cell::new).collect(),
             free,
             free_marks,

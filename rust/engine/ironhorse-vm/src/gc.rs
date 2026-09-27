@@ -184,9 +184,7 @@ pub fn collect_full(
         while let Some(idx) = worklist.pop() {
             // Collect edges first (immutable borrow), then mark (mutable).
             let mut edges: Vec<SlotIndex> = Vec::new();
-            if !slots.append_hardened_edges(idx, &mut edges) {
-                slots.get(idx).each_ref_slot(|e| edges.push(e));
-            }
+            slots.get(idx).each_ref_slot(|e| edges.push(e));
             hooks.extra_edges(idx, &mut |e| edges.push(e));
             for e in edges {
                 if slots.mark(e) {
