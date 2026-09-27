@@ -3030,6 +3030,31 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `e4a8e011666d0362` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
+    /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 3-byte input folds
+    /// into a `new RegExp(...).exec("b\n0")` over a nested lazy-quantifier
+    /// alternation that cannot match, so the completion value is `-1`.
+    ///
+    /// The completion value agreed **exactly** with the XS pin; the ONLY
+    /// disagreement was the computron count (ironhorse 187 vs the XS pin 186),
+    /// the same advisory class as `1cb63ec6f8e6fc22` above.
+    #[test]
+    fn finding_e4a8e011666d0362_regexp_exec_cost_gap_is_advisory() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-e4a8e011666d0362.input.bin");
+        let program = gen_stage3b_regexp_program(data);
+        assert!(
+            program.contains(".exec(\"b\\n0\"); m ? m.index : -1"),
+            "finding program is the RegExp.exec surface case: {}",
+            program
+        );
+        match differential_check_meter_v4(&program) {
+            Ok(()) => {}
+            Err(d) => panic!("finding e4a8e011666d0362 must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `1cd4ddc72d5801c4` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
     /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 10-byte input folds
