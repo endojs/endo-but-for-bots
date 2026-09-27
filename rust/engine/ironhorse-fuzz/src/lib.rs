@@ -2822,6 +2822,36 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `9001b34fa6dd2d80` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
+    /// SHA `38ca1d189`). The exact 5-byte input folds into a deeply nested
+    /// `new RegExp(<pattern>, "i").source` program whose 1231-byte completion
+    /// value overflowed the oracle's old 1024-byte capture buffer. The oracle
+    /// returned a truncated prefix and the harness mistook the port's correct
+    /// full result for a divergence. The causal oracle fix from same-class
+    /// finding `493390fc03979205` (larger buffer plus an honest skip on
+    /// overflow) must keep this distinct input clean.
+    #[test]
+    fn finding_9001b34fa6dd2d80_regexp_source_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-9001b34fa6dd2d80.input.bin");
+        let program = gen_stage3b_regexp_program(data);
+        assert!(
+            program.ends_with(".source"),
+            "finding program must exercise RegExp.source"
+        );
+        assert!(
+            program.len() > 1024,
+            "finding program must overflow the old oracle buffer"
+        );
+        match differential_check_meter_v4(&program) {
+            Ok(()) => {}
+            Err(divergence) => {
+                panic!("finding 9001b34fa6dd2d80 must not diverge: {divergence:?}")
+            }
+        }
+    }
+
     /// Regression for continuous-fuzz finding `3a6aab9d9d140c2c` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
     /// SHA `38ca1d189`). The 8-byte input `11 01 00 00 2c df 6d 6d` folds into
