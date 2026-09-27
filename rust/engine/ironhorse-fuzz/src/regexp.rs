@@ -363,4 +363,20 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn finding_1dc231089278c110_regexp_meter_overflow_agrees() {
+        // Fuzz finding 1dc231089278c110: the 3-byte input `68 68 bc` folds
+        // into a nested `\n*`/`0*`/`0{1,3}` alternation over "00\n00"@2
+        // that backtracks 83775 metered steps (raw meter 5490278400 >
+        // u32::MAX). The pre-c8497fd8 oracle wrapped the pin's meter to
+        // 32 bits; with the widened oracle both engines agree bit-exact.
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-1dc231089278c110.input.bin");
+        assert_eq!(data, &[0x68, 0x68, 0xbc]);
+        let case = gen_regexp(data);
+        assert_eq!(case.2, "00\n00");
+        assert_eq!(case.3, 2);
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
 }
