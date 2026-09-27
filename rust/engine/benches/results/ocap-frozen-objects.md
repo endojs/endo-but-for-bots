@@ -79,3 +79,49 @@ worst fixture regresses 8.08%. The implementation was reverted.
   `slots()`/`chunks()` accessors; the design-required immediate milestone
   parent was measured directly instead.
 
+
+## Own-key order correction
+
+After the result above, the fused walk was found to queue referents in
+property-creation order rather than `[[OwnPropertyKeys]]` order (index names,
+string names, then symbols). A Proxy reached later in the harden worklist
+observes that order through its traps: hardening an object whose symbol-keyed
+Proxy was created before a string-keyed one logged `sym,str` where the parent
+logs `str,sym`. Computrons were unchanged, so neither the benchmark nor the
+conformance manifests exposed it. Commit `0e4a5ac18` queues referents in
+own-key order and, while skipping per-key key re-resolution would be
+observable (shared-compartment mode, or intrinsic bindings pending for
+interned names), runs the full walk. The regression test
+`fused_harden_queues_referents_in_own_property_keys_order` pins the parent's
+logs.
+
+Re-measured after the correction on `oros-studio-garden-ce242c49` (aarch64,
+Linux 7.0, Rust 1.91.1; a shared, loaded host) with the same parent, one
+warm-up, and seven alternating samples. The raw report is
+[`ocap-frozen-ordered-fix.json`](ocap-frozen-ordered-fix.json):
+
+| fixture | candidate/parent | bootstrap 95% ratio interval |
+| --- | ---: | ---: |
+| representative composite | 0.8724 | |
+| harden-tree | 0.8510 | [0.8350, 0.9030] |
+| harden-repeat | 0.7798 | [0.7240, 1.3720] |
+| ocap-mixed | 0.7772 | [0.7120, 1.5100] |
+
+Results, computrons, raw meter totals, and dispatch counts are identical on
+every fixture. On this host the fixtures the change does not reach
+(`closure-site`, `facet-cohort`, `mutable-control`) moved by up to ±11% with
+confidence intervals spanning parity, the same magnitude of noise that swung
+an unmodified closure-site run by 17% in either direction. The quiet-host
+result above remains the acceptance measurement.
+
+Gates re-run on `0e4a5ac18`:
+
+- `cargo test --release -p ironhorse-vm -p ironhorse-snapshot`: 1,620 passed.
+- Hardened262 `ironhorse` and `sesIronhorse` baselines written with
+  `node scripts/test.js -a ironhorse -a sesIronhorse --update-baseline` on
+  parent `107ec8db7` and candidate `0e4a5ac18` are byte-identical: 75 scenario
+  files, 2,223 path-status entries.
+- Test262 runs no `harden`, and the correction changes the integrity paths it
+  does reach only by routing more calls to the unmodified full walk, so the
+  test262 manifest recorded above is not expected to move. The milestone-4
+  campaign audit re-runs the full exact manifest on the combined head.
