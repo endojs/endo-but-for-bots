@@ -1177,15 +1177,6 @@ impl SlotArena {
         entry.state |= state;
         entry.own_property_count = own_property_count;
         entry.own_keys_metering = own_keys_metering;
-        drop(cache);
-        // Candidate measurement: immutable chains at or above half the lazy
-        // index's 32-node threshold can be indexed once with no future
-        // structural invalidation.
-        if state & INTEGRITY_FROZEN != 0 && own_property_count >= 16 {
-            self.property_index
-                .borrow_mut()
-                .prime(index, |slot| self.get(slot));
-        }
     }
 
     /// Forget host-only facts when a slot dies or is reused.

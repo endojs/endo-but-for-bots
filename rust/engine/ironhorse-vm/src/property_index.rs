@@ -26,54 +26,6 @@ pub(crate) struct PropertyIndex {
     pending: HashSet<SlotIndex>,
 }
 impl PropertyIndex {
-    pub(crate) fn prime(&mut self, owner: SlotIndex, read: impl Fn(SlotIndex) -> Slot) {
-        self.synchronize(&read);
-        if self.owners.contains_key(&owner) {
-            return;
-        }
-        let head = read(owner).next;
-        let mut nodes = Vec::new();
-        let mut names = HashMap::new();
-        let mut seen = HashSet::new();
-        let mut current = head;
-        while !current.is_null() {
-            if !seen.insert(current) {
-                return;
-            }
-            let slot = read(current);
-            names.entry(slot.id).or_insert(current);
-            nodes.push((current, slot.id, slot.next));
-            current = slot.next;
-        }
-        if self.owner_slots.len() <= owner.0 as usize {
-            self.owner_slots.resize(owner.0 as usize + 1, false);
-        }
-        self.owner_slots[owner.0 as usize] = true;
-        for &(node, id, next) in &nodes {
-            if self.watched_slots.len() <= node.0 as usize {
-                self.watched_slots.resize(node.0 as usize + 1, false);
-            }
-            self.watched_slots[node.0 as usize] = true;
-            self.watched
-                .entry(node)
-                .or_insert_with(|| Watched {
-                    id,
-                    next,
-                    owners: HashSet::new(),
-                })
-                .owners
-                .insert(owner);
-        }
-        self.owners.insert(
-            owner,
-            Owner {
-                head: Some(head),
-                names,
-                nodes: nodes.into_iter().map(|(node, _, _)| node).collect(),
-            },
-        );
-    }
-
     pub(crate) fn will_mutate(&mut self, slot: SlotIndex) {
         if self
             .watched_slots
@@ -245,30 +197,6 @@ mod tests {
         arena.get_mut(owner).next = newest;
         assert_eq!(arena.find_property(owner, 1), Some(newest));
         assert_eq!(arena.find_property(owner, 2), Some(nodes[1]));
-    }
-
-    #[test]
-    fn priming_builds_a_complete_index_before_the_lazy_threshold() {
-        let mut arena = SlotArena::new();
-        let owner = arena.alloc(Slot::undefined());
-        let mut nodes = Vec::new();
-        for id in 1..=16 {
-            let mut property = Slot::integer(i32::from(id));
-            property.id = id;
-            property.next = arena.get(owner).next;
-            let node = arena.alloc(property);
-            arena.get_mut(owner).next = node;
-            nodes.push(node);
-        }
-        let mut index = super::PropertyIndex::default();
-        index.prime(owner, |slot| arena.get(slot));
-        assert!(index.owners.contains_key(&owner));
-        assert_eq!(index.find(owner, 1, |slot| arena.get(slot)), Some(nodes[0]));
-        assert_eq!(
-            index.find(owner, 16, |slot| arena.get(slot)),
-            Some(nodes[15])
-        );
-        assert_eq!(index.find(owner, 17, |slot| arena.get(slot)), None);
     }
 
     #[test]
