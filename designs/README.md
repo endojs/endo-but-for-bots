@@ -335,7 +335,7 @@ LLM-agent stack).*
 | [store-write-file](store-write-file.md) | 2026-07-15 | 2026-07-15 | Not Started |
 | [buffered-channel-exo-stream-consolidation](buffered-channel-exo-stream-consolidation.md) | 2026-07-06 | 2026-07-24 | **Complete** |
 | [endo-fs-backend-seam](endo-fs-backend-seam.md) | 2026-05-28 | 2026-05-28 | **Complete** |
-| [endo-ls-json](endo-ls-json.md) | 2026-07-15 | 2026-07-15 | Proposed |
+| [endo-ls-json](endo-ls-json.md) | 2026-07-15 | 2026-09-27 | Proposed |
 | [chat-color-schemes](chat-color-schemes.md) | 2026-02-26 | 2026-02-26 | **Complete** |
 | [cli-store-verb-text-modes](cli-store-verb-text-modes.md) | 2026-05-08 | 2026-05-18 | In Progress |
 | [cli-edit-verb](cli-edit-verb.md) | 2026-05-08 | 2026-08-23 | In Progress |
@@ -1479,7 +1479,7 @@ star.)
 | lal-transcript-memory-management | Not Started | Durable transcript nodes outliving dismissed messages |
 | patterns-diagnostic-feedback | Proposed | Opt-in `@endo/patterns/explain-mismatch.js` submodule; non-throwing `explainMismatch({ specimen, pattern, format? })` (mirrors `matches`'s boolean shape) returns a rendered diagnostic string or `undefined`; compact line-per-mismatch default (sized for AI-agent token economy) or opt-in Rust-compiler-style expanded form; zero cost to the production matcher path (submodule appears nowhere on its import graph) |
 | namehub-interface-unification | Proposed | Interface refactor so `EndoMount` and `NameHub` share a `ReadableNameHubInterface`; deferred companion to `filesystem-watchers` |
-| endo-ls-json | Proposed | Make `endo ls --json` a parseable snapshot `string[]`; retain follow-mode JSON Lines and reject incompatible display modifiers |
+| endo-ls-json | Proposed | Parseable snapshot `string[]` for `endo ls --json`; retains follow-mode JSON Lines, rejects incompatible display modifiers |
 
 **Exit criterion:** Chat UI feature-complete for current design scope.
 Commands are non-blocking with visible pending state. Developer tools
