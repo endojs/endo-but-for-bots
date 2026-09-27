@@ -22,8 +22,18 @@ impl Interp {
             Payload::Reference(i) => i,
             _ => return Ok(arg0),
         };
-        // Already hardened: XS short-circuits (`slot->flag & flag`).
+        // Already hardened: XS short-circuits (`slot->flag & flag`). The
+        // resident cache is derived only; a restored arena rebuilds this bit
+        // from the authoritative persisted instance flag on first use.
+        if self
+            .slots
+            .cached_integrity(inst)
+            .is_some_and(|(state, _, _)| state & INTEGRITY_HARDENED != 0)
+        {
+            return Ok(arg0);
+        }
         if self.slots.get(inst).flag & XS_DONT_MARSHALL_FLAG != 0 {
+            self.slots.cache_integrity(inst, INTEGRITY_HARDENED, 0, 0);
             return Ok(arg0);
         }
         let mut list: Vec<crate::value::SlotIndex> = Vec::new();
@@ -37,10 +47,23 @@ impl Interp {
                 // than short-circuit a partially frozen graph.
                 for &queued in &list {
                     self.slots.get_mut(queued).flag &= !XS_DONT_MARSHALL_FLAG;
+                    self.slots.clear_cached_integrity(queued);
                 }
                 return Err(halt);
             }
             i += 1;
+        }
+        for &queued in &list {
+            let (own_property_count, own_keys_metering) = self
+                .slots
+                .cached_integrity(queued)
+                .map_or((0, 0), |(_, count, metering)| (count, metering));
+            self.slots.cache_integrity(
+                queued,
+                INTEGRITY_HARDENED,
+                own_property_count,
+                own_keys_metering,
+            );
         }
         Ok(arg0)
     }
@@ -79,6 +102,9 @@ impl Interp {
         inst: crate::value::SlotIndex,
         list: &mut Vec<crate::value::SlotIndex>,
     ) -> Result<(), Step> {
+        if self.fused_integrity_object(inst) {
+            return self.harden_fused_ordinary(inst, list);
+        }
         self.meter.tick_raw(HARDEN_OBJECT_BASE_METERING);
         if !self.mop_prevent_extensions(code, inst)? {
             return Err(self.catchable_type_error_msg("extensible object".into()));
@@ -142,6 +168,121 @@ impl Interp {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Whether an instance's complete visible own-property surface is the
+    /// authoritative named slot chain. Functions synthesize own descriptors;
+    /// ordinary numeric properties live in a side store. Both retain the full
+    /// MOP path, as do every Proxy and exotic object kind.
+    fn fused_integrity_object(&self, inst: crate::value::SlotIndex) -> bool {
+        self.is_ordinary_object(inst)
+            && !self.functions.contains_key(&inst)
+            && !self.index_props.contains_key(&inst)
+    }
+
+    /// The exact release-versioned charge of materializing one ordinary
+    /// `[[OwnPropertyKeys]]` result. The fused/cache paths omit those temporary
+    /// key strings, but the public meter must remain bit-identical.
+    fn fused_own_keys_metering(&self, properties: &[crate::value::SlotIndex]) -> Result<u64, Step> {
+        let mut total = 0u64;
+        for &property in properties {
+            total = total
+                .checked_add(crate::meter::BUILTIN_METERING)
+                .ok_or(Step::Host(Halt::MeterAbort))?;
+            let id = self.slots.get(property).id;
+            if self.is_symbol_key_id(id) {
+                continue;
+            }
+            let name = self
+                .symbol_names
+                .get(usize::from(id).wrapping_sub(1))
+                .ok_or(Step::Host(Halt::EngineInvariant(
+                    "fused-ownKeys:unknown-key",
+                )))?;
+            let units = name
+                .as_bytes()
+                .iter()
+                .filter(|byte| **byte & 0xc0 != 0x80)
+                .count();
+            total = total
+                .checked_add(string_chunk_cost(units as u64))
+                .ok_or(Step::Host(Halt::MeterAbort))?;
+        }
+        Ok(total)
+    }
+
+    fn charge_fused_own_keys(&mut self, metering: u64) -> Result<(), Step> {
+        if metering == 0 {
+            Ok(())
+        } else {
+            self.charge_and_check(metering)
+        }
+    }
+
+    /// Freeze and discover referents for an ordinary non-Proxy object in one
+    /// authoritative slot-chain walk. The two historical own-key passes are
+    /// still charged in their original order, preserving deterministic meter
+    /// receipts while avoiding their host allocations and descriptor routing.
+    fn harden_fused_ordinary(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        list: &mut Vec<crate::value::SlotIndex>,
+    ) -> Result<(), Step> {
+        self.meter.tick_raw(HARDEN_OBJECT_BASE_METERING);
+        self.materialize_intrinsic_own_surface(inst);
+        self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
+
+        let properties = self.own_property_slots(inst);
+        let own_keys_metering = self.fused_own_keys_metering(&properties)?;
+        self.charge_fused_own_keys(own_keys_metering)?;
+        let mut referents = self.reserve_scratch(properties.len())?;
+        for &property in &properties {
+            self.meter.tick_raw(HARDEN_PER_KEY_METERING / 2);
+            let slot = self.slots.get(property);
+            if slot.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                let accessor = self
+                    .accessors
+                    .get(&(inst, slot.id))
+                    .copied()
+                    .unwrap_or_default();
+                let getter = accessor.get.and_then(|function| match function.value {
+                    Payload::Reference(referent) => Some(referent),
+                    _ => None,
+                });
+                let setter = accessor.set.and_then(|function| match function.value {
+                    Payload::Reference(referent) => Some(referent),
+                    _ => None,
+                });
+                self.push_prepaid_scratch(&mut referents, (getter, setter))?;
+                self.slots.get_mut(property).flag |= XS_DONT_DELETE_FLAG;
+            } else {
+                let referent = match slot.value {
+                    Payload::Reference(referent) => Some(referent),
+                    _ => None,
+                };
+                self.push_prepaid_scratch(&mut referents, (referent, None))?;
+                self.slots.get_mut(property).flag |= XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG;
+            }
+        }
+
+        // The second historical ownKeys pass precedes prototype/property
+        // queuing. Repeat its charges without rebuilding the key list.
+        self.charge_fused_own_keys(own_keys_metering)?;
+        let prototype = self.instance_prototype(inst);
+        self.harden_enqueue(prototype, list);
+        for (first, second) in referents {
+            self.meter.tick_raw(HARDEN_PER_KEY_METERING / 2);
+            for referent in [first, second].into_iter().flatten() {
+                self.harden_enqueue(referent, list);
+            }
+        }
+        self.slots.cache_integrity(
+            inst,
+            INTEGRITY_SEALED | INTEGRITY_FROZEN,
+            properties.len() as u32,
+            own_keys_metering,
+        );
         Ok(())
     }
 
@@ -218,6 +359,27 @@ impl Interp {
         frozen: bool,
     ) -> Result<(), Step> {
         self.meter.tick_raw(INTEGRITY_APPLY_KEYS_BASE_METERING);
+        if self.fused_integrity_object(inst) {
+            self.materialize_intrinsic_own_surface(inst);
+            self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
+            let properties = self.own_property_slots(inst);
+            let own_keys_metering = self.fused_own_keys_metering(&properties)?;
+            self.charge_fused_own_keys(own_keys_metering)?;
+            for property in &properties {
+                self.meter.tick_raw(INTEGRITY_APPLY_PER_KEY_METERING);
+                let accessor =
+                    self.slots.get(*property).flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0;
+                let slot = self.slots.get_mut(*property);
+                slot.flag |= XS_DONT_DELETE_FLAG;
+                if frozen && !accessor {
+                    slot.flag |= XS_DONT_SET_FLAG;
+                }
+            }
+            let state = INTEGRITY_SEALED | if frozen { INTEGRITY_FROZEN } else { 0 };
+            self.slots
+                .cache_integrity(inst, state, properties.len() as u32, own_keys_metering);
+            return Ok(());
+        }
         if !self.mop_prevent_extensions(code, inst)? {
             return Err(self.catchable_type_error_msg("extensible object".into()));
         }
@@ -283,11 +445,30 @@ impl Interp {
         frozen: bool,
     ) -> Result<bool, Step> {
         self.meter.tick_raw(IS_EXTENSIBLE_RESIDUAL_METERING);
+        let requested = if frozen {
+            INTEGRITY_FROZEN
+        } else {
+            INTEGRITY_SEALED
+        };
+        if let Some((state, own_property_count, own_keys_metering)) =
+            self.slots.cached_integrity(inst)
+        {
+            if state & requested != 0 {
+                self.meter.tick_raw(INTEGRITY_QUERY_KEYS_BASE_METERING);
+                self.charge_fused_own_keys(own_keys_metering)?;
+                for _ in 0..own_property_count {
+                    self.meter.tick_raw(INTEGRITY_QUERY_PER_KEY_METERING);
+                }
+                return Ok(true);
+            }
+        }
         if self.mop_is_extensible(code, inst)? {
             return Ok(false);
         }
         self.meter.tick_raw(INTEGRITY_QUERY_KEYS_BASE_METERING);
-        for key in self.mop_own_keys(code, inst)? {
+        let keys = self.mop_own_keys(code, inst)?;
+        let own_property_count = keys.len() as u32;
+        for key in keys {
             self.meter.tick_raw(INTEGRITY_QUERY_PER_KEY_METERING);
             let key = self.to_read_key(code, key)?;
             if let Some(descriptor) = self.mop_get_own_property_read(code, inst, key)? {
@@ -297,6 +478,13 @@ impl Interp {
                     return Ok(false);
                 }
             }
+        }
+        if self.fused_integrity_object(inst) {
+            let state = INTEGRITY_SEALED | if frozen { INTEGRITY_FROZEN } else { 0 };
+            let properties = self.own_property_slots(inst);
+            let own_keys_metering = self.fused_own_keys_metering(&properties)?;
+            self.slots
+                .cache_integrity(inst, state, own_property_count, own_keys_metering);
         }
         Ok(true)
     }

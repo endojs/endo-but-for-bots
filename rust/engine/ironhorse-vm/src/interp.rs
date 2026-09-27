@@ -165,6 +165,7 @@ use crate::snapshot_dirty::{SnapshotDirt, SnapshotSection, Tracked};
 use crate::symbols::{SymbolIds, SymbolName};
 use crate::value::{
     canonicalize_nan, number_to_ecma_string, to_int32, ChunkArena, Kind, Payload, Slot, SlotArena,
+    INTEGRITY_FROZEN, INTEGRITY_HARDENED, INTEGRITY_SEALED,
 };
 
 /// A program compiled from a runtime source string for same-realm

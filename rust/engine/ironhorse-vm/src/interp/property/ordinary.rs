@@ -579,6 +579,21 @@ impl Interp {
     ) -> Result<bool, Step> {
         let mut current = inst;
         loop {
+            // A resident frozen fact proves every own data property is
+            // non-writable. Accessors still take the descriptor path because
+            // freezing preserves (and may invoke) their setters.
+            if self
+                .slots
+                .cached_integrity(current)
+                .is_some_and(|(state, _, _)| state & INTEGRITY_FROZEN != 0)
+            {
+                if let Some(property) = self.find_property(current, id) {
+                    let flag = self.slots.get(property).flag;
+                    if flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0 {
+                        return Ok(false);
+                    }
+                }
+            }
             // Functions keep their `length`, `name`, and (when constructable)
             // `prototype` own properties in side tables.  They participate in
             // OrdinarySet exactly like materialized own descriptors and must be
@@ -661,6 +676,17 @@ impl Interp {
                     ..OrdinaryDescriptor::default()
                 },
             );
+        }
+        // At this point any inherited accessor setter has already run and an
+        // own non-writable data property has already rejected. A frozen
+        // ordinary receiver can therefore neither update nor create the data
+        // property OrdinarySetWithOwnDescriptor is about to define.
+        if self
+            .slots
+            .cached_integrity(receiver_inst)
+            .is_some_and(|(state, _, _)| state & INTEGRITY_FROZEN != 0)
+        {
+            return Ok(false);
         }
         let receiver_own = self
             .ordinary_get_own_descriptor(receiver_inst, id)
