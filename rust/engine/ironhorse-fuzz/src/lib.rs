@@ -2799,6 +2799,34 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `1cd4ddc72d5801c4` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
+    /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 10-byte input folds
+    /// into `new RegExp("((?:\1+?\1*?)…)|\1+?\1*?", "").toString()`, a
+    /// pattern of lazy quantified backreferences to group 1.
+    ///
+    /// The completion value agreed exactly with the XS pin; the only
+    /// disagreement was the computron count (ironhorse 50 vs the XS pin 49).
+    /// Under `meter-v4` an XS-computron gap is advisory, so the surface no
+    /// longer reports a divergence and no port change is warranted. This locks
+    /// the observable contract that remains.
+    #[test]
+    fn finding_1cd4ddc72d5801c4_regexp_backreference_cost_gap_is_advisory() {
+        // The exact minimized fuzz input (sha256
+        // b847cc7498bb5806fe98bbe606eb2cd7c4fae4d8edfb208e991b56d5fb7bd031).
+        let data: &[u8] = &[0x6d, 0x5b, 0x68, 0x74, 0x6a, 0xa2, 0x6f, 0x6e, 0xc6, 0xa2];
+        let program = gen_stage3b_regexp_program(data);
+        assert!(
+            program.starts_with("new RegExp(") && program.ends_with(".toString()"),
+            "finding program is the RegExp.toString surface case: {}",
+            program
+        );
+        match differential_check_meter_v4(&program) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 1cd4ddc72d5801c4 must not diverge: {:?}", d),
+        }
+    }
+
     #[test]
     fn generated_programs_agree_with_oracle() {
         // Sweep a spread of seeds; every generated subset program must
