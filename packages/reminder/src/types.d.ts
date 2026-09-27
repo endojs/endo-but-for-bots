@@ -75,6 +75,24 @@ export type ReminderMessage = {
 };
 
 /**
+ * The capability-free, JSON-serializable reminder event: the `minion-reminder/v1`
+ * package-mail payload, and the decoded/projected form the consumer reads back
+ * from its mailbox. It carries none of the in-memory message's ephemeral
+ * `reminderResponse` capability.
+ */
+export type ReminderEvent = {
+  schema: 'minion-reminder/v1';
+  reminderId: string;
+  label: string;
+  periodMs: number;
+  messageNumber: number;
+  scheduledAt: number;
+  actualAt: number;
+  missedMessages: number;
+  annotation: ReminderAnnotation;
+};
+
+/**
  * A writable virtual-file-system Directory cap (`@endo/platform/fs/extended`),
  * or an eventual reference to one. Only the reconciled writable-tree verbs are
  * used, so the concrete cap type is intentionally opaque here.
