@@ -3,8 +3,28 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
+| **Updated** | 2026-09-27 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | **Complete** |
+
+## Status
+
+**Complete.** The implementation merged upstream in
+[endojs/endo#3332](https://github.com/endojs/endo/pull/3332) on
+2026-08-21 as merge commit `30147f5aa1750a98ce1d4511a6cf45068a392f65`.
+It added the `%InitialURL%` / `%SharedURL%` split, universal
+`URLSearchParams`, explicit sampling and hardening of
+`%URLSearchParamsIteratorPrototype%`, absent-host degradation, documentation,
+a changeset, and 22 focused tests across `url.test.js`,
+`url-blob-remove.test.js`, and `url-missing.test.js`.
+
+The implementation preserved the design's security boundary while changing
+two internal spellings: the powered intrinsic is `%InitialURL%` rather than
+`%URL%`, and the lockdown option is `urlBlobTaming: 'retain' | 'remove'`
+rather than `urlBlobMethods: 'keepOnInitialGlobal' | 'remove'`. It also pins
+`%URLPrototype%.constructor` to `%SharedURL%`, closing the path by which a
+shared compartment could otherwise recover the powered constructor and its
+blob-registry methods.
 
 ## What is the Problem Being Solved?
 
