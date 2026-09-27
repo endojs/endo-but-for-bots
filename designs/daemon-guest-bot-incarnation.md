@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-08 |
-| **Updated** | 2026-09-22 |
+| **Updated** | 2026-09-27 |
 | **Author** | kriscendobot (prompted) |
 | **Status** | **Implemented** |
 
@@ -14,12 +14,15 @@ The daemon primitive this design needs has landed in
 `60802d3df`, implementation commit `9e16e50b1`). It is more general and smaller
 than the guest-specific `EndoBot` protocol originally proposed here:
 
+- Every guest formula retains two pin directories. `guestPins` is a namespace
+  visible and mutable to the guest as `@pins`. `hostPins` is visible only to the
+  host, through formula introspection, and is never installed as a guest special
+  name.
 - `provideGuest(..., { pins })` installs a caller-elected directory as the
-  guest's `@pins` directory.
-- Every mailbox delivery best-effort reincarnates the values in that directory
-  before publishing the message-received notification.
-- The same delivery also reincarnates a second, host-only pin directory retained
-  by the guest formula.
+  guest's `guestPins`; otherwise the daemon formulates a fresh one. The daemon
+  always formulates a fresh, empty `hostPins`.
+- Every mailbox delivery best-effort reincarnates the values in both `guestPins`
+  and `hostPins` before publishing the message-received notification.
 
 Consequently, a deployment provisions its mailbox consumer as an ordinary
 agent-side responder and stores that responder in the guest's pin directory.
@@ -56,20 +59,27 @@ already-live responder is therefore cheap and does not start a duplicate. After
 its worker is canceled and the prior controller is gone, providing the same
 formula identifier creates a fresh incarnation.
 
-A guest formula now refers to two pin directories:
+A guest formula now refers to two pin directories, alongside its per-agent
+`networks` and `planes` directories:
 
 ```ts
 export type GuestFormula = {
   type: 'guest';
   // existing fields
+  networks: FormulaIdentifier;
+  planes: FormulaIdentifier;
+  /** The guest-visible and guest-mutable pin directory (`@pins`). */
   guestPins?: FormulaIdentifier;
+  /** The host-only pin directory retained by the guest formula. */
   hostPins?: FormulaIdentifier;
 };
 ```
 
-`guestPins` is exposed to the guest as `@pins`; `hostPins` is deliberately not
-installed as a special name. Older guest formulas may omit both fields and
-continue to load.
+`guestPins` is exposed to the guest as `@pins`, and the guest may add or remove
+entries in it. `hostPins` is deliberately not installed as a special name; the
+host sees it only through formula introspection, where the formula inspector
+reports both `guestPins` and `hostPins` as references of the guest formula.
+Older guest formulas may omit both fields and continue to load.
 
 ## Design
 
@@ -107,15 +117,32 @@ surface:
 export type MakeAgentOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
+  /** A caller-selected directory to expose to the new agent as `@pins`. */
   pins?: EndoDirectory;
+  /** A caller-selected directory to expose as `@nets`. */
   networks?: EndoDirectory;
+  /** A caller-selected directory to expose as `@planes`. */
+  planes?: EndoDirectory;
 };
 ```
 
-The supplied `pins` value must be a daemon-minted directory. If omitted, a new
-directory is formulated. For a guest, this selected directory becomes
-`guestPins` and is visible as `@pins`. The guest may therefore add or remove its
-own durable services without receiving the host's root `@pins` authority.
+Each directory option must be a daemon-minted directory. If one is omitted, a
+new empty directory is formulated. For a guest, the selected `pins` directory
+becomes `guestPins` and is visible as `@pins`. The guest may therefore add or
+remove its own durable services without receiving the host's root `@pins`
+authority. `hostPins` has no corresponding option.
+
+`planes` selects the agent's `@planes` directory: the content data planes
+(for example, the HTTP web-seed plane) whose sharing capabilities the agent may
+use. When the agent shares content, the daemon resolves every plane in
+`@planes` into fresh source hints on the locator it produces, just as `@nets`
+selects the connection hints. A creator therefore decides which data planes a
+new agent may advertise by electing its `@planes` directory, as it elects
+`@pins` and `@nets`. On `llm` as of `efabaed2b`, the formulas and the special
+name are in place (every host and guest formula carries a `planes` directory),
+but `provideHost` and `provideGuest` do not yet accept the `planes` option and
+always formulate a fresh, empty `@planes`; the option completes the surface
+alongside `pins` and `networks`.
 
 Each guest should pin its own responder formula. Reusing one responder formula
 identifier across guests would reuse one memoized incarnation and combine their
@@ -203,10 +230,11 @@ slot.
 
 Removing the responder from `@pins` decommissions wake-on-message for that
 responder. Once no other reachable path retains it, its formula can be
-collected. Because the guest owns `@pins`, it can remove its own responder; a
-deployment that requires a relationship the guest cannot remove needs a
-host-controlled way to populate the guest's host-only pin directory, which is
-not part of the caller-elected `pins` surface.
+collected. Because the guest owns `@pins` (`guestPins`), it can remove its own
+responder. A relationship the guest cannot remove belongs in `hostPins`, which
+the guest cannot name. Delivery already reincarnates `hostPins`, and the host can
+find it through formula introspection, but no `MakeAgentOptions` field or host
+method yet populates it.
 
 Formula records do not change in place when a pin is added or removed. The
 directory's mutable name-to-identifier mapping changes, while the formulas that
@@ -229,7 +257,8 @@ reprovisioning or another future migration mechanism.
 The landed implementation carries focused and integration coverage:
 
 1. `packages/daemon/test/mail-pins.test.js` verifies that delivery provides both
-   guest pin directories, provides host pins, isolates a retained formula that
+   guest pin directories (`guestPins` and `hostPins`), provides a host agent's
+   own `@pins`, isolates a retained formula that
    rejects, and accepts old guests with no pin directories.
 2. `packages/daemon/test/endo.test.js` provisions an auto-responder in a
    caller-elected guest pin directory and verifies that the next message revives
@@ -247,10 +276,12 @@ The landed implementation carries focused and integration coverage:
   `pins` and `networks` directories.
 - `packages/daemon/src/manager.js`: guest pin-directory formulation and formula
   edges.
-- `packages/daemon/src/guest.js`: the guest-visible `@pins` special name.
+- `packages/daemon/src/guest.js`: the guest-visible `@pins` special name
+  (`guestPins`), with `hostPins` deliberately absent from special names.
 - `packages/daemon/src/mail.js`: `reincarnateMailboxPins` and the per-delivery
   wake.
-- `packages/daemon/src/formula-record.js`: formula-inspector references.
+- `packages/daemon/src/formula-record.js`: formula-inspector references,
+  including `guestPins` and `hostPins`.
 - `packages/daemon/test/mail-pins.test.js` and
   `packages/daemon/test/endo.test.js`: focused and end-to-end coverage.
 
@@ -267,15 +298,18 @@ The landed implementation carries focused and integration coverage:
 4. **Keep bot policy above the daemon.** Credential recovery, admission,
    backoff, status, and quotas vary by deployment and do not belong in the
    generic mailbox primitive.
-5. **Expose a guest-owned pin directory and retain a distinct host-only one.**
-   The guest can manage its own services without receiving the host's root pin
-   authority, while the formula shape leaves room for daemon-owned relationships
-   that the guest cannot remove.
+5. **Implement both `guestPins` and `hostPins`.** `guestPins` is the guest's
+   own `@pins`, so the guest can manage its own services without receiving the
+   host's root pin authority. `hostPins` is visible only to the host through
+   formula introspection, so it can hold relationships that the guest cannot
+   remove.
 
 ## Deferred Work
 
-- A host surface for populating a guest's host-only pin directory, if a
-  deployment needs a non-removable responder relationship.
+- A host surface for populating a guest's `hostPins`, if a deployment needs a
+  non-removable responder relationship.
+- Accepting the `planes` option in `provideHost` and `provideGuest`, with the
+  same daemon-minted-directory validation as `pins` and `networks`.
 - An explicit migration path for attaching caller-elected pins to an existing
   guest without changing guest identity.
 - Consumer-specific supervision, circuit breaking, credential recovery, and
