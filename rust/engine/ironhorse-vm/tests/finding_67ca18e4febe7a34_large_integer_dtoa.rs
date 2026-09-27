@@ -16,7 +16,7 @@
 //! resulting program with the pure-Rust compiler, and runs it through
 //! `ironhorse-vm`, asserting completion and the spec-conformant result.
 
-const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-67ca18e4febe7a34-input.bin");
+const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-67ca18e4febe7a34.input.bin");
 const FINDING_SOURCE: &str = "(226492416 * 226492416)";
 const SHORTEST_RESULT: &str = "51298814505517060";
 

@@ -20,7 +20,7 @@
 //! that the program completes without panic and returns the spec-conformant
 //! result.
 
-const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-8adaa3bbc9cda1ce-input.bin");
+const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-8adaa3bbc9cda1ce.input.bin");
 const FINDING_SOURCE: &str = "((((2113929216 / 1585446912) || (2113929216 / 1585446912)) * ((1585446912 * true) / (true || 1585446912))) / (((true || 1585446912) * (2113929216 / 1585446912)) / ((1585446912 * true) / (true || 1585446912))))";
 const SHORTEST_RESULT: &str = "2513641910770336000";
 /// XS's non-shortest rendering of the same double.

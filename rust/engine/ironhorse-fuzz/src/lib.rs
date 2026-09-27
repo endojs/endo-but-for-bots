@@ -2217,7 +2217,7 @@ mod tests {
     #[test]
     fn finding_67ca18e4febe7a34_large_integer_dtoa_agrees() {
         let data =
-            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-67ca18e4febe7a34-input.bin");
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-67ca18e4febe7a34.input.bin");
         let program = gen_program(data);
         assert_eq!(program, "(226492416 * 226492416)");
         match differential_check(&program) {

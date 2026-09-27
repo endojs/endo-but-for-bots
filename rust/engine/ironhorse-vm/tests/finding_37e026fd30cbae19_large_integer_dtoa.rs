@@ -23,7 +23,7 @@
 //! compiler, and runs it through `ironhorse-vm`. It asserts that the program
 //! completes without panic and returns the spec-conformant result.
 
-const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-37e026fd30cbae19-input.bin");
+const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-37e026fd30cbae19.input.bin");
 const FINDING_SOURCE: &str =
     "(((-(false * 226492416)) * (-(false * 226492416))) + (-((-226492416) * (-226492416))))";
 const SHORTEST_RESULT: &str = "-51298814505517060";

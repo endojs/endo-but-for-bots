@@ -21,7 +21,7 @@
 //! through `ironhorse-vm`, asserting completion without panic and the
 //! spec-conformant shortest result.
 
-const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-daf6694aec7856aa-input.bin");
+const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-daf6694aec7856aa.input.bin");
 const FINDING_SOURCE: &str = "(226492416 * 226492416)";
 const SHORTEST_RESULT: &str = "51298814505517060";
 
