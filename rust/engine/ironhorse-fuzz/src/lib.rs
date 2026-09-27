@@ -3018,6 +3018,36 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `b95320dfb5dd9d3d` (target
+    /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
+    /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 5-byte input folds
+    /// into `var m = new RegExp("([0-9]{2}([a-c0-9]{2}[0-9]{2}(\\w{2}0+?a{2})?)){2}[0-9]{2}", "")
+    /// .exec("aac00aa"); m ? m.index : -1`, a nested-group digit pattern that
+    /// cannot match the subject.
+    ///
+    /// The completion value agreed exactly with the XS pin (`-1`, V8 agrees);
+    /// the only disagreement was the computron count (ironhorse 118 vs the XS
+    /// pin 117). Under `meter-v4` an XS-computron gap is advisory, so the
+    /// surface no longer reports a divergence and no port change is warranted.
+    /// This locks the observable contract that remains.
+    #[test]
+    fn finding_b95320dfb5dd9d3d_regexp_exec_cost_gap_is_advisory() {
+        // The exact minimized fuzz input (sha256
+        // 89590ab03d5ee8aa96ba12d1543906131941b2d6571f43808ae7f9d2eaed7d07).
+        let data: &[u8] =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-b95320dfb5dd9d3d.input.bin");
+        let program = gen_stage3b_regexp_program(data);
+        assert!(
+            program.starts_with("var m = new RegExp(") && program.contains(".exec("),
+            "finding program is the RegExp.exec surface case: {}",
+            program
+        );
+        match differential_check_meter_v4(&program) {
+            Ok(()) => {}
+            Err(d) => panic!("finding b95320dfb5dd9d3d must not diverge: {:?}", d),
+        }
+    }
+
     #[test]
     fn generated_programs_agree_with_oracle() {
         // Sweep a spread of seeds; every generated subset program must
