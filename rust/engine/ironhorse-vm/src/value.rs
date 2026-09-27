@@ -1180,9 +1180,12 @@ impl SlotArena {
     }
 
     /// Forget host-only facts when a slot dies or is reused.
+    #[inline(always)]
     pub(crate) fn clear_cached_integrity(&mut self, index: SlotIndex) {
-        if let Some(entry) = self.integrity_cache.get_mut().get_mut(index.0 as usize) {
-            *entry = IntegrityCacheEntry::default();
+        let cache = self.integrity_cache.get_mut();
+        let index = index.0 as usize;
+        if index < cache.len() {
+            cache[index] = IntegrityCacheEntry::default();
         }
     }
 
