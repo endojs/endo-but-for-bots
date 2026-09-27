@@ -531,3 +531,135 @@ fn duplicate_private_names_are_error() {
     )
     .is_ok());
 }
+
+// ---- frame-locals ceiling (XS's 65535 slots-per-frame limit) ----
+//
+// XS reserves a frame's locals with `RESERVE`, whose slot operand — like
+// every `GET_LOCAL`/`SET_LOCAL`/`RETRIEVE`/`UNWIND` frame index — is a `u16`;
+// `fxByteCodeSize` corrupts the opcode stream past 65535 (a `+= 2` bump to a
+// nonexistent `_4` variant). Iron Horse ports that exact width selector, so it
+// shares the exact ceiling. The scoper rejects a frame whose `scopeCount`
+// (`== scopeMaximum`, the peak slot count) would exceed it, at parse/compile
+// time — a clean, catchable `Syntax` error, never lowered to bytecode.
+//
+// The check sits at the single `scopeCount` chokepoint, so it covers EVERY
+// path that accumulates a frame slot (each raises `scope_maximum`): plain
+// `var`/`let`/`const`, parameters, destructuring targets, hoisted function
+// declarations, and `catch` bindings. These fixtures drive one over-limit case
+// per path plus the exact boundary. They assert at the scoper (`scope_program`)
+// because that is where the check lives and where the boundary is observable in
+// isolation; the full `compile()` path additionally trips the *lower*
+// symbol-table ceiling (65534 distinct names) for the named-binding paths, so
+// the frame limit's clean isolation is a scoper-level property. See also the
+// public-API companion `ironhorse-vm/tests/compiler_frame_locals_limit.rs`.
+
+/// A function whose body is `count` repetitions of `item` (with `{i}`
+/// substituted), used to grow a single frame programmatically.
+fn frame_of(count: usize, pre: &str, item: &str, post: &str) -> String {
+    let mut s = String::with_capacity(count * item.len() + pre.len() + post.len());
+    s.push_str(pre);
+    for i in 0..count {
+        s.push_str(&item.replace("{i}", &i.to_string()));
+    }
+    s.push_str(post);
+    s
+}
+
+/// The largest `scopeCount` in the scope tree of `src`, or a scoper error.
+fn max_scope_count(src: &str) -> Result<i64, crate::parser::ParseError> {
+    let tree = scope_program(src, false)?;
+    Ok(tree
+        .dump()
+        .lines()
+        .filter_map(|l| l.split("scopeCount=").nth(1))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .filter_map(|n| n.parse::<i64>().ok())
+        .max()
+        .unwrap_or(0))
+}
+
+fn assert_frame_rejected(src: &str) {
+    let err = scope_program(src, false).expect_err("over-limit frame must be rejected");
+    assert_eq!(err.kind, ParseErrorKind::Syntax);
+    assert_eq!(err.message, "too many variables");
+}
+
+#[test]
+fn frame_at_the_ceiling_is_accepted() {
+    // 65535 `let`s = exactly 65535 frame slots: the largest frame XS's u16
+    // RESERVE operand can encode, so it is admitted.
+    let src = frame_of(65_535, "function f(){", "let a{i};", "}");
+    assert_eq!(max_scope_count(&src).unwrap(), 65_535);
+}
+
+#[test]
+fn frame_one_over_the_ceiling_is_rejected() {
+    // 65536 slots needs a nonexistent `RESERVE_4`; rejected before coding.
+    assert_frame_rejected(&frame_of(65_536, "function f(){", "let a{i};", "}"));
+}
+
+#[test]
+fn var_declarations_count_toward_the_ceiling() {
+    assert_eq!(
+        max_scope_count(&frame_of(65_535, "function f(){", "var a{i};", "}")).unwrap(),
+        65_535
+    );
+    assert_frame_rejected(&frame_of(65_536, "function f(){", "var a{i};", "}"));
+}
+
+#[test]
+fn array_destructuring_targets_count_toward_the_ceiling() {
+    // `var [a0, a1, ...] = []` — each pattern target is a frame slot.
+    assert_frame_rejected(&frame_of(65_536, "function f(){var [", "a{i},", "]=[];}"));
+}
+
+#[test]
+fn object_destructuring_targets_count_toward_the_ceiling() {
+    // `var { p0, p1, ... } = {}` — each shorthand binding is a frame slot.
+    assert_frame_rejected(&frame_of(65_536, "function f(){var {", "p{i},", "}={};}"));
+}
+
+#[test]
+fn hoisted_function_declarations_count_toward_the_ceiling() {
+    // Nested `function a0(){} function a1(){} ...` each take a frame slot in
+    // the enclosing function.
+    assert_frame_rejected(&frame_of(65_536, "function f(){", "function a{i}(){}", "}"));
+}
+
+#[test]
+fn catch_bindings_count_toward_the_ceiling() {
+    // A destructuring `catch` pattern binds many names in the catch frame:
+    // `try {} catch ([c0, c1, ...]) {}`.
+    assert_frame_rejected(&frame_of(65_536, "try{}catch([", "c{i},", "]){}"));
+}
+
+#[test]
+fn parameters_count_toward_the_ceiling() {
+    // Parameters are positional frame slots. A plain param list caps at 255
+    // ("too many arguments") on its own, so this proves params CONTRIBUTE to
+    // the frame total: 200 params plus 65340 `let`s = 65540 slots, over the
+    // ceiling — while the 65340 `let`s alone stay comfortably under it.
+    assert!(
+        max_scope_count(&frame_of(65_340, "function f(){", "let a{i};", "}")).unwrap() < 65_535
+    );
+    let mut src = String::from("function f(");
+    for i in 0..200 {
+        src.push_str(&format!("p{i},"));
+    }
+    src.push_str("p200){");
+    for i in 0..65_340 {
+        src.push_str(&format!("let a{i};"));
+    }
+    src.push('}');
+    assert_frame_rejected(&src);
+}
+
+#[test]
+fn module_top_level_frame_honors_the_ceiling() {
+    // A module's own top-level lexical frame is checked the same way
+    // (`bind_module`'s `scopeCount`).
+    let over = frame_of(65_536, "", "let a{i};", "");
+    let err = scope_module(&over).expect_err("over-limit module frame must be rejected");
+    assert_eq!(err.kind, ParseErrorKind::Syntax);
+    assert_eq!(err.message, "too many variables");
+}
