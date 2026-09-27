@@ -15,6 +15,7 @@ import {
   regexpPrototype,
   globalThis,
   assign,
+  apply,
   AsyncGeneratorFunctionInstance,
 } from './commons.js';
 import { InertCompartment } from './compartment.js';
@@ -122,6 +123,21 @@ export const getAnonymousIntrinsics = () => {
     '%TypedArray%': TypedArray,
     '%InertCompartment%': InertCompartment,
   };
+
+  // https://url.spec.whatwg.org/#interface-urlsearchparams
+  // The iterator prototype is reachable only through an instance. Hosts
+  // without URLSearchParams (XS) contribute nothing.
+  const { URLSearchParams } = globalThis;
+  if (typeof URLSearchParams === 'function') {
+    const URLSearchParamsIteratorObject = apply(
+      URLSearchParams.prototype.entries,
+      new URLSearchParams(),
+      [],
+    );
+    intrinsics['%URLSearchParamsIteratorPrototype%'] = getPrototypeOf(
+      URLSearchParamsIteratorObject,
+    );
+  }
 
   if (AsyncGeneratorFunctionInstance !== undefined) {
     // 25.3.1 The AsyncGeneratorFunction Constructor

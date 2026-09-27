@@ -61,6 +61,13 @@ export interface RepairOptions {
    */
   legacyRegeneratorRuntimeTaming?: 'safe' | 'unsafe-ignore';
   __hardenTaming__?: 'safe' | 'unsafe';
+  /**
+   * keepOnInitialGlobal (default): the start compartment's `URL` keeps
+   * `createObjectURL` and `revokeObjectURL`; other compartments' `URL` lacks them.
+   *
+   * remove: no compartment's `URL` has them, and all share one `URL`.
+   */
+  urlBlobMethods?: 'keepOnInitialGlobal' | 'remove';
 }
 
 // Deprecated in favor of the more specific RepairOptions

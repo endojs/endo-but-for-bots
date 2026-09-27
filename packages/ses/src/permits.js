@@ -92,6 +92,9 @@ export const universalPropertyNames = {
   TextEncoder: 'TextEncoder',
   TextDecoder: 'TextDecoder',
 
+  // https://url.spec.whatwg.org/#interface-urlsearchparams
+  URLSearchParams: 'URLSearchParams',
+
   // https://github.com/tc39/proposal-explicit-resource-management
   // TODO DisposableStack, AsyncDisposableStack
   // DisposableStack: 'DisposableStack',
@@ -135,6 +138,7 @@ export const initialGlobalPropertyNames = {
   Date: '%InitialDate%',
   Error: '%InitialError%',
   RegExp: '%InitialRegExp%',
+  URL: '%InitialURL%',
 
   // Omit `Symbol`, because we want the original to appear on the
   // start compartment without passing through the permits mechanism, since
@@ -187,6 +191,7 @@ export const sharedGlobalPropertyNames = {
   Error: '%SharedError%',
   RegExp: '%SharedRegExp%',
   Symbol: '%SharedSymbol%',
+  URL: '%SharedURL%',
 
   // *** Other Properties of the Global Object
 
@@ -2128,6 +2133,90 @@ export const permitted = {
     // rather than a data-property permit.
     fatal: getter,
     ignoreBOM: getter,
+  },
+
+  // URL
+  // https://url.spec.whatwg.org/#api
+
+  '%InitialURL%': {
+    // Properties of the URL Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    prototype: '%URLPrototype%',
+    parse: fn,
+    canParse: fn,
+    // Blob-registry authority, kept on the start compartment unless
+    // `urlBlobMethods: 'remove'`.
+    createObjectURL: fn,
+    revokeObjectURL: fn,
+  },
+
+  '%SharedURL%': {
+    // Properties of the URL Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    prototype: '%URLPrototype%',
+    parse: fn,
+    canParse: fn,
+    createObjectURL: false,
+    revokeObjectURL: false,
+  },
+
+  '%URLPrototype%': {
+    // Properties of the URL Prototype Object
+    constructor: '%SharedURL%',
+    href: accessor,
+    origin: getter,
+    protocol: accessor,
+    username: accessor,
+    password: accessor,
+    host: accessor,
+    hostname: accessor,
+    port: accessor,
+    pathname: accessor,
+    search: accessor,
+    searchParams: getter,
+    hash: accessor,
+    toJSON: fn,
+    toString: fn,
+    '@@toStringTag': 'string',
+    // Seen on Node.js
+    'RegisteredSymbol(nodejs.util.inspect.custom)': fn,
+  },
+
+  URLSearchParams: {
+    // Properties of the URLSearchParams Constructor
+    '[[Proto]]': '%FunctionPrototype%',
+    prototype: '%URLSearchParamsPrototype%',
+  },
+
+  '%URLSearchParamsPrototype%': {
+    // Properties of the URLSearchParams Prototype Object
+    constructor: 'URLSearchParams',
+    size: getter,
+    append: fn,
+    delete: fn,
+    get: fn,
+    getAll: fn,
+    has: fn,
+    set: fn,
+    sort: fn,
+    toString: fn,
+    forEach: fn,
+    entries: fn,
+    keys: fn,
+    values: fn,
+    '@@iterator': fn,
+    '@@toStringTag': 'string',
+    // Seen on Node.js
+    'RegisteredSymbol(nodejs.util.inspect.custom)': fn,
+  },
+
+  '%URLSearchParamsIteratorPrototype%': {
+    // Reachable only from an iterator over a URLSearchParams instance.
+    '[[Proto]]': '%IteratorPrototype%',
+    next: fn,
+    '@@toStringTag': 'string',
+    // Seen on Node.js
+    'RegisteredSymbol(nodejs.util.inspect.custom)': fn,
   },
 
   lockdown: fn,

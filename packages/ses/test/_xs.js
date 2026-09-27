@@ -222,6 +222,23 @@ print('# native compartment cannot link shim compartment');
   assert(threw, 'cannot link shim from native compartment');
 }
 
+print('# compartments lack URL and URLSearchParams on XS');
+{
+  // XS provides neither, so the URL taming must contribute nothing.
+  assert.equal(typeof URL, 'undefined', 'start compartment lacks URL');
+  const compartment = new Compartment();
+  assert.equal(
+    compartment.evaluate('typeof URL'),
+    'undefined',
+    'compartment lacks URL',
+  );
+  assert.equal(
+    compartment.evaluate('typeof URLSearchParams'),
+    'undefined',
+    'compartment lacks URLSearchParams',
+  );
+}
+
 print('ok');
 
 // To be continued in hardened262...

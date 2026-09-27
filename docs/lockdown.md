@@ -45,6 +45,7 @@ Each option is explained in its own section below.
 | `domainTaming`                   | `'safe'`         | `'unsafe'`                             | Node.js `domain` module    ([details](#domaintaming-options)) |
 | `legacyRegeneratorRuntimeTaming` | `'safe'`         | `'unsafe-ignore'`                      | regenerator-runtime ([details](#legacyregeneratorruntimetaming-options)) |
 | `__hardenTaming__`               | `'safe'`         | `'unsafe'`                             | Making `harden` no-op for performance in trusted environments ([details](#__hardentaming__-options)) |
+| `urlBlobMethods`                 | `'keepOnInitialGlobal'` | `'remove'`                      | `URL.createObjectURL` and `URL.revokeObjectURL` ([details](#urlblobmethods-options)) |
 
 In the absence of any of these options in lockdown arguments, lockdown will
 attempt to read these options from `process.env`, using the Node.js convention
@@ -66,6 +67,7 @@ for threading environment variables into a JavaScript program.
 | `domainTaming`                   | `LOCKDOWN_DOMAIN_TAMING`                     |                       |
 | `legacyRegeneratorRuntimeTaming` | `LOCKDOWN_LEGACY_REGENERATOR_RUNTIME_TAMING` |                       |
 | `__hardenTaming__`               | `LOCKDOWN_HARDEN_TAMING`                     |                       |
+| `urlBlobMethods`                 | `LOCKDOWN_URL_BLOB_METHODS`                  |                       |
 
 The options `mathTaming` and `dateTaming` are deprecated.
 `Math.random`, `Date.now`, and the `new Date()` are disabled within
@@ -1223,3 +1225,40 @@ The "`__`" in the option name indicates that this option is temporary. XS now
 has a fast native `harden`, but SwingSet currently runs on node/v8, which does
 not. If node/v8 ever implements a fast native `harden`, we hope to deprecate
 and eventually remove this option.
+
+## `urlBlobMethods` Options
+
+On hosts that provide `URL` and `URLSearchParams`, lockdown tames and hardens
+them and makes them available in every compartment.
+`URL.createObjectURL` and `URL.revokeObjectURL` mint and revoke handles in the
+host's blob registry, which is ambient authority, so the `URL` of every
+compartment constructed after lockdown omits them.
+Every compartment's `URL` shares one `URL.prototype`, so a URL made in any
+compartment is `instanceof URL` in every other.
+
+The `urlBlobMethods` option decides whether the start compartment keeps them.
+
+```js
+lockdown(); // urlBlobMethods defaults to 'keepOnInitialGlobal'
+// or
+lockdown({ urlBlobMethods: 'keepOnInitialGlobal' }); // start compartment keeps the blob methods
+// vs
+lockdown({ urlBlobMethods: 'remove' }); // no compartment has them
+```
+
+With `'keepOnInitialGlobal'`, the start compartment's `URL` and a constructed
+compartment's `URL` are different constructors.
+With `'remove'`, every compartment shares one `URL` constructor.
+
+To give a constructed compartment blob URLs anyway, endow it with a function
+that closes over the start compartment's `URL.createObjectURL`.
+
+If `lockdown` does not receive a `urlBlobMethods` option, it will respect
+`process.env.LOCKDOWN_URL_BLOB_METHODS`.
+
+```console
+LOCKDOWN_URL_BLOB_METHODS=keepOnInitialGlobal
+LOCKDOWN_URL_BLOB_METHODS=remove
+```
+
+On hosts without `URL` (XS), this option has no effect.
