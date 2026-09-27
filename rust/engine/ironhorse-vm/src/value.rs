@@ -46,6 +46,20 @@ pub const CHUNK_EXTENT_BYTES: u32 = 64 * 1024;
 use std::cell::{Cell, Ref, RefCell};
 use std::rc::Rc;
 
+/// Derived integrity facts for one live instance slot. These bytes are host
+/// caches, never snapshot payload: restore starts with an empty vector and the
+/// authoritative instance/property flags repopulate entries on demand.
+#[derive(Clone, Copy, Default)]
+struct IntegrityCacheEntry {
+    state: u8,
+    own_property_count: u32,
+    own_keys_metering: u64,
+}
+
+pub(crate) const INTEGRITY_SEALED: u8 = 1;
+pub(crate) const INTEGRITY_FROZEN: u8 = 2;
+pub(crate) const INTEGRITY_HARDENED: u8 = 4;
+
 /// A source of snapshot pages for **lazy reification** (store seam
 /// design, phase 3): the arenas fault a page/extent in on first touch
 /// instead of reading the whole heap at resume. Implemented outside
@@ -672,6 +686,15 @@ pub struct SlotArena {
     /// path pays one always-false branch. Residency is **grow-only**:
     /// pages fault in and stay (design decision 3).
     lazy: Option<SlotBacking>,
+    /// Monotonic sealed/frozen/hardened facts derived from authoritative slot
+    /// flags. Keep this cold state after the arena's established hot GC fields
+    /// so an empty cache does not perturb their layout. Slot reuse clears its
+    /// entry; snapshot construction deliberately creates an empty cache so
+    /// restore never trusts serialized derived state. The extra indirection is
+    /// intentional: it costs one allocation only when this cache first becomes
+    /// useful and keeps every always-live `SlotArena` two machine words smaller.
+    #[allow(clippy::box_collection)]
+    integrity_cache: RefCell<Option<Box<Vec<IntegrityCacheEntry>>>>,
 }
 
 impl Default for SlotArena {
@@ -725,6 +748,7 @@ impl SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
+            integrity_cache: RefCell::new(None),
             slots: Vec::new(),
             free: Vec::new(),
             free_marks: Vec::new(),
@@ -768,6 +792,7 @@ impl SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
+            integrity_cache: RefCell::new(None),
             slots: Vec::new(),
             free,
             free_marks: free_marks.clone(),
@@ -1026,6 +1051,7 @@ impl SlotArena {
         self.live += 1;
         if let Some(i) = self.free.pop() {
             self.property_index.get_mut().free(SlotIndex(i));
+            self.clear_cached_integrity(SlotIndex(i));
             // Fault the page first: overwriting one record of a
             // non-resident page and then marking nothing would let a
             // later fault clobber this fresh allocation with store
@@ -1065,6 +1091,7 @@ impl SlotArena {
         let live = self.live.checked_sub(1).expect("slot live count underflow");
         self.snapshot_dirt.liveness();
         self.property_index.get_mut().free(index);
+        self.clear_cached_integrity(index);
         self.free.push(index.0);
         self.free_marks[index.0 as usize] = true;
         self.live = live;
@@ -1121,6 +1148,53 @@ impl SlotArena {
         self.property_index
             .borrow_mut()
             .find(owner, id, |slot| self.get(slot))
+    }
+
+    /// Return a cached integrity fact and the own-key count used to preserve
+    /// release-versioned metering while skipping the authoritative key walk.
+    pub(crate) fn cached_integrity(&self, index: SlotIndex) -> Option<(u8, u32, u64)> {
+        let cache = self.integrity_cache.borrow();
+        let entry = cache
+            .as_deref()?
+            .get(index.0 as usize)
+            .copied()
+            .unwrap_or_default();
+        (entry.state != 0).then_some((
+            entry.state,
+            entry.own_property_count,
+            entry.own_keys_metering,
+        ))
+    }
+
+    /// Record monotonic integrity state proved from the authoritative records.
+    pub(crate) fn cache_integrity(
+        &self,
+        index: SlotIndex,
+        state: u8,
+        own_property_count: u32,
+        own_keys_metering: u64,
+    ) {
+        let mut holder = self.integrity_cache.borrow_mut();
+        let cache = holder.get_or_insert_with(|| Box::new(Vec::new()));
+        if cache.len() <= index.0 as usize {
+            cache.resize(index.0 as usize + 1, IntegrityCacheEntry::default());
+        }
+        let entry = &mut cache[index.0 as usize];
+        entry.state |= state;
+        entry.own_property_count = own_property_count;
+        entry.own_keys_metering = own_keys_metering;
+    }
+
+    /// Forget host-only facts when a slot dies or is reused.
+    #[inline(always)]
+    pub(crate) fn clear_cached_integrity(&mut self, index: SlotIndex) {
+        let Some(cache) = self.integrity_cache.get_mut().as_deref_mut() else {
+            return;
+        };
+        let index = index.0 as usize;
+        if index < cache.len() {
+            cache[index] = IntegrityCacheEntry::default();
+        }
     }
 
     /// Total slot records ever allocated (live + free). The collector
@@ -1195,6 +1269,7 @@ impl SlotArena {
         for i in 0..self.capacity() {
             if !self.marks[i as usize] && !self.is_free(i) {
                 self.property_index.get_mut().free(SlotIndex(i));
+                self.clear_cached_integrity(SlotIndex(i));
                 self.snapshot_dirt.liveness();
                 self.free.push(i);
                 self.free_marks[i as usize] = true;
@@ -1308,6 +1383,7 @@ impl SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
+            integrity_cache: RefCell::new(None),
             slots: slots.into_iter().map(Cell::new).collect(),
             free,
             free_marks,
@@ -2820,6 +2896,44 @@ mod dirty_tests {
         assert_eq!(arena.resident_extent_count(), 0);
         assert!(arena.dirty_extents().is_empty());
         assert!(arena.unbacked.iter().all(|flag| !flag));
+    }
+
+    #[test]
+    fn integrity_facts_are_derived_clean_and_absent_after_restore() {
+        let mut arena = SlotArena::new();
+        let object = arena.alloc(Slot::undefined());
+        arena.clear_dirty();
+        arena.cache_integrity(object, INTEGRITY_SEALED | INTEGRITY_FROZEN, 7, 123);
+        assert_eq!(
+            arena.cached_integrity(object),
+            Some((INTEGRITY_SEALED | INTEGRITY_FROZEN, 7, 123))
+        );
+        assert!(
+            arena.dirty_pages().is_empty(),
+            "derived cache writes are not snapshot writes"
+        );
+
+        let image = (0..arena.capacity())
+            .map(|index| arena.get(SlotIndex(index)))
+            .collect();
+        let restored = SlotArena::from_image(image, arena.free_list().to_vec(), arena.live_count());
+        assert_eq!(restored.cached_integrity(object), None);
+
+        // Authoritative integrity stamping still goes through get_mut and
+        // therefore dirties the containing snapshot page.
+        arena.get_mut(object).flag |= crate::interp::XS_DONT_PATCH_FLAG;
+        assert_eq!(arena.dirty_pages(), vec![0]);
+    }
+
+    #[test]
+    fn integrity_facts_do_not_survive_slot_reuse() {
+        let mut arena = SlotArena::new();
+        let object = arena.alloc(Slot::undefined());
+        arena.cache_integrity(object, INTEGRITY_FROZEN, 1, 123);
+        arena.free(object);
+        let replacement = arena.alloc(Slot::undefined());
+        assert_eq!(replacement, object);
+        assert_eq!(arena.cached_integrity(replacement), None);
     }
 
     #[test]

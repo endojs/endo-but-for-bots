@@ -1,0 +1,5146 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-09-27T14:34:27.862860Z",
+  "command": [
+    "/bin/python3",
+    "/home/kris/garden/scratch/project-wt-ironhor-f1a8d6b70d9c-f9b4c15b/rust/engine/benches/ocap/run.py",
+    "--parent",
+    "df1c87855d",
+    "--candidate",
+    "HEAD",
+    "--samples",
+    "7",
+    "--warmups",
+    "1",
+    "--output",
+    "rust/engine/benches/results/ocap-frozen-property-index.json"
+  ],
+  "provenance": {
+    "parent_commit": "df1c87855d4318710a6876780556a2211a5f806a",
+    "candidate_commit": "12f4886d349798d78d582d8eb5f4b96797f9f2b6",
+    "xs_commit": "23b4d6b0a65f35209d9118c4c13c6c9b3e68784d",
+    "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+    "cargo": "cargo 1.91.1 (ea2d97820 2025-10-10)",
+    "platform": "Linux-7.0.0-30-generic-x86_64-with-glibc2.39",
+    "machine": "x86_64",
+    "cpu": "AMD RYZEN AI MAX+ 395 w/ Radeon 8060S",
+    "hostname": "endolin-garden-ece02cb4",
+    "build_environment": {
+      "CC": null,
+      "CFLAGS": null,
+      "RUSTFLAGS": null,
+      "CARGO_ENCODED_RUSTFLAGS": null,
+      "CARGO_INCREMENTAL": "0",
+      "RUST_MIN_STACK": "33554432",
+      "RUSTUP_TOOLCHAIN": null,
+      "CARGO_BUILD_TARGET": null
+    },
+    "parent_build_command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "/home/kris/garden/scratch/ironhorse-ocap-7_zrq4cw/parent/rust/engine/Cargo.toml",
+      "--locked",
+      "--release",
+      "-p",
+      "ironhorse-262",
+      "--test",
+      "ocap_workload",
+      "--no-run",
+      "--message-format=json-render-diagnostics"
+    ],
+    "candidate_build_command": [
+      "cargo",
+      "test",
+      "--manifest-path",
+      "/home/kris/garden/scratch/project-wt-ironhor-f1a8d6b70d9c-f9b4c15b/rust/engine/Cargo.toml",
+      "--locked",
+      "--release",
+      "-p",
+      "ironhorse-262",
+      "--test",
+      "ocap_workload",
+      "--no-run",
+      "--message-format=json-render-diagnostics"
+    ]
+  },
+  "corpus": {
+    "fixture_sha256": "2d2ee4d59557b1320cd7f35e4cc76826b837d36d444edc7d5ec3ce28529a950b",
+    "roster": [
+      "closure-site",
+      "facet-cohort",
+      "harden-tree",
+      "harden-repeat",
+      "ocap-mixed",
+      "mutable-control"
+    ],
+    "sizes": [
+      "small",
+      "representative",
+      "stress"
+    ],
+    "source_generation_ns": 20915000
+  },
+  "methodology": {
+    "profile": "release",
+    "serial": true,
+    "warmups": 1,
+    "samples": 7,
+    "sample_order": [
+      {
+        "round": 0,
+        "warmup": true,
+        "ironhorse_order": [
+          "parent",
+          "candidate"
+        ],
+        "xs_after": true
+      },
+      {
+        "round": 1,
+        "warmup": false,
+        "ironhorse_order": [
+          "candidate",
+          "parent"
+        ],
+        "xs_after": true
+      },
+      {
+        "round": 2,
+        "warmup": false,
+        "ironhorse_order": [
+          "parent",
+          "candidate"
+        ],
+        "xs_after": true
+      },
+      {
+        "round": 3,
+        "warmup": false,
+        "ironhorse_order": [
+          "candidate",
+          "parent"
+        ],
+        "xs_after": true
+      },
+      {
+        "round": 4,
+        "warmup": false,
+        "ironhorse_order": [
+          "parent",
+          "candidate"
+        ],
+        "xs_after": true
+      },
+      {
+        "round": 5,
+        "warmup": false,
+        "ironhorse_order": [
+          "candidate",
+          "parent"
+        ],
+        "xs_after": true
+      },
+      {
+        "round": 6,
+        "warmup": false,
+        "ironhorse_order": [
+          "parent",
+          "candidate"
+        ],
+        "xs_after": true
+      },
+      {
+        "round": 7,
+        "warmup": false,
+        "ironhorse_order": [
+          "candidate",
+          "parent"
+        ],
+        "xs_after": true
+      }
+    ],
+    "primary_phase": "execution",
+    "object_capability_composite": "representative size geometric mean excluding mutable-control"
+  },
+  "measurements": [
+    {
+      "fixture": "closure-site",
+      "size": "small",
+      "source": "fixtures/closure-site-small.js",
+      "expected": "closure-site:64:28640:256",
+      "arms": {
+        "parent": {
+          "result": "closure-site:64:28640:256",
+          "computrons": 23520,
+          "meter_raw": 1541408552,
+          "dispatched": 22816,
+          "allocations": {
+            "checkpoint_bytes": 106929,
+            "chunk_bytes_after_collection": 12062,
+            "chunk_bytes_before_collection": 13360,
+            "collected_slots": 2970,
+            "peak_live_slots": 3859,
+            "retained_live_slots": 889,
+            "slot_allocations": 2970
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                220737,
+                221589,
+                225396,
+                230555,
+                259180,
+                253188,
+                352476
+              ],
+              "median_ns": 230555
+            },
+            "compile": {
+              "samples_ns": [
+                278026,
+                281061,
+                277755,
+                278055,
+                436285,
+                407510,
+                434781
+              ],
+              "median_ns": 281061
+            },
+            "link": {
+              "samples_ns": [
+                127200,
+                123313,
+                132350,
+                143622,
+                132079,
+                129194,
+                141527
+              ],
+              "median_ns": 132079
+            },
+            "execution": {
+              "samples_ns": [
+                594242,
+                588612,
+                603240,
+                616805,
+                634760,
+                617507,
+                627245
+              ],
+              "median_ns": 616805
+            },
+            "collection": {
+              "samples_ns": [
+                538127,
+                529060,
+                523509,
+                554187,
+                544218,
+                857660,
+                517528
+              ],
+              "median_ns": 538127
+            },
+            "checkpoint": {
+              "samples_ns": [
+                1952238,
+                1928693,
+                1938191,
+                2039844,
+                1980522,
+                2052357,
+                1943592
+              ],
+              "median_ns": 1952238
+            }
+          }
+        },
+        "candidate": {
+          "result": "closure-site:64:28640:256",
+          "computrons": 23520,
+          "meter_raw": 1541408552,
+          "dispatched": 22816,
+          "allocations": {
+            "checkpoint_bytes": 106929,
+            "chunk_bytes_after_collection": 12062,
+            "chunk_bytes_before_collection": 13360,
+            "collected_slots": 2970,
+            "peak_live_slots": 3859,
+            "retained_live_slots": 889,
+            "slot_allocations": 2970
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                234333,
+                234693,
+                232549,
+                213984,
+                224575,
+                325986,
+                275461
+              ],
+              "median_ns": 234333
+            },
+            "compile": {
+              "samples_ns": [
+                287253,
+                278266,
+                291140,
+                279688,
+                281171,
+                419232,
+                309705
+              ],
+              "median_ns": 287253
+            },
+            "link": {
+              "samples_ns": [
+                119416,
+                152979,
+                140946,
+                129445,
+                127320,
+                164070,
+                147980
+              ],
+              "median_ns": 140946
+            },
+            "execution": {
+              "samples_ns": [
+                576158,
+                642053,
+                631082,
+                578323,
+                619240,
+                610103,
+                719429
+              ],
+              "median_ns": 619240
+            },
+            "collection": {
+              "samples_ns": [
+                514421,
+                651010,
+                520804,
+                524050,
+                538197,
+                534901,
+                586678
+              ],
+              "median_ns": 534901
+            },
+            "checkpoint": {
+              "samples_ns": [
+                1928443,
+                2086261,
+                1957558,
+                1943341,
+                1961005,
+                1954713,
+                2364907
+              ],
+              "median_ns": 1957558
+            }
+          }
+        },
+        "xs": {
+          "result": "closure-site:64:28640:256",
+          "computrons": 23519,
+          "meter_raw": 1541378360,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                94659,
+                97394,
+                101582,
+                90701,
+                94589,
+                97735,
+                100961
+              ],
+              "median_ns": 97394
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                137350,
+                148461,
+                149172,
+                137680,
+                144413,
+                140987,
+                153811
+              ],
+              "median_ns": 144413
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 1.0039477630693656,
+        "improvement_fraction": -0.003947763069365617,
+        "bootstrap_95_ratio_interval": [
+          0.9365448488843041,
+          1.064340892513759
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "closure-site",
+      "size": "representative",
+      "source": "fixtures/closure-site-representative.js",
+      "expected": "closure-site:512:1720064:2048",
+      "arms": {
+        "parent": {
+          "result": "closure-site:512:1720064:2048",
+          "computrons": 187633,
+          "meter_raw": 12296738104,
+          "dispatched": 181856,
+          "allocations": {
+            "checkpoint_bytes": 601517,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 20550,
+            "collected_slots": 23578,
+            "peak_live_slots": 24467,
+            "retained_live_slots": 889,
+            "slot_allocations": 23578
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                114706,
+                135306,
+                117943,
+                123504,
+                124685,
+                119365,
+                113915
+              ],
+              "median_ns": 119365
+            },
+            "compile": {
+              "samples_ns": [
+                175732,
+                201380,
+                172747,
+                205227,
+                173829,
+                181804,
+                168278
+              ],
+              "median_ns": 175732
+            },
+            "link": {
+              "samples_ns": [
+                110108,
+                110138,
+                110459,
+                116951,
+                119526,
+                110008,
+                109497
+              ],
+              "median_ns": 110138
+            },
+            "execution": {
+              "samples_ns": [
+                4039952,
+                3956435,
+                4004946,
+                4390725,
+                4630969,
+                4026026,
+                3908685
+              ],
+              "median_ns": 4026026
+            },
+            "collection": {
+              "samples_ns": [
+                3601584,
+                3324350,
+                3387079,
+                3547893,
+                3532002,
+                3337575,
+                3262784
+              ],
+              "median_ns": 3387079
+            },
+            "checkpoint": {
+              "samples_ns": [
+                2314012,
+                2219603,
+                2050293,
+                2210295,
+                2389274,
+                2201049,
+                2152968
+              ],
+              "median_ns": 2210295
+            }
+          }
+        },
+        "candidate": {
+          "result": "closure-site:512:1720064:2048",
+          "computrons": 187633,
+          "meter_raw": 12296738104,
+          "dispatched": 181856,
+          "allocations": {
+            "checkpoint_bytes": 601517,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 20550,
+            "collected_slots": 23578,
+            "peak_live_slots": 24467,
+            "retained_live_slots": 889,
+            "slot_allocations": 23578
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                130937,
+                148009,
+                119626,
+                117102,
+                125176,
+                126920,
+                133993
+              ],
+              "median_ns": 126920
+            },
+            "compile": {
+              "samples_ns": [
+                173248,
+                221980,
+                174360,
+                203073,
+                185451,
+                171704,
+                208103
+              ],
+              "median_ns": 185451
+            },
+            "link": {
+              "samples_ns": [
+                109367,
+                121821,
+                107863,
+                111300,
+                112172,
+                112062,
+                111330
+              ],
+              "median_ns": 111330
+            },
+            "execution": {
+              "samples_ns": [
+                3977614,
+                4899395,
+                3901700,
+                3812192,
+                4262172,
+                3995498,
+                4066482
+              ],
+              "median_ns": 3995498
+            },
+            "collection": {
+              "samples_ns": [
+                3328137,
+                4014273,
+                3626741,
+                3274647,
+                3723163,
+                3510613,
+                3460447
+              ],
+              "median_ns": 3510613
+            },
+            "checkpoint": {
+              "samples_ns": [
+                2153679,
+                2434790,
+                2276561,
+                2097182,
+                2413008,
+                2274678,
+                2276581
+              ],
+              "median_ns": 2276561
+            }
+          }
+        },
+        "xs": {
+          "result": "closure-site:512:1720064:2048",
+          "computrons": 187632,
+          "meter_raw": 3706773320,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                49553,
+                52680,
+                50035,
+                44835,
+                56236,
+                43392,
+                51337
+              ],
+              "median_ns": 50035
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                1484715,
+                1656049,
+                1595003,
+                1491327,
+                1806723,
+                1497038,
+                1558464
+              ],
+              "median_ns": 1558464
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9924173365994159,
+        "improvement_fraction": 0.007582663400584111,
+        "bootstrap_95_ratio_interval": [
+          0.9059128048329148,
+          1.0642270832116087
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "closure-site",
+      "size": "stress",
+      "source": "fixtures/closure-site-stress.js",
+      "expected": "closure-site:4096:109180928:16384",
+      "arms": {
+        "parent": {
+          "result": "closure-site:4096:109180928:16384",
+          "computrons": 1514651,
+          "meter_raw": 99264218440,
+          "dispatched": 1454176,
+          "allocations": {
+            "checkpoint_bytes": 4558253,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 77916,
+            "collected_slots": 188442,
+            "peak_live_slots": 189331,
+            "retained_live_slots": 889,
+            "slot_allocations": 188442
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                186974,
+                114105,
+                120247,
+                127490,
+                141558,
+                116200,
+                116189
+              ],
+              "median_ns": 120247
+            },
+            "compile": {
+              "samples_ns": [
+                252777,
+                177666,
+                174099,
+                213743,
+                187845,
+                174519,
+                186523
+              ],
+              "median_ns": 186523
+            },
+            "link": {
+              "samples_ns": [
+                120177,
+                112322,
+                107943,
+                117242,
+                110919,
+                108946,
+                106241
+              ],
+              "median_ns": 110919
+            },
+            "execution": {
+              "samples_ns": [
+                36422508,
+                35002616,
+                32935812,
+                35710825,
+                36133785,
+                35759788,
+                34377527
+              ],
+              "median_ns": 35710825
+            },
+            "collection": {
+              "samples_ns": [
+                30866231,
+                28353595,
+                26959111,
+                26869101,
+                27553394,
+                25650369,
+                28312069
+              ],
+              "median_ns": 27553394
+            },
+            "checkpoint": {
+              "samples_ns": [
+                17323597,
+                17268513,
+                17066222,
+                16531672,
+                16506324,
+                15910399,
+                17107009
+              ],
+              "median_ns": 17066222
+            }
+          }
+        },
+        "candidate": {
+          "result": "closure-site:4096:109180928:16384",
+          "computrons": 1514651,
+          "meter_raw": 99264218440,
+          "dispatched": 1454176,
+          "allocations": {
+            "checkpoint_bytes": 4558253,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 77916,
+            "collected_slots": 188442,
+            "peak_live_slots": 189331,
+            "retained_live_slots": 889,
+            "slot_allocations": 188442
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                112112,
+                132330,
+                182044,
+                115107,
+                135045,
+                202353,
+                127852
+              ],
+              "median_ns": 132330
+            },
+            "compile": {
+              "samples_ns": [
+                163880,
+                221318,
+                245394,
+                220387,
+                220717,
+                251465,
+                208894
+              ],
+              "median_ns": 220717
+            },
+            "link": {
+              "samples_ns": [
+                104066,
+                116440,
+                116410,
+                110048,
+                145976,
+                116891,
+                123674
+              ],
+              "median_ns": 116440
+            },
+            "execution": {
+              "samples_ns": [
+                33908469,
+                41195646,
+                31867734,
+                32640084,
+                36636374,
+                32579209,
+                36146890
+              ],
+              "median_ns": 33908469
+            },
+            "collection": {
+              "samples_ns": [
+                27709327,
+                30444495,
+                25682900,
+                26013125,
+                27883638,
+                26136458,
+                35044147
+              ],
+              "median_ns": 27709327
+            },
+            "checkpoint": {
+              "samples_ns": [
+                18067793,
+                17442212,
+                16367902,
+                16562239,
+                16394703,
+                16973647,
+                18984386
+              ],
+              "median_ns": 16973647
+            }
+          }
+        },
+        "xs": {
+          "result": "closure-site:4096:109180928:16384",
+          "computrons": 1514651,
+          "meter_raw": 479940440,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                45466,
+                54493,
+                40276,
+                38102,
+                72036,
+                37040,
+                40286
+              ],
+              "median_ns": 40286
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                25995841,
+                27235203,
+                27985891,
+                26867618,
+                27332467,
+                26997214,
+                26850227
+              ],
+              "median_ns": 26997214
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9495291413737991,
+        "improvement_fraction": 0.05047085862620093,
+        "bootstrap_95_ratio_interval": [
+          0.9033120665327476,
+          1.0514685945850613
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "facet-cohort",
+      "size": "small",
+      "source": "fixtures/facet-cohort-small.js",
+      "expected": "facet-cohort:8:5192:48",
+      "arms": {
+        "parent": {
+          "result": "facet-cohort:8:5192:48",
+          "computrons": 37045,
+          "meter_raw": 2427843176,
+          "dispatched": 35450,
+          "allocations": {
+            "checkpoint_bytes": 176768,
+            "chunk_bytes_after_collection": 12062,
+            "chunk_bytes_before_collection": 14998,
+            "collected_slots": 5875,
+            "peak_live_slots": 6764,
+            "retained_live_slots": 889,
+            "slot_allocations": 5875
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                187765,
+                182314,
+                154893,
+                159561,
+                158770,
+                147619,
+                174469
+              ],
+              "median_ns": 159561
+            },
+            "compile": {
+              "samples_ns": [
+                291130,
+                284578,
+                276202,
+                292092,
+                278476,
+                289777,
+                294066
+              ],
+              "median_ns": 289777
+            },
+            "link": {
+              "samples_ns": [
+                124265,
+                126068,
+                120057,
+                122491,
+                121399,
+                122952,
+                123303
+              ],
+              "median_ns": 122952
+            },
+            "execution": {
+              "samples_ns": [
+                1139012,
+                1130325,
+                1125005,
+                1097714,
+                1086393,
+                1100659,
+                1129124
+              ],
+              "median_ns": 1125005
+            },
+            "collection": {
+              "samples_ns": [
+                909588,
+                918715,
+                901192,
+                910149,
+                887126,
+                868201,
+                965694
+              ],
+              "median_ns": 909588
+            },
+            "checkpoint": {
+              "samples_ns": [
+                574887,
+                574696,
+                565779,
+                567872,
+                551472,
+                551652,
+                582210
+              ],
+              "median_ns": 567872
+            }
+          }
+        },
+        "candidate": {
+          "result": "facet-cohort:8:5192:48",
+          "computrons": 37045,
+          "meter_raw": 2427843176,
+          "dispatched": 35450,
+          "allocations": {
+            "checkpoint_bytes": 176768,
+            "chunk_bytes_after_collection": 12062,
+            "chunk_bytes_before_collection": 14998,
+            "collected_slots": 5875,
+            "peak_live_slots": 6764,
+            "retained_live_slots": 889,
+            "slot_allocations": 5875
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                172186,
+                169450,
+                141267,
+                133102,
+                157517,
+                147629,
+                175501
+              ],
+              "median_ns": 157517
+            },
+            "compile": {
+              "samples_ns": [
+                268126,
+                285459,
+                265882,
+                259139,
+                277615,
+                280360,
+                294075
+              ],
+              "median_ns": 277615
+            },
+            "link": {
+              "samples_ns": [
+                119596,
+                121199,
+                118554,
+                115518,
+                119927,
+                120428,
+                128914
+              ],
+              "median_ns": 119927
+            },
+            "execution": {
+              "samples_ns": [
+                1117441,
+                1204816,
+                1060122,
+                1087394,
+                1098676,
+                1076513,
+                1232027
+              ],
+              "median_ns": 1098676
+            },
+            "collection": {
+              "samples_ns": [
+                913435,
+                988157,
+                911281,
+                888739,
+                908015,
+                924727,
+                984490
+              ],
+              "median_ns": 913435
+            },
+            "checkpoint": {
+              "samples_ns": [
+                565788,
+                590054,
+                539950,
+                562322,
+                553125,
+                551222,
+                602889
+              ],
+              "median_ns": 562322
+            }
+          }
+        },
+        "xs": {
+          "result": "facet-cohort:8:5192:48",
+          "computrons": 37380,
+          "meter_raw": 2449755600,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                95510,
+                100079,
+                99077,
+                95550,
+                97905,
+                69952,
+                97014
+              ],
+              "median_ns": 97014
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                170161,
+                177585,
+                175812,
+                177205,
+                172386,
+                176203,
+                173167
+              ],
+              "median_ns": 175812
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9765965484597846,
+        "improvement_fraction": 0.023403451540215392,
+        "bootstrap_95_ratio_interval": [
+          0.9534054718525158,
+          1.094631488953436
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "facet-cohort",
+      "size": "representative",
+      "source": "fixtures/facet-cohort-representative.js",
+      "expected": "facet-cohort:64:116800:384",
+      "arms": {
+        "parent": {
+          "result": "facet-cohort:64:116800:384",
+          "computrons": 294213,
+          "meter_raw": 19281564672,
+          "dispatched": 281514,
+          "allocations": {
+            "checkpoint_bytes": 1160572,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 33836,
+            "collected_slots": 46867,
+            "peak_live_slots": 47756,
+            "retained_live_slots": 889,
+            "slot_allocations": 46867
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                125927,
+                119816,
+                114125,
+                121550,
+                109697,
+                107433,
+                134204
+              ],
+              "median_ns": 119816
+            },
+            "compile": {
+              "samples_ns": [
+                218723,
+                212702,
+                202683,
+                229794,
+                192173,
+                194988,
+                223001
+              ],
+              "median_ns": 212702
+            },
+            "link": {
+              "samples_ns": [
+                112462,
+                120779,
+                110639,
+                113404,
+                108766,
+                109257,
+                114927
+              ],
+              "median_ns": 112462
+            },
+            "execution": {
+              "samples_ns": [
+                8893862,
+                8615546,
+                8634703,
+                8567717,
+                8634692,
+                8501320,
+                8606089
+              ],
+              "median_ns": 8615546
+            },
+            "collection": {
+              "samples_ns": [
+                7203078,
+                6913000,
+                6747558,
+                6675621,
+                6557007,
+                6651165,
+                6867204
+              ],
+              "median_ns": 6747558
+            },
+            "checkpoint": {
+              "samples_ns": [
+                3582848,
+                3562861,
+                3505823,
+                3479022,
+                3447433,
+                3420352,
+                3586806
+              ],
+              "median_ns": 3505823
+            }
+          }
+        },
+        "candidate": {
+          "result": "facet-cohort:64:116800:384",
+          "computrons": 294213,
+          "meter_raw": 19281564672,
+          "dispatched": 281514,
+          "allocations": {
+            "checkpoint_bytes": 1160572,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 33836,
+            "collected_slots": 46867,
+            "peak_live_slots": 47756,
+            "retained_live_slots": 889,
+            "slot_allocations": 46867
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                117953,
+                133001,
+                110458,
+                113955,
+                106301,
+                114376,
+                134484
+              ],
+              "median_ns": 114376
+            },
+            "compile": {
+              "samples_ns": [
+                202072,
+                230465,
+                195399,
+                225887,
+                192444,
+                196771,
+                248861
+              ],
+              "median_ns": 202072
+            },
+            "link": {
+              "samples_ns": [
+                108405,
+                117371,
+                107884,
+                111020,
+                108575,
+                108575,
+                121199
+              ],
+              "median_ns": 108575
+            },
+            "execution": {
+              "samples_ns": [
+                8577564,
+                9074393,
+                8414557,
+                8342661,
+                8400009,
+                8230389,
+                9153784
+              ],
+              "median_ns": 8414557
+            },
+            "collection": {
+              "samples_ns": [
+                6772024,
+                6837618,
+                6607463,
+                6786552,
+                6533453,
+                6686894,
+                7267179
+              ],
+              "median_ns": 6772024
+            },
+            "checkpoint": {
+              "samples_ns": [
+                3511454,
+                3575715,
+                3421534,
+                3542282,
+                3431282,
+                3416374,
+                3681525
+              ],
+              "median_ns": 3511454
+            }
+          }
+        },
+        "xs": {
+          "result": "facet-cohort:64:116800:384",
+          "computrons": 296891,
+          "meter_raw": 2277215464,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                49473,
+                50896,
+                51868,
+                51718,
+                50084,
+                50245,
+                51006
+              ],
+              "median_ns": 50896
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                1186011,
+                1211930,
+                1244922,
+                1216969,
+                1215957,
+                1185931,
+                1197432
+              ],
+              "median_ns": 1211930
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9766713566383373,
+        "improvement_fraction": 0.023328643361662738,
+        "bootstrap_95_ratio_interval": [
+          0.966178107110343,
+          1.0544154261012173
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "facet-cohort",
+      "size": "stress",
+      "source": "fixtures/facet-cohort-stress.js",
+      "expected": "facet-cohort:256:1499392:1536",
+      "arms": {
+        "parent": {
+          "result": "facet-cohort:256:1499392:1536",
+          "computrons": 1175930,
+          "meter_raw": 77065752592,
+          "dispatched": 1125162,
+          "allocations": {
+            "checkpoint_bytes": 4533628,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 98364,
+            "collected_slots": 187411,
+            "peak_live_slots": 188300,
+            "retained_live_slots": 889,
+            "slot_allocations": 187411
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                134915,
+                128903,
+                119966,
+                123483,
+                111962,
+                112723,
+                152458
+              ],
+              "median_ns": 123483
+            },
+            "compile": {
+              "samples_ns": [
+                267916,
+                233351,
+                215407,
+                223302,
+                197413,
+                212101,
+                254782
+              ],
+              "median_ns": 223302
+            },
+            "link": {
+              "samples_ns": [
+                119786,
+                115539,
+                112774,
+                114948,
+                109196,
+                110609,
+                118143
+              ],
+              "median_ns": 114948
+            },
+            "execution": {
+              "samples_ns": [
+                37165602,
+                38199265,
+                35727195,
+                34661472,
+                34434344,
+                34862352,
+                36730433
+              ],
+              "median_ns": 35727195
+            },
+            "collection": {
+              "samples_ns": [
+                30623643,
+                29561797,
+                28234851,
+                26847560,
+                27032961,
+                27274167,
+                30120935
+              ],
+              "median_ns": 28234851
+            },
+            "checkpoint": {
+              "samples_ns": [
+                14967587,
+                15039793,
+                14633616,
+                14776085,
+                14762569,
+                14835017,
+                14982025
+              ],
+              "median_ns": 14835017
+            }
+          }
+        },
+        "candidate": {
+          "result": "facet-cohort:256:1499392:1536",
+          "computrons": 1175930,
+          "meter_raw": 77065752592,
+          "dispatched": 1125162,
+          "allocations": {
+            "checkpoint_bytes": 4533628,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 98364,
+            "collected_slots": 187411,
+            "peak_live_slots": 188300,
+            "retained_live_slots": 889,
+            "slot_allocations": 187411
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                135977,
+                129294,
+                110739,
+                125557,
+                112172,
+                112973,
+                135727
+              ],
+              "median_ns": 125557
+            },
+            "compile": {
+              "samples_ns": [
+                236687,
+                257827,
+                204005,
+                219354,
+                201210,
+                203154,
+                256324
+              ],
+              "median_ns": 219354
+            },
+            "link": {
+              "samples_ns": [
+                114446,
+                118233,
+                109367,
+                112252,
+                109647,
+                108324,
+                122872
+              ],
+              "median_ns": 112252
+            },
+            "execution": {
+              "samples_ns": [
+                36897295,
+                36415275,
+                34186364,
+                35205140,
+                34927967,
+                33890487,
+                41310696
+              ],
+              "median_ns": 35205140
+            },
+            "collection": {
+              "samples_ns": [
+                30112477,
+                29659372,
+                27489613,
+                27682147,
+                27124875,
+                27471970,
+                32833059
+              ],
+              "median_ns": 27682147
+            },
+            "checkpoint": {
+              "samples_ns": [
+                15407327,
+                15575174,
+                15383442,
+                15221347,
+                14747711,
+                14562562,
+                15618216
+              ],
+              "median_ns": 15383442
+            }
+          }
+        },
+        "xs": {
+          "result": "facet-cohort:256:1499392:1536",
+          "computrons": 1186644,
+          "meter_raw": 458515704,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                47239,
+                47900,
+                48822,
+                49062,
+                47470,
+                47920,
+                47550
+              ],
+              "median_ns": 47900
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                4792153,
+                4908874,
+                5089365,
+                4965141,
+                5001449,
+                4781614,
+                4834934
+              ],
+              "median_ns": 4908874
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9853877417468682,
+        "improvement_fraction": 0.014612258253131838,
+        "bootstrap_95_ratio_interval": [
+          0.9307367544510026,
+          1.0583707892112386
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "harden-tree",
+      "size": "small",
+      "source": "fixtures/harden-tree-small.js",
+      "expected": "harden-tree:4:106:106:296",
+      "arms": {
+        "parent": {
+          "result": "harden-tree:4:106:106:296",
+          "computrons": 30230,
+          "meter_raw": 1981174392,
+          "dispatched": 19062,
+          "allocations": {
+            "checkpoint_bytes": 53911,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 27902,
+            "collected_slots": 378,
+            "peak_live_slots": 1675,
+            "retained_live_slots": 1297,
+            "slot_allocations": 700
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                198715,
+                194888,
+                166625,
+                152158,
+                163729,
+                172225,
+                167246
+              ],
+              "median_ns": 167246
+            },
+            "compile": {
+              "samples_ns": [
+                289427,
+                327789,
+                266704,
+                269429,
+                264991,
+                264770,
+                274429
+              ],
+              "median_ns": 269429
+            },
+            "link": {
+              "samples_ns": [
+                133112,
+                134745,
+                129474,
+                129885,
+                129495,
+                128112,
+                135346
+              ],
+              "median_ns": 129885
+            },
+            "execution": {
+              "samples_ns": [
+                2051035,
+                2073126,
+                2010559,
+                2038241,
+                2030396,
+                2005739,
+                2056245
+              ],
+              "median_ns": 2038241
+            },
+            "collection": {
+              "samples_ns": [
+                210848,
+                215106,
+                202493,
+                203154,
+                204046,
+                204436,
+                208715
+              ],
+              "median_ns": 204436
+            },
+            "checkpoint": {
+              "samples_ns": [
+                248790,
+                248560,
+                239723,
+                239843,
+                228171,
+                230175,
+                245023
+              ],
+              "median_ns": 239843
+            }
+          }
+        },
+        "candidate": {
+          "result": "harden-tree:4:106:106:296",
+          "computrons": 30230,
+          "meter_raw": 1981174392,
+          "dispatched": 19062,
+          "allocations": {
+            "checkpoint_bytes": 53911,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 27902,
+            "collected_slots": 378,
+            "peak_live_slots": 1675,
+            "retained_live_slots": 1297,
+            "slot_allocations": 700
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                167055,
+                187685,
+                148741,
+                155795,
+                159862,
+                152648,
+                178107
+              ],
+              "median_ns": 159862
+            },
+            "compile": {
+              "samples_ns": [
+                274218,
+                282003,
+                257457,
+                274679,
+                270802,
+                257397,
+                284047
+              ],
+              "median_ns": 274218
+            },
+            "link": {
+              "samples_ns": [
+                129736,
+                133041,
+                128382,
+                129334,
+                129285,
+                128924,
+                130476
+              ],
+              "median_ns": 129334
+            },
+            "execution": {
+              "samples_ns": [
+                2092022,
+                2116288,
+                2000779,
+                2049993,
+                2001932,
+                1968870,
+                2097032
+              ],
+              "median_ns": 2049993
+            },
+            "collection": {
+              "samples_ns": [
+                229183,
+                220446,
+                193976,
+                207733,
+                197493,
+                189939,
+                212482
+              ],
+              "median_ns": 207733
+            },
+            "checkpoint": {
+              "samples_ns": [
+                258298,
+                254511,
+                235996,
+                255102,
+                232920,
+                221368,
+                254982
+              ],
+              "median_ns": 254511
+            }
+          }
+        },
+        "xs": {
+          "result": "harden-tree:4:106:106:296",
+          "computrons": 30023,
+          "meter_raw": 1967617976,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                61106,
+                60385,
+                76745,
+                62629,
+                59473,
+                58490,
+                59322
+              ],
+              "median_ns": 60385
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                249351,
+                255803,
+                265461,
+                257166,
+                255272,
+                248329,
+                254180
+              ],
+              "median_ns": 255272
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 1.0057657558649835,
+        "improvement_fraction": -0.005765755864983513,
+        "bootstrap_95_ratio_interval": [
+          0.973586318750927,
+          1.0405175873973358
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "harden-tree",
+      "size": "representative",
+      "source": "fixtures/harden-tree-representative.js",
+      "expected": "harden-tree:16:1378:1378:21632",
+      "arms": {
+        "parent": {
+          "result": "harden-tree:16:1378:1378:21632",
+          "computrons": 1697424,
+          "meter_raw": 111242397544,
+          "dispatched": 259050,
+          "allocations": {
+            "checkpoint_bytes": 157591,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 145710,
+            "collected_slots": 4698,
+            "peak_live_slots": 5995,
+            "retained_live_slots": 1297,
+            "slot_allocations": 5020
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                122020,
+                118614,
+                124135,
+                122933,
+                115859,
+                107352,
+                122331
+              ],
+              "median_ns": 122020
+            },
+            "compile": {
+              "samples_ns": [
+                207613,
+                204747,
+                226718,
+                214715,
+                203795,
+                197564,
+                208874
+              ],
+              "median_ns": 207613
+            },
+            "link": {
+              "samples_ns": [
+                120057,
+                122221,
+                122391,
+                123222,
+                119756,
+                117913,
+                120378
+              ],
+              "median_ns": 120378
+            },
+            "execution": {
+              "samples_ns": [
+                36629459,
+                36403061,
+                35879523,
+                36346326,
+                36215509,
+                35679256,
+                36973111
+              ],
+              "median_ns": 36346326
+            },
+            "collection": {
+              "samples_ns": [
+                1188886,
+                1033452,
+                918926,
+                939325,
+                912664,
+                929175,
+                1110397
+              ],
+              "median_ns": 939325
+            },
+            "checkpoint": {
+              "samples_ns": [
+                536193,
+                518670,
+                497219,
+                500966,
+                495517,
+                499815,
+                531163
+              ],
+              "median_ns": 500966
+            }
+          }
+        },
+        "candidate": {
+          "result": "harden-tree:16:1378:1378:21632",
+          "computrons": 1697424,
+          "meter_raw": 111242397544,
+          "dispatched": 259050,
+          "allocations": {
+            "checkpoint_bytes": 157591,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 145710,
+            "collected_slots": 4698,
+            "peak_live_slots": 5995,
+            "retained_live_slots": 1297,
+            "slot_allocations": 5020
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                132800,
+                121159,
+                111531,
+                133171,
+                115729,
+                117062,
+                130607
+              ],
+              "median_ns": 121159
+            },
+            "compile": {
+              "samples_ns": [
+                226658,
+                211770,
+                194988,
+                241066,
+                201000,
+                192623,
+                243640
+              ],
+              "median_ns": 211770
+            },
+            "link": {
+              "samples_ns": [
+                125317,
+                118294,
+                117191,
+                124846,
+                117622,
+                114987,
+                135977
+              ],
+              "median_ns": 118294
+            },
+            "execution": {
+              "samples_ns": [
+                39807693,
+                37173768,
+                35645561,
+                36482453,
+                35906705,
+                35411230,
+                37082608
+              ],
+              "median_ns": 36482453
+            },
+            "collection": {
+              "samples_ns": [
+                1148169,
+                1017622,
+                903086,
+                996563,
+                884030,
+                939265,
+                1094258
+              ],
+              "median_ns": 996563
+            },
+            "checkpoint": {
+              "samples_ns": [
+                547134,
+                529731,
+                467513,
+                518320,
+                499393,
+                493051,
+                535392
+              ],
+              "median_ns": 518320
+            }
+          }
+        },
+        "xs": {
+          "result": "harden-tree:16:1378:1378:21632",
+          "computrons": 1692402,
+          "meter_raw": 3539092520,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                47389,
+                48782,
+                55705,
+                50154,
+                49053,
+                48733,
+                48482
+              ],
+              "median_ns": 48782
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                17018772,
+                17356108,
+                18380213,
+                17474924,
+                17384243,
+                16888676,
+                16990088
+              ],
+              "median_ns": 17356108
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 1.0037452753821665,
+        "improvement_fraction": -0.003745275382166513,
+        "bootstrap_95_ratio_interval": [
+          0.979191310313163,
+          1.0335312428763337
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "harden-tree",
+      "size": "stress",
+      "source": "fixtures/harden-tree-stress.js",
+      "expected": "harden-tree:64:20866:20866:1427456",
+      "arms": {
+        "parent": {
+          "result": "harden-tree:64:20866:20866:1427456",
+          "computrons": 329592494,
+          "meter_raw": 21600173708032,
+          "dispatched": 3978042,
+          "allocations": {
+            "checkpoint_bytes": 1747351,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 2009794,
+            "collected_slots": 70938,
+            "peak_live_slots": 72235,
+            "retained_live_slots": 1297,
+            "slot_allocations": 71260
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                152087,
+                139273,
+                118564,
+                127571,
+                115648,
+                129575,
+                142579
+              ],
+              "median_ns": 129575
+            },
+            "compile": {
+              "samples_ns": [
+                261124,
+                251044,
+                225576,
+                214496,
+                203385,
+                237058,
+                276292
+              ],
+              "median_ns": 237058
+            },
+            "link": {
+              "samples_ns": [
+                130958,
+                129385,
+                121670,
+                122291,
+                120428,
+                123383,
+                134124
+              ],
+              "median_ns": 123383
+            },
+            "execution": {
+              "samples_ns": [
+                9728878724,
+                9726428884,
+                9570055434,
+                9609286436,
+                9616564029,
+                9452528802,
+                9689446512
+              ],
+              "median_ns": 9616564029
+            },
+            "collection": {
+              "samples_ns": [
+                15196218,
+                15886122,
+                15358655,
+                14903296,
+                15281640,
+                15503259,
+                15500614
+              ],
+              "median_ns": 15358655
+            },
+            "checkpoint": {
+              "samples_ns": [
+                5263584,
+                5341230,
+                5256741,
+                5355608,
+                4900629,
+                4883416,
+                5204512
+              ],
+              "median_ns": 5256741
+            }
+          }
+        },
+        "candidate": {
+          "result": "harden-tree:64:20866:20866:1427456",
+          "computrons": 329592494,
+          "meter_raw": 21600173708032,
+          "dispatched": 3978042,
+          "allocations": {
+            "checkpoint_bytes": 1747351,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 2009794,
+            "collected_slots": 70938,
+            "peak_live_slots": 72235,
+            "retained_live_slots": 1297,
+            "slot_allocations": 71260
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                142669,
+                135897,
+                111250,
+                145655,
+                106781,
+                125477,
+                148510
+              ],
+              "median_ns": 135897
+            },
+            "compile": {
+              "samples_ns": [
+                259971,
+                258999,
+                195640,
+                250333,
+                205018,
+                216620,
+                267075
+              ],
+              "median_ns": 250333
+            },
+            "link": {
+              "samples_ns": [
+                130155,
+                127451,
+                124084,
+                126229,
+                122622,
+                118714,
+                131498
+              ],
+              "median_ns": 126229
+            },
+            "execution": {
+              "samples_ns": [
+                10080208655,
+                10001241568,
+                9957798613,
+                10210087674,
+                9935526580,
+                9987494609,
+                10216131441
+              ],
+              "median_ns": 10001241568
+            },
+            "collection": {
+              "samples_ns": [
+                16022269,
+                15930937,
+                15923783,
+                15903385,
+                15011250,
+                15255561,
+                15574845
+              ],
+              "median_ns": 15903385
+            },
+            "checkpoint": {
+              "samples_ns": [
+                5281578,
+                5144449,
+                5311314,
+                5465335,
+                5020865,
+                5089515,
+                5531470
+              ],
+              "median_ns": 5281578
+            }
+          }
+        },
+        "xs": {
+          "result": "harden-tree:64:20866:20866:1427456",
+          "computrons": 329512566,
+          "meter_raw": 4134952384,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                54342,
+                52669,
+                65684,
+                77557,
+                66215,
+                52309,
+                50756
+              ],
+              "median_ns": 54342
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                3616636151,
+                3680042826,
+                3653369591,
+                3693414520,
+                3642595504,
+                3590845456,
+                3601022521
+              ],
+              "median_ns": 3642595504
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 1.040001557504318,
+        "improvement_fraction": -0.040001557504318,
+        "bootstrap_95_ratio_interval": [
+          1.026840860927843,
+          1.0625229814931079
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "harden-repeat",
+      "size": "small",
+      "source": "fixtures/harden-repeat-small.js",
+      "expected": "harden-repeat:16:32:128:15",
+      "arms": {
+        "parent": {
+          "result": "harden-repeat:16:32:128:15",
+          "computrons": 2843,
+          "meter_raw": 186343432,
+          "dispatched": 2320,
+          "allocations": {
+            "checkpoint_bytes": 46032,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 18658,
+            "collected_slots": 56,
+            "peak_live_slots": 1354,
+            "retained_live_slots": 1298,
+            "slot_allocations": 458
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                173037,
+                176333,
+                157798,
+                164130,
+                166825,
+                188677,
+                192463
+              ],
+              "median_ns": 173037
+            },
+            "compile": {
+              "samples_ns": [
+                176764,
+                186682,
+                179158,
+                182034,
+                175672,
+                185050,
+                180201
+              ],
+              "median_ns": 180201
+            },
+            "link": {
+              "samples_ns": [
+                111441,
+                115859,
+                114637,
+                115869,
+                112132,
+                114466,
+                115137
+              ],
+              "median_ns": 114637
+            },
+            "execution": {
+              "samples_ns": [
+                1063559,
+                1082585,
+                1209445,
+                1077005,
+                1070653,
+                1068148,
+                1090120
+              ],
+              "median_ns": 1077005
+            },
+            "collection": {
+              "samples_ns": [
+                138282,
+                149192,
+                141968,
+                140826,
+                133582,
+                127591,
+                145695
+              ],
+              "median_ns": 140826
+            },
+            "checkpoint": {
+              "samples_ns": [
+                197843,
+                221949,
+                203395,
+                215858,
+                191081,
+                191452,
+                211489
+              ],
+              "median_ns": 203395
+            }
+          }
+        },
+        "candidate": {
+          "result": "harden-repeat:16:32:128:15",
+          "computrons": 2843,
+          "meter_raw": 186343432,
+          "dispatched": 2320,
+          "allocations": {
+            "checkpoint_bytes": 46032,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 18658,
+            "collected_slots": 56,
+            "peak_live_slots": 1354,
+            "retained_live_slots": 1298,
+            "slot_allocations": 458
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                179198,
+                176985,
+                163719,
+                186642,
+                163389,
+                165042,
+                155955
+              ],
+              "median_ns": 165042
+            },
+            "compile": {
+              "samples_ns": [
+                180231,
+                182104,
+                172476,
+                176233,
+                177665,
+                169410,
+                173107
+              ],
+              "median_ns": 176233
+            },
+            "link": {
+              "samples_ns": [
+                124194,
+                114206,
+                114997,
+                113535,
+                114767,
+                110810,
+                113775
+              ],
+              "median_ns": 114206
+            },
+            "execution": {
+              "samples_ns": [
+                1093346,
+                1068017,
+                1072346,
+                1064541,
+                1073148,
+                1049132,
+                1071384
+              ],
+              "median_ns": 1071384
+            },
+            "collection": {
+              "samples_ns": [
+                151707,
+                143691,
+                129124,
+                147809,
+                128843,
+                134194,
+                134084
+              ],
+              "median_ns": 134194
+            },
+            "checkpoint": {
+              "samples_ns": [
+                208894,
+                221138,
+                199537,
+                214646,
+                190791,
+                190079,
+                190430
+              ],
+              "median_ns": 199537
+            }
+          }
+        },
+        "xs": {
+          "result": "harden-repeat:16:32:128:15",
+          "computrons": 2946,
+          "meter_raw": 193089800,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                68980,
+                69171,
+                70312,
+                68620,
+                68760,
+                83999,
+                68520
+              ],
+              "median_ns": 68980
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                56276,
+                56867,
+                54593,
+                56937,
+                54002,
+                59473,
+                55605
+              ],
+              "median_ns": 56276
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9947808970246192,
+        "improvement_fraction": 0.005219102975380752,
+        "bootstrap_95_ratio_interval": [
+          0.9765356107584486,
+          1.0046809992622745
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "harden-repeat",
+      "size": "representative",
+      "source": "fixtures/harden-repeat-representative.js",
+      "expected": "harden-repeat:64:256:1024:63",
+      "arms": {
+        "parent": {
+          "result": "harden-repeat:64:256:1024:63",
+          "computrons": 17134,
+          "meter_raw": 1122947600,
+          "dispatched": 15648,
+          "allocations": {
+            "checkpoint_bytes": 49488,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 19440,
+            "collected_slots": 200,
+            "peak_live_slots": 1498,
+            "retained_live_slots": 1298,
+            "slot_allocations": 602
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                143562,
+                124826,
+                135406,
+                116160,
+                133743,
+                108916,
+                115388
+              ],
+              "median_ns": 124826
+            },
+            "compile": {
+              "samples_ns": [
+                113264,
+                132711,
+                110900,
+                126399,
+                107714,
+                111921,
+                109306
+              ],
+              "median_ns": 111921
+            },
+            "link": {
+              "samples_ns": [
+                100750,
+                106611,
+                102674,
+                112673,
+                104677,
+                109156,
+                100810
+              ],
+              "median_ns": 104677
+            },
+            "execution": {
+              "samples_ns": [
+                1387652,
+                1464126,
+                1480357,
+                1434290,
+                1391810,
+                1424772,
+                1410114
+              ],
+              "median_ns": 1424772
+            },
+            "collection": {
+              "samples_ns": [
+                155063,
+                159281,
+                151005,
+                151466,
+                144984,
+                144253,
+                145725
+              ],
+              "median_ns": 151005
+            },
+            "checkpoint": {
+              "samples_ns": [
+                198264,
+                213834,
+                201851,
+                208484,
+                196090,
+                197443,
+                195249
+              ],
+              "median_ns": 198264
+            }
+          }
+        },
+        "candidate": {
+          "result": "harden-repeat:64:256:1024:63",
+          "computrons": 17134,
+          "meter_raw": 1122947600,
+          "dispatched": 15648,
+          "allocations": {
+            "checkpoint_bytes": 49488,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 19440,
+            "collected_slots": 200,
+            "peak_live_slots": 1498,
+            "retained_live_slots": 1298,
+            "slot_allocations": 602
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                113385,
+                135806,
+                111360,
+                123734,
+                116600,
+                107533,
+                110058
+              ],
+              "median_ns": 113385
+            },
+            "compile": {
+              "samples_ns": [
+                115498,
+                143792,
+                108505,
+                105239,
+                102604,
+                105399,
+                106622
+              ],
+              "median_ns": 106622
+            },
+            "link": {
+              "samples_ns": [
+                102012,
+                104898,
+                102394,
+                101231,
+                101442,
+                99659,
+                103014
+              ],
+              "median_ns": 102012
+            },
+            "execution": {
+              "samples_ns": [
+                1437044,
+                1417058,
+                1407058,
+                1496688,
+                1402289,
+                1383303,
+                1425223
+              ],
+              "median_ns": 1417058
+            },
+            "collection": {
+              "samples_ns": [
+                150454,
+                151917,
+                145866,
+                153891,
+                144362,
+                145395,
+                143491
+              ],
+              "median_ns": 145866
+            },
+            "checkpoint": {
+              "samples_ns": [
+                202863,
+                220727,
+                202242,
+                196541,
+                197984,
+                193806,
+                199066
+              ],
+              "median_ns": 199066
+            }
+          }
+        },
+        "xs": {
+          "result": "harden-repeat:64:256:1024:63",
+          "computrons": 16993,
+          "meter_raw": 1113655056,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                25619,
+                24627,
+                25818,
+                25599,
+                24777,
+                37040,
+                24897
+              ],
+              "median_ns": 25599
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                131228,
+                129214,
+                131940,
+                134183,
+                129264,
+                131939,
+                128613
+              ],
+              "median_ns": 131228
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9945858003947298,
+        "improvement_fraction": 0.005414199605270231,
+        "bootstrap_95_ratio_interval": [
+          0.9610224803056567,
+          1.0240068687536374
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "harden-repeat",
+      "size": "stress",
+      "source": "fixtures/harden-repeat-stress.js",
+      "expected": "harden-repeat:256:1024:4096:255",
+      "arms": {
+        "parent": {
+          "result": "harden-repeat:256:1024:4096:255",
+          "computrons": 67333,
+          "meter_raw": 4412783128,
+          "dispatched": 62304,
+          "allocations": {
+            "checkpoint_bytes": 63312,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 23154,
+            "collected_slots": 776,
+            "peak_live_slots": 2074,
+            "retained_live_slots": 1298,
+            "slot_allocations": 1178
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                133733,
+                119536,
+                110319,
+                125667,
+                139875,
+                113314,
+                117672
+              ],
+              "median_ns": 119536
+            },
+            "compile": {
+              "samples_ns": [
+                105650,
+                119015,
+                108024,
+                109557,
+                101421,
+                105649,
+                101793
+              ],
+              "median_ns": 105650
+            },
+            "link": {
+              "samples_ns": [
+                101261,
+                103355,
+                103134,
+                104197,
+                101612,
+                102584,
+                112413
+              ],
+              "median_ns": 103134
+            },
+            "execution": {
+              "samples_ns": [
+                2777347,
+                2950664,
+                2871736,
+                2879460,
+                2914225,
+                2828754,
+                2830778
+              ],
+              "median_ns": 2871736
+            },
+            "collection": {
+              "samples_ns": [
+                232910,
+                236987,
+                229674,
+                230626,
+                226087,
+                229083,
+                230946
+              ],
+              "median_ns": 230626
+            },
+            "checkpoint": {
+              "samples_ns": [
+                225817,
+                247648,
+                231067,
+                236467,
+                227630,
+                225316,
+                225656
+              ],
+              "median_ns": 227630
+            }
+          }
+        },
+        "candidate": {
+          "result": "harden-repeat:256:1024:4096:255",
+          "computrons": 67333,
+          "meter_raw": 4412783128,
+          "dispatched": 62304,
+          "allocations": {
+            "checkpoint_bytes": 63312,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 23154,
+            "collected_slots": 776,
+            "peak_live_slots": 2074,
+            "retained_live_slots": 1298,
+            "slot_allocations": 1178
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                107733,
+                118033,
+                106381,
+                123734,
+                108866,
+                104147,
+                114978
+              ],
+              "median_ns": 108866
+            },
+            "compile": {
+              "samples_ns": [
+                108855,
+                116600,
+                104117,
+                105439,
+                105720,
+                101000,
+                103776
+              ],
+              "median_ns": 105439
+            },
+            "link": {
+              "samples_ns": [
+                105740,
+                100590,
+                102443,
+                102273,
+                100299,
+                100280,
+                102914
+              ],
+              "median_ns": 102273
+            },
+            "execution": {
+              "samples_ns": [
+                2850926,
+                2793778,
+                2902033,
+                2838783,
+                2792306,
+                2768981,
+                2854353
+              ],
+              "median_ns": 2838783
+            },
+            "collection": {
+              "samples_ns": [
+                235816,
+                220677,
+                224825,
+                226227,
+                225887,
+                219655,
+                224374
+              ],
+              "median_ns": 224825
+            },
+            "checkpoint": {
+              "samples_ns": [
+                232008,
+                241266,
+                228542,
+                240204,
+                228752,
+                224064,
+                233561
+              ],
+              "median_ns": 232008
+            }
+          }
+        },
+        "xs": {
+          "result": "harden-repeat:256:1024:4096:255",
+          "computrons": 66277,
+          "meter_raw": 48570136,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                20459,
+                19817,
+                20879,
+                20299,
+                20098,
+                21430,
+                19778
+              ],
+              "median_ns": 20299
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                395237,
+                393364,
+                393494,
+                393082,
+                381210,
+                476069,
+                388013
+              ],
+              "median_ns": 393364
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.988525059406575,
+        "improvement_fraction": 0.01147494059342502,
+        "bootstrap_95_ratio_interval": [
+          0.958669286002282,
+          1.008328099200997
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "ocap-mixed",
+      "size": "small",
+      "source": "fixtures/ocap-mixed-small.js",
+      "expected": "ocap-mixed:8:712:3",
+      "arms": {
+        "parent": {
+          "result": "ocap-mixed:8:712:3",
+          "computrons": 10012,
+          "meter_raw": 656166040,
+          "dispatched": 8827,
+          "allocations": {
+            "checkpoint_bytes": 65227,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 23070,
+            "collected_slots": 792,
+            "peak_live_slots": 2140,
+            "retained_live_slots": 1348,
+            "slot_allocations": 1151
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                121450,
+                119476,
+                116160,
+                127551,
+                117672,
+                115218,
+                112643
+              ],
+              "median_ns": 117672
+            },
+            "compile": {
+              "samples_ns": [
+                306920,
+                321638,
+                306990,
+                309074,
+                305738,
+                311248,
+                300348
+              ],
+              "median_ns": 306990
+            },
+            "link": {
+              "samples_ns": [
+                143080,
+                148821,
+                147298,
+                147158,
+                150234,
+                145615,
+                141207
+              ],
+              "median_ns": 147158
+            },
+            "execution": {
+              "samples_ns": [
+                1541602,
+                1611795,
+                1578092,
+                1579224,
+                1570507,
+                1573563,
+                1559165
+              ],
+              "median_ns": 1573563
+            },
+            "collection": {
+              "samples_ns": [
+                265010,
+                280620,
+                268176,
+                272635,
+                260212,
+                264450,
+                264330
+              ],
+              "median_ns": 265010
+            },
+            "checkpoint": {
+              "samples_ns": [
+                230645,
+                243611,
+                235655,
+                238511,
+                233371,
+                235645,
+                228512
+              ],
+              "median_ns": 235645
+            }
+          }
+        },
+        "candidate": {
+          "result": "ocap-mixed:8:712:3",
+          "computrons": 10012,
+          "meter_raw": 656166040,
+          "dispatched": 8827,
+          "allocations": {
+            "checkpoint_bytes": 65227,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 23070,
+            "collected_slots": 792,
+            "peak_live_slots": 2140,
+            "retained_live_slots": 1348,
+            "slot_allocations": 1151
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                118534,
+                118444,
+                114807,
+                115828,
+                113244,
+                109878,
+                117592
+              ],
+              "median_ns": 115828
+            },
+            "compile": {
+              "samples_ns": [
+                315657,
+                306990,
+                315436,
+                308272,
+                297983,
+                301199,
+                310056
+              ],
+              "median_ns": 308272
+            },
+            "link": {
+              "samples_ns": [
+                147729,
+                142910,
+                145545,
+                143522,
+                149943,
+                142369,
+                144654
+              ],
+              "median_ns": 144654
+            },
+            "execution": {
+              "samples_ns": [
+                1600634,
+                1581007,
+                1568263,
+                1556891,
+                1560288,
+                1531493,
+                1577239
+              ],
+              "median_ns": 1568263
+            },
+            "collection": {
+              "samples_ns": [
+                270231,
+                267335,
+                268217,
+                260131,
+                265842,
+                265161,
+                273386
+              ],
+              "median_ns": 267335
+            },
+            "checkpoint": {
+              "samples_ns": [
+                239292,
+                233471,
+                233090,
+                231528,
+                235404,
+                228312,
+                235745
+              ],
+              "median_ns": 233471
+            }
+          }
+        },
+        "xs": {
+          "result": "ocap-mixed:8:712:3",
+          "computrons": 10045,
+          "meter_raw": 658314904,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                89419,
+                88517,
+                89640,
+                93476,
+                86553,
+                99367,
+                87615
+              ],
+              "median_ns": 89419
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                118164,
+                116861,
+                117152,
+                120267,
+                118784,
+                129935,
+                117472
+              ],
+              "median_ns": 118164
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9966318475968232,
+        "improvement_fraction": 0.003368152403176783,
+        "bootstrap_95_ratio_interval": [
+          0.9858582443022649,
+          1.0121211570820483
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "ocap-mixed",
+      "size": "representative",
+      "source": "fixtures/ocap-mixed-representative.js",
+      "expected": "ocap-mixed:64:21824:22",
+      "arms": {
+        "parent": {
+          "result": "ocap-mixed:64:21824:22",
+          "computrons": 75319,
+          "meter_raw": 4936155176,
+          "dispatched": 68540,
+          "allocations": {
+            "checkpoint_bytes": 183595,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 45940,
+            "collected_slots": 5724,
+            "peak_live_slots": 7072,
+            "retained_live_slots": 1348,
+            "slot_allocations": 6083
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                119506,
+                117592,
+                116490,
+                116730,
+                120347,
+                114706,
+                113204
+              ],
+              "median_ns": 116730
+            },
+            "compile": {
+              "samples_ns": [
+                298464,
+                310717,
+                306088,
+                300568,
+                295599,
+                305477,
+                301660
+              ],
+              "median_ns": 301660
+            },
+            "link": {
+              "samples_ns": [
+                141477,
+                145725,
+                148310,
+                145635,
+                141778,
+                143091,
+                141157
+              ],
+              "median_ns": 143091
+            },
+            "execution": {
+              "samples_ns": [
+                4981872,
+                5169055,
+                5110996,
+                5038920,
+                5027639,
+                5018922,
+                5007530
+              ],
+              "median_ns": 5027639
+            },
+            "collection": {
+              "samples_ns": [
+                938603,
+                979360,
+                951267,
+                978148,
+                943593,
+                947951,
+                933975
+              ],
+              "median_ns": 947951
+            },
+            "checkpoint": {
+              "samples_ns": [
+                559107,
+                553326,
+                543567,
+                545901,
+                547083,
+                540311,
+                546653
+              ],
+              "median_ns": 546653
+            }
+          }
+        },
+        "candidate": {
+          "result": "ocap-mixed:64:21824:22",
+          "computrons": 75319,
+          "meter_raw": 4936155176,
+          "dispatched": 68540,
+          "allocations": {
+            "checkpoint_bytes": 183595,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 45940,
+            "collected_slots": 5724,
+            "peak_live_slots": 7072,
+            "retained_live_slots": 1348,
+            "slot_allocations": 6083
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                114917,
+                114917,
+                118394,
+                112622,
+                112543,
+                111311,
+                116590
+              ],
+              "median_ns": 114917
+            },
+            "compile": {
+              "samples_ns": [
+                300027,
+                307471,
+                304545,
+                293855,
+                299976,
+                290448,
+                306269
+              ],
+              "median_ns": 300027
+            },
+            "link": {
+              "samples_ns": [
+                155023,
+                145255,
+                150755,
+                150455,
+                142469,
+                147398,
+                144844
+              ],
+              "median_ns": 147398
+            },
+            "execution": {
+              "samples_ns": [
+                5109853,
+                5018721,
+                5048137,
+                5014964,
+                4994596,
+                4941376,
+                5046844
+              ],
+              "median_ns": 5018721
+            },
+            "collection": {
+              "samples_ns": [
+                974511,
+                963931,
+                940638,
+                940607,
+                933975,
+                928224,
+                969822
+              ],
+              "median_ns": 940638
+            },
+            "checkpoint": {
+              "samples_ns": [
+                560068,
+                544648,
+                538817,
+                531344,
+                536334,
+                591738,
+                564877
+              ],
+              "median_ns": 544648
+            }
+          }
+        },
+        "xs": {
+          "result": "ocap-mixed:64:21824:22",
+          "computrons": 73970,
+          "meter_raw": 552750696,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                75152,
+                74060,
+                74290,
+                78068,
+                72728,
+                78478,
+                74090
+              ],
+              "median_ns": 74290
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                453406,
+                462273,
+                453416,
+                461923,
+                447616,
+                585526,
+                450311
+              ],
+              "median_ns": 453416
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9982262051829894,
+        "improvement_fraction": 0.0017737948170105655,
+        "bootstrap_95_ratio_interval": [
+          0.9812107072672333,
+          1.0078509764294972
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "ocap-mixed",
+      "size": "stress",
+      "source": "fixtures/ocap-mixed-stress.js",
+      "expected": "ocap-mixed:256:308480:86",
+      "arms": {
+        "parent": {
+          "result": "ocap-mixed:256:308480:86",
+          "computrons": 298985,
+          "meter_raw": 19594337336,
+          "dispatched": 273028,
+          "allocations": {
+            "checkpoint_bytes": 589291,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 124290,
+            "collected_slots": 22628,
+            "peak_live_slots": 23976,
+            "retained_live_slots": 1348,
+            "slot_allocations": 22987
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                114877,
+                119316,
+                115338,
+                115638,
+                134314,
+                115007,
+                140566
+              ],
+              "median_ns": 115638
+            },
+            "compile": {
+              "samples_ns": [
+                300257,
+                310887,
+                302161,
+                300378,
+                300868,
+                304476,
+                307330
+              ],
+              "median_ns": 302161
+            },
+            "link": {
+              "samples_ns": [
+                148881,
+                149031,
+                144202,
+                146116,
+                144543,
+                146547,
+                143932
+              ],
+              "median_ns": 146116
+            },
+            "execution": {
+              "samples_ns": [
+                16945322,
+                17316003,
+                17126195,
+                17097421,
+                16992984,
+                16956314,
+                16832761
+              ],
+              "median_ns": 16992984
+            },
+            "collection": {
+              "samples_ns": [
+                3892103,
+                3510752,
+                3413578,
+                3438075,
+                3392780,
+                3442754,
+                3448435
+              ],
+              "median_ns": 3442754
+            },
+            "checkpoint": {
+              "samples_ns": [
+                1899338,
+                1880423,
+                1643926,
+                1624579,
+                1598380,
+                1957077,
+                1625931
+              ],
+              "median_ns": 1643926
+            }
+          }
+        },
+        "candidate": {
+          "result": "ocap-mixed:256:308480:86",
+          "computrons": 298985,
+          "meter_raw": 19594337336,
+          "dispatched": 273028,
+          "allocations": {
+            "checkpoint_bytes": 589291,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 124290,
+            "collected_slots": 22628,
+            "peak_live_slots": 23976,
+            "retained_live_slots": 1348,
+            "slot_allocations": 22987
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                121068,
+                132571,
+                115809,
+                116730,
+                115638,
+                159913,
+                121630
+              ],
+              "median_ns": 121068
+            },
+            "compile": {
+              "samples_ns": [
+                322228,
+                315506,
+                304736,
+                296691,
+                300488,
+                380428,
+                311278
+              ],
+              "median_ns": 311278
+            },
+            "link": {
+              "samples_ns": [
+                146086,
+                142900,
+                145836,
+                143801,
+                143602,
+                198084,
+                146798
+              ],
+              "median_ns": 145836
+            },
+            "execution": {
+              "samples_ns": [
+                17347152,
+                17017088,
+                17069868,
+                16956866,
+                16978135,
+                16671556,
+                17037548
+              ],
+              "median_ns": 17017088
+            },
+            "collection": {
+              "samples_ns": [
+                3600863,
+                3510893,
+                3428367,
+                3372581,
+                3446381,
+                3407648,
+                3428718
+              ],
+              "median_ns": 3428718
+            },
+            "checkpoint": {
+              "samples_ns": [
+                1681076,
+                2001120,
+                1622325,
+                1843312,
+                1882767,
+                1571499,
+                1632905
+              ],
+              "median_ns": 1681076
+            }
+          }
+        },
+        "xs": {
+          "result": "ocap-mixed:256:308480:86",
+          "computrons": 292897,
+          "meter_raw": 2015450232,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                74601,
+                69511,
+                69832,
+                71395,
+                68039,
+                81574,
+                68509
+              ],
+              "median_ns": 69832
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                1863992,
+                1857930,
+                1876295,
+                1895441,
+                1851748,
+                2136857,
+                1846980
+              ],
+              "median_ns": 1863992
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 1.001418467762931,
+        "improvement_fraction": -0.001418467762930975,
+        "bootstrap_95_ratio_interval": [
+          0.9901128651168576,
+          1.0073498750864693
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "mutable-control",
+      "size": "small",
+      "source": "fixtures/mutable-control-small.js",
+      "expected": "mutable-control:8:964:3",
+      "arms": {
+        "parent": {
+          "result": "mutable-control:8:964:3",
+          "computrons": 9422,
+          "meter_raw": 617509032,
+          "dispatched": 9091,
+          "allocations": {
+            "checkpoint_bytes": 55582,
+            "chunk_bytes_after_collection": 12062,
+            "chunk_bytes_before_collection": 12622,
+            "collected_slots": 728,
+            "peak_live_slots": 1716,
+            "retained_live_slots": 988,
+            "slot_allocations": 728
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                126709,
+                124696,
+                130266,
+                117823,
+                117201,
+                135716,
+                127701
+              ],
+              "median_ns": 126709
+            },
+            "compile": {
+              "samples_ns": [
+                323030,
+                314424,
+                323942,
+                308463,
+                316618,
+                310927,
+                304425
+              ],
+              "median_ns": 314424
+            },
+            "link": {
+              "samples_ns": [
+                144854,
+                148551,
+                145695,
+                147939,
+                147128,
+                146938,
+                142610
+              ],
+              "median_ns": 146938
+            },
+            "execution": {
+              "samples_ns": [
+                363176,
+                371161,
+                367344,
+                371652,
+                362215,
+                364248,
+                363396
+              ],
+              "median_ns": 364248
+            },
+            "collection": {
+              "samples_ns": [
+                202443,
+                208664,
+                209165,
+                204597,
+                215477,
+                202112,
+                201040
+              ],
+              "median_ns": 204597
+            },
+            "checkpoint": {
+              "samples_ns": [
+                219094,
+                228943,
+                216379,
+                216569,
+                213243,
+                215377,
+                214676
+              ],
+              "median_ns": 216379
+            }
+          }
+        },
+        "candidate": {
+          "result": "mutable-control:8:964:3",
+          "computrons": 9422,
+          "meter_raw": 617509032,
+          "dispatched": 9091,
+          "allocations": {
+            "checkpoint_bytes": 55582,
+            "chunk_bytes_after_collection": 12062,
+            "chunk_bytes_before_collection": 12622,
+            "collected_slots": 728,
+            "peak_live_slots": 1716,
+            "retained_live_slots": 988,
+            "slot_allocations": 728
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                138312,
+                144744,
+                117943,
+                118143,
+                127932,
+                115057,
+                141387
+              ],
+              "median_ns": 127932
+            },
+            "compile": {
+              "samples_ns": [
+                354149,
+                320756,
+                309435,
+                308353,
+                307561,
+                303524,
+                309415
+              ],
+              "median_ns": 309415
+            },
+            "link": {
+              "samples_ns": [
+                151696,
+                146697,
+                152488,
+                144894,
+                146246,
+                141427,
+                145645
+              ],
+              "median_ns": 146246
+            },
+            "execution": {
+              "samples_ns": [
+                364279,
+                363136,
+                361102,
+                361453,
+                362826,
+                354559,
+                359179
+              ],
+              "median_ns": 361453
+            },
+            "collection": {
+              "samples_ns": [
+                206009,
+                204667,
+                205107,
+                204747,
+                205268,
+                204136,
+                204195
+              ],
+              "median_ns": 204747
+            },
+            "checkpoint": {
+              "samples_ns": [
+                231187,
+                218242,
+                214736,
+                213884,
+                217280,
+                211680,
+                220727
+              ],
+              "median_ns": 217280
+            }
+          }
+        },
+        "xs": {
+          "result": "mutable-control:8:964:3",
+          "computrons": 9404,
+          "meter_raw": 616352896,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                96432,
+                97474,
+                96542,
+                105980,
+                94408,
+                143281,
+                92054
+              ],
+              "median_ns": 96542
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                37751,
+                36559,
+                37340,
+                40988,
+                37009,
+                51437,
+                37091
+              ],
+              "median_ns": 37340
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9923266565636599,
+        "improvement_fraction": 0.007673343436340074,
+        "bootstrap_95_ratio_interval": [
+          0.9728985534579333,
+          0.9992845270723949
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "mutable-control",
+      "size": "representative",
+      "source": "fixtures/mutable-control-representative.js",
+      "expected": "mutable-control:64:25632:22",
+      "arms": {
+        "parent": {
+          "result": "mutable-control:64:25632:22",
+          "computrons": 73158,
+          "meter_raw": 4794516880,
+          "dispatched": 70652,
+          "allocations": {
+            "checkpoint_bytes": 164542,
+            "chunk_bytes_after_collection": 12062,
+            "chunk_bytes_before_collection": 13540,
+            "collected_slots": 5268,
+            "peak_live_slots": 6256,
+            "retained_live_slots": 988,
+            "slot_allocations": 5268
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                109046,
+                112412,
+                115197,
+                104397,
+                110749,
+                110709,
+                112683
+              ],
+              "median_ns": 110749
+            },
+            "compile": {
+              "samples_ns": [
+                292553,
+                301480,
+                291311,
+                300989,
+                290639,
+                298173,
+                292923
+              ],
+              "median_ns": 292923
+            },
+            "link": {
+              "samples_ns": [
+                139564,
+                142299,
+                140536,
+                147318,
+                140466,
+                147799,
+                142619
+              ],
+              "median_ns": 142299
+            },
+            "execution": {
+              "samples_ns": [
+                2615511,
+                2722634,
+                2676376,
+                2718987,
+                2676907,
+                2655527,
+                2703808
+              ],
+              "median_ns": 2676907
+            },
+            "collection": {
+              "samples_ns": [
+                805753,
+                833124,
+                815741,
+                826181,
+                808117,
+                819448,
+                808257
+              ],
+              "median_ns": 815741
+            },
+            "checkpoint": {
+              "samples_ns": [
+                485477,
+                501087,
+                496908,
+                512238,
+                484635,
+                500225,
+                493833
+              ],
+              "median_ns": 496908
+            }
+          }
+        },
+        "candidate": {
+          "result": "mutable-control:64:25632:22",
+          "computrons": 73158,
+          "meter_raw": 4794516880,
+          "dispatched": 70652,
+          "allocations": {
+            "checkpoint_bytes": 164542,
+            "chunk_bytes_after_collection": 12062,
+            "chunk_bytes_before_collection": 13540,
+            "collected_slots": 5268,
+            "peak_live_slots": 6256,
+            "retained_live_slots": 988,
+            "slot_allocations": 5268
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                114987,
+                114627,
+                111290,
+                110118,
+                110459,
+                108425,
+                112041
+              ],
+              "median_ns": 111290
+            },
+            "compile": {
+              "samples_ns": [
+                307060,
+                296480,
+                301560,
+                296050,
+                292993,
+                288655,
+                297302
+              ],
+              "median_ns": 296480
+            },
+            "link": {
+              "samples_ns": [
+                144092,
+                143942,
+                142650,
+                139193,
+                146286,
+                137310,
+                142399
+              ],
+              "median_ns": 142650
+            },
+            "execution": {
+              "samples_ns": [
+                2704149,
+                2635308,
+                2655216,
+                2656318,
+                2643784,
+                2609750,
+                2651228
+              ],
+              "median_ns": 2651228
+            },
+            "collection": {
+              "samples_ns": [
+                830960,
+                816402,
+                819058,
+                805863,
+                819709,
+                816422,
+                822273
+              ],
+              "median_ns": 819058
+            },
+            "checkpoint": {
+              "samples_ns": [
+                505275,
+                494123,
+                497359,
+                494214,
+                502059,
+                487110,
+                497741
+              ],
+              "median_ns": 497359
+            }
+          }
+        },
+        "xs": {
+          "result": "mutable-control:64:25632:22",
+          "computrons": 73020,
+          "meter_raw": 490488936,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                74401,
+                71565,
+                72016,
+                73259,
+                69020,
+                104397,
+                70743
+              ],
+              "median_ns": 72016
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                263187,
+                255813,
+                260703,
+                258469,
+                261545,
+                268637,
+                256184
+              ],
+              "median_ns": 260703
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9904072125030866,
+        "improvement_fraction": 0.00959278749691339,
+        "bootstrap_95_ratio_interval": [
+          0.9723415374917203,
+          1.0002978693118165
+        ],
+        "bootstrap_resamples": 10000
+      }
+    },
+    {
+      "fixture": "mutable-control",
+      "size": "stress",
+      "source": "fixtures/mutable-control-stress.js",
+      "expected": "mutable-control:256:348288:86",
+      "arms": {
+        "parent": {
+          "result": "mutable-control:256:348288:86",
+          "computrons": 291437,
+          "meter_raw": 19099620248,
+          "dispatched": 281476,
+          "allocations": {
+            "checkpoint_bytes": 537978,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 16626,
+            "collected_slots": 20828,
+            "peak_live_slots": 21816,
+            "retained_live_slots": 988,
+            "slot_allocations": 20828
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                111701,
+                112893,
+                112352,
+                112763,
+                110909,
+                122591,
+                142379
+              ],
+              "median_ns": 112763
+            },
+            "compile": {
+              "samples_ns": [
+                297342,
+                309916,
+                300708,
+                301660,
+                300458,
+                302802,
+                294807
+              ],
+              "median_ns": 300708
+            },
+            "link": {
+              "samples_ns": [
+                140345,
+                145756,
+                142970,
+                144994,
+                143381,
+                142329,
+                141988
+              ],
+              "median_ns": 142970
+            },
+            "execution": {
+              "samples_ns": [
+                10351175,
+                11388625,
+                10784794,
+                10648778,
+                10565661,
+                10412883,
+                10600017
+              ],
+              "median_ns": 10600017
+            },
+            "collection": {
+              "samples_ns": [
+                3123942,
+                3110216,
+                3277341,
+                3042688,
+                2991893,
+                3074899,
+                2968147
+              ],
+              "median_ns": 3074899
+            },
+            "checkpoint": {
+              "samples_ns": [
+                1491277,
+                1607517,
+                1542234,
+                1489494,
+                1454047,
+                1510504,
+                1493662
+              ],
+              "median_ns": 1493662
+            }
+          }
+        },
+        "candidate": {
+          "result": "mutable-control:256:348288:86",
+          "computrons": 291437,
+          "meter_raw": 19099620248,
+          "dispatched": 281476,
+          "allocations": {
+            "checkpoint_bytes": 537978,
+            "chunk_bytes_after_collection": 12058,
+            "chunk_bytes_before_collection": 16626,
+            "collected_slots": 20828,
+            "peak_live_slots": 21816,
+            "retained_live_slots": 988,
+            "slot_allocations": 20828
+          },
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                115488,
+                113034,
+                111891,
+                111300,
+                113234,
+                112302,
+                137921
+              ],
+              "median_ns": 113034
+            },
+            "compile": {
+              "samples_ns": [
+                311609,
+                298013,
+                296561,
+                291301,
+                299816,
+                297652,
+                301590
+              ],
+              "median_ns": 298013
+            },
+            "link": {
+              "samples_ns": [
+                146898,
+                142479,
+                143351,
+                140445,
+                141758,
+                140244,
+                142960
+              ],
+              "median_ns": 142479
+            },
+            "execution": {
+              "samples_ns": [
+                10650050,
+                10504194,
+                10542317,
+                10439793,
+                10449171,
+                10310889,
+                10551194
+              ],
+              "median_ns": 10504194
+            },
+            "collection": {
+              "samples_ns": [
+                3087943,
+                3120546,
+                3059249,
+                3017871,
+                3086632,
+                3008444,
+                3080750
+              ],
+              "median_ns": 3080750
+            },
+            "checkpoint": {
+              "samples_ns": [
+                1513750,
+                1507317,
+                1532465,
+                1490727,
+                1475808,
+                1468895,
+                1528338
+              ],
+              "median_ns": 1507317
+            }
+          }
+        },
+        "xs": {
+          "result": "mutable-control:256:348288:86",
+          "computrons": 290885,
+          "meter_raw": 1883589232,
+          "dispatched": null,
+          "allocations": null,
+          "phases": {
+            "setup": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "compile": {
+              "samples_ns": [
+                69531,
+                67137,
+                67377,
+                68319,
+                63830,
+                70914,
+                65464
+              ],
+              "median_ns": 67377
+            },
+            "link": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "execution": {
+              "samples_ns": [
+                1078758,
+                1062327,
+                1073218,
+                1072806,
+                1067808,
+                1254450,
+                1048892
+              ],
+              "median_ns": 1072806
+            },
+            "collection": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            },
+            "checkpoint": {
+              "samples_ns": [
+                null,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null
+              ],
+              "median_ns": null
+            }
+          }
+        }
+      },
+      "execution_comparison": {
+        "candidate_parent_ratio": 0.9909601088375612,
+        "improvement_fraction": 0.009039891162438751,
+        "bootstrap_95_ratio_interval": [
+          0.9688799804613792,
+          1.0124301790387926
+        ],
+        "bootstrap_resamples": 10000
+      }
+    }
+  ],
+  "summary": {
+    "representative_candidate_parent_geometric_mean": 0.9930874778280266,
+    "representative_improvement_fraction": 0.0069125221719733565
+  },
+  "validation": {
+    "observable_results_checked": true,
+    "parent_candidate_computrons_identical": true,
+    "parent_candidate_allocations_identical": true,
+    "failures": []
+  }
+}
