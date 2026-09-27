@@ -2500,6 +2500,34 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `931a687135cabb0c` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 5-byte input
+    /// folds into the square of `620757035` (`310378496` is the generator's
+    /// `37 << 23` atom). Both engines compute the double `385339296501991232`.
+    /// XS renders it `385339296501991200`, a tie between the adjacent doubles
+    /// `...168` and `...232` (the spacing here is 64) that round-half-even
+    /// takes to `...168`. This is the `05264cccae42245a` tie class, which the
+    /// exact-double comparison already accepts.
+    #[test]
+    fn finding_931a687135cabb0c_tie_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // dca671e311ff51c7e982a8778381d2a16c177906a0465b373d68f95977589a67).
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-931a687135cabb0c.input.bin");
+        let program = gen_program(data);
+        assert!(
+            program.contains('*'),
+            "finding program is a product: {}",
+            program
+        );
+        let oracle = xs_oracle::run(&program).expect("oracle machine");
+        assert_eq!(oracle.result_number(), Some(385339296501991232.0));
+        match differential_check(&program) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 931a687135cabb0c must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `a7755caa51aa9320` (target
     /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
     /// `2d f7 60` folds into
