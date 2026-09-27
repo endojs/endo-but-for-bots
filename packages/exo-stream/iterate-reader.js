@@ -53,6 +53,9 @@ export const iterateReader = (readerRef, options = {}) => {
   // Call stream() - returns a promise for the acknowledge chain head
   /** @type {Promise<StreamNode<TRead, TReadReturn>>} */
   let nodePromise = E(readerRef).stream(synHead);
+  // The consumer may stay idle while the connection closes. Observe failure
+  // now, retaining the original promise so the next pull still rejects.
+  nodePromise.catch(() => undefined);
 
   /** @type {Promise<IteratorResult<TRead, TReadReturn>> | null} */
   let terminalPromise = null;
@@ -154,6 +157,7 @@ export const iterateReader = (readerRef, options = {}) => {
       nodePromise = /** @type {Promise<StreamNode<TRead, TReadReturn>>} */ (
         nextPromiseOrNull
       );
+      nodePromise.catch(() => undefined);
 
       return harden({ done: false, value });
     } catch (error) {

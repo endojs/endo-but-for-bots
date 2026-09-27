@@ -61,6 +61,9 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
   // Call streamBase64() - returns a promise for the acknowledge chain head
   /** @type {Promise<StreamNode<string, TReadReturn>>} */
   let nodePromise = E(bytesReaderRef).streamBase64(synHead);
+  // The consumer may stay idle while the connection closes. Observe failure
+  // now, retaining the original promise so the next pull still rejects.
+  nodePromise.catch(() => undefined);
 
   /** @type {Promise<IteratorResult<Uint8Array, TReadReturn>> | null} */
   let terminalPromise = null;
@@ -168,6 +171,7 @@ export const iterateBytesReader = (bytesReaderRef, options = {}) => {
       nodePromise = /** @type {Promise<StreamNode<string, TReadReturn>>} */ (
         nextPromiseOrNull
       );
+      nodePromise.catch(() => undefined);
 
       return harden({ done: false, value });
     } catch (error) {
