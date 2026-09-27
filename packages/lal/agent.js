@@ -8,6 +8,7 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeLocalTree } from '@endo/platform/fs/node';
 
 import { makePiAgent } from '@endo/agentry/harness';
+import { makeSturdyRefEscrow } from '@endo/agent-tools/sturdyref-escrow.js';
 
 import { systemPrompt } from './prompts/system.js';
 import { tools } from './tools/index.js';
@@ -90,9 +91,10 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
   //       security-notes wrapping is applied), and
   //   (c) the per-tool parameter schema lives at the tool boundary,
   //       which lets `@endo/patterns` validation guard inbound args.
-  const executeTool = makeExecuteTool(powers);
+  const sturdyRefEscrow = makeSturdyRefEscrow();
+  const executeTool = makeExecuteTool(powers, sturdyRefEscrow);
   const agentTools = tools.map(({ name, summary }) =>
-    toAgentTool(name, summary, executeTool),
+    toAgentTool(name, summary, executeTool, sturdyRefEscrow),
   );
 
   const resolvedModel = await resolveModel(model);
@@ -123,7 +125,16 @@ export const spawnWorkerLoop = async (powers, context, workerEnv) => {
    *
    * @param {string} prompt - User-role content for this round.
    */
-  const runOneRound = prompt => runRound(piAgent, prompt);
+  const runOneRound = async prompt => {
+    sturdyRefEscrow.clear();
+    try {
+      await runRound(piAgent, prompt);
+    } finally {
+      // Tool handles belong to one transcript turn. Do not retain their
+      // SturdyRefs for a future inbox turn.
+      sturdyRefEscrow.clear();
+    }
+  };
 
   await runInboxLoop({ powers, getCancelled, runOneRound });
 };

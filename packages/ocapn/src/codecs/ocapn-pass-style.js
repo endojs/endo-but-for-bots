@@ -5,10 +5,12 @@
  */
 
 import { passStyleOf } from '@endo/pass-style';
-import { isSturdyRef } from '../client/sturdyrefs.js';
 
 // We need to extend the PassStyle type to include OCapN-specific types.
-/** @typedef {PassStyle | 'sturdyref' | 'signedHandoffReceive' | 'signedHandoffGive'} OcapnPassStyle */
+// `'sturdyRef'` is now a first-class `@endo/pass-style` category, so it
+// arrives through `passStyleOf` directly; only the two signed-handoff
+// discriminators remain OCapN-specific here.
+/** @typedef {PassStyle | 'signedHandoffReceive' | 'signedHandoffGive'} OcapnPassStyle */
 
 /**
  * Get the PassStyle of a value, extended to include OCapN-specific types.
@@ -17,9 +19,6 @@ import { isSturdyRef } from '../client/sturdyrefs.js';
  * @returns {OcapnPassStyle}
  */
 export const ocapnPassStyleOf = value => {
-  if (isSturdyRef(value)) {
-    return 'sturdyref';
-  }
   if (
     typeof value === 'object' &&
     value !== null &&

@@ -19,15 +19,28 @@
  *
  * @typedef {import('./src/client/types.js').SwissNum} SwissNum
  * @typedef {import('./src/codecs/components.js').OcapnLocation} OcapnLocation
+ * @typedef {import('./src/client/sturdyref-uri.js').ParsedSturdyRefUri} ParsedSturdyRefUri
  */
 
 export { makeOcapn } from './src/client/index.js';
+// The SturdyRef session-manager tracker: minting a wire-tier SturdyRef
+// (with its `(location, swissNum)` details held off-band so the codec can
+// serialize it) and revealing those details. Promoted onto the public
+// surface for the daemon's own OCapN client, which mints and serves
+// SturdyRefs without standing up a full networked `makeOcapn` session
+// (see designs/sturdy-refs-cross-peer-bridge.md § "Mint and export").
+export { makeSturdyRefTracker } from './src/client/sturdyrefs.js';
 export {
   decodeSwissnum,
   swissnumFromBytes,
   swissnumToBytes,
+  // The canonical, secret-independent id of a peer location (an `ocapn://…`
+  // string). Promoted onto the public surface for the daemon's foreign-
+  // SturdyRef dedup index (design cut 5): two internalizations of the same
+  // `(location, swissNum)` must key on the same location id to converge on one
+  // formula identifier.
+  locationToLocationId,
 } from './src/client/util.js';
-
 // Protocol building blocks for consumers that route frames without reifying
 // their references as local objects or promises.
 export {
@@ -40,4 +53,7 @@ export {
 } from './src/codecs/descriptors.js';
 export { makePassableCodecs } from './src/codecs/passable.js';
 export { getSelectorName, makeSelector } from './src/selector.js';
-export { makeSturdyRef } from './src/client/sturdyrefs.js';
+export {
+  parseSturdyRefUri,
+  formatSturdyRefUri,
+} from './src/client/sturdyref-uri.js';

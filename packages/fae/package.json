@@ -53,6 +53,7 @@
     "timeout": "2m"
   },
   "dependencies": {
+    "@endo/agent-tools": "workspace:^",
     "@endo/agentry": "workspace:^",
     "@endo/base64": "workspace:^",
     "@endo/conversation-tree": "workspace:^",

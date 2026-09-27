@@ -9,6 +9,9 @@
       "path": "../ascii/tsconfig.composite.json"
     },
     {
+      "path": "../base64/tsconfig.composite.json"
+    },
+    {
       "path": "../bytes/tsconfig.composite.json"
     },
     {
@@ -43,6 +46,9 @@
     },
     {
       "path": "../stream/tsconfig.composite.json"
+    },
+    {
+      "path": "../sturdyref/tsconfig.composite.json"
     },
     {
       "path": "../syrup-frame/tsconfig.composite.json"

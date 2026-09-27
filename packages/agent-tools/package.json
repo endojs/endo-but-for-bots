@@ -32,6 +32,10 @@
       "types": "./workspace.types.d.ts",
       "default": "./src/workspace.js"
     },
+    "./sturdyref-escrow.js": {
+      "types": "./src/sturdyref-escrow.types.d.ts",
+      "default": "./src/sturdyref-escrow.js"
+    },
     "./json-tools/git.js": {
       "types": "./json-tools/git.types.d.ts",
       "default": "./src/json-tools/git.js"
@@ -165,6 +169,7 @@
     "@endo/exo-http-client": "workspace:^",
     "@endo/exo-shell": "workspace:^",
     "@endo/far": "workspace:^",
+    "@endo/harden": "workspace:^",
     "@endo/marshal": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^",

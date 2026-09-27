@@ -1387,6 +1387,7 @@ __metadata:
     "@endo/exo-shell": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/git": "workspace:^"
+    "@endo/harden": "workspace:^"
     "@endo/host-spawner": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/marshal": "workspace:^"
@@ -1965,6 +1966,7 @@ __metadata:
     "@endo/sha256": "workspace:^"
     "@endo/stream": "workspace:^"
     "@endo/stream-node": "workspace:^"
+    "@endo/sturdyref": "workspace:^"
     "@endo/tar": "workspace:^"
     "@endo/utf8": "workspace:^"
     "@endo/where": "workspace:^"
@@ -2362,6 +2364,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/fae@workspace:packages/fae"
   dependencies:
+    "@endo/agent-tools": "workspace:^"
     "@endo/agentry": "workspace:^"
     "@endo/base64": "workspace:^"
     "@endo/cli": "workspace:^"
@@ -2806,6 +2809,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
     "@endo/marshal": "workspace:^"
+    "@endo/pass-style": "workspace:^"
     "@endo/patterns": "workspace:^"
     "@endo/platform": "workspace:^"
     "@endo/promise-kit": "workspace:^"
@@ -3040,6 +3044,7 @@ __metadata:
   resolution: "@endo/ocapn@workspace:packages/ocapn"
   dependencies:
     "@endo/ascii": "workspace:^"
+    "@endo/base64": "workspace:^"
     "@endo/bytes": "workspace:^"
     "@endo/cbor": "workspace:^"
     "@endo/chacha12": "workspace:^"
@@ -3056,6 +3061,7 @@ __metadata:
     "@endo/random": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/stream": "workspace:^"
+    "@endo/sturdyref": "workspace:^"
     "@endo/syrup-frame": "workspace:^"
     "@endo/utf8": "workspace:^"
     "@noble/curves": "npm:^2.4.0"
@@ -3616,6 +3622,21 @@ __metadata:
     c8: "catalog:dev"
     eslint: "catalog:dev"
     ses: "workspace:^"
+    typescript: "catalog:dev"
+  languageName: unknown
+  linkType: soft
+
+"@endo/sturdyref@workspace:^, @endo/sturdyref@workspace:packages/sturdyref":
+  version: 0.0.0-use.local
+  resolution: "@endo/sturdyref@workspace:packages/sturdyref"
+  dependencies:
+    "@endo/harden": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/pass-style": "workspace:^"
+    ava: "catalog:dev"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    tsd: "catalog:dev"
     typescript: "catalog:dev"
   languageName: unknown
   linkType: soft
