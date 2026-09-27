@@ -690,7 +690,10 @@ pub struct SlotArena {
     /// flags. Keep this cold state after the arena's established hot GC fields
     /// so an empty cache does not perturb their layout. Slot reuse clears its
     /// entry; snapshot construction deliberately creates an empty cache so
-    /// restore never trusts serialized derived state.
+    /// restore never trusts serialized derived state. The extra indirection is
+    /// intentional: it costs one allocation only when this cache first becomes
+    /// useful and keeps every always-live `SlotArena` two machine words smaller.
+    #[allow(clippy::box_collection)]
     integrity_cache: RefCell<Option<Box<Vec<IntegrityCacheEntry>>>>,
 }
 
