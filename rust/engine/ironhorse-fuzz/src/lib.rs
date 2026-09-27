@@ -2511,6 +2511,33 @@ mod tests {
         }
     }
 
+    /// Regression for continuous-fuzz finding `37e026fd30cbae19` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
+    /// `1b 55 09` folds into
+    /// `(((-(false * 226492416)) * (-(false * 226492416))) + (-((-226492416) * (-226492416))))`.
+    /// `(-0) * (-0)` is `+0`, so the value is the exactly-representable double
+    /// `-51298814505517056`. XS's `fx_dtoa` printed that exact 17-digit integer
+    /// and ironhorse printed the shortest round-tripping `-51298814505517060`.
+    /// That is the same double, so this is the dtoa-spelling class again. It
+    /// reproduced only at the fuzzed SHA 38ca1d18. At the standing tip it is
+    /// suppressed by comparing against the oracle's exact double (`fdb9fef6e0`).
+    #[test]
+    fn finding_37e026fd30cbae19_large_integer_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // 647d3c14b217f8fce6e2db6fc2ebd5f861669cbf3a48ca77a498505e7be15d36).
+        let data: &[u8] = &[0x1b, 0x55, 0x09];
+        let program = gen_program(data);
+        assert!(
+            program.contains('*'),
+            "finding program is a product: {}",
+            program
+        );
+        match differential_check(&program) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 37e026fd30cbae19 must not diverge: {:?}", d),
+        }
+    }
+
     /// Regression for continuous-fuzz finding `a136f9038a1001fb` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`). The
     /// 5-byte input folds into a deeply nested `new RegExp(<pattern>, "m")`
