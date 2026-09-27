@@ -744,4 +744,34 @@ mod tests {
         assert!(outcome.match_meter_raw > u64::from(u32::MAX));
         assert_eq!(differential_check_regexp(&case), Ok(false));
     }
+
+    /// Regression for continuous-fuzz finding `f2f53bb078bc8a4e`. The exact
+    /// 21-byte input folds into a 73-byte nested empty-able quantifier
+    /// pattern, flags `s`, over `"aaaaaaaa"` at offset zero. The failed match
+    /// dispatches 170633 metered steps (raw meter 11182604288 > u32::MAX). The
+    /// pre-c8497fd8 oracle wrapped the pin's meter to 2592669696; with the
+    /// widened oracle both engines agree on the full value.
+    #[test]
+    fn finding_f2f53bb078bc8a4e_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-f2f53bb078bc8a4e.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(
+            case.0,
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-f2f53bb078bc8a4e.pattern.txt")
+        );
+        assert_eq!(case.1, "s");
+        assert_eq!(case.2, "aaaaaaaa");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 11_182_604_288);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
 }
