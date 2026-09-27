@@ -97,8 +97,17 @@ import {
   makeMountFsTools,
   makeShellTool,
   makeHttpTool,
+  makeWorkspaceTools,
+  provisionWorkspaceTools,
+  provisionHistoryTools,
 } from '@endo/agent-tools';
 ```
+
+`makeWorkspaceTools` composes an explicit grant record into one catalog. It
+qualifies the Shell and GitRemote bounds records as `inspectShell` and
+`inspectGitRemote`, so both capabilities can coexist without name shadowing.
+`provisionWorkspaceTools` can derive the filesystem view from a supplied Git
+worktree; it never discovers grants from a petstore.
 
 Scoped imports expose each layer:
 

@@ -21,7 +21,6 @@ import {
 } from './git-remote-fixtures.js';
 import {
   provisionWorkspaceTools,
-  makeWorkspaceTools,
   provisionHistoryTools,
 } from '../src/workspace.js';
 
@@ -166,21 +165,21 @@ test('the version-controlled-filesystem loop closes end to end through provision
     },
   });
 
-  // Compose the version-control catalog from the single Git grant (the file
-  // tools are derived from its worktree mount) plus the push tier. Shell is a
-  // separately-granted capability composed into its own group (see the loop's
-  // build step): both makers emit an `inspect` tool, so a single flat catalog
-  // holds at most one of them — an intentional fail-closed the adapter enforces.
-  const vcs = byNameOf(
-    await provisionWorkspaceTools({ git: workspace.git, remote }),
-  );
-  const shellTools = byNameOf(
-    makeWorkspaceTools({ shell: provisionWorkspaceShell(workspace.root) }),
+  // Compose every explicitly granted group into the one catalog an agent
+  // harness receives. The standalone Shell and GitRemote makers both emit
+  // `inspect`; workspace composition qualifies those records so neither grant
+  // shadows the other.
+  const tools = byNameOf(
+    await provisionWorkspaceTools({
+      git: workspace.git,
+      remote,
+      shell: provisionWorkspaceShell(workspace.root),
+    }),
   );
 
   // 1. Branch off the cloned base.
   const created = /** @type {{ name: string }} */ (
-    await vcs('createBranch').invoke({
+    await tools('createBranch').invoke({
       name: 'agent/loop',
       options: { switchAfterCreate: true },
     })
@@ -189,17 +188,17 @@ test('the version-controlled-filesystem loop closes end to end through provision
 
   // 2. Edit an existing file and create a new one, through the file tools.
   const editedReadme = 'seed\nedited by the agent through the file tool\n';
-  await vcs('mountWriteText').invoke({
+  await tools('mountWriteText').invoke({
     path: 'README.md',
     content: editedReadme,
   });
   const notes = 'agent notes\n';
-  await vcs('mountWriteText').invoke({ path: 'AGENT.md', content: notes });
+  await tools('mountWriteText').invoke({ path: 'AGENT.md', content: notes });
 
   // 3. Shell build step: a real subprocess in the workspace that reads the
   // agent's edit back — proving the shell tool runs against the same worktree.
   const build = /** @type {{ stdout: string, exitCode: number }} */ (
-    await shellTools('exec').invoke({
+    await tools('exec').invoke({
       command: 'node',
       args: [
         '-e',
@@ -212,16 +211,16 @@ test('the version-controlled-filesystem loop closes end to end through provision
 
   // 4. status → add → diff → commit → log, through the git tools.
   const dirty = /** @type {{ entries: { path: string }[] }} */ (
-    await vcs('status').invoke({})
+    await tools('status').invoke({})
   );
   const dirtyPaths = dirty.entries.map(row => row.path).sort();
   t.deepEqual(dirtyPaths, ['AGENT.md', 'README.md']);
 
-  await vcs('add').invoke({ paths: ['README.md', 'AGENT.md'] });
+  await tools('add').invoke({ paths: ['README.md', 'AGENT.md'] });
 
   const staged =
     /** @type {{ entries: { path: string, index?: string }[] }} */ (
-      await vcs('status').invoke({})
+      await tools('status').invoke({})
     );
   t.true(
     staged.entries.every(row => row.index && row.index !== 'unmodified'),
@@ -229,20 +228,20 @@ test('the version-controlled-filesystem loop closes end to end through provision
   );
 
   const diff = /** @type {string} */ (
-    await vcs('diff').invoke({ options: { cached: true } })
+    await tools('diff').invoke({ options: { cached: true } })
   );
   t.is(typeof diff, 'string');
   t.true(diff.includes('AGENT.md'), 'the staged diff names the new file');
 
   const commit = /** @type {{ oid: string }} */ (
-    await vcs('commit').invoke({
+    await tools('commit').invoke({
       message: 'feat: agent worked-loop commit through provisioned tools',
     })
   );
   t.regex(commit.oid, /^[0-9a-f]{7,64}$/u);
 
   const log = /** @type {{ oid: string, summary: string }[]} */ (
-    await vcs('log').invoke({})
+    await tools('log').invoke({})
   );
   t.is(
     log[0].summary,
@@ -252,7 +251,7 @@ test('the version-controlled-filesystem loop closes end to end through provision
   // 5. Push through the remote tool.
   const pushResult =
     /** @type {{ updatedRefs: { local: { oid: string }, remote: string, result: string }[] }} */ (
-      await vcs('push').invoke({
+      await tools('push').invoke({
         options: {
           source: 'refs/heads/agent/loop',
           destination: 'refs/heads/agent/loop',

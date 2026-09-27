@@ -46,17 +46,38 @@ import { makeMountFsTools } from './json-tools/fs.js';
  *   argument crosses this seam.
  *
  * The catalog is a flat array with unique tool names, so a harness may index it
- * by name without ambiguity.
+ * by name without ambiguity. The two generic `inspect` records are qualified at
+ * this composition boundary as `inspectGitRemote` and `inspectShell`. Their
+ * individual makers keep their established names, while a combined workspace
+ * catalog remains unambiguous.
  */
+
+const composedNames = harden({
+  gitRemote: harden({ inspect: 'inspectGitRemote' }),
+  shell: harden({ inspect: 'inspectShell' }),
+});
+
+/**
+ * Apply the workspace catalog's explicit names without changing a capability
+ * tool maker's standalone surface.
+ *
+ * @param {string} group
+ * @param {ToolRecord[]} records
+ * @returns {ToolRecord[]}
+ */
+const nameWorkspaceTools = (group, records) => {
+  const names = composedNames[group] || {};
+  return records.map(record => {
+    const name = names[record.name] || record.name;
+    return name === record.name ? record : harden({ ...record, name });
+  });
+};
 
 /**
  * Concatenate tool-group record arrays into one catalog, failing closed if two
  * groups would emit the same tool name. A catalog with two identically-named
  * tools is ambiguous the moment a harness dispatches by name, so the collision
- * is an error at composition time rather than a silent shadow. (Known overlap:
- * both `makeShellTool` and `makeGitRemoteTool` emit a bounds-legibility
- * `inspect`; grant at most one of `shell` / `remote` to a single catalog until
- * that tool-layer naming is reconciled.)
+ * is an error at composition time rather than a silent shadow.
  *
  * @param {{ group: string, records: ToolRecord[] }[]} groups
  * @returns {ToolRecord[]}
@@ -67,7 +88,7 @@ const concatDistinctTools = groups => {
   /** @type {Map<string, string>} */
   const sourceByName = new Map();
   for (const { group, records } of groups) {
-    for (const record of records) {
+    for (const record of nameWorkspaceTools(group, records)) {
       const priorGroup = sourceByName.get(record.name);
       if (priorGroup !== undefined) {
         throw new Error(

@@ -13,6 +13,9 @@ Each surface is opt-in via its own subpath export.
 - `@endo/agentry/define-agent` — `defineAgent(config)`, which returns a maker
   function: the powerless definition is the closure, and calling the returned
   maker with a powers handle is the powered stage.
+- `@endo/agentry/workspace-agent` — `defineWorkspaceAgent(config)`, an async
+  maker that receives an explicit set of already-granted filesystem, Git,
+  GitRemote, and Shell capabilities and installs their Pi tool projections.
 - `@endo/agentry/harness` — the code-mode-independent primitives the harness is
   built from: `makeEnvCredentials` (the single reader of `process.env`),
   `resolveModel`/`defineModels`, and `makePiAgent`. `@endo/lal` imports these
@@ -64,6 +67,25 @@ const makeAgent = defineAgent({
 ```
 
 `actions`/`skills`/`cwd` are deferred.
+
+## Explicit workspace agent
+
+`defineWorkspaceAgent` composes only the capabilities the caller supplies. It
+does not enumerate or probe a guest petstore for additional authority:
+
+```js
+import { defineWorkspaceAgent } from '@endo/agentry/workspace-agent';
+
+const makeAgent = defineWorkspaceAgent({ model, instructions });
+const agent = await makeAgent({
+  workspaceGrants: { git, remote, shell },
+  credentials,
+});
+```
+
+When Shell and GitRemote are both present, their generic standalone `inspect`
+records appear as `inspectShell` and `inspectGitRemote` in the composed catalog.
+The underlying capability-specific makers retain their existing names.
 
 ## Credential seam
 

@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-03-02 |
-| **Updated** | 2026-08-06 |
+| **Updated** | 2026-09-27 |
 | **Author** | Kris Kowal, endolinbot (prompted) |
-| **Status** | In Progress |
+| **Status** | **Complete** |
 
 ## Status
 
@@ -44,9 +44,8 @@ What has shipped, by layer:
   confinement core) and `@endo/exo-http-client` (the `HttpClient` /
   `HttpClientControl` capability), realizing
   [endoclaw-network-fetch](endoclaw-network-fetch.md). The daemon formula was
-  superseded by the `@endo/fetch` / `@endo/confined-fetch` plugin split; those
-  plugins, their policy store, and `makeHttpTool` are the remaining delta
-  (§ Tool Groups, § Implementation Plan).
+  superseded by the `@endo/fetch` plugin; its policy store and the
+  `makeHttpTool` binding have landed (#661 and follow-up reconciliation).
 - **Package-management tier.** `@endo/exo-package-manager` provides the
   portable reader, safe-installer, and project-executor facets (#948).
   The daemon-backed base-session design is #949, the grant-sensitive
@@ -54,11 +53,12 @@ What has shipped, by layer:
   design is #953.
   Code mode may consume the facets directly; #950 is part of the reviewed
   JSON-tool tail already in flight when that surface was parked.
-- **Remaining** (the phased delta in § Implementation Plan below): the
-  **network tool** (plugin provisioning plus `makeHttpTool`),
-  the **sandbox-spawner shell engine** (Phase 2c, gated on
-  [endo-posix-sandbox](endo-posix-sandbox.md)), and the provisioning and
-  across-turn persistence wiring.
+- **Integration.** #707 landed capability-based workspace composition and the
+  worked version-controlled-filesystem loop. The final harness integration
+  explicitly receives its grants, qualifies the Shell and GitRemote inspection
+  names, and never discovers additional authority from a guest petstore.
+  The sandbox-spawner engine (Phase 2c) and cap-bearing-result persistence are
+  follow-ups, not blockers for this M3 pillar.
 
 ## What is the Problem Being Solved?
 
@@ -110,7 +110,7 @@ What this document owns is the remainder:
 | Shell | `makeShell({ cwd, allowedCommands, … })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
 | Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616), with conflict checkout added in Phase 6 |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` landed (#705) |
-| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); plugin provisioning and `makeHttpTool` remaining |
+| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `makeHttpTool` landed (#661); plugin provisioning landed in `@endo/fetch` |
 | Package management | not in sketch | Portable `EndoPackageManager` reader, safe-installer, and project-executor facets over an injected, snapshot-revalidating backend | portable facets in #948; daemon-backed base-session design in #949; grant-sensitive agent-tools projection in #950; optional backend design in #953 |
 | Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus the Shell group's allowlisted `grep`; a capability-backed search substrate is an open question | not started |
 
@@ -404,12 +404,13 @@ the host running the derivation flow above and binding the petnames.
 ## Implementation Plan
 
 Phases are ordered by what gates the M3 exit pillar. Phase 0 records
-the landed substrate; Phases 1–3 are dispatchable builder work; Phase 4
-is the integration pass that demonstrates the pillar. As of 2026-08-06,
-Phase 1 (#614), Phase 2a/2b (#615), the local mount-bridged git
-tools (#616, Phase 3.5), and the push tier (#705, Phase 3) have landed on
-`llm`; the remaining builder work is the network tool wiring (Phase 3.6),
-the sandbox shell engine (Phase 2c), and the Phase 4 worked loop.
+the landed substrate; Phases 1–3 built the capability tools; Phase 4
+integrates and demonstrates the pillar. The file, Shell, local Git,
+GitRemote, and HTTP slices landed in #614, #615, #616, #705, and #661.
+#707 landed workspace composition and the worked loop. The final integration
+uses an explicit `@endo/agentry` harness rather than the dynamic petstore
+discovery attempted in the archived #618, which was closed over concerns that
+discovery could leak dangerous capabilities.
 
 The loop-level, cross-design sequencing of the git-capability stack is
 canonical in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased
@@ -519,18 +520,20 @@ document's scope.
   policy persistence and restart reconstitution; #286's formula shape is
   superseded outright and its CLI intent survives as the `endo http` eventual
   surface sketched there.
-- [ ] `makeHttpTool` in `@endo/agent-tools`: `ToolRecord` plus
+- [x] `makeHttpTool` in `@endo/agent-tools`: `ToolRecord` plus
   hand-authored wire schema and divergence gate, mirroring `makeGitTool`
   / `makeShellTool`; bounds come entirely from the granted `HttpClient`
   ([endo-fetch](endo-fetch.md) Phase 3 tracks the binding against the
   plugin-provisioned client).
 
-### Phase 4: Provisioning and the worked loop
+### Phase 4: Provisioning and the worked loop — landed (#707 plus explicit harness)
 
-- [ ] Wire the § Granting and Provisioning flow end to end for one
-  agent harness (lal front-loaded binding first; fae's `adopt` accretion
-  follows).
-- [ ] Run the worked reference flow of
+- [x] Wire the § Granting and Provisioning flow end to end for one explicit
+  `@endo/agentry` harness. The caller supplies every grant; the harness does not
+  enumerate or probe a guest petstore. Workspace composition qualifies the two
+  otherwise-colliding `inspect` records as `inspectShell` and
+  `inspectGitRemote`.
+- [x] Run the worked reference flow of
   [daemon-git-next-steps](daemon-git-next-steps.md) § Open Work as the
   acceptance test: branch → edit via file tools → status / diff / commit
   via git tools → push via the remote tool → inspect the pushed ref via

@@ -77,7 +77,7 @@ test('a filesystem grant composes the file tools; readOnly drops the write slice
 
 test('a remote grant composes the push tier', t => {
   const names = nameSet(makeWorkspaceTools({ remote: grant('GitRemote') }));
-  for (const method of ['inspect', 'fetch', 'pull', 'push']) {
+  for (const method of ['inspectGitRemote', 'fetch', 'pull', 'push']) {
     t.true(names.has(method), `remote tool "${method}" present`);
   }
 });
@@ -85,7 +85,7 @@ test('a remote grant composes the push tier', t => {
 test('a shell grant composes the command tools', t => {
   const names = nameSet(makeWorkspaceTools({ shell: grant('Shell') }));
   t.true(names.has('exec'));
-  t.true(names.has('inspect'));
+  t.true(names.has('inspectShell'));
 });
 
 test('grants compose into one flat catalog with distinct names', t => {
@@ -99,19 +99,16 @@ test('grants compose into one flat catalog with distinct names', t => {
   t.is(catalog.length, nameSet(catalog).size, 'no name is repeated');
 });
 
-test('a shell + remote catalog fails closed on the shared "inspect" name', t => {
-  // Both makeShellTool and makeGitRemoteTool emit a bounds-legibility `inspect`
-  // tool. A flat catalog with two identically-named tools is ambiguous the
-  // moment a harness dispatches by name, so composition rejects it rather than
-  // silently shadowing one. (Surfaced by the worked-loop composition; the fix
-  // is to reconcile the two makers' `inspect` naming — see the PR follow-ups.)
-  const error = t.throws(() =>
-    makeWorkspaceTools({ shell: grant('Shell'), remote: grant('GitRemote') }),
-  );
-  t.regex(error.message, /name collision/);
-  t.regex(error.message, /inspect/);
-  t.regex(error.message, /shell/);
-  t.regex(error.message, /gitRemote/);
+test('a shell + remote catalog explicitly qualifies both inspect tools', t => {
+  const catalog = makeWorkspaceTools({
+    shell: grant('Shell'),
+    remote: grant('GitRemote'),
+  });
+  const names = nameSet(catalog);
+  t.is(catalog.length, names.size, 'the combined catalog is unambiguous');
+  t.true(names.has('inspectShell'));
+  t.true(names.has('inspectGitRemote'));
+  t.false(names.has('inspect'));
 });
 
 test('provisionWorkspaceTools passes an explicit filesystem straight through', async t => {
