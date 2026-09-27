@@ -102,7 +102,7 @@ impl Interp {
         inst: crate::value::SlotIndex,
         list: &mut Vec<crate::value::SlotIndex>,
     ) -> Result<(), Step> {
-        if self.fused_integrity_object(inst) {
+        if self.fused_integrity_object(inst) && self.fused_key_resolution_is_inert() {
             return self.harden_fused_ordinary(inst, list);
         }
         self.meter.tick_raw(HARDEN_OBJECT_BASE_METERING);
@@ -181,6 +181,15 @@ impl Interp {
             && !self.index_props.contains_key(&inst)
     }
 
+    /// Whether skipping the full walk's per-key `to_read_key` is unobservable.
+    /// Re-interning a string key registers a shared-compartment binding and
+    /// installs any intrinsic bindings still pending for interned names; while
+    /// either can happen, the full walk runs so those effects land exactly
+    /// where they did.
+    fn fused_key_resolution_is_inert(&self) -> bool {
+        !self.shared_compartments && self.symbol_names.len() <= self.installed_names_len
+    }
+
     /// The exact release-versioned charge of materializing one ordinary
     /// `[[OwnPropertyKeys]]` result. The fused/cache paths omit those temporary
     /// key strings, but the public meter must remain bit-identical.
@@ -233,7 +242,9 @@ impl Interp {
         self.materialize_intrinsic_own_surface(inst);
         self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
 
-        let properties = self.own_property_slots(inst);
+        // Referents are queued in `[[OwnPropertyKeys]]` order: a Proxy reached
+        // later in the worklist observes that order through its traps.
+        let properties = self.ordered_own_property_slots(inst);
         let own_keys_metering = self.fused_own_keys_metering(&properties)?;
         self.charge_fused_own_keys(own_keys_metering)?;
         let mut referents = self.reserve_scratch(properties.len())?;
@@ -359,7 +370,7 @@ impl Interp {
         frozen: bool,
     ) -> Result<(), Step> {
         self.meter.tick_raw(INTEGRITY_APPLY_KEYS_BASE_METERING);
-        if self.fused_integrity_object(inst) {
+        if self.fused_integrity_object(inst) && self.fused_key_resolution_is_inert() {
             self.materialize_intrinsic_own_surface(inst);
             self.slots.get_mut(inst).flag |= XS_DONT_PATCH_FLAG;
             let properties = self.own_property_slots(inst);
@@ -453,7 +464,7 @@ impl Interp {
         if let Some((state, own_property_count, own_keys_metering)) =
             self.slots.cached_integrity(inst)
         {
-            if state & requested != 0 {
+            if state & requested != 0 && self.fused_key_resolution_is_inert() {
                 self.meter.tick_raw(INTEGRITY_QUERY_KEYS_BASE_METERING);
                 self.charge_fused_own_keys(own_keys_metering)?;
                 for _ in 0..own_property_count {

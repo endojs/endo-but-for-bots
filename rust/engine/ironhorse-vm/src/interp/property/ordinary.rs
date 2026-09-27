@@ -90,6 +90,45 @@ impl Interp {
         out
     }
 
+    /// [`Self::own_property_slots`] in `[[OwnPropertyKeys]]` order — the order
+    /// `ordered_own_key_ids` produces: array-index names ascending, then other
+    /// string names, then symbols, each in creation order. Classifies each key
+    /// once rather than once per sort comparison.
+    pub(in crate::interp) fn ordered_own_property_slots(
+        &self,
+        inst: crate::value::SlotIndex,
+    ) -> Vec<crate::value::SlotIndex> {
+        let mut indexes: Vec<(u32, crate::value::SlotIndex)> = Vec::new();
+        let mut names = Vec::new();
+        let mut symbols = Vec::new();
+        for property in self.own_property_slots(inst) {
+            let id = self.slots.get(property).id;
+            let may_be_index = self
+                .symbol_names
+                .get(usize::from(id).wrapping_sub(1))
+                .is_some_and(|name| name.as_bytes().first().is_some_and(u8::is_ascii_digit));
+            if self.is_symbol_key_id(id) {
+                symbols.push(property);
+            } else if let Some(index) = may_be_index
+                .then(|| self.scalar_key_text(id))
+                .flatten()
+                .and_then(|name| string_to_index(&name))
+            {
+                indexes.push((index, property));
+            } else {
+                names.push(property);
+            }
+        }
+        if indexes.is_empty() && symbols.is_empty() {
+            return names;
+        }
+        indexes.sort_by_key(|&(index, _)| index);
+        let mut out: Vec<_> = indexes.into_iter().map(|(_, property)| property).collect();
+        out.extend(names);
+        out.extend(symbols);
+        out
+    }
+
     /// Whether instance `inst` is extensible (XS's `mxBehaviorIsExtensible`):
     /// its own `XS_INSTANCE_KIND` slot does not carry `XS_DONT_PATCH_FLAG`.
     pub(in crate::interp) fn instance_extensible(&self, inst: crate::value::SlotIndex) -> bool {

@@ -3735,3 +3735,34 @@ fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
         "the stale pin must be dropped, not applied"
     );
 }
+
+/// The fused ordinary `harden` walk queues referents in `[[OwnPropertyKeys]]`
+/// order (index names, string names, then symbols), not property-creation
+/// order: a Proxy reached later in the worklist observes the order through
+/// its traps. The expected logs are the full-MOP walk's.
+#[test]
+fn fused_harden_queues_referents_in_own_property_keys_order() {
+    for (source, expected) in [
+        (
+            "var log=[]; function mk(n){ return new Proxy({}, { preventExtensions: function(t){ \
+             log.push(n); return Reflect.preventExtensions(t); } }); } \
+             var o={}; o[Symbol('s')]=mk('sym'); o.b=mk('str'); harden(o); log.join(',')",
+            "str,sym",
+        ),
+        (
+            "var log=[]; function mk(n){ return new Proxy({}, { preventExtensions: function(t){ \
+             log.push(n); return Reflect.preventExtensions(t); } }); } \
+             var o={}; o.z=mk('z'); Object.defineProperty(o, '1', {get: function(){}, enumerable: true, \
+             configurable: true}); o.a=mk('a'); var s={}; s[Symbol('first')]=mk('symFirst'); \
+             s.later=mk('later'); harden([o, s]); log.join(',')",
+            "z,a,later,symFirst",
+        ),
+    ] {
+        let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
+        let mut machine = Interp::new();
+        machine.link_intrinsics(&crate::parse_symbols(&symbols));
+        let outcome = machine.run(&code);
+        assert!(outcome.completed, "{source}: {:?}", outcome.halt);
+        assert_eq!(outcome.result, expected, "{source}");
+    }
+}
