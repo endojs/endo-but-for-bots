@@ -42,6 +42,26 @@ const CHURN: &str =
     "var zz = 0; for (zz = 0; zz < 64; zz++) { churn[zz % 8] = { a: zz, b: 'x' + zz }; }";
 
 #[test]
+fn a_hardened_ordinary_edge_roster_preserves_every_authoritative_edge() {
+    let crank1 = "var root = 0; var churn = []; \
+                  root = (function () { \
+                    var leaf = {v: 41}; var proto = {p: 1}; \
+                    var object = Object.create(proto); \
+                    Object.defineProperty(object, 'x', {value: leaf, enumerable: true}); \
+                    Object.defineProperty(object, 'y', {get: function () { return leaf; }, enumerable: true}); \
+                    return harden(object); \
+                  })(); 0;";
+    let crank2 = &format!(
+        "var root; var churn; var t = 0; {CHURN} \
+         t = [root.x.v, Object.getPrototypeOf(root).p, Object.isFrozen(root.x), \
+              typeof Object.getOwnPropertyDescriptor(root, 'y').get].join(); t"
+    );
+    let out = run_two_cranks_with_gc(crank1, crank2);
+    assert!(out.completed, "crank 2: {:?}", out.halt);
+    assert_eq!(out.result, "41,1,true,function");
+}
+
+#[test]
 fn proxy_target_and_handler_survive_a_full_collection() {
     let crank1 = "var p = 0; var churn = 0; churn = []; \
                   p = new Proxy({ v: 41 }, {}); 0;";

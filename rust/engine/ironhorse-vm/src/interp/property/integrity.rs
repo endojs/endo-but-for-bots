@@ -271,12 +271,26 @@ impl Interp {
         self.charge_fused_own_keys(own_keys_metering)?;
         let prototype = self.instance_prototype(inst);
         self.harden_enqueue(prototype, list);
+        let edge_capacity = properties
+            .len()
+            .checked_mul(3)
+            .and_then(|count| count.checked_add(1))
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        let mut gc_edges = self.reserve_scratch(edge_capacity)?;
+        for property in properties.iter().copied() {
+            self.push_prepaid_scratch(&mut gc_edges, property)?;
+        }
+        if !prototype.is_null() {
+            self.push_prepaid_scratch(&mut gc_edges, prototype)?;
+        }
         for (first, second) in referents {
             self.meter.tick_raw(HARDEN_PER_KEY_METERING / 2);
             for referent in [first, second].into_iter().flatten() {
                 self.harden_enqueue(referent, list);
+                self.push_prepaid_scratch(&mut gc_edges, referent)?;
             }
         }
+        self.slots.cache_hardened_edges(inst, &properties, gc_edges);
         self.slots.cache_integrity(
             inst,
             INTEGRITY_SEALED | INTEGRITY_FROZEN,
