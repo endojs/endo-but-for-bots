@@ -336,4 +336,31 @@ mod tests {
         assert!(matched_any, "sweep should include real matches");
         assert!(used_group, "sweep should exercise capturing groups");
     }
+
+    /// Regression for continuous-fuzz finding `12aca768c2e73c73`. The exact
+    /// 10-byte input used to expose the XS shim's 32-bit truncation of its
+    /// 64-bit regexp match meter. With the shim fields widened, both engines
+    /// must agree on the full value rather than the wrapped low 32 bits.
+    #[test]
+    fn finding_12aca768c2e73c73_match_meter_agrees_at_full_width() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-12aca768c2e73c73.input.bin");
+        let case = gen_regexp(data);
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+
+        assert!(
+            !outcome.matched,
+            "the exact finding pattern must remain a no-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 6_840_385_536);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        match differential_check_regexp(&case) {
+            Ok(false) => {}
+            Ok(true) => panic!("finding must remain a compiled no-match case"),
+            Err(divergence) => {
+                panic!("finding 12aca768c2e73c73 must not diverge: {divergence:?}")
+            }
+        }
+    }
 }
