@@ -16,3 +16,11 @@ import './src/lockdown-shim.js';
 import './src/compartment-shim.js';
 import './src/assert-shim.js';
 import './src/console-shim.js';
+
+// The canonical import-attributes normalization, re-exported for the small
+// number of consumers (notably `@endo/compartment-mapper`'s `link.js`) that
+// construct attributes on the fly.  See `designs/ses-import-attributes.md`.
+export {
+  EMPTY_ATTRIBUTES,
+  normalizeImportAttributes,
+} from './src/module-attributes.js';

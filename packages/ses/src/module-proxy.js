@@ -12,6 +12,10 @@
 
 import { makeAlias } from './module-load.js';
 import {
+  EMPTY_ATTRIBUTES,
+  attributesMemoKey,
+} from './module-attributes.js';
+import {
   Proxy,
   TypeError,
   create,
@@ -177,6 +181,9 @@ export const deferExports = () => {
  * @param {*} compartmentPrivateFields - The private fields of the compartment.
  * @param {*} moduleAliases - The module aliases of the compartment.
  * @param {string} specifier - The module specifier to retrieve deferred exports for.
+ * @param {Record<string, string>} [attributes] - normalized import attributes;
+ *   an attribute-bearing module has a distinct exports namespace from the
+ *   unattributed import of the same specifier.
  * @returns {DeferredExports} - The deferred exports for the module specifier of
  * the compartment.
  */
@@ -185,16 +192,18 @@ export const getDeferredExports = (
   compartmentPrivateFields,
   moduleAliases,
   specifier,
+  attributes = EMPTY_ATTRIBUTES,
 ) => {
   const { deferredExports } = compartmentPrivateFields;
-  if (!mapHas(deferredExports, specifier)) {
+  const memoKey = attributesMemoKey(specifier, attributes);
+  if (!mapHas(deferredExports, memoKey)) {
     const deferred = deferExports();
     weakmapSet(
       moduleAliases,
       deferred.exportsProxy,
       makeAlias(compartment, specifier),
     );
-    mapSet(deferredExports, specifier, deferred);
+    mapSet(deferredExports, memoKey, deferred);
   }
-  return mapGet(deferredExports, specifier);
+  return mapGet(deferredExports, memoKey);
 };

@@ -47,11 +47,17 @@ import {
   assign,
   defineProperties,
   identity,
+  mapSet,
   promiseThen,
   toStringTagSymbol,
   weakmapGet,
   weakmapSet,
 } from './commons.js';
+import {
+  EMPTY_ATTRIBUTES,
+  attributesMemoKey,
+  normalizeImportAttributes,
+} from './module-attributes.js';
 import {
   setGlobalObjectSymbolUnscopables,
   setGlobalObjectConstantProperties,
@@ -356,6 +362,7 @@ export const makeCompartmentConstructor = (
       __shimTransforms__ = [],
       globals: endowmentsOption = {},
       modules: moduleMapOption = {},
+      modulesWithAttributes: modulesWithAttributesOption = [],
       resolveHook,
       importHook,
       importNowHook,
@@ -372,6 +379,24 @@ export const makeCompartmentConstructor = (
     );
     const endowments = { __proto__: null, ...endowmentsOption };
     const moduleMap = { __proto__: null, ...moduleMapOption };
+
+    // The attribute-bearing priming path.  Each `[specifier, attributes, source]`
+    // triple normalizes its attributes and seats the source under the extended
+    // memo key, so a matching attribute-bearing import resolves from the primed
+    // entry before `importHook` is consulted.  `moduleMap` only ever seats the
+    // legacy-collapse slot (bare specifier), so the two cannot collide.
+    // See `designs/ses-import-attributes.md` § Compartment construction.
+    /** @type {Map<string, ModuleDescriptor>} */
+    const modulesWithAttributes = new Map();
+    for (const entry of modulesWithAttributesOption) {
+      const [specifier, attributes, source] = entry;
+      const normalizedAttributes = normalizeImportAttributes(attributes);
+      mapSet(
+        modulesWithAttributes,
+        attributesMemoKey(specifier, normalizedAttributes),
+        source,
+      );
+    }
 
     // Map<FullSpecifier, ModuleCompartmentRecord>
     const moduleRecords = new Map();
@@ -434,22 +459,35 @@ export const makeCompartmentConstructor = (
      * The method `compartment.import` accepts a full specifier, but dynamic
      * import accepts an import specifier and resolves it to a full specifier
      * relative to the calling module's full specifier.
+     * @param {Record<string, string>} [attributes] - normalized import
+     * attributes from the dynamic-import `with` clause (empty by default).
      * @returns {Promise<ModuleExportsNamespace>}
      */
-    const compartmentImport = async fullSpecifier => {
+    const compartmentImport = async (
+      fullSpecifier,
+      attributes = EMPTY_ATTRIBUTES,
+    ) => {
       if (typeof resolveHook !== 'function') {
         throw TypeError(
           `Compartment does not support dynamic import: no configured resolveHook for compartment ${q(name)}`,
         );
       }
-      await load(privateFields, moduleAliases, compartment, fullSpecifier, {
-        noAggregateErrors: noAggregateLoadErrors,
-      });
+      await load(
+        privateFields,
+        moduleAliases,
+        compartment,
+        fullSpecifier,
+        {
+          noAggregateErrors: noAggregateLoadErrors,
+        },
+        attributes,
+      );
       const { execute, exportsProxy } = link(
         privateFields,
         moduleAliases,
         compartment,
         fullSpecifier,
+        attributes,
       );
       execute();
       return exportsProxy;
@@ -466,6 +504,7 @@ export const makeCompartmentConstructor = (
       moduleMap,
       moduleMapHook,
       importMetaHook,
+      modulesWithAttributes,
       moduleRecords,
       __shimTransforms__,
       deferredExports,
