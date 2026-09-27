@@ -691,7 +691,7 @@ pub struct SlotArena {
     /// so an empty cache does not perturb their layout. Slot reuse clears its
     /// entry; snapshot construction deliberately creates an empty cache so
     /// restore never trusts serialized derived state.
-    integrity_cache: RefCell<Vec<IntegrityCacheEntry>>,
+    integrity_cache: RefCell<Option<Box<Vec<IntegrityCacheEntry>>>>,
 }
 
 impl Default for SlotArena {
@@ -745,7 +745,7 @@ impl SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
-            integrity_cache: RefCell::default(),
+            integrity_cache: RefCell::new(None),
             slots: Vec::new(),
             free: Vec::new(),
             free_marks: Vec::new(),
@@ -789,7 +789,7 @@ impl SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
-            integrity_cache: RefCell::default(),
+            integrity_cache: RefCell::new(None),
             slots: Vec::new(),
             free,
             free_marks: free_marks.clone(),
@@ -1150,9 +1150,9 @@ impl SlotArena {
     /// Return a cached integrity fact and the own-key count used to preserve
     /// release-versioned metering while skipping the authoritative key walk.
     pub(crate) fn cached_integrity(&self, index: SlotIndex) -> Option<(u8, u32, u64)> {
-        let entry = self
-            .integrity_cache
-            .borrow()
+        let cache = self.integrity_cache.borrow();
+        let entry = cache
+            .as_deref()?
             .get(index.0 as usize)
             .copied()
             .unwrap_or_default();
@@ -1171,7 +1171,8 @@ impl SlotArena {
         own_property_count: u32,
         own_keys_metering: u64,
     ) {
-        let mut cache = self.integrity_cache.borrow_mut();
+        let mut holder = self.integrity_cache.borrow_mut();
+        let cache = holder.get_or_insert_with(|| Box::new(Vec::new()));
         if cache.len() <= index.0 as usize {
             cache.resize(index.0 as usize + 1, IntegrityCacheEntry::default());
         }
@@ -1184,7 +1185,9 @@ impl SlotArena {
     /// Forget host-only facts when a slot dies or is reused.
     #[inline(always)]
     pub(crate) fn clear_cached_integrity(&mut self, index: SlotIndex) {
-        let cache = self.integrity_cache.get_mut();
+        let Some(cache) = self.integrity_cache.get_mut().as_deref_mut() else {
+            return;
+        };
         let index = index.0 as usize;
         if index < cache.len() {
             cache[index] = IntegrityCacheEntry::default();
@@ -1377,7 +1380,7 @@ impl SlotArena {
             ceiling: DEFAULT_SLOT_CEILING,
             snapshot_dirt: Rc::default(),
             property_index: RefCell::default(),
-            integrity_cache: RefCell::default(),
+            integrity_cache: RefCell::new(None),
             slots: slots.into_iter().map(Cell::new).collect(),
             free,
             free_marks,
