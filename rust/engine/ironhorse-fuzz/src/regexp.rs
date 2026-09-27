@@ -397,4 +397,22 @@ mod tests {
         assert_eq!(case.3, 2);
         assert_eq!(differential_check_regexp(&case), Ok(true));
     }
+
+    #[test]
+    fn finding_45f4af87eaf627c7_regexp_meter_overflow_agrees() {
+        // Fuzz finding 45f4af87eaf627c7: the 3-byte input `50 bc 5b` folds
+        // into optional runs of starred empty backreferences between
+        // `\n{1,3}` repetitions, over "a\n\na\n"@1. It matches empty at 1
+        // after 82118 metered steps (raw meter 5381685248 > u32::MAX). The
+        // pre-c8497fd8 oracle wrapped the pin's meter to 32 bits; with the
+        // widened oracle both engines agree bit-exact.
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-45f4af87eaf627c7.input.bin");
+        assert_eq!(data.len(), 3);
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "");
+        assert_eq!(case.2, "a\n\na\n");
+        assert_eq!(case.3, 1);
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
 }
