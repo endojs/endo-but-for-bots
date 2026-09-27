@@ -642,4 +642,28 @@ mod tests {
         assert!(outcome.match_meter_raw > u64::from(u32::MAX));
         assert_eq!(differential_check_regexp(&case), Ok(false));
     }
+
+    /// Regression for continuous-fuzz finding `7637ac162a0b916a`. The exact
+    /// 6-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter (729612288 instead of 490355884032) on a
+    /// failing match. With the shim fields widened, both engines must agree.
+    #[test]
+    fn finding_7637ac162a0b916a_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-7637ac162a0b916a.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "i");
+        assert_eq!(case.2, "b");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 490_355_884_032);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
 }
