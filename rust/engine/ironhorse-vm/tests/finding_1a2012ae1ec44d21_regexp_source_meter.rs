@@ -22,7 +22,7 @@
 //! constructor key when no escaping is required). The port was always correct
 //! on the completion value.
 //!
-//! The load-bearing invariant this test locks is that the exact reproducing
+//! The invariant this test locks is that the exact reproducing
 //! input's generated program runs to completion **without panic** and yields
 //! the byte-identical `.source` value. The raw computron count is
 //! deliberately **not** pinned: the `differential_regexp_surface` harness now

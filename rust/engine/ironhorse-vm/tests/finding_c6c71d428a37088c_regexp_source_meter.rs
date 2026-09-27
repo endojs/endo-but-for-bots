@@ -23,7 +23,7 @@
 //! run differential_regexp_surface <input> -- -runs=1` executes with no
 //! divergence). The port was always correct on the completion value.
 //!
-//! The load-bearing invariant this test locks is that the exact reproducing
+//! The invariant this test locks is that the exact reproducing
 //! input's generated program runs to completion **without panic** and yields
 //! the byte-identical `.source` value. The raw computron count is deliberately
 //! **not** pinned: the `differential_regexp_surface` harness now treats

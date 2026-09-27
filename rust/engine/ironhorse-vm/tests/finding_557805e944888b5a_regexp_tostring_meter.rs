@@ -28,7 +28,7 @@
 //! returns `Ok` for the generated source). The port was always correct on the
 //! completion value.
 //!
-//! The load-bearing invariant this test locks is that the exact reproducing
+//! The invariant this test locks is that the exact reproducing
 //! input's generated program runs to completion **without panic** and yields the
 //! byte-identical `RegExp.prototype.toString()` value. The raw computron count is
 //! deliberately **not** pinned: an exact-count assertion would be brittle against

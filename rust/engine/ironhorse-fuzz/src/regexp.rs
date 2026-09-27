@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn finding_13b68e2edb67861a_regexp_meter_overflow_agrees() {
-        // Fuzz finding 13b68e2edb67861a: the 12-byte input `3b 2b bc…bc`
+        // Fuzz finding 13b68e2edb67861a: the 12-byte input `3b 2b bc ... bc`
         // folds into a backreference-heavy (`\1`/`\3`/`\4`) nested
         // alternation, flags `i`, over "\n\n\n0 "@2 that backtracks
         // 91920681 metered steps (raw meter 6024113750016 > u32::MAX). The
