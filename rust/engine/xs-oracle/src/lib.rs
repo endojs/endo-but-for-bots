@@ -36,6 +36,10 @@ struct XsOracleResultRaw {
     /// holds a truncated prefix.
     result_len: u32,
     exit_status: i32,
+    /// Nonzero when the completion value was a Number; `result_number` then
+    /// holds its exact double.
+    result_is_number: u32,
+    result_number: f64,
 }
 
 impl Default for XsOracleResultRaw {
@@ -52,6 +56,8 @@ impl Default for XsOracleResultRaw {
             error: [0u8; 256],
             result_len: 0,
             exit_status: 0,
+            result_is_number: 0,
+            result_number: 0.0,
         }
     }
 }
@@ -235,6 +241,9 @@ pub struct OracleOutcome {
     /// faithfully represent this result" and skip the comparison rather than
     /// reading a divergence from the truncation (finding `493390fc0397`).
     pub result_truncated: bool,
+    /// The IEEE-754 bits of the completion value when it was a Number (valid
+    /// when `completed`), else `None`; see [`result_number`](Self::result_number).
+    pub result_number_bits: Option<u64>,
     /// The thrown value stringified (valid when `!completed`).
     pub error: String,
     /// Run-only computrons: `meterIndex >> 16` measured over execution,
@@ -245,6 +254,16 @@ pub struct OracleOutcome {
     pub meter_raw: u32,
     /// Original XS machine abort status; zero for ordinary guest exceptions.
     pub exit_status: i32,
+}
+
+impl OracleOutcome {
+    /// The completion value's exact double when it was a Number. XS's
+    /// `String()` rendering of a Number does not always round-trip (finding
+    /// `05264cccae42245a`), so a differential caller compares Numbers by this
+    /// value rather than by re-parsing [`result`](Self::result).
+    pub fn result_number(&self) -> Option<f64> {
+        self.result_number_bits.map(f64::from_bits)
+    }
 }
 
 /// Whether an explicit XS abort status means memory or stack exhaustion.
@@ -297,6 +316,7 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
         completed: raw.ok != 0,
         result: cstr_field(&raw.result),
         result_truncated: (raw.result_len as usize) > RESULT_BUF_CAP - 1,
+        result_number_bits: (raw.result_is_number != 0).then_some(raw.result_number.to_bits()),
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
@@ -364,6 +384,7 @@ fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
         // and a differential caller must skip the comparison rather than
         // read the truncation as a divergence.
         result_truncated: (raw.result_len as usize) > RESULT_BUF_CAP - 1,
+        result_number_bits: (raw.result_is_number != 0).then_some(raw.result_number.to_bits()),
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,

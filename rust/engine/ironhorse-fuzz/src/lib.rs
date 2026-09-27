@@ -1711,7 +1711,12 @@ pub fn differential_check(source: &str) -> Result<(), Divergence> {
     }
 
     compare_observations(
-        (oracle.completed, &oracle.result, oracle.computrons),
+        (
+            oracle.completed,
+            &oracle.result,
+            oracle.result_number(),
+            oracle.computrons,
+        ),
         (ironhorse.completed, &ironhorse.result, ironhorse.computrons),
     )
     .map(|_computron_advisory| ())
@@ -1777,7 +1782,12 @@ fn differential_check_symbols_mode(source: &str) -> Result<(), Divergence> {
         return Ok(());
     }
     compare_observations(
-        (oracle.completed, &oracle.result, oracle.computrons),
+        (
+            oracle.completed,
+            &oracle.result,
+            oracle.result_number(),
+            oracle.computrons,
+        ),
         (ironhorse.completed, &ironhorse.result, ironhorse.computrons),
     )
     .map(|_computron_advisory| ())
@@ -1818,7 +1828,8 @@ pub fn differential_check_result_only(source: &str) -> Result<(), Divergence> {
             ),
         });
     }
-    if oracle.completed && !results_agree(&oracle.result, &ironhorse.result) {
+    if oracle.completed && !results_agree(&oracle.result, oracle.result_number(), &ironhorse.result)
+    {
         return Err(Divergence {
             source: source.to_string(),
             detail: format!(
@@ -2435,6 +2446,33 @@ mod tests {
         match differential_check(&program) {
             Ok(()) => {}
             Err(d) => panic!("finding 3310b49d21f64878 must not diverge: {:?}", d),
+        }
+    }
+
+    /// Regression for continuous-fuzz finding `05264cccae42245a` (target
+    /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
+    /// `1b 64 1b` folds into a shift/product program that both engines evaluate
+    /// to the double `51298827675632344`. XS renders it `51298827675632340`, a
+    /// round-half-even tie that parses back to `51298827675632336`, so the
+    /// string-parsing comparison reported a divergence even though the values
+    /// were identical. The oracle now reports its Number completion's exact
+    /// double, and the check compares against that.
+    #[test]
+    fn finding_05264cccae42245a_tie_dtoa_agrees() {
+        // The exact minimized fuzz input (sha256
+        // fe91a16f9299c9c0d4dc9a35f1f1394d57adb1f9c4de97befb98afd383949f52).
+        let data: &[u8] = &[0x1b, 0x64, 0x1b];
+        let program = gen_program(data);
+        assert!(
+            program.contains("<<"),
+            "finding program shifts: {}",
+            program
+        );
+        let oracle = xs_oracle::run(&program).expect("oracle machine");
+        assert_eq!(oracle.result_number(), Some(51298827675632344.0));
+        match differential_check(&program) {
+            Ok(()) => {}
+            Err(d) => panic!("finding 05264cccae42245a must not diverge: {:?}", d),
         }
     }
 
