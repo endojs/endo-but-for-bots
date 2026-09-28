@@ -779,13 +779,19 @@ impl Interp {
                 }
             }
         }
-        // Native numeric data properties (`Math.PI` &co.): bound as own
-        // properties of their owner under the program-local id, unmetered.
+        // Math/Number constants and both TypedArray BYTES_PER_ELEMENT owners
+        // have immutable, non-enumerable data properties, including when
+        // own-key reflection first materializes them.
         let vdata = self.proto_value_data.clone();
         for (owner, pname, value) in &vdata {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
                 if keep(pid) && (full || self.find_property(*owner, pid).is_none()) {
-                    self.set_own_unmetered(*owner, pid, *value);
+                    self.set_own_unmetered_with_flag(
+                        *owner,
+                        pid,
+                        *value,
+                        XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG | XS_DONT_DELETE_FLAG,
+                    );
                 }
             }
         }
