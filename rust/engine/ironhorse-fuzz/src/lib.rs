@@ -2097,10 +2097,6 @@ mod tests {
             let oracle_spelling = xs_oracle::number_to_ecma_string(oracle);
             let ironhorse_spelling = ironhorse_vm::value::number_to_ecma_string(ironhorse);
             proptest::prop_assert_eq!(
-                results_agree(&oracle_spelling, None, &ironhorse_spelling),
-                oracle == ironhorse
-            );
-            proptest::prop_assert_eq!(
                 results_agree("", Some(&oracle_spelling), &ironhorse_spelling),
                 oracle == ironhorse
             );

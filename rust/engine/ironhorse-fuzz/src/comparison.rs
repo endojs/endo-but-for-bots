@@ -32,38 +32,15 @@ pub(crate) fn compare_observations(
 /// When the oracle's completion was a Number, IronHorse must spell it exactly
 /// as `oracle_spelling`, the ECMA-262 `Number::toString` of the oracle's
 /// exact double; XS's own spelling is ignored because it is not always
-/// shortest or round-tripping. Otherwise the strings must be byte-identical,
-/// or both parse as decimal Numbers with the same double.
+/// shortest or round-tripping. Otherwise the oracle has reported that the
+/// completion was not a Number (a String, BigInt, Boolean, and so on), so the
+/// strings must be byte-identical: re-inferring a Number from a numeric-looking
+/// spelling would hide a divergence such as the String `"1e2"` against `"100"`.
 pub(crate) fn results_agree(oracle: &str, oracle_spelling: Option<&str>, ironhorse: &str) -> bool {
-    if let Some(spec) = oracle_spelling {
-        return ironhorse == spec;
+    match oracle_spelling {
+        Some(spec) => ironhorse == spec,
+        None => oracle == ironhorse,
     }
-    if oracle == ironhorse {
-        return true;
-    }
-    match (as_ecma_number(oracle), as_ecma_number(ironhorse)) {
-        (Some(a), Some(b)) => a.to_bits() == b.to_bits(),
-        _ => false,
-    }
-}
-
-/// Parse a completion string as the ECMAScript `String()` of a finite
-/// Number, or `None` when it is not a plain decimal Number spelling — so
-/// `"Infinity"`, `"NaN"`, booleans, and string results fall through to the
-/// byte comparison in [`results_agree`] (and `Infinity`/`NaN` already match
-/// byte-for-byte anyway). The character allow-list is what keeps Rust's
-/// float parser from accepting `inf`/`nan`/`infinity`, which JS never prints.
-fn as_ecma_number(s: &str) -> Option<f64> {
-    if s.is_empty() {
-        return None;
-    }
-    if !s
-        .bytes()
-        .all(|b| b.is_ascii_digit() || matches!(b, b'+' | b'-' | b'.' | b'e' | b'E'))
-    {
-        return None;
-    }
-    s.parse::<f64>().ok().filter(|v| v.is_finite())
 }
 
 #[cfg(test)]
@@ -96,36 +73,41 @@ mod tests {
 
     #[test]
     fn numeric_spelling_policy_is_preserved() {
+        let spec = Some("57632001481506820");
         assert!(compare_observations(
-            (true, "57632001481506816", None, 1),
+            (true, "57632001481506816", spec, 1),
             (true, "57632001481506820", 2)
         )
         .is_ok());
         assert!(compare_observations(
-            (true, "57632001481506816", None, 1),
+            (true, "57632001481506816", spec, 1),
             (true, "57632001481506824", 2)
         )
         .is_err());
     }
-    fn results_agree_str(oracle: &str, ironhorse: &str) -> bool {
-        results_agree(oracle, None, ironhorse)
-    }
 
     #[test]
-    fn results_agree_on_equal_doubles_spelled_differently() {
-        // The finding's two renderings of the same double.
-        assert!(results_agree_str("57632001481506816", "57632001481506820"));
-        // A genuine value divergence is still caught.
-        assert!(!results_agree_str("57632001481506816", "57632001481506824"));
-        assert!(!results_agree_str("3", "4"));
-        // Non-numeric completions compare byte-for-byte.
-        assert!(results_agree_str("true", "true"));
-        assert!(!results_agree_str("true", "false"));
-        assert!(!results_agree_str("Infinity", "1e999"));
-        // `Infinity`/`NaN` are not parsed as numbers (they match as strings).
-        assert!(as_ecma_number("Infinity").is_none());
-        assert!(as_ecma_number("NaN").is_none());
-        assert!(as_ecma_number("").is_none());
+    fn non_number_completions_compare_byte_for_byte() {
+        assert!(results_agree("true", None, "true"));
+        assert!(!results_agree("true", None, "false"));
+        assert!(!results_agree("Infinity", None, "1e999"));
+        // `'' + 51298827675632344` completes as a String. XS spells it
+        // "51298827675632340"; a different String is a divergence even though
+        // both spellings parse to nearby (or equal) doubles.
+        assert!(!results_agree(
+            "51298827675632340",
+            None,
+            "51298827675632344"
+        ));
+        // The same double spelled two ways is still two different Strings.
+        assert!(!results_agree(
+            "57632001481506816",
+            None,
+            "57632001481506820"
+        ));
+        assert!(!results_agree("1e2", None, "100"));
+        assert!(!results_agree("100000000000000000000", None, "1e+20"));
+        assert!(results_agree("1e2", None, "1e2"));
     }
 
     #[test]
