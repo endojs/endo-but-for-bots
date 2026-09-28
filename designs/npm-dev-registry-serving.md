@@ -371,7 +371,7 @@ the live deployment have different owners and different review bases:
 | Repository | Design responsibility | Design base | Later implementation base |
 |---|---|---|---|
 | `endojs/endo-but-for-bots` | This document; npm HTTP adapter, publish validator, metadata/tag schema, read-through cache, directory-tree integration, and conformance fixtures in/around `@endo/exo-npm` | frozen snapshot of roadmap branch `llm` | a separate implementation PR on the project's implementation base, not this design PR |
-| `kriscendobot/minion.town` | Companion `designs/npm-minion-town-registry.md`; hosting, pin/build, DNS/TLS, Caddy, systemd, state directory, monitoring, and publish-auth secret | frozen snapshot of `main` | a later implementation PR on `main` |
+| `kriscendobot/minion.town` | Companion [`designs/npm-minion-town-registry.md`](https://github.com/kriscendobot/minion.town/pull/134); hosting, pin/build, DNS/TLS, Caddy, systemd, state directory, monitoring, and publish-auth secret | frozen snapshot of `main` | a later implementation PR on `main` |
 
 The minion repository remains a deployment and configuration layer, not the
 home of registry-serving library code. It consumes a pinned Endo build; it does
