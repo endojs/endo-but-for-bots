@@ -2085,14 +2085,11 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `66facfd52ae8c673` (target
-    /// `differential_source`). The exact 3-byte minimized input folds into
-    /// arithmetic whose result is the exactly representable double
-    /// `51298825763029616`. XS renders that exact integer while ironhorse uses
-    /// the shorter round-tripping decimal `51298825763029620`; both strings
-    /// parse to the same `f64`. This is the same oracle-rendering class as
-    /// finding `d99d263fcf6ca7a7`, so the numeric `results_agree` comparison
-    /// must suppress the false divergence.
+    // XS's `fx_dtoa` spells some doubles non-shortest or, at a tie, not
+    // round-tripping. `results_agree` holds IronHorse to the spec spelling of
+    // the oracle's exact double, so none of these findings may diverge.
+
+    /// Regression for finding `66facfd52ae8c673`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_66facfd52ae8c673_large_integer_dtoa_agrees() {
         let data: &[u8] = include_bytes!("../tests/fixtures/finding-66facfd52ae8c673.input.bin");
@@ -2112,16 +2109,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `d99d263fcf6ca7a7` (target
-    /// `differential_source`). The 5-byte input `2d 57 27 48 86` folds into
-    /// `((729808896 && …) * ((… * (729808896 % 603979776)) % 729808896))`,
-    /// whose value is the exactly-representable double `57632001481506816`.
-    /// XS's `fx_dtoa` prints that double verbatim as its 17-digit exact
-    /// integer, whereas ironhorse — like V8 and ECMA-262 §6.1.6.1.20's
-    /// shortest-round-tripping rule — prints the 16-digit `57632001481506820`.
-    /// Both denote the identical double, so the engines agree on the value and
-    /// diverge only on decimal spelling; the differential check must not read
-    /// that as a finding.
+    /// Regression for finding `d99d263fcf6ca7a7`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_d99d263fcf6ca7a7_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2137,19 +2125,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `314f811064b8febb` (target
-    /// `differential_source`). The 5-byte input `75 6c 74 7b 2d` (`"ult{-"`)
-    /// folds into the *division* chain
-    /// `(377487360 / (377487360 / (377487360 / (-5 / 981467136))))`, whose
-    /// value is the exactly-representable double `0xc370740000000000`. XS's
-    /// `fx_dtoa` renders that double as the 17-digit `-74098287619080190`,
-    /// whereas ironhorse — like V8 and ECMA-262 §6.1.6.1.20's
-    /// shortest-round-tripping rule — prints `-74098287619080200`. Both parse
-    /// back to the identical double, so the engines agree on the value and
-    /// diverge only on decimal spelling; the same class as `d99d263fcf6ca7a7`,
-    /// already suppressed by the numeric `results_agree` comparison — reached
-    /// here through division rather than a product. The differential check must
-    /// not read this as a finding.
+    /// Regression for finding `314f811064b8febb`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_314f811064b8febb_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2169,17 +2145,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `5c29667cc15d6d93` (target
-    /// `differential_source`). The 5-byte input `e1 1b dc dc dc` folds into
-    /// `((-(-(-226492416))) * (-(-(-226492416))))`, i.e. `226492416^2` where
-    /// `226492416 = 27 * 2^23`, whose value is the exactly-representable double
-    /// `729 * 2^46` = `51298814505517056`. XS's `fx_dtoa` prints that double
-    /// verbatim as its 17-digit exact integer, whereas ironhorse — like V8 and
-    /// ECMA-262 §6.1.6.1.20's shortest-round-tripping rule — prints
-    /// `51298814505517060`. Both denote the identical double, so the engines
-    /// agree on the value and diverge only on decimal spelling; the same class
-    /// as `d99d263fcf6ca7a7`, already suppressed by the numeric `results_agree`
-    /// comparison. The differential check must not read this as a finding.
+    /// Regression for finding `5c29667cc15d6d93`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_5c29667cc15d6d93_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2195,13 +2161,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `67a52af412f03a7b` (target
-    /// `differential_source`). The exact 3-byte minimized input folds into
-    /// `(226492416 * 226492416)`, whose exactly representable double value is
-    /// `51298814505517056`. XS prints that exact integer while ironhorse emits
-    /// the shortest round-tripping `51298814505517060`; the numeric
-    /// `results_agree` comparison must recognize that both spellings denote
-    /// the identical Number.
+    /// Regression for finding `67a52af412f03a7b`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_67a52af412f03a7b_large_integer_dtoa_agrees() {
         let data =
@@ -2219,13 +2179,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `67ca18e4febe7a34` (target
-    /// `differential_source`). The exact 3-byte minimized input folds into
-    /// `(226492416 * 226492416)`, whose exactly representable double value is
-    /// `51298814505517056`. XS prints that exact integer while ironhorse emits
-    /// the shortest round-tripping `51298814505517060`; the numeric
-    /// `results_agree` comparison must recognize that both spellings denote
-    /// the identical Number.
+    /// Regression for finding `67ca18e4febe7a34`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_67ca18e4febe7a34_large_integer_dtoa_agrees() {
         let data =
@@ -2243,14 +2197,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `daf6694aec7856aa` (target
-    /// `differential_source`). The 3-byte input `1b 1b 74` folds into
-    /// `(226492416 * 226492416)` — the byte-identical program of the earlier
-    /// `67a52af412f03a7b`, reached from different fuzzer bytes. Its value is the
-    /// exactly representable double `51298814505517056` (`729 * 2^46`). XS prints
-    /// that exact integer while ironhorse emits the shortest round-tripping
-    /// `51298814505517060`; the numeric `results_agree` comparison must recognize
-    /// that both spellings denote the identical Number.
+    /// Regression for finding `daf6694aec7856aa`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_daf6694aec7856aa_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2269,21 +2216,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `7289e31013d074ec` (target
-    /// `differential_source`). The 4-byte input `d8 7f 33 ba` folds into
-    /// `((~(~(1560281088 * true))) * ((~(1560281088 * true)) << ((~true) << (true << true))))`,
-    /// where `1560281088 = 186 * 2^23` (the generator's "larger integer" atom).
-    /// In ToInt32 arithmetic the left factor is `1560281088`, the outer shift is
-    /// by `24`, the right factor is `(~1560281088) << 24 = -16777216`, and the
-    /// product is `-(93 * 2^48)` = `-26177172834091008`, an exactly-representable
-    /// double whose magnitude overflows 2^53. XS's `fx_dtoa` prints that double
-    /// verbatim as its 17-digit exact integer, whereas ironhorse — like V8 and
-    /// ECMA-262 §6.1.6.1.20's shortest-round-tripping rule — prints
-    /// `-26177172834091010`. Both denote the identical double, so the engines
-    /// agree on the value and diverge only on decimal spelling; the same class
-    /// as `d99d263fcf6ca7a7` / `5c29667cc15d6d93`, already suppressed by the
-    /// numeric `results_agree` comparison. The differential check must not read
-    /// this as a finding.
+    /// Regression for finding `7289e31013d074ec`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_7289e31013d074ec_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2299,19 +2232,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `783be6e6106bad98` (target
-    /// `differential_source`). The 6-byte input `00 00 66 69 27 44` folds into
-    /// `((((true + 327155712) && (!true)) || ((~570425344) * (true + 327155712)))
-    /// + (!(...)))`, which collapses (the `&&` is `false`, so the `||` takes its
-    /// right operand; the outer `!(...)` is `false` → `0`) to the single product
-    /// `(~570425344) * (327155712 + 1) = -570425345 * 327155713`. Its exact value
-    /// `-186617910456745985` overflows 2^53 and rounds to the double
-    /// `-186617910456745984`. XS's `fx_dtoa` renders a non-shortest 17-digit form
-    /// (`-186617910456745980`) while ironhorse — like V8 and ECMA-262
-    /// §6.1.6.1.20's shortest-round-tripping rule — renders `-186617910456746000`.
-    /// Both denote the identical double; the same class as `5c29667cc15d6d93` and
-    /// `d99d263fcf6ca7a7`, already suppressed by the numeric `results_agree`
-    /// comparison. The differential check must not read this as a finding.
+    /// Regression for finding `783be6e6106bad98`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_783be6e6106bad98_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2327,21 +2248,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `284de587e16bce32` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 9-byte input
-    /// `00 fc 00 01 b1 5d 00 00 00` folds into
-    /// `(((~(true && true)) - ((780140544 - true) * (true + true))) * (…same…))`,
-    /// i.e. the square of `-2 - (780140543 * 2) = -1560281088`. In IEEE-754
-    /// doubles that is `1560281088^2 = (186 * 2^23)^2 = 8649 * 2^48`, the
-    /// exactly-representable double whose real value is `2434477073570463744`.
-    /// XS's `fx_dtoa` prints that double verbatim as its 19-digit exact integer,
-    /// whereas ironhorse — like V8 and ECMA-262 §6.1.6.1.20's shortest-round-
-    /// tripping rule — prints `2434477073570464000`. Both denote the identical
-    /// double, so the engines agree on the value and diverge only on decimal
-    /// spelling; the same class as `d99d263fcf6ca7a7` / `5c29667cc15d6d93` /
-    /// `7289e31013d074ec` / `783be6e6106bad98`, already suppressed by the
-    /// numeric `results_agree` comparison. The differential check must not read
-    /// this as a finding.
+    /// Regression for finding `284de587e16bce32`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_284de587e16bce32_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2357,22 +2264,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `7152c1a9960a0688` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 8-byte input
-    /// `27 79 00 00 00 57 2d 08` folds into the arithmetic program
-    /// `((((1015021568 / true) * (377487360 + -89)) + (-(true + 377487360))) ||
-    /// 1015021568)`, i.e. `1015021568 * 377487271 - 377487361`, whose IEEE-754
-    /// double is `8'315'...` — precisely the exactly-representable double whose
-    /// real value is `383157721332973568` (bits `0x439544ffab840000`). XS's
-    /// `fx_dtoa` renders it in a non-shortest 18-digit form
-    /// (`383157721332973570`), while ironhorse — like V8 and ECMA-262
-    /// §6.1.6.1.20's shortest-round-tripping rule — renders `383157721332973600`.
-    /// Both spellings parse back to the identical double, so the engines agree on
-    /// the value and diverge only on decimal spelling; the same class as
-    /// `d99d263fcf6ca7a7` / `5c29667cc15d6d93` / `7289e31013d074ec` /
-    /// `783be6e6106bad98` / `284de587e16bce32`, already suppressed by the numeric
-    /// `results_agree` comparison. The differential check must not read this as a
-    /// finding.
+    /// Regression for finding `7152c1a9960a0688`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_7152c1a9960a0688_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2388,22 +2280,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `7277b0fc4a72d8d6` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
-    /// `3f f7 de` folds into
-    /// `((~((~2071986176) * (~2071986176))) * (~((~2071986176) * (~2071986176))))`,
-    /// i.e. `X * X` where `X = ~ToInt32((~2071986176)^2)`. In IEEE-754 doubles
-    /// the inner product `(-2071986177)^2` rounds to `4293126717679075328`,
-    /// whose `ToInt32` is `-150994944`, so `X = 150994943` and the program's
-    /// value is `150994943^2`, the exactly-representable double
-    /// `22799472811573248`. XS's `fx_dtoa` prints that exact 17-digit integer,
-    /// whereas ironhorse — like V8/Node and ECMA-262 §6.1.6.1.20's shortest-
-    /// round-tripping rule — prints `22799472811573250`. Both parse to the
-    /// identical double, so the engines agree on the value and diverge only on
-    /// decimal spelling; the same class as `284de587e16bce32` /
-    /// `d99d263fcf6ca7a7` / `5c29667cc15d6d93` / `7289e31013d074ec` /
-    /// `783be6e6106bad98`, already suppressed by the numeric `results_agree`
-    /// comparison. The differential check must not read this as a finding.
+    /// Regression for finding `7277b0fc4a72d8d6`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_7277b0fc4a72d8d6_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2419,19 +2296,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `4658b8adc7bdd428` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 7-byte input
-    /// `7e 69 2d ed 7e ed b4` folds into
-    /// `((((377487360 - 1056964608) * (true && 377487360)) * ((true && 377487360)
-    /// && (1509949440 && true))) + (~((true * true) * (~1988100096))))`, whose
-    /// IEEE-754 double value is the exactly-representable `-256494070539485184`.
-    /// XS's `fx_dtoa` prints that exact 18-digit integer, whereas ironhorse —
-    /// like V8/Node and ECMA-262 §6.1.6.1.20's shortest-round-tripping rule —
-    /// prints `-256494070539485200`. Both parse to the identical double, so the
-    /// engines agree on the value and diverge only on decimal spelling; the same
-    /// class as `d99d263fcf6ca7a7` / `7277b0fc4a72d8d6` / `7152c1a9960a0688` /
-    /// `284de587e16bce32`, already suppressed by the numeric `results_agree`
-    /// comparison. The differential check must not read this as a finding.
+    /// Regression for finding `4658b8adc7bdd428`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_4658b8adc7bdd428_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2451,21 +2316,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `3310b49d21f64878` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 4-byte input
-    /// `24 00 1b 1b` folds into
-    /// `((((true * true) + (true * true)) * ((226492416 + true) * (301989888 *
-    /// true))) + (((true * true) + (true * true)) * ((226492416 + true) *
-    /// (301989888 * true))))` — the `226492416`/`301989888` operands are the
-    /// generator's `27 << 23` / `36 << 23` large-integer atoms. Its IEEE-754
-    /// double value is the exactly-representable `273593678570717184`. XS's
-    /// `fx_dtoa` prints that exact 18-digit integer, whereas ironhorse — like
-    /// V8/Node and ECMA-262 §6.1.6.1.20's shortest-round-tripping rule — prints
-    /// `273593678570717200`. Both parse to the identical double, so the engines
-    /// agree on the value and diverge only on decimal spelling; the same class
-    /// as `d99d263fcf6ca7a7` / `4658b8adc7bdd428` / `7277b0fc4a72d8d6` /
-    /// `284de587e16bce32`, already suppressed by the numeric `results_agree`
-    /// comparison. The differential check must not read this as a finding.
+    /// Regression for finding `3310b49d21f64878`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_3310b49d21f64878_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2485,14 +2336,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `05264cccae42245a` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
-    /// `1b 64 1b` folds into a shift/product program that both engines evaluate
-    /// to the double `51298827675632344`. XS renders it `51298827675632340`, a
-    /// round-half-even tie that parses back to `51298827675632336`, so the
-    /// string-parsing comparison reported a divergence even though the values
-    /// were identical. The oracle now reports its Number completion's exact
-    /// double, and the check compares against that.
+    /// Regression for finding `05264cccae42245a`: XS's non-round-tripping tie spelling.
     #[test]
     fn finding_05264cccae42245a_tie_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2512,14 +2356,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `931a687135cabb0c` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 5-byte input
-    /// folds into the square of `620757035` (`310378496` is the generator's
-    /// `37 << 23` atom). Both engines compute the double `385339296501991232`.
-    /// XS renders it `385339296501991200`, a tie between the adjacent doubles
-    /// `...168` and `...232` (the spacing here is 64) that round-half-even
-    /// takes to `...168`. This is the `05264cccae42245a` tie class, which the
-    /// exact-double comparison already accepts.
+    /// Regression for finding `931a687135cabb0c`: XS's non-round-tripping tie spelling.
     #[test]
     fn finding_931a687135cabb0c_tie_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2540,14 +2377,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `d87697d49a5f8f67` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 7-byte input
-    /// folds into the square of `1585446912` (the generator's `189 << 23`
-    /// atom). Both engines compute the double `2513641910770335744`. ironhorse
-    /// and V8 print the 16-digit `2513641910770336000`, a tie with the upper
-    /// neighbor that round-half-even takes back to this even significand. XS
-    /// prints the longer 17-digit `2513641910770335700`. This mirrors the
-    /// `05264cccae42245a` tie class, and the exact-double comparison accepts it.
+    /// Regression for finding `d87697d49a5f8f67`: XS's longer spelling where the shortest is a tie.
     #[test]
     fn finding_d87697d49a5f8f67_even_tie_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2568,22 +2398,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `a7755caa51aa9320` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
-    /// `2d f7 60` folds into
-    /// `((~((~2071986176) * (~2071986176))) * (~((~2071986176) * (~2071986176))))`
-    /// — the `2071986176` operand is the generator's `247 << 23` large-integer
-    /// atom. `~2071986176` is `-2071986177`; each `(~2071986176) * (~2071986176)`
-    /// is the double `4293126717679075328`, whose `ToInt32` (`~`) is `150994943`;
-    /// the whole product `150994943 * 150994943` is the exactly-representable
-    /// double `22799472811573248` (its exact real value `22799472811573249`
-    /// rounds to nearest-even). XS's `fx_dtoa` prints that exact 17-digit integer,
-    /// whereas ironhorse — like V8/Node and ECMA-262 §6.1.6.1.20's
-    /// shortest-round-tripping rule — prints `22799472811573250`. Both parse to
-    /// the identical double, so the engines agree on the value and diverge only on
-    /// decimal spelling; the same class as `d99d263fcf6ca7a7` / `4658b8adc7bdd428`
-    /// / `3310b49d21f64878`, already suppressed by the numeric `results_agree`
-    /// comparison. The differential check must not read this as a finding.
+    /// Regression for finding `a7755caa51aa9320`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_a7755caa51aa9320_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2603,15 +2418,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `9edaa2277fb90f03` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 4-byte input
-    /// `2d 1c 7e 5c` folds into a quotient of products whose value is
-    /// `234881024 * 234881024`, the double `55169095435288576`. XS's `fx_dtoa`
-    /// printed `55169095435288576` and ironhorse printed the shortest
-    /// round-tripping `55169095435288580`. That is the same double, so this is
-    /// the dtoa-spelling class again. It reproduced only at the fuzzed SHA
-    /// 38ca1d18. At the standing tip it is suppressed by comparing against the
-    /// oracle's exact double (`fdb9fef6e0`).
+    /// Regression for finding `9edaa2277fb90f03`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_9edaa2277fb90f03_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2629,15 +2436,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `8adaa3bbc9cda1ce` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
-    /// `fc 03 bd` folds into a quotient of products of `2113929216 / 1585446912`
-    /// and `1585446912` whose value is the double `2513641910770335744`. XS's
-    /// `fx_dtoa` printed `2513641910770335700` and ironhorse printed the
-    /// shortest round-tripping `2513641910770336000`. That is the same double,
-    /// so this is the dtoa-spelling class again. It reproduced only at the
-    /// fuzzed SHA 38ca1d18. At the standing tip it is suppressed by comparing
-    /// against the oracle's exact double (`fdb9fef6e0`).
+    /// Regression for finding `8adaa3bbc9cda1ce`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_8adaa3bbc9cda1ce_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2655,14 +2454,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `ecae051e6e8f5a27` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 10-byte
-    /// input folds into a product whose value is the double
-    /// `-396980243939421632`. XS's `fx_dtoa` printed `-396980243939421600` (a
-    /// different double) and ironhorse printed the shortest round-tripping
-    /// `-396980243939421630`, as V8 does. This is the dtoa-spelling class again.
-    /// It reproduced only at the fuzzed SHA 38ca1d18. At the standing tip the
-    /// harness checks Number spelling against the spec (`4b95dc199e`).
+    /// Regression for finding `ecae051e6e8f5a27`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_ecae051e6e8f5a27_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2683,14 +2475,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `aaa423e9c5d56067` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 5-byte input
-    /// folds into a product whose value is the double `-31032616836661248`.
-    /// XS's `fx_dtoa` printed `-31032616836661248` and ironhorse printed the
-    /// shortest round-tripping `-31032616836661250`. That is the same double,
-    /// so this is the dtoa-spelling class again. It reproduced only at the
-    /// fuzzed SHA 38ca1d18. At the standing tip the harness checks Number
-    /// spelling against the spec (`4b95dc199e`).
+    /// Regression for finding `aaa423e9c5d56067`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_aaa423e9c5d56067_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256
@@ -2711,16 +2496,7 @@ mod tests {
         }
     }
 
-    /// Regression for continuous-fuzz finding `37e026fd30cbae19` (target
-    /// `differential_source`, toolchain `nightly-2026-08-15`). The 3-byte input
-    /// `1b 55 09` folds into
-    /// `(((-(false * 226492416)) * (-(false * 226492416))) + (-((-226492416) * (-226492416))))`.
-    /// `(-0) * (-0)` is `+0`, so the value is the exactly-representable double
-    /// `-51298814505517056`. XS's `fx_dtoa` printed that exact 17-digit integer
-    /// and ironhorse printed the shortest round-tripping `-51298814505517060`.
-    /// That is the same double, so this is the dtoa-spelling class again. It
-    /// reproduced only at the fuzzed SHA 38ca1d18. At the standing tip it is
-    /// suppressed by comparing against the oracle's exact double (`fdb9fef6e0`).
+    /// Regression for finding `37e026fd30cbae19`: XS's longer spelling of a large exact double.
     #[test]
     fn finding_37e026fd30cbae19_large_integer_dtoa_agrees() {
         // The exact minimized fuzz input (sha256

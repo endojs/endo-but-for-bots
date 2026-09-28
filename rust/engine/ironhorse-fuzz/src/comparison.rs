@@ -27,45 +27,13 @@ pub(crate) fn compare_observations(
     Ok((oracle.0 && oracle.3 != ironhorse.2).then_some((oracle.3, ironhorse.2)))
 }
 
-/// Whether two completion result strings denote the same guest value.
+/// Whether IronHorse's completion string denotes the oracle's completion.
 ///
-/// Byte-identical strings agree. Beyond that, a **Number** completion is
-/// compared by its IEEE-754 double rather than its decimal spelling. XS's
-/// `fx_dtoa` renders some large integer-valued doubles in a non-shortest,
-/// exact-integer form — finding `d99d263fcf6ca7a7` reproduced
-/// `327155712 * ((327155712 * (729808896 % 603979776)) % 729808896)`, whose
-/// value is the exactly-representable double `57632001481506816`, which XS
-/// prints verbatim (17 digits). ironhorse — like V8/SpiderMonkey and
-/// ECMA-262 §6.1.6.1.20's "k is as small as possible" — prints the *shortest*
-/// round-tripping decimal, `57632001481506820` (16 digits). Both spellings
-/// parse back to the identical double, so the two engines computed the same
-/// value and disagree only on rendering; forcing byte-identity would make
-/// ironhorse reproduce XS's non-shortest, non-conformant rendering.
-///
-/// Comparing the parsed doubles suppresses that spurious spelling divergence
-/// while still flagging every genuine value divergence: two *different*
-/// doubles never share a parse (a decimal string parses to exactly one
-/// nearest double), so `a.to_bits() == b.to_bits()` fails the moment the
-/// engines actually computed different numbers.
-///
-/// That parse is only sound when the oracle's spelling round-trips, and XS's
-/// does not always: finding `05264cccae42245a` computed the double
-/// `51298827675632344` on both engines, but XS rendered it as
-/// `51298827675632340` — exactly halfway between it and `51298827675632336`,
-/// a tie that round-half-even parses back to `...336`. ironhorse (like V8, and
-/// as ECMA-262 §6.1.6.1.20 requires, since `𝔽(s × 10^(n−k))` must be `x`)
-/// needs all 17 digits and prints `51298827675632344`. So when the oracle
-/// reports its completion's exact double, the oracle's spelling is ignored and
-/// a Number must be spelled exactly as ECMA-262 `Number::toString` spells that
-/// double (`oracle_spelling`, which the caller derives from the oracle's
-/// exact double with the oracle-side, Ryu-backed
-/// `xs_oracle::number_to_ecma_string`). Keeping that formatter independent of
-/// IronHorse means the differential still detects a VM dtoa regression. This stops
-/// the ambiguous tie from masking a genuine one-ulp divergence, and, because
-/// the oracle is known to break §6.1.6.1.20 here, it checks IronHorse's
-/// spelling against the spec rather than merely checking that it parses back
-/// to the same value: a non-minimal, exponent-form, or `"-0"` spelling of the
-/// right double is still a divergence.
+/// When the oracle's completion was a Number, IronHorse must spell it exactly
+/// as `oracle_spelling`, the ECMA-262 `Number::toString` of the oracle's
+/// exact double; XS's own spelling is ignored because it is not always
+/// shortest or round-tripping. Otherwise the strings must be byte-identical,
+/// or both parse as decimal Numbers with the same double.
 pub(crate) fn results_agree(oracle: &str, oracle_spelling: Option<&str>, ironhorse: &str) -> bool {
     if let Some(spec) = oracle_spelling {
         return ironhorse == spec;
