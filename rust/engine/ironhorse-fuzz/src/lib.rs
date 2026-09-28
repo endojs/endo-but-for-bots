@@ -662,7 +662,7 @@ pub fn gen_stage3_text_math_program(data: &[u8]) -> String {
 /// `toJSON`/wrapper objects, a replacer/space argument). Depth and breadth are
 /// kept small on purpose: a *large* nested object literal accrues a
 /// sub-computron raw drift in ironhorse's object-literal *construction* metering
-/// (visible on the bare `var v = {…}` literal, independent of JSON) that can
+/// (visible on the bare `var v = {...}` literal, independent of JSON) that can
 /// tip a computron boundary — a pre-existing object-literal issue outside the
 /// JSON surface. The bound keeps this arm a clean differential test of the JSON
 /// *stringify* metering itself. Rides [`differential_check_with_symbols`] (the
@@ -827,7 +827,7 @@ pub fn gen_stage3b_promise_program(data: &[u8]) -> String {
 
 /// JS-escape a byte string as a double-quoted string-literal body (for
 /// embedding a fuzzer-generated regexp source or subject into `new
-/// RegExp("…")` / a method argument).
+/// RegExp("...")` / a method argument).
 fn js_string_escape(s: &str) -> String {
     let mut out = String::new();
     for c in s.chars() {
@@ -853,7 +853,7 @@ fn js_string_escape(s: &str) -> String {
 /// ASCII subjects), so a divergence is a real finding; an out-of-subset pattern
 /// the port names `Unsupported` is skipped honestly by the differential check.
 /// Rides [`differential_check_with_symbols`] — the RegExp surface resolves
-/// `exec`/`source`/`index`/… by their program-local symbol ids.
+/// `exec`/`source`/`index`/... by their program-local symbol ids.
 pub fn gen_stage3b_regexp_program(data: &[u8]) -> String {
     let (pattern, flags, subject, _start) = gen_regexp(data);
     // Drop any generated `g`/`y` flag: the stateful lastIndex drive needs the
@@ -891,7 +891,7 @@ pub fn gen_stage3b_regexp_program(data: &[u8]) -> String {
 /// spread of a dense literal, optionally with leading/trailing plain elements,
 /// then observes the result or its length. A single spread segment is
 /// raw-exact against the pin (each additional segment carries a sub-computron
-/// −8-raw residual from XS's item-chunk over-allocation, which never crosses a
+/// -8-raw residual from XS's item-chunk over-allocation, which never crosses a
 /// computron boundary in a bounded program; kept single-segment here so the
 /// arm is raw-clean). Rides the full symbol-linking differential check.
 pub fn gen_stage3_spread_program(data: &[u8]) -> String {
@@ -1506,7 +1506,7 @@ pub fn gen_stage3b_object_statics_program(data: &[u8]) -> String {
     let absent_key = ABSENT[(b.next() as usize) % ABSENT.len()];
     // Genuinely-novel names (absent from XS's boot key table AND the literal)
     // — a computed read/`hasOwnProperty` of one is bit-exact `undefined`/false,
-    // interning exactly one key slot. A boot default key (`toString`, …) read
+    // interning exactly one key slot. A boot default key (`toString`, ...) read
     // by a *computed* key self-names (ironhorse cannot tell an unlinked inherited
     // built-in from an absent own), so the computed-access arms draw only from
     // this novel pool to stay on the covered path.
@@ -2817,7 +2817,7 @@ mod tests {
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
     /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 2-byte input
     /// `32 eb` folds into
-    /// `"0a0a".search(new RegExp("(((\s{2}a?\s{2})?…)?…)?", ""))` — a
+    /// `"0a0a".search(new RegExp("(((\s{2}a?\s{2})?...)?...)?", ""))` — a
     /// `String.prototype.search` over a deeply nested optional-group
     /// whitespace-alternation pattern that matches empty at offset 0, so the
     /// completion value is the string `"0"`.
@@ -2905,7 +2905,7 @@ mod tests {
     /// Regression for continuous-fuzz finding `1cd4ddc72d5801c4` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
     /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 10-byte input folds
-    /// into `new RegExp("((?:\1+?\1*?)…)|\1+?\1*?", "").toString()`, a
+    /// into `new RegExp("((?:\1+?\1*?)...)|\1+?\1*?", "").toString()`, a
     /// pattern of lazy quantified backreferences to group 1.
     ///
     /// The completion value agreed exactly with the XS pin; the only
@@ -2933,7 +2933,7 @@ mod tests {
     /// Regression for continuous-fuzz finding `6ca7a76e0bfe3435` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
     /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 6-byte input folds
-    /// into `var m = new RegExp("(?:\\b.{1,3}(?:[a-c0-9]{1,3}(?:\\B\\s*?\\B){2}…", "m")
+    /// into `var m = new RegExp("(?:\\b.{1,3}(?:[a-c0-9]{1,3}(?:\\B\\s*?\\B){2}...", "m")
     /// .exec("b"); m ? m.length : 0`, a word-boundary / lazy-whitespace
     /// alternation exec'd over a one-character subject.
     ///
@@ -2993,7 +2993,7 @@ mod tests {
     /// Regression for continuous-fuzz finding `bc9529ac5818aa24` (target
     /// `differential_regexp_surface`, toolchain `nightly-2026-08-15`, project
     /// SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`). The 11-byte input folds
-    /// into `new RegExp("(?:(?:(?:\\s+?0*\\s*){1,2}…", "s").toString()`, a
+    /// into `new RegExp("(?:(?:(?:\\s+?0*\\s*){1,2}...", "s").toString()`, a
     /// large nested whitespace/digit alternation whose `toString()` completion
     /// value is longer than 1 KiB.
     ///

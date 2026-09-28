@@ -1,5 +1,8 @@
 //! Lossless JavaScript symbol spellings. Equality and hashing use XS CESU-8,
 //! including its modified encoding of NUL, never a diagnostic Rust string.
+//!
+//! [`number`] spells Numbers as ECMA-262 `Number::toString(10)` for the
+//! compiler, the VM and the XS oracle's independent reference spelling.
 #![forbid(unsafe_code)]
 
 pub mod number;
