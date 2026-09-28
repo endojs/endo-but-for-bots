@@ -6,6 +6,13 @@ below; record each grooming pass by appending its note to `ARCHIVE.md` — do no
 layer new groom notes at the top of this file.*
 
 *Recently added or revised:
+[npm-dev-registry-serving](npm-dev-registry-serving.md) (added 2026-09-28;
+the staging-only npm HTTP server over the existing registry tree, table, and
+CAS: constrained dated development publishes, durable dist-tags, exact
+tarball retention, public-upstream demand fill, and cold npm/Yarn installs
+through `npm.minion.town` as the sole client registry; production-npm promotion
+is explicitly deferred and `endor` runtime-identity PR #879 is not a serving
+dependency),
 [ironhorse-guest-compartment](ironhorse-guest-compartment.md) (added
 2026-09-18; the implementation specification for a guest-callable
 `Compartment` in `ironhorse-vm` — the remainder
@@ -382,6 +389,7 @@ LLM-agent stack).*
 | [daemon-worker-import-from-mount](daemon-worker-import-from-mount.md) | 2026-05-22 | 2026-06-02 | Not Started |
 | [registry-capability](registry-capability.md) | 2026-06-02 | 2026-08-29 | Deprecated |
 | [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md) | 2026-08-29 | 2026-08-29 | In Progress |
+| [npm-dev-registry-serving](npm-dev-registry-serving.md) | 2026-09-28 | — | Proposed |
 | [mvs-resolver](mvs-resolver.md) | 2026-06-02 | 2026-06-02 | In Progress (consolidated into [npm-registry-as-directory-tree](npm-registry-as-directory-tree.md)) |
 | [snapshot-mapper](snapshot-mapper.md) | 2026-06-02 | 2026-06-02 | **Complete** (consolidated into `@endo/exo-npm`) |
 | [filesystem-watchers](filesystem-watchers.md) | 2026-05-07 | 2026-05-07 | **Complete** |
@@ -569,7 +577,7 @@ LLM-agent stack).*
 | [thixotrope/message-delivery](../packages/thixotrope/designs/message-delivery.md) | 2026-09-08 | — | **Implemented** |
 | [thixotrope/vat-replacement](../packages/thixotrope/designs/vat-replacement.md) | 2026-09-08 | — | Proposed (exploratory) |
 
-**Current totals (2026-09-27 full corpus reconciliation):** 76 Complete/Implemented, 83 In Progress, 19 Not Started, 23 Proposed, 3 Active, 20 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**240 indexed records**). The bucket sum is 240. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase.
+**Current totals (2026-09-28; the 2026-09-27 full corpus reconciliation plus [npm-dev-registry-serving](npm-dev-registry-serving.md)):** 76 Complete/Implemented, 83 In Progress, 19 Not Started, 24 Proposed, 3 Active, 20 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**241 indexed records**). The bucket sum is 241. The raw corpus now contains 243 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files are excluded, while four already-indexed nested channel-thread research records lie outside those two globs. The underlying reconciliation checked every earlier indexed record and untallied file in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with that pass and was folded in at rebase.
 
 ## Roadmap
 
@@ -826,6 +834,7 @@ flowchart TD
         dwimp[daemon-worker-import-from-mount<br/><i>integration layer</i>]
         dwicap[registry-capability<br/><i>DEPRECATED</i>]
         nrtree[npm-registry-as-directory-tree]
+        nserve[npm-dev-registry-serving<br/><i>PROPOSED</i>]
         dwimvs[mvs-resolver<br/><i>CONSOLIDATED</i>]
         dwisnap[snapshot-mapper<br/><i>COMPLETE</i>]
         ernpm[endor-npm-registry-proxy<br/><i>COMPLETE</i>]
@@ -862,6 +871,9 @@ flowchart TD
         dwicap -.-> nrtree
         pfs --> nrtree
         ernpm --> nrtree
+        nrtree --> nserve
+        ernpm --> nserve
+        npubatten -.-> nserve
         nrtree --> dwimvs
         nrtree --> dwisnap
         dwimvs --> dwisnap
@@ -1491,6 +1503,7 @@ ecosystem.
 | endoclaw-channel-bridges | Not Started | `chat` SDK (Vercel) adapters for Slack, Telegram, Discord, etc. |
 | endoclaw-skill-registry | Abandoned | Skills directory — capability-aware plugin index |
 | npm-dev-publisher-attenuation | Proposed | Capability-attenuated npm dev-release publishing: an agent-facing proxy accepting only allowlisted packages with prerelease versions under `dev-*` dist-tags (behind `PublishGrant` capabilities), and a deterministic promoter (no agent/LLM in path) holding the only upstream npm token, revalidating and promoting byte-identical artifacts with hash-chained audit ledgers. Write-path sibling of the registry-capability / endor-npm-registry-proxy read stack; demo target `npm.minion.town`. Owns the staging boundary and outbound promoter for the chronological `llm` source layer in llm-dev-publish (PR #853), which supplies the FIFO ordering, commit-derived prerelease versions, and manifest recovery; the two designs reconcile into one continuous dev-publishing system |
+| npm-dev-registry-serving | Proposed | Staging-serving slice for `npm.minion.town`: npm-compatible publish, packument, dist-tag, and tarball routes over the shared registry tree/table/CAS; pinned public-upstream demand fill makes a single global registry override sufficient for a full npm/Yarn graph. Deliberately ends at staging; no production-npm promoter or dependency on `endor` runtime-identity PR #879. Companion deployment design lives in `kriscendobot/minion.town`. |
 | llm-dev-publish | Proposed | Chronological `llm` dev-publishing source layer; composes with the attenuated publisher row above. |
 
 **Exit criterion:** AI coding agent runs with principle of least
@@ -1846,6 +1859,7 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | daemon-worker-import-from-mount | S-M | 3-4 days | 3 | **Integration layer** of the four-layer stack (decomposed 2026-06-02). `makeFromPackage` host method + `makeFromMount` dispatcher + CLI `endo run <mount>` / `endo make <mount>` + XS bridging deferral. Driven by the three preceding layers (`registry-capability`, `mvs-resolver`, `snapshot-mapper`); first cut limited to MVS; lockfile honoring deferred. Does not depend on the Rust subsystem (separate lane). |
 | ~~registry-capability~~ | S-M | n/a | 3 | Deprecated method-call capability shape; implementation is the compatibility source for the directory-tree adapters |
 | npm-registry-as-directory-tree | M-L | 1-1.5 weeks | 3 | Factor `LookupTreeInterface`, add Node and Endor adapters plus shared conformance tests, move MVS and mapper late binding to traversal, and retain a temporary legacy method adapter |
+| npm-dev-registry-serving | M-L | 1-2 weeks | 10 | npm HTTP adapter, exact-tarball retention, dist-tag schema, constrained publish validation, pinned-origin demand fill, and npm/Yarn protocol + cold-cache conformance. Excludes the separately-owned minion.town deployment and all production-npm promotion. |
 | mvs-resolver | S-M | 3-4 days | 3 | Layer 2 of 4. JS reference MVS algorithm, eager single-pass resolution producing `RegistryResolution` (content-addressed `resolutionHash`). Multi-major coexistence under distinct `<name>@<version>` keys. Lockfile follow-up tracked as constraint-pass insertion point |
 | snapshot-mapper | M | 4-5 days | 3 | Layer 3 of 4. `packages/daemon/src/map-snapshot.js` + `packages/daemon/src/worker-import.js` (`makeMountReadPowers`) + small extension point in `packages/compartment-mapper` for the archive-precedent peer-directory layout. The one cross-package change in the four-layer stack |
 | ~~filesystem-watchers~~ (design) | S | — | 3 | ✅ Design merged (PR #115); implementation TBD |
