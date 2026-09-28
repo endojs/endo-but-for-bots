@@ -66,6 +66,31 @@ Both tracks were built. This document is the back-fill. It has four jobs:
 | kriscendobot/minion.town#96, #119 (merged) | Credential-expiry detection and root-user reauthentication; a fail-closed classifier that maps a provider response to `needs-auth` only through a table pinned to one CLI version. |
 | kriscendobot/minion.town#120 (draft) | Root-only `delegate()` for the factory, and the inbox-watch driver. |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (this repository) | The sourced finding that no vendor exposes a third-party broker role for an individual Claude subscription. |
+| Subscription-under-`--bare` probe (2026-09-28, Claude Code 2.1.280, a Max-subscription login on a garden host) | Whether a subscription OAuth token can authenticate a `--bare -p` turn, answering review on #1357. Results in § Subscription credentials under `--bare`. |
+
+### Subscription credentials under `--bare`
+
+Empirical probe, 2026-09-28, Claude Code 2.1.280, on a host signed in to a
+claude.ai Max subscription (no API key anywhere in the environment). Each row
+ran `claude --bare -p "Reply with exactly: ok" --max-turns 1`. The token is that
+login's short-lived `sk-ant-oat01-` access token, the same token class
+`claude setup-token` mints with a longer lifetime. No fresh `setup-token` was
+minted for the probe.
+
+| Credential delivery | Result |
+| --- | --- |
+| Stored login only (`~/.claude/.credentials.json`) | Fails: `Not logged in · Please run /login`. |
+| `CLAUDE_CODE_OAUTH_TOKEN=<token>` | Fails: `Not logged in · Please run /login`. |
+| `ANTHROPIC_AUTH_TOKEN=<token>` | **Succeeds** (`ok`). It also succeeded with an empty `HOME` and `CLAUDE_CONFIG_DIR`, plus `--setting-sources "" --strict-mcp-config --tools ""`. `init` reported `apiKeySource: none`. |
+| `ANTHROPIC_API_KEY=<token>`, or an `apiKeyHelper` printing it | No result: the process was still running when a 120 s timeout killed it, presumably retrying an API-key rejection. |
+| Control: `claude -p` without `--bare`, stored login | Succeeds. |
+
+So `--help`'s "OAuth and keychain are never read" is accurate but narrower than
+the conclusion #105 drew from it. `--bare` skips the stored OAuth login and
+`CLAUDE_CODE_OAUTH_TOKEN`, but it still sends whatever bearer token
+`ANTHROPIC_AUTH_TOKEN` holds, and the API accepts a subscription token there. A
+subscription therefore does not force an unconfined configuration. Like every
+flag, this behavior needs rechecking on each binary bump (Decision 4).
 
 ### Production observations (2026-09-28)
 
@@ -95,7 +120,7 @@ with a fake `claude` binary or an in-memory guest.
 | A real model reaches the guest's projected tools with every built-in denied | **Not observed.** Stub only: a fake binary read the generated `--mcp-config`, presented the nonce, and wrote through the guest surface. | **Observed once**: a real SDK query with built-ins denied called `writeText` then `readText` on an in-memory guest (`memory:g-abf1…-agent`), stored `sdk-live-value`, finished in three turns. Development host, claude.ai login, not the production credential or a real daemon guest. |
 | A real model reaches **nothing but** the guest's tools | Not observed (documented). | Not observed: no negative probe ran. |
 | Project and user memory, hooks, skills, and ambient MCP servers are excluded | Documented (`--bare`, `--setting-sources ""`, `--strict-mcp-config`). The 2.1.232 measurements in [endo-claude](endo-claude.md) remain the latest live check. | Documented. No live probe has measured these items for the SDK. |
-| Credential authenticates headless | Not observed: no credential in the build environment. | Observed with a claude.ai login on a development host only; the API-key path it targets is unobserved. |
+| Credential authenticates headless | Not observed in #105: no credential in the build environment. A subscription OAuth token authenticating a fully flagged `--bare -p` turn was observed on 2026-09-28 (§ Subscription credentials under `--bare`). | Observed with a claude.ai login on a development host only; the API-key path it targets is unobserved. |
 | The `needs-auth` wire signal | Stub: a substring heuristic. The live shape is unknown. | Stub: missing credential mapped before any query. |
 | Wall-clock, output-byte, and turn limits terminate a turn | Stub: each axis killed a fake spawn (process-group kill). | Stub: each axis mapped to `limit-exceeded` through the SDK abort controller. |
 | The confined process does not inherit the host environment | Stub: `process.env` secrets absent from the constructed child env. | Stub: SDK `env` built from an allowlist. |
@@ -112,7 +137,7 @@ credential path has run in production.**
 | What runs | `claude -p` spawned per turn. | The SDK **also spawns the Claude Code binary** (`pathToClaudeCodeExecutable`) and drives it over a control channel. It is not in-process inference. |
 | Configuration surface | Argv plus a settings file plus an MCP config file. Order and quoting matter ([endo-claude](endo-claude.md) § *Argv order is a confinement boundary*). | Typed options object. No argv to get wrong, but each option still becomes a CLI flag underneath, so flag semantics are the same. |
 | Guest projection delivery | Out of process: a loopback HTTP endpoint gated by a per-turn nonce (#105), or a claude-spawned stdio server ([endo-guest-stdio-mcp](endo-guest-stdio-mcp.md)). | In process: an `McpServer` handed to the SDK (`mcpServers`) with no socket or nonce. The host holds the facet; the binary reaches it only through the SDK's channel. |
-| Credential kinds it can use | API key via `ANTHROPIC_API_KEY` or `apiKeyHelper` under `--bare`. A subscription `setup-token` is **not** admissible under `--bare` (documented: "OAuth and keychain are never read"). | API key. Track B read Anthropic's third-party guidance as making this a paid-API backend; the one live run used a developer's claude.ai login, which is not a deployable credential. |
+| Credential kinds it can use | Under `--bare`: an API key via `ANTHROPIC_API_KEY` or `apiKeyHelper`, **or** a subscription OAuth token delivered as `ANTHROPIC_AUTH_TOKEN` (observed on 2.1.280). `--bare` ignores the stored login and `CLAUDE_CODE_OAUTH_TOKEN`, which is what `--help`'s "OAuth and keychain are never read" describes. | API key. Track B read Anthropic's third-party guidance as making this a paid-API backend; the one live run used a developer's claude.ai login, which is not a deployable credential. |
 | Dependency weight | The pinned binary only (~320 MiB). No npm dependency. | The SDK npm package pinned to the same Claude Code version, plus the binary. |
 | Upgrade coupling | Flags can appear between versions (2.1.280 adds `--restricted` and `--permission-prompts`). A pinned-version `--help` diff is needed on every bump. | SDK version must match the pinned binary; #106 pinned 0.3.236 to 2.1.236 and #103's bump to 2.1.268 now leaves that draft mismatched. |
 | Continuity between turns | None by construction (fresh process, no `--resume`). | None (`persistSession: false`). |
@@ -125,10 +150,11 @@ same binary with the same flags. They differ in two ways that matter:
 - **Projection delivery.** The SDK's in-process MCP server removes the loopback
   endpoint and its nonce entirely. That is a smaller attack surface and the only
   positive live result.
-- **Credential.** Under `--bare`, the CLI accepts only an API key or
-  `apiKeyHelper`, the same credential class the SDK uses. The subscription path
-  that motivated [endo-claude](endo-claude.md) is not available to either
-  confined backend (Decision 5).
+- **Credential.** Under `--bare`, the CLI accepts an API key, `apiKeyHelper`,
+  or a bearer token in `ANTHROPIC_AUTH_TOKEN`, and a subscription OAuth token
+  works in that last slot. `--bare` does not rule out the subscription path that
+  motivated [endo-claude](endo-claude.md). Whether to use it is a policy
+  question (Decision 5, Open question 1).
 
 So "which works better in practice" has no production answer yet. The
 engineering answer is that **the choice is not load-bearing for Endo**: Endo
@@ -289,9 +315,11 @@ The four ownership questions:
    live confinement canary (§ Verification gates).
 
 5. **Confined backends use an API-key credential delivered through a broker;
-   subscription credentials are outside the Endo contract.** Three findings
-   converge. `--bare` never reads OAuth, so a `setup-token` cannot authenticate a
-   confined CLI turn. The Agent SDK serves the paid API tier. And
+   subscription credentials are outside the Endo contract.** This is a policy
+   choice, not a technical limit: a subscription OAuth token delivered as
+   `ANTHROPIC_AUTH_TOKEN` authenticates a confined `--bare` turn
+   (§ Subscription credentials under `--bare`). Two findings support the choice.
+   The Agent SDK serves the paid API tier. And
    [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) found no documented
    third-party broker role for an individual Claude subscription. The maintainer's
    2026-09-23 note on #106 points the same way: offering Claude to end users
@@ -416,12 +444,15 @@ production authority boundary.
 1. **May a deployment keep using the owner's own subscription for the owner's own
    agents?** minion.town #87 captures a `setup-token` per `iss+sub`, and the
    maintainer's root-endowment amendment limits the factory to the root account.
-   That token cannot authenticate a `--bare` turn (Decision 5), so it only works
-   through an unconfined or non-`--bare` configuration, which this design does not
-   specify. Options: (a) drop subscription use from confined inference entirely
-   and move minion.town to the API-key broker; (b) permit a documented,
-   owner-only, non-`--bare` configuration outside the Endo contract; (c) wait for
-   a vendor-sanctioned broker role. Recommendation: (a), since the #106 note
+   Technically, that token can authenticate a fully confined `--bare` turn when
+   it is delivered as `ANTHROPIC_AUTH_TOKEN` (§ Subscription credentials under
+   `--bare`), so confinement does not force the answer. The question is whether
+   the owner's subscription terms permit it, and whether Endo's broker should
+   carry an OAuth token as well as an API key. Options: (a) drop subscription use
+   from confined inference entirely and move minion.town to the API-key broker;
+   (b) permit an owner-only subscription credential, delivered as
+   `ANTHROPIC_AUTH_TOKEN` or injected by the loopback broker, under the same
+   `--bare` recipe; (c) wait for a vendor-sanctioned broker role. Recommendation: (a), since the #106 note
    already names the API-key path as the end-user path.
 2. **Is Decision 9's relaxation acceptable?** It lets a single-operator deployment
    run a confined backend without the OS slice. The alternative keeps
