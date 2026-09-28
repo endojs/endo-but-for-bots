@@ -2620,10 +2620,7 @@ pub fn to_int32(n: f64) -> i32 {
 /// print as `0.0000001`), so the shortest digits from `{:e}` are placed by
 /// the spec's thresholds in [`ironhorse_text::number`].
 pub fn number_to_ecma_string(n: f64) -> String {
-    ironhorse_text::number::number_to_ecma_string_with(
-        n,
-        ironhorse_text::number::std_shortest_digits,
-    )
+    ironhorse_text::number::number_to_ecma_string(n)
 }
 
 #[cfg(test)]

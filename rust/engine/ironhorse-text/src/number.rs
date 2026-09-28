@@ -5,6 +5,19 @@
 //! Number spelling in the workspace shares it. The digit source is not
 //! shared: the XS oracle supplies its own so that a regression in the
 //! engine's dtoa cannot agree with itself in the differential.
+//!
+//! IronHorse's spelling intentionally departs from XS's `fxNumberToString`.
+//! XS's `fx_dtoa` sometimes prints a longer exact-integer form
+//! (`57632001481506816` where the spec prints `57632001481506820`) or, at a
+//! tie, a spelling that does not round-trip. IronHorse always follows the
+//! spec, so string conversion and non-index numeric property keys can spell
+//! the same Number differently on the two engines.
+
+/// Spell `number` as ECMA-262 `Number::toString(10)` with the standard
+/// library's shortest digits; the spelling the compiler and VM share.
+pub fn number_to_ecma_string(number: f64) -> String {
+    number_to_ecma_string_with(number, std_shortest_digits)
+}
 
 /// Spell `number` as ECMA-262 `Number::toString(10)`.
 ///
@@ -12,7 +25,7 @@
 /// `(digits, exponent)`: the shortest round-tripping decimal significand
 /// with one digit before its point, spelled with or without that point
 /// (`"1.25"` or `"125"`), and its base-10 exponent, so that
-/// `1.25 × 10^exponent` is the value.
+/// `1.25 x 10^exponent` is the value.
 pub fn number_to_ecma_string_with(
     number: f64,
     shortest: impl FnOnce(f64) -> (String, i32),
@@ -63,7 +76,7 @@ pub fn std_shortest_digits(magnitude: f64) -> (String, i32) {
 }
 
 /// Place `digits` (the spec's `s`, `k` digits long, no leading or trailing
-/// zero) so that the value is `0.s × 10^point` (`point` is the spec's `n`).
+/// zero) so that the value is `0.s x 10^point` (`point` is the spec's `n`).
 fn place_digits(digits: &str, point: i32) -> String {
     let count = digits.len() as i32;
     if count <= point && point <= 21 {

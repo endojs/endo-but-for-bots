@@ -34,6 +34,7 @@ use crate::token_flags::{
     EXPONENTIATION_EXPRESSION, IDENTIFIER_NAME, POSTFIX_EXPRESSION, PREFIX_EXPRESSION,
     RELATIONAL_EXPRESSION, SHIFT_EXPRESSION, UNARY_EXPRESSION,
 };
+use ironhorse_text::number::number_to_ecma_string;
 use ironhorse_text::SymbolName;
 
 /// A parser error, classified and located as XS's `fxReportParserError`
@@ -2228,18 +2229,6 @@ fn number_to_index(number: f64) -> Option<u32> {
     } else {
         None
     }
-}
-
-/// The ECMAScript `Number::toString(10)` rendering (spec 6.1.6.1.20),
-/// producing the canonical string a non-index numeric property key becomes
-/// (`fxNewParserSymbol(fxNumberToString…)`). Same digits and placement as
-/// `ironhorse_vm::value::number_to_ecma_string` (ironhorse-compile does not
-/// depend on ironhorse-vm).
-fn number_to_ecma_string(n: f64) -> String {
-    ironhorse_text::number::number_to_ecma_string_with(
-        n,
-        ironhorse_text::number::std_shortest_digits,
-    )
 }
 
 mod stmt;
