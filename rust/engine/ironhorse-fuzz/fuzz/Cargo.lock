@@ -469,6 +469,7 @@ name = "xs-oracle"
 version = "0.0.1"
 dependencies = [
  "cc",
+ "ironhorse-text",
  "ryu",
 ]
 
