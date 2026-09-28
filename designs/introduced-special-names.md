@@ -1,0 +1,657 @@
+# Introduced special names: indelible `@`-prefixed endowments on provisioning
+
+| | |
+|---|---|
+| **Created** | 2026-08-31 |
+| **Updated** | 2026-09-04 |
+| **Author** | kriscendobot (prompted) |
+| **Status** | Proposed |
+
+Narrowed from a broader Claude-agent provisioning proposal to just the generic
+daemon mechanism, at maintainer request on the
+[#1102](https://github.com/endojs/endo-but-for-bots/pull/1102) review.
+
+## Dependencies
+
+This design builds on the retained-guest provisioning API of
+[#1042](https://github.com/endojs/endo-but-for-bots/pull/1042) (the
+`provideGuest(name, options)` seam and its idempotent reacquisition), records the
+gap raised in
+[#982](https://github.com/endojs/endo-but-for-bots/issues/982) (see § What is the
+Problem Being Solved?), and supplies the generic daemon seam the confined in-guest
+agent of [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015)
+(`endo-claude`) needs for its provisioning half.
+
+## What is the Problem Being Solved?
+
+A host provisions a guest with `E(host).provideGuest(petName, opts)`.
+Today the only way to seed the new agent's namespace is `opts.introducedNames`,
+which maps names held by the providing host to *ordinary pet names* in the new
+agent.
+Ordinary pet names are mutable: the recipient can rename or remove them and can
+rebind them to different capabilities, so an `introducedNames` entry is a
+starting convenience, not a durable grant.
+
+Consider the concrete driver.
+A deployment provisions a child guest and wants that guest to hold a scoped
+account facet under a name the guest can look up but can never remove or rebind,
+so a later prompt inside the guest cannot lose or shadow the capability.
+Today the deployment can only introduce it as an ordinary pet name, which the
+guest can drop.
+The guest needs a *special name*: a well-known `@`-prefixed name the daemon binds
+and the recipient cannot mutate.
+
+The daemon owns a small, closed set of special names, all `@`-prefixed, that it
+binds itself at agent construction.
+For a guest: `@agent`, `@self`, `@host`, `@mail`, `@nets`, and `@planes`
+(`packages/daemon/src/guest.js:94-104`).
+For a host: a larger set including `@registry`, `@endo`, `@pins`, `@none`,
+`@main`, `@node`, and the conditional `@secrets` (root host) and `@mail` (mail
+hub) (`packages/daemon/src/host.js:504-524`).
+These daemon-owned special names are currently the *only* special names, and none
+can be introduced from a providing host through the provisioning call.
+
+This design adds one generic mechanism.
+It defines an `introducedSpecialNames` option on the provisioning call that maps
+host-held source names to `@`-prefixed destination names bound indelibly in the
+new agent.
+Each source name is resolved once at provisioning time.
+The resulting identifier is persisted in the new agent's *formula* (the durable
+record from which the daemon reconstructs the agent) and re-supplied on every
+daemon reincarnation (the reconstruction of a live agent from its formula that
+follows a daemon restart).
+
+It is deliberately narrow.
+It defines no package, no factory, no credential model, and nothing
+Claude-specific.
+Any deployment that wants to hand a new agent a durable capability under a
+reserved name uses this one seam.
+A scoped provisioner, an account-status facet, or a policy object are typical
+capabilities to endow.
+The policy of *which* names to introduce, and *what* capabilities sit behind
+them, belongs to the deployment, not to this daemon feature.
+
+## Relationship to #982
+
+The scoped-account-facet driver above is one motivating case, and the general
+mechanism this design specifies solves it fully.
+Issue [#982](https://github.com/endojs/endo-but-for-bots/issues/982) records a
+second, related but distinct case, which this design addresses only in part.
+Both cases share the same underlying need: letting the provisioning party
+designate a guest's indelible special names.
+But #982 names an "alternative `@main`" as its specific motivating case.
+This design addresses the general requirement (provisioning-party-designated
+indelible names) but deliberately does *not* let a caller bind the bare name
+`@main`: as § The introduced sub-namespace explains, introduced names live under a
+reserved prefix that is statically disjoint from the daemon's own names, and
+`@main` is daemon-owned.
+A literal alternative `@main` (rebinding a name the daemon already owns) would
+need its own daemon carve-out and is out of scope here; #982 is therefore
+*partially* addressed, with the general mechanism specified here and the specific
+`@main`-override left as separate work.
+
+## The option
+
+`introducedSpecialNames` joins `introducedNames` on the existing shared options
+bag `MakeHostOrGuestOptions` (`packages/daemon/src/types.d.ts:1444`), which both
+`provideGuest` and `provideHost` already accept.
+It builds directly on the retained-guest provisioning API landed by
+[#1042](https://github.com/endojs/endo-but-for-bots/pull/1042) (`feat(daemon):
+retain guests with introducedNames and code-mode globals`): its
+`EndoHost.provideGuest(name, options)` seam, its `introducedNames` grammar, and
+its idempotent reacquisition of a retained guest.
+Rather than introducing a parallel provisioning path, this design adds one new
+option field to that same bag.
+
+Destination names are drawn from the reserved introduction sub-namespace defined
+in § The introduced sub-namespace: they must carry the reserved `@intro-` prefix.
+
+```js
+await E(host).provideGuest(childName, {
+  introducedSpecialNames: {
+    // source name held by the providing host -> @intro- name in the new agent
+    'some-scoped-cap': '@intro-scoped-cap',
+  },
+});
+```
+
+The keys are single local names the *providing host* can resolve in its own pet
+store.
+The values are the `@intro-`-prefixed names bound in the *new agent*.
+
+The keys use the same grammar as `introducedNames`.
+`introducedNames` resolves its keys through
+`petStore.identifyLocal(parentName)` (`packages/daemon/src/host.js:1864`), single
+local names only.
+`introducedSpecialNames` deliberately matches that grammar rather than accepting
+name paths, so the two options in the same bag share one key grammar and a caller
+never hits a failed provisioning call caused by a grammar divergence between them.
+A deployment that needs to introduce a capability reached by a path can bind it
+to a single local name first and introduce that.
+
+Honoring the option on the shared `MakeHostOrGuestOptions`, and thus for both
+`provideHost` and `provideGuest`, is a deliberate widening rather than an
+oversight.
+A host is an agent with a pet store just as a guest is, and is equally entitled
+to receive an indelible special name.
+Keeping the option on the shared type avoids splitting `MakeHostOrGuestOptions`
+(and the single normalizer `normalizeHostOrGuestOptions` at
+`packages/daemon/src/host.js:83`) into per-agent-kind variants.
+If a later design needs a guest-only or host-only provisioning option, that split
+is its work to justify; this mechanism does not require it.
+
+## The introduced sub-namespace and the forward-compatibility contract
+
+A destination name must not collide with a name the daemon owns.
+The daemon's owned set is not fixed for all time, though.
+It is the closed set enumerated in `guest.js` and `host.js` above, *plus* an
+embedder-supplied set: `host.js:505` spreads `...platformNames`, built at
+`packages/daemon/src/manager.js:645-654` from the `specials` bag passed to
+`makeDaemon` (`packages/daemon/src/manager.js:7578`, `specials = {}`; type
+`Specials` at `packages/daemon/src/types.d.ts:697`), and today those keys pass
+through with no validation, not even `assertSpecialName`.
+The daemon may also add to its own set in a later release.
+A collision check run once at provisioning time, against the set as it stands that
+day, would silently break when a later daemon version, or a deployment's
+`specials` bag, claims a name an existing agent formula already binds.
+Because both the daemon-owned binding and the introduced binding are indelible,
+neither side could then be dropped to resolve the collision, and the merge order
+in the assembled special-name set (built by literal-plus-assignment in
+`guest.js:94-104`, then spread over `platformNames` in `host.js:505`) would alone
+decide the winner.
+
+The design therefore reserves a *statically disjoint sub-namespace* for
+introduced names rather than checking against a moving set.
+Introduced destination names are drawn from the reserved introduction prefix
+`@intro-`, pinned to that spelling here (it is a permanent, formula-baked
+contract, not a free choice for the implementation to revisit; `@x-` was rejected
+because the deprecated `X-` convention of RFC 6648 teaches that an "experimental"
+marker becomes permanent).
+The daemon's own special names are single unprefixed words (`@self`, `@host`,
+`@planes`).
+An introduced name carries the `@intro-` prefix.
+Collision-freedom is then a *structural* property (prefix membership), not a
+point-in-time set comparison.
+It is checkable without knowing the agent kind or the daemon version, and it holds
+across every future daemon release without reincarnation-time re-validation.
+This also removes the ergonomic trap of an introduced `@scoped-cap` being
+indistinguishable in form from a daemon-owned `@planes`: the reserved prefix makes
+the two visibly distinct at every call and inspection site.
+
+The contract has two sides, and each is enforced from a different point.
+The introduced side is enforced by validation (§ Resolution).
+The daemon-owned side is a promise that no daemon-owned or embedder-supplied
+special name uses the `@intro-` prefix, and nothing enforces that promise today,
+neither for the `specials` bag (its keys are unvalidated) nor for the daemon's own
+hardcoded literals (`@self`/`@host`/etc. are assembled inline in `guest.js:94-104`
+and `host.js:504-524`, read from no checkable source).
+The daemon-owned side itself splits into two structurally different halves.
+The embedder-supplied half is a runtime input (`specials`) a startup check can read
+directly, while the hardcoded half is the daemon's own inline literals a startup
+check over `specials` alone cannot see, so the assertion must be placed where
+*both* halves are visible.
+Phase 1 therefore asserts the prefix reservation over the **fully assembled**
+special-name set at agent construction: the daemon-owned literals from
+`guest.js`/`host.js` merged with the spread `platformNames` (`host.js:505`), the
+same assembled special-name object the daemon hands the agent's pet-sitter (the
+naming facet described in § Indelibility).
+Running the check at that assembly point, rather than only over the `specials`
+input at daemon startup, means a future release that adds an `@intro-`-prefixed
+key *directly to the `guest.js`/`host.js` literals* trips the same assertion, not
+only a deployment that registers one through `specials`.
+
+Two consequences of anchoring the runtime check at the assembly point, rather than
+once at daemon boot, must be stated plainly, because the hardcoded literals do not
+exist as a single value the daemon could enumerate at startup. Each variant's set
+is assembled inline only when that variant is constructed (`guest.js:94-104`;
+`host.js:504-524`, whose literal set differs by `isRootHost` and mail-hub branch).
+
+- The runtime assertion fires **lazily, per agent-kind construction**, not once at
+  daemon boot. A daemon can boot and run for a long time before its first guest is
+  provisioned, and each structurally distinct construction site (a guest, a root
+  host, a child non-root host, and a host acting as a mail hub) assembles a
+  different literal set, so a runtime regression in one variant is caught only when
+  that variant is first constructed, possibly long after deploy. The runtime check
+  is therefore a per-construction *backstop*, not a boot-time gate. The
+  forward-compatibility guarantee itself is enforced at **build time** by the Phase
+  1 test plan, which constructs one fixture per daemon-owned-literal variant (guest,
+  root host, child host, host+mail-hub) so a future release that adds an
+  `@intro-`-prefixed literal to any variant fails CI regardless of which variants a
+  given deployment ever exercises at runtime.
+- "Agent construction" **includes reincarnation** (rebuilding a live agent from its
+  already-persisted formula), not only fresh provisioning, because reincarnation
+  runs the same special-name assembly. This is the case the guarantee most needs to
+  cover: an existing agent whose formula already persists an `@intro-` binding,
+  meeting a colliding daemon-owned literal a *later* release adds. Because the
+  assertion re-runs at every reincarnation over the freshly assembled set, such a
+  release fails that agent's reincarnation loudly at the assembly point rather than
+  silently letting the merge order in the assembled special-name set decide the winner
+  between the persisted introduced binding and the new daemon-owned literal.
+
+That per-construction assertion over the assembled set, backed by the per-variant
+build-time fixtures, is what makes the forward-compatibility guarantee of § Security
+invariants (invariant 2, below) true rather than a human promise: that introduced
+names stay statically disjoint from the daemon-owned and embedder-supplied sets in
+every future release, whichever source a future name is added through and whichever
+agent-kind variant it lands in.
+
+No in-tree caller passes a non-empty `specials` bag today (`manager.js:7578`
+defaults it to `{}`), and the eventual downstream deployment named here (Minion
+Town) supplies no `@intro-`-prefixed platform special, so the newly reserved prefix
+collides with no known or planned embedder set. An out-of-tree embedder that
+happens to already use an `@intro-`-prefixed `specials` key is the deliberate
+scope of the assertion: it fails loudly at the first agent construction that
+assembles that key, rather than silently letting a platform special and an
+introduced name contend by merge order.
+
+## Resolution, validation, and rejection
+
+Provisioning resolves each source name *once*, against the providing host's pet
+store, and records the resulting formula identifier.
+Validation runs before any side effect and *rejects* (does not silently degrade)
+when:
+
+- a destination is not a well-formed `@intro-`-prefixed name (it must match the
+  existing special-name grammar `validSpecialNamePattern`,
+  `/^@[a-z][a-z0-9-]{0,127}$/` at `packages/daemon/src/pet-name.js:25`, and carry
+  the reserved prefix);
+- two entries map to the same destination name (duplicate destination); or
+- a *source name does not resolve* in the providing host's pet store.
+
+The daemon-owned-collision check that a flat (non-reserved) validation list would
+need is subsumed by the sub-namespace rule above.
+A destination outside the reserved prefix is malformed and rejected, and one
+inside it can never name a daemon-owned special name (given the Phase 1 assertion
+that keeps the prefix off the daemon-owned and embedder-supplied sets).
+
+The last case is the load-bearing departure from `introducedNames`.
+The existing `introduceNamesToAgent` helper silently `return`s when a source name
+is unresolvable (`packages/daemon/src/host.js:1867-1869`): the ordinary-name path
+can afford to no-op because those names are mutable hints.
+An indelible special name must not follow that path.
+A silent skip would mint an agent that is *missing* a capability the caller
+believes it granted and that the agent can never acquire afterward, which is the
+exact failure this mechanism exists to prevent.
+An unresolvable source name therefore *fails the provisioning call loudly*, before
+the agent is created.
+
+These rejection causes are not interchangeable to a caller: a malformed or
+duplicate destination is a caller-side syntax error the caller can correct and
+retry, an unresolvable source is a provider-state error, and the
+resolved-set-differs case on a repeat provide (§ Provisioning against an existing
+agent) is *unrecoverable*: the agent already holds a different indelible grant and
+can never receive the requested one. Each cause should therefore carry a
+distinguishable error identity (a `code` or error subclass, not one generic
+rejection string), so a programmatic caller can branch on recoverable versus
+unrecoverable outcomes at the call site rather than parse a message.
+
+## Provisioning against an existing agent
+
+`provideGuest` and `provideHost` are *provide* (get-or-create) verbs, not
+create-only verbs.
+`makeChildHost` (`packages/daemon/src/host.js`) returns an existing agent
+unchanged on a name hit and formulates a new one only on the miss.
+`introducedNames` survives this because it is re-applied on every call.
+An indelible, formula-baked special name cannot be re-applied, because the
+existing agent's formula is already written.
+The behavior on the existing-agent branch must therefore be stated, not left to
+whichever binding merges last.
+
+Because callers supply *source names* but the formula persists *resolved
+identifiers*, the comparison on the existing-agent branch is
+defined over the resolved value, not over the caller's surface syntax.
+Resolve the supplied `introducedSpecialNames` map first, producing a
+`{destination -> identifier}` set, and compare that set, order-insensitively,
+against the set already persisted in the agent's formula.
+"Byte-identical over the caller's record" is deliberately *not* the rule: a
+`Record<string,string>` has no canonical byte form or key order, and comparing
+resolved identifiers is what makes idempotence independent of caller-side syntax.
+
+On a name hit that returns an existing agent:
+
+- an omitted `introducedSpecialNames` option is a *no-op*: the bare reacquire
+  `provideGuest(name, { agentName })` that a retained guest issues on every
+  startup returns the existing agent unchanged, exactly as #1042 established.
+  Omitting the option never compares against, nor disturbs, the persisted set;
+- a supplied map whose resolved `{destination -> identifier}` set equals the
+  persisted set is a *no-op* (idempotent repeat provide); and
+- a supplied map whose resolved set *differs* from the persisted one *rejects*
+  the call, rather than silently endowing nothing (the differing entries can never
+  take effect on an indelible binding) or silently rebinding (indelibility forbids
+  it).
+
+Two caller-visible consequences follow, and both are intended.
+A repeat provide after the host *rebinds* a source pet name to a *different*
+capability resolves a different identifier and therefore rejects, surfacing the
+divergence instead of silently doing nothing.
+A repeat provide after a mere *rename* that preserves the identifier resolves the
+same identifier and is a clean no-op.
+A caller that intends to *change* an agent's introduced special names cannot: the
+grant is fixed for the agent's lifetime (see § Revocation).
+
+Because the comparison is over the *resolved identifier*, the reject fires not only
+on a caller-side rebind but also when the *providing host itself* legitimately
+recreates the source capability (re-minting a fresh scoped facet under the same
+stable source pet name across the provider's own reincarnations) and re-runs
+provisioning. That re-minted facet resolves to a *new* identifier, so a
+reassert-at-every-bring-up provisioning pattern would hit a spurious reject even
+though the caller changed nothing. This is an accepted operational constraint, not
+a gap: the persisted grant is anchored to the *identity* of the capability resolved
+at first provisioning, so a deployment must provision each indelible grant once and
+must not treat "reassert the grant on every provider restart" as its idempotent
+provisioning path. A deployment that needs the grant to survive provider-side
+recreation of what it points at introduces a *stable* forwarder (§ Revocation) as
+the source capability and re-mints only what sits behind that forwarder, leaving
+the resolved identifier (and therefore the idempotent repeat provide) unchanged.
+
+The reject-on-difference rule is deliberately stricter than indelibility alone
+requires, and the extra strictness is a scoping choice, not a security one.
+Indelibility (Security invariants) demands only that an *already-persisted* binding
+never be dropped or rebound; it does not, by itself, forbid *adding* a new,
+non-conflicting destination name to an already-provisioned agent.
+A supplied set that is a strict superset of the persisted one, agreeing on every
+shared destination and adding only fresh `@intro-` names, would violate no
+invariant.
+This design nonetheless rejects that superset case too, keeping the existing-agent
+branch a single equal-or-reject comparison rather than a three-way
+equal/append/reject one.
+The reasons are that monotonic growth introduces partial-application questions this
+narrow mechanism would rather not answer (if a superset also contains one entry
+that resolves differently, is the whole call rejected, or are the fresh names
+applied and only the conflict rejected?), and that append-after-provisioning is not
+a motivating use case here: the driver (§ What is the Problem Being Solved?) endows
+a guest at creation.
+Because an equal set is already a no-op, relaxing the equal-or-reject rule to also
+accept a strictly-additive superset is a *forward-compatible* change a later design
+can make without breaking any existing caller; excluding it now costs a deployment
+only that it must mint the second grant at provisioning time rather than bolting it
+on afterward.
+
+## Persistence and reincarnation
+
+The resolved formula identifiers are stored in the new agent's *formula*, not
+merely applied to its live pet store.
+On every daemon reincarnation the daemon re-supplies the special-name bindings to
+the agent from the persisted formula, so the grant survives restart without the
+providing host being present or re-running provisioning.
+
+Because the identifiers now live in the guest (and host) formula, they become part
+of the daemon's reachability graph and must be enumerated where every other
+formula-held identifier is, or the garbage collector (GC) will reclaim a capability the
+agent formula still names.
+Two hand-maintained tables read the formula and must both learn the new field:
+
+- `extractLabeledDeps` (`packages/daemon/src/manager.js:717`), whose `'guest'` and
+  `'host'` cases (`packages/daemon/src/manager.js:734-761`) enumerate each
+  formula-held identifier for the graph that `makeFormulaGraph` builds from its
+  output (`packages/daemon/src/manager.js:1162-1165`) to drive reachability and
+  `onCollect`; and
+- the parallel normalized-formula table in
+  `packages/daemon/src/formula-record.js` (the `'guest'` and `'host'` cases at
+  `packages/daemon/src/formula-record.js:55` and `:80`) that `EndoHost.getFormula`
+  and the inspector read.
+
+Both tables gain the persisted `introducedSpecialNames` identifiers.
+A retention test then asserts that an introduced capability is still reachable,
+not collected, after a daemon restart while the agent formula names it.
+
+`extractLabeledDeps` returns `Array<[string, FormulaIdentifier]>`: one label maps
+to exactly one identifier, and a label carries no other data.
+Because a single agent can hold several introduced identifiers, the design emits
+one `[label, identifier]` pair per introduced binding, deriving each label from its
+destination name.
+The label is effectively *data* (a deterministic function of the destination name)
+that two independently hand-maintained tables must construct identically, so the
+design pins that derivation as one named, shared pure function,
+`introducedSpecialNameLabel(destination)` (returning, for example,
+`introduced:@intro-scoped-cap`), which both `extractLabeledDeps` and the
+`formula-record.js` table call rather than each open-coding the string.
+Pinning the derivation once makes the two tables agree *by construction*; a
+free-form example string that each site reimplements would let them silently
+diverge, catchable only after the fact by a drift test.
+This keeps each identifier individually enumerated for reachability and matches the
+table's one-label-one-identifier shape rather than inventing a data-carrying label.
+A dedicated drift test (Phase 3, § Phased implementation and tests) that the two
+tables agree on the introduced identifiers still backs the shared helper (the
+helper makes divergence structurally hard; the test guards against a site that
+forgets to call it) and caps the cost of the two hand-maintained enumerations.
+
+## Indelibility
+
+The recipient can *look up* an introduced special name through ordinary naming
+machinery (it resolves like any `@`-prefixed name) but cannot *remove* or
+*rebind* it, exactly as it cannot remove or rebind daemon-owned special names.
+The property comes from the name grammar, not from the introduction itself: a pet
+store rejects any write to an `@`-prefixed name because every write path runs the
+injected `assertValidName` on the name it stores under.
+Those write paths are `storeIdentifier`
+(`packages/daemon/src/pet-store.js:98`), `remove`
+(`packages/daemon/src/pet-store.js:166`), and `rename`
+(`packages/daemon/src/pet-store.js:183-184`, asserting both the from- and
+to-name); and `isValidName` (`packages/daemon/src/pet-name.js:15`) excludes
+`@`-prefixed names.
+The pet-sitter (the facet the daemon exposes to an agent over its own pet store,
+through which the agent performs every naming operation, and which `makePetSitter`
+constructs) passes `storeIdentifier`, `remove`, and `rename` straight through to
+the underlying controller (`packages/daemon/src/pet-sitter.js:110`) and rejects
+nothing itself, so the guarantee is anchored in the grammar and its callers, not
+in the pet-sitter wrapper.
+An implementer must therefore assert indelibility against the *whole* write
+surface a name has (`storeIdentifier`, `storeLocator`, `move`, `copy`, `remove`,
+`rename`), not only `remove` and `rename`.
+An ordinary `introducedNames` entry offers neither property; that difference is the
+entire point of the new option.
+
+The recipient discovers which introduced names it holds by enumeration, since it
+did not choose them: `makePetSitter.list` returns special names sorted ahead of
+ordinary ones (`packages/daemon/src/pet-sitter.js:48-55`), so an introduced name
+appears there, and the reserved `@intro-` prefix makes it visibly distinct from a
+daemon-owned special name in that listing.
+
+From the recipient's side the endowment is visible and usable but immovable:
+
+```js
+// inside the newly provisioned guest
+await E(agent).lookup('@intro-scoped-cap');                  // resolves
+await E(agent).list();                                       // includes @intro-scoped-cap
+await E(agent).remove('@intro-scoped-cap');                  // rejects: indelible
+await E(agent).storeIdentifier(otherId, '@intro-scoped-cap'); // rejects: cannot rebind
+```
+
+## Revocation
+
+An introduced special name is indelible for the *lifetime of the agent* and is not
+independently revocable by this mechanism.
+The resolved identifier is rooted by the agent's formula (the reachability edge of
+§ Persistence and reincarnation), so the capability is not collected while the
+agent formula names it.
+
+This mechanism adds *no lifetime coupling of its own* between the introduced
+capability and the recipient agent.
+In particular it deliberately does **not** register a `thisDiesIfThatDies`
+dependency (`context.thisDiesIfThatDies(dep)`,
+`packages/daemon/src/context.js:115-118`, the daemon lifetime edge whereby one
+formula's destruction cancels a dependent).
+Wiring every introduced name to that edge would make destroying the introduced
+capability cancel the *whole recipient agent*: an agent-wide kill switch through
+any introduced name.
+That is rejected here because it is *itself* a revocation policy, and the most
+destructive one, contradicting this feature's deliberately policy-neutral stance:
+it guarantees only that the *name* is indelible.
+The consequence compounds under multiplicity: because a single agent can hold
+several independently-motivated introduced names (§ Persistence and reincarnation),
+a mandatory edge would give it *N* unrelated whole-agent kill switches sharing one
+blast radius, so an unrelated capability's ordinary lifecycle (rotation, expiry,
+GC of a sibling grant) could take the agent down.
+Instead, if the providing host later destroys the capability an introduced name
+points at, the name stays bound but resolves to a now-dangling identifier, exactly
+as the daemon already tolerates any other dangling capability.
+Removing the introduced identifier from an existing formula is still *not* a
+supported operation (the formula is written once at provisioning and reincarnation
+always re-supplies every persisted introduced binding), so the recipient cannot
+drop the name and the host cannot rewrite it away; only *what the name resolves to*
+is a revocation surface, and it belongs to the deployment.
+
+A deployment that needs a *revocable* endowment therefore introduces a *caretaker
+or attenuating forwarder* as the capability behind the introduced name and revokes
+through that forwarder, exactly as with any other durable grant.
+Because this mechanism couples no lifetimes, the forwarder can be *neutered* (made
+to stop forwarding) or *destroyed* as the deployment sees fit, with no whole-agent
+blast radius either way.
+The introduced name stays bound and resolvable; what it forwards to becomes inert.
+Providing that caretaker is the deployment's responsibility, not this daemon
+feature's.
+The feature guarantees only that the *name* is indelible, deliberately leaving
+revocation policy to the capability the name points at.
+
+## Security invariants
+
+1. `introducedSpecialNames` can only introduce capabilities the *providing host
+   already holds and can resolve* in its own pet store; it grants no way to name a
+   capability the host cannot itself reach.
+2. Destination names are constrained to well-formed `@intro-`-prefixed names,
+   statically disjoint from the daemon's own and the embedder-supplied special
+   names now and in every future release (enforced by the Phase 1 assertion that
+   keeps the reserved prefix off both sets), and may not duplicate each other.
+3. An unresolvable source name aborts provisioning; the mechanism never produces an
+   agent silently missing an intended indelible capability.
+4. A repeat provide of an existing agent with a resolved `introducedSpecialNames`
+   set that differs from the persisted set aborts, rather than silently endowing
+   nothing or rebinding an indelible name; an omitted option and an equal set are
+   both no-ops.
+5. An introduced special name is indelible to the recipient: lookup-only across the
+   whole write surface (`storeIdentifier`, `storeLocator`, `move`, `copy`,
+   `remove`, `rename`), and it survives daemon reincarnation from the persisted
+   formula.
+6. Persisted introduced identifiers are enumerated in the daemon's reachability and
+   formula-record tables, so an introduced capability is neither collected while
+   named nor invisible to the inspector.
+7. This mechanism adds no `thisDiesIfThatDies` or other agent-lifetime coupling to
+   the introduced capability: destroying the capability an introduced name points
+   at leaves the name bound but dangling, and never cancels the recipient agent.
+   Revocation of *what the name resolves to* is the deployment's responsibility,
+   through a caretaker or forwarder behind the name (§ Revocation).
+
+## Phased implementation and tests
+
+1. **Guard and normalizer.**
+   Add `introducedSpecialNames` to `MakeHostOrGuestOptions` and the shared options
+   normalizer, with the validation above, and add the assertion, run over the fully
+   assembled special-name set at agent construction, that no daemon-owned or
+   embedder-supplied (`specials`) special name carries the reserved `@intro-`
+   prefix.
+   Carry the reject-vs-skip asymmetry (§ Resolution) onto the type surface too: add
+   a one-line TSDoc note on the `introducedSpecialNames` field in `types.d.ts` that
+   an unresolvable source *rejects* the call, unlike the sibling `introducedNames`
+   field on the same bag, which silently skips, so a programmatic caller reading
+   the type (not only `help.md`) meets the divergence.
+   Test malformed destinations (outside the reserved sub-namespace), duplicate
+   destinations, and, distinctly, an *unresolvable source name that rejects* the
+   call rather than skipping.
+   Because the option rides the shared bag for both `provideGuest` and
+   `provideHost`, run these tests on **both** call paths, not the guest path alone;
+   in particular name a host-path test that provisions a **root host**
+   (`isRootHost`) with an `introducedSpecialNames` entry and asserts the introduced
+   name binds indelibly with no interaction with the root-host-only `@secrets`
+   special (`host.js:504-524`), so the deliberate widening onto the host path
+   (§ The option) is covered rather than assumed sufficient by symmetry.
+   Test the reservation assertion directly, too, on *both* of its halves, since they
+   are enforced from structurally different sources: constructing a daemon whose
+   `specials` bag carries an `@intro-`-prefixed key is rejected at construction
+   (embedder-supplied half), and a fixture whose assembled daemon-owned literal set
+   carries an `@intro-`-prefixed name is likewise rejected at construction
+   (hardcoded half).
+   Because the hardcoded literals are assembled per agent-kind rather than once at
+   boot (§ The introduced sub-namespace), the hardcoded-half fixture is **one case
+   per structurally distinct construction site** (guest, root host, child non-root
+   host, and host acting as a mail hub), each of which assembles a different literal
+   set, so a future release that adds an `@intro-`-prefixed literal to *any* variant
+   fails CI regardless of which variants a deployment exercises at runtime.
+   This assertion is the enforcement mechanism Security invariant 2's
+   forward-compatibility guarantee rides on, so it earns its own per-variant tests
+   rather than riding on the destination-validation tests.
+2. **Provisioning and formula.**
+   Resolve source names once, persist the resulting identifiers in the agent
+   formula, and bind them as special (indelible) names in the new agent.
+   Test that the recipient can look the name up and see it in `list` but cannot
+   remove or rebind it across the whole write surface; that a repeat provide whose
+   resolved set is *equal* is idempotent; that an *omitted* option on a bare
+   reacquire is a no-op; and that a repeat provide whose resolved set *differs*
+   rejects.
+3. **Reincarnation and GC.**
+   Re-supply bindings from the persisted formula on restart, and extend
+   `extractLabeledDeps` and the formula-record tables.
+   Test identity preservation of the introduced capability across a daemon restart,
+   assert the two tables agree on the introduced identifiers, and add a retention
+   test asserting the capability is not collected while the agent formula names it.
+
+## Surfacing the option (help and CLI)
+
+The `provideGuest` help entry documents its options as
+`{ introducedNames: { guestName: hostName } }` (`packages/daemon/src/help.md`),
+which spells the mapping direction *backwards*.
+`host.js:1863` maps `[parentName, childName]`, that is source -> destination, and the
+CLI spells the same direction `--introduce myPetname:theirPetname`
+(`packages/cli/src/endo.js:733,749`).
+Phase 1 therefore also:
+
+- documents `introducedSpecialNames` in the `provideHost` and `provideGuest` help
+  entries, stating the source -> destination direction and that an unresolvable
+  source rejects the call while `introducedNames` silently skips;
+- corrects the inverted existing `introducedNames` help entry to match the
+  implementation and the CLI, and adds the same "silently skips" note there so a
+  caller reading only that older entry meets the divergence in the docs
+  rather than as a runtime surprise; and
+- names a CLI spelling for the new option, `--introduce-special
+  cap:@intro-scoped-cap`, the sibling of the existing `--introduce`
+  (`packages/cli/src/endo.js:733,749`).
+
+## Design decisions
+
+1. **Reuse the existing options bag rather than a new provisioning verb.**
+   The grant is a property of provisioning; a separate call would let an agent
+   exist for a window without its intended indelible capability.
+   The cost of reusing a get-or-create verb, defining the existing-agent branch, is
+   paid explicitly in § Provisioning against an existing agent.
+2. **Make the mechanism generic and Claude-agnostic.**
+   A hard-coded daemon name for one deployment's capability would not be reusable;
+   deployments supply their own source capabilities and destination names.
+3. **Reject an unresolvable source instead of inheriting `introducedNames`'s
+   silent skip.**
+   Indelibility means the recipient can never recover from a missed grant, so the
+   miss must be a loud provisioning failure, not a quiet absence.
+4. **Persist resolved identifiers, not source names.**
+   Re-resolving source names at reincarnation would depend on the providing host
+   still holding them and would let a later rebind on the host silently change the
+   recipient's indelible capability.
+   The existing-agent idempotency check (§ Provisioning against an existing agent)
+   therefore compares resolved identifiers, not caller-supplied source names.
+5. **Draw introduced names from a reserved, statically disjoint sub-namespace.**
+   A flat collision check against the daemon's owned set is only valid at the
+   instant it runs; a reserved prefix makes collision-freedom structural and
+   forward-compatible without reincarnation-time re-validation of an indelible
+   binding.
+6. **Add no automatic agent-lifetime coupling to the introduced capability.**
+   Keeping the capability alive is handled by the formula reachability edge alone
+   (§ Persistence and reincarnation); the mechanism deliberately does *not* also
+   register a `thisDiesIfThatDies` edge that would kill the whole recipient agent
+   when the source capability dies.
+   A mandatory whole-agent kill switch is itself a revocation policy (the most
+   destructive one), and would both contradict the feature's policy-neutral stance
+   (the *name* is indelible; what it points at, and its lifetime, are the
+   deployment's to choose via a caretaker or forwarder) and, under the multiplicity
+   the design supports, hand one agent several unrelated whole-agent kill switches.
+   An introduced name whose source is later destroyed dangles like any other
+   dangling identifier rather than taking the agent down with it (§ Revocation).
+
+## Prompt
+
+> Narrow the earlier `@endo/exo-claude-agents` provisioning proposal, at the
+> maintainer's request, to just the one generic daemon mechanism it needed:
+> endowing a newly provisioned agent with indelible special names supplied on the
+> provisioning options bag.
+> Drop the package, factory, credential-lease, and lifecycle content; keep the
+> daemon `introducedSpecialNames` seam, its validation and rejection rules,
+> persistence across reincarnation, garbage-collection reachability, and a phased
+> test plan.
+> Implementation is out of scope.
