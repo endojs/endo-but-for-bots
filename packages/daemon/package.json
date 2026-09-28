@@ -30,6 +30,7 @@
     "./iroh.js": "./src/networks/iroh.js",
     "./formula-nonce-locator.js": "./src/networks/formula-nonce-locator.js",
     "./locator.js": "./locator.js",
+    "./capability-url.js": "./capability-url.js",
     "./pet-name.js": "./src/pet-name.js",
     "./type-guards.js": "./src/type-guards.js",
     "./src/interfaces.js": "./src/interfaces.js",

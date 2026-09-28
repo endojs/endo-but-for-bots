@@ -98,8 +98,8 @@ These are Chat-specific commands with no direct CLI equivalent:
 - `/accept <locator> <guest-name>` — Accept an invitation
 - `/share <name>` — Generate a shareable locator with
   connection hints
-- `/adopt-locator <locator> <name>` — Adopt a remote value
-  from a shareable locator
+- `/store <locator> <name>` — Store a remote value from a
+  shareable locator (endo:// or https capability link)
 - `/network [host] [port]` — Enable TCP peer network
   (defaults to 127.0.0.1:8940)
 - `/network-iroh` — Enable iroh peer network (no open

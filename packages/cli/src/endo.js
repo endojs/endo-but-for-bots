@@ -366,23 +366,6 @@ export const main = async rawArgs => {
     });
 
   program
-    .command('adopt-locator <name>')
-    .option(
-      '-f,--file <path>',
-      'read the endo:// locator from a file instead of standard input',
-    )
-    .option(...commonOptions.as)
-    .description(
-      'adopt the remote value an endo:// locator names (read from stdin)',
-    )
-    .action(async (name, options) => {
-      const { file, as: agentNames } = options;
-      const { adoptLocatorCommand } =
-        await import('./commands/adopt-locator.js');
-      return adoptLocatorCommand({ name, file, agentNames });
-    });
-
-  program
     .command('dismiss <message-number>')
     .description('delete a message')
     .option(...commonOptions.as)
@@ -578,6 +561,14 @@ export const main = async rawArgs => {
     .option('--json <json>', 'store JSON')
     .option('--json-stdin', 'store STDIN JSON')
     .option('--bigint <bigint>', 'store a bigint')
+    .option(
+      '--locator <locator>',
+      'store the value a capability URL (endo:// or https://…#v=1&…) names, resolving it first; pass - to read the locator from stdin so a bearer stays out of shell history',
+    )
+    .option(
+      '--locator-file <path>',
+      'like --locator, reading the capability URL from a file',
+    )
     .action(async options => {
       const {
         name,
@@ -589,6 +580,8 @@ export const main = async rawArgs => {
         json: storeJson,
         jsonStdin: storeJsonStdin,
         bigint: storeBigInt,
+        locator: storeLocator,
+        locatorFile: storeLocatorFile,
       } = options;
       const { store } = await import('./commands/store.js');
       return store({
@@ -599,6 +592,8 @@ export const main = async rawArgs => {
         storeJson,
         storeJsonStdin,
         storeBigInt,
+        storeLocator,
+        storeLocatorFile,
         name,
         agentNames,
       });
@@ -1052,7 +1047,6 @@ export const main = async rawArgs => {
         'resolve',
         'reject',
         'adopt',
-        'adopt-locator',
         'define',
         'endow',
         'form',

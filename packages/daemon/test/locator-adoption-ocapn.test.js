@@ -22,6 +22,10 @@ import {
   idFromLocator,
   parseLocator,
 } from '../src/locator.js';
+import {
+  formatCapabilityUrl,
+  parseCapabilityUrl,
+} from '../src/capability-url.js';
 
 // Guest-locator adoption across two real daemons over the OCapN-Noise
 // network (`designs/daemon-locator-reference.md`, Minion Town guest
@@ -164,6 +168,19 @@ test.serial(
     t.is(await E(remoteGuest).lookup('greeting'), 'hello from A');
     await E(remoteGuest).storeValue('hello from B', 'reply');
     t.is(await E(guestA).lookup('reply'), 'hello from B');
+
+    // The same locator in the https capability-URL form — every field in
+    // the fragment (designs/capability-url-locators.md) — adopts through
+    // the same daemon entry point with identical semantics.
+    const httpsForm = formatCapabilityUrl(
+      /** @type {any} */ (parseCapabilityUrl(locator)),
+      { base: 'https://minion.town/' },
+    );
+    await E(hostB).adoptFromLocator(httpsForm, 'remote-alice-https');
+    t.is(
+      await E(E(hostB).lookup('remote-alice-https')).lookup('greeting'),
+      'hello from A',
+    );
 
     // A locator for the same node whose hint names a different peer key
     // does not redirect the peer B already knows: B keeps its

@@ -107,7 +107,7 @@ Generate a shareable locator:
 
 The other party on another machine adopts it:
 ```
-/adopt-locator <locator> -n their-name
+/store <locator> -n their-name
 ```
 
 This works across network boundaries using Endo's peer

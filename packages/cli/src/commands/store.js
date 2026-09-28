@@ -31,6 +31,8 @@ export const store = async ({
   storeJson,
   storeJsonStdin,
   storeBigInt,
+  storeLocator,
+  storeLocatorFile,
 }) => {
   const modes = {
     storePath,
@@ -40,6 +42,8 @@ export const store = async ({
     storeJson,
     storeJsonStdin,
     storeBigInt,
+    storeLocator,
+    storeLocatorFile,
   };
   const selectedModes = Object.entries(modes).filter(
     ([_modeName, value]) => value !== undefined,
@@ -55,9 +59,42 @@ export const store = async ({
 
   const parsedName = parsePetNamePath(name);
 
+  // Read a bearer locator from stdin (`--locator -`) or a file
+  // (`--locator-file`), so it never has to appear on the command line (and
+  // in shell history or `ps`). A literal `--locator <url>` is accepted for
+  // locators that are not bearers.
+  let locator;
+  if (storeLocator !== undefined || storeLocatorFile !== undefined) {
+    if (storeLocatorFile !== undefined || storeLocator === '-') {
+      if (storeLocatorFile !== undefined) {
+        locator = await fs.promises.readFile(storeLocatorFile, 'utf-8');
+      } else {
+        process.stdin.setEncoding('utf-8');
+        const chunks = [];
+        for await (const chunk of process.stdin) {
+          chunks.push(chunk);
+        }
+        locator = chunks.join('');
+      }
+    } else {
+      locator = storeLocator;
+    }
+    locator = locator.trim();
+    if (locator === '') {
+      // Usage error should be reported without trace.
+      // eslint-disable-next-line no-throw-literal
+      throw `store: no locator given; pipe it to --locator - or pass --locator-file`;
+    }
+  }
+
   await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
     await null;
-    if (storeText !== undefined) {
+    if (locator !== undefined) {
+      // The daemon resolves the value the locator names before it commits
+      // the pet name, and accepts any capability URL (endo:// or the https
+      // fragment form).
+      await E(agent).adoptFromLocator(locator, parsedName);
+    } else if (storeText !== undefined) {
       await E(agent).storeValue(storeText, parsedName);
     } else if (storeJson !== undefined) {
       await E(agent).storeValue(JSON.parse(storeJson), parsedName);

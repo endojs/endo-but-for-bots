@@ -125,7 +125,7 @@ const encodePathComponents = components =>
 
 /**
  * @param {string} allegedLocator
- * @returns {{ formulaType: string, node: NodeNumber, number: FormulaNumber, hints: ConnectionHint[] }}
+ * @returns {{ formulaType: string, node: NodeNumber, number: FormulaNumber, hints: ConnectionHint[], from?: string, fromNode?: string, view?: string }}
  */
 export const parseLocator = allegedLocator => {
   const errorPrefix = `Invalid locator ${q(allegedLocator)}:`;
@@ -153,10 +153,17 @@ export const parseLocator = allegedLocator => {
     throw makeError(`${errorPrefix} Invalid id.`);
   }
 
-  // Only `type`, `from`, and `fromNode` are recognized query parameters.
-  // `from` and `fromNode` are specific to invitation and handle locators.
+  // Only `type`, `from`, `fromNode`, and `view` are recognized query
+  // parameters. `from` and `fromNode` are specific to invitation and handle
+  // locators; `view` is presentation metadata appended by sharing UIs and
+  // carries no authority (designs/capability-url-locators.md).
   for (const key of url.searchParams.keys()) {
-    if (key !== 'type' && key !== 'from' && key !== 'fromNode') {
+    if (
+      key !== 'type' &&
+      key !== 'from' &&
+      key !== 'fromNode' &&
+      key !== 'view'
+    ) {
       throw makeError(`${errorPrefix} Invalid search params.`);
     }
   }
@@ -168,7 +175,28 @@ export const parseLocator = allegedLocator => {
 
   const nodeNumber = /** @type {NodeNumber} */ (node);
   const formulaNumber = /** @type {FormulaNumber} */ (number);
-  return { formulaType, node: nodeNumber, number: formulaNumber, hints };
+  /** @type {{ formulaType: string, node: NodeNumber, number: FormulaNumber, hints: ConnectionHint[], from?: string, fromNode?: string, view?: string }} */
+  const result = {
+    formulaType,
+    node: nodeNumber,
+    number: formulaNumber,
+    hints,
+  };
+  // The optional fields appear only when present, so existing consumers
+  // (and their deep equalities) are unaffected by their introduction.
+  const from = url.searchParams.get('from');
+  if (from !== null) {
+    result.from = from;
+  }
+  const fromNode = url.searchParams.get('fromNode');
+  if (fromNode !== null) {
+    result.fromNode = fromNode;
+  }
+  const view = url.searchParams.get('view');
+  if (view !== null) {
+    result.view = view;
+  }
+  return result;
 };
 
 /** @param {string} allegedLocator */

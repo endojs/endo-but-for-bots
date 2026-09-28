@@ -30,6 +30,7 @@ import {
 } from './pet-name.js';
 import { parseId } from './formula-identifier.js';
 import { idFromLocator, internalizeLocator } from './locator.js';
+import { canonicalEndoLocator } from './capability-url.js';
 import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
 
@@ -2286,7 +2287,7 @@ export const makeHostMaker = ({
     };
 
     /** @type {EndoHost['adoptFromLocator']} */
-    const adoptFromLocator = async (locator, petNameOrPath) => {
+    const adoptFromLocator = async (allegedLocator, petNameOrPath) => {
       const { namePath } = petNamePathFrom(petNameOrPath);
       // A locator is a bearer capability: keep it, and its formula
       // number, out of any error this method reports.
@@ -2296,15 +2297,23 @@ export const makeHostMaker = ({
           (text, secret) => text.split(secret).join('<redacted>'),
           message,
         );
+      const inputSecrets =
+        typeof allegedLocator === 'string' ? [allegedLocator] : [];
+      // Accept any capability URL — endo:// or the https fragment form —
+      // and normalize to the canonical endo:// form before internalizing
+      // (designs/capability-url-locators.md).
+      /** @type {string} */
+      let locator;
       /** @type {ReturnType<typeof internalizeLocator>} */
       let internal;
       try {
+        locator = canonicalEndoLocator(allegedLocator);
         internal = internalizeLocator(locator);
       } catch (error) {
         throw makeError(
           redact(/** @type {Error} */ (error).message, [
-            String(q(locator)),
-            locator,
+            String(q(allegedLocator)),
+            ...inputSecrets,
           ]),
         );
       }
@@ -2361,7 +2370,12 @@ export const makeHostMaker = ({
       }
       /** @param {unknown} error */
       const describe = error =>
-        redact(/** @type {Error} */ (error).message, [locator, id, number]);
+        redact(/** @type {Error} */ (error).message, [
+          locator,
+          ...inputSecrets,
+          id,
+          number,
+        ]);
       // Resolve the formula through the peer before committing the name:
       // an adoption succeeds only once the remote daemon, authenticated
       // against the identity its hint names, has actually provided the

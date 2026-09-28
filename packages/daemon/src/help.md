@@ -504,7 +504,9 @@ Example: locateWithHints("my-channel") returns a shareable locator URL.
 
 ## adoptFromLocator(locator, petNameOrPath) -> Promise<void>
 
-Adopt a value from a locator that includes connection hints.
+Store the value a locator names, resolving it first. The locator is any
+capability URL: an endo:// URL, or an https URL carrying the same fields in
+its #v=1&... fragment. The CLI surface is `endo store --locator`.
 Parses the locator to extract peer info, connects over a hint that an
 installed network supports (skipping unsupported hints), authenticates the
 peer against the identity the hint names, and resolves the value before
