@@ -702,23 +702,23 @@ blobs, so generic code can read a content hash off any blob or tree.
 
 Check if an entry exists at the given path.
 names: string[] - Path segments.
-Example: has("index.html") → true
-Example: has("assets", "style.css") → true
+Example: has("index.html") -> true
+Example: has("assets", "style.css") -> true
 
 ## list(...names) -> Promise<string[]>
 
 List entry names at the given path (or root).
 names: string[] - Path segments (optional, defaults to root).
-Example: list() → ["index.html", "app.js", "assets"]
-Example: list("assets") → ["style.css", "logo.png"]
+Example: list() -> ["index.html", "app.js", "assets"]
+Example: list("assets") -> ["style.css", "logo.png"]
 
 ## lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>
 
 Get the value at a name or path.
 nameOrPath: string | string[] - Name or path segments.
 Returns EndoReadable for files, ReadableTree for subdirectories.
-Example: lookup("index.html") → EndoReadable
-Example: lookup(["assets", "style.css"]) → EndoReadable
+Example: lookup("index.html") -> EndoReadable
+Example: lookup(["assets", "style.css"]) -> EndoReadable
 
 # EndoMount - Live mutable access to a filesystem directory.
 
