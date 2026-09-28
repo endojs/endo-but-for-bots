@@ -652,6 +652,75 @@ mod tests {
         );
     }
 
+    #[test]
+    fn independent_number_spelling_matches_vm_at_placement_corners() {
+        for number in [
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            5e-324,
+            -1.5,
+            0.5,
+            123000.0,
+            1.5e20,
+            123.456,
+            1.25e-6,
+            -2.5e-7,
+        ] {
+            assert_eq!(
+                number_to_ecma_string(number),
+                ironhorse_vm::value::number_to_ecma_string(number),
+                "{number:e}"
+            );
+        }
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn independent_number_spelling_round_trips(bits in proptest::num::u64::ANY) {
+            let number = f64::from_bits(bits);
+            proptest::prop_assume!(number.is_finite());
+            let spelled = number_to_ecma_string(number);
+            let parsed: f64 = spelled.parse().expect("an ECMA Number spelling parses");
+            proptest::prop_assert_eq!(parsed, number, "{}", spelled);
+        }
+
+        #[test]
+        fn independent_number_spelling_matches_vm(bits in proptest::num::u64::ANY) {
+            let number = f64::from_bits(bits);
+            proptest::prop_assert_eq!(
+                number_to_ecma_string(number),
+                ironhorse_vm::value::number_to_ecma_string(number)
+            );
+        }
+    }
+
+    #[test]
+    fn non_finite_completions_are_captured_as_numbers() {
+        for (source, spelling) in [("1/0", "Infinity"), ("-1/0", "-Infinity"), ("0/0", "NaN")] {
+            let outcome = run(source).expect("oracle machine must start");
+            assert!(outcome.completed, "{source}: {}", outcome.error);
+            let number = outcome.result_number().expect("a Number completion");
+            assert_eq!(number_to_ecma_string(number), spelling, "{source}");
+        }
+    }
+
+    #[test]
+    fn non_number_completions_are_not_captured_as_numbers() {
+        for source in [
+            "12345678901234567890n",
+            "1n",
+            "'42'",
+            "true",
+            "undefined",
+            "null",
+            "Object(42)",
+        ] {
+            let outcome = run(source).expect("oracle machine must start");
+            assert!(outcome.completed, "{source}: {}", outcome.error);
+            assert_eq!(outcome.result_number_bits, None, "{source}");
+        }
+    }
+
     /// Regression for continuous-fuzz finding `493390fc03979205`: a completion
     /// value longer than the old 1024-byte capture buffer used to be silently
     /// truncated to 1023 bytes, so the oracle reported a shorter string than

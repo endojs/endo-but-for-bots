@@ -2085,6 +2085,28 @@ mod tests {
         }
     }
 
+    proptest::proptest! {
+        #[test]
+        fn decimal_numbers_agree_exactly_when_their_doubles_are_equal(
+            bits in proptest::num::u64::ANY,
+            ulps in 0u64..=2,
+        ) {
+            let oracle = f64::from_bits(bits);
+            let ironhorse = f64::from_bits(bits.wrapping_add(ulps));
+            proptest::prop_assume!(oracle.is_finite() && ironhorse.is_finite());
+            let oracle_spelling = xs_oracle::number_to_ecma_string(oracle);
+            let ironhorse_spelling = ironhorse_vm::value::number_to_ecma_string(ironhorse);
+            proptest::prop_assert_eq!(
+                results_agree(&oracle_spelling, None, &ironhorse_spelling),
+                oracle == ironhorse
+            );
+            proptest::prop_assert_eq!(
+                results_agree("", Some(&oracle_spelling), &ironhorse_spelling),
+                oracle == ironhorse
+            );
+        }
+    }
+
     // XS's `fx_dtoa` spells some doubles non-shortest or, at a tie, not
     // round-tripping. `results_agree` holds IronHorse to the spec spelling of
     // the oracle's exact double, so none of these findings may diverge.

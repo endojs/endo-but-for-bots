@@ -24,3 +24,4 @@ cc = "1"
 
 [dev-dependencies]
 ironhorse-vm = { path = "../ironhorse-vm" }
+proptest = { version = "1", default-features = false, features = ["std"] }
