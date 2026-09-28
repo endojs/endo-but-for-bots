@@ -1,0 +1,5 @@
+built-ins/Object/create/15.2.3.5-4-10.js
+built-ins/Object/create/15.2.3.5-4-33.js
+built-ins/Object/defineProperties/15.2.3.7-2-11.js
+built-ins/Object/defineProperties/15.2.3.7-5-a-12.js
+built-ins/Object/defineProperties/15.2.3.7-5-b-244.js
