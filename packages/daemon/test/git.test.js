@@ -3186,7 +3186,7 @@ test('Git.add accepts mixed string and entry designators', async t => {
   t.is(byPath['outside.txt'].index, 'clean');
 });
 
-test('Git string designators use mount.entry normalization and denial', async t => {
+test('Git string designators use adapter normalization and mount denial', async t => {
   const mount = await provisionMount(t);
   /** @type {string[][]} */
   const calls = [];
@@ -3198,7 +3198,7 @@ test('Git string designators use mount.entry normalization and denial', async t 
   });
   const git = makeGit({ mount, backend, lineageOf });
   const spelling = './a/b/../c';
-  const entry = await E(mount).entry(spelling);
+  const entry = await E(mount).entry(['a', 'c']);
 
   await E(git).add([spelling]);
   await E(git).add([entry]);
