@@ -268,72 +268,32 @@ impl OracleOutcome {
 
 /// Oracle-side ECMA-262 `Number::toString` spelling for an exact double.
 ///
-/// This deliberately does not call IronHorse's formatter: differential
-/// acceptance must retain an independent spelling oracle or a future VM dtoa
-/// regression would agree with itself. The shortest digits come from Ryu and
-/// are then placed using ECMA-262's fixed/exponential thresholds.
+/// The shortest digits come from Ryu rather than IronHorse's dtoa, so a VM
+/// dtoa regression cannot agree with itself in the differential; only the
+/// spec's digit placement is shared ([`ironhorse_text::number`]).
 pub fn number_to_ecma_string(number: f64) -> String {
-    if number.is_nan() {
-        return "NaN".to_string();
-    }
-    if number.is_infinite() {
-        return if number.is_sign_negative() {
-            "-Infinity"
-        } else {
-            "Infinity"
-        }
-        .to_string();
-    }
-    if number == 0.0 {
-        return "0".to_string();
-    }
+    ironhorse_text::number::number_to_ecma_string_with(number, ryu_shortest_digits)
+}
 
-    let sign = if number.is_sign_negative() { "-" } else { "" };
+/// Ryu spells a magnitude as `123.45`, `0.001`, or `1e21`; renormalize to
+/// significant digits and the exponent of the first one.
+fn ryu_shortest_digits(magnitude: f64) -> (String, i32) {
     let mut buffer = ryu::Buffer::new();
-    let shortest = buffer.format_finite(number.abs());
-    let (mantissa, exponent) = shortest
-        .split_once(['e', 'E'])
-        .map_or((shortest, 0), |(mantissa, exponent)| {
-            (mantissa, exponent.parse::<i32>().unwrap_or(0))
-        });
+    let shortest = buffer.format_finite(magnitude);
+    let (mantissa, exponent) =
+        shortest
+            .split_once(['e', 'E'])
+            .map_or((shortest, 0), |(mantissa, exponent)| {
+                (
+                    mantissa,
+                    exponent.parse::<i32>().expect("Ryu exponent is an integer"),
+                )
+            });
     let decimal_position = mantissa.find('.').unwrap_or(mantissa.len()) as i32;
-    let mut digits: String = mantissa
-        .bytes()
-        .filter(|byte| *byte != b'.')
-        .map(char::from)
-        .collect();
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
     let leading_zeroes = digits.bytes().take_while(|byte| *byte == b'0').count();
-    digits.drain(..leading_zeroes);
     let point = decimal_position + exponent - leading_zeroes as i32;
-    while digits.ends_with('0') {
-        digits.pop();
-    }
-    debug_assert!(!digits.is_empty());
-    let digit_count = digits.len() as i32;
-
-    let body = if digit_count <= point && point <= 21 {
-        let mut output = digits;
-        output.push_str(&"0".repeat((point - digit_count) as usize));
-        output
-    } else if 0 < point && point <= 21 {
-        format!(
-            "{}.{}",
-            &digits[..point as usize],
-            &digits[point as usize..]
-        )
-    } else if -6 < point && point <= 0 {
-        format!("0.{}{}", "0".repeat((-point) as usize), digits)
-    } else {
-        let exponent = point - 1;
-        let exponent_sign = if exponent >= 0 { "+" } else { "-" };
-        let significand = if digit_count == 1 {
-            digits
-        } else {
-            format!("{}.{}", &digits[..1], &digits[1..])
-        };
-        format!("{significand}e{exponent_sign}{}", exponent.abs())
-    };
-    format!("{sign}{body}")
+    (digits[leading_zeroes..].to_string(), point - 1)
 }
 
 /// Whether an explicit XS abort status means memory or stack exhaustion.

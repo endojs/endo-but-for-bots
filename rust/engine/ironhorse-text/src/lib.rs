@@ -2,6 +2,8 @@
 //! including its modified encoding of NUL, never a diagnostic Rust string.
 #![forbid(unsafe_code)]
 
+pub mod number;
+
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SymbolName(Vec<u8>);
 

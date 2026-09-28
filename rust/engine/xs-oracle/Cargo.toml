@@ -14,8 +14,9 @@ name = "xs_oracle"
 path = "src/lib.rs"
 
 [dependencies]
-# Keep the oracle's expected Number spelling independent of ironhorse-vm's
-# formatter so a VM dtoa regression remains visible to the differential.
+ironhorse-text = { path = "../ironhorse-text" }
+# Keep the oracle's Number digits independent of ironhorse-vm's dtoa
+# so a VM dtoa regression remains visible to the differential.
 ryu = "1"
 
 [build-dependencies]
