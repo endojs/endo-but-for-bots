@@ -17,6 +17,8 @@
 //! the oracle emitted, then replays the program through IronHorse and checks
 //! the complete result.
 
+mod common;
+
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-197b32cc30bdd4fe.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-197b32cc30bdd4fe.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-197b32cc30bdd4fe.symbols.bin");
@@ -25,6 +27,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-197b32cc30bdd4fe.ex
 #[test]
 fn exact_fuzz_input_regexp_source_completes_without_truncation() {
     assert_eq!(FINDING_INPUT.len(), 4, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "ede13378ef6a99084bdae3f261735d41106e04e22fa8b0b51b3daf39056a9211",
+    );
 
     let output = ironhorse_vm::run_program_with_symbols(BYTECODE, SYMBOLS);
     assert!(

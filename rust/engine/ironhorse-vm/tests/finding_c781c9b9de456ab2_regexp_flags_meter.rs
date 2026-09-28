@@ -12,12 +12,15 @@
 //! (`"m"`); only the meter differed (`computrons: oracle=48 ironhorse=49`).
 //! That is the advisory cost-table class of sibling RegExp-surface findings,
 //! not an engine-semantic defect: `differential_check_meter_v4` requires
-//! completion and result agreement while treating XS computrons as advisory,
-//! and the standing branch runs this exact fuzz input without divergence.
+//! completion and result agreement while treating XS computrons as
+//! advisory, and with that fix the target runs this exact fuzz input
+//! without divergence.
 //!
 //! This submodule-free test preserves the exact input beside the deterministic
 //! bytecode and symbols XS emitted for its generated program, then replays them
 //! through `ironhorse_vm`. It deliberately does not pin a raw computron count.
+
+mod common;
 
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-c781c9b9de456ab2.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-c781c9b9de456ab2.bytecode.bin");
@@ -27,6 +30,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-c781c9b9de456ab2.ex
 #[test]
 fn exact_fuzz_input_regexp_flags_completes_with_the_pinned_value() {
     assert_eq!(FINDING_INPUT.len(), 14, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "1daa22f72981a1c640bc9c5d96a4a5779a0f8d78f1ad0c171d5ab847f5a29902",
+    );
     assert_eq!(
         EXPECTED_RESULT, "m",
         "the fixture preserves the RegExp flags spelling"

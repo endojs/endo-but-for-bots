@@ -8,7 +8,7 @@
 //! whole-program
 //!
 //! ```text
-//! var m = new RegExp("(?:\\b.{1,3}(?:[a-c0-9]{1,3}(?:\\B\\s*?\\B){2}…|\\B\\s*?\\B", "m").exec("b"); m ? m.length : 0
+//! var m = new RegExp("(?:\\b.{1,3}(?:[a-c0-9]{1,3}(?:\\B\\s*?\\B){2}...|\\B\\s*?\\B", "m").exec("b"); m ? m.length : 0
 //! ```
 //!
 //! — an `exec` of a word-boundary / lazy-whitespace alternation over the
@@ -24,8 +24,8 @@
 //! cost-table difference, not a correctness defect.
 //!
 //! The arm no longer gates on that meter: `differential_check_meter_v4` /
-//! `compare_observations` treat XS computrons as **advisory**, so on the
-//! standing branch this exact input runs the target cleanly (verified:
+//! `compare_observations` treat XS computrons as **advisory**, so with
+//! that fix this exact input runs the target cleanly (verified:
 //! `cargo +nightly-2026-08-15 fuzz run differential_regexp_surface <input> --
 //! -runs=1` exits 0).
 //!
@@ -38,6 +38,8 @@
 //! bytecode and symbols the oracle emits for its generated program and replays
 //! them through `ironhorse_vm`.
 
+mod common;
+
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-6ca7a76e0bfe3435.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-6ca7a76e0bfe3435.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-6ca7a76e0bfe3435.symbols.bin");
@@ -46,6 +48,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-6ca7a76e0bfe3435.ex
 #[test]
 fn exact_fuzz_input_regexp_exec_surface_completes_with_the_pinned_value() {
     assert_eq!(FINDING_INPUT.len(), 6, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "9123812342a612c521af0e2cb2c8677c90de5e5dd605d4163d3c49e93f78a55b",
+    );
 
     let output = ironhorse_vm::run_program_with_symbols(BYTECODE, SYMBOLS);
     assert!(

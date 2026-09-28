@@ -17,6 +17,8 @@
 //! program through `ironhorse_vm::run_program_with_symbols` and asserts the VM
 //! completes without panicking or truncating the result.
 
+mod common;
+
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-ad5b483fc5e0973f.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-ad5b483fc5e0973f.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-ad5b483fc5e0973f.symbols.bin");
@@ -25,6 +27,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-ad5b483fc5e0973f.ex
 #[test]
 fn exact_fuzz_input_program_completes_without_panic_or_truncation() {
     assert_eq!(FINDING_INPUT.len(), 5, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "2cb19c84bdd3ba49bc1ac5004946f79f7c2757a5787b2153019a58cd7012a48e",
+    );
     assert_eq!(
         FINDING_INPUT.last().map(|byte| byte % 12),
         Some(4),

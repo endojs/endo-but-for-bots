@@ -19,8 +19,8 @@
 //! `differential_regexp` arm. This is the same root cause as findings
 //! `5d122a6fc10babd9` / `8275793bca439f6e` / `407764ab1120ed1a` /
 //! `637d760bc2e0278e`; the oracle-side fix (widening the meter fields to
-//! 64 bit, commit `c8497fd8`) was already landed on the standing branch,
-//! and the port was always correct.
+//! 64 bits, commit `c8497fd8`) is on `llm`, and the port was always
+//! correct.
 //!
 //! This test needs neither the XS oracle nor the `c/moddable` submodule:
 //! it pins the port's own full-width meter for the exact reproducing case,

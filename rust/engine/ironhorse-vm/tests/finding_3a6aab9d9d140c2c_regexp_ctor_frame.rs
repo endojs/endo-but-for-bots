@@ -49,6 +49,8 @@
 //! bytecode and symbols the oracle emits for its generated program and replays
 //! them through `ironhorse_vm`.
 
+mod common;
+
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-3a6aab9d9d140c2c.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-3a6aab9d9d140c2c.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-3a6aab9d9d140c2c.symbols.bin");
@@ -57,6 +59,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-3a6aab9d9d140c2c.ex
 #[test]
 fn exact_fuzz_input_regexp_ctor_frame_completes_with_the_pinned_value() {
     assert_eq!(FINDING_INPUT.len(), 8, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "a2a56dbe5d42cc9e08c57cd5951103f37c9c870e28687430b0f3910297534fdb",
+    );
 
     let output = ironhorse_vm::run_program_with_symbols(BYTECODE, SYMBOLS);
     assert!(

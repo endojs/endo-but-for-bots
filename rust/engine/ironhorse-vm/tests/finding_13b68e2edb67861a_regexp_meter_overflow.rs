@@ -10,7 +10,7 @@
 //! subject `"\n\n\n0 "` at start offset `2`.
 //!
 //! It matches `"\n0 "` at `(2, 5)` with every capture group unset; V8/Node
-//! agree (`/…/gi` with `lastIndex = 2` finds index 2, length 3, groups
+//! agree (`/.../gi` with `lastIndex = 2` finds index 2, length 3, groups
 //! `null`). But the empty-backreference quantifiers drive the port through
 //! `91920681` metered backtracking steps first, so the raw 16.16 match
 //! meter is `91920681 * 65536 = 6024113750016`, far **larger than
@@ -23,9 +23,9 @@
 //! meter" divergence. This is the same root cause as findings
 //! `5d122a6fc10babd9` / `407764ab1120ed1a` / `8275793bca439f6e` /
 //! `8b8afc47fcfb223d` / `c99f800f6a36e8a6` / `a172d6aba922c9ad` /
-//! `1dc231089278c110`; the oracle-side fix (meter fields widened to 64 bit,
-//! commit `c8497fd8`) is already on the standing branch and `llm`, and the
-//! port was always correct. With the widened oracle the arm checks clean
+//! `1dc231089278c110`; the oracle-side fix (meter fields widened to 64
+//! bits, commit `c8497fd8`) is on `llm`, and the port was always correct.
+//! With the widened oracle the arm checks clean
 //! (verified: `cargo +nightly-2026-08-15 fuzz run differential_regexp
 //! <input> -- -runs=1` exits 0; port and pin agree bit-for-bit on
 //! `matched`, all five capture slots, and the full-width meter).

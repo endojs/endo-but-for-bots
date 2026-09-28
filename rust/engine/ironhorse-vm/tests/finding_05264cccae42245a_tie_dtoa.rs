@@ -12,7 +12,7 @@
 //! `fx_dtoa` printed `51298827675632340`. That decimal lies exactly halfway
 //! between the adjacent doubles `...336` and `...344` (the spacing here is 8).
 //! Round-half-even takes it to `...336`, so it does not round-trip. ECMA-262
-//! §6.1.6.1.20 requires `𝔽(s × 10^(n−k))` to be the value itself, so no
+//! §6.1.6.1.20 requires `𝔽(s x 10^(n-k))` to be the value itself, so no
 //! 16-digit spelling qualifies and the correct rendering is the 17-digit
 //! `51298827675632344`. ironhorse and V8 both print that.
 //!

@@ -9,7 +9,7 @@
 //! bounded-quantified `{1,3}`/`{2}`) with no flags, matched against the
 //! subject `"0 0 0"` at start offset `5` (the end of the string).
 //!
-//! The pattern begins `b+…` but the subject holds no `b`, and the match
+//! The pattern begins `b+...` but the subject holds no `b`, and the match
 //! starts at end-of-string, so it never matches; V8/Node agree
 //! (`new RegExp(pattern).exec("0 0 0")` scanning from 5 is `null`). But the
 //! nested alternation over backreferences drives the port through `119645`
@@ -24,9 +24,9 @@
 //! `differential_regexp` arm. This is the same root cause as findings
 //! `5d122a6fc10babd9` / `8275793bca439f6e` / `407764ab1120ed1a` /
 //! `637d760bc2e0278e` / `8b8afc47fcfb223d` / `c99f800f6a36e8a6`; the
-//! oracle-side fix (widening the meter fields to 64 bit, commit `c8497fd8`)
-//! was already landed on the standing branch and merged to `llm`, and the
-//! port was always correct. With the widened oracle the arm checks clean
+//! oracle-side fix (widening the meter fields to 64 bits, commit
+//! `c8497fd8`) is on `llm`, and the port was always correct. With the
+//! widened oracle the arm checks clean
 //! (verified: `cargo +nightly-2026-08-15 fuzz run differential_regexp
 //! <input> -- -runs=1` exits 0; the port and pin agree bit-for-bit on
 //! `matched`, every capture, and the full-width meter `7841054720`).

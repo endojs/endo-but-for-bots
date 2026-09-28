@@ -8,7 +8,7 @@
 //! flags, matched against the subject `"00\n00"` at start offset `2`.
 //!
 //! It matches the single `"\n"` at `(2, 3)`; V8/Node agree
-//! (`/…/g` with `lastIndex = 2` finds index 2, length 1). But the nested
+//! (`/.../g` with `lastIndex = 2` finds index 2, length 1). But the nested
 //! empty-matchable alternation drives the port through `83775` metered
 //! backtracking steps first, so the raw 16.16 match meter is
 //! `83775 * 65536 = 5490278400`, which is **larger than `u32::MAX`**.
@@ -20,9 +20,9 @@
 //! manufacturing a false "match meter" divergence. This is the same root
 //! cause as findings `5d122a6fc10babd9` / `407764ab1120ed1a` /
 //! `8275793bca439f6e` / `8b8afc47fcfb223d` / `c99f800f6a36e8a6` /
-//! `a172d6aba922c9ad`; the oracle-side fix (meter fields widened to 64 bit,
-//! commit `c8497fd8`) is already on the standing branch and `llm`, and the
-//! port was always correct. With the widened oracle the arm checks clean
+//! `a172d6aba922c9ad`; the oracle-side fix (meter fields widened to 64
+//! bits, commit `c8497fd8`) is on `llm`, and the port was always correct.
+//! With the widened oracle the arm checks clean
 //! (verified: `cargo +nightly-2026-08-15 fuzz run differential_regexp
 //! <input> -- -runs=1` exits 0; port and pin agree bit-for-bit on
 //! `matched`, the capture `(2, 3)`, and the full-width meter `5490278400`).

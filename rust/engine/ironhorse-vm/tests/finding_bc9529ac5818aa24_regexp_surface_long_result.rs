@@ -8,7 +8,7 @@
 //! whole-program
 //!
 //! ```text
-//! new RegExp("(?:(?:(?:\\s+?0*\\s*){1,2}(?:\\d+?\\s*\\s*){1,2}…|\\s+?0*\\s*", "s").toString()
+//! new RegExp("(?:(?:(?:\\s+?0*\\s*){1,2}(?:\\d+?\\s*\\s*){1,2}...|\\s+?0*\\s*", "s").toString()
 //! ```
 //!
 //! — a large nested whitespace / digit alternation whose `toString()`
@@ -16,10 +16,10 @@
 //!
 //! At the finding SHA the XS shim captured the completion value into a fixed
 //! `char result[1024]` and `strncpy`-truncated it to 1023 bytes, so the pin
-//! reported a cut-off string while ironhorse reported the whole `/…/s` source.
-//! The port was correct; the divergence was the oracle's. The shim's buffer is
-//! now 16 KiB with an honest `result_truncated` flag, and on the standing
-//! branch this exact input runs the target cleanly (verified:
+//! reported a cut-off string while ironhorse reported the whole `/.../s`
+//! source. The port was correct; the divergence was the oracle's. The
+//! shim's buffer is now 16 KiB with an honest `result_truncated` flag, and
+//! with that fix this exact input runs the target cleanly (verified:
 //! `cargo +nightly-2026-08-15 fuzz run differential_regexp_surface <input> --
 //! -runs=1` exits 0).
 //!
@@ -31,6 +31,8 @@
 //! bytecode and symbols the oracle emits for its generated program and replays
 //! them through `ironhorse_vm`.
 
+mod common;
+
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-bc9529ac5818aa24.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-bc9529ac5818aa24.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-bc9529ac5818aa24.symbols.bin");
@@ -39,6 +41,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-bc9529ac5818aa24.ex
 #[test]
 fn exact_fuzz_input_regexp_to_string_surface_completes_with_the_full_value() {
     assert_eq!(FINDING_INPUT.len(), 11, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "c4b0b8c2b5ccf49a2608eab08cc79e770fbe892697379f8a91d99f49e11b12e4",
+    );
     assert_eq!(
         EXPECTED_RESULT.len(),
         1045,

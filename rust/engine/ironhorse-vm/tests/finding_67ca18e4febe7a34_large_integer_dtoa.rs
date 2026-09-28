@@ -9,124 +9,33 @@
 //! integer `51298814505517056`; ironhorse follows ECMA-262's shortest
 //! round-tripping rule and renders the same double as `51298814505517060`.
 //!
-//! The engines computed the same value. The causal fix, already present on the
-//! standing findings branch, compares finite Number results by their IEEE-754
-//! value rather than their decimal spelling. This submodule-free test replays
-//! the exact fuzz input through a local copy of that input grammar, compiles the
-//! resulting program with the pure-Rust compiler, and runs it through
-//! `ironhorse-vm`, asserting completion and the spec-conformant result.
+//! The engines computed the same value. The differential harness compares a
+//! Number completion against the ECMA-262 spelling of the oracle's exact
+//! double (`xs_oracle::number_to_ecma_string` over
+//! `OracleOutcome::result_number`), so this divergence is not reported. This
+//! submodule-free test replays the program that `ironhorse_fuzz::gen_program`
+//! generates from the exact input, pinned in
+//! `fixtures/finding-67ca18e4febe7a34.program.txt`, which
+//! `ironhorse-fuzz/tests/vm_finding_fixtures.rs` regenerates from the input
+//! and byte-compares; the test also asserts the input's cited sha256,
+//! compiles the pinned program with the pure-Rust compiler, and runs it
+//! through `ironhorse-vm`, asserting completion and the spec-conformant
+//! result.
+
+mod common;
 
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-67ca18e4febe7a34.input.bin");
-const FINDING_SOURCE: &str = "(226492416 * 226492416)";
+const FINDING_SOURCE: &str = include_str!("fixtures/finding-67ca18e4febe7a34.program.txt");
 const SHORTEST_RESULT: &str = "51298814505517060";
-
-struct InputBytes<'a> {
-    data: &'a [u8],
-    position: usize,
-}
-
-impl<'a> InputBytes<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, position: 0 }
-    }
-
-    fn next(&mut self) -> u8 {
-        if self.data.is_empty() {
-            return 0;
-        }
-        let byte = self.data[self.position % self.data.len()];
-        self.position = self.position.wrapping_add(1);
-        byte
-    }
-
-    fn choice(&mut self, options: u8) -> u8 {
-        self.next() % options
-    }
-}
-
-fn generate_program(data: &[u8]) -> String {
-    let mut input = InputBytes::new(data);
-    generate_expression(&mut input, 4)
-}
-
-fn generate_expression(input: &mut InputBytes<'_>, depth: u8) -> String {
-    if depth == 0 {
-        return generate_atom(input);
-    }
-    match input.choice(9) {
-        0 => {
-            let operator = ["+", "-", "*", "/", "%"][input.choice(5) as usize];
-            format!(
-                "({} {} {})",
-                generate_expression(input, depth - 1),
-                operator,
-                generate_expression(input, depth - 1)
-            )
-        }
-        1 => {
-            let operator = ["&", "|", "^", "<<", ">>", ">>>"][input.choice(6) as usize];
-            format!(
-                "({} {} {})",
-                generate_expression(input, depth - 1),
-                operator,
-                generate_expression(input, depth - 1)
-            )
-        }
-        2 => {
-            let operator =
-                ["<", "<=", ">", ">=", "===", "!==", "==", "!="][input.choice(8) as usize];
-            format!(
-                "({} {} {})",
-                generate_expression(input, depth - 1),
-                operator,
-                generate_expression(input, depth - 1)
-            )
-        }
-        3 => {
-            let operator = ["&&", "||"][input.choice(2) as usize];
-            format!(
-                "({} {} {})",
-                generate_expression(input, depth - 1),
-                operator,
-                generate_expression(input, depth - 1)
-            )
-        }
-        4 => format!("(-{})", generate_expression(input, depth - 1)),
-        5 => format!("(!{})", generate_expression(input, depth - 1)),
-        6 => format!("(~{})", generate_expression(input, depth - 1)),
-        7 => format!(
-            "({} ? {} : {})",
-            generate_expression(input, depth - 1),
-            generate_expression(input, depth - 1),
-            generate_expression(input, depth - 1)
-        ),
-        _ => generate_atom(input),
-    }
-}
-
-fn generate_atom(input: &mut InputBytes<'_>) -> String {
-    match input.choice(6) {
-        0 => "true".to_string(),
-        1 => "false".to_string(),
-        2 => (input.next() as i32 - 128).to_string(),
-        3 => ((input.next() as i64) << 23).to_string(),
-        4 => {
-            let integer = input.next() % 100;
-            let fraction = input.next() % 100;
-            format!("{}.{}", integer, fraction)
-        }
-        _ => (input.next() % 10).to_string(),
-    }
-}
 
 #[test]
 fn exact_fuzz_input_completes_without_panic_and_renders_shortest() {
     assert_eq!(FINDING_INPUT.len(), 3, "the minimized input remains exact");
-    let source = generate_program(FINDING_INPUT);
-    assert_eq!(
-        source, FINDING_SOURCE,
-        "the finding grammar must remain pinned"
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "e19049016d8614f90c078f93b854af0cc1d7142ae509c60bbf5072f2353292df",
     );
+    let source = FINDING_SOURCE;
 
     let (bytecode, symbols) =
         ironhorse_compile::compile_atoms(&source).expect("finding source compiles");

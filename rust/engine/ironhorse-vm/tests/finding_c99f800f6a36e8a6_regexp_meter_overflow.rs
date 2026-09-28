@@ -14,7 +14,7 @@
 //! matched with the `s` flag against the subject `"aaaaaaaa"` at start
 //! offset 0. The pattern never matches: its middle `{1,2}` group requires
 //! either a literal `0` (absent from the subject) or the first alternative
-//! `(a*|a*)?(?!…|a*)`, whose negative lookahead `(?!…|a*)` can never
+//! `(a*|a*)?(?!...|a*)`, whose negative lookahead `(?!...|a*)` can never
 //! succeed — the `a*` branch always matches the empty string, so the
 //! negation always fails. V8/Node agree: `new RegExp(pattern,"s").exec("aaaaaaaa")`
 //! is `null`. But the port explores `67862` metered backtracking steps
@@ -29,9 +29,9 @@
 //! `differential_regexp` arm. This is the same root cause as findings
 //! `5d122a6fc10babd9` / `8275793bca439f6e` / `407764ab1120ed1a` /
 //! `637d760bc2e0278e` / `8b8afc47fcfb223d`; the oracle-side fix (widening
-//! the meter fields to 64 bit, commit `c8497fd8`) was already landed on the
-//! standing branch and merged to `llm`, and the port was always correct.
-//! With the widened oracle the arm checks clean (verified:
+//! the meter fields to 64 bits, commit `c8497fd8`) is on `llm`, and the
+//! port was always correct. With the widened oracle the arm checks clean
+//! (verified:
 //! `cargo +nightly-2026-08-15 fuzz run differential_regexp <input> -- -runs=1`
 //! exits 0; the port and pin agree bit-for-bit on `matched`, every capture,
 //! and the full-width meter `4447404032`).

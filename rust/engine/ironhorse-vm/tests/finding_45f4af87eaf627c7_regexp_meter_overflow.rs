@@ -10,7 +10,7 @@
 //! matched against the subject `"a\n\na\n"` at start offset `1`.
 //!
 //! It matches the empty string at `(1, 1)` with every capture group unset;
-//! V8/Node agree (`/…/g` with `lastIndex = 1` finds index 1, length 0, all
+//! V8/Node agree (`/.../g` with `lastIndex = 1` finds index 1, length 0, all
 //! groups `undefined`). But the empty-backreference stars drive the port
 //! through `82118` metered backtracking steps first, so the raw 16.16 match
 //! meter is `82118 * 65536 = 5381685248`, **larger than `u32::MAX`**.
@@ -22,9 +22,9 @@
 //! `match meter ironhorse=5381685248 pin=1086717952` — manufacturing a false
 //! divergence. Same root cause as findings `13b68e2edb67861a` /
 //! `1dc231089278c110` / `a172d6aba922c9ad` / `c99f800f6a36e8a6` et al.; the
-//! oracle-side fix (meter fields widened to 64 bit, commit `c8497fd8`) is
-//! already on the standing branch and `llm`, and the port was always
-//! correct. With the widened oracle the arm checks clean.
+//! oracle-side fix (meter fields widened to 64 bits, commit `c8497fd8`) is
+//! on `llm`, and the port was always correct. With the widened oracle the
+//! arm checks clean.
 //!
 //! This test needs neither the XS oracle nor the `c/moddable` submodule:
 //! it pins the port's own full-width meter and capture offsets for the

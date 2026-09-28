@@ -30,10 +30,13 @@
 //!     `toString` ("let `k` be as small as possible") — prints the *shortest*
 //!     decimal that round-trips, `22799472811573250` (16 significant digits).
 //!
-//! Both spellings parse back to the same double, so the port was never wrong;
-//! the differential harness compares numeric completions by their double
-//! rather than their decimal spelling (finding `d99d263fcf6ca7a7`). This is a
-//! re-discovery of that dtoa-spelling class under a new minimized input; the
+//! Both spellings parse back to the same double, so the port was never
+//! wrong; the differential harness compares a Number completion against the
+//! ECMA-262 spelling of the oracle's exact double
+//! (`xs_oracle::number_to_ecma_string` over `OracleOutcome::result_number`),
+//! not the oracle's own decimal spelling (finding `d99d263fcf6ca7a7`). This
+//! is a re-discovery of that dtoa-spelling class under a new minimized
+//! input; the
 //! finding reproduced only at the older project SHA
 //! `38ca1d189384245dd9accfcc2f79763a3b8ec5cb`, before that harness policy
 //! suppressed the spurious spelling divergence.

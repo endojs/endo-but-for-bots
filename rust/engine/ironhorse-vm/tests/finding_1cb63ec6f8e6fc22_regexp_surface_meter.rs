@@ -8,7 +8,7 @@
 //! whole-program
 //!
 //! ```text
-//! "0a0a".search(new RegExp("(((\\s{2}a?\\s{2})?(\\s{2}a?\\s{2})?(\\s{2}a?\\s{2})?)?…)?", ""))
+//! "0a0a".search(new RegExp("(((\\s{2}a?\\s{2})?(\\s{2}a?\\s{2})?(\\s{2}a?\\s{2})?)?...)?", ""))
 //! ```
 //!
 //! — a `String.prototype.search` over a deeply nested optional-group
@@ -45,6 +45,8 @@
 //! bytecode and symbols the oracle emits for its generated program and replays
 //! them through `ironhorse_vm`.
 
+mod common;
+
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-1cb63ec6f8e6fc22.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-1cb63ec6f8e6fc22.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-1cb63ec6f8e6fc22.symbols.bin");
@@ -53,6 +55,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-1cb63ec6f8e6fc22.ex
 #[test]
 fn exact_fuzz_input_regexp_search_surface_completes_with_the_pinned_value() {
     assert_eq!(FINDING_INPUT.len(), 2, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "bbb90f36295c5377281fad9a7bce09f4a6a6a2d0342598c4f42cfcc434247802",
+    );
 
     let output = ironhorse_vm::run_program_with_symbols(BYTECODE, SYMBOLS);
     assert!(

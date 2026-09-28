@@ -20,6 +20,8 @@
 //! `ironhorse_fuzz` test proves that the input still generates this pattern and
 //! that the widened oracle agrees.
 
+mod common;
+
 const INPUT: &[u8] = include_bytes!("fixtures/finding-cfdc1a28296f23a1.input.bin");
 const PATTERN: &str = include_str!("fixtures/finding-cfdc1a28296f23a1.pattern.txt");
 const FLAGS: &str = "s";
@@ -65,6 +67,10 @@ const EXPECTED_CAPTURES: &[(i32, i32)] = &[
 #[test]
 fn exact_fuzz_input_preserves_the_full_width_match_meter() {
     assert_eq!(INPUT.len(), 6, "the minimized finding remains exact");
+    common::fixtures::assert_input_sha256(
+        INPUT,
+        "0603c5237ff20137251a9f7ce92fccd95d7ba0d80ebd5e300dd82dbfd6453f4d",
+    );
     assert_eq!(PATTERN.len(), 371, "the generated pattern remains exact");
     assert!(EXPECTED_MATCH_METER_RAW > u64::from(u32::MAX));
 

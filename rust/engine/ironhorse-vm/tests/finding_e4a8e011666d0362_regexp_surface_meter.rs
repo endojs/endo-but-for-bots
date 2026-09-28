@@ -8,7 +8,7 @@
 //! whole-program
 //!
 //! ```text
-//! var m = new RegExp("(?:[abc]+?(?:[abc]+?(?:.{1,3}.+?[abc]{1,3}){1,2}…){1,2}", "").exec("b\n0"); m ? m.index : -1
+//! var m = new RegExp("(?:[abc]+?(?:[abc]+?(?:.{1,3}.+?[abc]{1,3}){1,2}...){1,2}", "").exec("b\n0"); m ? m.index : -1
 //! ```
 //!
 //! — a `RegExp.prototype.exec` over a nested lazy-quantifier alternation
@@ -37,6 +37,8 @@
 //! bytecode and symbols the oracle emits for its generated program and replays
 //! them through `ironhorse_vm`.
 
+mod common;
+
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-e4a8e011666d0362.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-e4a8e011666d0362.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-e4a8e011666d0362.symbols.bin");
@@ -45,6 +47,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-e4a8e011666d0362.ex
 #[test]
 fn exact_fuzz_input_regexp_exec_surface_completes_with_the_pinned_value() {
     assert_eq!(FINDING_INPUT.len(), 3, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "1c3ef6ed461f18060fd3607e8553fdddca6337002c20d38ffc83eaae980876d5",
+    );
     assert_eq!(EXPECTED_RESULT, "-1", "the exec surface finds no match");
 
     let output = ironhorse_vm::run_program_with_symbols(BYTECODE, SYMBOLS);

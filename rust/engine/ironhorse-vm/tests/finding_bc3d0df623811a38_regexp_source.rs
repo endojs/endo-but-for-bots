@@ -17,6 +17,8 @@
 //! bytecode and symbols emitted for its generated program. It replays that
 //! program through IronHorse and checks the full result without panicking.
 
+mod common;
+
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-bc3d0df623811a38.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-bc3d0df623811a38.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-bc3d0df623811a38.symbols.bin");
@@ -25,6 +27,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-bc3d0df623811a38.ex
 #[test]
 fn exact_fuzz_input_program_completes_without_panic_or_truncation() {
     assert_eq!(FINDING_INPUT.len(), 4, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "b2e8860df966da8a789c6b2e30db50f2de60bf11e03b6c0494925d3a1148c1e5",
+    );
 
     let output = ironhorse_vm::run_program_with_symbols(BYTECODE, SYMBOLS);
     assert!(

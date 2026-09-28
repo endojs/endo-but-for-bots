@@ -16,6 +16,8 @@
 //! bytecode and symbols emitted for its generated program. It replays that
 //! program through IronHorse and checks the complete result.
 
+mod common;
+
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-9001b34fa6dd2d80.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-9001b34fa6dd2d80.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-9001b34fa6dd2d80.symbols.bin");
@@ -24,6 +26,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-9001b34fa6dd2d80.ex
 #[test]
 fn exact_fuzz_input_regexp_source_completes_without_truncation() {
     assert_eq!(FINDING_INPUT.len(), 5, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "5e2b476e505da46d7a2151149cf5a8ac93173736cfd1fd136bea0152cae2318c",
+    );
     assert_eq!(
         FINDING_INPUT.last().map(|byte| byte % 12),
         Some(4),

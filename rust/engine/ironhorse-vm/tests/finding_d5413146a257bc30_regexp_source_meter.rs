@@ -13,12 +13,14 @@
 //! advisory cost-table class of sibling RegExp-surface findings (such as
 //! `89e303d17e33b117`), not an engine-semantic defect:
 //! `differential_check_meter_v4` requires completion and result agreement
-//! while treating XS computrons as advisory, and the standing branch runs this
-//! exact fuzz input without divergence.
+//! while treating XS computrons as advisory, and with that fix the target
+//! runs this exact fuzz input without divergence.
 //!
 //! This submodule-free test preserves the exact input beside the deterministic
 //! bytecode and symbols XS emitted for its generated program, then replays them
 //! through `ironhorse_vm`. It deliberately does not pin a raw computron count.
+
+mod common;
 
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-d5413146a257bc30.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-d5413146a257bc30.bytecode.bin");
@@ -28,6 +30,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-d5413146a257bc30.ex
 #[test]
 fn exact_fuzz_input_regexp_source_completes_with_the_pinned_value() {
     assert_eq!(FINDING_INPUT.len(), 6, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "957c39a802d5b3a9f09413832ea4c03dba2d2fed67d8b6da0553a6cb6cef0563",
+    );
     assert_eq!(
         EXPECTED_RESULT, r"a+a{1,3}a+|(?:a*\s+|a{1,3}a+)?\s+|a{1,3}a+|[a-c]+a{1,3}",
         "the fixture preserves the RegExp.source spelling"

@@ -19,14 +19,16 @@
 //! pin=1452146688" divergence. The port's [`ironhorse_regexp`] matcher
 //! always metered into a `u64`. This is the same root cause as findings
 //! `f83dc8932cd3b41a` / `5565a021a8cc30bc` / `12aca768c2e73c73`; the
-//! oracle-side fix (widening the meter fields to 64 bit, commit
-//! `c8497fd88`) is already on the standing branch, where the finding no
-//! longer reproduces. The port needed no change.
+//! oracle-side fix (widening the meter fields to 64 bits, commit
+//! `c8497fd88`) is on `llm`, where the finding no longer reproduces. The
+//! port needed no change.
 //!
 //! This test needs neither the XS oracle nor the `c/moddable` submodule:
 //! it pins the port's own full-width meter for the exact reproducing case
 //! (the fuzz crate's `finding_bf6cfbd74a7487fc_*` test proves the fixture
 //! pattern is what the recorded bytes generate, and that the pin agrees).
+
+mod common;
 
 /// The finding's minimized fuzzer input, kept beside the pattern it folds to.
 const INPUT: &[u8] = include_bytes!("fixtures/finding-bf6cfbd74a7487fc.input.bin");
@@ -45,6 +47,10 @@ const EXPECTED_MATCH_METER_RAW: u64 = 1_457_446_060_032;
 #[test]
 fn regexp_match_meter_does_not_overflow_u32() {
     assert_eq!(INPUT, b"G+8h88");
+    common::fixtures::assert_input_sha256(
+        INPUT,
+        "7438aae1a9b4a8675efb11242949c17d753770526152b8864a7b228b0ac030b6",
+    );
     assert_eq!(PATTERN.len(), 822);
     // Sanity: the reproducing meter really is past the 32-bit boundary, so
     // a narrowing bug here would actually change the value.

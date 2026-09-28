@@ -19,10 +19,10 @@
 //! pin=2457862144" divergence in the `differential_regexp` arm. This is the
 //! same root cause as findings `5d122a6fc10babd9` / `8275793bca439f6e` /
 //! `407764ab1120ed1a` / `637d760bc2e0278e` / `8b8afc47fcfb223d`; the
-//! oracle-side fix (widening the meter fields to 64 bit, commit
-//! `c8497fd88`) was already landed on the standing branch — it is an
-//! ancestor of this branch's HEAD but is *not* in the `38ca1d1893` SHA the
-//! finding was recorded against — and the port was always correct.
+//! oracle-side fix (widening the meter fields to 64 bits, commit
+//! `c8497fd88`) is on `llm` — an ancestor of the current commit but *not*
+//! in the `38ca1d1893` SHA the finding was recorded against — and the
+//! port was always correct.
 //!
 //! This test needs neither the XS oracle nor the `c/moddable` submodule:
 //! it pins the port's own full-width meter for the exact reproducing case,

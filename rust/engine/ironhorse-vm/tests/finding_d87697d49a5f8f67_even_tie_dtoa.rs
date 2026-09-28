@@ -18,11 +18,15 @@
 //! round-trips but is not the shortest.
 //!
 //! At the fuzzed SHA `38ca1d189384245dd9accfcc2f79763a3b8ec5cb` the harness
-//! compared the two spellings and reported a divergence. The standing branch
-//! compares a Number completion against the oracle's exact double, so the
-//! finding no longer reproduces. This test needs neither the XS oracle nor the
-//! `c/moddable` submodule. It replays the exact input through a local copy of
-//! the generator and pins the port's own evaluation and rendering.
+//! compared the two spellings and reported a divergence. The differential
+//! harness now compares a Number completion against the oracle's exact
+//! double, so the finding no longer reproduces. This test needs neither the
+//! XS oracle nor the `c/moddable` submodule. It replays the program that
+//! `ironhorse_fuzz::gen_program` generates from the exact input, pinned in
+//! `fixtures/finding-d87697d49a5f8f67.program.txt`, which
+//! `ironhorse-fuzz/tests/vm_finding_fixtures.rs` regenerates from the input
+//! and byte-compares; the test also asserts the input's cited sha256, and
+//! pins the port's own evaluation and rendering.
 
 mod common;
 
@@ -33,7 +37,7 @@ use ironhorse_vm::{parse_symbols, Interp};
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-d87697d49a5f8f67.input.bin");
 
 /// `gen_program(FINDING_INPUT)`.
-const FINDING_PROGRAM: &str = "((~(~(1585446912 / true))) * (~(~(1585446912 / true))))";
+const FINDING_PROGRAM: &str = include_str!("fixtures/finding-d87697d49a5f8f67.program.txt");
 
 /// The double the finding program evaluates to on both engines.
 const FINDING_VALUE: f64 = 2513641910770335744.0;
@@ -42,109 +46,13 @@ const SPEC: &str = "2513641910770336000";
 /// XS's rendering: round-trips, but one digit longer than the shortest.
 const XS_LONGER: &str = "2513641910770335700";
 
-struct InputBytes<'a> {
-    data: &'a [u8],
-    position: usize,
-}
-
-impl<'a> InputBytes<'a> {
-    fn new(data: &'a [u8]) -> Self {
-        Self { data, position: 0 }
-    }
-
-    fn next(&mut self) -> u8 {
-        if self.data.is_empty() {
-            return 0;
-        }
-        let byte = self.data[self.position % self.data.len()];
-        self.position = self.position.wrapping_add(1);
-        byte
-    }
-
-    fn choice(&mut self, options: u8) -> u8 {
-        self.next() % options
-    }
-}
-
-fn generate_program(data: &[u8]) -> String {
-    let mut input = InputBytes::new(data);
-    generate_expression(&mut input, 4)
-}
-
-fn generate_expression(input: &mut InputBytes<'_>, depth: u8) -> String {
-    if depth == 0 {
-        return generate_atom(input);
-    }
-    match input.choice(9) {
-        0 => {
-            let operator = ["+", "-", "*", "/", "%"][input.choice(5) as usize];
-            format!(
-                "({} {} {})",
-                generate_expression(input, depth - 1),
-                operator,
-                generate_expression(input, depth - 1)
-            )
-        }
-        1 => {
-            let operator = ["&", "|", "^", "<<", ">>", ">>>"][input.choice(6) as usize];
-            format!(
-                "({} {} {})",
-                generate_expression(input, depth - 1),
-                operator,
-                generate_expression(input, depth - 1)
-            )
-        }
-        2 => {
-            let operator =
-                ["<", "<=", ">", ">=", "===", "!==", "==", "!="][input.choice(8) as usize];
-            format!(
-                "({} {} {})",
-                generate_expression(input, depth - 1),
-                operator,
-                generate_expression(input, depth - 1)
-            )
-        }
-        3 => {
-            let operator = ["&&", "||"][input.choice(2) as usize];
-            format!(
-                "({} {} {})",
-                generate_expression(input, depth - 1),
-                operator,
-                generate_expression(input, depth - 1)
-            )
-        }
-        4 => format!("(-{})", generate_expression(input, depth - 1)),
-        5 => format!("(!{})", generate_expression(input, depth - 1)),
-        6 => format!("(~{})", generate_expression(input, depth - 1)),
-        7 => format!(
-            "({} ? {} : {})",
-            generate_expression(input, depth - 1),
-            generate_expression(input, depth - 1),
-            generate_expression(input, depth - 1)
-        ),
-        _ => generate_atom(input),
-    }
-}
-
-fn generate_atom(input: &mut InputBytes<'_>) -> String {
-    match input.choice(6) {
-        0 => "true".to_string(),
-        1 => "false".to_string(),
-        2 => (input.next() as i32 - 128).to_string(),
-        3 => ((input.next() as i64) << 23).to_string(),
-        4 => {
-            let integer = input.next() % 100;
-            let fraction = input.next() % 100;
-            format!("{}.{}", integer, fraction)
-        }
-        _ => (input.next() % 10).to_string(),
-    }
-}
-
 #[test]
 fn exact_fuzz_input_generates_the_finding_program() {
     assert_eq!(FINDING_INPUT.len(), 7, "the minimized input remains exact");
-    assert_eq!(generate_program(FINDING_INPUT), FINDING_PROGRAM);
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "b4814c1b47ca2297e26e5e27a1151a79dc222cd408f51d4130a07d423229311b",
+    );
 }
 
 #[test]

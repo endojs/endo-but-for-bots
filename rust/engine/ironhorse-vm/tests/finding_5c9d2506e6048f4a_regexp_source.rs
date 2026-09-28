@@ -16,6 +16,8 @@
 //! deterministic bytecode and symbols that the oracle emitted, then replays
 //! the program through IronHorse and checks the complete result.
 
+mod common;
+
 const FINDING_INPUT: &[u8] = include_bytes!("fixtures/finding-5c9d2506e6048f4a.input.bin");
 const BYTECODE: &[u8] = include_bytes!("fixtures/finding-5c9d2506e6048f4a.bytecode.bin");
 const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-5c9d2506e6048f4a.symbols.bin");
@@ -24,6 +26,10 @@ const EXPECTED_RESULT: &str = include_str!("fixtures/finding-5c9d2506e6048f4a.ex
 #[test]
 fn exact_fuzz_input_regexp_source_completes_without_truncation() {
     assert_eq!(FINDING_INPUT.len(), 4, "the minimized input stays exact");
+    common::fixtures::assert_input_sha256(
+        FINDING_INPUT,
+        "cf677bd6b6eee5fe9ed8394911852ed267fe6057e827df87ef1ffd2abdee8302",
+    );
 
     let output = ironhorse_vm::run_program_with_symbols(BYTECODE, SYMBOLS);
     assert!(
