@@ -5,6 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
+/** @import { EndoGuestAuthority } from './provision/types.js' */
 /** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeGuestOptions, MakeHostOptions, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
@@ -81,7 +82,7 @@ const assertPowersNameOrPath = nameOrPath => {
 /**
  * Normalizes host or guest options, providing default values.
  * @param {MakeGuestOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, authority?: import('./provision/types.js').EndoGuestAuthority, endowSpecialNames?: Record<Name, string> }}
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, authority?: EndoGuestAuthority, endowSpecialNames?: Record<Name, string> }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
@@ -1916,8 +1917,8 @@ export const makeHostMaker = ({
       handleName,
       {
         introducedNames = Object.create(null),
+        specialNames: introducedSpecialNames = Object.create(null),
         agentName = undefined,
-        specialNames: endowedSpecialNames = Object.create(null),
       } = {},
     ) => {
       // An explicit agent name is the stable capability identity; the handle
@@ -1942,7 +1943,7 @@ export const makeHostMaker = ({
               /** @type {NameOrPath | undefined} */ (agentName),
             ),
             guestLabel,
-            endowedSpecialNames,
+            introducedSpecialNames,
           );
         guest = { value: Promise.resolve(value), id };
       } else if (handleName !== undefined) {
