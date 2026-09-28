@@ -57,7 +57,7 @@ const SYMBOLS: &[u8] = include_bytes!("fixtures/finding-3a6aab9d9d140c2c.symbols
 const EXPECTED_RESULT: &str = include_str!("fixtures/finding-3a6aab9d9d140c2c.expected-result.txt");
 
 #[test]
-fn exact_fuzz_input_regexp_ctor_frame_completes_with_the_pinned_value() {
+fn exact_fuzz_input_regexp_constructor_frame_completes_with_the_pinned_value() {
     assert_eq!(FINDING_INPUT.len(), 8, "the minimized input stays exact");
     common::fixtures::assert_input_sha256(
         FINDING_INPUT,

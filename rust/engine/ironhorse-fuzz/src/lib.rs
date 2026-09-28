@@ -2795,7 +2795,7 @@ mod tests {
     #[test]
     // The RegExp-surface family's costs are IronHorse's own under meter-v4; a
     // computron gap vs XS is advisory. This locks completion/result agreement.
-    fn finding_3a6aab9d9d140c2c_regexp_ctor_frame_cost_gap_is_advisory() {
+    fn finding_3a6aab9d9d140c2c_regexp_constructor_frame_cost_gap_is_advisory() {
         // The exact minimized fuzz input (sha256
         // a2a56dbe5d42cc9e08c57cd5951103f37c9c870e28687430b0f3910297534fdb).
         let data: &[u8] = &[0x11, 0x01, 0x00, 0x00, 0x2c, 0xdf, 0x6d, 0x6d];
@@ -2804,7 +2804,7 @@ mod tests {
         // whose `\n+` tail cannot match "aa" (so `.exec` is null).
         assert!(
             program.contains(".exec(") && program.contains("\\n+a{1,3}"),
-            "finding program is the RegExp.exec ctor-frame case: {}",
+            "finding program is the RegExp.exec constructor-frame case: {}",
             program
         );
         match differential_check_meter_v4(&program) {
