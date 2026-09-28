@@ -705,6 +705,16 @@ mod tests {
     }
 
     #[test]
+    fn negative_zero_completion_keeps_its_sign_bit() {
+        let outcome = run("-0").expect("oracle machine must start");
+        assert!(outcome.completed, "{}", outcome.error);
+        assert_eq!(outcome.result, "0");
+        assert_eq!(outcome.result_number_bits, Some(0x8000_0000_0000_0000));
+        let outcome = run("0 * -1").expect("oracle machine must start");
+        assert_eq!(outcome.result_number_bits, Some((-0.0_f64).to_bits()));
+    }
+
+    #[test]
     fn non_number_completions_are_not_captured_as_numbers() {
         for source in [
             "12345678901234567890n",
