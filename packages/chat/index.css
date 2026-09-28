@@ -587,6 +587,456 @@ body.resizing * {
   color: var(--accent);
 }
 
+/* ── Inventory `+` create affordance (chat-inventory-create-menu) ─────────── */
+
+/* The create button sits as a header row at the TOP of the inventory, above
+   the first name, styled like an inventory item row (dashed border, `+`
+   glyph). The row is the positioning context for the pop-over menu. */
+.inventory-create-row {
+  position: relative;
+  flex-shrink: 0;
+  padding: 0 8px 6px;
+}
+
+.inventory-create-button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 1px dashed var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.inventory-create-button:hover,
+.inventory-create-button[aria-expanded='true'] {
+  border-color: var(--accent-primary);
+  background: var(--accent-light);
+  color: var(--accent-primary);
+}
+
+.inventory-create-glyph {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* Pop-over menu, anchored under the button. Hidden until populated. */
+#inventory-create-menu:empty {
+  display: none;
+}
+
+.create-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+}
+
+.create-menu {
+  position: absolute;
+  top: calc(100% - 2px);
+  left: 8px;
+  right: 8px;
+  z-index: 1201;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  outline: none;
+}
+
+.create-menu-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+
+.create-menu-item.active,
+.create-menu-item:hover {
+  background: var(--bg-hover);
+}
+
+.create-menu-icon {
+  font-size: 16px;
+  line-height: 1.2;
+}
+
+.create-menu-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.create-menu-label {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.create-menu-soon {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.create-menu-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ── Create modals (mount / scratch / placeholder / new-agent wizard) ─────── */
+
+#inventory-create-modal-container {
+  position: fixed;
+  inset: 0;
+  z-index: 1300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+#inventory-create-modal-container:empty {
+  display: none;
+}
+
+.create-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: var(--backdrop);
+  backdrop-filter: blur(4px);
+}
+
+.create-modal {
+  position: relative;
+  width: 90%;
+  max-width: 460px;
+  max-height: 90dvh;
+  overflow-y: auto;
+  background: var(--bg-primary);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  padding: 20px;
+}
+
+.wizard-modal {
+  max-width: 540px;
+}
+
+.create-modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.create-modal-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.create-modal-close {
+  background: none;
+  border: none;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+}
+
+.create-modal-close:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.create-modal-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  margin: 4px 0 12px;
+}
+
+.create-modal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.create-modal-field label,
+.wizard-field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.create-modal-input,
+.wizard-input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: var(--bg-primary);
+  box-sizing: border-box;
+}
+
+.create-modal-input:focus,
+.wizard-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+}
+
+.create-modal-hint,
+.wizard-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.create-modal-error {
+  font-size: 12px;
+  color: var(--danger);
+  background: var(--danger-bg);
+  border: 1px solid var(--danger-border);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  margin: 8px 0;
+}
+
+.create-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.create-modal-cancel {
+  padding: 8px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.create-modal-cancel:hover {
+  background: var(--bg-hover);
+}
+
+.create-modal-submit {
+  padding: 8px 14px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--accent-primary);
+  color: #fff;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.create-modal-submit:hover {
+  background: var(--accent-hover);
+}
+
+.create-modal-submit:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Placeholder modal */
+.create-modal-badge,
+.wizard-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-muted);
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.wizard-badge.detected {
+  color: var(--success);
+  border-color: var(--success);
+}
+
+.create-modal-points {
+  margin: 10px 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.create-modal-backing {
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+/* ── New-agent wizard panes ──────────────────────────────────────────────── */
+
+.wizard-steps {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0 14px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.wizard-step.active {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.wizard-step.done {
+  color: var(--success);
+}
+
+.wizard-pane-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.wizard-radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.wizard-radio-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.wizard-radio-row.selected {
+  border-color: var(--accent-primary);
+  background: var(--accent-light);
+}
+
+.wizard-radio-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.wizard-radio-label {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wizard-radio-desc {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.wizard-note {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  margin-bottom: 10px;
+}
+
+.wizard-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.wizard-disclosure {
+  margin-bottom: 12px;
+}
+
+.wizard-disclosure-toggle {
+  background: none;
+  border: none;
+  color: var(--accent-primary);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.wizard-disclosure-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.wizard-endowments {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.wizard-endowment-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.wizard-endowment-row.disabled {
+  opacity: 0.7;
+}
+
+.wizard-endowment-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.wizard-endowment-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.wizard-endowment-note {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 /* Special (all-caps) items - hidden by default */
 .pet-item-wrapper.special {
   display: none;
