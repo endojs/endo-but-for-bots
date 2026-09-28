@@ -561,6 +561,14 @@ export const main = async rawArgs => {
     .option('--json <json>', 'store JSON')
     .option('--json-stdin', 'store STDIN JSON')
     .option('--bigint <bigint>', 'store a bigint')
+    .option(
+      '--locator <locator>',
+      'store the value a capability URL (endo:// or https://…#v=1&…) names, resolving it first; pass - to read the locator from stdin so a bearer stays out of shell history',
+    )
+    .option(
+      '--locator-file <path>',
+      'like --locator, reading the capability URL from a file',
+    )
     .action(async options => {
       const {
         name,
@@ -572,6 +580,8 @@ export const main = async rawArgs => {
         json: storeJson,
         jsonStdin: storeJsonStdin,
         bigint: storeBigInt,
+        locator: storeLocator,
+        locatorFile: storeLocatorFile,
       } = options;
       const { store } = await import('./commands/store.js');
       return store({
@@ -582,6 +592,8 @@ export const main = async rawArgs => {
         storeJson,
         storeJsonStdin,
         storeBigInt,
+        storeLocator,
+        storeLocatorFile,
         name,
         agentNames,
       });

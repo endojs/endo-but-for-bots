@@ -191,12 +191,18 @@ const assertCapability = value => {
  * affect any other peer's session.
  *
  * @param {object} options
- * @param {(id: FormulaIdentifier, localNodeNumber: NodeNumber) => Promise<unknown>} options.provideLocalFormula
+ * @param {(id: FormulaIdentifier, node: NodeNumber) => Promise<unknown>} options.provideLocalFormula
  *   Reads the local formula table and incarnates the formula through the
  *   daemon's existing `provide` path. May reject (absent, collected,
  *   corrupt, failed-to-incarnate); the adapter folds every rejection
  *   into a miss.
  * @param {NodeNumber} options.localNodeNumber
+ * @param {(node: NodeNumber) => boolean} [options.isLocalNode]
+ *   Which node numbers this daemon hosts formulas under. Defaults to
+ *   `localNodeNumber` alone. A daemon whose agents (hosts and guests)
+ *   each hold their own key names their formulas under those agent keys,
+ *   so an embedder serving agent formulas widens this to the daemon's
+ *   own key predicate. A node it rejects is a miss, never a dial.
  * @param {number} [options.missBound]
  * @param {Pick<Console, 'error'>} [options.logger]
  *   Where the adapter names, locally, why a presentation missed. The peer
@@ -207,6 +213,7 @@ const assertCapability = value => {
 export const makeFormulaNonceLocator = ({
   provideLocalFormula,
   localNodeNumber,
+  isLocalNode = node => node === localNodeNumber,
   missBound = DEFAULT_MISS_BOUND,
   logger = console,
 }) => {
@@ -265,11 +272,11 @@ export const makeFormulaNonceLocator = ({
       // other noncanonical text all throw here and become the same miss.
       assertValidId(secret);
       const { node, id } = parseId(secret);
-      if (node !== localNodeNumber) {
+      if (!isLocalNode(node)) {
         // An identifier for another node is a miss, not a dial.
         return undefined;
       }
-      const value = await provideLocalFormula(id, localNodeNumber);
+      const value = await provideLocalFormula(id, node);
       assertCapability(value);
       return value;
     } catch (error) {

@@ -662,10 +662,11 @@ export const COMMANDS = {
     ],
     submitLabel: 'Share',
   },
-  'adopt-locator': {
-    name: 'adopt-locator',
-    label: 'Adopt from Locator',
-    description: 'Adopt a remote value from a shareable locator',
+  store: {
+    name: 'store',
+    label: 'Store from Locator',
+    description:
+      'Store the remote value a shareable locator (endo:// or https link) names',
     category: 'connections',
     mode: 'inline',
     fields: [
@@ -674,7 +675,7 @@ export const COMMANDS = {
         label: 'Locator',
         type: 'locator',
         required: true,
-        placeholder: 'endo://.../formula@hint?type=...',
+        placeholder: 'endo://… or https://…#v=1&…',
       },
       {
         name: 'petName',
@@ -684,7 +685,7 @@ export const COMMANDS = {
         placeholder: 'remote-channel',
       },
     ],
-    submitLabel: 'Adopt',
+    submitLabel: 'Store',
   },
   network: {
     name: 'network',

@@ -10,7 +10,10 @@ import harden from '@endo/harden';
 /** @import { EndoHost } from '@endo/daemon' */
 
 import { E } from '@endo/eventual-send';
-import { assertValidLocator } from '@endo/spaces-util/locator.js';
+import {
+  parseCapabilityUrl,
+  formatEndoLocator,
+} from '@endo/spaces-util/locator.js';
 import { petNamePathsAutocomplete } from '@endo/spaces-util/petname-paths-autocomplete.js';
 import { ALL_ICONS, IconSelector } from './icon-selector.js';
 import { createSchemePicker } from './scheme-picker.js';
@@ -678,7 +681,7 @@ const ConnectChannelForm = ({ view, on }) =>
     h(TextField, {
       id: 'connect-locator',
       label: 'Invitation Locator',
-      placeholder: 'endo://…',
+      placeholder: 'endo://… or https://…#v=1&…',
       value: view.connectLocator,
       onInput: on.connectLocatorInput,
       hint: 'Paste the invitation link you received',
@@ -1990,23 +1993,24 @@ export const createAddSpaceModal = ({
       return;
     }
 
-    if (!locator.startsWith('endo://')) {
-      error = 'Locator must start with endo://';
-      render();
-      return;
-    }
-
+    // Accept any capability URL — an endo:// locator or an https link
+    // carrying the locator in its #v=1&… fragment — and normalize to the
+    // canonical endo:// form for every daemon call below
+    // (designs/capability-url-locators.md).
+    /** @type {ReturnType<typeof parseCapabilityUrl>} */
+    let parsedLocator;
     try {
-      // Validate the locator URL shape against the daemon's
-      // parseLocator contract; storeLocator below takes the original
-      // endo:// locator string and would otherwise surface a terser
-      // daemon error to the user on a near-miss.
-      assertValidLocator(locator);
+      parsedLocator = parseCapabilityUrl(locator);
     } catch {
-      error = 'Invalid locator URL format';
+      parsedLocator = undefined;
+    }
+    if (parsedLocator === undefined) {
+      error =
+        'Invalid locator: paste an endo:// URL or an https://…#v=1&… capability link';
       render();
       return;
     }
+    const endoLocator = formatEndoLocator(parsedLocator);
 
     if (connectPersonaMode === 'new') {
       const spaceName = connectSpaceName.trim();
@@ -2034,15 +2038,9 @@ export const createAddSpaceModal = ({
 
       try {
         // 0. Register peer info from the locator's connection hints
-        //    (subsequent `@`-delimited URL-encoded path components after
-        //    the formula address) so the daemon knows how to reach the
-        //    remote node.
-        const locatorUrl = new URL(locator);
-        const nodeNumber = locatorUrl.host;
-        const [, ...addresses] = locatorUrl.pathname
-          .replace(/^\//, '')
-          .split('@')
-          .map(decodeURIComponent);
+        //    so the daemon knows how to reach the remote node.
+        const nodeNumber = parsedLocator.node;
+        const addresses = parsedLocator.hints;
         if (addresses.length > 0 && nodeNumber) {
           await E(
             /** @type {{ addPeerInfo: (info: { node: string, addresses: string[] }) => Promise<void> }} */ (
@@ -2073,11 +2071,11 @@ export const createAddSpaceModal = ({
           /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
             personaPowers
           ),
-        ).storeLocator('general', locator);
+        ).storeLocator('general', endoLocator);
 
         // 4. Create space config
         // Use the view mode from the locator if provided, else default chat.
-        const recommendedView = locatorUrl.searchParams.get('view');
+        const recommendedView = parsedLocator.view ?? null;
         /** @type {'chat' | 'forum' | 'outliner' | undefined} */
         const connectViewMode =
           recommendedView === 'forum' || recommendedView === 'outliner'
@@ -2116,15 +2114,9 @@ export const createAddSpaceModal = ({
       render();
 
       try {
-        // Register peer info from the locator's connection hints
-        // (subsequent `@`-delimited URL-encoded path components after the
-        // formula address).
-        const locatorUrl = new URL(locator);
-        const nodeNumber = locatorUrl.host;
-        const [, ...addresses] = locatorUrl.pathname
-          .replace(/^\//, '')
-          .split('@')
-          .map(decodeURIComponent);
+        // Register peer info from the locator's connection hints.
+        const nodeNumber = parsedLocator.node;
+        const addresses = parsedLocator.hints;
         if (addresses.length > 0 && nodeNumber) {
           await E(
             /** @type {{ addPeerInfo: (info: { node: string, addresses: string[] }) => Promise<void> }} */ (
@@ -2159,7 +2151,7 @@ export const createAddSpaceModal = ({
           /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
             personaPowers
           ),
-        ).storeLocator('general', locator);
+        ).storeLocator('general', endoLocator);
 
         // No new space needed — the existing space already renders the channel
         hide();

@@ -129,5 +129,5 @@ loses access.
 Returns a locator URL that can be shared with peers on other
 machines. The other party adopts it:
 ```
-/adopt-locator <locator> -n their-name
+/store <locator> -n their-name
 ```

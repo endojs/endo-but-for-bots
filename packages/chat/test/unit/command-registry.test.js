@@ -272,7 +272,12 @@ test('filterCommands with channel context and prefix', t => {
   const results = filterCommands('ad', 'channel');
   const names = results.map(cmd => cmd.name);
   t.true(names.includes('adopt'));
-  // adopt-locator should also match if present
+});
+
+test('the store command (store from locator) is registered', t => {
+  const names = getCommandList().map(cmd => cmd.name);
+  t.true(names.includes('store'));
+  t.false(names.includes('adopt-locator'));
 });
 
 test('filterCommands with inbox context and prefix includes inbox commands', t => {

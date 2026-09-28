@@ -18,6 +18,7 @@ import {
   externalizeContent,
   internalizeContentLocator as parseContentLocatorGrammar,
 } from './locator.js';
+import { canonicalEndoLocator } from './capability-url.js';
 import { formatId } from './formula-identifier.js';
 import {
   assertNamePath,
@@ -598,16 +599,15 @@ export const makeDirectoryMaker = ({
     };
 
     /**
-     * Store a locator (endo:// URL) at a pet name path.
+     * Store a locator (any capability URL) at a pet name path.
      * @param {string | string[]} petNamePath
-     * @param {string} locator
+     * @param {string} allegedLocator
      */
-    const storeLocator = async (petNamePath, locator) => {
-      if (!locator.startsWith('endo://')) {
-        throw new Error(
-          `storeLocator requires an endo:// locator, got ${q(locator)}`,
-        );
-      }
+    const storeLocator = async (petNamePath, allegedLocator) => {
+      // Any capability URL — endo:// or the https fragment form — is
+      // accepted (designs/capability-url-locators.md). The rejection
+      // deliberately does not echo the input, which may be a bearer.
+      const locator = canonicalEndoLocator(allegedLocator);
       const { id } = internalizeLocator(locator);
       await storeIdentifier(petNamePath, id);
     };

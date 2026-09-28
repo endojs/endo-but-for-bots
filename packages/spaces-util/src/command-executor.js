@@ -700,14 +700,18 @@ export const createCommandExecutor = ({
           };
         }
 
-        case 'adopt-locator': {
+        case 'store': {
+          // The Chat counterpart of `endo store --locator`: store the
+          // value any capability URL (endo:// or https fragment form)
+          // names, resolved by the daemon before the pet name commits
+          // (designs/capability-url-locators.md).
           const { locator, petName } = params;
           const petNameStr = String(petName);
-          console.log(`[Chat] Adopting from locator as "${petNameStr}"...`);
+          console.log(`[Chat] Storing from locator as "${petNameStr}"...`);
           await E(powers).adoptFromLocator(String(locator), petNameStr);
           return {
             success: true,
-            message: `Adopted as "${petNameStr}" from locator`,
+            message: `Stored as "${petNameStr}" from locator`,
           };
         }
 
