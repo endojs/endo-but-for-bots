@@ -9,36 +9,42 @@
 
 ## Status
 
-**Implemented (Phases 1–2).** The permits, sampling, tests, and changeset
-merged upstream in
+**Implemented (Phases 1–2).** The permits, the global sampling
+(§ Sampling and degradation on hosts without the codecs), the tests, and the
+changeset merged upstream in
 [endojs/endo#3322](https://github.com/endojs/endo/pull/3322) on 2026-07-22
-as merge commit `8021d268e777e3edb51136a31e63c2032dcc37f7`, and reached `llm`
-through the upstream merges. The change put `TextEncoder` and `TextDecoder`
-on `universalPropertyNames` in `packages/ses/src/permits.js` with exactly the
+as merge commit `8021d268e777e3edb51136a31e63c2032dcc37f7`, and reached this
+repository's `llm` integration branch through the upstream merges.
+The change put `TextEncoder` and `TextDecoder` on `universalPropertyNames`
+in `packages/ses/src/permits.js` with exactly the
 prototype permits in the table below. It added 18 focused tests in
 `packages/ses/test/text-codecs.test.js` (16) and
-`packages/ses/test/text-codecs-missing.test.js` (2), covering test-plan
-items 1–5, and a changeset (`.changeset/hardened-text-codecs.md`, released by
+`packages/ses/test/text-codecs-missing.test.js` (2), covering items 1–5
+of the § Test plan below, and a changeset
+(`.changeset/hardened-text-codecs.md`, released by
 [endojs/endo#3302](https://github.com/endojs/endo/pull/3302)).
 
 A follow-up, [endojs/endo#3340](https://github.com/endojs/endo/pull/3340)
 (merged 2026-08-11, `dc504ca9934eba18e3100a170a070382cbd6b344`, also on
 `llm`), explicitly denies Node's non-standard
-`Symbol(nodejs.util.inspect.custom)` method on both prototypes. Before it,
-lockdown on Node warned while removing that method.
+`Symbol(nodejs.util.inspect.custom)` method on both prototypes. Before that
+change, lockdown on Node warned while removing that method.
 
-Remaining items, none of which gate the M2 milestone:
+Remaining items, none of which gate Milestone 2 (M2 in
+[`README.md`](README.md) § Milestones):
 
-- **Test-plan item 6 (XS smoke test):** open as draft
+- **§ Test plan item 6 (XS smoke test):** open as draft
   [endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349).
   It extends `packages/ses/test/_xs.js`. It also found that the current
   Moddable `xst` *does* define both codecs, so on today's toolchain the XS
-  path exercises pass-through-and-harden rather than the absence path this
-  design assumed.
+  path exercises pass-through-and-harden rather than the missing-codecs
+  case this design assumed. § Sampling and degradation and Design
+  Decision 3 below note this.
 - **Phase 3 (downstream audit):** not performed on `llm`. As of `7ff30afbce`,
-  `packages/*/src` has 17 `Buffer.from(` / `.toString('utf…')` sites in 10
-  files. All are Node-host powers, drivers, and backends (`9p-server`, `cli`,
-  `daemon`, `git`, `platform`, `sandbox`, and the `*-sandbox` packages), not
+  `packages/*/src` has 16 `Buffer.from(` / `.toString('utf...')` call sites
+  in 10 files. All are Node-host powers, drivers, and backends
+  (`9p-server`, `cli`, `daemon`, `git`, `platform`, `sandbox`, and the
+  `*-sandbox` packages), not
   code that runs inside a compartment. An audit, if wanted, is a separate
   cleanup job.
 - **Node `TextDecoder` fast-path flags:** hardening a `TextDecoder`
@@ -113,9 +119,12 @@ No iterator prototypes are exposed.
 universalPropertyNames)` already tolerates missing properties: a
 permit whose name is absent on the global is simply skipped.
 The shim relies on this behavior.
-On XS, where `TextEncoder` and `TextDecoder` are not defined,
-lockdown proceeds without them and compartments observe their
-absence exactly as they do today.
+On a host where `TextEncoder` and `TextDecoder` are not defined
+(older XS builds, when this design was written), lockdown proceeds
+without them and compartments observe their absence exactly as they
+do today.
+Current Moddable `xst` defines both codecs, so on today's XS the
+permits pass them through and harden them (see § Status).
 
 ### Lockdown sequencing
 
@@ -223,7 +232,8 @@ Tests live under `packages/ses/test/`.
    machinery in a per-package shim.
 
 3. **No polyfill in this design.**
-   XS users continue to lack `TextEncoder` and `TextDecoder`.
+   Hosts that lack `TextEncoder` and `TextDecoder` continue to lack
+   them (current Moddable `xst` defines both; see § Status).
    A separate polyfill design can layer cleanly on top when there is
    demand.
 
