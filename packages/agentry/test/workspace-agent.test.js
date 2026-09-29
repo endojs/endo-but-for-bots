@@ -79,3 +79,39 @@ test('workspace agent rejects tools from any source other than its grants', asyn
   const agent = await credentialed({ workspaceGrants });
   t.is(agent.state.tools.length, 4);
 });
+
+test('workspace agent endow hook never sees the granted tools', async t => {
+  /** @type {object[]} */
+  const seen = [];
+  const makeAgent = defineWorkspaceAgent({
+    endow: (_definition, options) => {
+      seen.push(options);
+      return {};
+    },
+  });
+  const agent = await makeAgent({
+    workspaceGrants: testGrants({
+      filesystem: grant('Filesystem'),
+      git: grant('Git'),
+      remote: grant('GitRemote'),
+      shell: grant('Shell'),
+    }),
+  });
+  t.true(agent.state.tools.length > 0);
+  t.is(seen.length, 1);
+  t.false('tools' in seen[0]);
+  t.false('workspaceGrants' in seen[0]);
+});
+
+test('workspace agent fails closed when an endow hook returns no endowments', async t => {
+  const makeAgent = defineWorkspaceAgent({
+    endow: /** @type {any} */ (() => undefined),
+  });
+  await t.throwsAsync(
+    () =>
+      makeAgent({
+        workspaceGrants: testGrants({ filesystem: grant('Filesystem') }),
+      }),
+    { message: /endow hook must return an endowments object/ },
+  );
+});
