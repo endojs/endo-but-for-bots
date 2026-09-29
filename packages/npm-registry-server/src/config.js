@@ -55,12 +55,15 @@ harden(readServerEnv);
 
 /**
  * An ISO 8601 date (`YYYY-MM-DD`, read as UTC midnight) or date-time with
- * an explicit `Z` or `±HH:MM` offset. `Date.parse` alone reads a date-time
- * without an offset in the host's local time zone, and accepts other
- * formats by engine-specific heuristics, so the format is checked first.
+ * an explicit `Z` or `±HH:MM` offset, with optional seconds and optional
+ * milliseconds of exactly three digits (ECMA-262 Date Time String Format).
+ * `Date.parse` reads a date-time without an offset in the host's local time
+ * zone, rolls out-of-range fields over, and accepts other formats by
+ * engine-specific heuristics, so every field is checked and the instant is
+ * computed here instead.
  */
 const ISO_INSTANT =
-  /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/u;
+  /^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{3}))?)?(?:Z|([+-])(\d{2}):(\d{2})))?$/u;
 
 /**
  * @param {string} text
@@ -71,8 +74,21 @@ export const parseIsoInstant = text => {
   if (!match) {
     return undefined;
   }
-  // `Date.parse` rolls an impossible day over (2027-02-30 is March 2).
-  const [year, month, day] = match.slice(1, 4).map(Number);
+  const [year, month, day, hour, minute, second, millisecond] = match
+    .slice(1, 8)
+    .map(field => (field === undefined ? 0 : Number(field)));
+  const offsetHours = Number(match[9] ?? 0);
+  const offsetMinutes = Number(match[10] ?? 0);
+  if (
+    hour > 23 ||
+    minute > 59 ||
+    second > 59 ||
+    offsetHours > 23 ||
+    offsetMinutes > 59
+  ) {
+    return undefined;
+  }
+  // `Date.UTC` rolls an impossible day over (2027-02-30 is March 2).
   const calendar = new Date(Date.UTC(year, month - 1, day));
   if (
     calendar.getUTCFullYear() !== year ||
@@ -81,8 +97,11 @@ export const parseIsoInstant = text => {
   ) {
     return undefined;
   }
-  const time = Date.parse(text);
-  return Number.isNaN(time) ? undefined : time;
+  const offset =
+    (match[8] === '-' ? -1 : 1) * (offsetHours * 60 + offsetMinutes) * 60_000;
+  const time =
+    Date.UTC(year, month - 1, day, hour, minute, second, millisecond) - offset;
+  return Number.isFinite(time) ? time : undefined;
 };
 harden(parseIsoInstant);
 

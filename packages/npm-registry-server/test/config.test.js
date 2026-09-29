@@ -54,6 +54,14 @@ test('expiry dates must carry an explicit offset', t => {
   t.is(parseIsoInstant('2027-01-01T00:00:00Z'), Date.UTC(2027, 0, 1));
   t.is(parseIsoInstant('2027-01-01T01:00+01:00'), Date.UTC(2027, 0, 1));
   t.is(parseIsoInstant('2028-02-29'), Date.UTC(2028, 1, 29));
+  t.is(
+    parseIsoInstant('2027-01-01T00:00:00.500Z'),
+    Date.UTC(2027, 0, 1, 0, 0, 0, 500),
+  );
+  t.is(
+    parseIsoInstant('2026-12-31T23:59:59-00:30'),
+    Date.UTC(2027, 0, 1, 0, 29, 59),
+  );
   // No offset means host-local time to `Date.parse`; other formats are
   // engine heuristics.
   for (const text of [
@@ -62,6 +70,15 @@ test('expiry dates must carry an explicit offset', t => {
     '2027-13-01',
     '2027-02-30',
     '2027-02-29T00:00Z',
+    // Milliseconds are exactly three digits, and every time field is
+    // bounded here rather than left to `Date.parse`'s rollover.
+    '2027-01-01T00:00:00.5Z',
+    '2027-01-01T00:00:00.5000Z',
+    '2027-01-01T24:00Z',
+    '2027-01-01T23:60Z',
+    '2027-01-01T23:59:60Z',
+    '2027-01-01T00:00+24:00',
+    '2027-01-01T00:00+00:60',
     '',
   ]) {
     t.is(parseIsoInstant(text), undefined, text);
