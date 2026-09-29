@@ -3,8 +3,10 @@
 // compatibility shim; each name has no older home to deprecate.
 //
 // Deliberately omitted: `src/config.js` (environment parsing for the
-// `npm-registry-server` bin, not a library surface) and `STATUS_ERRORS`
-// from `src/errors.js` (the HTTP adapter's internal status-to-code table).
+// `npm-registry-server` bin, not a library surface), `STATUS_ERRORS`
+// from `src/errors.js` (the HTTP adapter's internal status-to-code table),
+// and `isAllowlistEntry` from `src/names.js` (the grant store's input
+// validator; `makeGrants().putGrant` is the public way to exercise it).
 
 export { makeFileCas } from './src/cas.js';
 export {

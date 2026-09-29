@@ -50,9 +50,10 @@ test('putGrant validates id, token length, and package list', t => {
   t.throws(() => grants.putGrant({ ...grant, id: 'bad id' }), {
     message: /Invalid grant id/,
   });
-  t.throws(() => grants.putGrant({ ...grant, token: 'short' }), {
+  t.throws(() => grants.putGrant({ ...grant, token: 'k'.repeat(31) }), {
     message: /at least 32 characters/,
   });
+  t.notThrows(() => grants.putGrant({ ...grant, token: 'k'.repeat(32) }));
   t.throws(() => grants.putGrant({ ...grant, packages: [] }), {
     message: /at least one package/,
   });
@@ -173,4 +174,29 @@ test('putGrant refuses allowlist entries outside the package-name grammar', t =>
       token: TOKEN,
     }),
   );
+});
+
+test('allowlist entries are bounded by the package-name length limit', t => {
+  const { grants } = makeTestGrants({ value: 1000 });
+  /** @param {string} entry */
+  const put = entry =>
+    grants.putGrant({
+      id: 'g1',
+      subject: 'publisher',
+      packages: [entry],
+      expiresAt: 2000,
+      token: TOKEN,
+    });
+  // `@` + scope + `/*` and `@` + scope + `/x` at 214 characters, then 215.
+  const scope = 'a'.repeat(211);
+  for (const tail of ['*', 'x']) {
+    t.notThrows(() => put(`@${scope}/${tail}`), tail);
+    t.throws(() => put(`@${scope}a/${tail}`), {
+      message: /Invalid grant allowlist entry/,
+    });
+  }
+  t.notThrows(() => put('a'.repeat(214)));
+  t.throws(() => put('a'.repeat(215)), {
+    message: /Invalid grant allowlist entry/,
+  });
 });

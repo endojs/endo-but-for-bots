@@ -71,9 +71,10 @@ const SCOPE_WILDCARD = /^@[a-z0-9][a-z0-9._~-]*\/\*$/u;
  * @returns {boolean}
  */
 export const isAllowlistEntry = entry =>
-  SCOPE_WILDCARD.test(entry) ||
-  (entry.length <= MAX_NAME_LENGTH &&
-    (SCOPED_NAME.test(entry) || UNSCOPED_NAME.test(entry)));
+  entry.length <= MAX_NAME_LENGTH &&
+  (SCOPE_WILDCARD.test(entry) ||
+    SCOPED_NAME.test(entry) ||
+    UNSCOPED_NAME.test(entry));
 harden(isAllowlistEntry);
 
 /**

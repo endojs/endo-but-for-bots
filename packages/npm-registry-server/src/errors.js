@@ -26,7 +26,8 @@ harden(RegistryHttpError);
  */
 export const isRegistryHttpError = error =>
   error instanceof Error &&
-  typeof (/** @type {any} */ (error).statusCode) === 'number';
+  typeof (/** @type {any} */ (error).statusCode) === 'number' &&
+  typeof (/** @type {any} */ (error).reason) === 'string';
 harden(isRegistryHttpError);
 
 /** @type {Record<number, string>} */
