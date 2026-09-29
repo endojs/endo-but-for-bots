@@ -26,6 +26,8 @@ export const RegistryHttpError = (statusCode, reason) => {
   const error = /** @type {RegistryHttpErrorShape} */ (Error(reason));
   error.statusCode = statusCode;
   error.reason = reason;
+  // The brand vouches for the status, so the status must not change.
+  harden(error);
   registryHttpErrors.add(error);
   return error;
 };
