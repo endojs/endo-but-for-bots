@@ -66,6 +66,7 @@ type FilesystemStats = {
     type?: string;
 };
 type PassableBytesReader<TReadReturn = undefined> = {
+    stream?: (synPromise: ERef<StreamNode<unknown, TReadReturn>>) => Promise<StreamNode<Uint8Array, TReadReturn>>;
     streamBase64: (synPromise: ERef<StreamNode<unknown, TReadReturn>>) => Promise<StreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
@@ -295,6 +296,7 @@ type MountStreamNode<Y = undefined, R = undefined> = MountStreamYieldNode<Y, R> 
     promise: null;
 };
 type MountPassableBytesReader<TReadReturn = undefined> = {
+    stream?: (synPromise: MountERef<MountStreamNode<unknown, TReadReturn>>) => Promise<MountStreamNode<Uint8Array, TReadReturn>>;
     streamBase64: (synPromise: MountERef<MountStreamNode<unknown, TReadReturn>>) => Promise<MountStreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };

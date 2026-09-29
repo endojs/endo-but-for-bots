@@ -127,6 +127,7 @@ type GitWorktreeEntry = {
     prunable: boolean;
 };
 type GitPassableBytesReader<TReadReturn = undefined> = {
+    stream?: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<Uint8Array, TReadReturn>>;
     streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
@@ -504,6 +505,7 @@ type GitWorktreeEntry = {
 };
 type GitERef<T> = T | Promise<T>;
 type GitPassableBytesReader<TReadReturn = undefined> = {
+    stream?: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<Uint8Array, TReadReturn>>;
     streamBase64: (synPromise: GitERef<GitStreamNode<unknown, TReadReturn>>) => Promise<GitStreamNode<string, TReadReturn>>;
     readReturnPattern: () => unknown | undefined;
 };
