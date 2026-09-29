@@ -162,7 +162,7 @@ test('upstream read-through rewrites URLs, verifies, and serves stale on error',
   const { integrity, shasum } = digestTarball(tgz);
   let online = true;
   const requests = [];
-  /** @type {typeof fetch} */
+  /** @type {import("../src/node-fetch.js").UpstreamFetch} */
   const fakeFetch = async (url, init) => {
     requests.push(String(url));
     if (!online) throw TypeError('fetch failed');

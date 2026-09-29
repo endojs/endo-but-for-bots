@@ -6,6 +6,7 @@ import { Buffer } from 'node:buffer';
 
 import { q } from '@endo/errors';
 import { RegistryHttpError } from './errors.js';
+import { makeNodeFetch } from './node-fetch.js';
 import {
   allowlistCovers,
   encodePackageName,
@@ -29,6 +30,7 @@ import {
 /** @import { RegistryStore } from './store.js' */
 /** @import { Grants, PublishGrant } from './grants.js' */
 /** @import { ArchiveLimits } from './tarball.js' */
+/** @import { UpstreamFetch, UpstreamResponse } from './node-fetch.js' */
 
 /**
  * Fields npm's abbreviated install metadata
@@ -84,7 +86,7 @@ const canonicalJson = value =>
   ) ?? 'undefined';
 
 /**
- * @param {Response} response
+ * @param {UpstreamResponse} response
  * @param {number} maxBytes
  * @returns {Promise<Uint8Array>}
  */
@@ -118,6 +120,20 @@ const readLimited = async (response, maxBytes) => {
 };
 
 /**
+ * Release an upstream response body that will not be read.
+ *
+ * @param {UpstreamResponse} response
+ */
+const discard = response => {
+  const body = /** @type {any} */ (response.body);
+  if (body && typeof body.destroy === 'function') {
+    body.destroy();
+  } else if (body && typeof body.cancel === 'function') {
+    body.cancel().catch(() => {});
+  }
+};
+
+/**
  * @param {string} data
  * @returns {Uint8Array}
  */
@@ -137,7 +153,8 @@ const decodeBase64 = data => {
  *   served tarball URLs are rooted at, e.g. `https://npm.minion.town`.
  * @property {string} [upstreamOrigin] The single pinned upstream registry;
  *   omit for a local-only registry.
- * @property {typeof globalThis.fetch} [fetch] Outbound HTTP power.
+ * @property {UpstreamFetch} [fetch] Outbound HTTP power; defaults to a
+ *   `node:http`/`node:https` client that never follows redirects.
  * @property {readonly string[]} [reservedTags] Moving `dev-*` pointers that
  *   `npm dist-tag add` may set besides the date channels.
  * @property {number} [upstreamTtlMs] Freshness of cached upstream metadata.
@@ -162,7 +179,7 @@ export const makeRegistry = ({
   grants,
   publicOrigin,
   upstreamOrigin,
-  fetch = globalThis.fetch,
+  fetch = makeNodeFetch(),
   reservedTags = ['dev-latest'],
   upstreamTtlMs = 5 * 60 * 1000,
   upstreamTimeoutMs = 30 * 1000,
@@ -580,7 +597,7 @@ export const makeRegistry = ({
       if (meta?.upstream_etag) {
         headers['if-none-match'] = meta.upstream_etag;
       }
-      /** @type {Response} */
+      /** @type {UpstreamResponse} */
       let response;
       try {
         response = await fetch(`${upstream}/${encodePackageName(name)}`, {
@@ -597,6 +614,9 @@ export const makeRegistry = ({
           timedOut ? 504 : 502,
           `Upstream metadata for ${q(name)} is unavailable`,
         );
+      }
+      if (!response.ok || response.status === 304) {
+        discard(response);
       }
       if (response.status === 304 && meta) {
         statements.upsertMeta.run(
@@ -762,7 +782,7 @@ export const makeRegistry = ({
       // Reconstructed against the pinned origin; the packument's own
       // `dist.tarball` is never followed.
       const url = `${upstream}/${encodePackageName(name)}/-/${tarballFileName(name, version)}`;
-      /** @type {Response} */
+      /** @type {UpstreamResponse} */
       let response;
       try {
         response = await fetch(url, {
@@ -777,6 +797,7 @@ export const makeRegistry = ({
         );
       }
       if (!response.ok) {
+        discard(response);
         throw RegistryHttpError(
           502,
           `Upstream tarball for ${key} returned ${response.status}`,

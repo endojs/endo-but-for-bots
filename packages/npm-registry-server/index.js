@@ -23,6 +23,7 @@ export {
   defaultArchiveLimits,
 } from './src/tarball.js';
 export { makeRegistry } from './src/registry.js';
+export { makeNodeFetch } from './src/node-fetch.js';
 export { makeRequestHandler } from './src/http.js';
 export { openRegistry, startRegistryServer } from './src/server.js';
 export { RegistryHttpError, isRegistryHttpError } from './src/errors.js';

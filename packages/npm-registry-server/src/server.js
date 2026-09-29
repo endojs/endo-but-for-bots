@@ -20,7 +20,7 @@ import { makeRequestHandler } from './http.js';
  * @property {string} [upstreamOrigin]
  * @property {string} [host]
  * @property {number} [port] 0 picks a free port.
- * @property {typeof globalThis.fetch} [fetch]
+ * @property {import('./node-fetch.js').UpstreamFetch} [fetch]
  * @property {number} [upstreamTtlMs]
  * @property {(entry: RequestLog) => void} [log]
  */
