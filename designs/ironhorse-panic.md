@@ -196,11 +196,16 @@ tables therefore belong to the dedicated worker thread. Thread exit drops these
 resources. Handle identifiers remain globally allocated, and a lookup resolves
 only against the calling thread's table. This also closes the pre-existing
 cross-worker handle lookup gap: the former process-wide tables did not check
-ownership even in runs without a panic. Reconstruction after restart remains
-separate work in § Slot Machine Termination and Retry. Until those handles can
-be reconstructed, a supervised suspend request with open native handles returns
-`suspend-error` and leaves the worker running. The caller must close its file,
-directory, SQLite, and hasher handles before retrying suspension.
+ownership even in runs without a panic. A worker that has attached its host
+transcript (the `host-transcript` control envelope) routes these tables through
+`Transcript::host_call`, so each handle is a logical id with a reconstruction
+descriptor that tracks its committed position, and suspension with open handles
+is allowed. Attaching on resume re-seats every open handle before any delivery
+can use it; a handle with no descriptor (an in-memory database, a hasher fed
+more than its recording limit) is re-seated as broken and every use is refused
+(§ Host functions are messages too). A worker with no attached transcript still
+answers a suspend request with open native handles with `suspend-error` and keeps
+running, because nothing durable could rebuild them.
 
 **Limits of the unwind boundary.** `catch_unwind` catches unwinding Rust panics.
 It cannot contain native stack overflow, explicit process abort, allocation
@@ -836,6 +841,20 @@ supervisor, because `ironhorse_engine` is not on the delivery path. The
 `ExecutionOutcome` seam (§ The Formal `Panic` Category) is where the two are joined: it is the
 point at which an Ironhorse `Halt::Panic` becomes the same supervisor-visible
 worker-death that the XS `"terminated"` meter report is today.
+
+The supervisor side of this sequence is `slot_machine_transcript::Supervisor`.
+It drops the incarnation on any verdict but `Quiesced`. `recover` checks the
+pinned configuration, re-seats handles, restores the latest published snapshot,
+and replays the committed suffix through `Replay`: recorded frames are matched
+and suppressed, recorded host replies answer host calls, and any divergence is a
+`ReplayStop`. `retry` re-delivers the pending crank only under a fix its
+`PanicSource` admits (the table below) and only while `recovery_gate` is open.
+`discard_pending` drops it instead. On the live XS worker, an attached host
+transcript stages outbound frames in the delivery's crank. `host_ledger::replay`
+re-runs the committed suffix on a worker restored from
+`host_ledger::published_heap`. The handle-table callbacks record their guest
+result as a tagged reply, so replay can set it without a native call. A
+callback that has no reply encoding yet, such as the SQLite reads, stops replay.
 
 ### What "fixed" means in practice
 

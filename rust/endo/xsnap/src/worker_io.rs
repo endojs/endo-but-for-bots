@@ -655,10 +655,10 @@ pub unsafe extern "C" fn host_send_frame(the: *mut XsMachine) {
     guard_ffi(|| unsafe {
         let hex_data = arg_str(the, 0);
         match hex::decode(hex_data) {
-            Ok(data) => {
+            Ok(data) if crate::host_ledger::outbound(&data) => {
                 let _ = with_transport(|t| t.send_frame(&data));
             }
-            Err(_) => {}
+            _ => {}
         }
     });
 }
@@ -676,7 +676,9 @@ pub unsafe extern "C" fn host_get_daemon_handle(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_issue_command(the: *mut XsMachine) {
     guard_ffi(|| unsafe {
         let slot = (*the).frame.sub(1);
-        if let Some(buf) = read_typed_array_bytes(the, slot) {
+        if let Some(buf) =
+            read_typed_array_bytes(the, slot).filter(|buf| crate::host_ledger::outbound(buf))
+        {
             if let Err(e) = with_transport(|t| t.send_frame(&buf)) {
                 eprintln!("endor: issueCommand error: {}", e);
             }
@@ -688,7 +690,9 @@ pub unsafe extern "C" fn host_issue_command(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_send_raw_frame(the: *mut XsMachine) {
     guard_ffi(|| unsafe {
         let slot = (*the).frame.sub(1);
-        if let Some(buf) = read_typed_array_bytes(the, slot) {
+        if let Some(buf) =
+            read_typed_array_bytes(the, slot).filter(|buf| crate::host_ledger::outbound(buf))
+        {
             if let Err(e) = with_transport(|t| t.send_raw_frame(&buf)) {
                 eprintln!("endor: sendRawFrame error: {}", e);
             }

@@ -204,6 +204,11 @@ class Repository(unittest.TestCase):
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 
+    def test_slot_machine_transcript_selects_its_test_and_format_jobs(self):
+        selected = self.selected("rust/endo/slot-machine-transcript/src/lib.rs")
+        self.assertTrue(selected["test-ironhorse"])
+        self.assertTrue(selected["format-ironhorse"])
+
     def test_row_schema_guard_inputs(self):
         for path in ["rust/engine/scripts/check-row-schema.py",
                      "rust/engine/scripts/test-row-schema.py",
