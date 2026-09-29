@@ -151,9 +151,15 @@ test('the confined process has no daemon socket and no credential in its MCP chi
   t.is(result.type, 'ok', JSON.stringify(result));
   const report = JSON.parse(/** @type {any} */ (result).text);
 
-  // The confined `claude`: a constructed environment, no daemon socket.
+  // The confined `claude`: a constructed environment, no daemon socket. macOS
+  // adds `__CF_USER_TEXT_ENCODING` to every process at exec; the harness does
+  // not supply it.
+  const osInjected = ['__CF_USER_TEXT_ENCODING'];
   for (const name of report.ownEnvNames) {
-    t.true(ALLOWED_ENV_KEYS.includes(name), `claude env carries ${name}`);
+    t.true(
+      ALLOWED_ENV_KEYS.includes(name) || osInjected.includes(name),
+      `claude env carries ${name}`,
+    );
   }
   t.false(report.ownEnvNames.includes('ENDO_SOCK'));
   t.false(report.ownEnvNames.includes('XDG_RUNTIME_DIR'));
