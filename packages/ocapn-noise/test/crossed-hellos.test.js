@@ -31,11 +31,11 @@ test('crossed hellos: both peers end on the same session with a stable session i
   // Synthesize locations that route through the mesh fabric.
   const locA = {
     ...netA.locationFor(keyA),
-    hints: { 'mesh:to': 'A' },
+    hints: { 0: 'mesh:A' },
   };
   const locB = {
     ...netB.locationFor(keyB),
-    hints: { 'mesh:to': 'B' },
+    hints: { 0: 'mesh:B' },
   };
 
   // Fire both provideSession calls in the same microtask so the two
@@ -113,20 +113,20 @@ const runLateCrossedHello = async (t, i) => {
     /** @type {import('../src/types.js').OcapnNoiseTransport} */
     const gatedB = harden({
       ...baseB,
-      connect: async hints => {
+      connect: async hint => {
         await gate;
-        return baseB.connect(hints);
+        return baseB.connect(hint);
       },
     });
     await netB.addTransport(gatedB);
 
     const locA = {
       ...netA.locationFor(keyA),
-      hints: { 'mesh:to': 'A' },
+      hints: { 0: 'mesh:A' },
     };
     const locB = {
       ...netB.locationFor(keyB),
-      hints: { 'mesh:to': 'B' },
+      hints: { 0: 'mesh:B' },
     };
 
     // B dials first so its handshake registers in-progress, but its

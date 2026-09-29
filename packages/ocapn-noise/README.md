@@ -129,8 +129,10 @@ const keyId = network.addSigningKeys(keys);
 // `listen` immediately starts accepting inbound sessions.
 await network.addTransport(makeTcpTransport());
 
-// Hand peers our location; they reach us at
-// `ocapn://<keyId>.np?tcp:host=...&tcp:port=...`.
+// Hand peers our location. It carries the listening transports' hints as
+// a priority-ordered list of self-describing dial URLs — e.g.
+// `tcp://<host>:<port>` and `ws://<host>:<port>/…` — the URL scheme
+// selecting the transport; peers try them in order until one connects.
 const myLocation = network.locationFor(keyId);
 
 // Initiate on behalf of a specific identity.
