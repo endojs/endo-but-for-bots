@@ -32,24 +32,113 @@ endo-host `ops/explicit-journal-deployment-20260924.md`.
 
 | Item | Status | Evidence |
 |---|---|---|
-| RA-01 simplification | Removals done; target regressed | Every removal named below is in source. The four backend/shared packages measure 42,185 lines (was 39,713 at the snapshot), and the vendor packages 19,028 (was 16,718), mostly new native-context capture/restore code (Claude coverage and helpers, Codex context transport) that the retained-mechanism inventory does not yet cover. The attachment allowlist exists twice, in `claude-context-coverage.js` and `oci/capture-compaction.mjs`, synchronized by hand |
+| RA-01 simplification | Removals done; target regressed | Every removal named below is in source. The four backend/shared packages measure 42,185 lines (was 39,713 at the snapshot), and the vendor packages 19,028 (was 16,718), mostly new native-context capture/restore code (Claude coverage and helpers, Codex context transport) that the retained-mechanism inventory does not yet cover. The attachment allowlist, the record identity pattern and the transport limit that were repeated across the Claude helpers and validator are written once since `d2effd167`, the Codex envelope bound and identity pattern since `0385937c5`, and the Claude and OpenCode `setup-hosted.js` scripts run one shared sequence since `a26ae97da` (all 2026-09-30, below) |
 | RA-02 bounded context | Open | No whole-context bound, no Fae compaction producer, no policy. The portable fallback (`88f9deb23`) and non-fatal capture (`adf25f948`) reverse RA-02's "refuse rather than fall back" for Claude (the transcript-continuity backend with native checkpoints; OpenCode has none to refuse on): a failed, stopped or uncaptured turn now projects the checkpoint's portable context plus everything after it, so bounding relies on the CLI's own compaction until the next Claude checkpoint. Codex still refuses |
 | RA-03 account identity | Done in source; in the deployed code | Explicit bindings, exact-authority merging, reset pairing; not separately accepted live |
 | RA-04 admission conformance | Partial | The shared harness covers cancellation before/during preparation and during restoration on all three adapters. Cancel at the write, after dispatch, and failure-then-next-turn are per-adapter only; Codex's successor disposition deliberately differs |
-| RA-05 rebaseline and accept | Partial; Codex blocked by quota | Paired deployment done. Claude and OpenCode pass the hosted matrix (create, tools, network policy, cancel, delete) and restart recall; Fae passes its matrix and restart recall; the Claude pin is now restoration-verified. Codex could not run: both subscriptions returned `usage_limit_reached` until 2026-09-30/10-01. The generation-173 Codex owner stop and opaque grant-admission refusal remain open. The matrix's Claude seed logged one non-fatal capture failure ("Divergent or missing suffix ancestry"), an unseen native record chain still to reproduce |
+| RA-05 rebaseline and accept | Done on generation 182 (2026-09-30) | Paired deployment done. On generation 182 (`d06622804`) Claude, OpenCode and Codex pass the hosted matrix (create, tools, network policy, cancel, delete) and restart recall; Fae passes its matrix and restart recall; the Claude pin is restoration-verified. Codex's first pass since the generation-173 defects; the owner stop and opaque grant-admission refusal seen then did not recur, and stay listed until reproduced or retired. The generation-180 Claude capture failure ("Divergent or missing suffix ancestry") did not recur either and is still unexplained. Codex could not run before 12:05 JST: the pool kept the September 25 refusal marks over newer readings that showed capacity, fixed in `984e8c78b` (below). Generation 183 (`984e8c78b`, rebuilt Claude and Codex images) repeats the hosted matrix on all three; its restart recall for Claude and Codex hit the known eager-start race, so the new image pins stay `candidate` until the dormant-after-restart change lands |
 
-**Divergence: per-backend concurrent-session caps.** Hosted Codex is capped at
-two concurrent sessions (endo-host `codexSandbox.maxSessions = 2`, also the
-module default; mapped to the listener runtime's `maxListeners`). Claude and
-OpenCode have no host option and run at the runtime default of 16. The design
-requires each numeric limit to be justified by capacity, parser, provider or
-budget rather than copied, and no justification for two is recorded; it likely
-survives from the retired project-id scheme. Codex setup refuses a changed
-retained configuration, so raising it means retiring the Codex broker; if an
-option is added for Claude and OpenCode, it must also join their
-retained-configuration checks, which today compare only authority, credential
-kind and images. Align the three (one option, a justified shared default) as part of
-RA-04/RA-05.
+**Divergence: per-backend concurrent-session caps — resolved 2026-09-29.**
+Hosted Codex was capped at two concurrent sessions (endo-host
+`codexSandbox.maxSessions = 2`) while Claude and OpenCode ran at the listener
+runtime's default of 16 with no option, and no justification for two was
+recorded. Changing it also required retiring the Codex broker, because a
+broker's capacity, public-egress ceiling and admission trail were fixed at
+mint (Codex refused any changed setting; Claude and OpenCode silently kept
+the minted values). `85a473fc9` and `9fd9876c8` make those three operator
+settings, not identity: setup applies them to the retained broker at every
+start through an operator-only `configure()`, the broker saves the intent in
+its private directory before applying it so a revived incarnation never
+reopens what was closed, and turning public egress off stops live public
+listeners. Each backend now has the same host option (`maxSessions`, default
+16). Owner, directory, account, images and pool mode still require a
+retirement.
+
+**Duplicate implementations: the Claude native-context shape — merged
+2026-09-30.** The attachment allowlist existed twice (the host validator
+`claude-context-coverage.js` and the in-image helper
+`oci/capture-compaction.mjs`), and the record identity pattern and the 16 MiB
+transport limit five times each, across `claude-client.js`, the validator and
+the three `oci/` helpers, all synchronized by hand. `d2effd167` writes them
+once in `oci/native-context-shape.mjs`, a module that depends on nothing but
+the language, so the image carries it beside the helpers and the daemon
+imports it through the existing `src` → `oci` path (`claude-native-controller.js`
+already imported the projection that way). Behavior is unchanged at every call
+site; the pre-commit review checked both old predicates against the new one
+differentially. New tests fix the contract, prove the Containerfile copies
+every module a helper reaches by a relative reference, and fail if a shape
+token reappears in a second source file. Runtime source shrinks by 21 lines
+(143 removed, 122 added, 87 of them the module with its comments); the point is
+one definition, not the count. Deploying it is an image change: the
+Containerfile moves the Claude image digest, and images remain broker
+identity, so it rides the next Claude image redeploy (retire the broker name
+and the Claude sessions, as on September 25), not a daemon-only release.
+
+**Duplicate implementations, continued — 2026-09-30.** `0385937c5` does for
+Codex what `d2effd167` did for Claude: the 16 MiB envelope bound (declared in
+three in-image helpers and the host transport) and the record identity
+pattern (two helpers) are one module, `codex-sandbox/oci/native-context-shape.mjs`,
+copied into the image and guarded by the same two tests; the Codex image
+digest moves with it. `a26ae97da` replaces the 211 identical lines the Claude
+and OpenCode `setup-hosted.js` scripts shared with one sequence in
+`hosted-agent/src/hosted-backend-setup.js`: explicit steps (environment,
+provisioned services, storage roots, retained broker or minted identity,
+session roots, disjoint guest roots, broker mint-or-retain with its settings,
+backend caplet swap, Floot binding, account publication), parameterized by
+label, `ENDO_<PREFIX>` and pet-name directory. Each adapter's own code
+(Claude's credential kinds, pool, `anthropic-beta` profile and
+state-provider-backed storage owner; OpenCode's null-powers storage owner)
+sits between the steps as plain code, not behind hooks. Both adapter setup
+suites pass unchanged (10 and 19 tests), nine unit tests cover the steps, and
+the pre-commit review confirmed side-effect order, console text and the
+persisted broker profiles' key order identical, apart from four documented
+reorderings of pure checks. The scripts shrink from 527 and 414 lines to 388
+and 271. Codex's setup script (64 shared lines) stays separate: it requires
+both images, verifies retained powers identity, mints two services and
+orders its profile differently; `requireProvisioned` and `bindFlootBackend`
+would fit it as-is, `publishHostedAccount` would need `resetCredits`. The
+setup change is daemon-only and exercises the retained-broker path at the
+next start; the mint path runs when the brokers are next retired, which the
+two image changes above call for anyway.
+
+**Defect found by the Codex rerun — fixed 2026-09-30.** The subscription pool
+skips a member that refused with a 429 until the reset time that refusal's
+reading named, and keeps the mark across restarts in its pool state. It took
+the later of that mark and the member's current reading's block, so a reading
+taken since that showed the windows open (the provider had reset the account
+early; the settings UI showed full capacity) could not bring the member back:
+both Codex subscriptions stayed skipped until their September 25 reset times.
+`984e8c78b` records when a mark was set and whether the provider dated it; at
+selection and in the status view a dated mark yields to a reading observed
+after it that stands unblocked, and the mark is dropped and the change kept.
+The refusal's own reading, accepted before the refusal is marked, and a
+duplicate in-flight refusal cannot supersede the mark they came with; backoff
+marks for a member that could not be used at all are left to lapse; the
+account sources now stamp readings with the pool's clock. Deployed as
+generation 183 (below).
+
+**Image release — generation 183, 2026-09-30.** `984e8c78b` with the Claude
+and Codex images rebuilt from `d06622804` (the shared base reproduced
+`a2fbee0f…` exactly; the listener image is unchanged, so OpenCode kept its
+verified pin and its broker). The Claude and Codex brokers were retired with
+their sessions, as the operator approved. Retirement taught one thing: removing
+the broker's name is not enough. The account sources, the subscription and
+Codex's reset redeemers were minted over the broker formula as their powers,
+and Floot evaluates them by name at start, which re-incarnated the old broker
+under its owner label before setup could mint the new one; the sandbox refused
+the mint with "Native service owner is already live" and both hosted setups
+failed on the first start. Unbinding those dependents (endo-host
+`ops/redeploy-hosted-image-20260930.mjs`, `PHASE=dependents`) and restarting
+let setup construct both brokers on the new pins and re-make the dependents
+over them. On generation 183 all three hosted backends pass the matrix
+(create, tools, network policy, cancel, delete), and the restoration seeds
+write native-context checkpoints on the new images. The restart recall passed
+for OpenCode and Fae but failed for Claude and Codex on the eager-start race
+("Session incarnation is stopped" right after the restart, the turn ending
+`outcome-unknown`), which generation 182 had passed by timing; a follow-up
+turn is held by the queue-held-after-restart rule. That race is the
+dormant-after-restart change decided on September 25 and not yet built; the
+new image pins stay `candidate` in the ledger until a recall passes.
 
 ## Requirements and current evidence
 

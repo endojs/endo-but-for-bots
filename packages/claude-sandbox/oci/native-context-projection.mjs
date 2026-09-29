@@ -1,8 +1,11 @@
 // @ts-check
 // Pure projection shared by the sandbox importer and trusted host controller.
 import { createHash } from 'node:crypto';
+import {
+  NATIVE_CONTEXT_LIMIT as LIMIT,
+  isUuid,
+} from './native-context-shape.mjs';
 
-const LIMIT = 16 * 1024 * 1024;
 const requireValue = condition => {
   if (!condition) throw Error('Invalid native context projection');
 };
@@ -36,10 +39,7 @@ export const renderNativeContext = ({
     .split('\n')
     .map(line => JSON.parse(line));
   const session = rows[0]?.sessionId;
-  requireValue(
-    typeof session === 'string' &&
-      /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(session),
-  );
+  requireValue(isUuid(session));
   requireValue(
     rows.every(
       row => row.sessionId === session && row.cwd === cwd && !row.isSidechain,

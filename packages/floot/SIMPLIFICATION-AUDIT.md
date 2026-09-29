@@ -246,3 +246,20 @@ Endo's host tools among them, still match exactly). Capture failures after a
 covered, successful reply are no longer fatal (`adf25f948`): the turn completes
 without a checkpoint and the next one restores portably; operators see a static
 warning. Deployed as generations 179 and 180 with live probes passing.
+
+Duplicate check merged (2026-09-30, `d2effd167`): the attachment allowlist that
+the daemon validator and the in-image capture helper each carried, and the
+record identity pattern and 16 MiB transport limit repeated across five Claude
+files, are one module, `oci/native-context-shape.mjs`, copied into the image
+beside the helpers and imported by the daemon. A test fails if the shape is
+written down a second time or if the Containerfile misses a module a helper
+imports. Not deployed: the Containerfile changes the Claude image digest, which
+is broker identity.
+
+Same day, the same for Codex (`0385937c5`: the envelope bound and identity
+pattern of three in-image helpers and the host transport, one module, image
+digest moves), and the Claude and OpenCode `setup-hosted.js` scripts now run
+one shared sequence, `hosted-agent/src/hosted-backend-setup.js` (`a26ae97da`):
+their 211 identical lines are written once, each adapter keeps only what is its
+own, and both adapters' setup suites pass unchanged. Codex's setup script is
+structurally different and stays separate.

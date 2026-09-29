@@ -171,19 +171,21 @@ harden(standingOf);
 /**
  * The refusals a pool has seen, which outlive the reading that came with
  * them: a member that refused is skipped until the time it named, or, when it
- * named none, for a pause that doubles with each refusal in a row.
+ * named none, for a pause that doubles with each refusal in a row. A mark
+ * remembers when it was set (`sinceMs`), so that a reading of the member
+ * taken later can outrank it (see `supersededBy`).
  *
  * @param {object} [options]
- * @param {Record<string, { untilMs: number, strikes: number }>} [options.initial]
+ * @param {Record<string, { untilMs: number, strikes: number, sinceMs?: number, dated?: boolean }>} [options.initial]
  *   What a previous incarnation recorded.
- * @param {(marks: Record<string, { untilMs: number, strikes: number }>) => void} [options.onChange]
+ * @param {(marks: Record<string, { untilMs: number, strikes: number, sinceMs?: number, dated?: boolean }>) => void} [options.onChange]
  *   Called when the marks change, for the owner to make durable.
  */
 export const makeRefusalMarks = ({
   initial = {},
   onChange = () => {},
 } = {}) => {
-  /** @type {Map<string, { untilMs: number, strikes: number }>} */
+  /** @type {Map<string, { untilMs: number, strikes: number, sinceMs?: number, dated?: boolean }>} */
   const marks = new Map(Object.entries(initial));
   const changed = () => onChange(harden(Object.fromEntries(marks)));
   return harden({
@@ -201,8 +203,17 @@ export const makeRefusalMarks = ({
         // report the same event, and are not refusals "in a row". A later
         // time the provider named still extends the mark.
         if (dated !== null && dated > before.untilMs) {
-          marks.set(memberId, { untilMs: dated, strikes: before.strikes });
+          marks.set(memberId, {
+            untilMs: dated,
+            strikes: before.strikes,
+            sinceMs: nowMs,
+            dated: true,
+          });
           changed();
+        } else {
+          // Its own reading must not outrank the mark either; in memory is
+          // enough, the mark itself is unchanged.
+          marks.set(memberId, { ...before, sinceMs: nowMs });
         }
         return;
       }
@@ -222,7 +233,12 @@ export const makeRefusalMarks = ({
         BACKOFF_START_MS * 2 ** (strikes - 1),
         BACKOFF_MAX_MS,
       );
-      marks.set(memberId, { untilMs: dated ?? nowMs + pause, strikes });
+      marks.set(memberId, {
+        untilMs: dated ?? nowMs + pause,
+        strikes,
+        sinceMs: nowMs,
+        dated: dated !== null,
+      });
       changed();
     },
     /** @param {string} memberId */
@@ -237,6 +253,35 @@ export const makeRefusalMarks = ({
     blockedUntil: (memberId, nowMs) => {
       const mark = marks.get(memberId);
       return mark && mark.untilMs > nowMs ? mark.untilMs : null;
+    },
+    /**
+     * A reading of the member taken after its mark was set is newer evidence
+     * than the refusal: the provider reset the account early, or the refusal
+     * named a later time than its windows do. The caller has found that
+     * reading to show the windows open; the mark is dropped. Only a mark the
+     * provider dated is about capacity: the backoff for a member that could
+     * not be used at all says nothing a reading could contradict, and lapses
+     * by itself within the hour. The refusal's own reading reaches the
+     * account source before the refusal is marked, so it can never supersede
+     * the mark it came with. A mark kept by an earlier incarnation, before
+     * marks recorded their time, yields to any such reading.
+     *
+     * @param {string} memberId
+     * @param {number} observedMs When the reading was taken.
+     * @returns {boolean} Whether a mark was dropped.
+     */
+    supersededBy: (memberId, observedMs) => {
+      const mark = marks.get(memberId);
+      if (
+        mark === undefined ||
+        mark.dated === false ||
+        !(observedMs > (mark.sinceMs ?? 0))
+      ) {
+        return false;
+      }
+      marks.delete(memberId);
+      changed();
+      return true;
     },
     /**
      * Drop marks for members no longer in the set. @param {string[]} ids
@@ -254,6 +299,41 @@ export const makeRefusalMarks = ({
 harden(makeRefusalMarks);
 
 /**
+ * A member's refusal mark as it stands against its reading: until when it is
+ * skipped, or null when it has no mark, or when a reading taken since the
+ * mark shows its windows open. The member refused once, but the provider has
+ * since said otherwise (it reset the account early, or the refusal named a
+ * later time than its windows do): the newer word wins and the mark goes. A
+ * reading from before the refusal changes nothing.
+ *
+ * @param {object} args
+ * @param {string} args.memberId
+ * @param {any} args.reading The member's last `rateLimits`, or undefined.
+ * @param {Standing} args.standing That reading's standing now.
+ * @param {number} args.nowMs
+ * @param {(memberId: string, nowMs: number) => number | null} args.refusedUntil
+ * @param {(memberId: string, observedMs: number) => boolean} args.refusalSupersededBy
+ * @returns {number | null}
+ */
+const refusalAgainstReading = ({
+  memberId,
+  reading,
+  standing,
+  nowMs,
+  refusedUntil,
+  refusalSupersededBy,
+}) => {
+  const refused = refusedUntil(memberId, nowMs);
+  if (refused === null || !standing.known || standing.blocked) return refused;
+  const observedMs = Date.parse(reading?.observedAt);
+  return Number.isFinite(observedMs) &&
+    refusalSupersededBy(memberId, observedMs)
+    ? null
+    : refused;
+};
+harden(refusalAgainstReading);
+
+/**
  * The subscriptions to try for one request, in order. The first is the
  * choice; the rest are where the request is handed if the ones before refuse
  * it as exhausted.
@@ -263,6 +343,9 @@ harden(makeRefusalMarks);
  * @param {(memberId: string) => any} options.readingOf The member's last
  *   `rateLimits` reading, or undefined.
  * @param {(memberId: string, nowMs: number) => number | null} options.refusedUntil
+ * @param {(memberId: string, observedMs: number) => boolean} [options.refusalSupersededBy]
+ *   Asked to drop a member's refusal mark when its reading, taken at
+ *   `observedMs`, shows its windows open; answers whether it did.
  * @param {string} options.preference `'auto'` or a member id.
  * @param {{ memberId: string, atMs: number } | undefined} options.last Where
  *   this session was last served.
@@ -275,6 +358,7 @@ export const selectMembers = ({
   members,
   readingOf,
   refusedUntil,
+  refusalSupersededBy = () => false,
   preference,
   last,
   cacheLifetimeMs,
@@ -294,8 +378,16 @@ export const selectMembers = ({
         : member.id === preference,
     )
     .map((member, index) => {
-      const standing = standingOf(readingOf(member.id), nowMs);
-      const refused = refusedUntil(member.id, nowMs);
+      const reading = readingOf(member.id);
+      const standing = standingOf(reading, nowMs);
+      const refused = refusalAgainstReading({
+        memberId: member.id,
+        reading,
+        standing,
+        nowMs,
+        refusedUntil,
+        refusalSupersededBy,
+      });
       const blocked = standing.blocked || refused !== null;
       let backMs = null;
       if (blocked) {
@@ -481,7 +573,7 @@ harden(normalizeSubscriptionSet);
 
 /**
  * @typedef {object} PoolState What of a pool outlives a restart.
- * @property {Record<string, { untilMs: number, strikes: number }>} refusals
+ * @property {Record<string, { untilMs: number, strikes: number, sinceMs?: number, dated?: boolean }>} refusals
  * @property {Record<string, { memberId: string, atMs: number }>} sessions
  */
 
@@ -525,7 +617,7 @@ export const makeSubscriptionPool = ({
   /** What was last offered for keeping, per session. */
   /** @type {Map<string, { memberId: string, atMs: number }>} */
   const kept = new Map(sessions);
-  /** @type {Record<string, { untilMs: number, strikes: number }>} */
+  /** @type {Record<string, { untilMs: number, strikes: number, sinceMs?: number, dated?: boolean }>} */
   let refusals = initial?.refusals ?? {};
   const save = () =>
     onChange(harden({ refusals, sessions: Object.fromEntries(kept) }));
@@ -553,6 +645,7 @@ export const makeSubscriptionPool = ({
             members: declared,
             readingOf,
             refusedUntil: marks.blockedUntil,
+            refusalSupersededBy: marks.supersededBy,
             preference,
             last: sessions.get(sessionId),
             cacheLifetimeMs: cacheLifetime(),
@@ -618,8 +711,18 @@ export const makeSubscriptionPool = ({
       const nowMs = now();
       return harden(
         members().map(member => {
-          const standing = standingOf(readingOf(member.id), nowMs);
-          const refused = marks.blockedUntil(member.id, nowMs);
+          const reading = readingOf(member.id);
+          const standing = standingOf(reading, nowMs);
+          // Status tells the same story as selection: a mark a newer reading
+          // has outranked is not reported, nor kept.
+          const refused = refusalAgainstReading({
+            memberId: member.id,
+            reading,
+            standing,
+            nowMs,
+            refusedUntil: marks.blockedUntil,
+            refusalSupersededBy: marks.supersededBy,
+          });
           return {
             ...member,
             ...standing,

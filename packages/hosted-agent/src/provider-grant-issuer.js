@@ -122,6 +122,9 @@ harden(withDeadline);
  * stands, for the grant's audit trail.
  * @param {(spec:any)=>{endpoint:any,dispose:()=>void}} [options.makePublicNetwork]
  * Host-only factory for a separately revocable public-egress capability.
+ * @param {() => boolean} [options.allowsPublicNetwork] Whether the operator
+ * allows public egress now; asked at each admission. Defaults to whether a
+ * factory was supplied.
  * @param {IssuerPool} [options.pool] Several subscriptions of this provider,
  * in place of `secret`, `credential`, `adaptRequest` and `onReading`, which
  * describe one. Every grant then serves each request from the member the
@@ -148,6 +151,7 @@ export const makeProviderBrokerGrantIssuer = ({
   admits,
   catalogState,
   makePublicNetwork,
+  allowsPublicNetwork = () => makePublicNetwork !== undefined,
   pool,
   wrappedOpenDeadlineMs = WRAPPED_OPEN_DEADLINE_MS,
 }) => {
@@ -692,7 +696,9 @@ export const makeProviderBrokerGrantIssuer = ({
         Fail`Provider grant request denied`;
       (!disposed && !inactive) || Fail`Provider grant request denied`;
       spec.networkPolicy === 'off' ||
-        (spec.networkPolicy === 'public-internet' && makePublicNetwork) ||
+        (spec.networkPolicy === 'public-internet' &&
+          makePublicNetwork &&
+          allowsPublicNetwork()) ||
         Fail`Unsupported provider grant network policy`;
       admitted = true;
       grants.add(revoke);

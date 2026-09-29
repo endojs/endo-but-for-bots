@@ -384,6 +384,82 @@ test('runtime requires explicit operator public network enablement', async t => 
   );
 });
 
+test.serial(
+  'configure changes capacity for the next admission without stopping listeners',
+  async t => {
+    t.timeout(10_000);
+    const f = await fixture(t);
+    const kit = makePodmanProviderListenerRuntimeKit({
+      ...f.options,
+      maxListeners: 1,
+    });
+    t.teardown(kit.close);
+    const runtime = await kit.open();
+    const start = () =>
+      runtime.start({ endpoint: Far('unused inference', {}), limits });
+    const first = await start();
+    await t.throwsAsync(start, { message: /capacity exceeded/ });
+    await kit.configure({ maxListeners: 2 });
+    const second = await start();
+    // Lowering capacity below what is live stops nothing; it refuses more.
+    await kit.configure({ maxListeners: 1 });
+    t.is(f.removals.length, 0);
+    await t.throwsAsync(start, { message: /capacity exceeded/ });
+    await t.throwsAsync(() => kit.configure({ maxListeners: 0 }), {
+      message: /Invalid listener capacity/,
+    });
+    await t.throwsAsync(
+      () => kit.configure({ publicInternet: /** @type {any} */ ('yes') }),
+      { message: /Invalid public network configuration/ },
+    );
+    await first.stop();
+    await second.stop();
+  },
+);
+
+test.serial(
+  'configure allows public listeners later and stops live ones when turned off',
+  async t => {
+    t.timeout(10_000);
+    const f = await fixture(t);
+    const kit = makePodmanProviderListenerRuntimeKit(f.options);
+    t.teardown(kit.close);
+    const runtime = await kit.open();
+    const resolverPath = join(f.options.stateDirectory, 'public-resolv.conf');
+    const startPublic = () =>
+      runtime.start({
+        endpoint: Far('unused inference', {}),
+        limits,
+        network: { endpoint: Far('test egress', {}) },
+      });
+    await t.throwsAsync(startPublic, {
+      message: /not configured by the operator/,
+    });
+    await t.throwsAsync(() => lstat(resolverPath), { code: 'ENOENT' });
+    await kit.configure({ publicInternet: true });
+    const publicListener = await startPublic();
+    t.is(
+      (await publicListener.observe()).network?.resolverConfigPath,
+      resolverPath,
+    );
+    // The resolver file is written once, at the first public admission.
+    t.is((await lstat(resolverPath)).mode % 0o1000, 0o444);
+    const closed = await runtime.start({
+      endpoint: Far('unused inference', {}),
+      limits,
+    });
+    await kit.configure({ publicInternet: false });
+    // The public listener is gone; the private one is untouched.
+    t.is(f.removals.length, 1);
+    await t.throwsAsync(startPublic, {
+      message: /not configured by the operator/,
+    });
+    await closed.observe();
+    await closed.stop();
+    t.is(f.removals.length, 2);
+  },
+);
+
 test('runtime recovers a dead owner and sweeps only its exactly labelled orphan', async t => {
   const f = await fixture(t);
   await symlink('999999-1', join(f.options.stateDirectory, 'test-owner.lock'));

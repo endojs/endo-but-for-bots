@@ -4,9 +4,10 @@ import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
 import { makeBrokerEnvironment } from './app-server-transport.js';
+import { NATIVE_CONTEXT_LIMIT as LIMIT } from '../oci/native-context-shape.mjs'; // eslint-disable-line import/no-relative-packages
 
-// Bound the serialized envelope, not just its unescaped native payload.
-const LIMIT = 16 * 1024 * 1024;
+// Bound the serialized envelope, not just its unescaped native payload; the
+// helpers inside the image bound their output by the same shared limit.
 const STDERR_LIMIT = 16 * 1024;
 const encoder = new TextEncoder();
 

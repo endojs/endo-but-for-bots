@@ -11,14 +11,14 @@ import {
   renderCodexNativeContext,
   makeCodexNativeContextSelector,
 } from './native-context.mjs';
+import {
+  NATIVE_CONTEXT_LIMIT as LIMIT,
+  isUuid as uuid,
+} from './native-context-shape.mjs';
 
-const LIMIT = 16 * 1024 * 1024;
 const requireValue = condition => {
   if (!condition) throw Error('Invalid Codex native capture');
 };
-const uuid = value =>
-  typeof value === 'string' &&
-  /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const absolute = value =>
   typeof value === 'string' &&
   path.isAbsolute(value) &&

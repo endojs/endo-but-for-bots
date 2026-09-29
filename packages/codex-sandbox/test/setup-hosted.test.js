@@ -54,6 +54,9 @@ const makeFakeHost = ({
   const valuesById = new Map();
   const secrets = new Map();
   const capabilities = new Map();
+  /** @type {Array<Record<string, unknown>>} */
+  const configured = [];
+  let configureFails = false;
   const guests = new Map();
   const publications = new Map();
   const directories = new Set();
@@ -187,7 +190,19 @@ const makeFakeHost = ({
       if (key(...parts) === key('codex-sandbox', 'credential'))
         return credential;
       const id = bindings.get(key(...parts));
-      if (!capabilities.has(id)) capabilities.set(id, Far(`Formula ${id}`, {}));
+      if (!capabilities.has(id)) {
+        capabilities.set(
+          id,
+          key(...parts) === key('codex-sandbox', 'broker-service')
+            ? Far(`Formula ${id}`, {
+                configure: async settings => {
+                  if (configureFails) throw Error('broker unavailable');
+                  configured.push(settings);
+                },
+              })
+            : Far(`Formula ${id}`, {}),
+        );
+      }
       return capabilities.get(id);
     },
     async locate(...parts) {
@@ -260,6 +275,10 @@ const makeFakeHost = ({
     bindings,
     mints,
     stored,
+    configured,
+    failConfigure: () => {
+      configureFails = true;
+    },
     copies,
     removed,
     bind,
@@ -461,17 +480,70 @@ test.serial(
   },
 );
 
-test.serial('retained broker configuration cannot silently change', async t => {
-  await baseEnv(t);
-  const fake = makeFakeHost();
-  await main(fake.host, { exec: noExec });
-  const before = fake.mints.length;
-  withEnv(t, { ENDO_CODEX_PUBLIC_INTERNET: '1' });
-  await t.throwsAsync(main(fake.host, { exec: noExec }), {
-    message: /retained service configuration changed/,
-  });
-  t.is(fake.mints.length, before);
-});
+test.serial(
+  'retained broker settings change without a retirement; its identity cannot',
+  async t => {
+    await baseEnv(t);
+    const fake = makeFakeHost();
+    await main(fake.host, { exec: noExec });
+    const brokerMints = () =>
+      fake.mints.filter(
+        mint => [mint.options.resultName].flat().at(-1) === 'broker-service',
+      ).length;
+    const before = brokerMints();
+    withEnv(t, {
+      ENDO_CODEX_PUBLIC_INTERNET: '1',
+      ENDO_CODEX_DIAGNOSTICS: '1',
+      ENDO_CODEX_MAX_SESSIONS: '16',
+    });
+    await main(fake.host, { exec: noExec });
+    t.is(brokerMints(), before, 'the broker is retained, not re-minted');
+    t.deepEqual(fake.configured.at(-1), {
+      maxSessions: 16,
+      publicInternet: true,
+      diagnostics: true,
+    });
+    withEnv(t, { ENDO_CODEX_MAX_SESSIONS: '0' });
+    await t.throwsAsync(main(fake.host, { exec: noExec }), {
+      message: /ENDO_CODEX_MAX_SESSIONS must be an integer from 1 to 256/,
+    });
+    // Identity is still the formula's: a new listener pin needs a retirement.
+    withEnv(t, {
+      ENDO_CODEX_MAX_SESSIONS: '16',
+      ENDO_CODEX_BROKER_LISTENER_IMAGE: `localhost/other-listener@sha256:${'e'.repeat(64)}`,
+    });
+    await t.throwsAsync(main(fake.host, { exec: noExec }), {
+      message: /retained service configuration changed/,
+    });
+    t.is(brokerMints(), before);
+  },
+);
+
+test.serial(
+  'a broker minted with a capacity keeps it when none is configured, and a failed configure does not stop setup',
+  async t => {
+    await baseEnv(t);
+    withEnv(t, { ENDO_CODEX_MAX_SESSIONS: '2' });
+    const fake = makeFakeHost();
+    await main(fake.host, { exec: noExec });
+    // Tokyo's broker was minted with `maxSessions: 2`; an unset option now
+    // leaves it alone rather than calling that a changed identity.
+    withEnv(t, { ENDO_CODEX_MAX_SESSIONS: undefined });
+    await main(fake.host, { exec: noExec });
+    t.deepEqual(fake.configured.at(-1), {
+      publicInternet: false,
+      diagnostics: false,
+    });
+    const backendMints = () =>
+      fake.mints.filter(
+        mint => [mint.options.resultName].flat().at(-1) === 'backend-next',
+      ).length;
+    const before = backendMints();
+    fake.failConfigure();
+    await main(fake.host, { exec: noExec });
+    t.is(backendMints(), before + 1, 'the backend still comes up');
+  },
+);
 
 test.serial(
   'retained storage refuses a rebound state-provider identity',

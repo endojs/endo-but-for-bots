@@ -294,6 +294,7 @@ const fixture = ({
   policy: policyOverride,
   credential,
   makePublicNetwork,
+  allowsPublicNetwork,
   observeNetwork,
   adaptRequest,
   fetch: fetchAuthority = async () => new Response('ok'),
@@ -353,6 +354,7 @@ const fixture = ({
     policy: policyOverride ?? policy,
     ...(credential === undefined ? {} : { credential }),
     ...(makePublicNetwork ? { makePublicNetwork } : {}),
+    ...(allowsPublicNetwork ? { allowsPublicNetwork } : {}),
     requestTimeoutMs,
     imageDigest: digest,
     accountRef: 'account',
@@ -468,6 +470,29 @@ test('public egress is lease-bound and revoked before cleanup retries', async t 
   f.allowCleanup();
   await f.issuer.retryCleanup();
   await t.throwsAsync(E(lease).attestation(), { message: /inactive/ });
+});
+
+test('public egress admission follows the operator setting at each grant', async t => {
+  let allowed = false;
+  let made = 0;
+  const f = fixture({
+    makePublicNetwork: () => {
+      made += 1;
+      return { endpoint: Far('Test public egress', {}), dispose: () => {} };
+    },
+    allowsPublicNetwork: () => allowed,
+    observeNetwork: () => networkEvidence,
+  });
+  t.teardown(f.issuer.dispose);
+  await t.throwsAsync(f.issuer({ ...spec, networkPolicy: 'public-internet' }), {
+    message: /Unsupported provider grant network policy/,
+  });
+  t.is(made, 0, 'a refused grant makes no egress');
+  allowed = true;
+  const lease = await f.issuer({ ...spec, networkPolicy: 'public-internet' });
+  t.is(made, 1);
+  t.deepEqual((await E(lease).attestation()).network, networkEvidence);
+  await E(lease).revoke();
 });
 
 test('network mismatch or drift revokes public egress', async t => {

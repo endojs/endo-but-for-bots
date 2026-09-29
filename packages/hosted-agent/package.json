@@ -68,6 +68,7 @@
     "./session-storage.js": "./src/session-storage.js",
     "./session-state-storage.js": "./src/session-state-storage.js",
     "./hosted-setup.js": "./src/hosted-setup.js",
+    "./hosted-backend-setup.js": "./src/hosted-backend-setup.js",
     "./hosted-agent-policy.js": "./src/hosted-agent-policy.js",
     "./transcript-records.js": "./src/transcript-records.js",
     "./turn-channel.js": "./src/turn-channel.js",

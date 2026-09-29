@@ -48,6 +48,8 @@ const makeFakeHost = ({ failMint } = {}) => {
   const mints = [];
   /** @type {any[]} */
   const copies = [];
+  /** @type {Array<Record<string, unknown>>} */
+  const configured = [];
   /** @type {string[][]} */
   const removed = [];
   /** @type {Array<{ name: string, description: string, base64: string }>} */
@@ -170,6 +172,13 @@ const makeFakeHost = ({ failMint } = {}) => {
             },
           });
         }
+        if (key(pathParts) === key('claude-sandbox', 'broker-service')) {
+          return harden({
+            configure: async settings => {
+              configured.push(settings);
+            },
+          });
+        }
         const kind = credentialKinds.get(pathParts[0]);
         if (pathParts.length === 1 && kind !== undefined) {
           return harden({
@@ -231,6 +240,7 @@ const makeFakeHost = ({ failMint } = {}) => {
     bindings,
     mints,
     copies,
+    configured,
     removed,
     environments,
     reads,
@@ -759,7 +769,12 @@ test.serial(
       credentialKind: 'apiKey',
       accountAuthority: 'claude-main',
       publicInternet: true,
+      diagnostics: false,
     });
+    // Setup applied the same settings to the broker it minted.
+    t.deepEqual(fake.configured, [
+      { publicInternet: true, diagnostics: false },
+    ]);
     // eslint-disable-next-line no-bitwise
     t.is((await stat(path.join(base, 'broker'))).mode & 0o777, 0o700);
     const storage = fake.mints[2];
@@ -844,7 +859,8 @@ test.serial(
       credentialKind: 'oauthToken',
       anthropicBeta: 'oauth-2025-04-20,interleaved-thinking',
     });
-    t.false(Object.hasOwn(config, 'publicInternet'));
+    // Where a new broker's settings start; setup applies them at every start.
+    t.is(config.publicInternet, false);
     t.truthy(backendMint(fake.mints));
     await access(path.join(base, 'broker'));
   },
@@ -855,13 +871,16 @@ test.serial(
   async t => {
     const base = await baseEnv(t);
     // Nothing names a kind and no seed is offered: the retained broker's
-    // persisted kind is the credential's, and the current broker and root
-    // settings are not reapplied.
+    // persisted kind is the credential's, and the current root settings are
+    // not reapplied. Its operator settings are: capacity, public egress and
+    // the admission trail change with no retirement.
     // The pinned slice image equals the retained broker's, so nothing reaches
     // Podman; an absent listener image is what a retained broker allows.
     await withEnv(t, {
       ENDO_FLOOT_AUTH_TOKEN: undefined,
       ENDO_CLAUDE_BROKER_LISTENER_IMAGE: undefined,
+      ENDO_CLAUDE_MAX_SESSIONS: '16',
+      ENDO_CLAUDE_DIAGNOSTICS: '1',
     });
     const fake = makeFakeHost();
     fake.seedCredential('test-creds', 'oauthToken');
@@ -879,6 +898,7 @@ test.serial(
       }),
     );
     await main(fake.host, { exec: refuseInspect });
+    t.like(fake.configured.at(-1), { maxSessions: 16, diagnostics: true });
     t.deepEqual(
       fake.mints.map(mint => [mint.options.resultName].flat().join('/')),
       [
