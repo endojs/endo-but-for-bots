@@ -81,8 +81,25 @@ const bearerOf = request => {
 };
 
 /**
- * The npm registry HTTP surface of `designs/npm-dev-registry-serving.md`
- * § npm registry HTTP surface. Reads are public; mutations authenticate a
+ * Percent-decode one URL path segment, refusing a malformed escape as a
+ * client error rather than letting its `URIError` become a 500.
+ *
+ * @param {string} segment
+ * @param {string} what
+ * @returns {string}
+ */
+const decodeSegment = (segment, what) => {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw RegistryHttpError(400, `Invalid ${what} encoding`);
+  }
+};
+
+/**
+ * The npm registry HTTP surface of the proposed design
+ * `designs/npm-dev-registry-serving.md` (not yet landed; see
+ * https://github.com/endojs/endo-but-for-bots/pull/1361) § npm registry HTTP surface. Reads are public; mutations authenticate a
  * `PublishGrant` bearer. The adapter trusts no forwarded identity header,
  * and never logs Authorization.
  *
@@ -157,13 +174,14 @@ export const makeRequestHandler = ({
           throw RegistryHttpError(404, 'Not found');
         }
         const tag =
-          rest[1] === undefined ? undefined : decodeURIComponent(rest[1]);
+          rest[1] === undefined ? undefined : decodeSegment(rest[1], 'tag');
         if (read) {
           const tags = await registry.getDistTags(name);
           if (tag === undefined) {
             return { status: sendJson(request, response, 200, tags) };
           }
-          if (tags[tag] === undefined) {
+          // The tag comes from the URL; never follow the prototype chain.
+          if (!Object.hasOwn(tags, tag)) {
             throw RegistryHttpError(404, `Tag ${tag} not found`);
           }
           return { status: sendJson(request, response, 200, tags[tag]) };
@@ -221,14 +239,14 @@ export const makeRequestHandler = ({
     if (rest.length === 1 && read) {
       const manifest = await registry.getVersionManifest(
         name,
-        decodeURIComponent(rest[0]),
+        decodeSegment(rest[0], 'version'),
       );
       return { status: sendJson(request, response, 200, manifest) };
     }
     if (rest.length === 2 && rest[0] === '-' && read) {
       const { bytes, tarballHash } = await registry.getTarball(
         name,
-        decodeURIComponent(rest[1]),
+        decodeSegment(rest[1], 'tarball name'),
       );
       const etag = `"${tarballHash}"`;
       if (request.headers['if-none-match'] === etag) {
@@ -296,6 +314,6 @@ export const makeRequestHandler = ({
     });
   };
 
-  return handle;
+  return harden(handle);
 };
 harden(makeRequestHandler);

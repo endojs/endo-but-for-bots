@@ -35,39 +35,54 @@ export const makeNodeFetch = () => {
     'http:': new http.Agent({ keepAlive: true, maxSockets: 32 }),
     'https:': new https.Agent({ keepAlive: true, maxSockets: 32 }),
   };
-  return (url, { headers = {}, signal } = {}) =>
-    new Promise((resolve, reject) => {
-      const target = new URL(url);
-      const protocol = /** @type {'http:' | 'https:'} */ (target.protocol);
-      const client = protocol === 'https:' ? https : http;
-      if (!(protocol in agents)) {
-        reject(Error(`Unsupported upstream protocol ${target.protocol}`));
-        return;
-      }
-      const request = client.request(
-        target,
-        { method: 'GET', headers, agent: agents[protocol], signal },
-        response => {
-          const status = response.statusCode ?? 0;
-          resolve({
-            status,
-            ok: status >= 200 && status < 300,
-            headers: {
-              get: name => {
-                const value = response.headers[name.toLowerCase()];
-                if (value === undefined) return null;
-                return Array.isArray(value) ? value.join(', ') : value;
+  return harden(
+    (url, { headers = {}, signal } = {}) =>
+      new Promise((resolve, reject) => {
+        const target = new URL(url);
+        const protocol = /** @type {'http:' | 'https:'} */ (target.protocol);
+        const client = protocol === 'https:' ? https : http;
+        if (!(protocol in agents)) {
+          reject(Error(`Unsupported upstream protocol ${target.protocol}`));
+          return;
+        }
+        const request = client.request(
+          target,
+          { method: 'GET', headers, agent: agents[protocol], signal },
+          response => {
+            const status = response.statusCode ?? 0;
+            resolve({
+              status,
+              ok: status >= 200 && status < 300,
+              headers: {
+                get: name => {
+                  const value = response.headers[name.toLowerCase()];
+                  if (value === undefined) return null;
+                  return Array.isArray(value) ? value.join(', ') : value;
+                },
               },
-            },
-            body: response,
-          });
-        },
-      );
-      request.on('error', error => {
-        // Surface a timeout as the signal's own TimeoutError.
-        reject(signal?.aborted ? signal.reason : error);
-      });
-      request.end();
-    });
+              body: {
+                // After the headers arrive, an aborting signal destroys the
+                // socket and the body fails with a plain ECONNRESET; surface
+                // the signal's own TimeoutError instead, as in the request
+                // phase below.
+                async *[Symbol.asyncIterator]() {
+                  try {
+                    yield* response;
+                  } catch (error) {
+                    throw signal?.aborted ? signal.reason : error;
+                  }
+                },
+                destroy: () => response.destroy(),
+              },
+            });
+          },
+        );
+        request.on('error', error => {
+          // Surface a timeout as the signal's own TimeoutError.
+          reject(signal?.aborted ? signal.reason : error);
+        });
+        request.end();
+      }),
+  );
 };
 harden(makeNodeFetch);

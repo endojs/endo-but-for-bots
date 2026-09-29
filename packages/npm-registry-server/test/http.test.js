@@ -10,6 +10,10 @@ import http from 'node:http';
 import { makeRequestHandler } from '../src/http.js';
 import { makePublishDocument, makeTestRegistry } from './_fixtures.js';
 
+/** @import { ExecutionContext } from 'ava' */
+/** @import { AddressInfo } from 'node:net' */
+/** @import { RequestLog } from '../src/http.js' */
+
 const VERSION = '1.7.0-dev.20260928101010.gaaaaaaa';
 const TAG = 'dev-2026-09-28';
 
@@ -67,12 +71,12 @@ const requestOver = (port, pathname, { method = 'GET', headers, body } = {}) =>
   });
 
 /**
- * @param {import('ava').ExecutionContext} t
+ * @param {ExecutionContext} t
  * @param {{ maxBodyBytes?: number }} [options]
  */
 const serve = async (t, options = {}) => {
   const fixture = makeTestRegistry();
-  /** @type {import('../src/http.js').RequestLog[]} */
+  /** @type {RequestLog[]} */
   const logs = [];
   const handler = makeRequestHandler({
     registry: fixture.registry,
@@ -87,9 +91,7 @@ const serve = async (t, options = {}) => {
     server.listen(0, '127.0.0.1', () => resolve(undefined)),
   );
   t.teardown(() => server.close());
-  const { port } = /** @type {import('node:net').AddressInfo} */ (
-    server.address()
-  );
+  const { port } = /** @type {AddressInfo} */ (server.address());
   const auth = { authorization: `Bearer ${fixture.token}` };
   /**
    * @param {string} pathname
@@ -221,6 +223,23 @@ test('dist-tags over HTTP', async t => {
     (await request('/-/package/@endo%2fpatterns/dist-tags/nope')).status,
     404,
   );
+  // Tag names from the URL never reach the prototype chain.
+  const inheritedStatuses = await Promise.all(
+    ['__proto__', 'constructor', 'toString'].map(async inherited => {
+      const reply = await request(
+        `/-/package/@endo%2fpatterns/dist-tags/${inherited}`,
+      );
+      return reply.status;
+    }),
+  );
+  t.deepEqual(inheritedStatuses, [404, 404, 404]);
+  // A malformed percent-escape is the client's error, not the server's.
+  t.is(
+    (await request('/-/package/@endo%2fpatterns/dist-tags/%E0')).status,
+    400,
+  );
+  t.is((await request('/@endo%2fpatterns/%E0%A4%A')).status, 400);
+  t.is((await request('/@endo%2fpatterns/-/%E0')).status, 400);
 
   const setTag = (
     /** @type {string} */ tag,

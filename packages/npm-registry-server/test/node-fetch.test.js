@@ -101,6 +101,28 @@ test('makeNodeFetch rejects with the signal reason on timeout', async t => {
   t.is(error?.name, 'TimeoutError');
 });
 
+test('makeNodeFetch surfaces a timeout after the headers as the signal reason', async t => {
+  const origin = await serve(t, (_request, response) => {
+    // Send the headers and one byte of a longer body, then stall.
+    response.writeHead(200, { 'content-length': '100' });
+    response.write('x');
+  });
+  const response = await makeNodeFetch()(`${origin}/pkg`, {
+    signal: AbortSignal.timeout(200),
+  });
+  t.true(response.ok);
+  const error = await t.throwsAsync(async () => {
+    /** @type {Uint8Array[]} */
+    const chunks = [];
+    for await (const chunk of /** @type {AsyncIterable<Uint8Array>} */ (
+      response.body
+    )) {
+      chunks.push(chunk);
+    }
+  });
+  t.is(error?.name, 'TimeoutError');
+});
+
 test('makeNodeFetch rejects with the transport error otherwise', async t => {
   const origin = await serve(t, request => {
     request.socket.destroy();
