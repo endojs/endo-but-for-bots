@@ -20,7 +20,7 @@ import {
   ingestTarball,
   verifyTarball,
 } from '../src/tarball.js';
-import { makeTempDir, makeTgz } from './_fixtures.js';
+import { makeTemporaryDirectory, makeTgz } from './_fixtures.js';
 
 /** @import { ExecutionContext } from 'ava' */
 /** @import { ArchiveLimits } from '../src/tarball.js' */
@@ -33,7 +33,7 @@ const PACKAGE_JSON = JSON.stringify({ name: 'solo', version: '1.0.0' });
  */
 const ingest = (tarball, limits = {}) =>
   ingestTarball(tarball, {
-    cas: makeFileCas(path.join(makeTempDir(), 'cas')),
+    cas: makeFileCas(path.join(makeTemporaryDirectory(), 'cas')),
     limits: { ...defaultArchiveLimits, ...limits },
   });
 

@@ -9,7 +9,7 @@ import Database from 'better-sqlite3';
 
 import { installPublisherGrant } from '../src/config.js';
 import { openRegistry } from '../src/server.js';
-import { makeTempDir, makeTestRegistry } from './_fixtures.js';
+import { makeTemporaryDirectory, makeTestRegistry } from './_fixtures.js';
 
 const TOKEN = 'p'.repeat(40);
 
@@ -59,9 +59,9 @@ test('installPublisherGrant reports, not throws, a refused grant', t => {
 });
 
 test('the server entry point keeps serving when its grant is refused', async t => {
-  const stateDir = makeTempDir();
+  const stateDirectory = makeTemporaryDirectory();
   const setup = openRegistry({
-    stateDir,
+    stateDirectory,
     publicOrigin: 'https://npm.example',
     openDatabase: file => new Database(file),
   });
@@ -83,7 +83,7 @@ test('the server entry point keeps serving when its grant is refused', async t =
   const child = spawn(process.execPath, [bin], {
     env: {
       ...process.env,
-      REGISTRY_STATE_DIR: stateDir,
+      REGISTRY_STATE_DIR: stateDirectory,
       PUBLIC_REGISTRY_URL: 'https://npm.example',
       UPSTREAM_REGISTRY_URL: '',
       PORT: '0',

@@ -16,7 +16,7 @@ import { makeRequestHandler } from './http.js';
 
 /**
  * @typedef {object} ServerConfig
- * @property {string} stateDir Holds `registry.sqlite` and `cas/`.
+ * @property {string} stateDirectory Holds `registry.sqlite` and `cas/`.
  * @property {(file: string) => SqlDatabase} openDatabase
  * @property {string} publicOrigin
  * @property {string} [upstreamOrigin]
@@ -35,12 +35,12 @@ import { makeRequestHandler } from './http.js';
  * @param {ServerConfig} config
  */
 export const openRegistry = config => {
-  fs.mkdirSync(config.stateDir, { recursive: true, mode: 0o750 });
+  fs.mkdirSync(config.stateDirectory, { recursive: true, mode: 0o750 });
   const database = config.openDatabase(
-    path.join(config.stateDir, 'registry.sqlite'),
+    path.join(config.stateDirectory, 'registry.sqlite'),
   );
   const store = makeRegistryStore(database);
-  const cas = makeFileCas(path.join(config.stateDir, 'cas'));
+  const cas = makeFileCas(path.join(config.stateDirectory, 'cas'));
   const grants = makeGrants({ store });
   const registry = makeRegistry({
     store,

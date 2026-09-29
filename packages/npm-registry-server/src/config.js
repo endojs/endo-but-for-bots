@@ -13,9 +13,9 @@ import { q } from '@endo/errors';
  * @param {Record<string, string | undefined>} env
  */
 export const readServerEnv = env => {
-  const stateDir = env.REGISTRY_STATE_DIR;
+  const stateDirectory = env.REGISTRY_STATE_DIR;
   const publicOrigin = env.PUBLIC_REGISTRY_URL;
-  if (!stateDir || !publicOrigin) {
+  if (!stateDirectory || !publicOrigin) {
     throw Error('REGISTRY_STATE_DIR and PUBLIC_REGISTRY_URL are required');
   }
   const upstream =
@@ -26,7 +26,7 @@ export const readServerEnv = env => {
     throw Error(`UPSTREAM_REGISTRY_URL must be https, got ${q(upstream)}`);
   }
   return {
-    stateDir,
+    stateDirectory,
     publicOrigin,
     upstreamOrigin: upstream || undefined,
     host: env.HOST || '127.0.0.1',

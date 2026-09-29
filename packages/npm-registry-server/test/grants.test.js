@@ -7,14 +7,14 @@ import Database from 'better-sqlite3';
 
 import { makeRegistryStore } from '../src/store.js';
 import { hashToken, makeGrants, makeToken } from '../src/grants.js';
-import { makeTempDir } from './_fixtures.js';
+import { makeTemporaryDirectory } from './_fixtures.js';
 
 const TOKEN = 'k'.repeat(40);
 
 /** @param {{ value: number }} clock */
 const makeTestGrants = clock => {
   const store = makeRegistryStore(
-    new Database(path.join(makeTempDir(), 'db.sqlite')),
+    new Database(path.join(makeTemporaryDirectory(), 'db.sqlite')),
   );
   const grants = makeGrants({ store, now: () => clock.value });
   return { store, grants };

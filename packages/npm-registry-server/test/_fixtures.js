@@ -40,14 +40,14 @@ export const makeTgz = files => {
 };
 
 /** @returns {string} */
-export const makeTempDir = () =>
+export const makeTemporaryDirectory = () =>
   fs.mkdtempSync(path.join(os.tmpdir(), 'npm-registry-server-'));
 
 /**
  * @param {Partial<Parameters<typeof makeRegistry>[0]>} [options]
  */
 export const makeTestRegistry = (options = {}) => {
-  const directory = makeTempDir();
+  const directory = makeTemporaryDirectory();
   const store = makeRegistryStore(
     new Database(path.join(directory, 'db.sqlite')),
   );

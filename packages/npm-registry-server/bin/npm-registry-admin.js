@@ -17,14 +17,14 @@ const usage = `usage: npm-registry-admin <command>
       exit 1 if any stored version is missing its tarball or tree
 Reads REGISTRY_STATE_DIR (and PUBLIC_REGISTRY_URL, default https://npm.minion.town).`;
 
-const [command, subcommand, ...args] = process.argv.slice(2);
-const stateDir = process.env.REGISTRY_STATE_DIR;
-if (!stateDir || !command) {
+const [command, subcommand, ...operands] = process.argv.slice(2);
+const stateDirectory = process.env.REGISTRY_STATE_DIR;
+if (!stateDirectory || !command) {
   console.error(usage);
   process.exit(2);
 }
 const { grants, registry, database } = openRegistry({
-  stateDir,
+  stateDirectory,
   publicOrigin: process.env.PUBLIC_REGISTRY_URL || 'https://npm.minion.town',
   openDatabase: file => new Database(file),
 });
@@ -35,9 +35,9 @@ if (command === 'grants' && subcommand === 'list') {
 } else if (
   command === 'grants' &&
   subcommand === 'issue' &&
-  args.length === 4
+  operands.length === 4
 ) {
-  const [id, subject, packages, expires] = args;
+  const [id, subject, packages, expires] = operands;
   const expiresAt = Date.parse(expires);
   if (Number.isNaN(expiresAt)) {
     console.error(`invalid expiry ${expires}`);
@@ -55,9 +55,9 @@ if (command === 'grants' && subcommand === 'list') {
 } else if (
   command === 'grants' &&
   subcommand === 'revoke' &&
-  args.length === 1
+  operands.length === 1
 ) {
-  status = grants.revokeGrant(args[0]) ? 0 : 1;
+  status = grants.revokeGrant(operands[0]) ? 0 : 1;
 } else if (command === 'verify') {
   const missing = registry.verifyStore();
   for (const coordinate of missing) {

@@ -15,7 +15,7 @@ import Database from 'better-sqlite3';
 
 import { startRegistryServer } from '../src/server.js';
 import { digestTarball } from '../src/tarball.js';
-import { makeTempDir, makeTgz } from './_fixtures.js';
+import { makeTemporaryDirectory, makeTgz } from './_fixtures.js';
 
 const run = promisify(execFile);
 const TOKEN = 't'.repeat(43);
@@ -123,10 +123,10 @@ const npmEnv = (directory, extra = {}) => ({
     const upstream = await startUpstream();
     const port = await freePort();
     const registryUrl = `http://127.0.0.1:${port}`;
-    const stateDir = makeTempDir();
+    const stateDirectory = makeTemporaryDirectory();
     const logs = [];
     const registry = await startRegistryServer({
-      stateDir,
+      stateDirectory,
       port,
       publicOrigin: registryUrl,
       upstreamOrigin: upstream.origin,
@@ -149,7 +149,7 @@ const npmEnv = (directory, extra = {}) => ({
 
     // Publisher: two staged packages, one depending on the other at the
     // exact shared prerelease and on an upstream-only package.
-    const publisher = makeTempDir();
+    const publisher = makeTemporaryDirectory();
     fs.writeFileSync(
       path.join(publisher, '.npmrc'),
       `//127.0.0.1:${port}/:_authToken=${TOKEN}\n`,
@@ -221,7 +221,7 @@ const npmEnv = (directory, extra = {}) => ({
 
     // Cold clients: empty home, cache, and project; one global registry.
     const install = async () => {
-      const client = makeTempDir();
+      const client = makeTemporaryDirectory();
       fs.writeFileSync(
         path.join(client, 'package.json'),
         '{"name":"client","version":"1.0.0"}',
