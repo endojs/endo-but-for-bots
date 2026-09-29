@@ -333,3 +333,115 @@ test('an upstream body interrupted mid-read is a 502, not an internal error', as
   t.true(isRegistryHttpError(error));
   t.is(/** @type {any} */ (error).statusCode, 502);
 });
+
+test('publishing over an upstream-indexed version names the upstream', async t => {
+  const tgz = makeTgz({
+    'package.json': JSON.stringify({ name: '@endo/errors', version: V1 }),
+  });
+  const { integrity } = digestTarball(tgz);
+  const { registry, grant } = makeTestRegistry({
+    upstreamOrigin: 'https://upstream.example',
+    fetch: async () =>
+      new Response(
+        JSON.stringify({
+          name: '@endo/errors',
+          'dist-tags': {},
+          versions: {
+            [V1]: { name: '@endo/errors', version: V1, dist: { integrity } },
+          },
+        }),
+      ),
+  });
+  await registry.getPackument('@endo/errors');
+  await t.throwsAsync(
+    registry.publish(
+      grant,
+      '@endo/errors',
+      makePublishDocument({ name: '@endo/errors', version: V1 }),
+    ),
+    { message: /already exists from the upstream registry/ },
+  );
+});
+
+test('an upstream failure after a 200 still serves cached rows', async t => {
+  const tgz = makeTgz({
+    'package.json': JSON.stringify({ name: 'left-pad', version: '1.3.0' }),
+  });
+  const { integrity } = digestTarball(tgz);
+  const good = JSON.stringify({
+    name: 'left-pad',
+    'dist-tags': { latest: '1.3.0' },
+    versions: {
+      '1.3.0': { name: 'left-pad', version: '1.3.0', dist: { integrity } },
+    },
+  });
+  /** @type {() => any} */
+  let respond = () => new Response(good);
+  const { registry } = makeTestRegistry({
+    upstreamOrigin: 'https://upstream.example',
+    fetch: async () => respond(),
+    upstreamTtlMs: 0,
+    maxPackumentBytes: 1024,
+  });
+  await registry.getPackument('left-pad');
+
+  /** @type {Array<[string, () => any]>} */
+  const failures = [
+    ['not JSON', () => new Response('{"name":')],
+    [
+      'another name',
+      () => new Response(good.replace('"left-pad"', '"right-pad"')),
+    ],
+    ['oversized', () => new Response('x'.repeat(2048))],
+    [
+      'interrupted',
+      () => ({
+        status: 200,
+        ok: true,
+        headers: { get: () => null },
+        body: {
+          async *[Symbol.asyncIterator]() {
+            yield new TextEncoder().encode('{"name":');
+            throw Error('read ECONNRESET');
+          },
+        },
+      }),
+    ],
+  ];
+  for (const [label, failure] of failures) {
+    respond = failure;
+    // eslint-disable-next-line no-await-in-loop
+    const packument = await registry.getPackument('left-pad');
+    t.deepEqual(Object.keys(packument.versions), ['1.3.0'], label);
+  }
+});
+
+test('an upstream body refused by its declared length is released', async t => {
+  let destroyed = false;
+  /** @type {UpstreamFetch} */
+  const fakeFetch = async () => ({
+    status: 200,
+    ok: true,
+    headers: {
+      get: name => (name === 'content-length' ? String(2 ** 30) : null),
+    },
+    body: {
+      destroy: () => {
+        destroyed = true;
+      },
+      async *[Symbol.asyncIterator]() {
+        yield new Uint8Array(0);
+      },
+    },
+  });
+  const { registry } = makeTestRegistry({
+    upstreamOrigin: 'https://upstream.example',
+    fetch: fakeFetch,
+    upstreamTtlMs: 0,
+  });
+  const error = await t.throwsAsync(() => registry.getPackument('left-pad'), {
+    message: /size limit/,
+  });
+  t.is(/** @type {any} */ (error).statusCode, 502);
+  t.true(destroyed);
+});

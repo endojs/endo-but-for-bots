@@ -86,6 +86,20 @@ const canonicalJson = value =>
   ) ?? 'undefined';
 
 /**
+ * Release an upstream response body that will not be read.
+ *
+ * @param {UpstreamResponse} response
+ */
+const discard = response => {
+  const body = /** @type {any} */ (response.body);
+  if (body && typeof body.destroy === 'function') {
+    body.destroy();
+  } else if (body && typeof body.cancel === 'function') {
+    body.cancel().catch(() => {});
+  }
+};
+
+/**
  * @param {UpstreamResponse} response
  * @param {number} maxBytes
  * @returns {Promise<Uint8Array>}
@@ -93,6 +107,7 @@ const canonicalJson = value =>
 const readLimited = async (response, maxBytes) => {
   const declared = Number(response.headers.get('content-length'));
   if (declared > maxBytes) {
+    discard(response);
     throw RegistryHttpError(502, 'Upstream response exceeds the size limit');
   }
   if (!response.body) {
@@ -133,20 +148,6 @@ const readLimited = async (response, maxBytes) => {
     offset += chunk.byteLength;
   }
   return bytes;
-};
-
-/**
- * Release an upstream response body that will not be read.
- *
- * @param {UpstreamResponse} response
- */
-const discard = response => {
-  const body = /** @type {any} */ (response.body);
-  if (body && typeof body.destroy === 'function') {
-    body.destroy();
-  } else if (body && typeof body.cancel === 'function') {
-    body.cancel().catch(() => {});
-  }
 };
 
 /**
@@ -676,18 +677,28 @@ export const makeRegistry = ({
           `Upstream metadata for ${q(name)} returned ${response.status}`,
         );
       }
-      const bytes = await readLimited(response, maxPackumentBytes);
-      /** @type {any} */
-      let document;
+      // Failures after the upstream starts replying (a truncated or
+      // oversized body, a body that is not JSON, a packument for another
+      // name) fall back to cached rows like any other upstream failure.
       try {
-        document = JSON.parse(new TextDecoder().decode(bytes));
-      } catch {
-        throw RegistryHttpError(
-          502,
-          `Upstream packument for ${q(name)} is not JSON`,
-        );
+        const bytes = await readLimited(response, maxPackumentBytes);
+        /** @type {any} */
+        let document;
+        try {
+          document = JSON.parse(new TextDecoder().decode(bytes));
+        } catch {
+          throw RegistryHttpError(
+            502,
+            `Upstream packument for ${q(name)} is not JSON`,
+          );
+        }
+        indexUpstream(name, document, response.headers.get('etag'));
+      } catch (error) {
+        if (meta) {
+          return;
+        }
+        throw error;
       }
-      indexUpstream(name, document, response.headers.get('etag'));
     })().finally(() => metaInFlight.delete(name));
     metaInFlight.set(name, work);
     return work;
