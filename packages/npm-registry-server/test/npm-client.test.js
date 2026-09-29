@@ -81,19 +81,19 @@ const startUpstream = async () => {
   add('tiny-leaf', '1.0.0');
   add('tiny-upstream', '1.2.3', { 'tiny-leaf': '^1.0.0' });
   const requests = [];
-  const server = http.createServer((req, res) => {
-    const url = req.url ?? '';
+  const server = http.createServer((request, response) => {
+    const url = request.url ?? '';
     requests.push(url);
     const tgz = tarballs.get(url);
     if (tgz) {
-      res.writeHead(200, { 'content-type': 'application/octet-stream' });
-      res.end(tgz);
+      response.writeHead(200, { 'content-type': 'application/octet-stream' });
+      response.end(tgz);
     } else if (packuments[url]) {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify(packuments[url]));
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(packuments[url]));
     } else {
-      res.writeHead(404, { 'content-type': 'application/json' });
-      res.end('{"error":"not_found"}');
+      response.writeHead(404, { 'content-type': 'application/json' });
+      response.end('{"error":"not_found"}');
     }
   });
   await new Promise(resolve =>
@@ -103,14 +103,14 @@ const startUpstream = async () => {
 };
 
 /**
- * @param {string} dir
+ * @param {string} directory
  * @param {Record<string, string>} extra
  */
-const npmEnv = (dir, extra = {}) => ({
+const npmEnv = (directory, extra = {}) => ({
   PATH: process.env.PATH,
-  HOME: dir,
-  npm_config_userconfig: path.join(dir, '.npmrc'),
-  npm_config_cache: path.join(dir, 'cache'),
+  HOME: directory,
+  npm_config_userconfig: path.join(directory, '.npmrc'),
+  npm_config_cache: path.join(directory, 'cache'),
   npm_config_update_notifier: 'false',
   npm_config_audit: 'false',
   npm_config_fund: 'false',
@@ -155,10 +155,10 @@ const npmEnv = (dir, extra = {}) => ({
       `//127.0.0.1:${port}/:_authToken=${TOKEN}\n`,
     );
     const stage = (name, dependencies) => {
-      const dir = path.join(publisher, name.replace('/', '-'));
-      fs.mkdirSync(dir);
+      const directory = path.join(publisher, name.replace('/', '-'));
+      fs.mkdirSync(directory);
       fs.writeFileSync(
-        path.join(dir, 'package.json'),
+        path.join(directory, 'package.json'),
         JSON.stringify({
           name,
           version: VERSION,
@@ -167,10 +167,10 @@ const npmEnv = (dir, extra = {}) => ({
         }),
       );
       fs.writeFileSync(
-        path.join(dir, 'index.js'),
+        path.join(directory, 'index.js'),
         `module.exports = ${JSON.stringify(name)};\n`,
       );
-      return dir;
+      return directory;
     };
     const leaf = stage('@endo/e2e-leaf', {});
     const top = stage('@endo/e2e-top', {
@@ -178,7 +178,7 @@ const npmEnv = (dir, extra = {}) => ({
       'tiny-upstream': '^1.2.0',
     });
     const env = npmEnv(publisher);
-    for (const dir of [leaf, top]) {
+    for (const directory of [leaf, top]) {
       // eslint-disable-next-line no-await-in-loop
       await run(
         'npm',
@@ -191,7 +191,7 @@ const npmEnv = (dir, extra = {}) => ({
           '--access',
           'public',
         ],
-        { cwd: dir, env },
+        { cwd: directory, env },
       );
     }
     const { stdout: whoami } = await run(

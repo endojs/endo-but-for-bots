@@ -47,9 +47,11 @@ export const makeTempDir = () =>
  * @param {Partial<Parameters<typeof makeRegistry>[0]>} [options]
  */
 export const makeTestRegistry = (options = {}) => {
-  const dir = makeTempDir();
-  const store = makeRegistryStore(new Database(path.join(dir, 'db.sqlite')));
-  const cas = makeFileCas(path.join(dir, 'cas'));
+  const directory = makeTempDir();
+  const store = makeRegistryStore(
+    new Database(path.join(directory, 'db.sqlite')),
+  );
+  const cas = makeFileCas(path.join(directory, 'cas'));
   const grants = makeGrants({ store });
   const token = 'x'.repeat(40);
   grants.putGrant({
@@ -67,7 +69,7 @@ export const makeTestRegistry = (options = {}) => {
     ...options,
   });
   return {
-    dir,
+    directory,
     store,
     cas,
     grants,
