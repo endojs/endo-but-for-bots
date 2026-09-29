@@ -53,9 +53,17 @@ test('expiry dates must carry an explicit offset', t => {
   t.is(parseIsoInstant('2027-01-01'), Date.UTC(2027, 0, 1));
   t.is(parseIsoInstant('2027-01-01T00:00:00Z'), Date.UTC(2027, 0, 1));
   t.is(parseIsoInstant('2027-01-01T01:00+01:00'), Date.UTC(2027, 0, 1));
+  t.is(parseIsoInstant('2028-02-29'), Date.UTC(2028, 1, 29));
   // No offset means host-local time to `Date.parse`; other formats are
   // engine heuristics.
-  for (const text of ['2027-01-01T00:00', 'Jan 1 2027', '2027-13-01', '']) {
+  for (const text of [
+    '2027-01-01T00:00',
+    'Jan 1 2027',
+    '2027-13-01',
+    '2027-02-30',
+    '2027-02-29T00:00Z',
+    '',
+  ]) {
     t.is(parseIsoInstant(text), undefined, text);
   }
 });

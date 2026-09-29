@@ -10,7 +10,8 @@ const SEMVER =
  * The development coordinate from the proposed design
  * `designs/npm-dev-registry-serving.md` (not yet landed; see
  * https://github.com/endojs/endo-but-for-bots/pull/1361) § Release identity:
- * `<major>.<minor>.<patch>-dev.<UTC commit time YYYYMMDDHHMMSS>.g<sha7>`.
+ * `<major>.<minor>.<patch>-dev.<UTC commit time YYYYMMDDHHMMSS>.g<sha>`,
+ * where `<sha>` is 7 to 40 lowercase hex digits of the commit hash.
  */
 const DEV_VERSION =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-dev\.((\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}))\.g([0-9a-f]{7,40})$/u;

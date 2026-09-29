@@ -140,6 +140,8 @@ test('package names canonicalize both scoped spellings', t => {
   t.throws(() => canonicalizePackageName('Upper'));
   t.throws(() => canonicalizePackageName('..'));
   t.throws(() => canonicalizePackageName('@endo%2f..%2fx'));
+  t.is(canonicalizePackageName('a'.repeat(214)), 'a'.repeat(214));
+  t.throws(() => canonicalizePackageName('a'.repeat(215)));
   t.is(encodePackageName('@endo/patterns'), '@endo%2fpatterns');
   t.is(tarballFileName('@endo/patterns', '1.0.0'), 'patterns-1.0.0.tgz');
   t.true(allowlistCovers(['@endo/*'], '@endo/patterns'));

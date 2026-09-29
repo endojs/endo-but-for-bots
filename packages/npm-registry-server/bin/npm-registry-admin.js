@@ -7,6 +7,7 @@ import '@endo/init';
 import Database from 'better-sqlite3';
 import { openRegistry } from '../src/server.js';
 import { makeToken } from '../src/grants.js';
+import { parseIsoInstant } from '../src/config.js';
 
 const usage = `usage: npm-registry-admin <command>
   grants list
@@ -38,8 +39,8 @@ if (command === 'grants' && subcommand === 'list') {
   operands.length === 4
 ) {
   const [id, subject, packages, expires] = operands;
-  const expiresAt = Date.parse(expires);
-  if (Number.isNaN(expiresAt)) {
+  const expiresAt = parseIsoInstant(expires);
+  if (expiresAt === undefined) {
     console.error(`invalid expiry ${expires}`);
     process.exit(2);
   }

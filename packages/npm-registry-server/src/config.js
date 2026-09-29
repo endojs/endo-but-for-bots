@@ -60,14 +60,25 @@ harden(readServerEnv);
  * formats by engine-specific heuristics, so the format is checked first.
  */
 const ISO_INSTANT =
-  /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/u;
+  /^(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2}))?$/u;
 
 /**
  * @param {string} text
  * @returns {number | undefined} milliseconds since the epoch
  */
 export const parseIsoInstant = text => {
-  if (!ISO_INSTANT.test(text)) {
+  const match = ISO_INSTANT.exec(text);
+  if (!match) {
+    return undefined;
+  }
+  // `Date.parse` rolls an impossible day over (2027-02-30 is March 2).
+  const [year, month, day] = match.slice(1, 4).map(Number);
+  const calendar = new Date(Date.UTC(year, month - 1, day));
+  if (
+    calendar.getUTCFullYear() !== year ||
+    calendar.getUTCMonth() !== month - 1 ||
+    calendar.getUTCDate() !== day
+  ) {
     return undefined;
   }
   const time = Date.parse(text);
