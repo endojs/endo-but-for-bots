@@ -387,6 +387,39 @@ test('upstream metadata cannot plant development versions or dev-* tags', async 
   t.true(result.created);
 });
 
+test('upstream tags cannot target a local dev build or shadow a version', async t => {
+  const tgz = makeTgz({
+    'package.json': JSON.stringify({ name: '@endo/errors', version: '1.0.0' }),
+  });
+  const { integrity } = digestTarball(tgz);
+  const { registry, grant } = makeTestRegistry({
+    upstreamOrigin: 'https://upstream.example',
+    fetch: async () =>
+      new Response(
+        JSON.stringify({
+          name: '@endo/errors',
+          'dist-tags': { latest: V1, '2.0.0': '1.0.0', stable: '1.0.0' },
+          versions: {
+            '1.0.0': {
+              name: '@endo/errors',
+              version: '1.0.0',
+              dist: { integrity },
+            },
+          },
+        }),
+      ),
+  });
+  await registry.publish(
+    grant,
+    '@endo/errors',
+    makePublishDocument({ name: '@endo/errors', version: V1 }),
+  );
+  const tags = await registry.getDistTags('@endo/errors');
+  t.false(Object.hasOwn(tags, 'latest'));
+  t.false(Object.hasOwn(tags, '2.0.0'));
+  t.is(tags.stable, '1.0.0');
+});
+
 test('an upstream packument with null versions is a 502', async t => {
   const { registry } = makeTestRegistry({
     upstreamOrigin: 'https://upstream.example',

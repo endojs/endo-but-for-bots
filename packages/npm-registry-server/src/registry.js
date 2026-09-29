@@ -714,9 +714,15 @@ export const makeRegistry = ({
       for (const [tag, version] of Object.entries(
         document['dist-tags'] ?? {},
       )) {
+        // Filter the target as well as the tag name: the existence check
+        // matches local rows too, so an upstream tag could otherwise point
+        // at a staged dev build. A SemVer-shaped tag would shadow the
+        // version of the same name in `getVersionManifest`.
         if (
           !isDevTag(tag) &&
+          !parseSemver(tag) &&
           typeof version === 'string' &&
+          !isDevVersion(version) &&
           statements.getVersion.get(name, version)
         ) {
           statements.setUpstreamTag.run(name, tag, version, at);
