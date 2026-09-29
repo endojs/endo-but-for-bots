@@ -1417,10 +1417,8 @@ pub enum Halt {
 /// requiring the cause to be re-derived from the program counter (design
 /// `ironhorse-panic.md` § The Formal `Panic` Category, item 3).
 ///
-/// Extensible on purpose: the reference-error source of the design's Coda
-/// (`ReferenceError { name, site }`, off by default) is a deferred
-/// follow-on and is intentionally absent here; `#[non_exhaustive]` lets it
-/// be added later without churning match sites.
+/// Extensible on purpose: `#[non_exhaustive]` lets a new source be added
+/// without churning match sites.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum PanicKind {
@@ -1442,6 +1440,110 @@ pub enum PanicKind {
         /// always reconstruct it.
         location: Option<String>,
     },
+    /// An engine-raised reference error under the off-by-default
+    /// `panic-on-reference-error` construction option (design
+    /// `ironhorse-panic.md` § Coda). The site returned this panic instead
+    /// of raising a catchable `ReferenceError`, without consulting the
+    /// jump chain, so the machine is still at the fault-site PC.
+    ReferenceError {
+        /// The offending binding's name, when the site knows it.
+        name: Option<String>,
+        /// Which of the Coda's raise sites fired.
+        site: RaiseSite,
+    },
+}
+
+impl PanicKind {
+    /// The `kind` attribute of the debugger's `<panic kind="...">`
+    /// element for this panic (design `ironhorse-panic.md` § Debugger
+    /// Interaction), the same spelling the C-XS worker and the daemon's
+    /// `PanicEvent` use.
+    pub fn wire_kind(&self) -> &'static str {
+        match self {
+            PanicKind::EngineFault { .. } => "engine-fault",
+            PanicKind::ReferenceError { .. } => "reference-error",
+        }
+    }
+}
+
+/// The replay-relevant `Machine`-construction configuration (design
+/// `ironhorse-panic.md` § Coda, "Pinned across a worker's
+/// snapshot->replay lineage"). Any construction option that changes what a
+/// raise site does changes what replay must reproduce, so the embedder
+/// pins the whole value in its snapshot record and checks it once on every
+/// resume-for-replay. `panic-on-reference-error` is the first field; a
+/// later replay-relevant option joins this struct and its fingerprint
+/// rather than growing its own pin.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReplayConfig {
+    /// The Coda's `panic-on-reference-error` option. Off by default.
+    pub panic_on_reference_error: bool,
+}
+
+impl ReplayConfig {
+    /// A stable text fingerprint of the non-default fields, empty for the
+    /// default configuration so a lineage recorded before the fingerprint
+    /// existed keeps its identity.
+    pub fn fingerprint(&self) -> String {
+        let mut fields = Vec::new();
+        if self.panic_on_reference_error {
+            fields.push("panic-on-reference-error=1");
+        }
+        fields.join(";")
+    }
+
+    /// The resume-time check: a replay under a configuration other than
+    /// the pinned one is a deterministic replay fault. Toggling an option
+    /// starts a new lineage; it never replays an existing one.
+    pub fn check_replay(&self, pinned: &ReplayConfig) -> Result<(), ReplayConfigMismatch> {
+        if self == pinned {
+            Ok(())
+        } else {
+            Err(ReplayConfigMismatch {
+                pinned: *pinned,
+                requested: *self,
+            })
+        }
+    }
+}
+
+/// A resume-for-replay whose [`ReplayConfig`] differs from the one pinned
+/// for the lineage. Deterministic: retrying with the same configuration
+/// fails the same way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayConfigMismatch {
+    /// The configuration the lineage's snapshot recorded.
+    pub pinned: ReplayConfig,
+    /// The configuration the resume asked for.
+    pub requested: ReplayConfig,
+}
+
+impl std::fmt::Display for ReplayConfigMismatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "replay configuration mismatch: lineage pinned [{}], resume requested [{}]",
+            self.pinned.fingerprint(),
+            self.requested.fingerprint()
+        )
+    }
+}
+
+/// The engine-raised reference-error sites the Coda's option repoints
+/// (design `ironhorse-panic.md` § Coda). A finite, categorical origin,
+/// unlike [`PanicKind::EngineFault`]'s optional physical location.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RaiseSite {
+    /// `XS_CODE_GET_LOCAL`: a `let`/`const` local read in its temporal
+    /// dead zone.
+    LocalTdz,
+    /// `XS_CODE_GET_VARIABLE` / `XS_CODE_GET_THIS_VARIABLE`: a name bound
+    /// in no reachable environment, or bound but still in its temporal
+    /// dead zone.
+    VariableLookup,
+    /// `XS_CODE_GET_CLOSURE`: a captured `let`/`const` read in its
+    /// temporal dead zone.
+    ClosureTdz,
 }
 
 impl Halt {

@@ -713,7 +713,7 @@ jobs:
         # selected target, so folding it into the line above would
         # silently filter the three integration suites down to nothing.
         run: |
-          cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
+          cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait --test ironhorse_panic_on_reference_error
           cargo test --locked -p endo --features ironhorse-engine --lib ironhorse_engine::
 
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.

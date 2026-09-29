@@ -80,6 +80,45 @@ impl Interp {
         }
     }
 
+    /// Raise an engine-created `ReferenceError` from one of the Coda's
+    /// sites (design `ironhorse-panic.md` § Coda). This is the switch: with
+    /// the `panic-on-reference-error` construction option off (the
+    /// default) it is exactly [`Self::raise_js`], a catchable throw through
+    /// the jump chain. With it on, the site returns
+    /// `Halt::Panic(PanicKind::ReferenceError)` without building an error
+    /// object or consulting `jumps`, so no `catch` intercepts it, the
+    /// uncaught classifier never sees it, and the machine stays at the
+    /// fault-site PC for a debugger or a frozen-at-fault snapshot.
+    pub(super) fn raise_reference_error(
+        &mut self,
+        name: String,
+        message: String,
+        site: RaiseSite,
+    ) -> Step {
+        if self.panic_on_reference_error {
+            return Step::Host(Halt::Panic(PanicKind::ReferenceError {
+                name: Some(name),
+                site,
+            }));
+        }
+        let error = self.internal_error("ReferenceError", message);
+        self.raise_js(error)
+    }
+
+    /// Whether the `panic-on-reference-error` construction option is on.
+    pub fn panic_on_reference_error(&self) -> bool {
+        self.panic_on_reference_error
+    }
+
+    /// Set the `panic-on-reference-error` construction option (design
+    /// `ironhorse-panic.md` § Coda). The embedder sets it at machine create
+    /// and again at every resume: it is host configuration, not snapshotted
+    /// heap state, and a replay must run under the value pinned for the
+    /// lineage it replays.
+    pub fn set_panic_on_reference_error(&mut self, on: bool) {
+        self.panic_on_reference_error = on;
+    }
+
     /// Raise a realm-local TypeError carrying a diagnostic message. Existing
     /// oracle-pinned messages remain verbatim; profile-specific guards supply
     /// descriptive diagnostics even where XS has no corresponding refusal.

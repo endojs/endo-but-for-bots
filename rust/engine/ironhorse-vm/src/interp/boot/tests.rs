@@ -37,6 +37,7 @@ const FRESH_ORDER: &[&str] = &[
     "host_callbacks",
     "compiler_registry",
     "shared_compartments",
+    "panic_on_reference_error",
     "direct_eval_hoist",
     "eval_program_hoist",
     "result",

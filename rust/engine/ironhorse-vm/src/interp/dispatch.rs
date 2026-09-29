@@ -626,14 +626,19 @@ impl Interp {
                         // error. Mirrors the `GET_VARIABLE` unresolved arm.
                         None => {
                             let id = self.local_index(k).map(|i| self.locals[i].id).unwrap_or(0);
-                            let error = self.internal_error(
-                                "ReferenceError",
-                                format!(
-                                    "get {}: not initialized yet",
-                                    self.property_debug_name(id)
+                            let name = self.property_debug_name(id);
+                            let message = format!("get {name}: not initialized yet");
+                            dispatch_halt!(
+                                self.raise_reference_error(
+                                    name,
+                                    message,
+                                    super::RaiseSite::LocalTdz
                                 ),
+                                pc,
+                                self,
+                                return_depth,
+                                code
                             );
-                            dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                         }
                     }
                 }
@@ -1791,14 +1796,19 @@ impl Interp {
                             if s.kind == Kind::Uninitialized {
                                 let id =
                                     self.local_index(k).map(|i| self.locals[i].id).unwrap_or(0);
-                                let error = self.internal_error(
-                                    "ReferenceError",
-                                    format!(
-                                        "get {}: not initialized yet",
-                                        self.property_debug_name(id)
+                                let name = self.property_debug_name(id);
+                                let message = format!("get {name}: not initialized yet");
+                                dispatch_halt!(
+                                    self.raise_reference_error(
+                                        name,
+                                        message,
+                                        super::RaiseSite::ClosureTdz
                                     ),
+                                    pc,
+                                    self,
+                                    return_depth,
+                                    code
                                 );
-                                dispatch_halt!(self.raise_js(error), pc, self, return_depth, code);
                             }
                             self.push(Slot::of(s.kind, s.value));
                         }

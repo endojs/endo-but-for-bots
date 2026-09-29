@@ -83,6 +83,34 @@ test('a panic is reported under setExceptionBreakMode("none")', t => {
   t.is(session.getLastPanic()?.kind, 'stack-overflow');
 });
 
+// The Coda's panic-on-reference-error option (designs/ironhorse-panic.md
+// § Coda) turns an engine-raised ReferenceError into a panic, so it arrives
+// as `<panic kind="reference-error">`, not as an exception break, whatever
+// the exception-break mode.
+const REFERENCE_ERROR_PANIC =
+  '\r\n<xsbug><panic kind="reference-error" path="/app.js" line="4">' +
+  '# Panic: get x: not initialized yet\n</panic></xsbug>\r\n';
+
+for (const mode of /** @type {const} */ (['none', 'uncaught', 'all'])) {
+  test(`a reference-error panic is a panic under setExceptionBreakMode("${mode}")`, t => {
+    const { session, feed } = makeTestSession();
+    session.setExceptionBreakMode(mode);
+    /** @type {import('../src/types.js').PanicEvent[]} */
+    const panics = [];
+    session.onPanic(event => panics.push(event));
+    feed(REFERENCE_ERROR_PANIC);
+    t.deepEqual(panics, [
+      {
+        kind: 'reference-error',
+        path: '/app.js',
+        line: 4,
+        message: '# Panic: get x: not initialized yet\n',
+      },
+    ]);
+    t.true(session.isPanicked());
+  });
+}
+
 test('frames at the panic site remain inspectable', async t => {
   const { session, feed } = makeTestSession();
   feed(STACK_OVERFLOW_PANIC);

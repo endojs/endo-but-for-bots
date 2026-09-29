@@ -38,7 +38,8 @@ pub mod engine {
     pub use ironhorse_vm::Machine as VmMachine;
     pub use ironhorse_vm::{
         Compartment, GcStats, Halt, Heap, Intrinsics, Meter as VMeter, MeterCheck, MeterState,
-        ModuleGraph, ModuleSource, PanicKind, RunOutcome, Slot,
+        ModuleGraph, ModuleSource, PanicKind, RaiseSite, ReplayConfig, ReplayConfigMismatch,
+        RunOutcome, Slot,
     };
 
     /// A deterministic engine-side refusal, with whatever the refusing site
@@ -302,6 +303,10 @@ pub mod engine {
             Halt::Panic(PanicKind::EngineFault { message, location }) => match location {
                 Some(location) => format!("engine fault at {location}: {message}"),
                 None => format!("engine fault: {message}"),
+            },
+            Halt::Panic(PanicKind::ReferenceError { name, site }) => match name {
+                Some(name) => format!("reference-error panic ({site:?}): {name}"),
+                None => format!("reference-error panic ({site:?})"),
             },
             other => format!("halted: {other:?}"),
         }
@@ -689,10 +694,20 @@ pub mod engine {
 
         /// Create a fresh machine under an explicit metering policy.
         pub fn with_bounds(bounds: MeterBounds) -> Machine {
+            Machine::with_config(bounds, ReplayConfig::default())
+        }
+
+        /// A machine under `bounds` with the replay-relevant construction
+        /// options `replay` (design `ironhorse-panic.md` § Coda), such as
+        /// the off-by-default `panic-on-reference-error`.
+        pub fn with_config(bounds: MeterBounds, replay: ReplayConfig) -> Machine {
             let inner = VmMachine::new();
             inner
                 .set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler))
                 .expect("fresh machine admits its compiler policy");
+            inner
+                .apply_replay_config(replay)
+                .expect("fresh machine admits its replay configuration");
             Machine { inner, bounds }
         }
 
@@ -867,6 +882,29 @@ pub mod engine {
         /// out of band. It cannot revoke bindings already in the heap or
         /// capabilities reachable through prototypes.
         pub global_names: Option<Vec<String>>,
+        /// The replay-relevant construction options (design
+        /// `ironhorse-panic.md` § Coda), applied at boot and at every
+        /// resume and rewind. Unlike `cadence` and `meter` it IS pinned
+        /// in the store: its fingerprint joins the store signature, so
+        /// resuming a heap under a different setting is refused as a
+        /// deterministic replay fault instead of silently replaying a
+        /// raise site differently. The default configuration adds
+        /// nothing to the signature, so existing stores keep theirs.
+        pub replay: ReplayConfig,
+    }
+
+    impl HeapStoreOptions {
+        /// The signature the store is opened under: the caller's
+        /// callback-table signature plus the replay-configuration
+        /// fingerprint when it is not the default.
+        pub fn store_signature(&self) -> String {
+            let fingerprint = self.replay.fingerprint();
+            if fingerprint.is_empty() {
+                self.signature.clone()
+            } else {
+                format!("{}\u{1f}replay-config:{fingerprint}", self.signature)
+            }
+        }
     }
 
     /// The checkpoint/collect cadence a [`PersistentMachine`] runs
@@ -1033,6 +1071,9 @@ pub mod engine {
         /// that runs a crank without the policy in force.
         meter: MeterBounds,
         global_names: Option<Vec<String>>,
+        /// The replay-relevant construction options, re-applied to every
+        /// resumed machine (they are host configuration, not heap state).
+        replay: ReplayConfig,
         /// The absolute computron ceiling the CURRENT crank runs under,
         /// shared with the installed host callback and re-pointed at
         /// every crank start to `meter index at start + crank_limit`.
@@ -1074,7 +1115,7 @@ pub mod engine {
             use ironhorse_snapshot::machine::begin_shared_store_session;
             use ironhorse_snapshot::store::{HeapStore, StoreError};
 
-            let signature = ironhorse_snapshot::Signature::new(&options.signature);
+            let signature = ironhorse_snapshot::Signature::new(options.store_signature());
             let mut store =
                 ironhorse_store_sqlite::SqliteHeapStore::open(&options.path).map_err(store_err)?;
             // Upgrade a decodable older store forward before resuming.
@@ -1132,6 +1173,8 @@ pub mod engine {
                         ironhorse_runtime::IronhorseSourceCompiler,
                     ))
                     .map_err(MachineError::Halt)?;
+                    boot.apply_replay_config(options.replay)
+                        .map_err(MachineError::Halt)?;
                     let start = boot.start_compartment();
                     boot.with_persistence(|interp| {
                         if let Some(interval) = options.meter.check_interval() {
@@ -1161,6 +1204,7 @@ pub mod engine {
                         last_collect_error: None,
                         meter: options.meter.clone(),
                         global_names: options.global_names.clone(),
+                        replay: options.replay,
                         crank_ceiling,
                     })
                 }
@@ -1171,6 +1215,7 @@ pub mod engine {
                         &signature,
                         &options.meter,
                         &options.global_names,
+                        options.replay,
                         &crank_ceiling,
                     )?;
                     // The durable crank total the store already carries:
@@ -1191,6 +1236,7 @@ pub mod engine {
                         last_collect_error: None,
                         meter: options.meter.clone(),
                         global_names: options.global_names.clone(),
+                        replay: options.replay,
                         crank_ceiling,
                     })
                 }
@@ -1223,6 +1269,7 @@ pub mod engine {
             signature: &ironhorse_snapshot::Signature,
             meter: &MeterBounds,
             global_names: &Option<Vec<String>>,
+            replay: ReplayConfig,
             ceiling: &std::rc::Rc<std::cell::Cell<u64>>,
         ) -> Result<(ironhorse_snapshot::machine::SharedStoreSession, Compartment), MachineError>
         {
@@ -1261,6 +1308,10 @@ pub mod engine {
                 },
             )
             .map_err(store_err)?;
+            session
+                .machine()
+                .apply_replay_config(replay)
+                .map_err(MachineError::Halt)?;
             session
                 .machine()
                 .with_persistence(|interp| match meter.check_interval() {
@@ -1311,6 +1362,7 @@ pub mod engine {
                 &self.signature,
                 &self.meter,
                 &self.global_names,
+                self.replay,
                 &self.crank_ceiling,
             )?;
             self.start = Some(start);
@@ -1911,6 +1963,7 @@ pub mod engine {
                 cadence: CadencePolicy::default(),
                 meter: MeterBounds::default(),
                 global_names: None,
+                replay: Default::default(),
             };
             let mut store = ironhorse_store_sqlite::SqliteHeapStore::open(&options.path).unwrap();
             let vm = ironhorse_vm::Interp::new();
@@ -1945,6 +1998,7 @@ pub mod engine {
                 cadence: CadencePolicy::default(),
                 meter: MeterBounds::default(),
                 global_names: None,
+                replay: Default::default(),
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
             machine
@@ -2001,6 +2055,7 @@ pub mod engine {
                 },
                 meter: MeterBounds::default(),
                 global_names: None,
+                replay: Default::default(),
             };
             let mut machine = PersistentMachine::open(&options).unwrap();
             let outcome = machine.eval(

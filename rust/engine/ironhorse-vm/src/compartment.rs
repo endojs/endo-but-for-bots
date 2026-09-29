@@ -943,6 +943,34 @@ impl Machine {
         }
     }
 
+    /// Apply the replay-relevant construction options (design
+    /// `ironhorse-panic.md` § Coda). Set at create and again at every
+    /// resume, before any compartment runs: the options are host
+    /// configuration, not heap state, so a restored machine starts with
+    /// the defaults until its embedder re-applies the pinned value.
+    pub fn apply_replay_config(&self, config: crate::ReplayConfig) -> Result<(), Halt> {
+        let mut interpreter = self
+            .machine
+            .interpreter
+            .try_borrow_mut()
+            .map_err(|_| Halt::MachineBusy)?;
+        interpreter.set_panic_on_reference_error(config.panic_on_reference_error);
+        Ok(())
+    }
+
+    /// The replay-relevant construction options in force, the value an
+    /// embedder pins in its snapshot record.
+    pub fn replay_config(&self) -> Result<crate::ReplayConfig, Halt> {
+        let interpreter = self
+            .machine
+            .interpreter
+            .try_borrow()
+            .map_err(|_| Halt::MachineBusy)?;
+        Ok(crate::ReplayConfig {
+            panic_on_reference_error: interpreter.panic_on_reference_error(),
+        })
+    }
+
     /// Borrow the actual engine for snapshot/store operations. The caller is a
     /// trusted embedding layer; execution remains excluded for the whole borrow.
     pub fn with_persistence<R>(&self, operation: impl FnOnce(&mut Interp) -> R) -> Result<R, Halt> {

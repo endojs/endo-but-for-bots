@@ -26,6 +26,7 @@ fn options(dir: &std::path::Path, meter: MeterBounds) -> HeapStoreOptions {
         cadence: CadencePolicy::default(),
         meter,
         global_names: None,
+        replay: Default::default(),
     }
 }
 
