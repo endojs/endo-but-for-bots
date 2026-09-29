@@ -4686,10 +4686,13 @@ mod tests {
                      sqliteExec(db, 'CREATE TABLE t (x); INSERT INTO t VALUES (1)');
                      var s = sqlitePrepare(db, 'SELECT count(*) AS n FROM t');
                      var d = openDir('test', 'sub');
+                     var nested = openReader(d, 'inner.txt');
+                     var head = String.fromCharCode(...new Uint8Array(read(nested, 2)));
                      var m = sqliteOpen(':memory:');",
                         db = db_path.to_str().unwrap(),
                     ));
                     assert_eq!(machine.eval("first"), Some(JsValue::String("abcd".into())));
+                    assert_eq!(machine.eval("head"), Some(JsValue::String("in".into())));
                     host_ledger::end_delivery(true);
                     let callbacks = machine.registered_callbacks.borrow().clone();
                     let cas_bytes = cas_dir.to_str().unwrap().as_bytes();
@@ -4730,7 +4733,7 @@ mod tests {
                         other => panic!("{name} is not a handle: {other:?}"),
                     };
                     let memory = handle("m");
-                    let mut reseated: Vec<u64> = ["r", "w", "h", "db", "s", "d"]
+                    let mut reseated: Vec<u64> = ["r", "w", "h", "db", "s", "d", "nested"]
                         .iter()
                         .map(|n| handle(n))
                         .collect();
@@ -4766,6 +4769,12 @@ mod tests {
                     assert_eq!(
                         eval("readFileText(d, 'inner.txt')"),
                         Some(JsValue::String("inner".into()))
+                    );
+                    // A reader opened below a directory handle re-seats at its
+                    // joined path and committed offset.
+                    assert_eq!(
+                        eval("String.fromCharCode(...new Uint8Array(read(nested, 3)))"),
+                        Some(JsValue::String("ner".into()))
                     );
                     // The in-memory database had no descriptor: its use is refused
                     // without reaching a fabricated connection.
