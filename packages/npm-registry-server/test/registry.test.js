@@ -528,6 +528,20 @@ test('install facts come from the tarball, not the publish document', async t =>
   t.is(packument.versions[V1]._hasShrinkwrap, true);
 });
 
+test('publish does not deprecate a version', async t => {
+  const { registry, grant } = makeTestRegistry();
+  const document = makePublishDocument({ name: '@endo/patterns', version: V1 });
+  /** @type {any} */ (document.versions[V1]).deprecated = 'do not use';
+  await registry.publish(grant, '@endo/patterns', document);
+  for (const abbreviated of [true, false]) {
+    // eslint-disable-next-line no-await-in-loop
+    const packument = await registry.getPackument('@endo/patterns', {
+      abbreviated,
+    });
+    t.false(Object.hasOwn(packument.versions[V1], 'deprecated'));
+  }
+});
+
 test('publish refuses platform fields that differ from the tarball', async t => {
   const { registry, grant } = makeTestRegistry();
   const document = makePublishDocument({ name: '@endo/patterns', version: V1 });
@@ -640,6 +654,7 @@ test('an upstream body refused by its declared length is released', async t => {
 });
 
 test('the upstream size limit holds at its boundary however the length is declared', async t => {
+  await null;
   const body = new TextEncoder().encode(
     JSON.stringify({
       name: 'left-pad',

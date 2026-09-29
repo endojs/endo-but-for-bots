@@ -518,6 +518,9 @@ export const makeRegistry = ({
       dist: { integrity, shasum },
     };
     delete stored.readme;
+    // Deprecation is refused as an operation, so it is not accepted as a
+    // publish-time field either.
+    delete stored.deprecated;
     // Facts installers act on without reading the tarball come from the
     // tarball, not from the publish document.
     const scripts = packageJson.scripts ?? {};
