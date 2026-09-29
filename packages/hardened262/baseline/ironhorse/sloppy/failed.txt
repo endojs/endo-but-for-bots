@@ -22,6 +22,8 @@ test/intrinsics/SetPrototype/intrinsic-metadata.js
 test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/WeakMapPrototype/intrinsic-metadata.js
 test/intrinsics/WeakSetPrototype/intrinsic-metadata.js
+test/ironhorse/resource-limits/native-recursion-ceiling.js
+test/ironhorse/resource-limits/regexp-matcher-state-ceiling.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js
 test/modules/module-source-reflection/ses-legacy/export-all-from.js
 test/modules/module-source-reflection/ses-legacy/export-default.js

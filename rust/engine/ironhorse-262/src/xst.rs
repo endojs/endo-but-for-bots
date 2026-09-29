@@ -24,7 +24,7 @@ use crate::frontmatter::{self, Frontmatter, Negative};
 use crate::report::CaseRecord;
 use crate::{Agreement, AsyncDualRun, DualRun, IronhorseCompile};
 use ironhorse_vm::halt_labels::{is_not_implemented_label, is_refused_label};
-use ironhorse_vm::{Halt, RunOutcome};
+use ironhorse_vm::{Halt, ResourceLimitPolicy, RunOutcome};
 use std::collections::{BTreeMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -245,6 +245,13 @@ pub struct Config {
     /// caller that did not ask for one and a case's verdict never becomes
     /// load-dependent behind its back.
     pub per_case_timeout_seconds: u64,
+    /// `--resource-limits panic|throw`: the engine's
+    /// [`ResourceLimitPolicy`]. The default `panic` stops the crank at a
+    /// resource ceiling, as XS does, and a positive case that stops there where
+    /// the oracle completed is the named `ironhorse-aborted-limit` skip.
+    /// `throw` raises a guest `RangeError` instead, so such a case classifies
+    /// as a pass or a failure.
+    pub resource_limits: ResourceLimitPolicy,
 }
 
 /// The `ironhorse-xst` CLI's default per-case wall-clock bound (seconds).
@@ -273,6 +280,7 @@ impl Default for Config {
             // Off by default: the library imposes no bound on a caller that did
             // not ask for one. The CLI opts in to DEFAULT_CASE_TIMEOUT_SECONDS.
             per_case_timeout_seconds: 0,
+            resource_limits: ResourceLimitPolicy::Panic,
         }
     }
 }
@@ -1507,6 +1515,12 @@ function print(msg) { __endorAsyncSignal = '' + msg; }
 
 /// Run one case (source text) through the full mode/verdict machinery.
 pub fn run_case(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
+    crate::with_resource_limit_policy(cfg.resource_limits, || {
+        run_case_inner(cfg, harness_dir, src)
+    })
+}
+
+fn run_case_inner(cfg: &Config, harness_dir: &Path, src: &str) -> CaseResult {
     let fm = frontmatter::parse(src);
 
     // Feature pre-skip: a declared feature ironhorse does not implement.
@@ -2498,6 +2512,19 @@ fn run_case_bounded_with(
     timeout: std::time::Duration,
     runner: impl FnOnce(&Config, &Path, &str) -> CaseResult + Send + 'static,
 ) -> CaseResult {
+    // The hang attribution below runs on this thread, not the case thread.
+    crate::with_resource_limit_policy(cfg.resource_limits, || {
+        run_case_bounded_in_scope(cfg, harness_dir, src, timeout, runner)
+    })
+}
+
+fn run_case_bounded_in_scope(
+    cfg: &Config,
+    harness_dir: &Path,
+    src: &str,
+    timeout: std::time::Duration,
+    runner: impl FnOnce(&Config, &Path, &str) -> CaseResult + Send + 'static,
+) -> CaseResult {
     let (tx, rx) = std::sync::mpsc::channel();
     let owned_config = cfg.clone();
     let owned_harness_directory = harness_dir.to_path_buf();
@@ -2636,11 +2663,14 @@ fn ironhorse_terminates_alone(
             source.setup = format!("{ASYNC_PRELUDE}{}", source.setup);
         }
         let (tx, rx) = std::sync::mpsc::channel();
+        let resource_limits = crate::resource_limit_policy();
         let spawn = std::thread::Builder::new()
             .name("ironhorse-xst-attribute".into())
             .stack_size(CASE_THREAD_STACK_BYTES)
             .spawn(move || {
-                let _ = tx.send(crate::ironhorse_only_scripts(&source.setup, &source.body));
+                let _ = tx.send(crate::with_resource_limit_policy(resource_limits, || {
+                    crate::ironhorse_only_scripts(&source.setup, &source.body)
+                }));
             });
         if spawn.is_err() {
             return false;
@@ -4214,6 +4244,38 @@ mod tests {
                 "shared-positive-test-failure"
             ),
             crate::report::Category::Unsupported
+        );
+    }
+
+    #[test]
+    fn the_resource_limit_policy_decides_whether_a_ceiling_classifies() {
+        // XS's matcher completes this; Ironhorse's retained-state cap refuses it.
+        let uncaught = "/*---\nflags: [raw]\n---*/\n/(?:a|b)*$/.exec('ab'.repeat(40000)); 'done';";
+        let caught = "/*---\nflags: [raw]\n---*/\ntry { /(?:a|b)*$/.exec('ab'.repeat(40000)); } catch (error) { if (!(error instanceof RangeError)) throw error; } 'done';";
+        let harness = Path::new("/nonexistent");
+        let panic = Config::default();
+        let throw = Config {
+            resource_limits: ResourceLimitPolicy::Throw,
+            ..Config::default()
+        };
+        for source in [uncaught, caught] {
+            assert_eq!(
+                run_case(&panic, harness, source).verdict,
+                Verdict::RunSkip("ironhorse-aborted-limit".into())
+            );
+        }
+        assert_eq!(
+            run_case(&throw, harness, uncaught).verdict,
+            Verdict::Fail(
+                "ironhorse threw where the oracle completed: RangeError: resource limit: heap exhausted"
+                    .into()
+            )
+        );
+        assert_eq!(run_case(&throw, harness, caught).verdict, Verdict::Covered);
+        // The bounded runner applies the policy on its own case thread.
+        assert_eq!(
+            run_case_bounded(&throw, harness, caught, std::time::Duration::from_secs(60)).verdict,
+            Verdict::Covered
         );
     }
 

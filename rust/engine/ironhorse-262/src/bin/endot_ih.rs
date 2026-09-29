@@ -46,6 +46,7 @@ use ironhorse_262::expectations::{compare, Expectations, Header};
 use ironhorse_262::report::RunReport;
 use ironhorse_262::test262::{collect_js, collect_js_batch, collect_js_direct, locate_test262};
 use ironhorse_262::xst::{run_files, Config, SesMode, DEFAULT_CASE_TIMEOUT_SECONDS};
+use ironhorse_vm::ResourceLimitPolicy;
 use std::path::PathBuf;
 
 fn main() {
@@ -75,6 +76,13 @@ fn main() {
                     args.next().and_then(|n| n.parse().ok()).unwrap_or_else(|| {
                         fail("--case-timeout needs a non-negative integer (seconds; 0 = unbounded)")
                     });
+            }
+            "--resource-limits" => {
+                cfg.resource_limits = match args.next().as_deref() {
+                    Some("panic") => ResourceLimitPolicy::Panic,
+                    Some("throw") => ResourceLimitPolicy::Throw,
+                    _ => fail("--resource-limits needs panic or throw"),
+                };
             }
             "--gate-meter-exact" => cfg.gate_meter_exact = true,
             "--repeat" => {
@@ -537,6 +545,9 @@ OPTIONS:
                              non-terminator is an ironhorse-hang failure, while
                              an oracle-only one is an infrastructure skip
                              (default 10; 0 = off)
+    --resource-limits MODE   panic (default): a resource ceiling stops the case,
+                             as in XS; throw: it raises a guest RangeError, so
+                             the case classifies as a pass or a failure
     --gate-meter-exact       legacy flag; oracle computron drift is always advisory
     --repeat N               re-run N times; require identical results, halts, and raw costs
     --features-include F[,F] opt features OUT of the skip set (e.g. ses-xs-parity)

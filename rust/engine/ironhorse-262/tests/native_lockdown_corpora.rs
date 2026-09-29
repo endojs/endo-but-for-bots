@@ -5,6 +5,7 @@
 use ironhorse_262::expectations::{Mode, Outcome};
 use ironhorse_262::frontmatter;
 use ironhorse_262::xst::{run_case, strict_mode_status, Config, SesMode, Verdict};
+use ironhorse_vm::ResourceLimitPolicy;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -66,37 +67,49 @@ fn qualifies(flags: &[String], mode: Mode) -> bool {
     })
 }
 
+/// One Ironhorse agent's lockdown script-scenario baseline, keyed by file and
+/// mode, with `true` for a pass.
+fn lockdown_baseline(package: &Path, agent: &str) -> BTreeMap<(String, Mode), bool> {
+    let mut expected = BTreeMap::new();
+    for (mode, scenario) in [
+        (Mode::Sloppy, "lockdownSloppy"),
+        (Mode::Strict, "lockdownStrict"),
+    ] {
+        for (status, pass) in [("passed", true), ("failed", false)] {
+            let list = package.join(format!("baseline/{agent}/{scenario}/{status}.txt"));
+            for file in std::fs::read_to_string(&list).unwrap().lines() {
+                assert!(package.join(file).is_file(), "stale baseline: {file}");
+                assert!(
+                    expected.insert((file.to_string(), mode), pass).is_none(),
+                    "duplicate baseline: {agent} {scenario} {file}"
+                );
+            }
+        }
+        assert!(
+            std::fs::read_to_string(
+                package.join(format!("baseline/{agent}/{scenario}/skipped.txt"))
+            )
+            .unwrap()
+            .trim()
+            .is_empty(),
+            "native baseline must not hide skips"
+        );
+    }
+    expected
+}
+
 #[test]
 fn hardened262_native_lockdown_matches_existing_baselines() {
     on_engine_stack(|| {
         let package = repository().join("packages/hardened262");
-        let mut expected = BTreeMap::new();
-        for (mode, scenario) in [
-            (Mode::Sloppy, "lockdownSloppy"),
-            (Mode::Strict, "lockdownStrict"),
-        ] {
-            for (status, pass) in [("passed", true), ("failed", false)] {
-                let list = package.join(format!("baseline/ironhorse/{scenario}/{status}.txt"));
-                for file in std::fs::read_to_string(&list).unwrap().lines() {
-                    assert!(package.join(file).is_file(), "stale baseline: {file}");
-                    assert!(
-                        expected.insert((file.to_string(), mode), pass).is_none(),
-                        "duplicate baseline: {scenario} {file}"
-                    );
-                }
-            }
-            assert!(
-                std::fs::read_to_string(
-                    package.join(format!("baseline/ironhorse/{scenario}/skipped.txt"))
-                )
-                .unwrap()
-                .trim()
-                .is_empty(),
-                "native baseline must not hide skips"
-            );
-        }
+        let expected = lockdown_baseline(&package, "ironhorse");
+        let throw_expected = lockdown_baseline(&package, "ironhorseThrowOnLimit");
 
         let cfg = config();
+        let throw_cfg = Config {
+            resource_limits: ResourceLimitPolicy::Throw,
+            ..config()
+        };
         let mut inventoried = BTreeSet::new();
         let mut drift = Vec::new();
         let mut passed = 0;
@@ -207,6 +220,36 @@ fn hardened262_native_lockdown_matches_existing_baselines() {
                         eprintln!("excluded (named missing global) {file} {mode:?}: {outcome:?}");
                         excluded_modes += 1;
                         continue;
+                    }
+                    // The default policy stops the case at a resource
+                    // ceiling. It counts as a known failure only when the
+                    // `throw` policy runs the same body to the outcome the
+                    // `ironhorseThrowOnLimit` baseline records.
+                    Some((_, Outcome::Skip(reason))) if reason == "ironhorse-aborted-limit" => {
+                        let thrown = run_case(&throw_cfg, &package.join("harness"), &source);
+                        let throw_outcome = thrown
+                            .mode_outcomes
+                            .iter()
+                            .find(|(found, _)| *found == mode)
+                            .map(|(_, outcome)| outcome);
+                        let throw_pass = match throw_outcome {
+                            Some(Outcome::Pass) => Some(true),
+                            Some(Outcome::Fail(reason)) if !reason.starts_with("setup ") => {
+                                Some(false)
+                            }
+                            _ => None,
+                        };
+                        if throw_pass.is_none()
+                            || throw_expected.get(&(file.to_string(), mode)) != throw_pass.as_ref()
+                        {
+                            drift.push(format!(
+                                "{file} {mode:?}: under the throw policy expected {:?}, \
+                                 observed {throw_outcome:?} {:?}",
+                                throw_expected.get(&(file.to_string(), mode)),
+                                thrown.verdict
+                            ));
+                        }
+                        false
                     }
                     _ => {
                         drift.push(format!(

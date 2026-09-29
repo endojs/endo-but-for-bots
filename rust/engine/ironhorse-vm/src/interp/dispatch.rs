@@ -25,7 +25,9 @@ use crate::DecodeError;
 /// belongs to an enclosing dispatch, so the unwind propagates out to it.
 /// A handler owned by this loop resumes here, paying XS's `mxFirstCode` meter check
 /// at the catch landing (`xsRun.c` `XS_CODE_CATCH`, after the `c_setjmp`
-/// restore). Every other halt leaves the loop as-is.
+/// restore). Under [`ResourceLimitPolicy::Throw`] a resource-ceiling halt is
+/// first raised here as a guest `RangeError`; every other halt leaves the loop
+/// as-is.
 ///
 /// Every engine raise in the loop (`raise_js`, the `catchable_*` helpers)
 /// and every native re-entry that can raise must pass through here or
@@ -34,7 +36,10 @@ use crate::DecodeError;
 /// ownership checks or expose an internal unwind as a host result.
 macro_rules! dispatch_halt {
     ($halt:expr, $program_counter:ident, $machine:expr, $return_depth:expr, $code:expr) => {
-        match $halt {
+        match {
+            let step = $halt;
+            $machine.resource_limit_step(step)
+        } {
             Step::Unwound(target)
                 if $machine.call_stack.len() < $return_depth
                     || !$machine.resume_target_belongs_to(target, $code) =>

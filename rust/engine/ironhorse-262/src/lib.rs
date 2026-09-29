@@ -29,9 +29,34 @@
 //! differential and line-splitting primitives the converter and the runner
 //! share.
 
-use ironhorse_vm::{Halt, RunOutcome};
+use ironhorse_vm::{Halt, ResourceLimitPolicy, RunOutcome};
 
 pub use ironhorse_runtime::IronhorseSourceCompiler;
+
+thread_local! {
+    static RESOURCE_LIMIT_POLICY: std::cell::Cell<ResourceLimitPolicy> =
+        const { std::cell::Cell::new(ResourceLimitPolicy::Panic) };
+}
+
+/// The policy [`with_resource_limit_policy`] installed on this thread.
+pub fn resource_limit_policy() -> ResourceLimitPolicy {
+    RESOURCE_LIMIT_POLICY.get()
+}
+
+/// Run `f` with every harness interpreter this thread constructs using
+/// `policy`, restoring the previous policy afterward. Thread-scoped rather
+/// than threaded through every run helper, because a case runs on its own
+/// thread and parallel callers must not observe one another's policy.
+pub fn with_resource_limit_policy<T>(policy: ResourceLimitPolicy, f: impl FnOnce() -> T) -> T {
+    struct Restore(ResourceLimitPolicy);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RESOURCE_LIMIT_POLICY.set(self.0);
+        }
+    }
+    let _restore = Restore(RESOURCE_LIMIT_POLICY.replace(policy));
+    f()
+}
 
 /// Construct a realm interpreter linked against `names` **and** armed with the
 /// runtime source compiler, so a program that calls `eval` on a string (or the
@@ -43,6 +68,7 @@ pub use ironhorse_runtime::IronhorseSourceCompiler;
 /// production machine never exposes the detach primitive.
 fn interp_with_source_bridge(names: &[ironhorse_vm::SymbolName]) -> ironhorse_vm::Interp {
     let mut interp = ironhorse_vm::Interp::new();
+    interp.set_resource_limit_policy(RESOURCE_LIMIT_POLICY.get());
     interp.install_test262_host();
     interp.link_intrinsics(names);
     interp.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
