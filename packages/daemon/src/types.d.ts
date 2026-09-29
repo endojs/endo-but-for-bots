@@ -208,6 +208,12 @@ export type HostFormula = {
   networks: FormulaIdentifier;
   planes: FormulaIdentifier;
   pins: FormulaIdentifier;
+  /**
+   * When `true`, the agent's own pet-name directory is non-extensible: the
+   * agent may resolve, rebind, and remove its existing names but cannot add
+   * new ones.  Absent on formulas written before the option existed.
+   */
+  nonExtensibleDirectory?: boolean;
 };
 
 export type GuestFormula = {
@@ -225,6 +231,12 @@ export type GuestFormula = {
   guestPins?: FormulaIdentifier;
   /** The host-only pin directory retained by the guest formula. */
   hostPins?: FormulaIdentifier;
+  /**
+   * When `true`, the agent's own pet-name directory is non-extensible: the
+   * agent may resolve, rebind, and remove its existing names but cannot add
+   * new ones.  Absent on formulas written before the option existed.
+   */
+  nonExtensibleDirectory?: boolean;
 };
 
 export type LeastAuthorityFormula = {
@@ -1629,6 +1641,15 @@ export type MakeAgentOptions = {
   pins?: EndoDirectory;
   /** A caller-selected directory to expose as `@nets`. */
   networks?: EndoDirectory;
+  /**
+   * Make the new agent's own pet-name directory non-extensible.  The agent
+   * can still resolve, rebind, and remove the names it has (including the
+   * `introducedNames` its host endows), but any attempt by the agent to add
+   * a new name to its own directory fails.  The setting is persisted on the
+   * agent formula and survives restart.  It applies only when the agent is
+   * created; providing an existing agent does not change it.
+   */
+  nonExtensibleDirectory?: boolean;
 };
 
 export type MakeCapletOptions = {
@@ -2803,6 +2824,7 @@ type FormulateNumberedGuestParams = {
   guestPinsDirectoryId: FormulaIdentifier;
   hostPinsDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
+  nonExtensibleDirectory?: boolean;
 };
 
 type FormulateHostDependenciesParams = {
@@ -2832,6 +2854,7 @@ type FormulateNumberedHostParams = {
   planesDirectoryId: FormulaIdentifier;
   pinsDirectoryId: FormulaIdentifier;
   pinned: FormulaIdentifier[];
+  nonExtensibleDirectory?: boolean;
 };
 
 export type FormulaValueTypes = {
@@ -2955,6 +2978,7 @@ export interface DaemonCore {
     workerLabel?: string,
     guestPinsDirectoryId?: FormulaIdentifier,
     networksDirectoryId?: FormulaIdentifier,
+    nonExtensibleDirectory?: boolean,
   ) => FormulateResult<EndoGuest>;
 
   /**
@@ -2993,6 +3017,7 @@ export interface DaemonCore {
     specifiedWorkerId?: FormulaIdentifier | undefined,
     hostHandleId?: FormulaIdentifier,
     workerLabel?: string,
+    nonExtensibleDirectory?: boolean,
   ) => FormulateResult<EndoHost>;
 
   /**

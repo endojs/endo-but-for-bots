@@ -6,7 +6,7 @@ import { q } from '@endo/errors';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { cancelPendingIterator } from './cancelable-iterator.js';
-import { makePetSitter } from './pet-sitter.js';
+import { makeNonExtensibleStore, makePetSitter } from './pet-sitter.js';
 import {
   assertPetNamePath,
   namePathFrom,
@@ -71,6 +71,8 @@ export const makeGuestMaker = ({
    * @param {FormulaIdentifier | undefined} guestPinsDirectoryId
    * @param {FormulaIdentifier | undefined} hostPinsDirectoryId
    * @param {Context} context
+   * @param {boolean} [nonExtensibleDirectory] - Whether the guest's own
+   * directory refuses new names.
    */
   const makeGuest = async (
     guestId,
@@ -87,6 +89,7 @@ export const makeGuestMaker = ({
     guestPinsDirectoryId,
     hostPinsDirectoryId,
     context,
+    nonExtensibleDirectory = false,
   ) => {
     context.thisDiesIfThatDies(hostHandleId);
     context.thisDiesIfThatDies(hostAgentId);
@@ -105,7 +108,10 @@ export const makeGuestMaker = ({
       context.thisDiesIfThatDies(hostPinsDirectoryId);
     }
 
-    const baseController = await provideStoreController(petStoreId);
+    const storeController = await provideStoreController(petStoreId);
+    const baseController = nonExtensibleDirectory
+      ? makeNonExtensibleStore(storeController)
+      : storeController;
     const mailboxController = await provideStoreController(mailboxStoreId);
     const specialNames = {
       '@agent': guestId,

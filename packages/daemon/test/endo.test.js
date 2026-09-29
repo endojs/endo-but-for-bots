@@ -1031,6 +1031,103 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
       await E(host).identify('@nets'),
     );
   });
+
+  test(`provideAgent with nonExtensibleDirectory refuses new names in ${kind}'s directory`, async t => {
+    const { host } = await prepareHost(t);
+    await E(host).storeValue(10, 'ten');
+    await E(host).storeValue(11, 'eleven');
+    const tenId = await E(host).identify('ten');
+    const elevenId = await E(host).identify('eleven');
+    const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
+      introducedNames: { ten: 'dix', eleven: 'onze' },
+      nonExtensibleDirectory: true,
+    });
+
+    // Names the host introduced remain usable.
+    t.is(await E(agent).lookup('dix'), 10);
+    t.is(await E(agent).lookup('onze'), 11);
+
+    // Adding a new name to the agent's own directory fails closed.
+    await t.throwsAsync(E(agent).storeIdentifier(['fresh'], tenId), {
+      message: /non-extensible/,
+    });
+    await t.throwsAsync(E(agent).move(['dix'], ['elsewhere']), {
+      message: /non-extensible/,
+    });
+    t.false(await E(agent).has('fresh'));
+    t.false(await E(agent).has('elsewhere'));
+    t.is(await E(agent).lookup('dix'), 10);
+
+    // Existing names can be rebound and removed, but not re-added.
+    await E(agent).storeIdentifier(['dix'], elevenId);
+    t.is(await E(agent).lookup('dix'), 11);
+    await E(agent).remove('onze');
+    t.false(await E(agent).has('onze'));
+    await t.throwsAsync(E(agent).storeIdentifier(['onze'], elevenId), {
+      message: /non-extensible/,
+    });
+
+    // Only the agent's own directory is sealed, not the directories it holds.
+    await E(agent).storeIdentifier(['@pins', 'ten'], tenId);
+    t.deepEqual(await E(agent).list('@pins'), ['ten']);
+
+    const agentId = await E(host).identify(`${kind}-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    t.deepEqual(agentRecord.properties.nonExtensibleDirectory, {
+      kind: 'literal',
+      value: true,
+    });
+  });
+
+  test(`provideAgent leaves ${kind}'s directory extensible by default`, async t => {
+    const { host } = await prepareHost(t);
+    await E(host).storeValue(10, 'ten');
+    const tenId = await E(host).identify('ten');
+    const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
+    });
+    await E(agent).storeIdentifier(['fresh'], tenId);
+    t.is(await E(agent).lookup('fresh'), 10);
+
+    const agentId = await E(host).identify(`${kind}-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    t.is(agentRecord.properties.nonExtensibleDirectory, undefined);
+  });
+
+  test(`provideAgent rejects a non-boolean nonExtensibleDirectory for ${kind}`, async t => {
+    const { host } = await prepareHost(t);
+    await t.throwsAsync(
+      provideAgent(host, kind, { nonExtensibleDirectory: 'yes' }),
+      { message: /nonExtensibleDirectory must be a boolean/ },
+    );
+    t.false(await E(host).has(kind));
+  });
+
+  test(`${kind} nonExtensibleDirectory persists across restart`, async t => {
+    const { cancelled, config } = await prepareConfig(t);
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).storeValue(10, 'ten');
+      await provideAgent(host, kind, {
+        agentName: `${kind}-agent`,
+        introducedNames: { ten: 'dix' },
+        nonExtensibleDirectory: true,
+      });
+    }
+
+    await restart(config);
+
+    {
+      const { host } = await makeHost(config, cancelled);
+      const agent = await E(host).lookup(`${kind}-agent`);
+      const tenId = await E(host).identify('ten');
+      t.is(await E(agent).lookup('dix'), 10);
+      await t.throwsAsync(E(agent).storeIdentifier(['fresh'], tenId), {
+        message: /non-extensible/,
+      });
+    }
+  });
 }
 
 test('move moves value, between different guests', async t => {

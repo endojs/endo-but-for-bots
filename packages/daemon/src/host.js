@@ -31,7 +31,7 @@ import {
 import { parseId } from './formula-identifier.js';
 import { idFromLocator, internalizeLocator } from './locator.js';
 import { toHex, fromHex } from './hex.js';
-import { makePetSitter } from './pet-sitter.js';
+import { makeNonExtensibleStore, makePetSitter } from './pet-sitter.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { makeFormulaRecord } from './formula-record.js';
@@ -71,13 +71,20 @@ const assertPowersNameOrPath = nameOrPath => {
  * Normalizes options for provisioning either a host or a guest, filling in
  * default values.
  * @param {MakeAgentOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, pins?: EndoDirectory, networks?: EndoDirectory }}
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, pins?: EndoDirectory, networks?: EndoDirectory, nonExtensibleDirectory: boolean }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
   const pins = opts?.pins;
   const networks = opts?.networks;
+  const nonExtensibleDirectory = opts?.nonExtensibleDirectory ?? false;
+  if (typeof nonExtensibleDirectory !== 'boolean') {
+    throw makeError(
+      X`nonExtensibleDirectory must be a boolean, got ${q(nonExtensibleDirectory)}`,
+    );
+  }
   return {
+    nonExtensibleDirectory,
     introducedNames: /** @type {Record<Name, PetName>} */ (
       opts?.introducedNames ?? Object.create(null)
     ),
@@ -444,6 +451,8 @@ export const makeHostMaker = ({
    * @param {FormulaIdentifier} leastAuthorityId
    * @param {{[name: string]: FormulaIdentifier}} platformNames
    * @param {Context} context
+   * @param {boolean} [ownDirectoryNonExtensible] - Whether the host's own
+   * directory refuses new names.
    */
   const makeHost = async (
     hostId,
@@ -465,6 +474,7 @@ export const makeHostMaker = ({
     leastAuthorityId,
     platformNames,
     context,
+    ownDirectoryNonExtensible = false,
   ) => {
     context.thisDiesIfThatDies(storeId);
     context.thisDiesIfThatDies(mainWorkerId);
@@ -476,7 +486,10 @@ export const makeHostMaker = ({
       context.thisDiesIfThatDies(mailHubId);
     }
 
-    const baseController = await provideStoreController(storeId);
+    const storeController = await provideStoreController(storeId);
+    const baseController = ownDirectoryNonExtensible
+      ? makeNonExtensibleStore(storeController)
+      : storeController;
     const mailboxController = await provideStoreController(mailboxStoreId);
 
     // Note: `inspectorId` is retained on the host formula for
@@ -1861,13 +1874,31 @@ export const makeHostMaker = ({
      */
     const introduceNamesToAgent = async (agentId, introducedNames) => {
       const agent = await provide(agentId, 'agent');
+      // An agent with a non-extensible directory refuses new names through
+      // its own facet, but the introducing host is not bound by that: write
+      // the endowed names directly into the agent's underlying pet store.
+      const agentFormula = await getFormulaForId(agentId);
+      /** @type {((name: PetName, id: FormulaIdentifier) => Promise<void>) | undefined} */
+      let storeIntroduction;
+      if (
+        (agentFormula.type === 'guest' || agentFormula.type === 'host') &&
+        agentFormula.nonExtensibleDirectory
+      ) {
+        const agentStore = await provideStoreController(agentFormula.petStore);
+        storeIntroduction = (name, id) => agentStore.storeIdentifier(name, id);
+      } else {
+        storeIntroduction = (name, id) => agent.storeIdentifier([name], id);
+      }
       await Promise.all(
         Object.entries(introducedNames).map(async ([parentName, childName]) => {
           const introducedId = await E(directory).identify(parentName);
           if (introducedId === undefined) {
             return;
           }
-          await agent.storeIdentifier([childName], introducedId);
+          await storeIntroduction(
+            childName,
+            /** @type {FormulaIdentifier} */ (introducedId),
+          );
         }),
       );
     };
@@ -1967,6 +1998,7 @@ export const makeHostMaker = ({
         agentName = undefined,
         pins = undefined,
         networks = undefined,
+        nonExtensibleDirectory = false,
       } = {},
     ) => {
       let host = await getNamedAgent(petName, 'host');
@@ -1999,6 +2031,7 @@ export const makeHostMaker = ({
             undefined,
             handleId,
             hostLabel,
+            nonExtensibleDirectory,
           );
         host = { value: Promise.resolve(value), id };
       }
@@ -2039,6 +2072,7 @@ export const makeHostMaker = ({
         agentName = undefined,
         pins = undefined,
         networks = undefined,
+        nonExtensibleDirectory = false,
       } = {},
     ) => {
       let guest = await getNamedAgent(handleName, 'guest');
@@ -2070,6 +2104,7 @@ export const makeHostMaker = ({
             guestLabel,
             guestPinsDirectoryId,
             guestNetworksDirectoryId,
+            nonExtensibleDirectory,
           );
         guest = { value: Promise.resolve(value), id };
       }

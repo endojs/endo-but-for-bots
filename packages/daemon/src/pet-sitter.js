@@ -144,3 +144,51 @@ export const makePetSitter = (controller, specialNames) => {
 
   return petSitter;
 };
+
+/**
+ * Wraps a pet store controller so that it is non-extensible, in the sense of
+ * `Object.preventExtensions`: existing names can still be resolved, rebound,
+ * and removed, but no new name can be added.  Storing an identifier or locator
+ * under a name the store does not already hold, or renaming onto such a name,
+ * fails closed and leaves the store unchanged.
+ *
+ * @param {StoreController} controller
+ * @returns {StoreController}
+ */
+export const makeNonExtensibleStore = controller => {
+  /** @param {Name} petName */
+  const assertExisting = petName => {
+    if (!controller.has(petName)) {
+      throw new TypeError(
+        `Cannot add pet name ${q(petName)}: this agent's directory is non-extensible`,
+      );
+    }
+  };
+
+  /** @type {StoreController['storeIdentifier']} */
+  const storeIdentifier = async (petName, id) => {
+    assertExisting(petName);
+    return controller.storeIdentifier(petName, id);
+  };
+
+  /** @type {StoreController['storeLocator']} */
+  const storeLocator = async (petName, locator) => {
+    assertExisting(petName);
+    return controller.storeLocator(petName, locator);
+  };
+
+  /** @type {StoreController['rename']} */
+  const rename = async (fromPetName, toPetName) => {
+    if (fromPetName !== toPetName) {
+      assertExisting(toPetName);
+    }
+    return controller.rename(fromPetName, toPetName);
+  };
+
+  return {
+    ...controller,
+    storeIdentifier,
+    storeLocator,
+    rename,
+  };
+};

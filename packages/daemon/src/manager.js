@@ -3872,6 +3872,7 @@ const makeDaemonCore = async (
         networks: networksId,
         planes: planesId,
         pins: pinsId,
+        nonExtensibleDirectory = false,
       } = formula;
 
       if (mailHubId === undefined) {
@@ -3924,6 +3925,7 @@ const makeDaemonCore = async (
         leastAuthorityId,
         platformNames,
         context,
+        nonExtensibleDirectory,
       );
       const handle = /** @type {any} */ (agent).handle();
       agentIdForHandle.set(handle, id);
@@ -3942,6 +3944,7 @@ const makeDaemonCore = async (
         planes: planesDirectoryId,
         guestPins: guestPinsDirectoryId,
         hostPins: hostPinsDirectoryId,
+        nonExtensibleDirectory = false,
       } = formula;
 
       if (mailHubId === undefined) {
@@ -3980,6 +3983,7 @@ const makeDaemonCore = async (
         guestPinsDirectoryId,
         hostPinsDirectoryId,
         context,
+        nonExtensibleDirectory,
       );
       const handle = /** @type {any} */ (agent).handle();
       agentIdForHandle.set(handle, id);
@@ -5791,6 +5795,9 @@ const makeDaemonCore = async (
       networks: identifiers.networksDirectoryId,
       planes: identifiers.planesDirectoryId,
       pins: identifiers.pinsDirectoryId,
+      ...(identifiers.nonExtensibleDirectory && {
+        nonExtensibleDirectory: true,
+      }),
     };
 
     return /** @type {FormulateResult<EndoHost>} */ (
@@ -5811,6 +5818,7 @@ const makeDaemonCore = async (
     specifiedWorkerId,
     hostHandleId,
     workerLabel,
+    nonExtensibleDirectory = false,
   ) => {
     return withFormulaGraphLock(async () => {
       const identifiers = await formulateHostDependencies({
@@ -5827,7 +5835,10 @@ const makeDaemonCore = async (
         handleId: identifiers.handleId,
       });
 
-      const result = await formulateNumberedHost(identifiers);
+      const result = await formulateNumberedHost({
+        ...identifiers,
+        nonExtensibleDirectory,
+      });
       for (const id of identifiers.pinned) {
         unpinTransient(id);
       }
@@ -5971,6 +5982,9 @@ const makeDaemonCore = async (
       planes: identifiers.planesDirectoryId,
       guestPins: identifiers.guestPinsDirectoryId,
       hostPins: identifiers.hostPinsDirectoryId,
+      ...(identifiers.nonExtensibleDirectory && {
+        nonExtensibleDirectory: true,
+      }),
     };
 
     return /** @type {FormulateResult<EndoGuest>} */ (
@@ -5990,6 +6004,7 @@ const makeDaemonCore = async (
     workerLabel,
     guestPinsDirectoryId,
     networksDirectoryId,
+    nonExtensibleDirectory = false,
   ) => {
     return withFormulaGraphLock(async () => {
       const identifiers = await formulateGuestDependencies(
@@ -6005,7 +6020,10 @@ const makeDaemonCore = async (
         handleId: identifiers.handleId,
       });
 
-      const result = await formulateNumberedGuest(identifiers);
+      const result = await formulateNumberedGuest({
+        ...identifiers,
+        nonExtensibleDirectory,
+      });
       for (const id of identifiers.pinned) {
         unpinTransient(id);
       }
