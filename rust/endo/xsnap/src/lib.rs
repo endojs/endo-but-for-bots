@@ -1030,14 +1030,119 @@ pub enum XsnapError {
     ///   leaves `location` `None`.
     ///
     /// Carries the caught panic's message and optional `file:line:col`. The
-    /// daemon seam maps this to `ExecutionOutcome::Panicked` alongside a
-    /// prospective Ironhorse `Halt::Panic(PanicKind::EngineFault)`; here on the
-    /// live C-XS path there is no `Halt` to carry, so the worker-death value is
-    /// this error.
+    /// daemon's C-XS adapter (`endo::worker_outcome`) maps this, together
+    /// with [`XsnapError::Aborted`], to `WorkerOutcome::Panicked`, the arm a
+    /// prospective Ironhorse `Halt::Panic(PanicKind::EngineFault)` also
+    /// reaches; here on the live C-XS path there is no `Halt` to carry, so
+    /// the worker-death value is this error.
     Panicked {
         message: String,
         location: Option<String>,
     },
+    /// An `fxAbort` exit ended the supervised run: XS longjmp'd out of the
+    /// crank's reactive pump with a nonzero `exitStatus` (design
+    /// `designs/ironhorse-panic.md` § Architectural Boundary: the live C-XS
+    /// adapter maps these exits, together with [`XsnapError::Panicked`], to
+    /// one supervisor-visible `Panicked` arm). `abort` names which exit fired
+    /// so a stack overflow is no longer reported as a metering death;
+    /// `computrons` is the crank's meter reading at the abort.
+    Aborted { abort: XsAbort, computrons: u64 },
+}
+
+/// Which `fxAbort` exit status ended a C-XS run.
+///
+/// `xsnap-platform.c`'s `fxAbort` longjmps to the nearest `mxTry` for every
+/// status listed here except `Unknown`, and `run_promise_jobs_metered`
+/// returns the status. This is the C-XS counterpart of the Ironhorse `Halt`
+/// abort variants; [`XsAbort::is_panic`] is its one membership predicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum XsAbort {
+    /// `XS_JAVASCRIPT_STACK_OVERFLOW_EXIT`: the emulated JS stack overflowed
+    /// (Ironhorse `Halt::StackOverflow`).
+    StackOverflow,
+    /// `XS_NATIVE_STACK_OVERFLOW_EXIT`: the C stack guard fired (Ironhorse
+    /// `Halt::ReentryLimit`).
+    NativeStackOverflow,
+    /// `XS_TOO_MUCH_COMPUTATION_EXIT`: the crank's hard meter limit refused
+    /// more computation (Ironhorse `Halt::MeterAbort`).
+    MeterAbort,
+    /// `XS_NOT_ENOUGH_MEMORY_EXIT`: the heap could not grow (Ironhorse
+    /// `Halt::HeapExhausted`).
+    OutOfMemory,
+    /// `XS_NO_MORE_KEYS_EXIT`: the property-key table is exhausted, a heap
+    /// exhaustion of a different table.
+    NoMoreKeys,
+    /// `XS_UNHANDLED_EXCEPTION_EXIT`: a JS throw escaped every handler. Not
+    /// a panic: catchable in principle.
+    UnhandledException,
+    /// `XS_UNHANDLED_REJECTION_EXIT`: an unhandled rejection was promoted
+    /// to an abort. Not a panic: a guest-level error.
+    UnhandledRejection,
+    /// Any other status. Not a member of the panic category, but the
+    /// adapter fails closed and discards the crank.
+    Unknown(i32),
+}
+
+impl XsAbort {
+    /// Classify an `fxAbort` exit status.
+    pub fn from_status(status: i32) -> XsAbort {
+        match status {
+            ffi::XS_JAVASCRIPT_STACK_OVERFLOW_EXIT => XsAbort::StackOverflow,
+            ffi::XS_NATIVE_STACK_OVERFLOW_EXIT => XsAbort::NativeStackOverflow,
+            ffi::XS_TOO_MUCH_COMPUTATION_EXIT => XsAbort::MeterAbort,
+            ffi::XS_NOT_ENOUGH_MEMORY_EXIT => XsAbort::OutOfMemory,
+            ffi::XS_NO_MORE_KEYS_EXIT => XsAbort::NoMoreKeys,
+            ffi::XS_UNHANDLED_EXCEPTION_EXIT => XsAbort::UnhandledException,
+            ffi::XS_UNHANDLED_REJECTION_EXIT => XsAbort::UnhandledRejection,
+            other => XsAbort::Unknown(other),
+        }
+    }
+
+    /// The `fxAbort` exit status this abort was classified from.
+    pub fn status(self) -> i32 {
+        match self {
+            XsAbort::StackOverflow => ffi::XS_JAVASCRIPT_STACK_OVERFLOW_EXIT,
+            XsAbort::NativeStackOverflow => ffi::XS_NATIVE_STACK_OVERFLOW_EXIT,
+            XsAbort::MeterAbort => ffi::XS_TOO_MUCH_COMPUTATION_EXIT,
+            XsAbort::OutOfMemory => ffi::XS_NOT_ENOUGH_MEMORY_EXIT,
+            XsAbort::NoMoreKeys => ffi::XS_NO_MORE_KEYS_EXIT,
+            XsAbort::UnhandledException => ffi::XS_UNHANDLED_EXCEPTION_EXIT,
+            XsAbort::UnhandledRejection => ffi::XS_UNHANDLED_REJECTION_EXIT,
+            XsAbort::Unknown(status) => status,
+        }
+    }
+
+    /// Whether this abort is a member of the formal panic category (design
+    /// § The Formal `Panic` Category): an uncatchable engine-limit
+    /// termination. The two unhandled-error exits are guest-level errors,
+    /// and an unknown status is not claimed as a panic.
+    pub fn is_panic(self) -> bool {
+        match self {
+            XsAbort::StackOverflow
+            | XsAbort::NativeStackOverflow
+            | XsAbort::MeterAbort
+            | XsAbort::OutOfMemory
+            | XsAbort::NoMoreKeys => true,
+            XsAbort::UnhandledException
+            | XsAbort::UnhandledRejection
+            | XsAbort::Unknown(_) => false,
+        }
+    }
+}
+
+impl std::fmt::Display for XsAbort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            XsAbort::StackOverflow => write!(f, "JavaScript stack overflow"),
+            XsAbort::NativeStackOverflow => write!(f, "native stack overflow"),
+            XsAbort::MeterAbort => write!(f, "meter limit exceeded"),
+            XsAbort::OutOfMemory => write!(f, "out of memory"),
+            XsAbort::NoMoreKeys => write!(f, "property-key table exhausted"),
+            XsAbort::UnhandledException => write!(f, "unhandled exception"),
+            XsAbort::UnhandledRejection => write!(f, "unhandled rejection"),
+            XsAbort::Unknown(status) => write!(f, "abort status {status}"),
+        }
+    }
 }
 
 impl std::fmt::Display for XsnapError {
@@ -1057,6 +1162,9 @@ impl std::fmt::Display for XsnapError {
                 }
                 None => write!(f, "worker panicked: {message}"),
             },
+            XsnapError::Aborted { abort, computrons } => {
+                write!(f, "worker aborted: {abort} (used {computrons} computrons)")
+            }
         }
     }
 }
@@ -1871,6 +1979,9 @@ pub fn run_xs_program(
     // panic-injection harness (tracked follow-on; the `guard_ffi` unit suite
     // pins the poison/short-circuit mechanics these checkpoints consume).
     let mut ffi_death: Option<worker_io::FfiPanic> = None;
+    // The `fxAbort` exit that ended the supervised run, with the crank's meter
+    // reading; surfaced as `XsnapError::Aborted` after teardown.
+    let mut xs_abort: Option<(XsAbort, u64)> = None;
 
     // A guarded `extern "C"` callback can panic during *bootstrap eval*
     // above — the bundle's own guest JS calls `hostBase64Decode`,
@@ -1952,7 +2063,7 @@ pub fn run_xs_program(
             // drain inbound envelopes. If after draining we still have
             // fresh jobs, repeat. When both promise jobs and envelopes
             // are exhausted, break.
-            let mut metering_abort = false;
+            let mut abort_status: Option<i32> = None;
             loop {
                 // Drain all ready promise jobs (multiple turns may be
                 // needed as resolving one promise can queue another).
@@ -1964,11 +2075,12 @@ pub fn run_xs_program(
                         Ok(()) => {}
                         Err(status) => {
                             eprintln!(
-                                "{label}: metering abort (status {status}) \
+                                "{label}: {} (status {status}) \
                                  after {} computrons",
+                                XsAbort::from_status(status),
                                 machine.current_computrons()
                             );
-                            metering_abort = true;
+                            abort_status = Some(status);
                             break;
                         }
                     }
@@ -1977,7 +2089,7 @@ pub fn run_xs_program(
                     }
                 }
 
-                if metering_abort {
+                if abort_status.is_some() {
                     break;
                 }
 
@@ -2095,9 +2207,13 @@ pub fn run_xs_program(
                 break 'outer;
             }
 
-            if metering_abort {
+            if let Some(status) = abort_status {
+                // The meter report keeps its worker-death spelling; the run's
+                // return value carries which exit fired.
                 send_meter_report(steps, "terminated");
-                eprintln!("{label}: terminated by metering (used {steps} computrons)");
+                let abort = XsAbort::from_status(status);
+                eprintln!("{label}: terminated by {abort} (used {steps} computrons)");
+                xs_abort = Some((abort, steps));
                 break 'outer;
             }
 
@@ -2134,6 +2250,9 @@ pub fn run_xs_program(
             message: ffi_panic.message,
             location: ffi_panic.location,
         });
+    }
+    if let Some((abort, computrons)) = xs_abort {
+        return Err(XsnapError::Aborted { abort, computrons });
     }
     Ok(())
 }
@@ -4957,6 +5076,42 @@ mod tests {
             ),
         }
 
+        machine.end_metering();
+    }
+
+    #[test]
+    fn xs_abort_classifies_every_fxabort_exit() {
+        use XsAbort::*;
+        let cases = [
+            (ffi::XS_JAVASCRIPT_STACK_OVERFLOW_EXIT, StackOverflow, true),
+            (ffi::XS_NATIVE_STACK_OVERFLOW_EXIT, NativeStackOverflow, true),
+            (ffi::XS_TOO_MUCH_COMPUTATION_EXIT, MeterAbort, true),
+            (ffi::XS_NOT_ENOUGH_MEMORY_EXIT, OutOfMemory, true),
+            (ffi::XS_NO_MORE_KEYS_EXIT, NoMoreKeys, true),
+            (ffi::XS_UNHANDLED_EXCEPTION_EXIT, UnhandledException, false),
+            (ffi::XS_UNHANDLED_REJECTION_EXIT, UnhandledRejection, false),
+            (ffi::XS_FATAL_CHECK_EXIT, Unknown(ffi::XS_FATAL_CHECK_EXIT), false),
+        ];
+        for (status, abort, panic) in cases {
+            assert_eq!(XsAbort::from_status(status), abort, "status {status}");
+            assert_eq!(abort.status(), status, "{abort:?} must round-trip");
+            assert_eq!(abort.is_panic(), panic, "{abort:?} panic membership");
+        }
+    }
+
+    #[test]
+    fn metered_stack_overflow_is_not_classified_as_a_meter_abort() {
+        let machine = new_machine();
+        machine.begin_metering(DEFAULT_METERING_INTERVAL);
+        set_crank_limit(0);
+        machine.set_meter(0);
+        machine
+            .eval("Promise.resolve().then(function f() { return f() + 1; })")
+            .expect("promise creation should succeed");
+        let status = machine
+            .run_promise_jobs_metered()
+            .expect_err("unbounded recursion must abort");
+        assert_eq!(XsAbort::from_status(status), XsAbort::StackOverflow);
         machine.end_metering();
     }
 

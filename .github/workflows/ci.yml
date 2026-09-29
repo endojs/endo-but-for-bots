@@ -705,9 +705,14 @@ jobs:
         # Two commands, not one: a filter argument applies to every
         # selected target, so folding it into the line above would
         # silently filter the three integration suites down to nothing.
+        #
+        # `worker_outcome::` and `inproc::` are the C-XS adapter's outcome
+        # classification and its live retire-path tests (designs/ironhorse-panic.md
+        # § Architectural Boundary); their bundles define every global the
+        # live loop evaluates, so they stay clear of the `eval` defect above.
         run: |
           cargo test --locked -p endo --features ironhorse-engine --test ironhorse_store_worker --test ironhorse_runtime_compiler --test js_machine_trait
-          cargo test --locked -p endo --features ironhorse-engine --lib ironhorse_engine::
+          cargo test --locked -p endo --features ironhorse-engine --lib -- ironhorse_engine:: worker_outcome:: inproc::
 
   # Skip entire jobs, including the runner matrix, on unrelated PRs/pushes.
   format-ironhorse:

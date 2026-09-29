@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
@@ -6,6 +6,7 @@ use tokio::task::JoinHandle;
 
 use crate::mailbox::{self, Mailbox, MailboxReceiver};
 use crate::types::{Handle, MeterMode, MeterState, Message, RateLimit, WorkerInfo};
+use crate::worker_outcome::{CrankDisposition, WorkerOutcome};
 
 /// State for a suspended worker.
 ///
@@ -43,7 +44,13 @@ pub struct Supervisor {
     outbox: Mutex<Option<Mailbox>>,
     next_handle: AtomicI64,
     done: Mutex<Option<JoinHandle<()>>>,
+    /// The most recent retired workers' outcomes, newest last, capped at
+    /// [`RETIRED_OUTCOMES`] so a long-running daemon does not grow it.
+    retired: Mutex<VecDeque<(Handle, WorkerOutcome)>>,
 }
+
+/// How many retired-worker outcomes the supervisor keeps for inspection.
+const RETIRED_OUTCOMES: usize = 64;
 
 impl Supervisor {
     /// Create a new supervisor, returning it and the outbox receiver
@@ -60,6 +67,7 @@ impl Supervisor {
             outbox: Mutex::new(Some(outbox_tx)),
             next_handle: AtomicI64::new(1),
             done: Mutex::new(None),
+            retired: Mutex::new(VecDeque::new()),
         });
         (sup, outbox_rx)
     }
@@ -82,6 +90,40 @@ impl Supervisor {
         self.workers.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.parents.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
         self.meters.write().unwrap_or_else(|e| e.into_inner()).remove(&h);
+    }
+
+    /// Retire a worker whose run has ended, consuming its classified
+    /// outcome (design `designs/ironhorse-panic.md` § Architectural
+    /// Boundary). The supervisor reads only the outcome's arm: it
+    /// unregisters the worker (a suspended worker's record survives in the
+    /// suspended set), records the outcome, and returns the crank
+    /// disposition. Discarding embargoed
+    /// effects and the restore/replay policy act on that disposition in
+    /// later slices; today no outbound effect is staged, so there is
+    /// nothing to discard.
+    pub fn retire(&self, h: Handle, outcome: WorkerOutcome) -> CrankDisposition {
+        let disposition = outcome.disposition();
+        if disposition != CrankDisposition::Commit {
+            eprintln!("endor: worker {h} {outcome}; crank disposition {disposition:?}");
+        }
+        self.unregister(h);
+        let mut retired = self.retired.lock().unwrap_or_else(|e| e.into_inner());
+        if retired.len() == RETIRED_OUTCOMES {
+            retired.pop_front();
+        }
+        retired.push_back((h, outcome));
+        disposition
+    }
+
+    /// The outcome a retired worker's run ended with, if it is among the
+    /// most recently retired.
+    pub fn retired_outcome(&self, h: Handle) -> Option<WorkerOutcome> {
+        let retired = self.retired.lock().unwrap_or_else(|e| e.into_inner());
+        retired
+            .iter()
+            .rev()
+            .find(|(handle, _)| *handle == h)
+            .map(|(_, outcome)| outcome.clone())
     }
 
     pub fn set_parent(&self, child: Handle, parent: Handle) {
