@@ -268,8 +268,15 @@ revised 2026-05-29; implementation progress section reads the trio as
 shipped (Phases 0-5 + bulk-archive via #364/#365/#367), keeps the
 pin-algorithm caching forward-design note, and points the fix/test/
 legibility follow-ups to issue #378),
+[daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md)
+(added 2026-09-29; the next `daemon-git-remotes` slice: a host method that
+splits a minion.town git capability URL into a non-extractable
+`BasicCredential` and a credential-free endpoint, plus redaction of the
+embedded-credential rejection that currently echoes the token; also splits
+the minion.town § 12 dependency into its client half (this stack) and its
+server half (minion.town increment 1 today, a daemon design to be filed)),
 [daemon-git-remotes](daemon-git-remotes.md) (added 2026-05-18, revised
-2026-05-29; implementation progress section reads #365 + #368 as shipped,
+2026-05-29 and 2026-09-29; implementation progress section reads #365 + #368 as shipped,
 keeps the `LC_ALL=C` and porcelain-flag-gating design spec and the
 `setUrl` / Windows-port forward-design, and points the fix/test/
 legibility follow-ups to issue #378),
@@ -371,7 +378,8 @@ LLM-agent stack).*
 | [daemon-content-store-gc](daemon-content-store-gc.md) | 2026-03-20 | 2026-05-08 | **Complete** |
 | [daemon-git-capability](daemon-git-capability.md) | 2026-05-18 | 2026-07-06 | In Progress |
 | [exo-git-follow-root-advancement](exo-git-follow-root-advancement.md) | 2026-07-29 | 2026-08-24 | **Complete** |
-| [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-05-29 | In Progress |
+| [daemon-git-remotes](daemon-git-remotes.md) | 2026-05-18 | 2026-09-29 | In Progress |
+| [daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md) | 2026-09-29 | 2026-09-29 | Proposed |
 | [daemon-git-next-steps](daemon-git-next-steps.md) | 2026-05-27 | 2026-06-03 | In Progress |
 | [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) | 2026-09-08 | 2026-09-22 | **Implemented** |
 | [endo-content-locators-magnet-urn](endo-content-locators-magnet-urn.md) | 2026-07-10 | 2026-07-10 | In Progress |
@@ -569,7 +577,7 @@ LLM-agent stack).*
 | [thixotrope/message-delivery](../packages/thixotrope/designs/message-delivery.md) | 2026-09-08 | — | **Implemented** |
 | [thixotrope/vat-replacement](../packages/thixotrope/designs/vat-replacement.md) | 2026-09-08 | — | Proposed (exploratory) |
 
-**Current totals (2026-09-27 full corpus reconciliation):** 76 Complete/Implemented, 83 In Progress, 19 Not Started, 23 Proposed, 3 Active, 20 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**240 indexed records**). The bucket sum is 240. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase.
+**Current totals (2026-09-27 full corpus reconciliation):** 76 Complete/Implemented, 83 In Progress, 19 Not Started, 23 Proposed, 3 Active, 20 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**240 indexed records**). The bucket sum is 240. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase. Since that pass, [daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md) (Proposed, 2026-09-29) was added, making 24 Proposed and **241 indexed records**.
 
 ## Roadmap
 
@@ -815,6 +823,7 @@ flowchart TD
         dgit[daemon-git-capability]
         dgitfollow[exo-git-follow-root-advancement<br/><i>COMPLETE</i>]
         dgitremote[daemon-git-remotes]
+        dgitcapurl[daemon-git-remote-capability-urls<br/><i>PROPOSED</i>]
         dgitnext[daemon-git-next-steps]
         dfsw[filesystem-watchers<br/><i>COMPLETE</i>]
         dcsgc[daemon-content-store-gc<br/><i>COMPLETE</i>]
@@ -846,6 +855,7 @@ flowchart TD
         dgit --> dgitremote
         dgit --> dgitnext
         dgitremote --> dgitnext
+        dgitremote --> dgitcapurl
         pfs --> dci
         pfs --> dfsw
         dmount --> dfsw
@@ -1048,10 +1058,13 @@ halves and their directly-dependent companions as its first-to-land work:
   `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR
   [#41](https://github.com/kriscendobot/minion.town/pull/41), merged
   2026-08-18); its § 12 named the endo-side follow-on as "named but not
-  actioned." That follow-on is exactly the git trio already in this
+  actioned." Its client half is the git trio already in this
   milestone (`daemon-git-capability`, `daemon-git-remotes`,
   `daemon-git-next-steps`) plus the `daemon-agent-tools` `makeGitRemoteTool`
-  push tier (#705), and its Rust smart-HTTP backing is
+  push tier (#705) and capability-URL adoption
+  ([daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md),
+  the next slice); its server half runs today in minion.town's deployed
+  increment 1, and its Rust smart-HTTP backing is
   [endor-git-bindings](endor-git-bindings.md) (home M11, revised
   2026-08-14 after this Minion Town review — the shared `rust/endor-git`
   contract backs Minion Town's smart-HTTP adapter). Read-side companion is
@@ -1099,9 +1112,10 @@ docker-selfhost, the rest of agent-tools) keep their places behind them.
 | snapshot-mapper | **Complete** (consolidated into `@endo/exo-npm`) | Layer 3 of 4. `mapSnapshot` lane in `packages/daemon/` that translates `(RegistryResolution, EndoMount)` into a `CompartmentMap` via `compartment-mapper`'s package-descriptor walker (one new extension point in `compartment-mapper`). `makeMountReadPowers` and the compartment-mapper archive-precedent layout (top-level `compartment-map.json` plus peer directories named by package; `<name>@<version>/` for registry-resolved entries, bare `<name>/` for workspace members) |
 | daemon-git-capability | In Progress | Revised git design over `EndoMount` / `EndoMountEntry`; `tree(ref)` and `readOnly()` both live on the `Git` cap |
 | exo-git-follow-root-advancement | **Complete** | Extends `@endo/platform/fs` with tree identity, atomic method-call transactions, high-level patches, and separate lossless-change / lossy-latest root followers; `GitStage` adds tentative commit metadata and a mutable root whose explicit `commit()` advances the corresponding Git followers |
-| daemon-git-remotes | In Progress | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps |
+| daemon-git-remotes | In Progress | MVP remote-git companion: fetch / pull / push composed from local `Git`, bounded HTTPS transport, endpoint policy, and credential caps. Phases 1–5 landed (#365, #368, #538, #706, hardening through #1145); next slice is [daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md): adopt a minion.town capability URL as a `GitRemote` without exposing its token |
+| daemon-git-remote-capability-urls | Proposed | Next `daemon-git-remotes` slice: `EndoHost.provideGitCapabilityCredential` adopts a minion.town git capability URL as a non-extractable `BasicCredential` plus a credential-free endpoint for the landed `provideGitRemote` / `provideGitClone`, and redacts the token from the landed embedded-credential rejection. Closes the client half of the M3 exit criterion's capability-addressed `git push` using only landed substrate |
 | daemon-git-next-steps | In Progress | The version-controlled filesystem loop milestone over the canonical trio: north-star agent loop (provide workspace -> read/list/edit -> status/diff -> commit -> pull/push -> inspect history via `filesystemAt(ref)`) and the content/versioning/network/historical-read/bulk-storage layer split. Open `- [ ]` work: worked bot-fork reference flow, `provideGitClone` + identity boundary (-> `daemon-git-clone.md`), `tree(ref)`/`filesystemAt(ref)` reconciliation. The linked-worktree worked example is complete. Agent-tools layer deferred to #416 |
-| **git-remote-capability** *(minion.town #41)* | **Complete** (design) / Not Started (endo impl) | **Client-side bridge, top priority (carved 2026-09-03).** The capability-addressed git remote: `git push` into an Endo directory over a capability URL, so an artifact crosses the bridge with no MCP-tool-call byte marshaling. Design lives in `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR [#41](https://github.com/kriscendobot/minion.town/pull/41), merged 2026-08-18; spec only). Its § 12 endo-side follow-on **is** the git trio above + the `daemon-agent-tools` `makeGitRemoteTool` push tier (#705); the Rust smart-HTTP backing is `endor-git-bindings` (home M11). Cross-repo companion row; counted in its home repo, listed here as the design driving this milestone's git substrate. |
+| **git-remote-capability** *(minion.town #41)* | **Complete** (design) / Not Started (endo impl) | **Client-side bridge, top priority (carved 2026-09-03).** The capability-addressed git remote: `git push` into an Endo directory over a capability URL, so an artifact crosses the bridge with no MCP-tool-call byte marshaling. Design lives in `kriscendobot/minion.town` `designs/git-remote-capability.md` (PR [#41](https://github.com/kriscendobot/minion.town/pull/41), merged 2026-08-18; spec only). Its § 12 endo-side follow-on splits in two. The **client** half is the git trio above + the `daemon-agent-tools` `makeGitRemoteTool` push tier (#705), plus capability-URL adoption ([daemon-git-remote-capability-urls](daemon-git-remote-capability-urls.md), the next slice). The **server** half (partition primitive, URL minting and revocation, git-object ↔ CAS database) is served today by minion.town's own deployed increment 1 (#86, `git.minion.town`); moving it into the daemon is a separate design, to be filed, backed in Rust by `endor-git-bindings` (home M11). Cross-repo companion row; counted in its home repo, listed here as the design driving this milestone's git substrate. |
 | **endo-claude** | In Progress | **Client-side bridge, top priority (carved 2026-09-03; moved here from M6).** A confined `claude -p` that *is* an Endo guest's inference engine, reaching only that one guest's facet as its whole tool surface — the in-guest agent that acts directly on the daemon side instead of marshaling everything across the bridge by value. Confinement is a **combination** of Claude Code flags (`--bare` + `--strict-mcp-config` + `--setting-sources ""` + `--tools ""` + `--disable-slash-commands`), a membership-validated facet-derived `mcp__<server>__<tool>` allow-list, never `--resume`, inside a required `@endo/claude-sandbox` OS slice. Confinement core in flight as PR [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (open draft: `@endo/claude` + `@endo/claude-sandbox`, 56 passing tests, per design PR #995). Consumes the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone) as its prerequisite — its true dependency lives here, which is why the 2026-09-03 groom moved it from M6 into M3. |
 | **endo-guest-stdio-mcp** | In Progress | **Client-side bridge (arc [kriscendobot/garden#89](https://github.com/kriscendobot/garden/issues/89) item 5).** The stdio MCP server the confined `endo-claude` process reaches. Revised 2026-09-17 per the PR #1226 review to a **single claude-spawned process** (no per-guest socket, named pipe, or broker): it reads the guest's 64-hex formula id from its environment (threaded from the MCP config, never the MCP wire), uses the ordinary Endo daemon client to reach the bootstrap root host, resolves that one guest's facet, pins the pruned `tools/list` snapshot, and rejects any `tools/call` outside it. Owns the server side of `endo-claude`'s pinned-catalog contract and the server-hosting seam it names as a prerequisite; the neighboring MCP designs (`endo-gateway-mcp`, `daemon-agent-tools`, and the minion.town trio) are all HTTP-plus-OAuth. Composes with the `@endo/agent-tools` MCP-adapter projection (`endo-agent-tools`, this milestone). Isolation is per-process, per-call; cross-guest isolation is now runtime (formula-id secrecy) rather than structural, with the ocapn offset-0 gateway / broker retained as the multi-tenant hardening path. Fail-closed: empty/underivable catalog is a construction throw. Names honor the reconciled flat namespace from `kriscendobot/minion.town` PR #79. |
 | ~~daemon-guest-bot-incarnation~~ | **Implemented** | Landed generically in [#1306](https://github.com/endojs/endo-but-for-bots/pull/1306): `provideGuest(..., { pins })` installs a caller-elected guest `@pins` directory, and every mailbox delivery best-effort reincarnates its values before publishing the message notification. A deployment pins an ordinary responder formulated with the guest as its powers; the earlier `GuestFormula.bot`, `EndoBot`, supervisor, startup scan, and daemon-level breaker proposal is retired. Design reconciliation remains in PR [#1227](https://github.com/endojs/endo-but-for-bots/pull/1227). |
@@ -1595,6 +1609,7 @@ an explicit accounting disposition.
 | `llm-dev-publish` | M, 4-5 days | M10 |
 | `mount-stream-glob-grep` | M, 4-5 days | M3 |
 | `reviewed-change-workflow` | M, 4-5 days | M3 |
+| `daemon-git-remote-capability-urls` (added 2026-09-29) | S, 1-2 days | M3 |
 | `chat/outliner-confinement-migration` | Implemented, none | M9 |
 | `chat/outliner_drag_and_drop` | Implemented, none | M9 |
 | `chat/preact-confinement-migration` | S-M, 3-5 days | M9 |
