@@ -93,6 +93,39 @@ mismatch, an out-of-set model); every per-call outcome — including admission
 failure and cancellation — resolves to a hardened, passable tagged record and
 never rejects.
 
+## One confined turn
+
+```js
+import { runConfinedTurn } from '@endo/claude';
+
+const result = await runConfinedTurn({
+  formulaId,            // the guest's 64-hex formula number
+  credential,           // presented through the apiKeyHelper only
+  prompt,               // delivered on stdin
+  model: 'claude-sonnet-4-5',
+  claudePath: '/usr/local/bin/claude', // the pinned binary, or a sandbox wrapper
+});
+```
+
+The `endo-claude-turn` bin does the same thing. It takes `--formula-id`,
+`--model`, `--claude`, and `--credential-file`, reads the prompt from stdin,
+and writes the tagged result as JSON.
+
+`runConfinedTurn` opens the ordinary daemon client in the harness process and
+starts `@endo/agent-mcp-stdio`'s `startGuestBroker` for the one guest. It then
+runs `make(...)` with concrete seams: `makeSpawnFilesPreparer` writes the `0600`
+`--mcp-config` / `--settings` / credential files, whose `apiKeyHelper` is
+`/bin/cat` of the credential file, and `makeLaunch` spawns `claude` directly
+with the constructed environment, the three bounds, and the process group. The
+launch seam parses `--output-format stream-json --verbose` with
+`parseClaudeStreamJson`. A turn succeeds only on exactly one terminal
+`result`. A `result` from a background task does not count. A truncated or
+malformed stream is a `parse-error`, or a `nonzero-exit` if the process failed.
+`error_max_turns` maps to `limit-exceeded: max-turns`, and a rate-limit result
+maps to `rate-limited`, with `retryAfterMs` taken from the last
+`rate_limit_event`. Every exit path closes the broker, the daemon session, and
+the files.
+
 ## Two transports
 
 - **Preferred (v1): a claude-spawned stdio adapter reaching a separate,
@@ -122,11 +155,22 @@ an inherited `ANTHROPIC_API_KEY` cannot silently bypass the pool.
 
 This increment is honest about what it does **not** yet do:
 
-- **The confined `@endo/agent-mcp-stdio` hosting seam** — the MCP projection and
-  single-tenant stdio server have landed, including `makeGuestMcpServer`, but the
-  harness-owned broker or scoped bootstrap outside the sandbox slice and its
-  private relay into the confined process tree remain to be built. The package's
-  injected `connectBroker` / `transport` boundary is the seam for that work.
+- **Kernel-level confinement of the `claude` tree.** `runConfinedTurn` (below)
+  builds the harness side of the confined shape: the daemon connection, its
+  socket path, and the formula id stay in the harness, and the confined tree
+  gets only a guest-pinned broker socket and an empty-environment relay. Making
+  the daemon socket *structurally* unreachable is still the job of the
+  `@endo/claude-sandbox` / `@endo/sandbox` slice that wraps `claudePath`. That
+  slice must bind the broker and per-spawn directories and supply a scratch
+  home, because the constructed environment carries no `HOME`.
+- **Config through `/dev/fd`.** The design prefers a pipe- or `memfd`-backed
+  `--mcp-config` path. The spawn files are `0600` files in a `0700` directory,
+  removed on every exit path, until a live check shows that the pinned CLI reads
+  `--settings` only once.
+- **Fail-fast on authentication retries.** A rejected credential makes
+  `claude` retry `401`s for minutes (endojs/endo-but-for-bots#1369 gap 11). The
+  launch seam only sees the terminal `result`, so such a turn ends as
+  `limit-exceeded: wall-clock`.
 - **A live negative-and-positive confinement test** against a real `claude -p`:
   no built-in runs, no `/skill-name` resolves, no other MCP server is reachable,
   an unanchored `mcp__*` grants nothing — *and* the guest's tools do invoke, an

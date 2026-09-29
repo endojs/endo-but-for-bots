@@ -16,11 +16,15 @@ taxonomy, logging facet) in `packages/agent-tools/src/adapters/mcp.js`, and the
 names, files, locators, search over held mounts, evaluators, mail, and bounded
 pulls from followed streams), the harness-side
 `--mcp-config`/`--allowedTools` renderers, and the `stream-json` signal parser in
-`packages/agent-mcp-stdio`. The confined shape's harness-owned connection (the
-broker or scoped bootstrap outside the sandbox slice) and its structural
-socket-denial test remain to be built with [endo-claude](endo-claude.md) and
-[endo-posix-sandbox](endo-posix-sandbox.md); `makeGuestMcpServer` is the entry
-point that shape binds to a facet it already holds.
+`packages/agent-mcp-stdio`. The confined shape's harness side is also
+implemented. It is a two-process broker: `startGuestBroker` holds the daemon
+connection outside the confined tree and serves one guest on a private Unix
+socket, and the claude-spawned `relay.mjs` starts under `env -i`. `@endo/claude`'s
+`runConfinedTurn` composes these with the confinement argv, the constructed
+environment, and the stream-json launch. Still to be built are the kernel-level
+slice that makes the daemon socket structurally unreachable
+([endo-posix-sandbox](endo-posix-sandbox.md)) and the daemon-issued
+guest-scoped bootstrap that would replace the root-host `lookupById`.
 
 The design's 64-hex formula id is the daemon's formula *number*; the daemon's
 full identifier is `<number>:<node>`. The server accepts either form and

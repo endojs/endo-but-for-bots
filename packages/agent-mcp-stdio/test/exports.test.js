@@ -7,7 +7,9 @@ test('the package entry re-exports exactly its public surface', async t => {
   t.deepEqual(
     Object.keys(entry).sort(),
     [
+      'BROKER_SOCKET_NAME',
       'FORMULA_ID_ENV',
+      'RELAY_PATH',
       'SERVER_LABEL',
       'connectToDaemon',
       'constructGuestMcpServer',
@@ -16,12 +18,14 @@ test('the package entry re-exports exactly its public surface', async t => {
       'makeGuestMcpServer',
       'makeLineWriter',
       'makeMcpConfig',
+      'makeRelayTransport',
       'parseClaudeStreamJson',
       'readFormulaId',
       'renderGuestAllowedTools',
       'requiredGuestMethods',
       'resolveGuest',
       'serveStdio',
+      'startGuestBroker',
     ],
     '@endo/agent-mcp-stdio export surface',
   );

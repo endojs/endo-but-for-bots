@@ -25,6 +25,9 @@
   },
   "type": "module",
   "main": "./index.js",
+  "bin": {
+    "endo-claude-turn": "./bin/endo-claude-turn.js"
+  },
   "exports": {
     ".": {
       "types": "./claude.types.d.ts",
@@ -45,15 +48,17 @@
     "test:xs": "exit 0"
   },
   "dependencies": {
+    "@endo/agent-mcp-stdio": "workspace:^",
     "@endo/agent-tools": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
+    "@endo/init": "workspace:^",
     "@endo/pass-style": "workspace:^",
     "@endo/patterns": "workspace:^"
   },
   "devDependencies": {
-    "@endo/init": "workspace:^",
+    "@endo/promise-kit": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
@@ -69,7 +74,8 @@
     "SECURITY*",
     "dist",
     "lib",
-    "src"
+    "src",
+    "bin"
   ],
   "publishConfig": {
     "access": "public"
