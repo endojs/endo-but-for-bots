@@ -1,5 +1,5 @@
 //! Native-owned guest boundaries: handler isolation and caught-throw cleanup.
-use super::{Halt, Interp, Slot, Step};
+use super::{Halt, Interp, PanicKind, Slot, Step};
 
 /// Whether guest execution owns a native catch boundary or shares its caller's.
 #[derive(Clone, Copy)]
@@ -36,12 +36,14 @@ impl Interp {
         }
         let fenced_jumps = std::mem::take(&mut self.jumps);
         let outcome = match body(self) {
-            Err(Step::Unwound(_)) => Err(Step::Host(Halt::EngineInvariant(
+            Err(Step::Unwound(_)) => Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "native-try:resume-escaped-fence",
-            ))),
-            Ok(_) | Err(Step::Threw { .. }) if !self.jumps.is_empty() => Err(Step::Host(
-                Halt::EngineInvariant("native-try:handlers-left-behind"),
-            )),
+            )))),
+            Ok(_) | Err(Step::Threw { .. }) if !self.jumps.is_empty() => {
+                Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "native-try:handlers-left-behind",
+                ))))
+            }
             outcome => outcome,
         };
         self.jumps = fenced_jumps;
@@ -90,7 +92,7 @@ impl Interp {
 
 #[cfg(test)]
 mod tests {
-    use super::{CallerHandlers, Halt, Interp, Slot, Step};
+    use super::{CallerHandlers, Halt, Interp, PanicKind, Slot, Step};
     use crate::interp::{CatchJump, ResumeTarget};
 
     fn handler(target_pc: usize) -> CatchJump {
@@ -129,9 +131,9 @@ mod tests {
             assert!(
                 matches!(
                     outcome,
-                    Err(Step::Host(Halt::EngineInvariant(
+                    Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                         "native-try:handlers-left-behind"
-                    )))
+                    ))))
                 ),
                 "leave_by_throw={leave_by_throw}"
             );
@@ -148,9 +150,12 @@ mod tests {
         vm.jumps.push(handler(123));
         let outcome = vm.run_guest_under_native_try::<()>(CallerHandlers::Isolate, |machine| {
             machine.jumps.push(handler(456));
-            Err(Step::Host(Halt::MeterAbort))
+            Err(Step::Host(Halt::Panic(PanicKind::MeterAbort)))
         });
-        assert!(matches!(outcome, Err(Step::Host(Halt::MeterAbort))));
+        assert!(matches!(
+            outcome,
+            Err(Step::Host(Halt::Panic(PanicKind::MeterAbort)))
+        ));
         assert_eq!(vm.jumps.len(), 1);
         assert_eq!(vm.jumps[0].target_pc, 123);
     }
@@ -194,9 +199,9 @@ mod tests {
         });
         assert!(matches!(
             outcome,
-            Err(Step::Host(Halt::EngineInvariant(
+            Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "native-try:resume-escaped-fence"
-            )))
+            ))))
         ));
         assert_eq!(vm.jumps.len(), 1);
         assert_eq!(vm.jumps[0].target_pc, 123);

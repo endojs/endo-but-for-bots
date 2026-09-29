@@ -112,7 +112,7 @@ impl Interp {
         for i in 0..len {
             self.meter.tick_builtin();
             if self.check_meter() == MeterCheck::Abort {
-                return Err(Step::Host(Halt::MeterAbort));
+                return Err(Step::Host(Halt::Panic(PanicKind::MeterAbort)));
             }
             let element = self.arraylike_index(code, inst, i, value)?;
             if element.kind != Kind::String && element.kind != Kind::Symbol {

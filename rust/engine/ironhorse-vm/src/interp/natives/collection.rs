@@ -53,9 +53,9 @@ impl Interp {
                 CollKind::WeakSet
             }
             _ => {
-                return Err(Step::Host(Halt::EngineInvariant(
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "collection:unexpected-method",
-                )))
+                ))))
             }
         };
         let inst = match self.collection_ref(this) {
@@ -170,9 +170,9 @@ impl Interp {
                     None => Ok(Slot::boolean(false)),
                 }
             }
-            _ => Err(Step::Host(Halt::EngineInvariant(
+            _ => Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "collection:unexpected-method",
-            ))),
+            )))),
         }
     }
 
@@ -570,7 +570,9 @@ impl Interp {
                 }
             }
         }
-        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+        Err(Step::Host(Halt::Panic(PanicKind::StepLimit(
+            self.n_dispatched,
+        ))))
     }
 
     /// Build a String Iterator over the UTF-16BE `bytes` (`fx_String_prototype_
@@ -702,9 +704,9 @@ impl Interp {
             self.intrinsics
                 .get("Iterator")
                 .copied()
-                .ok_or(Step::Host(Halt::EngineInvariant(
+                .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "Iterator:missing-constructor",
-                )))?;
+                ))))?;
         let iterator_ctor = Slot::of(Kind::Reference, Payload::Reference(iterator_ctor));
         if self.ordinary_has_instance(code, iterator_ctor, iterator)? {
             return Ok(iterator);
@@ -970,7 +972,9 @@ impl Interp {
         // but a guest-reachable frame should not be the one place that aborts
         // the process instead of unwinding the crank.
         let Some(iterator_id) = self.well_known_symbol_property_id("iterator") else {
-            return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-symbol")));
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "Iterator:helper-symbol",
+            ))));
         };
         let method =
             match self.array_from_try(|this| this.mop_get(code, inst, iterator_id, value))? {
@@ -1097,7 +1101,9 @@ impl Interp {
                 Slot::number(if limit == 0.0 { 0.0 } else { limit })
             }
             _ => {
-                return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-id")));
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "Iterator:helper-id",
+                ))));
             }
         };
 
@@ -1282,7 +1288,11 @@ impl Interp {
                 while remaining > 0.0 {
                     budget = match budget.checked_sub(1) {
                         Some(left) => left,
-                        None => return Err(Step::Host(Halt::StepLimit(self.n_dispatched))),
+                        None => {
+                            return Err(Step::Host(Halt::Panic(PanicKind::StepLimit(
+                                self.n_dispatched,
+                            ))))
+                        }
                     };
                     if remaining.is_finite() {
                         remaining -= 1.0;
@@ -1328,9 +1338,13 @@ impl Interp {
                         return Ok(Ok(Some(value)));
                     }
                 }
-                Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+                Err(Step::Host(Halt::Panic(PanicKind::StepLimit(
+                    self.n_dispatched,
+                ))))
             }
-            _ => Err(Step::Host(Halt::EngineInvariant("Iterator:helper-kind"))),
+            _ => Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "Iterator:helper-kind",
+            )))),
         }
     }
 
@@ -1399,7 +1413,9 @@ impl Interp {
             self.helper_set(holder, Self::HELPER_INNER, inner);
             self.helper_set(holder, Self::HELPER_INNER_NEXT, inner_next);
         }
-        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+        Err(Step::Host(Halt::Panic(PanicKind::StepLimit(
+            self.n_dispatched,
+        ))))
     }
 
     /// `%IteratorHelperPrototype%.return()`: the return completion the spec
@@ -1693,7 +1709,9 @@ impl Interp {
             }
             counter += 1;
         }
-        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+        Err(Step::Host(Halt::Panic(PanicKind::StepLimit(
+            self.n_dispatched,
+        ))))
     }
 
     /// `fx_MapIterator_prototype_next` / `fx_SetIterator_prototype_next`: yield
@@ -1820,11 +1838,11 @@ impl Interp {
         code: &[u8],
     ) -> Result<Slot, Step> {
         let _ = argc;
-        let expected =
-            self.collection_method_brand(base)
-                .ok_or(Step::Host(Halt::EngineInvariant(
-                    "collection:missing-method-brand",
-                )))?;
+        let expected = self
+            .collection_method_brand(base)
+            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "collection:missing-method-brand",
+            ))))?;
         let inst = match self.collection_ref(this) {
             Some(i) => i,
             None => return Err(self.collection_brand_error(expected, false)),
@@ -2287,9 +2305,9 @@ impl Interp {
                 }
                 Ok(Slot::boolean(true))
             }
-            _ => Err(Step::Host(Halt::EngineInvariant(
+            _ => Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "set-method:unexpected-method",
-            ))),
+            )))),
         }
     }
 
@@ -2321,9 +2339,9 @@ impl Interp {
                 (CollKind::WeakMap, true)
             }
             _ => {
-                return Err(Step::Host(Halt::EngineInvariant(
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "map-get-or-insert:unexpected-method",
-                )))
+                ))))
             }
         };
         let inst = match self.collection_ref(this) {
@@ -2400,9 +2418,9 @@ impl Interp {
                 }
                 Ok(value)
             }
-            _ => Err(Step::Host(Halt::EngineInvariant(
+            _ => Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "map-get-or-insert:unexpected-method",
-            ))),
+            )))),
         }
     }
 
@@ -2535,9 +2553,9 @@ impl Interp {
                 let iter_inst = match it.value {
                     Payload::Reference(x) => x,
                     _ => {
-                        return Err(Step::Host(Halt::EngineInvariant(
+                        return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                             "group-by:invalid-string-iterator",
-                        )))
+                        ))))
                     }
                 };
                 loop {
@@ -2656,9 +2674,9 @@ impl Interp {
                     let id = match key.value {
                         Payload::Reference(desc) => self.intern_symbol_key(desc)?,
                         _ => {
-                            return Err(Step::Host(Halt::EngineInvariant(
+                            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                                 "group-by:invalid-symbol-key",
-                            )))
+                            ))))
                         }
                     };
                     Slot::of(Kind::At, Payload::At(id, 0))
@@ -2667,9 +2685,9 @@ impl Interp {
                     let s = match key.value {
                         Payload::String(off) => SymbolName::from_units(&self.str_units(off)),
                         _ => {
-                            return Err(Step::Host(Halt::EngineInvariant(
+                            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                                 "group-by:invalid-string-key",
-                            )))
+                            ))))
                         }
                     };
                     if let Some(idx) = s.as_str().and_then(string_to_index) {
@@ -2680,9 +2698,9 @@ impl Interp {
                     }
                 }
                 _ => {
-                    return Err(Step::Host(Halt::EngineInvariant(
+                    return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                         "group-by:invalid-key-kind",
-                    )))
+                    ))))
                 }
             };
             // CreateDataPropertyOrThrow (enumerable/writable/configurable own).
@@ -2729,9 +2747,9 @@ impl Interp {
                 // surrogate pair, two (4 bytes) — `for...of` iterates by code point.
                 let i = st.index as usize;
                 if i + 2 > st.str_bytes.len() {
-                    return Err(Step::Host(Halt::EngineInvariant(
+                    return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                         "string-iterator:truncated-sequence",
-                    )));
+                    ))));
                 }
                 let hi = u16::from_be_bytes([st.str_bytes[i], st.str_bytes[i + 1]]);
                 let consumed = if (0xD800..=0xDBFF).contains(&hi) && i + 4 <= st.str_bytes.len() {
@@ -2808,9 +2826,9 @@ impl Interp {
             }
             NativeMethod::IteratorToStringTagSetter => self
                 .well_known_symbol_property_id("toStringTag")
-                .ok_or(Step::Host(Halt::EngineInvariant(
+                .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "Iterator.setter:missing-toStringTag",
-                )))?,
+                ))))?,
             _ => unreachable!("only Iterator prototype setters dispatch here"),
         };
         let existing = self.mop_get_own_property(code, inst, id)?.is_some();
@@ -2822,7 +2840,7 @@ impl Interp {
             // every level passes through `mop_set` (a light frame) and back into
             // `call_native_method` (a heavy one). The pinned XS does not
             // complete this program either (it aborts at ~8180 computrons); the
-            // point is to degrade to a `Halt::ReentryLimit` the host can
+            // point is to degrade to a `PanicKind::ReentryLimit` the host can
             // observe rather than overflowing the real thread stack and taking
             // the process down.
             self.mop_set(code, inst, id, value, this)?

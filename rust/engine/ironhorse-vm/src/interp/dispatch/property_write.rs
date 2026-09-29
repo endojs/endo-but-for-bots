@@ -193,7 +193,11 @@ impl Interp {
         let obj = self.pop_checked()?;
         let (id, index) = match key.value {
             Payload::At(id, index) => (id, index),
-            _ => return Err(Step::Host(Halt::EngineInvariant("delete_property_at:key"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "delete_property_at:key",
+                ))))
+            }
         };
         let numeric_index = (id == crate::value::XS_NO_ID).then_some(index);
         // The integer-indexed exotic `[[Delete]]` (10.4.5.7): a

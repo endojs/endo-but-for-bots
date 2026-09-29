@@ -107,7 +107,10 @@ fn slicing_lazy_strings_reads_only_the_requested_range() {
             2,
             &[],
         );
-        assert_eq!(refused, Err(Step::Host(Halt::HeapExhausted)));
+        assert_eq!(
+            refused,
+            Err(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))
+        );
         assert_eq!(vm.chunks.byte_size(), byte_size);
         assert_eq!(*reads.borrow(), [0]);
     }

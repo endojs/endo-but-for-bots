@@ -39,7 +39,9 @@ impl Interp {
     pub(super) fn pop_checked(&mut self) -> Result<Slot, Step> {
         self.stack
             .pop()
-            .ok_or(Step::Host(Halt::EngineInvariant("value-stack:underflow")))
+            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "value-stack:underflow",
+            ))))
     }
 
     /// Read an operand without manufacturing `undefined` for corrupt code.
@@ -48,20 +50,22 @@ impl Interp {
         self.stack
             .last()
             .copied()
-            .ok_or(Step::Host(Halt::EngineInvariant("value-stack:underflow")))
+            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "value-stack:underflow",
+            ))))
     }
 
     /// Charge `cost` budget units for a native activation about to be entered,
-    /// or refuse with [`Halt::ReentryLimit`] when the charge would exceed
+    /// or refuse with [`PanicKind::ReentryLimit`] when the charge would exceed
     /// [`NATIVE_DEPTH_LIMIT`]. Pair with [`Self::leave_native_frame`] around the
     /// activation (or use [`Self::with_native_frame`], which cannot forget to).
     #[inline]
     pub(super) fn enter_native_frame(&mut self, cost: usize) -> Result<(), Step> {
         if self.native_depth + cost > NATIVE_DEPTH_LIMIT {
-            return Err(Step::Host(Halt::ReentryLimit {
+            return Err(Step::Host(Halt::Panic(PanicKind::ReentryLimit {
                 depth: self.native_depth + cost,
                 limit: NATIVE_DEPTH_LIMIT,
-            }));
+            })));
         }
         self.native_depth += cost;
         Ok(())
@@ -97,7 +101,7 @@ impl Interp {
     /// crashed one. Count the walk's Proxy steps in `proxy_steps` against the
     /// native-recursion budget, exactly what the recursive shape of the same
     /// walk would have consumed, so the cycle halts with
-    /// [`Halt::ReentryLimit`] after at most the budget's worth of forwarding.
+    /// [`PanicKind::ReentryLimit`] after at most the budget's worth of forwarding.
     /// Ordinary steps are free: an ordinary chain is acyclic by construction.
     pub(super) fn charge_proxy_chain_step(
         &self,
@@ -107,10 +111,10 @@ impl Interp {
         if self.proxies.contains_key(&object) {
             *proxy_steps += LIGHT_FRAME_COST;
             if self.native_depth + *proxy_steps > NATIVE_DEPTH_LIMIT {
-                return Err(Step::Host(Halt::ReentryLimit {
+                return Err(Step::Host(Halt::Panic(PanicKind::ReentryLimit {
                     depth: self.native_depth + *proxy_steps,
                     limit: NATIVE_DEPTH_LIMIT,
-                }));
+                })));
             }
         }
         Ok(())
@@ -121,7 +125,9 @@ impl Interp {
     pub(super) fn pop_run_count(&mut self) -> Result<usize, Step> {
         match self.pop_checked()?.value {
             Payload::Integer(i) if i >= 0 => Ok(i as usize),
-            _ => Err(Step::Host(Halt::EngineInvariant("run:argument-count"))),
+            _ => Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "run:argument-count",
+            )))),
         }
     }
 
@@ -144,7 +150,9 @@ impl Interp {
             .len()
             .checked_sub(argc)
             .and_then(|n| n.checked_sub(4))
-            .ok_or(Step::Host(Halt::EngineInvariant("call:stack-underflow")))?; // THIS
+            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "call:stack-underflow",
+            ))))?; // THIS
         let func_slot = self.stack[base + 1];
         // Collect arguments (arg0 is the deepest of the argc; XS's
         // `mxFrameArgv(i) = mxFrame - 1 - i`).
@@ -184,7 +192,11 @@ impl Interp {
         // in-range gates trampoline bound callees before they get here.
         let body_start = match self.functions[&func].body_start {
             Some(bs) => bs,
-            None => return Err(Step::Host(Halt::EngineInvariant("bind:bound-callback"))),
+            None => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "bind:bound-callback",
+                ))))
+            }
         };
         // Stack-overflow guard (XS's `fxOverflow` on the callee's frame
         // allocation): entering this call suspends the caller (its frame
@@ -199,7 +211,9 @@ impl Interp {
         // suspended on the stack). If that crosses the fixed budget, abort
         // to the host exactly as XS's `fxOverflow`.
         if exceeds_budget {
-            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
+            return Err(Step::Host(Halt::Panic(PanicKind::StackOverflow(
+                self.stack_slots_in_use(),
+            ))));
         }
         // The caller's frame is now suspended: account its live slots.
         self.frame_slots += caller_footprint;

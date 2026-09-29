@@ -605,17 +605,17 @@ impl Interp {
                 Payload::Reference(descriptor) => {
                     Ok(ReadKey::Id(self.intern_symbol_key(descriptor)?))
                 }
-                _ => Err(Step::Host(Halt::EngineInvariant(
+                _ => Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "to_read_key:symbol-without-descriptor",
-                ))),
+                )))),
             };
         }
         let name = match property_key.value {
             Payload::String(offset) => SymbolName::from_units(&self.str_units(offset)),
             _ => {
-                return Err(Step::Host(Halt::EngineInvariant(
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "to_read_key:non-string-key",
-                )))
+                ))))
             }
         };
         // A canonical array-index string is what XS's `fxAt` turns into
@@ -683,9 +683,9 @@ impl Interp {
                 // A `Kind::Symbol` slot always carries its descriptor
                 // reference; anything else is a port invariant break, not
                 // guest behavior.
-                _ => Err(Step::Host(Halt::EngineInvariant(
+                _ => Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "to_property_id:symbol-without-descriptor",
-                ))),
+                )))),
             };
         }
         let name = match property_key.value {
@@ -693,9 +693,9 @@ impl Interp {
             // `to_property_key` returns a string or a symbol; anything else
             // is a port invariant break.
             _ => {
-                return Err(Step::Host(Halt::EngineInvariant(
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "to_property_id:non-string-key",
-                )))
+                ))))
             }
         };
         let id = self.intern_key(&name)?;
@@ -718,9 +718,9 @@ impl Interp {
             .symbol_names
             .get(usize::from(id).wrapping_sub(1))
             .filter(|name| self.symbol_ids.get(*name) == Some(&id))
-            .ok_or(Step::Host(Halt::EngineInvariant(
+            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "ordinary-ownKeys:unknown-key",
-            )))?;
+            ))))?;
         // Canonical CESU-8 has one leading byte per UTF-16 code unit.
         let count = name
             .as_bytes()

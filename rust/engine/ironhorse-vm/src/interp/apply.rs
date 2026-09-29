@@ -431,7 +431,7 @@ impl Interp {
                 .args
                 .len()
                 .checked_add(acc.len())
-                .ok_or(Step::Host(Halt::HeapExhausted))?;
+                .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
             let mut prepended = self.reserve_work_scratch(length)?;
             prepended.extend_from_slice(&self.bound_functions[&cur].args);
             prepended.extend_from_slice(&acc);

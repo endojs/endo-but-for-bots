@@ -1,5 +1,5 @@
 //! F180: an invocation receipt is a raw delta, not a lifetime meter reset.
-use ironhorse_vm::{parse_symbols, Halt, Interp};
+use ironhorse_vm::{parse_symbols, Halt, Interp, PanicKind};
 
 #[test]
 fn repeated_runs_subtract_raw_before_rounding_and_keep_lifetime_counts() {
@@ -47,7 +47,10 @@ fn halted_runs_report_only_work_incurred_after_entry() {
         let before = vm.meter_index();
         let out = vm.run(&code);
         assert!(!out.completed);
-        assert!(matches!(out.halt, Halt::Throw { .. } | Halt::HeapExhausted));
+        assert!(matches!(
+            out.halt,
+            Halt::Throw { .. } | Halt::Panic(PanicKind::HeapExhausted)
+        ));
         assert_eq!(out.meter_raw_this_run, out.meter_raw - before);
         assert_eq!(out.computrons_this_run, out.meter_raw_this_run >> 16);
     }

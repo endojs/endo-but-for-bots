@@ -2666,12 +2666,16 @@ impl Interp {
             // `Function.prototype.call` is handled by the `run` trampoline
             // (`enter_call_dot_call`) and never reaches here.
             NativeMethod::FunctionCall => {
-                return Err(Step::Host(Halt::EngineInvariant("call:unexpected")))
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "call:unexpected",
+                ))))
             }
             // `Function.prototype.apply` is handled by the `run` trampoline
             // (`enter_call_dot_apply`) and never reaches here.
             NativeMethod::FunctionApply => {
-                return Err(Step::Host(Halt::EngineInvariant("apply:unexpected")))
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "apply:unexpected",
+                ))))
             }
             NativeMethod::FunctionPrototype => Slot::undefined(),
             // `Object.prototype.valueOf`: `ToObject(this)`. Object receivers
@@ -2761,7 +2765,7 @@ impl Interp {
                     let length = tag
                         .len()
                         .checked_add(9)
-                        .ok_or(Step::Host(Halt::HeapExhausted))?;
+                        .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
                     self.charge_and_check(string_chunk_cost(length as u64))?;
                     self.admit_scratch::<u16>(length)?;
                     let mut units = Self::reserved_vec(length)?;
@@ -5192,7 +5196,7 @@ impl Interp {
                 let mut rebuilt: Vec<Slot> = self.reserve_scratch(
                     (length as usize)
                         .checked_add(insertions as usize)
-                        .ok_or(Step::Host(Halt::HeapExhausted))?,
+                        .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?,
                 )?;
                 rebuilt.extend_from_slice(&cur[..start as usize]);
                 rebuilt.extend(inserted);
@@ -5300,7 +5304,7 @@ impl Interp {
                 let mut rebuilt: Vec<Slot> = self.reserve_scratch(
                     (length as usize)
                         .checked_add(insertions as usize)
-                        .ok_or(Step::Host(Halt::HeapExhausted))?,
+                        .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?,
                 )?;
                 rebuilt.extend_from_slice(&cur[..start as usize]);
                 rebuilt.extend(inserted);
@@ -5640,9 +5644,13 @@ impl Interp {
             NativeMethod::IteratorWrapperNext => self.iterator_wrapper_next(code, this)?,
             NativeMethod::IteratorWrapperReturn => self.iterator_wrapper_return(code, this)?,
             NativeMethod::IteratorConstructorGetter => {
-                let constructor = self.intrinsics.get("Iterator").copied().ok_or(Step::Host(
-                    Halt::EngineInvariant("Iterator:missing-constructor"),
-                ))?;
+                let constructor =
+                    self.intrinsics
+                        .get("Iterator")
+                        .copied()
+                        .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                            "Iterator:missing-constructor",
+                        ))))?;
                 Slot::of(Kind::Reference, Payload::Reference(constructor))
             }
             NativeMethod::IteratorToStringTagGetter => self.new_string_metered(b"Iterator"),
@@ -5659,7 +5667,9 @@ impl Interp {
                 // `create_intrinsics` installs exactly eleven helpers, so an id
                 // outside 0..=10 can only come from a corrupted method
                 // identity, not from guest code.
-                return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-id")));
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "Iterator:helper-id",
+                ))));
             }
             NativeMethod::IteratorHelperNext => self.iterator_helper_next(code, this)?,
             NativeMethod::IteratorHelperReturn => self.iterator_helper_return(code, this)?,
@@ -5779,9 +5789,9 @@ impl Interp {
             NativeMethod::CollEntries | NativeMethod::CollKeys | NativeMethod::CollValues => {
                 let expected =
                     self.collection_method_brand(base)
-                        .ok_or(Step::Host(Halt::EngineInvariant(
+                        .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                             "collection:missing-method-brand",
-                        )))?;
+                        ))))?;
                 let inst = match self.collection_ref(this) {
                     Some(i) => i,
                     None => return Err(self.collection_brand_error(expected, false)),
@@ -5812,9 +5822,9 @@ impl Interp {
             NativeMethod::CollClear => {
                 let expected =
                     self.collection_method_brand(base)
-                        .ok_or(Step::Host(Halt::EngineInvariant(
+                        .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                             "collection:missing-method-brand",
-                        )))?;
+                        ))))?;
                 let inst = match self.collection_ref(this) {
                     Some(i) => i,
                     None => return Err(self.collection_brand_error(expected, false)),
@@ -6201,9 +6211,9 @@ impl Interp {
             | NativeMethod::PromiseCapabilityExecutor
             | NativeMethod::PromiseFinallyHandler
             | NativeMethod::PromiseFinallyValue => {
-                return Err(Step::Host(Halt::EngineInvariant(
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "promise:resolving-fn-unexpected",
-                )))
+                ))))
             }
             // `RegExp.prototype.exec`/`test`/`toString` — the JavaScript RegExp
             // surface over `ironhorse_regexp`.

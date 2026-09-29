@@ -7,8 +7,8 @@
 //! Guest strings use UTF-16; symbol-name conversion is shared through `ironhorse-text`.
 //! [`SourceCompiler`] supplies dynamic compilation without a production compiler dependency.
 //! [`gc::GcHooks`] connects the collector to references held outside the arenas.
-//! [`Halt`] includes [`Halt::HeapExhausted`] and [`Halt::Panic`]; resource stops and
-//! engine faults are not catchable guest exceptions.
+//! Every [`Halt::Panic`] carries a [`PanicKind`]; resource stops and engine faults
+//! are panics, not catchable guest exceptions.
 //!
 //! [`Machine`] owns one frozen intrinsic graph and shared heap. Each
 //! [`Compartment`] retains a [`Realm`] with independent globals and compiler policy.
@@ -125,13 +125,13 @@ pub fn run_program(bytecode: &[u8]) -> RunOutcome {
 }
 
 /// Run a program bytecode buffer under a **dispatch-count ceiling**, halting
-/// with [`Halt::StepLimit`] if the program dispatches `step_limit` opcodes
+/// with [`PanicKind::StepLimit`] if the program dispatches `step_limit` opcodes
 /// without completing. The un-metered [`run_program`] is not total on
 /// arbitrary bytecode — a malformed backward branch that targets itself (or
 /// any other non-terminating dispatch cycle) spins forever because no
 /// metering host is armed to refuse it. The bytecode-decoder fuzz harness
 /// runs every arbitrary/malformed input through this bounded entry so a hang
-/// becomes a bounded [`Halt::StepLimit`] in milliseconds instead of wedging
+/// becomes a bounded [`PanicKind::StepLimit`] in milliseconds instead of wedging
 /// the whole test binary.
 pub fn run_program_bounded(bytecode: &[u8], step_limit: u64) -> RunOutcome {
     Interp::new()
@@ -212,7 +212,7 @@ mod tests {
         // dispatch-count step limit does not bound, blowing the native stack.
         // The native re-entry depth is now capped by the native-recursion
         // budget ([`NATIVE_DEPTH_LIMIT`]), so an arbitrary corrupt snapshot
-        // degrades to `Halt::ReentryLimit` instead of aborting the process.
+        // degrades to `PanicKind::ReentryLimit` instead of aborting the process.
         //
         // Run on the stack the budget is calibrated for
         // ([`NATIVE_STACK_BYTES`]): the default Rust *test* harness gives
@@ -230,7 +230,7 @@ mod tests {
             .expect("spawn regression thread");
         let halt = handle.join().expect("regression thread must not overflow");
         assert!(
-            matches!(halt, Halt::ReentryLimit { .. }),
+            matches!(halt, Halt::Panic(PanicKind::ReentryLimit { .. })),
             "nested START_ASYNC must bound to ReentryLimit, got {halt:?}"
         );
     }
@@ -277,26 +277,54 @@ mod tests {
 
     #[test]
     fn is_panic_names_the_terminate_do_not_commit_set() {
-        // The single source of truth for the panic set (design
-        // `ironhorse-panic.md` § The Formal `Panic` Category, item 2).
-        // Settled core:
-        assert!(Halt::StackOverflow(3).is_panic());
-        assert!(Halt::MeterAbort.is_panic());
-        assert!(Halt::EngineInvariant("bitwise:stack-underflow").is_panic());
-        assert!(Halt::Panic(PanicKind::EngineFault {
-            message: "arena kind check".to_string(),
-            location: None,
-        })
-        .is_panic());
-        // Provisional members (Open Question), included for the commit
-        // decision:
-        assert!(
-            Halt::Decode(crate::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 })
-                .is_panic()
-        );
-        assert!(Halt::StepLimit(9).is_panic());
-        // Not panics: an ordinary (uncaught) throw and normal completion.
-        assert!(!Halt::synthetic_throw("catchable".to_string()).is_panic());
-        assert!(!Halt::Return.is_panic());
+        // Design `ironhorse-panic.md` § Type-enforced classification (Q8):
+        // every panic is `Halt::Panic(kind)`. The match below is exhaustive
+        // inside this crate (no wildcard), so a new `PanicKind` variant fails
+        // to compile here until it is added to this fixture.
+        let kinds = [
+            PanicKind::StackOverflow(3),
+            PanicKind::ReentryLimit {
+                depth: 2049,
+                limit: 2048,
+            },
+            PanicKind::MeterAbort,
+            PanicKind::HeapExhausted,
+            PanicKind::EngineInvariant("bitwise:stack-underflow"),
+            PanicKind::Decode(crate::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 }),
+            PanicKind::StepLimit(9),
+            PanicKind::EngineFault {
+                message: "arena kind check".to_string(),
+                location: None,
+            },
+        ];
+        let mut seen = [false; 8];
+        for kind in kinds {
+            seen[match kind {
+                PanicKind::StackOverflow(_) => 0,
+                PanicKind::ReentryLimit { .. } => 1,
+                PanicKind::MeterAbort => 2,
+                PanicKind::HeapExhausted => 3,
+                PanicKind::EngineInvariant(_) => 4,
+                PanicKind::Decode(_) => 5,
+                PanicKind::StepLimit(_) => 6,
+                PanicKind::EngineFault { .. } => 7,
+            }] = true;
+            let halt = Halt::Panic(kind.clone());
+            assert!(halt.is_panic(), "{halt:?}");
+            assert_eq!(halt.panic_kind(), Some(&kind));
+        }
+        assert!(seen.iter().all(|&s| s), "every PanicKind has a fixture");
+        // Not panics: an ordinary (uncaught) throw, normal completion, and
+        // the declined halts that fail closed at the supervisor seam.
+        for halt in [
+            Halt::synthetic_throw("catchable".to_string()),
+            Halt::Return,
+            Halt::MachineBusy,
+            Halt::NotImplemented("Date:method"),
+            Halt::Refused("Array.prototype.sort:oversized-array-like"),
+        ] {
+            assert!(!halt.is_panic(), "{halt:?}");
+            assert_eq!(halt.panic_kind(), None);
+        }
     }
 }

@@ -85,7 +85,9 @@ fn a_spinning_crank_is_refused_through_the_stateless_machine() {
     assert!(!outcome.completed);
     assert!(matches!(
         outcome.halt,
-        endo::ironhorse_engine::engine::Halt::MeterAbort
+        endo::ironhorse_engine::engine::Halt::Panic(
+            endo::ironhorse_engine::engine::PanicKind::MeterAbort
+        )
     ));
     // Ordinary programs are untouched.
     assert_eq!(m.eval("1 + 2").expect("completes"), "3");
@@ -460,7 +462,9 @@ fn regexp_compilation_heap_refusal_preserves_the_persistent_checkpoint() {
         assert!(
             matches!(
                 result,
-                Err(MachineError::Halt(ironhorse_vm::Halt::HeapExhausted))
+                Err(MachineError::Halt(ironhorse_vm::Halt::Panic(
+                    ironhorse_vm::PanicKind::HeapExhausted
+                )))
             ),
             "{result:?}"
         );

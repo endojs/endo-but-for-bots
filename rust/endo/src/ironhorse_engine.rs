@@ -192,7 +192,7 @@ pub mod engine {
         /// walked.
         SymbolMismatch(String),
         /// The crank spent more than its [`MeterBounds`] allow and the
-        /// meter halted it (`Halt::MeterAbort`), distinct from every
+        /// meter halted it (`PanicKind::MeterAbort`), distinct from every
         /// other halt because it is the one a supervisor budgets for:
         /// the program was refused, not wrong. Carries the computrons
         /// the crank had spent when the host refused (at least the
@@ -280,30 +280,39 @@ pub mod engine {
     pub fn describe_halt(halt: &Halt) -> String {
         match halt {
             Halt::Return => "completed".to_string(),
-            Halt::MeterAbort => "metering aborted the run".to_string(),
-            Halt::StepLimit(n) => format!("step ceiling reached after {n} dispatches"),
             Halt::NotImplemented(op) => {
                 format!("unsupported opcode `{op}` (a named, unlanded engine gap)")
             }
             Halt::Refused(label) => {
                 format!("execution refused: `{label}` (an engine profile limit)")
             }
-            Halt::EngineInvariant(label) => {
+            Halt::Throw { rendered, .. } => format!("uncaught throw: {rendered}"),
+            Halt::Panic(kind) => describe_panic(kind),
+            other => format!("halted: {other:?}"),
+        }
+    }
+
+    /// Render a panic's kind with its diagnostic payload.
+    pub fn describe_panic(kind: &PanicKind) -> String {
+        match kind {
+            PanicKind::MeterAbort => "metering aborted the run".to_string(),
+            PanicKind::StepLimit(n) => format!("step ceiling reached after {n} dispatches"),
+            PanicKind::HeapExhausted => "heap ceiling exhausted".to_string(),
+            PanicKind::EngineInvariant(label) => {
                 format!("engine invariant violated: `{label}` (an Ironhorse defect, not an unlanded gap)")
             }
-            Halt::Decode(e) => format!("bytecode decode error: {e}"),
-            Halt::Throw { rendered, .. } => format!("uncaught throw: {rendered}"),
-            Halt::StackOverflow(n) => {
+            PanicKind::Decode(e) => format!("bytecode decode error: {e}"),
+            PanicKind::StackOverflow(n) => {
                 format!("value stack overflow ({n} slots in use)")
             }
-            Halt::ReentryLimit { depth, limit } => {
+            PanicKind::ReentryLimit { depth, limit } => {
                 format!("native recursion limit (attempted weighted depth {depth}; limit {limit})")
             }
-            Halt::Panic(PanicKind::EngineFault { message, location }) => match location {
+            PanicKind::EngineFault { message, location } => match location {
                 Some(location) => format!("engine fault at {location}: {message}"),
                 None => format!("engine fault: {message}"),
             },
-            other => format!("halted: {other:?}"),
+            other => format!("panic: {other:?}"),
         }
     }
 
@@ -342,31 +351,26 @@ pub mod engine {
         /// The seam's canonical constructor: classify a top-level [`Halt`]
         /// into the three-way outcome.
         ///
-        /// The `Panicked` arm delegates to [`Halt::is_panic`] for every
-        /// genuine *panic* variant, never re-listing panic shapes here:
-        /// adding a new panic variant updates `is_panic()` alone and this
-        /// classifier follows for free (design § The Formal `Panic`
-        /// Category, item 4).
+        /// Every genuine panic is `Halt::Panic(_)` by construction (design
+        /// § Type-enforced classification (Q8)), so the `Panicked` arm for
+        /// panics is one shape match: a new panic source is a new
+        /// [`PanicKind`] variant and lands in that arm without an edit here.
         ///
         /// `ExecutionOutcome::Panicked` is deliberately a **strict
-        /// superset** of `is_panic()`, not equal to it. Two non-panic halts
-        /// also classify as `Panicked` because they likewise must
-        /// terminate-without-commit: `Halt::NotImplemented` (a named, unlanded
-        /// engine gap) and the fail-closed catch-all for any control-state
-        /// or future `#[non_exhaustive]` variant that should never reach
-        /// this seam. Those two arms below are the *only* places `Panicked`
-        /// is produced without `is_panic()`; every genuine panic still flows
-        /// through that single gate, so `is_panic()` stays the one place the
-        /// panic set is defined (the superset only adds "did not run to
-        /// quiescence" cases that are not themselves panics).
+        /// superset** of [`Halt::is_panic`], not equal to it. Two non-panic
+        /// halts also classify as `Panicked` because they likewise must
+        /// terminate-without-commit: `Halt::NotImplemented` / `Halt::Refused`
+        /// (a named engine gap or profile refusal) and the fail-closed
+        /// catch-all for any control-state or future `#[non_exhaustive]`
+        /// variant that should never reach this seam. Those reasons are not
+        /// [`PanicKind`] values; `Panicked(reason).is_panic()` tells them
+        /// apart for diagnostics.
         /// Spelled as an associated function (not a free `classify_halt`)
         /// because it is the sanctioned way to build an `ExecutionOutcome`
         /// from a `Halt`, discoverable at the type it produces.
         pub fn classify(halt: Halt) -> ExecutionOutcome {
-            if halt.is_panic() {
-                return ExecutionOutcome::Panicked(halt);
-            }
             match halt {
+                halt @ Halt::Panic(_) => ExecutionOutcome::Panicked(halt),
                 Halt::Throw { rendered, .. } => ExecutionOutcome::Uncaught(rendered),
                 Halt::Return => ExecutionOutcome::Quiesced,
                 // A known implementation gap or profile refusal did not run
@@ -588,12 +592,12 @@ pub mod engine {
             ironhorse_compile::compile_atoms_with_meter(source, strict, meter.clone())
         }));
         if meter.exhausted() {
-            return Err(MachineError::Halt(Halt::MeterAbort));
+            return Err(MachineError::Halt(Halt::Panic(PanicKind::MeterAbort)));
         }
         match result {
             Ok(Ok(atoms)) => Ok(atoms),
             Ok(Err(error)) if error.kind == ironhorse_compile::ParseErrorKind::MeterLimit => {
-                Err(MachineError::Halt(Halt::MeterAbort))
+                Err(MachineError::Halt(Halt::Panic(PanicKind::MeterAbort)))
             }
             Ok(Err(ironhorse_compile::ParseError {
                 kind:
@@ -602,7 +606,7 @@ pub mod engine {
                         ..
                     }),
                 ..
-            })) => Err(MachineError::Halt(Halt::HeapExhausted)),
+            })) => Err(MachineError::Halt(Halt::Panic(PanicKind::HeapExhausted))),
             Ok(Err(ironhorse_compile::ParseError {
                 kind:
                     ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
@@ -610,7 +614,7 @@ pub mod engine {
                         ..
                     }),
                 ..
-            })) => Err(MachineError::Halt(Halt::MeterAbort)),
+            })) => Err(MachineError::Halt(Halt::Panic(PanicKind::MeterAbort))),
             Ok(Err(error)) => Err(MachineError::Compile {
                 message: error.to_string(),
                 meter_raw: meter.raw(),
@@ -651,7 +655,7 @@ pub mod engine {
     /// crank had spent when it halted.
     fn refuse(halt: Halt, spent: u64, limit: Option<u64>) -> MachineError {
         match (halt, limit) {
-            (Halt::MeterAbort, Some(limit)) => MachineError::MeterAbort {
+            (Halt::Panic(PanicKind::MeterAbort), Some(limit)) => MachineError::MeterAbort {
                 computrons: spent,
                 limit,
             },
@@ -709,7 +713,7 @@ pub mod engine {
         /// would not resolve. Each evaluation has a fresh Realm and meter, so
         /// its meter starts at zero and the crank limit is the ceiling
         /// itself. A refused program comes back with `completed: false`
-        /// and `halt: Halt::MeterAbort`; [`Machine::eval`] maps that to
+        /// and `halt: Halt::Panic(PanicKind::MeterAbort)`; [`Machine::eval`] maps that to
         /// [`MachineError::MeterAbort`].
         pub fn evaluate(&self, source: &str, strict: bool) -> Result<EvalOutcome, MachineError> {
             // The prior Realm was dropped on return. Reclaim it before the
@@ -2045,7 +2049,7 @@ pub mod engine {
             let source = format!("/*{}*/ 1", "x".repeat(1_000_000));
             let outcome = machine.evaluate(&source, false).unwrap();
             assert!(!outcome.completed);
-            assert!(matches!(outcome.halt, Halt::MeterAbort));
+            assert!(matches!(outcome.halt, Halt::Panic(PanicKind::MeterAbort)));
             assert_eq!(outcome.meter_raw, 32 << 16);
             assert_eq!(outcome.dispatched, 0);
         }
@@ -2312,19 +2316,18 @@ pub mod engine {
         #[test]
         fn every_panic_source_classifies_as_panicked() {
             for halt in [
-                Halt::StackOverflow(7),
-                Halt::ReentryLimit {
+                Halt::Panic(PanicKind::StackOverflow(7)),
+                Halt::Panic(PanicKind::ReentryLimit {
                     depth: 2049,
                     limit: 2048,
-                },
-                Halt::MeterAbort,
-                Halt::EngineInvariant("bitwise:stack-underflow"),
-                engine_fault(),
-                Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds {
-                    pc: 0,
-                    len: 0,
                 }),
-                Halt::StepLimit(42),
+                Halt::Panic(PanicKind::MeterAbort),
+                Halt::Panic(PanicKind::EngineInvariant("bitwise:stack-underflow")),
+                engine_fault(),
+                Halt::Panic(PanicKind::Decode(
+                    ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 },
+                )),
+                Halt::Panic(PanicKind::StepLimit(42)),
             ] {
                 assert!(halt.is_panic(), "{halt:?} should be a panic");
                 assert!(
@@ -2340,14 +2343,14 @@ pub mod engine {
         #[test]
         fn stack_diagnostics_distinguish_value_geometry_from_native_depth() {
             assert_eq!(
-                describe_halt(&Halt::StackOverflow(4000)),
+                describe_halt(&Halt::Panic(PanicKind::StackOverflow(4000))),
                 "value stack overflow (4000 slots in use)"
             );
             assert_eq!(
-                describe_halt(&Halt::ReentryLimit {
+                describe_halt(&Halt::Panic(PanicKind::ReentryLimit {
                     depth: 2064,
                     limit: 2048
-                }),
+                })),
                 "native recursion limit (attempted weighted depth 2064; limit 2048)"
             );
         }
@@ -2363,16 +2366,16 @@ pub mod engine {
             for halt in [
                 Halt::Return,
                 Halt::synthetic_throw("x".to_string()),
-                Halt::StackOverflow(1),
-                Halt::ReentryLimit {
+                Halt::Panic(PanicKind::StackOverflow(1)),
+                Halt::Panic(PanicKind::ReentryLimit {
                     depth: 2049,
                     limit: 2048,
-                },
-                Halt::MeterAbort,
-                Halt::EngineInvariant("bitwise:stack-underflow"),
+                }),
+                Halt::Panic(PanicKind::MeterAbort),
+                Halt::Panic(PanicKind::EngineInvariant("bitwise:stack-underflow")),
                 engine_fault(),
-                Halt::Decode(ironhorse_vm::DecodeError::InvalidSymbols),
-                Halt::StepLimit(1),
+                Halt::Panic(PanicKind::Decode(ironhorse_vm::DecodeError::InvalidSymbols)),
+                Halt::Panic(PanicKind::StepLimit(1)),
             ] {
                 let panicked = matches!(
                     ExecutionOutcome::classify(halt.clone()),
@@ -2410,7 +2413,9 @@ pub mod engine {
             // Private transfer variants cannot be represented by Halt. The VM
             // reports a transfer escaping its host boundary as an invariant
             // failure, which must discard the crank in every build profile.
-            let halt = Halt::EngineInvariant("dispatch:control-transfer-escaped");
+            let halt = Halt::Panic(PanicKind::EngineInvariant(
+                "dispatch:control-transfer-escaped",
+            ));
             assert!(matches!(
                 ExecutionOutcome::classify(halt),
                 ExecutionOutcome::Panicked(_)
@@ -2428,6 +2433,66 @@ pub mod engine {
                 location: None,
             });
             assert_eq!(describe_halt(&halt), "engine fault: kind check failed");
+        }
+
+        #[test]
+        fn every_panic_kind_keeps_its_payload_through_classification() {
+            // Design § Type-enforced classification (Q8): every member of the
+            // panic set is `Halt::Panic(kind)`, and the classifier hands the
+            // halt back unchanged, so each source's diagnostic survives to the
+            // supervisor and renders distinctly.
+            let kinds = [
+                PanicKind::StackOverflow(7),
+                PanicKind::ReentryLimit {
+                    depth: 2049,
+                    limit: 2048,
+                },
+                PanicKind::MeterAbort,
+                PanicKind::HeapExhausted,
+                PanicKind::EngineInvariant("bitwise:stack-underflow"),
+                PanicKind::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds {
+                    pc: 3,
+                    len: 2,
+                }),
+                PanicKind::StepLimit(42),
+                PanicKind::EngineFault {
+                    message: "kind check failed".to_string(),
+                    location: Some("interp.rs:1:1".to_string()),
+                },
+            ];
+            let mut renderings = std::collections::BTreeSet::new();
+            for kind in kinds {
+                let halt = Halt::Panic(kind.clone());
+                assert!(halt.is_panic());
+                assert_eq!(halt.panic_kind(), Some(&kind));
+                assert_eq!(
+                    ExecutionOutcome::classify(halt.clone()),
+                    ExecutionOutcome::Panicked(halt.clone()),
+                    "{kind:?} must reach the supervisor with its payload",
+                );
+                assert_eq!(describe_halt(&halt), describe_panic(&kind));
+                assert!(
+                    renderings.insert(describe_panic(&kind)),
+                    "{kind:?} renders like another panic kind",
+                );
+            }
+        }
+
+        #[test]
+        fn non_panic_refusals_fail_closed_without_a_panic_kind() {
+            // `Panicked` also carries non-panic stops for discard policy.
+            // They must stay distinguishable in diagnostics: no `PanicKind`.
+            for halt in [
+                Halt::NotImplemented("STAGE8_GAP"),
+                Halt::Refused("eval:no-compiler"),
+            ] {
+                assert!(!halt.is_panic(), "{halt:?} is not a panic");
+                assert_eq!(halt.panic_kind(), None);
+                assert_eq!(
+                    ExecutionOutcome::classify(halt.clone()),
+                    ExecutionOutcome::Panicked(halt),
+                );
+            }
         }
 
         #[test]

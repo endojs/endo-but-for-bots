@@ -180,7 +180,7 @@ impl Interp {
         match result {
             Ok(result) => result,
             Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
-                Err(Step::Host(Halt::HeapExhausted))
+                Err(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))
             }
             Err(payload) => std::panic::resume_unwind(payload),
         }
@@ -459,7 +459,7 @@ mod tests {
                     saw_success = true;
                     break;
                 }
-                Err(Step::Host(Halt::HeapExhausted)) => saw_failure = true,
+                Err(Step::Host(Halt::Panic(PanicKind::HeapExhausted))) => saw_failure = true,
                 Err(other) => panic!("unexpected construction result: {other:?}"),
             }
 

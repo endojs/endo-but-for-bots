@@ -309,7 +309,7 @@ pub struct Interp {
     /// interpreter the differential harness uses: the check points then
     /// never consult a host and never abort. When `Some`, each
     /// loop-closing check point passes the current computron count to it
-    /// and halts with [`Halt::MeterAbort`] on refusal. `None` on an
+    /// and halts with [`PanicKind::MeterAbort`] on refusal. `None` on an
     /// ARMED meter (restored from a snapshot without reattaching a host)
     /// is the fail-closed state: every check point aborts
     /// ([`Interp::check_meter`]).
@@ -328,7 +328,7 @@ pub struct Interp {
     /// the oracle-differential harness sees exactly the historical
     /// behavior. A finite value — installed by [`Interp::run_bounded`] /
     /// [`run_program_bounded`] for un-metered callers such as the decoder
-    /// fuzz harness — makes the dispatch loop halt with [`Halt::StepLimit`]
+    /// fuzz harness — makes the dispatch loop halt with [`PanicKind::StepLimit`]
     /// once `n_dispatched` reaches it, so a non-terminating program (a
     /// self-targeting backward branch, an unbounded loop) aborts in bounded
     /// time rather than wedging the caller.
@@ -415,7 +415,7 @@ pub struct Interp {
     /// or recurses without a bound of its own over guest-controlled structure
     /// on the host stack charges its frame class here
     /// ([`Self::enter_native_frame`]) and releases it on return, so a
-    /// degenerate nest halts with [`Halt::ReentryLimit`] instead of
+    /// degenerate nest halts with [`PanicKind::ReentryLimit`] instead of
     /// overflowing the real thread stack. (A recursion with its own small node
     /// budget — the compact `flat` path's 1,024-node pre-check — and a
     /// redispatch that loops instead, such as the bound-function fold and the

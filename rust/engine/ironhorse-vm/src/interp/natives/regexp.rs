@@ -341,10 +341,10 @@ impl Interp {
         }
         let program = match outcome.result {
             Err(ironhorse_regexp::CompileError::BudgetExceeded) => {
-                return Err(Step::Host(Halt::MeterAbort))
+                return Err(Step::Host(Halt::Panic(PanicKind::MeterAbort)))
             }
             Err(ironhorse_regexp::CompileError::ResourceLimit) => {
-                return Err(Step::Host(Halt::HeapExhausted))
+                return Err(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))
             }
             Ok(p) => p,
             Err(ironhorse_regexp::CompileError::Syntax(reason)) => {
@@ -506,7 +506,7 @@ impl Interp {
     /// charges the meter INCREMENTALLY with what the match has accumulated
     /// so far and runs the same `check` the loop-closing points run, so
     /// the host sees the match's computrons on its normal cadence and its
-    /// refusal halts the crank with [`Halt::MeterAbort`]. The total
+    /// refusal halts the crank with [`PanicKind::MeterAbort`]. The total
     /// charged is the same `match_meter_raw` either way — the seam moves
     /// WHEN the charge lands, never how much, so computrons are identical
     /// armed and un-armed. An armed meter with no host attached fails
@@ -546,10 +546,10 @@ impl Interp {
         };
         self.charge_and_check(outcome.match_meter_raw - charged)?;
         if outcome.resource_limit {
-            return Err(Step::Host(Halt::HeapExhausted));
+            return Err(Step::Host(Halt::Panic(PanicKind::HeapExhausted)));
         }
         if outcome.aborted {
-            return Err(Step::Host(Halt::MeterAbort));
+            return Err(Step::Host(Halt::Panic(PanicKind::MeterAbort)));
         }
         Ok(outcome)
     }
@@ -2353,7 +2353,7 @@ impl Interp {
         self.charge_and_check(
             (length as u64)
                 .checked_mul(crate::meter::BUILTIN_METERING)
-                .ok_or(Step::Host(Halt::MeterAbort))?,
+                .ok_or(Step::Host(Halt::Panic(PanicKind::MeterAbort)))?,
         )?;
         let mut index = 0;
         while index < length {

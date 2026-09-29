@@ -1,5 +1,5 @@
 //! Catch offsets are untrusted bytecode, including before a handler is used.
-use ironhorse_vm::{run_program_bounded, Halt, Opcode};
+use ironhorse_vm::{run_program_bounded, Halt, Opcode, PanicKind};
 
 #[test]
 fn catch_targets_outside_the_buffer_are_decode_errors() {
@@ -19,7 +19,10 @@ fn catch_targets_outside_the_buffer_are_decode_errors() {
                 // without ever using them.
                 *code.last_mut().unwrap() = tail as u8;
                 let out = run_program_bounded(&code, 100);
-                assert!(matches!(out.halt, Halt::Decode(_)), "{code:?}: {out:?}");
+                assert!(
+                    matches!(out.halt, Halt::Panic(PanicKind::Decode(_))),
+                    "{code:?}: {out:?}"
+                );
             }
         }
     }

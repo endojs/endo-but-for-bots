@@ -15,16 +15,24 @@ impl Interp {
     ) -> Result<(), Step> {
         let fref = match f.value {
             Payload::Reference(r) => r,
-            _ => return Err(Step::Host(Halt::EngineInvariant("async:bad-resolving-fn"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "async:bad-resolving-fn",
+                ))))
+            }
         };
         let data = match self.promise_functions.get(&fref) {
             Some(d) => *d,
-            None => return Err(Step::Host(Halt::EngineInvariant("async:bad-resolving-fn"))),
+            None => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "async:bad-resolving-fn",
+                ))))
+            }
         };
         if !is_promise_resolving_guard(data.guard) || data.guard >= self.promise_guards.len() {
-            return Err(Step::Host(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "async:non-resolver-as-resolver",
-            )));
+            ))));
         }
         if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
             self.meter.tick_raw(PROMISE_SETTLE_GUARDED_METERING);
@@ -47,7 +55,11 @@ impl Interp {
     ) -> Result<(), Step> {
         let fref = match f.value {
             Payload::Reference(r) => r,
-            _ => return Err(Step::Host(Halt::EngineInvariant("async:bad-resolving-fn"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "async:bad-resolving-fn",
+                ))))
+            }
         };
         let data = match self.promise_functions.get(&fref) {
             Some(d)
@@ -57,7 +69,11 @@ impl Interp {
             {
                 *d
             }
-            _ => return Err(Step::Host(Halt::EngineInvariant("async:bad-rejecting-fn"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "async:bad-rejecting-fn",
+                ))))
+            }
         };
         if self.promise_guards.get(data.guard).copied().unwrap_or(true) {
             self.meter.tick_raw(PROMISE_SETTLE_GUARDED_METERING);
@@ -647,9 +663,9 @@ impl Interp {
             return Ok(value);
         }
         if data.guard != PROMISE_FINALLY_HANDLER_GUARD {
-            return Err(Step::Host(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "promise:unknown-finally-function",
-            )));
+            ))));
         }
         let handler_id = self.intern_static_key("[[PromiseFinallyHandler]]");
         let constructor_id = self.intern_static_key("[[PromiseFinallyConstructor]]");
@@ -686,9 +702,9 @@ impl Interp {
         reject: bool,
     ) -> Result<(), Step> {
         if !self.promises.contains_key(&promise) {
-            return Err(Step::Host(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "promise:settle-non-promise",
-            )));
+            ))));
         }
         // The resolve-with-thenable branch (`fxResolvePromise`, `mxIsReference`):
         // probe `.then`; a callable one adopts the thenable rather than settling.
@@ -760,9 +776,9 @@ impl Interp {
         reject: bool,
     ) -> Result<(), Step> {
         if !self.promises.contains_key(&promise) {
-            return Err(Step::Host(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "promise:settle-non-promise",
-            )));
+            ))));
         }
         let state = if reject {
             PromiseState::Rejected
@@ -870,7 +886,7 @@ impl Interp {
             // checkpoint. Consult between jobs and after the last one, before
             // removing another queued root, without changing their charges.
             if self.check_meter() == MeterCheck::Abort {
-                return Err(Step::Host(Halt::MeterAbort));
+                return Err(Step::Host(Halt::Panic(PanicKind::MeterAbort)));
             }
             if self.id_space_exhausted {
                 return Err(Step::Host(Halt::Refused("property-key:id-space-exhausted")));
@@ -933,9 +949,12 @@ impl Interp {
         if let ReactionKind::AsyncGeneratorYield(gen) = reaction.kind {
             self.meter.tick_raw(PROMISE_JOB_FRAME_METERING);
             if rejected {
-                let data = self.async_generators.get_mut(&gen).ok_or(Step::Host(
-                    Halt::EngineInvariant("async-generator:yield-reaction-missing"),
-                ))?;
+                let data = self
+                    .async_generators
+                    .get_mut(&gen)
+                    .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                        "async-generator:yield-reaction-missing",
+                    ))))?;
                 data.state = AsyncGeneratorState::Completed;
                 data.frame = None;
                 return self.finish_async_generator_request(code, gen, value, true);
@@ -1722,7 +1741,9 @@ impl Interp {
             self.combinators[comb_idx].remaining = self.combinators[comb_idx]
                 .remaining
                 .checked_add(1)
-                .ok_or(Step::Host(Halt::StepLimit(self.n_dispatched)))?;
+                .ok_or(Step::Host(Halt::Panic(PanicKind::StepLimit(
+                    self.n_dispatched,
+                ))))?;
             let next_promise =
                 match self.call_any_catching_throw(code, promise_resolve, constructor, &[value])? {
                     Ok(value) => value,
@@ -1826,7 +1847,9 @@ impl Interp {
                 }
             }
         }
-        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+        Err(Step::Host(Halt::Panic(PanicKind::StepLimit(
+            self.n_dispatched,
+        ))))
     }
 
     /// Settle a combinator whose iterable was empty: `all`/`allSettled` resolve

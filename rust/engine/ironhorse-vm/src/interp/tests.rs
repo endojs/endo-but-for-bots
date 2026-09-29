@@ -67,7 +67,7 @@ fn failed_collection_permanently_disqualifies_the_machine() {
     let outcome = machine.run(&[Opcode::XS_CODE_RETURN as u8]);
     assert_eq!(
         outcome.halt,
-        Halt::EngineInvariant("gc:previous-collection-failed")
+        Halt::Panic(PanicKind::EngineInvariant("gc:previous-collection-failed"))
     );
     assert!(!outcome.completed);
     assert_eq!(machine.meter.raw(), raw);
@@ -134,7 +134,7 @@ fn partial_collection_rejects_a_guard_index_even_when_cardinalities_match() {
     let outcome = machine.run(&[Opcode::XS_CODE_RETURN as u8]);
     assert_eq!(
         outcome.halt,
-        Halt::EngineInvariant("gc:previous-collection-failed")
+        Halt::Panic(PanicKind::EngineInvariant("gc:previous-collection-failed"))
     );
     assert!(!outcome.completed);
     assert_eq!(machine.meter.raw(), raw);
@@ -512,11 +512,10 @@ fn pending_new_target_is_rooted_and_gated_after_every_non_throw_halt() {
             );
         }
         let out = m.run_bounded(&code, 100_000);
-        assert!(
-            format!("{:?}", out.halt).starts_with(kind),
-            "{kind}: {:?}",
-            out.halt
-        );
+        let rendered = format!("{:?}", out.halt);
+        // Panics render as `Panic(<kind>…)`; declined halts render bare.
+        let rendered = rendered.strip_prefix("Panic(").unwrap_or(&rendered);
+        assert!(rendered.starts_with(kind), "{kind}: {:?}", out.halt);
         let target = m
             .pending_new_target
             .unwrap_or_else(|| panic!("{kind}: SUPER must still be armed at the halt"));
@@ -826,13 +825,15 @@ fn internal_transfers_cannot_be_reported_as_host_completions() {
     ] {
         assert_eq!(
             interp.finish_step(step),
-            Halt::EngineInvariant("dispatch:control-transfer-escaped")
+            Halt::Panic(PanicKind::EngineInvariant(
+                "dispatch:control-transfer-escaped"
+            ))
         );
     }
     assert_eq!(interp.finish_step(Step::Returned), Halt::Return);
     assert_eq!(
-        interp.finish_step(Step::Host(Halt::MeterAbort)),
-        Halt::MeterAbort
+        interp.finish_step(Step::Host(Halt::Panic(PanicKind::MeterAbort))),
+        Halt::Panic(PanicKind::MeterAbort)
     );
     let value = Slot::number(42.0);
     assert_eq!(
@@ -849,7 +850,9 @@ fn program_return_cannot_complete_a_callback_activation() {
     let mut interp = Interp::new();
     assert_eq!(
         interp.dispatch_at(&[b(Opcode::XS_CODE_RETURN)], 0, 1),
-        Step::Host(Halt::EngineInvariant("return:non-program-frame"))
+        Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+            "return:non-program-frame"
+        )))
     );
 }
 
@@ -1848,7 +1851,7 @@ fn async_non_boundary_return_does_not_leak_instances() {
     let out = interp.run_bounded(&[193u8, 169], 2_000_000);
     assert_eq!(
         out.halt,
-        Halt::EngineInvariant("return:non-program-frame"),
+        Halt::Panic(PanicKind::EngineInvariant("return:non-program-frame")),
         "malformed async `RETURN` must fail at the dispatch boundary"
     );
     assert!(
@@ -1913,7 +1916,7 @@ fn armed_meter_aborts_at_threshold() {
 
     assert_eq!(
         out.halt,
-        Halt::MeterAbort,
+        Halt::Panic(PanicKind::MeterAbort),
         "armed meter must abort the loop"
     );
     assert!(!out.completed);
@@ -2044,7 +2047,10 @@ fn hostile_suspend_below_run_base_fails_closed() {
     // the same bounded entry the fuzz harness uses.
     let bytes = [192u8, 193, 10, 193, 35, 193, 139];
     let out = crate::run_program_bounded(&bytes, 100_000);
-    assert_eq!(out.halt, Halt::EngineInvariant("bitwise:stack-underflow"));
+    assert_eq!(
+        out.halt,
+        Halt::Panic(PanicKind::EngineInvariant("bitwise:stack-underflow"))
+    );
 }
 
 #[test]
@@ -2054,7 +2060,7 @@ fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
     // length on a well-formed instruction, and (c) DISPATCH to a
     // defined effect — either it executes (the implemented subset and
     // the pure stubs) or it halts `Halt::NotImplemented` naming itself.
-    // It must NEVER panic and NEVER fall through to `Halt::Decode` on a
+    // It must NEVER panic and NEVER fall through to `PanicKind::Decode` on a
     // well-formed single instruction: a stubbed opcode either steps
     // with faithful stack/frame/meter effects (where its semantics need
     // no built-in) or self-names as unsupported (where they do), so a
@@ -2074,7 +2080,7 @@ fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
         code.extend_from_slice(&[0u8; 16]);
 
         let out = Interp::new().run(&code);
-        if let Halt::Decode(msg) = &out.halt {
+        if let Halt::Panic(PanicKind::Decode(msg)) = &out.halt {
             // A decode error is only acceptable if it is NOT about the
             // opcode under test — i.e. the opcode dispatched fine and
             // the walk later tripped on the pad. In practice the pad is
@@ -2093,15 +2099,15 @@ fn every_opcode_decodes_and_dispatches_without_panic_or_decode_error() {
         match out.halt {
             Halt::Return
             | Halt::Throw { .. }
-            | Halt::MeterAbort
-            | Halt::HeapExhausted
-            | Halt::StepLimit(_)
+            | Halt::Panic(PanicKind::MeterAbort)
+            | Halt::Panic(PanicKind::HeapExhausted)
+            | Halt::Panic(PanicKind::StepLimit(_))
             | Halt::NotImplemented(_)
             | Halt::Refused(_)
-            | Halt::EngineInvariant(_)
-            | Halt::StackOverflow(_)
-            | Halt::ReentryLimit { .. } => {}
-            Halt::Decode(_) => unreachable!("handled above"),
+            | Halt::Panic(PanicKind::EngineInvariant(_))
+            | Halt::Panic(PanicKind::StackOverflow(_))
+            | Halt::Panic(PanicKind::ReentryLimit { .. }) => {}
+            Halt::Panic(PanicKind::Decode(_)) => unreachable!("handled above"),
             Halt::MachineBusy => unreachable!("standalone interpreter has no competing Realm"),
             Halt::Panic(_) => unreachable!("engine-fault panic escaped the FFI/Machine seam"),
         }
@@ -2397,7 +2403,7 @@ fn harden_freezes_target_transitively_and_returns_it() {
 /// makes them permanent, failure revokes them. One exit does not: a Rust panic
 /// through the walk (heap exhaustion in a host allocation, say) unwinds past
 /// both, and a supervisor that catches it and KEEPS the interpreter would hold
-/// marks for a freeze that never happened. `Halt::HeapExhausted` is not that
+/// marks for a freeze that never happened. `PanicKind::HeapExhausted` is not that
 /// case -- it is an ordinary `Err` and takes the revoke path.
 ///
 /// This reproduces the state such an unwind leaves -- an instance marked, and
@@ -3257,7 +3263,7 @@ fn promise_native_roots_preserve_halted_operand_stack() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&crate::parse_symbols(&symbols));
         let out = vm.run_bounded(&code, 2_000);
-        assert!(matches!(out.halt, Halt::StepLimit(_)), "{:?}", out.halt);
+        assert!(matches!(out.halt, Halt::Panic(PanicKind::StepLimit(_))), "{:?}", out.halt);
         assert!(!vm.call_stack.is_empty(), "halted callee must remain installed");
         assert!(!vm.cur_func.is_null());
         let key = vm.intern_static_key("haltOnlyOperand");
@@ -3293,7 +3299,7 @@ fn promise_native_roots_preserve_stack_overflow_operands() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&crate::parse_symbols(&symbols));
         let out = vm.run_bounded(&code, 100_000);
-        assert!(matches!(out.halt, Halt::StackOverflow(_)), "{:?}", out.halt);
+        assert!(matches!(out.halt, Halt::Panic(PanicKind::StackOverflow(_))), "{:?}", out.halt);
         assert!(!vm.call_stack.is_empty(), "halted callee must remain installed");
         assert!(!vm.cur_func.is_null());
         let key = vm.intern_static_key("haltOnlyOperand");
@@ -3345,7 +3351,10 @@ fn generator_resume_admission_counts_sent_value_and_retains_refused_frame() {
         if excess == 0 {
             assert!(result.is_ok(), "{result:?}");
         } else {
-            assert!(matches!(result, Err(Step::Host(Halt::StackOverflow(_)))));
+            assert!(matches!(
+                result,
+                Err(Step::Host(Halt::Panic(PanicKind::StackOverflow(_))))
+            ));
             assert_eq!(vm.stack.len(), stack_len);
             assert_eq!(
                 vm.generators
@@ -3596,7 +3605,10 @@ fn catch_entry_shares_names_until_a_binding_changes() {
     // dispatch_at preserves the prepared frame; run's new-crank reset does not.
     let code = [Opcode::XS_CODE_CATCH_1 as u8, 0, Opcode::XS_CODE_END as u8];
     vm.step_limit = 1;
-    assert_eq!(vm.dispatch_at(&code, 0, 0), Step::Host(Halt::StepLimit(1)));
+    assert_eq!(
+        vm.dispatch_at(&code, 0, 0),
+        Step::Host(Halt::Panic(PanicKind::StepLimit(1)))
+    );
     assert_eq!(vm.jumps.len(), 1);
     assert!(std::rc::Rc::ptr_eq(&vm.jumps[0].id_map, &names));
     assert!(std::rc::Rc::ptr_eq(&vm.id_map, &names));
@@ -3638,13 +3650,15 @@ fn call_entry_failures_retire_the_pending_frame_tuple() {
             "noncallable" => assert!(matches!(result, Err(Step::Threw { .. }))),
             "bodyless" => assert_eq!(
                 result,
-                Err(Step::Host(Halt::EngineInvariant("bind:bound-callback")))
+                Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "bind:bound-callback"
+                ))))
             ),
             _ => assert_eq!(
                 result,
-                Err(Step::Host(Halt::StackOverflow(
+                Err(Step::Host(Halt::Panic(PanicKind::StackOverflow(
                     STACK_SLOT_COUNT + FRAME_OVERHEAD_SLOTS + 1
-                )))
+                ))))
             ),
         }
         assert_eq!(vm.stack, [Slot::integer(99)], "{failure}");
@@ -3659,7 +3673,9 @@ fn impossible_call_argument_count_refuses_without_arithmetic_overflow() {
     vm.stack.push(Slot::integer(1));
     assert_eq!(
         vm.enter_call(usize::MAX, 0, false),
-        Err(Step::Host(Halt::EngineInvariant("call:stack-underflow")))
+        Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+            "call:stack-underflow"
+        ))))
     );
     assert_eq!(vm.stack, [Slot::integer(1)]);
 }

@@ -1,5 +1,5 @@
 //! F095: reinstalling a suspended activation must admit its saved slots.
-use ironhorse_vm::{parse_symbols, Halt, Interp};
+use ironhorse_vm::{parse_symbols, Halt, Interp, PanicKind};
 
 fn locals(count: usize) -> String {
     (0..count).map(|i| format!("var v{i}=0; ")).collect()
@@ -11,7 +11,11 @@ fn run(source: &str, overflow: bool) {
     vm.link_intrinsics(&parse_symbols(&symbols));
     let out = vm.run(&code);
     if overflow {
-        assert!(matches!(out.halt, Halt::StackOverflow(_)), "{:?}", out.halt);
+        assert!(
+            matches!(out.halt, Halt::Panic(PanicKind::StackOverflow(_))),
+            "{:?}",
+            out.halt
+        );
         assert!(!out.completed);
         assert_eq!(vm.global_string("after").as_deref(), Some("no"));
     } else {

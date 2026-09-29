@@ -30,7 +30,7 @@
 //! (`23b4d6b0`, XS 8.3.1) before it was asserted here.
 
 use ironhorse_compile::compile_atoms;
-use ironhorse_vm::{parse_symbols_checked, Halt, Interp};
+use ironhorse_vm::{parse_symbols_checked, Halt, Interp, PanicKind};
 
 fn thrown(source: &str, in_guest: bool) -> String {
     match halt_of(source, in_guest).1 {
@@ -228,12 +228,12 @@ fn an_engine_fault_in_the_render_propagates_instead_of_becoming_the_sentinel() {
 /// Unbounded, `throw {toString(){ while(true){} }}` never returns: the 262
 /// machine is unmetered, `step_limit` is `u64::MAX` in production, and every
 /// in-repo harness suite runs with the per-case timeout disabled. The budget
-/// surfaces as `Halt::StepLimit`, which propagates as a fault rather than
+/// surfaces as `PanicKind::StepLimit`, which propagates as a fault rather than
 /// becoming text.
 #[test]
 fn a_render_that_does_not_terminate_is_bounded() {
     match halt_of("throw {toString(){ while(true){} }}", true).1 {
-        Halt::StepLimit(n) => assert!(n >= 10_000_000, "budget not applied: {n}"),
+        Halt::Panic(PanicKind::StepLimit(n)) => assert!(n >= 10_000_000, "budget not applied: {n}"),
         other => panic!("expected StepLimit, got {other:?}"),
     }
     // The default boundary never had this problem and still does not.

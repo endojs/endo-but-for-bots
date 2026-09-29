@@ -1,6 +1,6 @@
 //! UTF-16 storage, CESU-8 decoding, and admitted Unicode transformations.
 
-use super::{Halt, Interp, Step};
+use super::{Halt, Interp, PanicKind, Step};
 
 /// Decode a string value's stored **UTF-16 big-endian** payload into its
 /// code units. A trailing odd byte (never produced by the store path) is
@@ -85,11 +85,11 @@ pub(super) fn unicode_case_convert_utf16(
 fn admitted_scalar_run(vm: &mut Interp, units: usize) -> Result<String, Step> {
     let bytes = units
         .checked_mul(3)
-        .ok_or(Step::Host(Halt::HeapExhausted))?;
+        .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
     vm.admit_scratch::<u8>(bytes)?;
     let mut run = String::new();
     run.try_reserve_exact(bytes)
-        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
     Ok(run)
 }
 
@@ -159,7 +159,7 @@ pub(super) fn unicode_normalize_utf16(
         units
             .len()
             .checked_mul(18)
-            .ok_or(Step::Host(Halt::HeapExhausted))?,
+            .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?,
     )?;
     let flush =
         |vm: &mut Interp, scalar_run: &mut String, out: &mut Vec<u16>| -> Result<(), Step> {

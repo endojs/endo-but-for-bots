@@ -1,6 +1,8 @@
 use ironhorse_compile::{compile_atoms_with, compile_atoms_with_budget, ParseErrorKind};
 use ironhorse_runtime::IronhorseSourceCompiler;
-use ironhorse_vm::{CompiledSource, Halt, Interp, RunOutcome, SourceCompileError, SourceCompiler};
+use ironhorse_vm::{
+    CompiledSource, Halt, Interp, PanicKind, RunOutcome, SourceCompileError, SourceCompiler,
+};
 use std::{cell::Cell, rc::Rc};
 
 struct ObservedCompiler {
@@ -98,7 +100,7 @@ fn compilation_refusal_is_uncatchable_and_adds_no_dynamic_segment() {
             }),
             true,
         );
-        assert_eq!(out.halt, Halt::MeterAbort);
+        assert_eq!(out.halt, Halt::Panic(PanicKind::MeterAbort));
         assert!(!out.completed);
         assert!(!vm.is_quiescent());
         assert_eq!(
@@ -256,11 +258,11 @@ fn ignored_refusal_and_forged_receipt_cannot_execute_output() {
         Rc::new(MisbehavingCompiler(true)),
         true,
     );
-    assert_eq!(out.halt, Halt::MeterAbort);
+    assert_eq!(out.halt, Halt::Panic(PanicKind::MeterAbort));
     let (_, out) = run("eval('1')", Rc::new(MisbehavingCompiler(false)), false);
     assert_eq!(
         out.halt,
-        Halt::EngineInvariant("eval:compile-charge-receipt")
+        Halt::Panic(PanicKind::EngineInvariant("eval:compile-charge-receipt"))
     );
 }
 
@@ -281,7 +283,7 @@ impl SourceCompiler for ExhaustAddressability {
 #[test]
 fn exhausting_raw_addressability_halts_without_unwind() {
     let (_, out) = run("eval('1')", Rc::new(ExhaustAddressability), false);
-    assert_eq!(out.halt, Halt::MeterAbort);
+    assert_eq!(out.halt, Halt::Panic(PanicKind::MeterAbort));
 }
 
 #[test]

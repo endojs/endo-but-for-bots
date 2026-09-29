@@ -80,7 +80,7 @@ impl Interp {
             };
             size = size
                 .checked_add(added)
-                .ok_or(Step::Host(Halt::HeapExhausted))?;
+                .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
             i += 1;
         }
         self.json_reserve_output(state, size)?;
@@ -125,7 +125,7 @@ impl Interp {
         let total = state
             .output_units
             .checked_add(additional as u64)
-            .ok_or(Step::Host(Halt::HeapExhausted))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         self.reserve_units_growth(state.output_units, total)?;
         state.output_units = total;
         Ok(())
@@ -160,12 +160,13 @@ impl Interp {
         } else {
             2 + 2 * count + count * indent.len() as u64 + stepback.len() as u64
         };
-        let extra = usize::try_from(extra).map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        let extra = usize::try_from(extra)
+            .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         self.json_reserve_output(state, extra)?;
         let length = partial
             .iter()
             .try_fold(extra, |length, part| length.checked_add(part.len()))
-            .ok_or(Step::Host(Halt::HeapExhausted))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         self.reserve_scratch(length)
     }
 
@@ -258,7 +259,7 @@ impl Interp {
                     units
                         .len()
                         .checked_mul(3)
-                        .ok_or(Step::Host(Halt::HeapExhausted))?,
+                        .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?,
                 )?;
                 // The tokenizer below operates on scalar UTF-8 text. Preserve
                 // correctness at its remaining representation boundary: a
@@ -720,7 +721,7 @@ impl Interp {
                 self.admit_scratch::<u16>(member.len() + additional)?;
                 member
                     .try_reserve(additional)
-                    .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                    .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
                 member.push(b':' as u16);
                 if !state.gap.is_empty() {
                     member.push(b' ' as u16);
@@ -777,7 +778,7 @@ impl Interp {
     /// caller charges [`JSON_PARSE_SETUP_METERING`] once and `cost` at the end).
     /// A malformed input throws a catchable `SyntaxError`. Each nesting level
     /// of the input is one light frame of the native-recursion budget, so
-    /// `"[".repeat(1e6)` halts with [`Halt::ReentryLimit`] instead of
+    /// `"[".repeat(1e6)` halts with [`PanicKind::ReentryLimit`] instead of
     /// overflowing the host stack (XS's `fxParseJSONValue` recurses the same
     /// way, bounded by its C stack).
     fn json_parse_value(
@@ -1180,7 +1181,7 @@ impl Interp {
             let (v, source) = self.json_parse_value(input, pos, track_source)?;
             member_count = member_count
                 .checked_add(1)
-                .ok_or(Step::Host(Halt::HeapExhausted))?;
+                .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
             self.admit_scratch::<(ReadKey, Slot)>(member_count)?;
             match key_ref {
                 ReadKey::Id(id) => self.set_own_unmetered(inst, id, v),
@@ -1199,7 +1200,7 @@ impl Interp {
                         self.admit_scratch::<(ReadKey, usize)>(source_positions.len() + 1)?;
                         source_positions
                             .try_reserve(1)
-                            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                            .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
                         source_positions.insert(key_ref, sources.len());
                         self.push_prepaid_scratch(&mut sources, (key_ref, source))?;
                     }

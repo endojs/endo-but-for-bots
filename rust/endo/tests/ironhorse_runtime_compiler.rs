@@ -66,7 +66,10 @@ fn ephemeral_dynamic_source_stays_under_the_crank_budget() {
         )
         .unwrap();
     assert!(!outcome.completed);
-    assert!(matches!(outcome.halt, ironhorse_vm::Halt::MeterAbort));
+    assert!(matches!(
+        outcome.halt,
+        ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::MeterAbort)
+    ));
 }
 
 #[test]

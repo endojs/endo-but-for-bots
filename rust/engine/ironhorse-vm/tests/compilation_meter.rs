@@ -1,4 +1,4 @@
-use ironhorse_vm::{CompiledSource, Halt, Interp, SourceCompileError, SourceCompiler};
+use ironhorse_vm::{CompiledSource, Halt, Interp, PanicKind, SourceCompileError, SourceCompiler};
 use std::{cell::Cell, rc::Rc};
 
 struct Compiler {
@@ -104,7 +104,7 @@ fn compilation_refusal_bypasses_guest_catch() {
         "try { Function('return 3')(); } catch(e) { 999; }",
     ] {
         let (outcome, _, spent, calls) = run(source, true, true);
-        assert_eq!(outcome.halt, Halt::MeterAbort, "{source}");
+        assert_eq!(outcome.halt, Halt::Panic(PanicKind::MeterAbort), "{source}");
         assert!(!outcome.completed);
         assert!(spent > 0);
         assert_eq!(calls, 1, "compiler stopped on the first host refusal");

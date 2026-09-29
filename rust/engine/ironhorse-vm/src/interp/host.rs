@@ -151,7 +151,9 @@ impl<'scope> HostCallContext<'scope> {
                 return Err(HostCallError::Stopped);
             }
             Err(payload) => {
-                self.stopped = Some(Step::Host(Halt::EngineInvariant("host:meter-panicked")));
+                self.stopped = Some(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "host:meter-panicked",
+                ))));
                 std::panic::resume_unwind(payload);
             }
         }
@@ -168,13 +170,13 @@ impl<'scope> HostCallContext<'scope> {
         match result {
             Ok(offset) => Ok(self.value(Slot::of(Kind::String, Payload::String(offset)))),
             Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
-                self.stopped = Some(Step::Host(Halt::HeapExhausted));
+                self.stopped = Some(Step::Host(Halt::Panic(PanicKind::HeapExhausted)));
                 Err(HostCallError::Stopped)
             }
             Err(payload) => {
-                self.stopped = Some(Step::Host(Halt::EngineInvariant(
+                self.stopped = Some(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "host:string-allocation-panicked",
-                )));
+                ))));
                 std::panic::resume_unwind(payload)
             }
         }
@@ -204,9 +206,9 @@ impl<'scope> HostCallContext<'scope> {
                 self.interp.native_depth = native_depth;
                 self.interp.jumps = jumps;
                 self.stopped = Some(Step::Host(if payload.is::<crate::value::HeapExhausted>() {
-                    Halt::HeapExhausted
+                    Halt::Panic(PanicKind::HeapExhausted)
                 } else {
-                    Halt::EngineInvariant("host:guest-call-panicked")
+                    Halt::Panic(PanicKind::EngineInvariant("host:guest-call-panicked"))
                 }));
                 if payload.is::<crate::value::HeapExhausted>() {
                     return Err(HostCallError::Stopped);
@@ -234,14 +236,20 @@ impl Interp {
     ) -> Result<Slot, Step> {
         let owner = match self.stack[base + 1].value {
             Payload::Reference(owner) => owner,
-            _ => return Err(Step::Host(Halt::EngineInvariant("host:missing-function"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "host:missing-function",
+                ))))
+            }
         };
         let data = self
             .functions
             .get(&owner)
             .and_then(|f| f.host.as_ref())
             .cloned()
-            .ok_or(Step::Host(Halt::EngineInvariant("host:missing-metadata")))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "host:missing-metadata",
+            ))))?;
         let registry = self
             .host_callbacks
             .upgrade()
@@ -317,7 +325,9 @@ impl Interp {
         }));
         match result {
             Ok(result) => result,
-            Err(payload) if payload.is::<crate::value::HeapExhausted>() => Err(Halt::HeapExhausted),
+            Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
+                Err(Halt::Panic(PanicKind::HeapExhausted))
+            }
             Err(payload) => std::panic::resume_unwind(payload),
         }
     }

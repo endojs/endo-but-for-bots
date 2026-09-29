@@ -15,7 +15,8 @@ impl Interp {
         };
         let length = self.arraylike_length(code, inst, value)?;
         let len = self.to_length_value(code, length)?;
-        let capacity = usize::try_from(len).map_err(|_| Step::Host(Halt::HeapExhausted))?;
+        let capacity =
+            usize::try_from(len).map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         let mut out = self.reserve_work_scratch(capacity)?;
         for i in 0..len {
             out.push(self.arraylike_index(code, inst, i, value)?);
@@ -169,6 +170,8 @@ impl Interp {
             self.charge_builtin_work(1)?;
             self.push_prepaid_scratch(&mut values, value)?;
         }
-        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+        Err(Step::Host(Halt::Panic(PanicKind::StepLimit(
+            self.n_dispatched,
+        ))))
     }
 }

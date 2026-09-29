@@ -1,7 +1,7 @@
 //! F065 runtime compilation pair. Source construction and outer compilation are excluded.
 use ironhorse_262::IronhorseSourceCompiler;
 use ironhorse_compile::compile_atoms_with;
-use ironhorse_vm::{parse_symbols, Halt, Interp};
+use ironhorse_vm::{parse_symbols, Halt, Interp, PanicKind};
 use std::{rc::Rc, time::Instant};
 
 #[test]
@@ -39,7 +39,7 @@ fn runtime_compilation_cost() {
                 let start = Instant::now();
                 let outcome = vm.run(&code);
                 let seconds = start.elapsed().as_secs_f64();
-                assert!(outcome.completed || outcome.halt == Halt::MeterAbort);
+                assert!(outcome.completed || outcome.halt == Halt::Panic(PanicKind::MeterAbort));
                 if shape != "refusal" {
                     assert!(outcome.completed, "{:?}", outcome.halt);
                     assert_eq!(

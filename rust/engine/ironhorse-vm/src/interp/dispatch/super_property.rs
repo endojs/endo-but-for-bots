@@ -34,7 +34,11 @@ impl Interp {
         let super_ref = self.pop_checked()?;
         let receiver_ref = match super_ref.value {
             Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => receiver,
-            _ => return Err(Step::Host(Halt::EngineInvariant("get_super_at:reference"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "get_super_at:reference",
+                ))))
+            }
         };
         // A read mints nothing: an index the key table has never
         // held stays an index (`ReadKey`).
@@ -46,7 +50,11 @@ impl Interp {
                 }
             }
             Payload::At(id, _) => ReadKey::Id(id),
-            _ => return Err(Step::Host(Halt::EngineInvariant("get_super_at:key"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "get_super_at:key",
+                ))))
+            }
         };
         let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
         // A computed super reference defers the null-base
@@ -104,14 +112,22 @@ impl Interp {
         let super_ref = self.pop_checked()?;
         let receiver_ref = match super_ref.value {
             Payload::Reference(receiver) if super_ref.kind == Kind::EnvReference => receiver,
-            _ => return Err(Step::Host(Halt::EngineInvariant("set_super_at:reference"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "set_super_at:reference",
+                ))))
+            }
         };
         let id = match key.value {
             Payload::At(id, index) if id == crate::value::XS_NO_ID => {
                 self.intern_key(index.to_string())?
             }
             Payload::At(id, _) => id,
-            _ => return Err(Step::Host(Halt::EngineInvariant("set_super_at:key"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "set_super_at:key",
+                ))))
+            }
         };
         let receiver = Slot::of(Kind::Reference, Payload::Reference(receiver_ref));
         // A computed super reference defers the null-base

@@ -92,7 +92,7 @@ fn unguarded_unwinds(code: &[Token<'_>]) -> Vec<usize> {
 fn macro_ownership_and_metering(code: &[Token<'_>]) -> bool {
     [
         "Step::Unwound(target) if $machine.call_stack.len() < $return_depth || !$machine.resume_target_belongs_to(target, $code) => { return Step::Unwound(target); }",
-        "Step::Unwound(target) => { $machine.assert_resume_target(target, $code); $program_counter = target.pc; if $machine.check_meter() == MeterCheck::Abort { return Step::Host(Halt::MeterAbort); } continue; }",
+        "Step::Unwound(target) => { $machine.assert_resume_target(target, $code); $program_counter = target.pc; if $machine.check_meter() == MeterCheck::Abort { return Step::Host(Halt::Panic(PanicKind::MeterAbort)); } continue; }",
     ].iter().all(|pattern| token_positions(code, pattern).len() == 1)
 }
 

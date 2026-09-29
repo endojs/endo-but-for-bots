@@ -211,7 +211,7 @@ pub enum SourceCompileError {
     ///
     /// This is an ENGINE FAULT, not a coverage gap and not a guest error.
     /// The bridge stops the machine with an uncatchable
-    /// [`Halt::EngineInvariant`] under a fixed label rather than letting
+    /// [`PanicKind::EngineInvariant`] under a fixed label rather than letting
     /// arbitrary panic text reach a guest, and no guest `SyntaxError` is
     /// raised: the source may be perfectly valid.
     Invariant(String),
@@ -287,7 +287,7 @@ pub const STACK_SLOT_COUNT: usize = 4096;
 
 /// Additional live-slot stop for `run_bounded`. An instruction-count bound
 /// alone does not bound the heap retained by a loop. Bounded dispatch checks
-/// this ceiling before the next instruction and returns `Halt::StepLimit`.
+/// this ceiling before the next instruction and returns `PanicKind::StepLimit`.
 /// Ordinary runs use the arena and allocation-admission limits instead.
 const BOUNDED_RUN_SLOT_CEILING: u32 = 1_000_000;
 
@@ -295,7 +295,7 @@ const BOUNDED_RUN_SLOT_CEILING: u32 = 1_000_000;
 /// ([`Interp::run_rendering_throws_in_guest`]). Generous by orders of
 /// magnitude for any `toString` a diagnostic would meet -- test262's is a
 /// string concatenation -- while still bounding a `toString` that does not
-/// terminate. Exceeding it is `Halt::StepLimit`, which the render propagates
+/// terminate. Exceeding it is `PanicKind::StepLimit`, which the render propagates
 /// rather than turning into text.
 const RENDER_DISPATCH_BUDGET: u64 = 10_000_000;
 /// XS reserves a fixed band at the top of the stack for the machine roots
@@ -336,7 +336,7 @@ pub const FRAME_OVERHEAD_SLOTS: usize = 4;
 ///
 /// One counter, [`Interp::native_depth`], is charged by every one of those
 /// re-entry points and checked against this ceiling; past it the engine halts
-/// with [`Halt::ReentryLimit`] — distinct from the value-stack abort XS raises from
+/// with [`PanicKind::ReentryLimit`] — distinct from the value-stack abort XS raises from
 /// `fxCheckCStack`, deterministic across hosts because it is a counter rather
 /// than a stack-address margin. The *depth* at which it fires is this
 /// engine's, sized to its own frames, not XS's: the oracle's C stack admits
@@ -1326,16 +1326,19 @@ pub fn error_name_static(name: &str) -> Option<&'static str> {
 /// A host-observable completion or abort. Nested catch and suspension transfers
 /// are private interpreter state and cannot be returned in this type.
 ///
-/// Match a **panic** via [`Halt::is_panic`] (or the
-/// `ExecutionOutcome` seam in the `endo` crate's `ironhorse_engine`
-/// module, which delegates to it), never on a variant shape directly: the
-/// "terminate, do not commit" set is defined in exactly one place
-/// (`is_panic`), so a commit-path caller that matches `StackOverflow` /
-/// `MeterAbort` / `Panic(_)` by hand reproduces that logic and silently
-/// drifts when the set changes (design `ironhorse-panic.md`
-/// § The Formal `Panic` Category). `#[non_exhaustive]` adds
-/// discovery-time friction toward this rule for out-of-crate matches; it
-/// is a convention, not a type-level guarantee.
+/// Every **panic** — an uncatchable abort-to-host termination whose crank
+/// the supervisor must discard rather than commit — is spelled
+/// `Halt::Panic(kind)`, and only that (design `ironhorse-panic.md`
+/// § Type-enforced classification (Q8)). The classification is carried by
+/// the type: a new panic source is a new [`PanicKind`] variant, so it lands
+/// inside the panic arm by construction and cannot be forgotten by a
+/// commit-path match. [`Halt::is_panic`] is a shape test over that one arm.
+///
+/// Out-of-crate commit/discard decisions still go through the `endo`
+/// crate's `ExecutionOutcome` classifier, never a raw `Halt` match: its
+/// `Panicked` arm also absorbs fail-closed non-panic stops
+/// (`NotImplemented`, `Refused`, unexpected control states) that are not
+/// [`PanicKind`] values.
 // Thrown values contain floating-point numbers, so only PartialEq is derived.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -1344,20 +1347,6 @@ pub enum Halt {
     MachineBusy,
     /// Reached RETURN/END: the completion value is in `result`.
     Return,
-    /// The meter host refused more computation.
-    MeterAbort,
-    /// The configured slot or chunk heap ceiling was exhausted.
-    HeapExhausted,
-    /// The interpreter ran past a caller-supplied **step ceiling** without
-    /// completing — a bounded-execution guard for callers that install no
-    /// metering host (notably the bytecode-decoder fuzz harness, which
-    /// [`run_program`] leaves un-metered). A malformed backward branch that
-    /// targets itself (e.g. `BRANCH_STATUS_1` with offset `-2` at pc 0) or
-    /// any other non-terminating dispatch cycle aborts here in bounded time
-    /// instead of hanging. Carries the dispatch count reached at the abort.
-    /// Never produced by the default-unbounded [`Interp::run`], so it does
-    /// not perturb the oracle-differential paths.
-    StepLimit(u64),
     /// An opcode, built-in, or value shape outside the implemented surface.
     /// Skip eligibility requires an explicit NotImplemented label in
     /// [`crate::halt_labels`]; a new or misclassified label is a harness failure.
@@ -1367,6 +1356,49 @@ pub enum Halt {
     /// Skip eligibility requires an explicit Refused label in
     /// [`crate::halt_labels`]; this is distinct from an implementation gap.
     Refused(&'static str),
+    /// A JS-level throw that escaped every guest handler and reached the
+    /// host boundary. `value` is the original guest value, carried through
+    /// nested dispatch and native catches before this outcome is constructed;
+    /// `rendered` is its host-boundary `String()` rendering, for
+    /// diagnostics and the oracle's thrown-value comparison.
+    ///
+    /// Constructed at the host boundary after nested dispatch and native
+    /// catches have declined the thrown value, or by [`Halt::synthetic_throw`]
+    /// for the harness (`tests/throw_construction_sites.rs` locks the set). An
+    /// engine error built anywhere else must be a real error object routed
+    /// through `raise_js`, so guest `try`/`catch` can observe it.
+    Throw { value: Slot, rendered: String },
+    /// An uncatchable abort-to-host termination (design `ironhorse-panic.md`
+    /// § The Formal `Panic` Category). The [`PanicKind`] keeps each source's
+    /// diagnostic payload.
+    Panic(PanicKind),
+}
+
+/// The kind of a [`Halt::Panic`]. Each variant keeps the diagnostic payload
+/// its source produced, so a frozen-at-fault snapshot is self-describing
+/// rather than requiring the cause to be re-derived from the program counter
+/// (design `ironhorse-panic.md` § The Formal `Panic` Category, items 1–3,
+/// and § Type-enforced classification (Q8)).
+///
+/// Extensible on purpose: the reference-error source of the design's Coda
+/// (`ReferenceError { name, site }`) lands here as one more variant.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum PanicKind {
+    /// XS's fixed-geometry value-stack abort (`fxOverflow`). Carries the
+    /// slots in use before the refused frame installation. Not catchable.
+    StackOverflow(usize),
+    /// The release's implementation-specific native recursion budget was
+    /// exhausted. `depth` is the attempted weighted depth, including the
+    /// refused activation; `limit` is the release's maximum weighted depth.
+    /// This abort is distinct from the modeled XS value-stack geometry.
+    ReentryLimit { depth: usize, limit: usize },
+    /// The meter host refused more computation. Terminal: a refill gates
+    /// admission of the next crank, never resumption of this one (design
+    /// Q2).
+    MeterAbort,
+    /// The configured slot or chunk heap ceiling was exhausted.
+    HeapExhausted,
     /// The engine's **own state is wrong**: a guard on the interpreter's
     /// invariants fired (value-stack or frame underflow, a suspended
     /// generator or async instance with no saved frame, a resolving
@@ -1380,50 +1412,21 @@ pub enum Halt {
     /// Its label set is pinned alongside the declined set in
     /// `tests/halt_label_registry.rs`.
     EngineInvariant(&'static str),
-    /// The bytecode was truncated or an opcode byte was invalid.
+    /// The bytecode was truncated or an opcode byte was invalid. Arises on
+    /// the loader path and while `dispatch_at` fetches instructions, so it
+    /// is not confined to loading (design Q1).
     Decode(DecodeError),
-    /// A JS-level throw that escaped every guest handler and reached the
-    /// host boundary. `value` is the original guest value, carried through
-    /// nested dispatch and native catches before this outcome is constructed;
-    /// `rendered` is its host-boundary `String()` rendering, for
-    /// diagnostics and the oracle's thrown-value comparison.
-    ///
-    /// Constructed at the host boundary after nested dispatch and native
-    /// catches have declined the thrown value, or by [`Halt::synthetic_throw`]
-    /// for the harness (`tests/throw_construction_sites.rs` locks the set). An
-    /// engine error built anywhere else must be a real error object routed
-    /// through `raise_js`, so guest `try`/`catch` can observe it.
-    Throw { value: Slot, rendered: String },
-    /// XS's fixed-geometry value-stack abort (`fxOverflow`). Carries the
-    /// slots in use before the refused frame installation. Not catchable.
-    StackOverflow(usize),
-    /// The release's implementation-specific native recursion budget was
-    /// exhausted. `depth` is the attempted weighted depth, including the
-    /// refused activation; `limit` is the release's maximum weighted depth.
-    /// This abort is distinct from the modeled XS value-stack geometry.
-    ReentryLimit { depth: usize, limit: usize },
-    /// A **net-new panic** with no legacy `Halt` variant (design
-    /// `ironhorse-panic.md` § The Formal `Panic` Category, item 3). The
-    /// pre-existing panics (`StackOverflow`, `MeterAbort`) keep their flat,
-    /// diagnostic-carrying shapes; the sources introduced by the panic
-    /// design nest under `Panic(PanicKind)`. Both spellings answer the same
-    /// supervisor question — routed through [`Halt::is_panic`], never a
-    /// direct variant match.
-    Panic(PanicKind),
-}
-
-/// The kind of a net-new [`Halt::Panic`], each carrying a diagnostic
-/// payload so a frozen-at-fault snapshot is self-describing rather than
-/// requiring the cause to be re-derived from the program counter (design
-/// `ironhorse-panic.md` § The Formal `Panic` Category, item 3).
-///
-/// Extensible on purpose: the reference-error source of the design's Coda
-/// (`ReferenceError { name, site }`, off by default) is a deferred
-/// follow-on and is intentionally absent here; `#[non_exhaustive]` lets it
-/// be added later without churning match sites.
-#[derive(Debug, Clone, PartialEq)]
-#[non_exhaustive]
-pub enum PanicKind {
+    /// The interpreter ran past a caller-supplied **step ceiling** without
+    /// completing — a bounded-execution guard for callers that install no
+    /// metering host (the bytecode-decoder fuzz harness, which
+    /// [`run_program`] leaves un-metered, and bounded guest-throw rendering).
+    /// A malformed backward branch that targets itself (e.g.
+    /// `BRANCH_STATUS_1` with offset `-2` at pc 0) or any other
+    /// non-terminating dispatch cycle aborts here in bounded time instead of
+    /// hanging. Carries the dispatch count reached at the abort. Never
+    /// produced by the default-unbounded [`Interp::run`], so it does not
+    /// perturb the oracle-differential paths.
+    StepLimit(u64),
     /// A caught Rust panic, converted into this value at the thread/FFI
     /// boundary so the supervisor observes a worker-death *value* rather
     /// than a process abort. As informative as `StackOverflow`'s overshoot:
@@ -1449,44 +1452,26 @@ impl Halt {
     /// termination whose crank the supervisor must *discard, not commit*
     /// (design `ironhorse-panic.md` § The Formal `Panic` Category, item 2).
     ///
-    /// This is the single place the **panic** set is defined. The
-    /// `ExecutionOutcome` classifier delegates its `Panicked` arm here for
-    /// every genuine panic rather than re-listing panic shapes, so adding a
-    /// new panic variant updates this predicate alone. That classifier's
-    /// `Panicked` outcome is a strict *superset* of this predicate, though:
-    /// it also absorbs `Halt::NotImplemented` and a fail-closed catch-all, which
-    /// terminate-without-commit but are **not** panics. Those extra cases
-    /// live in `ExecutionOutcome::classify`, never here — so this predicate is
-    /// still the sole definition of "is a panic," not of "must discard the
-    /// crank" (a strictly larger set).
-    ///
-    /// The settled core is `StackOverflow | ReentryLimit | MeterAbort | EngineInvariant(_) | Panic(_)`.
-    /// `Decode` and the harness-only `StepLimit` are **provisional**
-    /// members: they terminate-without-commit like a panic, but their
-    /// provenance is supervisor/harness rather than guest behavior, so
-    /// their inclusion is an open question (design § Open Questions).
-    /// Because this returns a bare `bool`, a caller written against today's
-    /// answer for those two gets **no compiler signal** if the question
-    /// later flips it — treat this doc note as that signal.
+    /// A shape test: every panic is `Halt::Panic(_)` by construction, so
+    /// adding a panic source means adding a [`PanicKind`] variant and this
+    /// predicate follows without edit. The `ExecutionOutcome` classifier's
+    /// `Panicked` outcome is a strict *superset* of this predicate: it also
+    /// absorbs `Halt::NotImplemented`, `Halt::Refused`, and a fail-closed
+    /// catch-all, which terminate-without-commit but are **not** panics.
     ///
     /// A pure function of the `Halt` value: it never consults caller
-    /// context. `Decode` arises only on the loader path and `StepLimit`
-    /// only on the un-metered fuzz harness, but that is a fact about *where
-    /// those variants arise*, not a branch inside this predicate.
+    /// context. Provenance (load, execute, diagnostic rendering, harness)
+    /// is a separate report field, not part of this answer.
     pub fn is_panic(&self) -> bool {
-        matches!(
-            self,
-            Halt::StackOverflow(_)
-                | Halt::ReentryLimit { .. }
-                | Halt::MeterAbort
-                | Halt::HeapExhausted
-                | Halt::Panic(_)
-                | Halt::EngineInvariant(_)
-                // Provisional (Open Question), may change without a
-                // type-level signal:
-                | Halt::Decode(_)
-                | Halt::StepLimit(_)
-        )
+        self.panic_kind().is_some()
+    }
+
+    /// The panic's kind and diagnostic payload, when this halt is a panic.
+    pub fn panic_kind(&self) -> Option<&PanicKind> {
+        match self {
+            Halt::Panic(kind) => Some(kind),
+            _ => None,
+        }
     }
 }
 
@@ -2284,7 +2269,7 @@ impl Interp {
     /// arm before running. The un-metered default is unchanged — a fresh
     /// `Interp` never arms and never checks, so the differential harness
     /// is unaffected. On host refusal, the run halts with
-    /// [`Halt::MeterAbort`].
+    /// [`PanicKind::MeterAbort`].
     pub fn arm_meter(&mut self, interval: u64, host: Box<dyn FnMut(u64) -> bool>) {
         self.meter.begin(interval);
         self.meter_host = Some(host);
@@ -2396,7 +2381,7 @@ impl Interp {
 
     /// Run a program bytecode buffer to completion.
     /// Run under a dispatch-count ceiling: identical to [`Self::run`] but
-    /// halts with [`Halt::StepLimit`] if the program dispatches `step_limit`
+    /// halts with [`PanicKind::StepLimit`] if the program dispatches `step_limit`
     /// opcodes without completing. For un-metered callers (the decoder fuzz
     /// harness) that must stay total on arbitrary/malformed bytecode without
     /// wedging on a non-terminating dispatch cycle.
@@ -2523,7 +2508,7 @@ impl Interp {
                 computrons: self.meter.computrons(),
                 dispatched: self.n_dispatched,
                 meter_raw: self.meter.raw(),
-                halt: Halt::EngineInvariant("gc:previous-collection-failed"),
+                halt: Halt::Panic(PanicKind::EngineInvariant("gc:previous-collection-failed")),
                 host_render_halt: None,
             };
         }
@@ -2564,7 +2549,7 @@ impl Interp {
                     computrons: self.meter.computrons(),
                     dispatched: self.n_dispatched,
                     meter_raw: self.meter.raw(),
-                    halt: Halt::HeapExhausted,
+                    halt: Halt::Panic(PanicKind::HeapExhausted),
                     host_render_halt: None,
                 }
             }
@@ -2796,7 +2781,9 @@ impl Interp {
             },
             Step::Host(halt) => halt,
             Step::Yielded(_) | Step::Awaited(_) | Step::AsyncYielded(_) | Step::Unwound(_) => {
-                Halt::EngineInvariant("dispatch:control-transfer-escaped")
+                Halt::Panic(PanicKind::EngineInvariant(
+                    "dispatch:control-transfer-escaped",
+                ))
             }
         }
     }
@@ -3199,7 +3186,7 @@ fn bi_to_radix(
         .len()
         .checked_mul(32)
         .and_then(|n| n.checked_add(1))
-        .ok_or(Step::Host(Halt::HeapExhausted))?;
+        .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
     let mut digits = vm.reserve_scratch::<u8>(capacity)?;
     while !bi_is_zero(&limbs) {
         vm.charge_builtin_work(limbs.len() as u64)?;

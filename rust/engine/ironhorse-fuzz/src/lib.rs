@@ -13,7 +13,7 @@
 //!   string. Computrons are release-pinned independently, not compared to XS.
 //! - **Target 2, bytecode decoder fuzzing**: `decoder_is_panic_free`
 //!   drives arbitrary/truncated bytes through the decoder and
-//!   interpreter, which must degrade to a `Halt::Decode`, never panic
+//!   interpreter, which must degrade to a `PanicKind::Decode`, never panic
 //!   (XS treats bytecode as trusted; ironhorse's loader must not).
 //!
 //! **Trophies pin the PROGRAM, not the bytes.** A regression here records the
@@ -1854,7 +1854,7 @@ pub struct Divergence {
 ///   exemption is granted by that allowlist, not by the halt: an `Unsupported`
 ///   whose label is not registered is a divergence (`Some(Err(_))`), so the
 ///   engine cannot widen its own exemption by reaching for a new string.
-/// * [`Halt::EngineInvariant`] is **never** skip-eligible (`Some(Err(_))`):
+/// * [`PanicKind::EngineInvariant`] is **never** skip-eligible (`Some(Err(_))`):
 ///   one of the interpreter's own guards (a value-stack or frame underflow, a
 ///   suspended instance with no frame, an unrecognized resolving function)
 ///   fired on bytecode the oracle compiled and ran. That is a defect in the
@@ -1865,7 +1865,7 @@ pub struct Divergence {
 /// * Anything else (`None`) proceeds to the completion / result comparison (XS cost drift is advisory).
 ///
 /// [`Halt::NotImplemented`]: ironhorse_vm::Halt::NotImplemented
-/// [`Halt::EngineInvariant`]: ironhorse_vm::Halt::EngineInvariant
+/// [`PanicKind::EngineInvariant`]: ironhorse_vm::PanicKind::EngineInvariant
 fn halt_precheck(source: &str, halt: &ironhorse_vm::Halt) -> Option<Result<(), Divergence>> {
     match halt {
         ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::EngineFault { message, .. }) => {
@@ -1890,10 +1890,12 @@ fn halt_precheck(source: &str, halt: &ironhorse_vm::Halt) -> Option<Result<(), D
                 detail: format!("unregistered declined label: {label}"),
             }))
         }
-        ironhorse_vm::Halt::EngineInvariant(label) => Some(Err(Divergence {
-            source: source.to_string(),
-            detail: format!("engine invariant violated: {label}"),
-        })),
+        ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::EngineInvariant(label)) => {
+            Some(Err(Divergence {
+                source: source.to_string(),
+                detail: format!("engine invariant violated: {label}"),
+            }))
+        }
         _ => None,
     }
 }
@@ -2206,7 +2208,7 @@ pub fn oracle_is_live() -> bool {
 /// `-2` at pc 0, decoded from seed 1750 of
 /// [`decoder_never_panics_on_arbitrary_bytes`]) spins forever with no
 /// metering host armed to refuse it. Bounding execution turns any such hang
-/// into a [`ironhorse_vm::Halt::StepLimit`] in milliseconds. The bound is far
+/// into a [`ironhorse_vm::PanicKind::StepLimit`] in milliseconds. The bound is far
 /// above any well-formed `<= 40`-byte fuzz program's dispatch count, so it
 /// only ever fires on a genuine non-terminating cycle.
 pub const DECODER_STEP_LIMIT: u64 = 2_000_000;
@@ -2216,8 +2218,8 @@ pub const DECODER_STEP_LIMIT: u64 = 2_000_000;
 /// liveness; the point is simply that it returns — in bounded time.
 pub fn decoder_is_panic_free(bytes: &[u8]) -> usize {
     let dis = disassemble(bytes);
-    // The interpreter must also degrade gracefully — a `Halt::Decode` on a
-    // truncated/invalid stream, a bounded `Halt::StepLimit` on a
+    // The interpreter must also degrade gracefully — a `PanicKind::Decode` on a
+    // truncated/invalid stream, a bounded `PanicKind::StepLimit` on a
     // non-terminating dispatch cycle — never panic and never hang. The
     // bounded entry is the wedge-proofing: without it a self-targeting
     // backward branch would spin the whole test binary forever (the
@@ -2407,7 +2409,12 @@ mod tests {
             location: None,
         });
         assert!(matches!(halt_precheck("throw 1", &fault), Some(Err(_))));
-        match halt_precheck("1", &Halt::EngineInvariant("add:stack-underflow")) {
+        match halt_precheck(
+            "1",
+            &Halt::Panic(ironhorse_vm::PanicKind::EngineInvariant(
+                "add:stack-underflow",
+            )),
+        ) {
             Some(Err(divergence)) => {
                 assert_eq!(divergence.source, "1");
                 assert_eq!(
@@ -2420,10 +2427,12 @@ mod tests {
         for halt in [
             Halt::Return,
             Halt::synthetic_throw("TypeError"),
-            Halt::MeterAbort,
-            Halt::StepLimit(1),
-            Halt::StackOverflow(1),
-            Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 }),
+            Halt::Panic(ironhorse_vm::PanicKind::MeterAbort),
+            Halt::Panic(ironhorse_vm::PanicKind::StepLimit(1)),
+            Halt::Panic(ironhorse_vm::PanicKind::StackOverflow(1)),
+            Halt::Panic(ironhorse_vm::PanicKind::Decode(
+                ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 },
+            )),
         ] {
             assert!(
                 halt_precheck("1", &halt).is_none(),
@@ -4229,7 +4238,7 @@ mod tests {
         // backward-branch handler; before that it was an unimplemented byte
         // that halted. With no metering host armed, this spun `run_program`
         // forever and wedged `cargo test --workspace`. The bounded decoder
-        // entry now aborts it with `Halt::StepLimit`. Full 14-byte seed
+        // entry now aborts it with `PanicKind::StepLimit`. Full 14-byte seed
         // string plus the minimal 2-byte core.
         let _ = decoder_is_panic_free(&[
             0x25, 0xfe, 0x86, 0x1c, 0x28, 0xee, 0x59, 0x08, 0xa6, 0xf7, 0xec, 0xc0, 0x0d, 0x17,
@@ -4306,7 +4315,7 @@ mod tests {
     ];
 
     /// Wedge-proofing lock: the self-targeting backward branch that caused the
-    /// stage-4a decoder hang must abort with a bounded `Halt::StepLimit` — not
+    /// stage-4a decoder hang must abort with a bounded `PanicKind::StepLimit` — not
     /// spin — and every fixed malformed case above must return promptly. A
     /// future non-terminating decode arm fails this in milliseconds (the
     /// `StepLimit` assertion) instead of hanging the whole workspace bar.
@@ -4316,7 +4325,7 @@ mod tests {
         let core = run_program_bounded(&[0x25, 0xfe], DECODER_STEP_LIMIT);
         assert_eq!(
             core.halt,
-            ironhorse_vm::Halt::StepLimit(DECODER_STEP_LIMIT),
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::StepLimit(DECODER_STEP_LIMIT)),
             "self-targeting backward branch must hit the step ceiling, not complete or hang"
         );
         // The full seed-1750 string aborts the same bounded way.
@@ -4327,7 +4336,10 @@ mod tests {
             DECODER_STEP_LIMIT,
         );
         assert!(
-            matches!(full.halt, ironhorse_vm::Halt::StepLimit(_)),
+            matches!(
+                full.halt,
+                ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::StepLimit(_))
+            ),
             "seed-1750 decode must abort under the step ceiling, got {:?}",
             full.halt
         );
@@ -4344,7 +4356,9 @@ mod tests {
         let out = run_program_bounded(&[0xC1, 0xA9, 0xC1, 0xC1], DECODER_STEP_LIMIT);
         assert_eq!(
             out.halt,
-            ironhorse_vm::Halt::EngineInvariant("return:non-program-frame"),
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::EngineInvariant(
+                "return:non-program-frame"
+            )),
             "the malformed async exit must fail before it can self-feed"
         );
         assert!(
@@ -4485,7 +4499,9 @@ mod hostile_suspend_tests {
         let out = ironhorse_vm::run_program_with_symbols(&patched, &symbols);
         assert_eq!(
             out.halt,
-            ironhorse_vm::Halt::EngineInvariant("value-stack:underflow"),
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::EngineInvariant(
+                "value-stack:underflow"
+            )),
             "the first excess POP refuses before YIELD can observe a drained frame"
         );
     }

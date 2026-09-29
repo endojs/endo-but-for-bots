@@ -24,7 +24,7 @@ use crate::frontmatter::{self, Frontmatter, Negative};
 use crate::report::CaseRecord;
 use crate::{Agreement, AsyncDualRun, DualRun, IronhorseCompile};
 use ironhorse_vm::halt_labels::{is_not_implemented_label, is_refused_label};
-use ironhorse_vm::{Halt, RunOutcome};
+use ironhorse_vm::{Halt, PanicKind, RunOutcome};
 use std::collections::{BTreeMap, HashSet};
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
@@ -434,7 +434,9 @@ pub fn oracle_negative_ok(ty: &str, run: &DualRun) -> bool {
 pub fn ironhorse_negative_ok(ty: &str, run: &DualRun) -> bool {
     match &run.ironhorse_halt {
         Halt::Throw { rendered: s, .. } => constructor_name(s) == ty,
-        Halt::StackOverflow(_) | Halt::MeterAbort => ty == "RangeError",
+        Halt::Panic(PanicKind::StackOverflow(_)) | Halt::Panic(PanicKind::MeterAbort) => {
+            ty == "RangeError"
+        }
         _ => false,
     }
 }
@@ -553,7 +555,7 @@ fn setup_halt_verdict(halt: &Halt) -> Verdict {
         }
         Halt::NotImplemented(op) => declined_verdict(op),
         Halt::Refused(op) => refused_verdict(op),
-        Halt::Decode(_) => Verdict::RunSkip("parse-or-decode".into()),
+        Halt::Panic(PanicKind::Decode(_)) => Verdict::RunSkip("parse-or-decode".into()),
         other => Verdict::Fail(format!("setup failed: ironhorse={other:?}")),
     }
 }
@@ -664,11 +666,11 @@ fn evaluate_positive(cfg: &Config, run: &DualRun, meter_exact_gate: bool) -> Ver
     match &run.ironhorse_halt {
         Halt::NotImplemented(op) => return declined_verdict(op),
         Halt::Refused(op) => return refused_verdict(op),
-        Halt::EngineInvariant(label) => return engine_invariant_failure(label),
-        Halt::Panic(ironhorse_vm::PanicKind::EngineFault { message, .. }) => {
+        Halt::Panic(PanicKind::EngineInvariant(label)) => return engine_invariant_failure(label),
+        Halt::Panic(PanicKind::EngineFault { message, .. }) => {
             return Verdict::Fail(format!("engine-fault:{message}"));
         }
-        Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
+        Halt::Panic(PanicKind::Decode(_)) => return Verdict::RunSkip("parse-or-decode".into()),
         _ => {}
     }
     let _ = meter_exact_gate; // Legacy CLI flag retained; cost drift is advisory.
@@ -1237,8 +1239,8 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
     // An early-negative compiler disposition cannot excuse internal runtime
     // faults or an engine granting itself an unregistered skip label.
     match &run.ironhorse_halt {
-        Halt::EngineInvariant(label) => return engine_invariant_failure(label),
-        Halt::Panic(ironhorse_vm::PanicKind::EngineFault { message, .. }) => {
+        Halt::Panic(PanicKind::EngineInvariant(label)) => return engine_invariant_failure(label),
+        Halt::Panic(PanicKind::EngineFault { message, .. }) => {
             return Verdict::Fail(format!("engine-fault:{message}"));
         }
         Halt::NotImplemented(label) if !is_skip_eligible_label(label) => {
@@ -1262,11 +1264,11 @@ fn evaluate_negative(cfg: &Config, run: &DualRun, neg: &Negative) -> Verdict {
     match &run.ironhorse_halt {
         Halt::NotImplemented(op) => return declined_verdict(op),
         Halt::Refused(op) => return refused_verdict(op),
-        Halt::EngineInvariant(label) => return engine_invariant_failure(label),
-        Halt::Panic(ironhorse_vm::PanicKind::EngineFault { message, .. }) => {
+        Halt::Panic(PanicKind::EngineInvariant(label)) => return engine_invariant_failure(label),
+        Halt::Panic(PanicKind::EngineFault { message, .. }) => {
             return Verdict::Fail(format!("engine-fault:{message}"));
         }
-        Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
+        Halt::Panic(PanicKind::Decode(_)) => return Verdict::RunSkip("parse-or-decode".into()),
         _ => {}
     }
     let oracle_ok = oracle_negative_ok(&neg.ty, run);
@@ -2063,11 +2065,11 @@ fn run_accepted_module(
     match &ironhorse.halt {
         Halt::NotImplemented(op) => return declined_verdict(op),
         Halt::Refused(op) => return refused_verdict(op),
-        Halt::EngineInvariant(label) => return engine_invariant_failure(label),
-        Halt::Panic(ironhorse_vm::PanicKind::EngineFault { message, .. }) => {
+        Halt::Panic(PanicKind::EngineInvariant(label)) => return engine_invariant_failure(label),
+        Halt::Panic(PanicKind::EngineFault { message, .. }) => {
             return Verdict::Fail(format!("engine-fault:{message}"));
         }
-        Halt::Decode(_) => return Verdict::RunSkip("parse-or-decode".into()),
+        Halt::Panic(PanicKind::Decode(_)) => return Verdict::RunSkip("parse-or-decode".into()),
         _ => {}
     }
 
@@ -2953,7 +2955,9 @@ mod tests {
             Verdict::RunSkip(format!("unsupported-opcode:{declined}"))
         );
         assert_eq!(
-            setup_halt_verdict(&Halt::Decode(ironhorse_vm::DecodeError::MissingBytecode)),
+            setup_halt_verdict(&Halt::Panic(PanicKind::Decode(
+                ironhorse_vm::DecodeError::MissingBytecode
+            ))),
             Verdict::RunSkip("parse-or-decode".into())
         );
         // An unregistered label is a harness failure wherever it appears.
@@ -3094,22 +3098,22 @@ mod tests {
     fn ironhorse_range_error_accepts_stack_and_meter_aborts() {
         // A synthetic dual-run with ironhorse stack overflow: an expected
         // RangeError negative is satisfied on ironhorse's side.
-        let run = synthetic_abort(Halt::StackOverflow(4), "");
+        let run = synthetic_abort(Halt::Panic(PanicKind::StackOverflow(4)), "");
         assert!(ironhorse_negative_ok("RangeError", &run));
         assert!(!ironhorse_negative_ok("TypeError", &run));
 
         // An implementation recursion budget is not evidence that the
         // guest threw the expected RangeError or hit XS value-stack geometry.
         let native = synthetic_abort(
-            Halt::ReentryLimit {
+            Halt::Panic(PanicKind::ReentryLimit {
                 depth: 2064,
                 limit: 2048,
-            },
+            }),
             "",
         );
         assert!(!ironhorse_negative_ok("RangeError", &native));
 
-        let meter = synthetic_abort(Halt::MeterAbort, "");
+        let meter = synthetic_abort(Halt::Panic(PanicKind::MeterAbort), "");
         assert!(ironhorse_negative_ok("RangeError", &meter));
 
         let thrown = synthetic_abort(Halt::synthetic_throw("TypeError: bad"), "TypeError: bad");
@@ -4058,7 +4062,7 @@ mod tests {
         }
         changed!(result, "different".into());
         changed!(error, "different".into());
-        changed!(halt, format!("{:?}", Halt::MeterAbort));
+        changed!(halt, format!("{:?}", Halt::Panic(PanicKind::MeterAbort)));
         changed!(compile, IronhorseCompile::Rejected("syntax".into()));
         changed!(raw, 1); // fractional drift with unchanged whole computrons
         changed!(computrons, 1);
@@ -4119,7 +4123,7 @@ mod tests {
             Verdict::Covered
         ));
         run.agreement = Agreement::OracleOnlyComplete;
-        run.ironhorse_halt = Halt::HeapExhausted;
+        run.ironhorse_halt = Halt::Panic(PanicKind::HeapExhausted);
         assert!(!matches!(
             verdict_for(&cfg, &run, &fm, true),
             Verdict::Covered
@@ -4165,7 +4169,9 @@ mod tests {
         compile: IronhorseCompile,
     ) -> DualRun {
         let mut run = synthetic_abort(
-            Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 }),
+            Halt::Panic(PanicKind::Decode(
+                ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 },
+            )),
             "",
         );
         run.agreement = agreement;
@@ -4342,7 +4348,7 @@ mod tests {
             Agreement::IronhorseOnlyComplete,
         ] {
             for oracle in [true, false] {
-                let halt = Halt::Panic(ironhorse_vm::PanicKind::EngineFault {
+                let halt = Halt::Panic(PanicKind::EngineFault {
                     message: "synthetic defect".into(),
                     location: Some("interp.rs:1".into()),
                 });
@@ -4362,7 +4368,10 @@ mod tests {
                     };
                     assert_eq!(evaluate_negative(&cfg, &run, &negative), expected);
                 }
-                let invariant = synthetic_abort(Halt::EngineInvariant("end:frame-underflow"), "");
+                let invariant = synthetic_abort(
+                    Halt::Panic(PanicKind::EngineInvariant("end:frame-underflow")),
+                    "",
+                );
                 for phase in ["parse", "resolution"] {
                     let negative = Negative {
                         phase: phase.into(),
@@ -4521,7 +4530,9 @@ mod tests {
             ),
             crate::report::Category::Infrastructure
         );
-        let invariant = synthetic_oracle_only(Halt::EngineInvariant("end:frame-underflow"));
+        let invariant = synthetic_oracle_only(Halt::Panic(PanicKind::EngineInvariant(
+            "end:frame-underflow",
+        )));
         assert_eq!(
             evaluate_positive(&cfg, &invariant, false),
             Verdict::Fail("engine-invariant:end:frame-underflow".into())
@@ -4839,7 +4850,11 @@ mod tests {
 
     #[test]
     fn an_engine_limit_where_the_oracle_completes_stays_a_named_skip() {
-        for halt in [Halt::StackOverflow(4), Halt::MeterAbort, Halt::StepLimit(7)] {
+        for halt in [
+            Halt::Panic(PanicKind::StackOverflow(4)),
+            Halt::Panic(PanicKind::MeterAbort),
+            Halt::Panic(PanicKind::StepLimit(7)),
+        ] {
             let run = synthetic_oracle_only(halt);
             assert_eq!(
                 evaluate_positive(&Config::default(), &run, false),
@@ -4854,7 +4869,7 @@ mod tests {
         // reporting its own state as wrong is a hard failure that names the
         // guard — the halt the differential exists to catch, and the one the
         // old `unsupported-opcode:` skip used to launder.
-        let halt = Halt::EngineInvariant("end:frame-underflow");
+        let halt = Halt::Panic(PanicKind::EngineInvariant("end:frame-underflow"));
         let expected = Verdict::Fail("engine-invariant:end:frame-underflow".into());
         let positive = synthetic_oracle_only(halt.clone());
         assert_eq!(

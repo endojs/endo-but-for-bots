@@ -27,7 +27,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::interp::{Halt, Interp, RunOutcome};
+use crate::interp::{Halt, Interp, PanicKind, RunOutcome};
 use crate::module::{ModuleError, ModuleGraph, ModuleId};
 use crate::value::{Kind, Payload, Slot};
 
@@ -780,9 +780,9 @@ impl Compartment {
                 machine.set_shared_compiler(compiler);
             }
             let code = match names {
-                Some(names) => machine
-                    .relink_crank(&bytecode, names)
-                    .map_err(|_| Halt::Decode(crate::DecodeError::InvalidSymbols)),
+                Some(names) => machine.relink_crank(&bytecode, names).map_err(|_| {
+                    Halt::Panic(PanicKind::Decode(crate::DecodeError::InvalidSymbols))
+                }),
                 None => machine.relink_unlinked_realm_program(&bytecode),
             };
             let code = match code {
@@ -799,7 +799,9 @@ impl Compartment {
                             Some(name) => name.clone(),
                             None => {
                                 return Self::unrun(
-                                    Halt::Decode(crate::DecodeError::InvalidSymbols),
+                                    Halt::Panic(PanicKind::Decode(
+                                        crate::DecodeError::InvalidSymbols,
+                                    )),
                                     machine.meter_index(),
                                 )
                             }
@@ -1251,7 +1253,7 @@ impl Machine {
         let stats = machine.collect_garbage().map_err(|error| match error {
             crate::gc::GcAdmissionError::NotQuiescent => Halt::MachineBusy,
             crate::gc::GcAdmissionError::PreviousCollectionFailed => {
-                Halt::EngineInvariant("gc:previous-collection-failed")
+                Halt::Panic(PanicKind::EngineInvariant("gc:previous-collection-failed"))
             }
         })?;
         drop(machine);
@@ -1486,7 +1488,10 @@ mod tests {
             .borrow()
             .current_environment_id();
         machine.machine.interpreter.borrow_mut().set_slot_ceiling(0);
-        assert_eq!(machine.with_persistence(|_| ()), Err(Halt::HeapExhausted));
+        assert_eq!(
+            machine.with_persistence(|_| ()),
+            Err(Halt::Panic(PanicKind::HeapExhausted))
+        );
         assert_eq!(
             machine
                 .machine
@@ -1517,7 +1522,10 @@ mod tests {
             let ceiling = interp.slots().capacity() + allowance;
             interp.set_slot_ceiling(ceiling);
             drop(interp);
-            assert_eq!(machine.with_persistence(|_| ()), Err(Halt::HeapExhausted));
+            assert_eq!(
+                machine.with_persistence(|_| ()),
+                Err(Halt::Panic(PanicKind::HeapExhausted))
+            );
             let mut interp = machine.machine.interpreter.borrow_mut();
             assert_eq!(interp.current_environment_id(), previous);
             assert!(interp.is_quiescent());
@@ -1540,7 +1548,7 @@ mod tests {
         machine.machine.interpreter.borrow_mut().set_slot_ceiling(0);
         assert!(matches!(
             machine.unhandled_rejections(),
-            Err(Halt::HeapExhausted)
+            Err(Halt::Panic(PanicKind::HeapExhausted))
         ));
         machine.discard_unhandled_rejections().unwrap();
         assert!(machine.unhandled_rejections().unwrap().is_empty());

@@ -292,10 +292,12 @@ impl Interp {
                 let count = self.reserve_units((end - start) as u64)?;
                 let mut units = Self::reserved_vec(count)?;
                 if let Some(off) = offset {
-                    let bytes = self
-                        .chunks
-                        .payload_range(off, start * 2..end * 2)
-                        .ok_or(Step::Host(Halt::EngineInvariant("string:slice-range")))?;
+                    let bytes =
+                        self.chunks
+                            .payload_range(off, start * 2..end * 2)
+                            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "string:slice-range",
+                            ))))?;
                     units.extend(
                         bytes
                             .chunks_exact(2)

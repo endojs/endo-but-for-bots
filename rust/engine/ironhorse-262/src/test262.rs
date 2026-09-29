@@ -27,6 +27,7 @@
 
 use crate::{dual_run, Agreement, DualRun};
 use ironhorse_vm::Halt;
+use ironhorse_vm::PanicKind;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -119,7 +120,7 @@ pub fn classify(source: &str) -> Class {
 pub(crate) fn classify_run(r: DualRun) -> Class {
     if matches!(
         &r.ironhorse_halt,
-        Halt::Panic(ironhorse_vm::PanicKind::EngineFault { .. })
+        Halt::Panic(PanicKind::EngineFault { .. })
     ) {
         return Class::Divergent(Box::new(r));
     }
@@ -144,14 +145,14 @@ pub(crate) fn classify_run(r: DualRun) -> Class {
     // One of the interpreter's own guards fired on bytecode the oracle
     // produced: the engine's state is wrong, a real failure whatever the
     // oracle then did — never an honest skip.
-    if let Halt::EngineInvariant(_) = r.ironhorse_halt {
+    if let Halt::Panic(PanicKind::EngineInvariant(_)) = r.ironhorse_halt {
         return Class::Divergent(Box::new(r));
     }
     // Empty/undecodable bytecode: a parse-phase negative test (the oracle
     // compiler rejected the source, which ironhorse's loader cannot mirror —
     // compiler parity is a separate axis, stages 1–4 keep the oracle
     // compiler) or a truncated stream.
-    if let Halt::Decode(_) = r.ironhorse_halt {
+    if let Halt::Panic(PanicKind::Decode(_)) = r.ironhorse_halt {
         return Class::Skipped("parse-or-decode".into());
     }
     match r.agreement {

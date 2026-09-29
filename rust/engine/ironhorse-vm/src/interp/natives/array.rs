@@ -469,7 +469,9 @@ impl Interp {
                     return Ok(Err(error));
                 }
             }
-            return Err(Step::Host(Halt::StepLimit(self.n_dispatched)));
+            return Err(Step::Host(Halt::Panic(PanicKind::StepLimit(
+                self.n_dispatched,
+            ))));
         }
 
         // Array-like fallback: ToObject, ToLength(Get(length)), construct with
@@ -3140,7 +3142,7 @@ impl Interp {
     ) -> Result<u64, Step> {
         // One light frame of the native-recursion budget per nested array:
         // a self-containing array under `flat(Infinity)` halts with
-        // `Halt::ReentryLimit` (XS recurses `fxFlattenIntoArray` on its C
+        // `PanicKind::ReentryLimit` (XS recurses `fxFlattenIntoArray` on its C
         // stack to the same end) instead of overflowing the host stack.
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.array_generic_flatten_into_inner(
@@ -3240,8 +3242,8 @@ impl Interp {
                 ));
             }
             self.charge_and_check(ARRAY_FLAT_PER_LEAF_METERING)?;
-            let count =
-                usize::try_from(target_index + 1).map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            let count = usize::try_from(target_index + 1)
+                .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
             self.admit_scratch::<Slot>(count)?;
             self.array_generic_create_data_property(code, target, target_index, element)?;
             target_index += 1;
@@ -4578,7 +4580,7 @@ impl Interp {
                 self.charge_and_check(self.array_item_grow_metering(out.len() as u64))?;
                 self.admit_scratch::<Slot>(out.len() + 1)?;
                 out.try_reserve(1)
-                    .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                    .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
                 out.push(item);
             }
         }

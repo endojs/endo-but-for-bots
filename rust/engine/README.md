@@ -147,7 +147,7 @@ The invariant, not the sites, is what landed:
   the same host stack (13 MiB and 11 MiB unoptimized), and a mix is bounded
   by the heavier corner rather than by their sum. Past the ceiling the crank
   halts with
-  `Halt::StackOverflow`, the abort-to-host XS raises from `fxCheckCStack` —
+  `Halt::Panic(PanicKind::StackOverflow)`, the abort-to-host XS raises from `fxCheckCStack` —
   at a depth that is this engine's, sized to its own frames, not XS's (the
   oracle's C stack admits thousands of `JSON.parse` levels and a hundred-odd
   nested `join`s), which is why the differential harness classifies that halt
@@ -389,11 +389,14 @@ cargo run -p ironhorse-262 --bin endot-ih -- -o report.yaml built-ins/Math
 `Halt::Refused(label)` names a deliberate execution-profile restriction.
 Both require the matching classification in `ironhorse_vm::halt_labels` before
 receiving a skip; a new or misclassified label is a harness failure.
-`Halt::EngineInvariant(label)` and `Halt::Panic(PanicKind)` report engine faults,
-not missing-feature acceptance.
-`HeapExhausted`, `MeterAbort`, `StackOverflow` and the harness-only `StepLimit`
+Every panic, an uncatchable stop whose crank must be discarded, is
+`Halt::Panic(PanicKind)`, so `Halt::is_panic` is a shape test.
+`PanicKind::EngineInvariant(label)` and `PanicKind::EngineFault` report engine
+faults, not missing-feature acceptance.
+`HeapExhausted`, `MeterAbort`, `StackOverflow`, `ReentryLimit` and `StepLimit`
 report resource/limit stops; guest handlers cannot catch them.
-`Decode` names malformed bytecode, and `Throw` carries an escaping guest exception.
+`Decode` names malformed bytecode.
+`Throw` carries an escaping guest exception.
 See `Halt::is_panic`, `ExecutionOutcome::classify`, the runner verdict arms and
 `ironhorse-vm/tests/halt_label_registry.rs` for the actual classification rules.
 The [architecture guide](ARCHITECTURE.md#halts-resource-admission-and-determinism)

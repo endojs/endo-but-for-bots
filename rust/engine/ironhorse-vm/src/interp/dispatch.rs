@@ -12,7 +12,7 @@ use super::{
     branch_target, cannot_coerce_to_object, canonicalize_nan, cesu8_to_units, count_new_locals,
     to_int32, to_number, unary_minus, units_to_be16, ArithOp, AsyncGeneratorState, BitOp,
     CatchJump, GeneratorState, Halt, Interp, Kind, MeterCheck, Native, NativeMethod, Opcode,
-    Payload, RelOp, ResumeStatus, Slot, Step, Suspension, BIGINT_LITERAL_METERING,
+    PanicKind, Payload, RelOp, ResumeStatus, Slot, Step, Suspension, BIGINT_LITERAL_METERING,
     BIGINT_NEG_FRAME_METERING, BOUNDED_RUN_SLOT_CEILING, FUNCTION_LOCAL_METERING, HEAVY_FRAME_COST,
     USING_DECL_METERING, USING_RESOURCE_METERING, WITH_ENV_SETUP_METERING, XS_DONT_DELETE_FLAG,
     XS_DONT_ENUM_FLAG, XS_DONT_SET_FLAG,
@@ -45,7 +45,7 @@ macro_rules! dispatch_halt {
                 $machine.assert_resume_target(target, $code);
                 $program_counter = target.pc;
                 if $machine.check_meter() == MeterCheck::Abort {
-                    return Step::Host(Halt::MeterAbort);
+                    return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                 }
                 continue;
             }
@@ -91,7 +91,7 @@ impl Interp {
     ///
     /// This thin wrapper charges the **native-recursion budget** for the
     /// (very large) `dispatch_at_inner` activation and aborts with
-    /// [`Halt::ReentryLimit`] once [`super::NATIVE_DEPTH_LIMIT`] is exceeded, so a
+    /// [`PanicKind::ReentryLimit`] once [`super::NATIVE_DEPTH_LIMIT`] is exceeded, so a
     /// degenerate callback/async/generator nest cannot overflow the real thread
     /// stack (endojs/endo-but-for-bots#1046). It manages the counter across the
     /// inner loop's many early returns; every re-entry site
@@ -143,7 +143,7 @@ impl Interp {
                 && self.n_dispatched.is_multiple_of(4096)
                 && self.check_meter() == MeterCheck::Abort
             {
-                return Step::Host(Halt::MeterAbort);
+                return Step::Host(Halt::Panic(PanicKind::MeterAbort));
             }
             // Bounded-execution guard (default `u64::MAX` = unbounded, so the
             // oracle-differential paths are untouched). A finite ceiling makes
@@ -177,7 +177,7 @@ impl Interp {
                 }
             }
             if self.n_dispatched >= self.step_limit {
-                return Step::Host(Halt::StepLimit(self.n_dispatched));
+                return Step::Host(Halt::Panic(PanicKind::StepLimit(self.n_dispatched)));
             }
             // Memory wedge guard, bounded mode ONLY (`step_limit` is
             // `u64::MAX` in production, which relies on the computron
@@ -191,7 +191,7 @@ impl Interp {
             // memory as much as time, and no real ≤21-byte fuzz input
             // legitimately reaches a million live slots.
             if self.step_limit != u64::MAX && self.slots.live_count() >= BOUNDED_RUN_SLOT_CEILING {
-                return Step::Host(Halt::StepLimit(self.n_dispatched));
+                return Step::Host(Halt::Panic(PanicKind::StepLimit(self.n_dispatched)));
             }
             // Property-key id-space poison latch:
             // an intern that would alias sets the flag instead of handing
@@ -204,15 +204,19 @@ impl Interp {
                 return Step::Host(Halt::Refused("property-key:id-space-exhausted"));
             }
             if pc >= len {
-                return Step::Host(Halt::Decode(DecodeError::ProgramCounterOutOfBounds {
-                    pc,
-                    len,
-                }));
+                return Step::Host(Halt::Panic(PanicKind::Decode(
+                    DecodeError::ProgramCounterOutOfBounds { pc, len },
+                )));
             }
             let byte = code[pc];
             let op = match Opcode::from_u8(byte) {
                 Some(o) => o,
-                None => return Step::Host(Halt::Decode(DecodeError::InvalidOpcode { pc, byte })),
+                None => {
+                    return Step::Host(Halt::Panic(PanicKind::Decode(DecodeError::InvalidOpcode {
+                        pc,
+                        byte,
+                    })))
+                }
             };
             // Every dispatched opcode meters one code unit (mxBreak /
             // the switch-path `meterIndex += XS_CODE_METERING`).
@@ -232,20 +236,21 @@ impl Interp {
             let ilen = match crate::opcode::encoded_instruction_len(code, pc) {
                 Some(l) if l > 0 => l,
                 _ => {
-                    return Step::Host(Halt::Decode(DecodeError::UnresolvableInstructionLength {
-                        pc,
-                        opcode: byte,
-                    }))
+                    return Step::Host(Halt::Panic(PanicKind::Decode(
+                        DecodeError::UnresolvableInstructionLength { pc, opcode: byte },
+                    )))
                 }
             };
             // Bounds-check the operands before reading.
             if pc + ilen > len {
-                return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
-                    pc,
-                    opcode: byte,
-                    needed: ilen,
-                    remaining: len - pc,
-                }));
+                return Step::Host(Halt::Panic(PanicKind::Decode(
+                    DecodeError::TruncatedInstruction {
+                        pc,
+                        opcode: byte,
+                        needed: ilen,
+                        remaining: len - pc,
+                    },
+                )));
             }
 
             use Opcode::*;
@@ -749,7 +754,9 @@ impl Interp {
                 XS_CODE_AT | XS_CODE_AT_2 => {
                     let depth = if op == XS_CODE_AT_2 { 1 } else { 0 };
                     let Some(base_index) = self.stack.len().checked_sub(2 + depth) else {
-                        return Step::Host(Halt::EngineInvariant("at:stack-underflow"));
+                        return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                            "at:stack-underflow",
+                        )));
                     };
                     let idx = base_index + 1;
                     let key = self.stack[idx];
@@ -789,7 +796,11 @@ impl Interp {
                         Some(at) => at,
                         // Every primitive kind resolves; `None` is a payload that does
                         // not match its kind, the engine's own value being malformed.
-                        None => return Step::Host(Halt::EngineInvariant("at:key-kind")),
+                        None => {
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "at:key-kind",
+                            )))
+                        }
                     };
                     self.stack[idx] = at;
                     pc += size as usize;
@@ -836,12 +847,14 @@ impl Interp {
                 // literal keeps below.
                 XS_CODE_NEW_PROPERTY_AT => {
                     if pc + 3 > len {
-                        return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
-                            pc,
-                            opcode: byte,
-                            needed: 3,
-                            remaining: len - pc,
-                        }));
+                        return Step::Host(Halt::Panic(PanicKind::Decode(
+                            DecodeError::TruncatedInstruction {
+                                pc,
+                                opcode: byte,
+                                needed: 3,
+                                remaining: len - pc,
+                            },
+                        )));
                     }
                     let property_flag = code[pc + 2];
                     dispatch_result!(
@@ -901,12 +914,14 @@ impl Interp {
                 // so the flag pair is NOT a separate dispatched opcode.
                 XS_CODE_NEW_PROPERTY => {
                     if pc + 5 > len {
-                        return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
-                            pc,
-                            opcode: byte,
-                            needed: 5,
-                            remaining: len - pc,
-                        }));
+                        return Step::Host(Halt::Panic(PanicKind::Decode(
+                            DecodeError::TruncatedInstruction {
+                                pc,
+                                opcode: byte,
+                                needed: 5,
+                                remaining: len - pc,
+                            },
+                        )));
                     }
                     let id = id!(1);
                     let property_flag = code[pc + 4];
@@ -925,12 +940,14 @@ impl Interp {
                 // the ordinary public-property MOP untouched.
                 XS_CODE_NEW_PRIVATE_1 | XS_CODE_NEW_PRIVATE_2 => {
                     if pc + ilen + 2 > len {
-                        return Step::Host(Halt::Decode(DecodeError::TruncatedInstruction {
-                            pc,
-                            opcode: byte,
-                            needed: ilen + 2,
-                            remaining: len - pc,
-                        }));
+                        return Step::Host(Halt::Panic(PanicKind::Decode(
+                            DecodeError::TruncatedInstruction {
+                                pc,
+                                opcode: byte,
+                                needed: ilen + 2,
+                                remaining: len - pc,
+                            },
+                        )));
                     }
                     let index = self.closure_index(op, code, pc);
                     let flag = code[pc + ilen + 1];
@@ -1244,7 +1261,11 @@ impl Interp {
                         {
                             (ctor, proto)
                         }
-                        _ => return Step::Host(Halt::EngineInvariant("class:invalid-stack")),
+                        _ => {
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "class:invalid-stack",
+                            )))
+                        }
                     };
                     let derived = self
                         .functions
@@ -1374,7 +1395,9 @@ impl Interp {
                 XS_CODE_EVAL | XS_CODE_EVAL_TAIL => {
                     let argc = dispatch_result!(self.pop_run_count(), pc, self, return_depth, code);
                     let Some(base) = self.stack.len().checked_sub(argc + 4) else {
-                        return Step::Host(Halt::EngineInvariant("eval:frame-underflow"));
+                        return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                            "eval:frame-underflow",
+                        )));
                     };
                     let native = match self.stack.get(base + 1).and_then(|slot| match slot.value {
                         Payload::Reference(function) => self.native_of(function),
@@ -1407,7 +1430,7 @@ impl Interp {
                     self.eval_direct = false;
                     dispatch_result!(outcome, pc, self, return_depth, code);
                     if self.check_meter() == MeterCheck::Abort {
-                        return Step::Host(Halt::MeterAbort);
+                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                     }
                     pc += size as usize;
                 }
@@ -1484,7 +1507,7 @@ impl Interp {
                         let result = self.call_promise_function(code, f, base, argc);
                         dispatch_result!(result, pc, self, return_depth, code);
                         if self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = ret_pc;
                     } else if let Some((native, base)) = callee {
@@ -1498,7 +1521,7 @@ impl Interp {
                         );
                         // Return into the JS caller: `END_ALL` checks.
                         if self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = ret_pc;
                     } else if let Some((NativeMethod::FunctionCall, base)) = method {
@@ -1528,14 +1551,14 @@ impl Interp {
                         ) {
                             true => {
                                 if self.check_meter() == MeterCheck::Abort {
-                                    return Step::Host(Halt::MeterAbort);
+                                    return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                                 }
                                 pc = ret_pc;
                             }
                             false => match self.enter_call_dot_call(base, argc, ret_pc) {
                                 Ok(body_start) => {
                                     if self.check_meter() == MeterCheck::Abort {
-                                        return Step::Host(Halt::MeterAbort);
+                                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                                     }
                                     pc = body_start;
                                 }
@@ -1567,14 +1590,14 @@ impl Interp {
                         ) {
                             true => {
                                 if self.check_meter() == MeterCheck::Abort {
-                                    return Step::Host(Halt::MeterAbort);
+                                    return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                                 }
                                 pc = ret_pc;
                             }
                             false => match self.enter_call_dot_apply(base, argc, ret_pc, code) {
                                 Ok(body_start) => {
                                     if self.check_meter() == MeterCheck::Abort {
-                                        return Step::Host(Halt::MeterAbort);
+                                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                                     }
                                     pc = body_start;
                                 }
@@ -1611,7 +1634,7 @@ impl Interp {
                             code
                         );
                         if self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = ret_pc;
                     } else if let Some((bf, base)) =
@@ -1637,7 +1660,7 @@ impl Interp {
                             match self.enter_construct_bound(bf, base, argc, ret_pc) {
                                 Ok(body_start) => {
                                     if self.check_meter() == MeterCheck::Abort {
-                                        return Step::Host(Halt::MeterAbort);
+                                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                                     }
                                     pc = body_start;
                                     continue;
@@ -1668,7 +1691,7 @@ impl Interp {
                         );
                         self.push(result);
                         if self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = ret_pc;
                     } else if let Some((px, base)) =
@@ -1710,7 +1733,7 @@ impl Interp {
                         };
                         self.push(result);
                         if self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = ret_pc;
                     } else if let Some(seg) = self.cross_segment_callee(argc) {
@@ -1724,7 +1747,7 @@ impl Interp {
                             Ok(result) => {
                                 self.push(result);
                                 if self.check_meter() == MeterCheck::Abort {
-                                    return Step::Host(Halt::MeterAbort);
+                                    return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                                 }
                                 pc = ret_pc;
                             }
@@ -1744,7 +1767,7 @@ impl Interp {
                                 // Call entry: `mxFirstCode()` runs a meter check
                                 // before the callee's first opcode.
                                 if self.check_meter() == MeterCheck::Abort {
-                                    return Step::Host(Halt::MeterAbort);
+                                    return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                                 }
                                 pc = body_start;
                             }
@@ -1802,7 +1825,11 @@ impl Interp {
                             }
                             self.push(Slot::of(s.kind, s.value));
                         }
-                        None => return Step::Host(Halt::EngineInvariant("get_closure:no-cell")),
+                        None => {
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "get_closure:no-cell",
+                            )))
+                        }
                     }
                     pc += op.size() as usize;
                 }
@@ -1975,7 +2002,9 @@ impl Interp {
                         }
                     });
                     let (Some(env), Some(arrow)) = (env, arrow) else {
-                        return Step::Host(Halt::EngineInvariant("store_arrow:frame"));
+                        return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                            "store_arrow:frame",
+                        )));
                     };
                     let home = self
                         .functions
@@ -2159,7 +2188,11 @@ impl Interp {
                         // Closure/EnvReference/Uninitialized are never live
                         // stack *values*: reaching one here is the engine's
                         // own state being wrong, not an unported shape.
-                        _ => return Step::Host(Halt::EngineInvariant("typeof:non-value-kind")),
+                        _ => {
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "typeof:non-value-kind",
+                            )))
+                        }
                     };
                     if let Some(s) = self.stack.last_mut() {
                         *s = Slot::of(Kind::String, Payload::String(off));
@@ -2460,7 +2493,11 @@ impl Interp {
                     let receiver_depth = if op == XS_CODE_SUPER_AT_2 { 3 } else { 2 };
                     let receiver_pos = match self.stack.len().checked_sub(receiver_depth) {
                         Some(pos) => pos,
-                        None => return Step::Host(Halt::EngineInvariant("super_at:stack")),
+                        None => {
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "super_at:stack",
+                            )))
+                        }
                     };
                     let key_pos = receiver_pos + 1;
                     let receiver = self.stack[receiver_pos];
@@ -2573,7 +2610,11 @@ impl Interp {
                 XS_CODE_TEMPLATE => {
                     let cooked = match self.stack.last().map(|slot| (slot.kind, slot.value)) {
                         Some((Kind::Reference, Payload::Reference(cooked))) => cooked,
-                        _ => return Step::Host(Halt::EngineInvariant("template:object")),
+                        _ => {
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "template:object",
+                            )))
+                        }
                     };
                     if !self.freeze_template_object(cooked) {
                         return Step::Host(Halt::NotImplemented("template:raw"));
@@ -2694,7 +2735,9 @@ impl Interp {
                     let top = match self.stack.last_mut() {
                         Some(s) => s,
                         None => {
-                            return Step::Host(Halt::EngineInvariant("increment:stack-underflow"))
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "increment:stack-underflow",
+                            )))
                         }
                     };
                     match (top.kind, top.value) {
@@ -2722,9 +2765,9 @@ impl Interp {
                         // BigInt (handled before); anything else is the
                         // engine's own coercion result being malformed.
                         _ => {
-                            return Step::Host(Halt::EngineInvariant(
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                                 "increment:non-numeric-result",
-                            ))
+                            )))
                         }
                     }
                     pc += size as usize;
@@ -2785,7 +2828,9 @@ impl Interp {
                     // for a computed compound assignment (xsRun.c DUB_AT).
                     let n = self.stack.len();
                     if n < 2 {
-                        return Step::Host(Halt::EngineInvariant("dub_at:stack-underflow"));
+                        return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                            "dub_at:stack-underflow",
+                        )));
                     }
                     let receiver = self.stack[n - 2];
                     let key = self.stack[n - 1];
@@ -2803,7 +2848,9 @@ impl Interp {
                 XS_CODE_SWAP => {
                     let n = self.stack.len();
                     if n < 2 {
-                        return Step::Host(Halt::EngineInvariant("value-stack:underflow"));
+                        return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                            "value-stack:underflow",
+                        )));
                     }
                     self.stack.swap(n - 1, n - 2);
                     pc += size as usize;
@@ -2825,18 +2872,18 @@ impl Interp {
                 // mxBranch: target = pc + INDEX(size) + OFFSET(operand).
                 // XS runs `mxCheckMeter` only when the taken offset is
                 // negative (a backward branch — the loop-closing point);
-                // an armed host refusal aborts with `Halt::MeterAbort`.
+                // an armed host refusal aborts with `PanicKind::MeterAbort`.
                 XS_CODE_BRANCH_1 => {
                     let off = s1!(1);
                     if off < 0 && self.check_meter() == MeterCheck::Abort {
-                        return Step::Host(Halt::MeterAbort);
+                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                     }
                     pc = branch_target(pc, size, off);
                 }
                 XS_CODE_BRANCH_2 => {
                     let off = i16::from_le_bytes([code[pc + 1], code[pc + 2]]) as i32;
                     if off < 0 && self.check_meter() == MeterCheck::Abort {
-                        return Step::Host(Halt::MeterAbort);
+                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                     }
                     pc = branch_target(pc, size, off);
                 }
@@ -2848,7 +2895,7 @@ impl Interp {
                         code[pc + 4],
                     ]);
                     if off < 0 && self.check_meter() == MeterCheck::Abort {
-                        return Step::Host(Halt::MeterAbort);
+                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                     }
                     pc = branch_target(pc, size, off);
                 }
@@ -2901,7 +2948,7 @@ impl Interp {
                         }
                         ResumeStatus::NoStatus => {
                             if off < 0 && self.check_meter() == MeterCheck::Abort {
-                                return Step::Host(Halt::MeterAbort);
+                                return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                             }
                             pc = branch_target(pc, size, off);
                         }
@@ -2918,7 +2965,7 @@ impl Interp {
                         pc += size as usize;
                     } else {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = branch_target(pc, size, off);
                     }
@@ -2931,7 +2978,7 @@ impl Interp {
                         pc += size as usize;
                     } else {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = branch_target(pc, size, off);
                     }
@@ -2945,7 +2992,7 @@ impl Interp {
                     let cond = self.truthy(&v);
                     if cond {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = branch_target(pc, size, off);
                     } else {
@@ -2958,7 +3005,7 @@ impl Interp {
                     let cond = self.truthy(&v);
                     if cond {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = branch_target(pc, size, off);
                     } else {
@@ -2991,7 +3038,7 @@ impl Interp {
                         pc += size as usize;
                     } else {
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = branch_target(pc, size, off);
                     }
@@ -3019,7 +3066,7 @@ impl Interp {
                             *s = Slot::undefined();
                         }
                         if off < 0 && self.check_meter() == MeterCheck::Abort {
-                            return Step::Host(Halt::MeterAbort);
+                            return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                         }
                         pc = branch_target(pc, size, off);
                     } else {
@@ -3084,7 +3131,9 @@ impl Interp {
                     // as the sibling stack-underflow guards do (`yield:`/
                     // `await:`/`add:stack-underflow`), never `panic!`.
                     if self.call_stack.len() < return_depth {
-                        return Step::Host(Halt::EngineInvariant("end:frame-underflow"));
+                        return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                            "end:frame-underflow",
+                        )));
                     }
                     // Construct return (XS's `END` with `mxFrameHasTarget`):
                     // a constructor's completion is its `this` instance unless
@@ -3096,7 +3145,7 @@ impl Interp {
                     pc = resume;
                     // Returning into a JS caller: `mxFirstCode()` checks.
                     if self.check_meter() == MeterCheck::Abort {
-                        return Step::Host(Halt::MeterAbort);
+                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                     }
                 }
                 // `return` (`XS_CODE_RETURN`, xsRun.c:1080): the top-level
@@ -3106,7 +3155,9 @@ impl Interp {
                 // `set_result; end`), so this is the exit-to-host boundary.
                 XS_CODE_RETURN => {
                     if return_depth != 0 || !self.call_stack.is_empty() {
-                        return Step::Host(Halt::EngineInvariant("return:non-program-frame"));
+                        return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                            "return:non-program-frame",
+                        )));
                     }
                     return Step::Returned;
                 }
@@ -3144,15 +3195,15 @@ impl Interp {
                     // `start_generator` reached below `return_depth` on crafted
                     // bytecode must not pop an outer frame (#1046).
                     if self.call_stack.len() < return_depth {
-                        return Step::Host(Halt::EngineInvariant(
+                        return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                             "start_generator:frame-underflow",
-                        ));
+                        )));
                     }
                     let resume = self.leave_call();
                     self.push(gen_slot);
                     pc = resume;
                     if self.check_meter() == MeterCheck::Abort {
-                        return Step::Host(Halt::MeterAbort);
+                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                     }
                 }
                 // `yield` (`XS_CODE_YIELD`, xsRun.c:1213): suspend the running
@@ -3199,7 +3250,11 @@ impl Interp {
                     let (gen, stack_base, jumps_base, call_depth_base) =
                         match self.gen_run_stack.last() {
                             Some(g) => (g.gen, g.stack_base, g.jumps_base, g.call_depth_base),
-                            None => return Step::Host(Halt::EngineInvariant("yield:no-generator")),
+                            None => {
+                                return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                    "yield:no-generator",
+                                )))
+                            }
                         };
                     let resume_pc = pc + size as usize;
                     let yielded =
@@ -3243,15 +3298,15 @@ impl Interp {
                     // `start_async_generator` reached below `return_depth` on
                     // crafted bytecode must not pop an outer frame (#1046).
                     if self.call_stack.len() < return_depth {
-                        return Step::Host(Halt::EngineInvariant(
+                        return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                             "start_async_generator:frame-underflow",
-                        ));
+                        )));
                     }
                     let resume = self.leave_call();
                     self.push(slot);
                     pc = resume;
                     if self.check_meter() == MeterCheck::Abort {
-                        return Step::Host(Halt::MeterAbort);
+                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                     }
                 }
                 // `start_async` (`XS_CODE_START_ASYNC`, xsRun.c:1094): the
@@ -3304,13 +3359,15 @@ impl Interp {
                     // site the `leave_call with empty call stack` fuzz abort
                     // hit (#1046).
                     if self.call_stack.len() < return_depth {
-                        return Step::Host(Halt::EngineInvariant("start_async:frame-underflow"));
+                        return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                            "start_async:frame-underflow",
+                        )));
                     }
                     let resume = self.leave_call();
                     self.push(promise_slot);
                     pc = resume;
                     if self.check_meter() == MeterCheck::Abort {
-                        return Step::Host(Halt::MeterAbort);
+                        return Step::Host(Halt::Panic(PanicKind::MeterAbort));
                     }
                 }
                 // `await` (`XS_CODE_AWAIT`, xsRun.c:1212): suspend the running
@@ -3366,7 +3423,9 @@ impl Interp {
                         match self.async_run_stack.last() {
                             Some(a) => (a.inst, a.stack_base, a.jumps_base, a.call_depth_base),
                             None => {
-                                return Step::Host(Halt::EngineInvariant("await:no-async-instance"))
+                                return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                    "await:no-async-instance",
+                                )))
                             }
                         };
                     let resume_pc = pc + size as usize;
@@ -3412,11 +3471,9 @@ impl Interp {
                     // untrusted offset before retaining it, so a later throw
                     // cannot reach the resume-target invariant with bad input.
                     if target >= len {
-                        return Step::Host(Halt::Decode(DecodeError::InvalidCatchTarget {
-                            pc,
-                            target,
-                            len,
-                        }));
+                        return Step::Host(Halt::Panic(PanicKind::Decode(
+                            DecodeError::InvalidCatchTarget { pc, target, len },
+                        )));
                     }
                     self.jumps.push(CatchJump {
                         target_pc: target,
@@ -3582,11 +3639,19 @@ impl Interp {
                             .value
                         {
                             Payload::Integer(n) if n >= 3 => n as usize,
-                            _ => return Step::Host(Halt::EngineInvariant("module:transfer-shape")),
+                            _ => {
+                                return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                    "module:transfer-shape",
+                                )))
+                            }
                         };
                     let start = match self.stack.len().checked_sub(count) {
                         Some(start) => start,
-                        None => return Step::Host(Halt::EngineInvariant("module:transfer-stack")),
+                        None => {
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "module:transfer-stack",
+                            )))
+                        }
                     };
                     let imported = self.stack[start + 1].kind == Kind::String;
                     let local_id = match self.stack[start].value {
@@ -3613,11 +3678,19 @@ impl Interp {
                             .value
                         {
                             Payload::Integer(n) if n >= 2 => n as usize,
-                            _ => return Step::Host(Halt::EngineInvariant("module:envelope-shape")),
+                            _ => {
+                                return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                    "module:envelope-shape",
+                                )))
+                            }
                         };
                     let start = match self.stack.len().checked_sub(count) {
                         Some(start) => start,
-                        None => return Step::Host(Halt::EngineInvariant("module:envelope-stack")),
+                        None => {
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "module:envelope-stack",
+                            )))
+                        }
                     };
                     let initialize = self.stack[start];
                     let execute = self.stack[start + 1];
@@ -3649,7 +3722,9 @@ impl Interp {
                         .unwrap_or(crate::value::SlotIndex::NULL);
                     for transfer in &transfers {
                         let Payload::At(local_id, _) = transfer.value else {
-                            return Step::Host(Halt::EngineInvariant("module:transfer-record"));
+                            return Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                                "module:transfer-record",
+                            )));
                         };
                         if local_id == crate::value::XS_NO_ID {
                             continue;

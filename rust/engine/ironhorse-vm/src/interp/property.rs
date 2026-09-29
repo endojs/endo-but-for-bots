@@ -23,7 +23,11 @@ impl Interp {
     ) -> Result<Slot, Step> {
         let (id, index) = match key.value {
             Payload::At(id, index) => (id, index),
-            _ => return Err(Step::Host(Halt::EngineInvariant("get_property_at:key"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "get_property_at:key",
+                ))))
+            }
         };
         // A primitive string indexed by number yields its one-unit character;
         // a named key boxes to `%String.prototype%` (methods / `.length`).
@@ -429,7 +433,11 @@ impl Interp {
         };
         let (id, index) = match key.value {
             Payload::At(id, index) => (id, index),
-            _ => return Err(Step::Host(Halt::EngineInvariant("set_property_at:key"))),
+            _ => {
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "set_property_at:key",
+                ))))
+            }
         };
         if self.proxies.contains_key(&inst) {
             // `p[k] = v` (or a computed define) routes through the proxy's
@@ -643,7 +651,7 @@ impl Interp {
     // a trap that runs guest code comes back in through the same entries — so
     // each of these is where a guest-shaped chain recurses on the host stack.
     // The `_inner` body is the internal method; the guarded entry charges
-    // [`LIGHT_FRAME_COST`] around it and halts with [`Halt::ReentryLimit`]
+    // [`LIGHT_FRAME_COST`] around it and halts with [`PanicKind::ReentryLimit`]
     // past [`NATIVE_DEPTH_LIMIT`].
 
     /// `O.[[GetPrototypeOf]]()` as a slot (`Reference(proto)` or `Null`).
@@ -1606,7 +1614,7 @@ impl Interp {
             let ordinary_ids = self.ordered_own_key_ids(inst);
             self.admit_scratch::<u32>(idxs.len() + ordinary_ids.len())?;
             idxs.try_reserve(ordinary_ids.len())
-                .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
             self.charge_builtin_work((ordinary_ids.len() + idxs.len()) as u64)?;
             idxs.extend(ordinary_ids.iter().filter_map(|id| {
                 self.scalar_key_text(*id)
