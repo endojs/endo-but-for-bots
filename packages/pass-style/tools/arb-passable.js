@@ -66,6 +66,23 @@ export const makeArbitraries = (
   );
   const notThen = arbString.filter(s => s !== 'then');
 
+  /**
+   * Build with Object.fromEntries because fast-check's dictionary mapper uses
+   * assignment, which cannot shadow frozen Object.prototype properties such as
+   * `valueOf` under lockdown.
+   *
+   * @template T
+   * @param {Arbitrary<T>} valueArb
+   * @returns {Arbitrary<Record<string, T>>}
+   */
+  const arbCopyRecord = valueArb =>
+    fc
+      .uniqueArray(fc.tuple(notThen, valueArb), {
+        maxLength,
+        selector: ([key]) => key,
+      })
+      .map(entries => Object.fromEntries(entries));
+
   const keyableLeaves = transformKeyableLeaves(
     /** @type {Arbitrary<Key>[]} */ ([
       fc.constantFrom(null, undefined, false, true),
@@ -179,11 +196,7 @@ export const makeArbitraries = (
             ),
             // copyRecord
             recoverableMap(
-              /** @type {any} */ (
-                fc.dictionary(notThen, tie('liftedKeyDag'), {
-                  maxKeys: maxLength,
-                })
-              ),
+              /** @type {any} */ (arbCopyRecord(tie('liftedKeyDag'))),
               pairsRec => [0, 1].map(i => objectMap(pairsRec, p => p[i])),
             ),
           )
@@ -208,11 +221,7 @@ export const makeArbitraries = (
             ),
             // copyRecord
             recoverableMap(
-              /** @type {any} */ (
-                fc.dictionary(notThen, tie('liftedArbDag'), {
-                  maxKeys: maxLength,
-                })
-              ),
+              /** @type {any} */ (arbCopyRecord(tie('liftedArbDag'))),
               pairsRec => [0, 1].map(i => objectMap(pairsRec, p => p[i])),
             ),
             // promise
