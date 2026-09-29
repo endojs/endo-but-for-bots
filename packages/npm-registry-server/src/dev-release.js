@@ -7,8 +7,9 @@ const SEMVER =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/u;
 
 /**
- * The development coordinate from `designs/npm-dev-registry-serving.md`
- * § Release identity:
+ * The development coordinate from the proposed design
+ * `designs/npm-dev-registry-serving.md` (not yet landed; see
+ * https://github.com/endojs/endo-but-for-bots/pull/1361) § Release identity:
  * `<major>.<minor>.<patch>-dev.<UTC commit time YYYYMMDDHHMMSS>.g<sha7>`.
  */
 const DEV_VERSION =

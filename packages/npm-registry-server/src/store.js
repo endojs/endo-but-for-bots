@@ -20,8 +20,9 @@
 export const SCHEMA_VERSION = 1;
 
 /**
- * The registry tables of `designs/npm-dev-registry-serving.md` § Durable
- * schema, plus the grant and audit tables the publish path records into.
+ * The registry tables of the proposed design
+ * `designs/npm-dev-registry-serving.md` (not yet landed; see
+ * https://github.com/endojs/endo-but-for-bots/pull/1361) § Durable schema, plus the grant and audit tables the publish path records into.
  * `packages` keeps its existing meaning: a row exists only when the exact
  * tarball blob and extracted tree are in the CAS.
  */

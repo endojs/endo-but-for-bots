@@ -1,8 +1,10 @@
 # `@endo/npm-registry-server`
 
 An npm-protocol registry server for staged **development** releases, as
-specified by
-[`designs/npm-dev-registry-serving.md`](../../designs/npm-dev-registry-serving.md).
+specified by the proposed design `designs/npm-dev-registry-serving.md`, which
+is still under review in
+[endojs/endo-but-for-bots#1361](https://github.com/endojs/endo-but-for-bots/pull/1361) and has not
+landed.
 Stock `npm` and Yarn clients publish to it and install from it; nothing on the
 client side is Endo-specific.
 
@@ -78,8 +80,11 @@ With Yarn, set `npmRegistryServer: "https://npm.minion.town"`.
 
 ## Not yet
 
-- The HTTP adapter reads exact versions through its own tables rather than
-  the `npm-registry-as-directory-tree` interface, which has not landed; the
-  design permits this compatibility adapter until the tree does.
+- The HTTP adapter reads exact versions through its own tables and its own
+  content-addressed store rather than the `npm-registry-as-directory-tree`
+  interface and the `@endo/exo-npm` machinery, which the design asks it to
+  reuse. The design allows a temporary adapter only when its handler is
+  already written against the tree interface, and this one is not, so this
+  package does not yet conform to the design.
 - Tarballs containing hard links or symbolic links are refused, including
   upstream ones; such a dependency returns `502` rather than installing.
