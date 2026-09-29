@@ -1,0 +1,49 @@
+{
+  "name": "@endo/inference",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Provider-neutral seam for one confined inference turn: the InferenceBackend interface, its result taxonomy, and enrichers (admission, usage records) that compose over any provider's backend.",
+  "keywords": [],
+  "author": "Endo contributors",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/endojs/endo.git",
+    "directory": "packages/inference"
+  },
+  "bugs": {
+    "url": "https://github.com/endojs/endo/issues"
+  },
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./interface.js": "./src/interface.js",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "exit 0",
+    "test": "ava",
+    "lint": "yarn lint:eslint",
+    "lint:eslint": "eslint ."
+  },
+  "dependencies": {
+    "@endo/patterns": "workspace:^"
+  },
+  "devDependencies": {
+    "@endo/ses-ava": "workspace:^",
+    "ava": "catalog:dev",
+    "eslint": "catalog:dev"
+  },
+  "files": [
+    "./*.js",
+    "src",
+    "LICENSE*"
+  ],
+  "ava": {
+    "files": [
+      "test/**/*.test.js"
+    ],
+    "timeout": "2m"
+  }
+}
