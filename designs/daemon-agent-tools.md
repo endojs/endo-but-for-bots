@@ -63,7 +63,8 @@ What has shipped, by layer:
   **sandbox-spawner shell engine** (Phase 2c, gated on
   [endo-posix-sandbox](endo-posix-sandbox.md)); the Phase 4 end-to-end
   provisioning wiring, in which daemon-provisioned grants reach a lal or fae
-  agent through that harness; the Phase 3.5 cap-bearing-result persistence;
+  agent (whether through that JSON-tool harness or through code mode is open
+  on #731, see the parking callout below); the Phase 3.5 cap-bearing-result persistence;
   and the Phase 5 contract-test extension.
 
 ## What is the Problem Being Solved?
@@ -132,6 +133,11 @@ What this document owns is the remainder:
 > grandfathered
 > ([daemon-git-next-steps](daemon-git-next-steps.md) § Phased Build Plan,
 > *Status and the #731 grandfathering*).
+> `@endo/agentry/workspace-agent` projects `ToolRecord`s to an agent, so it is
+> new JSON-tool surface and is **not** grandfathered. Whether the parking is
+> lifted for it is undecided on #731. Until that is decided, code mode stays the
+> default Phase 4 consumer, and the harness is recorded here as a candidate,
+> not as the path.
 
 Three properties of the reconciled map, each a correction to the sketch:
 
@@ -418,7 +424,9 @@ integration uses an explicit `@endo/agentry` harness rather than the dynamic
 petstore discovery attempted in the archived #618, which was closed over
 concerns that discovery could leak dangerous capabilities. The remaining work
 is the sandbox shell engine (Phase 2c) and the Phase 4 end-to-end provisioning
-wiring into a lal or fae agent.
+wiring into a lal or fae agent. Which surface carries that wiring, the
+explicit JSON-tool harness or code mode, turns on the #731 parking (§ Tool
+Groups, Reconciled).
 
 The loop-level, cross-design sequencing of the git-capability stack is
 canonical in [daemon-git-next-steps](daemon-git-next-steps.md) § Phased
@@ -543,7 +551,9 @@ pure confinement core) and `@endo/exo-http-client` (the `HttpClient` /
   probes a guest petstore. Workspace composition qualifies the two
   otherwise-colliding `inspect` records as `inspectShell` and
   `inspectGitRemote`. No lal or fae agent consumes the harness yet, so no
-  observation shows daemon-provisioned grants reaching an agent.
+  observation shows daemon-provisioned grants reaching an agent. The harness
+  is new JSON-tool surface under the #731 parking; if the parking is not
+  lifted for it, this item is met through code mode instead.
 - [x] Run the worked reference flow of
   [daemon-git-next-steps](daemon-git-next-steps.md) § Open Work as the
   acceptance test: branch → edit via file tools → status / diff / commit
