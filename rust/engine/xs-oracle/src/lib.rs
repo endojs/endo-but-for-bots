@@ -665,6 +665,10 @@ mod tests {
             123.456,
             1.25e-6,
             -2.5e-7,
+            // Exact decimal ties, where the VM's std digits alone pick the odd
+            // candidate and Ryu the even one.
+            -(125343939420064.0 + 0.625),
+            -(614423824407840.0 + 0.25),
         ] {
             assert_eq!(
                 number_to_ecma_string(number),
@@ -687,15 +691,12 @@ mod tests {
         #[test]
         fn independent_number_spelling_matches_vm(bits in proptest::num::u64::ANY) {
             let number = f64::from_bits(bits);
-            let independent = number_to_ecma_string(number);
-            let vm = ironhorse_vm::value::number_to_ecma_string(number);
-            // At an exact tie the spec leaves the last digit open (Ryu picks
-            // the even one, the VM's std digits may not); both must still be
-            // shortest spellings of `number` in the same shape.
-            if independent != vm {
-                proptest::prop_assert_eq!(independent.len(), vm.len(), "{} {}", independent, vm);
-                proptest::prop_assert_eq!(vm.parse::<f64>().ok(), Some(number), "{}", vm);
-            }
+            // Both spellers resolve an exact decimal tie to the even digit
+            // (6.1.6.1.20 Note 2), so the spellings are byte-identical.
+            proptest::prop_assert_eq!(
+                number_to_ecma_string(number),
+                ironhorse_vm::value::number_to_ecma_string(number)
+            );
         }
     }
 

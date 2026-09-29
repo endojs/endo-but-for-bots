@@ -29,50 +29,18 @@ pub(crate) fn compare_observations(
 
 /// Whether IronHorse's completion string denotes the oracle's completion.
 ///
-/// When the oracle's completion was a Number, IronHorse must spell it as
-/// `oracle_spelling`, the ECMA-262 `Number::toString` of the oracle's exact
+/// When the oracle's completion was a Number, IronHorse must spell it exactly
+/// as `oracle_spelling`, the ECMA-262 `Number::toString` of the oracle's exact
 /// double; XS's own spelling is ignored because it is not always shortest or
-/// round-tripping. The one freedom the spec leaves is the last digit of an
-/// exact tie (step 5 does not determine `s` uniquely; Note 2 only recommends
-/// the even one), so a spelling with the same shape and digit count that
-/// denotes the same double also agrees. Otherwise the oracle has reported that
-/// the completion was not a Number (a String, BigInt, Boolean, and so on), so
-/// the strings must be byte-identical: re-inferring a Number from a
-/// numeric-looking spelling would hide a divergence such as the String `"1e2"`
-/// against `"100"`.
+/// round-tripping. Step 5 of 6.1.6.1.20 leaves `s` open at an exact decimal
+/// tie; both spellers resolve it by Note 2 (the even digit), so the spelling
+/// is fully determined and any other digits are a divergence. Otherwise the
+/// oracle has reported that the completion was not a Number (a String, BigInt,
+/// Boolean, and so on), so the strings must be byte-identical: re-inferring a
+/// Number from a numeric-looking spelling would hide a divergence such as the
+/// String `"1e2"` against `"100"`.
 pub(crate) fn results_agree(oracle: &str, oracle_spelling: Option<&str>, ironhorse: &str) -> bool {
-    match oracle_spelling {
-        Some(spec) => ironhorse == spec || is_tie_spelling(spec, ironhorse),
-        None => oracle == ironhorse,
-    }
-}
-
-/// Whether `other` is `spec` with a different choice of shortest digits for
-/// the same finite double: same length, same significant-digit count, and the
-/// same parsed value.
-fn is_tie_spelling(spec: &str, other: &str) -> bool {
-    let same_double = match (spec.parse::<f64>(), other.parse::<f64>()) {
-        (Ok(a), Ok(b)) => a.is_finite() && a == b,
-        _ => false,
-    };
-    same_double
-        && spec.len() == other.len()
-        && significant_digits(spec).is_some()
-        && significant_digits(spec) == significant_digits(other)
-}
-
-/// The spec's `k` for a decimal spelling (digits without leading or trailing
-/// zeros), or `None` if it contains anything a finite Number spelling cannot.
-fn significant_digits(spelling: &str) -> Option<usize> {
-    let mantissa = spelling.split_once('e').map_or(spelling, |(m, _)| m);
-    if !spelling
-        .bytes()
-        .all(|b| b.is_ascii_digit() || matches!(b, b'-' | b'+' | b'.' | b'e'))
-    {
-        return None;
-    }
-    let digits: String = mantissa.chars().filter(char::is_ascii_digit).collect();
-    Some(digits.trim_start_matches('0').trim_end_matches('0').len())
+    ironhorse == oracle_spelling.unwrap_or(oracle)
 }
 
 #[cfg(test)]
@@ -119,15 +87,30 @@ mod tests {
     }
 
     #[test]
-    fn either_shortest_spelling_of_an_exact_tie_agrees() {
+    fn a_number_agrees_only_with_its_exact_spec_spelling() {
         // -125343939420064.625 is exactly halfway between the 17-digit
-        // candidates; Ryu spells the even one, Rust's `{:e}` the odd one.
+        // candidates; Note 2 and both spellers pick the even one.
         let spec = Some("-125343939420064.62");
-        assert!(results_agree("", spec, "-125343939420064.63"));
+        assert!(results_agree("", spec, "-125343939420064.62"));
+        assert!(!results_agree("", spec, "-125343939420064.63"));
         assert!(!results_agree("", spec, "-125343939420064.61"));
         assert!(!results_agree("", spec, "-125343939420064.625"));
-        assert!(!results_agree("", spec, "125343939420064.63"));
-        assert!(!results_agree("", None, "-125343939420064.63"));
+        assert!(!results_agree("", spec, "125343939420064.62"));
+        // Other spellings of the same double are divergences, as are
+        // non-closest digits that happen to round-trip.
+        for (spec, other) in [
+            ("100", "1e2"),
+            ("1000", "1e+3"),
+            ("1000", "+1e3"),
+            ("1000", "01e3"),
+            ("1e+21", "10e20"),
+            ("1e+21", "1.e21"),
+            ("5e-324", "4e-324"),
+            ("51298827675632344", "51298827675632342"),
+        ] {
+            assert_eq!(other.parse::<f64>(), spec.parse::<f64>(), "{other}");
+            assert!(!results_agree("", Some(spec), other), "{spec} {other}");
+        }
     }
 
     #[test]
