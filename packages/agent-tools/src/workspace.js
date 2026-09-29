@@ -52,24 +52,31 @@ import { makeMountFsTools } from './json-tools/fs.js';
  * catalog remains unambiguous.
  */
 
-const composedNames = harden({
-  gitRemote: harden({ inspect: 'inspectGitRemote' }),
-  shell: harden({ inspect: 'inspectShell' }),
-});
+const composedNames = harden(
+  new Map([
+    ['gitRemote', harden(new Map([['inspect', 'inspectGitRemote']]))],
+    ['shell', harden(new Map([['inspect', 'inspectShell']]))],
+  ]),
+);
 
 /**
  * Apply the workspace catalog's explicit names without changing a capability
- * tool maker's standalone surface.
+ * tool maker's standalone surface. The name tables are `Map`s so a group or
+ * tool name that coincides with an `Object.prototype` property (`constructor`,
+ * `toString`) cannot resolve to an inherited value.
  *
  * @param {string} group
  * @param {ToolRecord[]} records
  * @returns {ToolRecord[]}
  */
 const nameWorkspaceTools = (group, records) => {
-  const names = composedNames[group] || {};
+  const names = composedNames.get(group);
+  if (names === undefined) {
+    return records;
+  }
   return records.map(record => {
-    const name = names[record.name] || record.name;
-    return name === record.name ? record : harden({ ...record, name });
+    const name = names.get(record.name);
+    return name === undefined ? record : harden({ ...record, name });
   });
 };
 
