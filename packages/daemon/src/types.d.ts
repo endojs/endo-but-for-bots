@@ -189,6 +189,7 @@ export type WorkerDeferredTaskParams = {
 export type AgentDeferredTaskParams = {
   agentId: FormulaIdentifier;
   handleId: FormulaIdentifier;
+  petStoreId: FormulaIdentifier;
 };
 
 export type HostFormula = {
@@ -208,6 +209,8 @@ export type HostFormula = {
   networks: FormulaIdentifier;
   planes: FormulaIdentifier;
   pins: FormulaIdentifier;
+  /** Whether the agent may introduce new names into its own directory. */
+  nonExtensible?: boolean;
 };
 
 export type GuestFormula = {
@@ -225,6 +228,8 @@ export type GuestFormula = {
   guestPins?: FormulaIdentifier;
   /** The host-only pin directory retained by the guest formula. */
   hostPins?: FormulaIdentifier;
+  /** Whether the agent may introduce new names into its own directory. */
+  nonExtensible?: boolean;
 };
 
 export type LeastAuthorityFormula = {
@@ -1625,6 +1630,8 @@ export interface EndoWorker {}
 export type MakeAgentOptions = {
   agentName?: string | string[];
   introducedNames?: Record<string, string>;
+  /** Prevent the new agent from adding names to its own directory. */
+  nonExtensible?: boolean;
   /** A caller-selected directory to expose to the new agent as `@pins`. */
   pins?: EndoDirectory;
   /** A caller-selected directory to expose as `@nets`. */
@@ -2802,6 +2809,7 @@ type FormulateNumberedGuestParams = {
   planesDirectoryId: FormulaIdentifier;
   guestPinsDirectoryId: FormulaIdentifier;
   hostPinsDirectoryId: FormulaIdentifier;
+  nonExtensible?: boolean;
   pinned: FormulaIdentifier[];
 };
 
@@ -2831,6 +2839,7 @@ type FormulateNumberedHostParams = {
   networksDirectoryId: FormulaIdentifier;
   planesDirectoryId: FormulaIdentifier;
   pinsDirectoryId: FormulaIdentifier;
+  nonExtensible?: boolean;
   pinned: FormulaIdentifier[];
 };
 
@@ -2955,6 +2964,7 @@ export interface DaemonCore {
     workerLabel?: string,
     guestPinsDirectoryId?: FormulaIdentifier,
     networksDirectoryId?: FormulaIdentifier,
+    nonExtensible?: boolean,
   ) => FormulateResult<EndoGuest>;
 
   /**
@@ -2993,6 +3003,7 @@ export interface DaemonCore {
     specifiedWorkerId?: FormulaIdentifier | undefined,
     hostHandleId?: FormulaIdentifier,
     workerLabel?: string,
+    nonExtensible?: boolean,
   ) => FormulateResult<EndoHost>;
 
   /**

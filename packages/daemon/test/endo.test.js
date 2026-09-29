@@ -1031,6 +1031,44 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
       await E(host).identify('@nets'),
     );
   });
+
+  test(`provideAgent can make ${kind} directory non-extensible`, async t => {
+    const { host } = await prepareHost(t);
+    await E(host).storeValue(10, `${kind}-ten`);
+    await E(host).storeValue(20, `${kind}-twenty`);
+    const agent = await provideAgent(host, `${kind}-fixed`, {
+      agentName: `${kind}-fixed-agent`,
+      introducedNames: {
+        [`${kind}-ten`]: 'first',
+        [`${kind}-twenty`]: 'second',
+      },
+      nonExtensible: true,
+    });
+    const tenId = await E(host).identify(`${kind}-ten`);
+    const twentyId = await E(host).identify(`${kind}-twenty`);
+
+    t.is(await E(agent).lookup('first'), 10);
+    await E(agent).storeIdentifier(['first'], twentyId);
+    t.is(await E(agent).lookup('first'), 20);
+    await E(agent).move(['second'], ['first']);
+    t.false(await E(agent).has('second'));
+    t.is(await E(agent).lookup('first'), 20);
+
+    await t.throwsAsync(E(agent).storeIdentifier(['third'], tenId), {
+      message: 'Cannot add pet name "third" to a non-extensible directory',
+    });
+    await E(agent).remove('first');
+    await t.throwsAsync(E(agent).storeIdentifier(['first'], tenId), {
+      message: 'Cannot add pet name "first" to a non-extensible directory',
+    });
+
+    const agentId = await E(host).identify(`${kind}-fixed-agent`);
+    const agentRecord = await E(E(host).diagnostics()).getFormula(agentId);
+    t.deepEqual(agentRecord.properties.nonExtensible, {
+      kind: 'literal',
+      value: true,
+    });
+  });
 }
 
 test('move moves value, between different guests', async t => {

@@ -71,12 +71,13 @@ const assertPowersNameOrPath = nameOrPath => {
  * Normalizes options for provisioning either a host or a guest, filling in
  * default values.
  * @param {MakeAgentOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, pins?: EndoDirectory, networks?: EndoDirectory }}
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, pins?: EndoDirectory, networks?: EndoDirectory, nonExtensible: boolean }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
   const pins = opts?.pins;
   const networks = opts?.networks;
+  const nonExtensible = opts?.nonExtensible ?? false;
   return {
     introducedNames: /** @type {Record<Name, PetName>} */ (
       opts?.introducedNames ?? Object.create(null)
@@ -84,6 +85,7 @@ const normalizeHostOrGuestOptions = opts => {
     ...(agentName !== undefined && { agentName }),
     ...(pins !== undefined && { pins }),
     ...(networks !== undefined && { networks }),
+    nonExtensible,
   };
 };
 
@@ -441,6 +443,7 @@ export const makeHostMaker = ({
    * @param {FormulaIdentifier} networksDirectoryId
    * @param {FormulaIdentifier} planesDirectoryId
    * @param {FormulaIdentifier} pinsDirectoryId
+   * @param {boolean} nonExtensible
    * @param {FormulaIdentifier} leastAuthorityId
    * @param {{[name: string]: FormulaIdentifier}} platformNames
    * @param {Context} context
@@ -462,6 +465,7 @@ export const makeHostMaker = ({
     networksDirectoryId,
     planesDirectoryId,
     pinsDirectoryId,
+    nonExtensible,
     leastAuthorityId,
     platformNames,
     context,
@@ -523,7 +527,11 @@ export const makeHostMaker = ({
     if (mailHubId !== undefined) {
       specialNames['@mail'] = mailHubId;
     }
-    const specialStore = makePetSitter(baseController, specialNames);
+    const specialStore = makePetSitter(
+      baseController,
+      specialNames,
+      nonExtensible,
+    );
 
     const getNetworkAddresses = () =>
       getAllNetworkAddresses(networksDirectoryId);
@@ -1956,6 +1964,34 @@ export const makeHostMaker = ({
     };
 
     /**
+     * Resolve names in this host before formulation and arrange to seed the
+     * new agent's own pet store before its non-extensible view is exposed.
+     *
+     * @param {Record<Name, PetName>} introducedNames
+     * @param {DeferredTasks<AgentDeferredTaskParams>} tasks
+     */
+    const deferIntroducedNamesToAgent = async (introducedNames, tasks) => {
+      const introductions = await Promise.all(
+        Object.entries(introducedNames).map(async ([parentName, childName]) =>
+          harden({
+            childName,
+            id: await E(directory).identify(parentName),
+          }),
+        ),
+      );
+      for (const { childName, id } of introductions) {
+        if (id !== undefined) {
+          tasks.push(async identifiers => {
+            const childPetStore = await provideStoreController(
+              identifiers.petStoreId,
+            );
+            await childPetStore.storeIdentifier(childName, id);
+          });
+        }
+      }
+    };
+
+    /**
      * @param {NameOrPath} [petName]
      * @param {MakeAgentOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoHost>}>}
@@ -1967,6 +2003,7 @@ export const makeHostMaker = ({
         agentName = undefined,
         pins = undefined,
         networks = undefined,
+        nonExtensible: childNonExtensible = false,
       } = {},
     ) => {
       let host = await getNamedAgent(petName, 'host');
@@ -1986,29 +2023,33 @@ export const makeHostMaker = ({
           'networks',
           networks,
         );
+        const deferredTasks = getDeferredTasksForAgent(
+          petName,
+          /** @type {NameOrPath | undefined} */ (agentName),
+        );
+        await deferIntroducedNamesToAgent(
+          /** @type {Record<Name, PetName>} */ (introducedNames),
+          deferredTasks,
+        );
         const { value, id } =
           // Behold, recursion:
           await formulateHost(
             endoId,
             selectedNetworksDirectoryId ?? networksDirectoryId,
             selectedPinsDirectoryId ?? pinsDirectoryId,
-            getDeferredTasksForAgent(
-              petName,
-              /** @type {NameOrPath | undefined} */ (agentName),
-            ),
+            deferredTasks,
             undefined,
             handleId,
             hostLabel,
+            childNonExtensible,
           );
         host = { value: Promise.resolve(value), id };
+      } else {
+        await introduceNamesToAgent(
+          host.id,
+          /** @type {Record<Name, PetName>} */ (introducedNames),
+        );
       }
-
-      await introduceNamesToAgent(
-        host.id,
-        /** @type {Record<import('./types.js').Name, import('./types.js').PetName>} */ (
-          introducedNames
-        ),
-      );
 
       /** @type {{ id: FormulaIdentifier, value: Promise<EndoHost> }} */
       return host;
@@ -2039,6 +2080,7 @@ export const makeHostMaker = ({
         agentName = undefined,
         pins = undefined,
         networks = undefined,
+        nonExtensible: guestNonExtensible = false,
       } = {},
     ) => {
       let guest = await getNamedAgent(handleName, 'guest');
@@ -2058,28 +2100,32 @@ export const makeHostMaker = ({
           'networks',
           networks,
         );
+        const deferredTasks = getDeferredTasksForAgent(
+          handleName,
+          /** @type {NameOrPath | undefined} */ (agentName),
+        );
+        await deferIntroducedNamesToAgent(
+          /** @type {Record<Name, PetName>} */ (introducedNames),
+          deferredTasks,
+        );
         const { value, id } =
           // Behold, recursion:
           await formulateGuest(
             hostId,
             handleId,
-            getDeferredTasksForAgent(
-              handleName,
-              /** @type {NameOrPath | undefined} */ (agentName),
-            ),
+            deferredTasks,
             guestLabel,
             guestPinsDirectoryId,
             guestNetworksDirectoryId,
+            guestNonExtensible,
           );
         guest = { value: Promise.resolve(value), id };
+      } else {
+        await introduceNamesToAgent(
+          guest.id,
+          /** @type {Record<Name, PetName>} */ (introducedNames),
+        );
       }
-
-      await introduceNamesToAgent(
-        guest.id,
-        /** @type {Record<import('./types.js').Name, import('./types.js').PetName>} */ (
-          introducedNames
-        ),
-      );
 
       /** @type {{ id: FormulaIdentifier, value: Promise<EndoGuest> }} */
       return guest;

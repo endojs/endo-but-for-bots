@@ -10,14 +10,19 @@ import {
 import { isPetName, assertName } from './pet-name.js';
 import { parseId } from './formula-identifier.js';
 
-/** @import { StoreController, IdRecord, PetStoreIdNameChange, Name, SpecialName } from './types.js' */
+/** @import { StoreController, IdRecord, PetStoreIdNameChange, Name, PetName, SpecialName } from './types.js' */
 
 /**
  * @param {StoreController} controller
  * @param {Record<string,string>} specialNames
+ * @param {boolean} [nonExtensible]
  * @returns {StoreController}
  */
-export const makePetSitter = (controller, specialNames) => {
+export const makePetSitter = (
+  controller,
+  specialNames,
+  nonExtensible = false,
+) => {
   /** @type {StoreController['has']} */
   const has = petName => {
     return Object.hasOwn(specialNames, petName) || controller.has(petName);
@@ -125,8 +130,40 @@ export const makePetSitter = (controller, specialNames) => {
     return harden(names);
   };
 
-  const { storeIdentifier, storeLocator, remove, rename, seedGcEdges } =
-    controller;
+  /** @param {PetName} petName */
+  const assertCanAdd = petName => {
+    if (nonExtensible && !controller.has(petName)) {
+      throw new TypeError(
+        `Cannot add pet name ${q(petName)} to a non-extensible directory`,
+      );
+    }
+  };
+
+  /** @type {StoreController['storeIdentifier']} */
+  const storeIdentifier = async (petName, formulaIdentifier) => {
+    assertCanAdd(petName);
+    await controller.storeIdentifier(petName, formulaIdentifier);
+  };
+
+  /** @type {StoreController['storeLocator']} */
+  const storeLocator = async (petName, locator) => {
+    assertCanAdd(petName);
+    await controller.storeLocator(petName, locator);
+  };
+
+  /** @type {StoreController['rename']} */
+  const rename = async (fromPetName, toPetName) => {
+    if (
+      fromPetName !== toPetName &&
+      controller.has(fromPetName) &&
+      !controller.has(toPetName)
+    ) {
+      assertCanAdd(toPetName);
+    }
+    await controller.rename(fromPetName, toPetName);
+  };
+
+  const { remove, seedGcEdges } = controller;
 
   const petSitter = {
     has,

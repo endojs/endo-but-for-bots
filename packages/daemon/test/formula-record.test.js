@@ -167,6 +167,7 @@ test('makeFormulaRecord surfaces every host retained reference', t => {
     networks: { kind: 'reference', identifier: 'networks-id' },
     planes: { kind: 'reference', identifier: 'planes-id' },
     pins: { kind: 'reference', identifier: 'pins-id' },
+    nonExtensible: { kind: 'literal', value: false },
   });
 });
 
@@ -207,6 +208,7 @@ test('makeFormulaRecord surfaces every guest retained reference', t => {
     planes: { kind: 'reference', identifier: 'planes-id' },
     guestPins: { kind: 'reference', identifier: 'guest-pins-id' },
     hostPins: { kind: 'reference', identifier: 'host-pins-id' },
+    nonExtensible: { kind: 'literal', value: false },
   });
 });
 
@@ -234,6 +236,10 @@ test('makeFormulaRecord omits guest pin directories when absent', t => {
   t.is(record.type, 'guest');
   t.false('guestPins' in record.properties);
   t.false('hostPins' in record.properties);
+  t.deepEqual(record.properties.nonExtensible, {
+    kind: 'literal',
+    value: false,
+  });
 });
 
 test('makeFormulaRecord omits a scratch-mount path when unresolved', t => {
