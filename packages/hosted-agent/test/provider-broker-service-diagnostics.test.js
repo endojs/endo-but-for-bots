@@ -107,10 +107,11 @@ test('failure hooks do not depend on the diagnostics flag; the admission trail d
     );
     t.is(typeof options.onDiagnostic, 'function', `${flag}`);
     t.is(typeof options.onListenerDiagnostic, 'function', `${flag}`);
-    t.is(typeof options.audit, flag === true ? 'function' : 'undefined');
+    t.is(typeof options.audit, 'function', `${flag}`);
     options.onDiagnostic({ stage: 'response', status: 429 });
     options.onListenerDiagnostic({ stage: 'endpoint' });
-    if (flag === true) options.audit({ event: 'admitted', requests: 1n });
+    // Only the minted `true` writes the admission trail.
+    options.audit({ event: 'admitted', requests: 1n });
   }
   t.is(
     logged.filter(line => line === 'Test broker event admitted 1').length,
@@ -1773,4 +1774,24 @@ test('a share in the pool lists only what its grantor’s limits allow', async t
       ['friend', 'current', ['allowed']],
     ],
   );
+});
+
+test('the admission trail follows configured settings, not only the minted flag', async t => {
+  /** @type {string[]} */
+  const logged = [];
+  const options = await kitOptionsFor(false, (...args) =>
+    logged.push(args.join(' ')),
+  );
+  options.audit({ event: 'admitted', requests: 1n });
+  options.onSettings({ diagnostics: true });
+  options.audit({ event: 'admitted', requests: 2n });
+  // A settings change that names no diagnostics keeps the trail as it is.
+  options.onSettings({ maxSessions: 4 });
+  options.audit({ event: 'completed', requests: 2n });
+  options.onSettings({ diagnostics: false });
+  options.audit({ event: 'admitted', requests: 3n });
+  t.deepEqual(logged, [
+    'Test broker event admitted 2',
+    'Test broker event completed 2',
+  ]);
 });

@@ -24,6 +24,7 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 import { normalizeRunnerLimits } from './delegated-runner.js';
+import { BROKER_SETTINGS_FILE } from './provider-broker-service.js';
 import { normalizeShareLimits } from './subscription-share.js';
 
 import {
@@ -1121,3 +1122,78 @@ export const assertRetainedBrokerImages = async ({
   }
 };
 harden(assertRetainedBrokerImages);
+
+/**
+ * The operator's broker settings that are not the broker's identity, from
+ * `ENDO_<BACKEND>_MAX_SESSIONS`, `_PUBLIC_INTERNET` and `_DIAGNOSTICS`. An
+ * unset capacity is omitted, so the broker keeps the one it has.
+ * @param {Record<string, string | undefined>} env
+ * @param {string} prefix For example `ENDO_CODEX`.
+ * @returns {import('./provider-scopes.js').BrokerSettings}
+ */
+export const readBrokerSettings = (env, prefix) => {
+  const capacityName = `${prefix}_MAX_SESSIONS`;
+  const capacity = env[capacityName] || '';
+  capacity === '' ||
+    (/^[1-9][0-9]{0,2}$/.test(capacity) && Number(capacity) <= 256) ||
+    Fail`${b(capacityName)} must be an integer from 1 to 256, got ${q(capacity)}`;
+  return harden({
+    ...(capacity === '' ? {} : { maxSessions: Number(capacity) }),
+    publicInternet: env[`${prefix}_PUBLIC_INTERNET`] === '1',
+    diagnostics: env[`${prefix}_DIAGNOSTICS`] === '1',
+  });
+};
+harden(readBrokerSettings);
+
+/**
+ * A broker minted into a directory an earlier, retired broker used must not
+ * take that broker's saved settings: it starts from its own minted ones and
+ * setup's. Call just before minting.
+ * @param {string} directory The broker's private directory.
+ */
+export const forgetBrokerSettings = async directory => {
+  const file = path.join(directory, BROKER_SETTINGS_FILE);
+  await fs.rm(file, { force: true });
+  await fs.rm(`${file}.next`, { force: true });
+};
+harden(forgetBrokerSettings);
+
+/**
+ * Apply those settings to the retained or newly minted broker, at every
+ * start. They change without retiring it: only identity (owner, directory,
+ * account, images, pool mode) is the formula's own. Turning public internet
+ * off stops the broker's live public listeners. The broker keeps what it was
+ * last given across its own revivals.
+ *
+ * A failure is logged, not thrown, like the other publications here: the
+ * backend and its Floot binding still come up, the broker keeps the settings
+ * it had, and the next start tries again.
+ * @param {any} hostAgent
+ * @param {string[]} brokerPath
+ * @param {import('./provider-scopes.js').BrokerSettings} settings
+ * @param {string} label
+ */
+export const configureBroker = async (
+  hostAgent,
+  brokerPath,
+  settings,
+  label,
+) => {
+  await null;
+  try {
+    const broker = await E(hostAgent).lookup(brokerPath);
+    await E(broker).configure(settings);
+    console.log(
+      `Applied ${label} broker settings: ${JSON.stringify(settings)}`,
+    );
+    return true;
+  } catch (error) {
+    console.error(
+      `${label} broker settings ${JSON.stringify(settings)} were not applied; the broker keeps its previous ones until the next start: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return false;
+  }
+};
+harden(configureBroker);

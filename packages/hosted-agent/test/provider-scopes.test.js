@@ -196,10 +196,13 @@ test('scopes share one issuer and expose no operator shutdown authority', async 
   // operator's, over the account's banked resets and nothing else; the
   // service is held by setup and the host-side backend, and a scope, a grant
   // and a slice have no path back to it. This adapter has none to offer.
+  // `configure` is the operator's too, for the same holders: capacity, public
+  // egress and the admission trail, never identity, a scope or shutdown.
   t.deepEqual([...serviceMethods].sort(), [
     '__getInterfaceGuard__',
     '__getMethodNames__',
     'accountSource',
+    'configure',
     'lookupScope',
     'modelCatalog',
     'provideScope',

@@ -15,6 +15,15 @@ import { M } from '@endo/patterns';
  */
 
 /**
+ * @typedef {object} BrokerSettings The operator's settings that are not a
+ * broker's identity. Each absent field keeps its current value.
+ * @property {number} [maxSessions] Concurrent session (listener) capacity.
+ * @property {boolean} [publicInternet] Whether sessions may be granted public
+ *   egress; turning it off stops the live public listeners.
+ * @property {boolean} [diagnostics] Whether every admission is logged.
+ */
+
+/**
  * @typedef {object} ScopedProviderIssuer
  * @property {(spec: ProviderScopeSpec & {sessionId: string}) => {value: Promise<any>, fence(): Promise<void>, revoke(): Promise<void>}} issueKit
  */
@@ -27,6 +36,16 @@ const SpecShape = M.splitRecord(
     // Which of the provider's subscriptions this session uses: `auto`, or
     // one by id. Absent means `auto`.
     subscription: M.string(),
+  },
+  harden({}),
+);
+
+const SettingsShape = M.splitRecord(
+  {},
+  {
+    maxSessions: M.and(M.number(), M.gte(1), M.lte(256)),
+    publicInternet: M.boolean(),
+    diagnostics: M.boolean(),
   },
   harden({}),
 );
@@ -72,6 +91,8 @@ const ScopeInterface = M.interface('ProviderScope', {
  *   per subscription.
  * @param {any} [powers.subscription] The broker as a `Subscription`
  *   (`broker-subscription.js`): endpoints without a listener, for shares.
+ * @param {(settings: BrokerSettings) => Promise<void>} [powers.configure]
+ *   The operator's settings that are not the broker's identity.
  */
 export const makeProviderScopes = ({
   openIssuer,
@@ -82,6 +103,7 @@ export const makeProviderScopes = ({
   resetRedeemer,
   resetRedeemerOf,
   subscription,
+  configure,
 }) => {
   /** @type {Map<string, {spec: ProviderScopeSpec, facet: any, revoke(): Promise<void>}>} */
   const scopes = new Map();
@@ -250,6 +272,7 @@ export const makeProviderScopes = ({
         .optional(M.string())
         .returns(M.or(M.remotable(), M.undefined(), M.promise())),
       subscription: M.call().returns(M.or(M.remotable(), M.undefined())),
+      configure: M.call(SettingsShape).returns(M.promise()),
     }),
     {
       provideScope,
@@ -302,6 +325,15 @@ export const makeProviderScopes = ({
       // holds it as a formula of its own, and only a share's namespace is
       // given that; what is handed to anybody else is the share.
       subscription: () => subscription,
+      // An operator's: capacity, public egress and the admission trail, which
+      // setup applies at every start. Identity (owner, directory, account,
+      // images, pool mode) is the formula's and still needs a retirement.
+      /** @param {BrokerSettings} settings */
+      configure: async settings => {
+        !stopped || Fail`Provider scope service is closed`;
+        if (!configure) throw Fail`Provider settings are not configurable`;
+        await configure(settings);
+      },
     },
   );
   return harden({ service, close });

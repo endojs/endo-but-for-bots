@@ -78,10 +78,14 @@ const readStart = async pid => {
  * @param {string} options.imageRef Pinned listener image, including its SHA-256 digest.
  * @param {string} options.ownerId Stable operator-owned cleanup scope.
  * @param {string} options.stateDirectory Private directory for a process lock.
- * @param {number} [options.maxListeners]
+ * @param {number} [options.maxListeners] Initial concurrent listener capacity.
  * @param {any} [options.host] Trusted host powers, never session inputs.
  * @param {Record<string,string>} [options.env] Operator host environment overrides, never guest env.
- * @param {boolean} [options.publicInternet] Operator enables optional public listeners.
+ * @param {boolean} [options.publicInternet] Operator initially enables optional public listeners.
+ *
+ * Capacity and the public-network ceiling are operator settings, not identity:
+ * `configure()` changes both for the next admission. Turning public networking
+ * off also stops every live public listener; lowering capacity stops nothing.
  */
 export const makePodmanProviderListenerRuntimeKit = ({
   imageRef,
@@ -95,11 +99,19 @@ export const makePodmanProviderListenerRuntimeKit = ({
   (/^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/.test(ownerId) &&
     /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(imageRef)) ||
     Fail`Invalid provider runtime identity`;
-  (Number.isInteger(maxListeners) && maxListeners > 0 && maxListeners <= 256) ||
-    Fail`Invalid listener capacity`;
+  /** @param {{ maxListeners: unknown, publicInternet: unknown }} settings */
+  const assertSettings = settings => {
+    (Number.isInteger(settings.maxListeners) &&
+      /** @type {number} */ (settings.maxListeners) > 0 &&
+      /** @type {number} */ (settings.maxListeners) <= 256) ||
+      Fail`Invalid listener capacity`;
+    typeof settings.publicInternet === 'boolean' ||
+      Fail`Invalid public network configuration`;
+  };
+  assertSettings({ maxListeners, publicInternet });
+  let capacity = maxListeners;
+  let publicAllowed = publicInternet;
   const imageDigest = imageRef.slice(imageRef.indexOf('@') + 1);
-  typeof publicInternet === 'boolean' ||
-    Fail`Invalid public network configuration`;
   const hostEnvironment = makePodmanHostEnvironment(process.env, env);
   // Low-level injection preserves the default argv/environment construction in
   // tests. High-level run/launch remain trusted complete host implementations.
@@ -135,6 +147,9 @@ export const makePodmanProviderListenerRuntimeKit = ({
   const cleanup = new Set();
   /** @type {Set<() => Promise<void>>} */
   const pendingCleanup = new Set();
+  /** @type {Set<() => Promise<void>>} */
+  const publicListeners = new Set();
+  let resolverReady = false;
   let disposed = false;
   let initialized = false;
   let lockOwned = false;
@@ -205,6 +220,48 @@ export const makePodmanProviderListenerRuntimeKit = ({
       await remove(id);
     }
   };
+  // The public listeners' resolver file, written once and immutable after.
+  // Made at open when the operator allows public networking, else at the
+  // first public admission after `configure()` allows it.
+  const provideResolver = async () => {
+    await null;
+    if (resolverReady) return;
+    // A handle an earlier failed attempt could not close is closed first,
+    // never replaced and leaked.
+    await closeResolver();
+    const resolverContents =
+      'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n';
+    try {
+      resolverFile = await openFile(resolverConfigPath, 'wx', 0o444);
+    } catch (error) {
+      if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
+        throw error;
+    }
+    if (resolverFile) {
+      try {
+        assertOpen();
+        await resolverFile.writeFile(resolverContents);
+        assertOpen();
+        await resolverFile.chmod(0o444);
+        await closeResolver();
+      } catch (error) {
+        // This process created the file and did not finish it: remove it, so
+        // the next public admission writes it whole instead of refusing it.
+        // An unclosed handle stays for the next attempt or close() to retry.
+        await removeLink(resolverConfigPath).catch(() => {});
+        throw error;
+      }
+    }
+    const resolverStat = await lstat(resolverConfigPath);
+    // eslint-disable-next-line no-bitwise
+    const resolverMode = resolverStat.mode & 0o777;
+    (resolverStat.isFile() &&
+      resolverStat.uid === process.getuid?.() &&
+      resolverMode === 0o444 &&
+      (await readFile(resolverConfigPath, 'utf8')) === resolverContents) ||
+      Fail`Public resolver configuration is not immutable`;
+    resolverReady = true;
+  };
   const initialize = async () => {
     assertOpen();
     await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
@@ -221,31 +278,7 @@ export const makePodmanProviderListenerRuntimeKit = ({
     start !== null || Fail`Provider runtime requires a procfs process identity`;
     identity = `${process.pid}-${start}`;
     assertOpen();
-    const resolverContents =
-      'nameserver 127.0.0.53\noptions attempts:1 timeout:2\n';
-    if (publicInternet) {
-      try {
-        resolverFile = await openFile(resolverConfigPath, 'wx', 0o444);
-      } catch (error) {
-        if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
-          throw error;
-      }
-      if (resolverFile) {
-        assertOpen();
-        await resolverFile.writeFile(resolverContents);
-        assertOpen();
-        await resolverFile.chmod(0o444);
-        await closeResolver();
-      }
-      const resolverStat = await lstat(resolverConfigPath);
-      // eslint-disable-next-line no-bitwise
-      const resolverMode = resolverStat.mode & 0o777;
-      (resolverStat.isFile() &&
-        resolverStat.uid === process.getuid?.() &&
-        resolverMode === 0o444 &&
-        (await readFile(resolverConfigPath, 'utf8')) === resolverContents) ||
-        Fail`Public resolver configuration is not immutable`;
-    }
+    if (publicAllowed) await provideResolver();
     assertOpen();
     try {
       await symlink(identity, lockPath);
@@ -330,6 +363,7 @@ export const makePodmanProviderListenerRuntimeKit = ({
           if (child) await deadline(child.finished, 5000);
           cleanup.delete(stop);
           pendingCleanup.delete(stop);
+          publicListeners.delete(stop);
         }
         cleaned = true;
       })().catch(error => {
@@ -340,15 +374,21 @@ export const makePodmanProviderListenerRuntimeKit = ({
     };
     const acquisition = serialize(async () => {
       if (network !== undefined) {
-        (publicInternet && network.endpoint) ||
+        (publicAllowed && network.endpoint) ||
           Fail`Public network is not configured by the operator`;
       }
       assertAdmission();
       initialized || Fail`Provider runtime is not open`;
       await retryCleanup();
       assertAdmission();
-      cleanup.size < maxListeners || Fail`Provider listener capacity exceeded`;
+      cleanup.size < capacity || Fail`Provider listener capacity exceeded`;
+      if (network !== undefined) {
+        await provideResolver();
+        assertAdmission();
+        publicAllowed || Fail`Public network is not configured by the operator`;
+      }
       cleanup.add(stop);
+      if (network !== undefined) publicListeners.add(stop);
       admitted = true;
       const subprocess = launch([
         'run',
@@ -416,7 +456,9 @@ export const makePodmanProviderListenerRuntimeKit = ({
       const diagnosticChunkBytes = host.onStderr ? 4096 : 0;
       subprocess.stderr.on('data', chunk => {
         if (diagnosticChunkBytes === 0) return;
-        host.onStderr?.(Uint8Array.from(chunk.subarray(0, diagnosticChunkBytes)));
+        host.onStderr?.(
+          Uint8Array.from(chunk.subarray(0, diagnosticChunkBytes)),
+        );
       });
       pipe = makeProviderPipe({
         input: subprocess.stdout,
@@ -575,6 +617,34 @@ export const makePodmanProviderListenerRuntimeKit = ({
     });
     return attempt;
   };
+  /**
+   * The operator's current capacity and public-network ceiling. Applies to
+   * the next admission; turning public networking off stops live public
+   * listeners, whose grants their issuer then revokes.
+   *
+   * @param {{ maxListeners?: number, publicInternet?: boolean }} settings
+   */
+  const configure = async settings => {
+    await null;
+    assertOpen();
+    const next = {
+      maxListeners: settings.maxListeners ?? capacity,
+      publicInternet: settings.publicInternet ?? publicAllowed,
+    };
+    assertSettings(next);
+    capacity = next.maxListeners;
+    publicAllowed = next.publicInternet;
+    if (!publicAllowed) {
+      const results = await Promise.allSettled(
+        [...publicListeners].map(stop => stop()),
+      );
+      const failures = results.flatMap(result =>
+        result.status === 'rejected' ? [result.reason] : [],
+      );
+      if (failures.length)
+        throw AggregateError(failures, 'Public listener shutdown pending');
+    }
+  };
   const runtime = harden({
     /** @param {Parameters<typeof startKit>[0]} configuration */
     start: configuration => startKit(configuration).value,
@@ -590,7 +660,7 @@ export const makePodmanProviderListenerRuntimeKit = ({
     });
     return opening;
   };
-  return harden({ open: openRuntime, close });
+  return harden({ open: openRuntime, close, configure });
 };
 harden(makePodmanProviderListenerRuntimeKit);
 

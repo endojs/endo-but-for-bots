@@ -17,6 +17,7 @@
  * @module
  */
 
+import { open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { Fail, b, q } from '@endo/errors';
@@ -49,6 +50,7 @@ import { makePublicEgress } from './public-egress.js';
 import { assertAccountAuthority } from './account-authority.js';
 
 /** @import { BrokerPolicy } from './provider-broker.js' */
+/** @import { BrokerSettings } from './provider-scopes.js' */
 
 /** How long a far share gets to say what it lists, for a wrapped member's catalog. */
 const WRAPPED_DESCRIBE_DEADLINE_MS = 15_000;
@@ -68,6 +70,26 @@ const DIGEST_PATTERN = /^sha256:[a-f0-9]{64}$/;
 // by exact label; keep the composition inside that bound.
 export const BROKER_OWNER_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 harden(BROKER_OWNER_PATTERN);
+
+/**
+ * The operator's broker settings, checked whole before any of them is saved
+ * or applied.
+ * @param {BrokerSettings} settings
+ */
+export const assertBrokerSettings = settings => {
+  const { maxSessions, publicInternet, diagnostics, ...rest } = settings;
+  Object.keys(rest).length === 0 || Fail`Unknown broker settings`;
+  maxSessions === undefined ||
+    (Number.isInteger(maxSessions) && maxSessions >= 1 && maxSessions <= 256) ||
+    Fail`Invalid listener capacity`;
+  publicInternet === undefined ||
+    typeof publicInternet === 'boolean' ||
+    Fail`Invalid public network configuration`;
+  diagnostics === undefined ||
+    typeof diagnostics === 'boolean' ||
+    Fail`Invalid broker diagnostics setting`;
+};
+harden(assertBrokerSettings);
 
 /**
  * Construct an inert provider broker owner. Retain the kit before start().
@@ -96,8 +118,8 @@ harden(BROKER_OWNER_PATTERN);
  * @param {string} options.imageDigest - Slice image digest (`sha256:...`)
  * @param {string} options.listenerImageRef - Pinned listener image ref
  * @param {Record<string,string>} [options.env] Trusted operator host environment overrides.
- * @param {boolean} [options.publicInternet] Operator permits public egress grants.
- * @param {number} [options.maxSessions]
+ * @param {boolean} [options.publicInternet] Operator initially permits public egress grants.
+ * @param {number} [options.maxSessions] Initial concurrent listener capacity.
  * @param {any} [options.audit]
  * @param {(diagnostic: any) => void} [options.onDiagnostic]
  * @param {(reading: any) => void} [options.onReading] Host-only: what each
@@ -110,11 +132,12 @@ harden(BROKER_OWNER_PATTERN);
  *   booleans), read from its stderr pipe.
  * @param {typeof globalThis.fetch} [options.fetch]
  * @param {any} [options.runtime] - Injectable provider listener runtime (tests)
- * @param {ReturnType<typeof makePodmanProviderListenerRuntimeKit>} [options.runtimeKit]
+ * @param {Omit<ReturnType<typeof makePodmanProviderListenerRuntimeKit>, 'configure'> & Partial<Pick<ReturnType<typeof makePodmanProviderListenerRuntimeKit>, 'configure'>>} [options.runtimeKit]
  *   Injectable retained runtime owner (tests); mutually exclusive with runtime.
+ *   Without `configure`, capacity is the owner's own.
  * @param {typeof makeProviderBrokerGrantIssuer} [options.makeIssuer]
  *   Injectable synchronous issuer constructor (tests).
- * @returns {{start: () => Promise<{issuer: any, imageRef: string}>, close: () => Promise<void>}}
+ * @returns {{start: () => Promise<{issuer: any, imageRef: string}>, close: () => Promise<void>, configure: (settings: BrokerSettings) => Promise<void>}}
  */
 export const makeProviderBrokerKit = ({
   label,
@@ -145,6 +168,8 @@ export const makeProviderBrokerKit = ({
 }) => {
   typeof publicInternet === 'boolean' ||
     Fail`Invalid public network configuration`;
+  // An operator setting, not identity: `configure()` changes it later.
+  let publicAllowed = publicInternet;
   DIGEST_PATTERN.test(imageDigest) ||
     Fail`${b(label)} broker image digest must be pinned, got ${q(imageDigest)}`;
   (typeof imageRef === 'string' && imageRef.endsWith(`@${imageDigest}`)) ||
@@ -240,12 +265,9 @@ export const makeProviderBrokerKit = ({
         accountRef,
         requestTimeoutMs: DEFAULT_REQUEST_TIMEOUT_MS,
         policy,
-        ...(publicInternet
-          ? {
-              makePublicNetwork: () =>
-                makePublicEgress({ policy: 'public-internet' }),
-            }
-          : {}),
+        makePublicNetwork: () =>
+          makePublicEgress({ policy: 'public-internet' }),
+        allowsPublicNetwork: () => publicAllowed,
         ...(audit === undefined ? {} : { audit }),
         ...(onDiagnostic === undefined ? {} : { onDiagnostic }),
         ...(onReading === undefined ? {} : { onReading }),
@@ -292,7 +314,51 @@ export const makeProviderBrokerKit = ({
     });
     return attempt;
   };
-  return harden({ start, close });
+  /** @type {Promise<void>} */
+  let configuring = Promise.resolve();
+  /** @param {BrokerSettings} settings */
+  const applySettings = async ({
+    maxSessions: capacity,
+    publicInternet: next,
+  }) => {
+    await null;
+    // An injected runtime may have no settings of its own.
+    const configurable =
+      /** @type {{ configure?: (settings: { maxListeners?: number, publicInternet?: boolean }) => Promise<void> }} */ (
+        /** @type {unknown} */ (owner)
+      );
+    assertOpen();
+    // Refused whole, before either flag moves.
+    assertBrokerSettings({
+      ...(capacity === undefined ? {} : { maxSessions: capacity }),
+      ...(next === undefined ? {} : { publicInternet: next }),
+    });
+    // Refuse new public grants before any live public listener is stopped;
+    // allow them only once the runtime has accepted the new settings.
+    if (next === false) publicAllowed = false;
+    if (configurable.configure) {
+      await configurable.configure({
+        ...(capacity === undefined ? {} : { maxListeners: capacity }),
+        ...(next === undefined ? {} : { publicInternet: next }),
+      });
+    }
+    if (next === true) publicAllowed = true;
+  };
+  /**
+   * The operator's settings that are not the broker's identity: session
+   * capacity and the public-egress ceiling. They apply to the next admission,
+   * with no retirement; turning public egress off also stops live public
+   * listeners, which revokes their grants. One at a time, so the broker's
+   * flag and the runtime's end up the same.
+   *
+   * @param {BrokerSettings} settings
+   */
+  const configure = settings => {
+    const result = configuring.then(() => applySettings(settings));
+    configuring = result.catch(() => {});
+    return result;
+  };
+  return harden({ start, close, configure });
 };
 harden(makeProviderBrokerKit);
 
@@ -378,6 +444,7 @@ const readCatalogAccount = async (
  * @param {any} powers.brokerOptions
  * @param {(error: unknown) => void} powers.reportAccountError
  * @param {CatalogOptions} [powers.catalog]
+ * @param {(settings: BrokerSettings) => void | Promise<void>} [powers.onSettings]
  */
 const makePooledBrokerServiceKit = ({
   label,
@@ -386,6 +453,7 @@ const makePooledBrokerServiceKit = ({
   brokerOptions,
   reportAccountError,
   catalog: catalogOptions = {},
+  onSettings,
 }) => {
   const {
     readSet,
@@ -844,6 +912,13 @@ const makePooledBrokerServiceKit = ({
   const scopes = makeProviderScopes({
     openIssuer: async () => (await broker.start()).issuer,
     subscription: asSubscription.subscription,
+    // The operator's intent is recorded before it is applied, so a revived
+    // broker takes it even when applying it here fails part way.
+    configure: async settings => {
+      assertBrokerSettings(settings);
+      await onSettings?.(settings);
+      await broker.configure(settings);
+    },
     // A status reader asks before any session has opened a grant, so the set
     // is read here too; it calls no provider.
     accountSourceOf: async subscriptionId => {
@@ -1048,7 +1123,7 @@ harden(listenerDiagnostics);
  * Scope lookup recovers ownership only within this service incarnation. An
  * empty lookup after service loss does not prove earlier listeners stopped.
  *
- * @param {Parameters<typeof makeProviderBrokerKit>[0] & { providerId?: string, activeAccountRead?: () => Promise<any>, modelRead?: () => Promise<any>, resetRedeem?: (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>, subscriptions?: PooledSubscriptions, catalog?: CatalogOptions, now?: () => number }} options
+ * @param {Parameters<typeof makeProviderBrokerKit>[0] & { providerId?: string, activeAccountRead?: () => Promise<any>, modelRead?: () => Promise<any>, resetRedeem?: (request: { idempotencyKey: string, creditId?: string }) => Promise<{ outcome: string }>, subscriptions?: PooledSubscriptions, catalog?: CatalogOptions, now?: () => number, onSettings?: (settings: BrokerSettings) => void | Promise<void> }} options
  *   `activeAccountRead` is the adapter's one read of its provider's usage
  *   endpoint, host-only and only ever run on request. `resetRedeem` is its
  *   one call that spends a banked rate-limit reset, an operator's and never
@@ -1065,6 +1140,7 @@ export const makeProviderBrokerServiceKit = options => {
     catalog: catalogOptions = {},
     now = Date.now,
     providerId = label.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    onSettings,
     ...brokerOptions
   } = options;
   const reportAccountError = (/** @type {unknown} */ error) =>
@@ -1080,6 +1156,7 @@ export const makeProviderBrokerServiceKit = options => {
       brokerOptions,
       reportAccountError,
       catalog: catalogOptions,
+      ...(onSettings === undefined ? {} : { onSettings }),
     });
   }
   // The one account's catalog: what a picker sees, and what admits every
@@ -1136,6 +1213,13 @@ export const makeProviderBrokerServiceKit = options => {
     ...(resetRedeem === undefined
       ? {}
       : { resetRedeemer: makeResetRedeemer(resetRedeem) }),
+    // The operator's intent is recorded before it is applied, so a revived
+    // broker takes it even when applying it here fails part way.
+    configure: async settings => {
+      assertBrokerSettings(settings);
+      await onSettings?.(settings);
+      await broker.configure(settings);
+    },
   });
   return harden({
     service: scopes.service,
@@ -1199,6 +1283,64 @@ const makeServiceClose = ({ label, scopes, broker, closeAccounts }) => {
     return closing;
   };
   return close;
+};
+
+// The broker's operator settings as the last `configure` left them, in its
+// private directory: an incarnation revived after a crash or at a daemon
+// start takes these, not the minted ones, before any session can reach it.
+export const BROKER_SETTINGS_FILE = 'broker-settings.json';
+const SETTINGS_FILE = BROKER_SETTINGS_FILE;
+
+/**
+ * An unreadable or malformed file refuses the revival, naming the file: an
+ * operator removes it (the broker then starts from its minted settings and
+ * setup's) rather than have a narrowed setting silently widen.
+ * @param {string} directory
+ */
+const readSavedSettings = async directory => {
+  await null;
+  const path = join(directory, SETTINGS_FILE);
+  /** @type {string} */
+  let text;
+  try {
+    text = await readFile(path, 'utf8');
+  } catch (error) {
+    if (/** @type {NodeJS.ErrnoException} */ (error).code === 'ENOENT')
+      return undefined;
+    throw error;
+  }
+  try {
+    const settings = JSON.parse(text);
+    (settings !== null &&
+      typeof settings === 'object' &&
+      !Array.isArray(settings)) ||
+      Fail`not an object`;
+    assertBrokerSettings(settings);
+    return /** @type {BrokerSettings} */ (harden(settings));
+  } catch (error) {
+    throw Fail`Broker settings ${q(path)} are unreadable (${
+      error instanceof Error ? error.message : String(error)
+    }); remove the file to start from the minted settings`;
+  }
+};
+
+/**
+ * @param {string} directory
+ * @param {BrokerSettings} settings
+ */
+const saveSettings = async (directory, settings) => {
+  const path = join(directory, SETTINGS_FILE);
+  const temporary = `${path}.next`;
+  await rm(temporary, { force: true });
+  const file = await open(temporary, 'wx', 0o600);
+  try {
+    await file.writeFile(JSON.stringify(settings));
+    // Durable before it replaces the last one.
+    await file.sync();
+  } finally {
+    await file.close();
+  }
+  await rename(temporary, path);
 };
 
 /**
@@ -1285,18 +1427,56 @@ export const makeOwnedProviderBrokerService = ({
     // a request failed first took retiring the broker.
     //
     // What `diagnostics` still gates is the admission trail, a line for every
-    // request whether or not anything went wrong.
+    // request whether or not anything went wrong. The minted value is only
+    // where it starts: setup's `configure()` changes it at every start.
+    let admissionTrail = config.diagnostics === true;
+    // Only a real profile names a directory; a test's may not.
+    const directory =
+      typeof config.directory === 'string' ? config.directory : undefined;
+    /** @type {BrokerSettings} */
+    let lastSettings = harden({});
+    let restoring = false;
+    /** @type {Promise<void>} */
+    let saving = Promise.resolve();
     const hooks = {
       onDiagnostic: diagnostic =>
         log(`${label} upstream failure`, JSON.stringify(diagnostic)),
       onListenerDiagnostic: diagnostic =>
         log(`${label} listener failure`, JSON.stringify(diagnostic)),
-      ...(config.diagnostics === true
-        ? {
-            audit: ({ event, requests }) =>
-              log(`${label} broker event`, event, String(requests)),
-          }
-        : {}),
+      audit: ({ event, requests }) => {
+        if (admissionTrail)
+          log(`${label} broker event`, event, String(requests));
+      },
+      /** @param {BrokerSettings} settings */
+      onSettings: async settings => {
+        if (settings.diagnostics !== undefined)
+          admissionTrail = settings.diagnostics;
+        if (directory === undefined || restoring) return;
+        lastSettings = harden({ ...lastSettings, ...settings });
+        const merged = lastSettings;
+        // One save at a time, in the order the settings were given.
+        const saved = saving.then(() => saveSettings(directory, merged));
+        saving = saved.catch(() => {});
+        await saved;
+      },
+    };
+    // Before the service is handed out, take the settings the last
+    // `configure` saved, so a revived broker never reopens what an operator
+    // closed.
+    /** @param {any} service */
+    const restoreSettings = async service => {
+      if (directory === undefined) return service;
+      const restored = await readSavedSettings(directory);
+      if (restored === undefined) return service;
+      // Applied, not saved again: the file already says this.
+      lastSettings = restored;
+      restoring = true;
+      try {
+        await E(service).configure(restored);
+      } finally {
+        restoring = false;
+      }
+      return service;
     };
     if (pooled === true) {
       // Several subscriptions: the formula's powers are not one secret but a
@@ -1448,7 +1628,7 @@ export const makeOwnedProviderBrokerService = ({
         ...hooks,
       });
       return harden({
-        open: async () => pooledKit.service,
+        open: async () => restoreSettings(pooledKit.service),
         close: pooledKit.close,
       });
     }
@@ -1497,7 +1677,10 @@ export const makeOwnedProviderBrokerService = ({
       env,
       ...hooks,
     });
-    return harden({ open: async () => kit.service, close: kit.close });
+    return harden({
+      open: async () => restoreSettings(kit.service),
+      close: kit.close,
+    });
   };
   return makeOwnedNativeService({ readConfig, makeKit, reportError });
 };

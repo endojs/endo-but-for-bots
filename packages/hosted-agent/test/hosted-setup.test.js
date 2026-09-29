@@ -8,6 +8,7 @@ import {
   rm,
   stat,
   symlink,
+  writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -19,6 +20,8 @@ import { makeAccountId } from '../src/account-bindings.js';
 import {
   assertNoRuntimeLeftovers,
   assertRuntimePlacement,
+  configureBroker,
+  forgetBrokerSettings,
   mintWithPowersPath,
   prepareRuntimeEnv,
   providePrivateDirectory,
@@ -26,6 +29,7 @@ import {
   provideSubscriptionShare,
   publishAccountOracle,
   publishBrokerSubscription,
+  readBrokerSettings,
   republishDelegatedRunners,
   readProvisionedEnvironment,
   readSliceImageReference,
@@ -1181,4 +1185,59 @@ test('a delegated runner is a namespace, a kit and the name that is handed out, 
     unmetered: true,
   });
   t.true(whole.created);
+});
+
+test('broker settings come from the backend prefix; an unset capacity is omitted', t => {
+  t.deepEqual(readBrokerSettings({}, 'ENDO_X'), {
+    publicInternet: false,
+    diagnostics: false,
+  });
+  t.deepEqual(
+    readBrokerSettings(
+      {
+        ENDO_X_MAX_SESSIONS: '16',
+        ENDO_X_PUBLIC_INTERNET: '1',
+        ENDO_X_DIAGNOSTICS: '1',
+      },
+      'ENDO_X',
+    ),
+    { maxSessions: 16, publicInternet: true, diagnostics: true },
+  );
+  for (const bad of ['0', '257', '1.5', '08', 'many', '-1']) {
+    t.throws(() => readBrokerSettings({ ENDO_X_MAX_SESSIONS: bad }, 'ENDO_X'), {
+      message: /ENDO_X_MAX_SESSIONS must be an integer from 1 to 256/,
+    });
+  }
+});
+
+test('a failed broker configure is logged, not thrown', async t => {
+  const host = Far('host', {
+    lookup: async () =>
+      Far('broker', {
+        configure: async () => {
+          throw Error('broker unavailable');
+        },
+      }),
+  });
+  t.false(
+    await configureBroker(
+      host,
+      ['x', 'broker-service'],
+      { diagnostics: true },
+      'X',
+    ),
+  );
+});
+
+test("a newly minted broker does not take a retired one's saved settings", async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'broker-dir-'));
+  t.teardown(() => rm(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'broker-settings.json');
+  await writeFile(file, '{"maxSessions":2}');
+  await writeFile(`${file}.next`, '{');
+  await forgetBrokerSettings(directory);
+  await t.throwsAsync(() => stat(file), { code: 'ENOENT' });
+  await t.throwsAsync(() => stat(`${file}.next`), { code: 'ENOENT' });
+  // Nothing there is not an error.
+  await forgetBrokerSettings(directory);
 });
