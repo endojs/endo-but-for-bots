@@ -3,7 +3,6 @@ export type * from './src/code-mode/types.js';
 export type * from './src/harness/types.js';
 export {
   defineAgent,
-  defineWorkspaceAgent,
   getAmbientEnv,
   makeEnvCredentials,
   makeApiKeyGetter,

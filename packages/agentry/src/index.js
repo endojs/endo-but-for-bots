@@ -2,7 +2,6 @@
 
 // Package root: defineAgent plus the harness primitives.
 export { defineAgent } from './define-agent.js';
-export { defineWorkspaceAgent } from './workspace-agent.js';
 export {
   getAmbientEnv,
   makeEnvCredentials,

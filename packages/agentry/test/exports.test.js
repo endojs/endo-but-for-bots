@@ -38,7 +38,6 @@ test('agentry subpaths resolve through package exports', async t => {
       'buildOllamaModel',
       'defineAgent',
       'defineModels',
-      'defineWorkspaceAgent',
       'getAmbientEnv',
       'makeApiKeyGetter',
       'makeEnvCredentials',
