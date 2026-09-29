@@ -19,6 +19,8 @@ export {
   compareSemver,
   devDateTagForVersion,
   isDateTag,
+  isDevTag,
+  isDevVersion,
   isWritableDevTag,
   parseSemver,
 } from './src/dev-release.js';

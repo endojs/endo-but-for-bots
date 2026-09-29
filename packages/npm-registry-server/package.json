@@ -51,6 +51,7 @@
   },
   "devDependencies": {
     "@endo/ses-ava": "workspace:^",
+    "@fast-check/ava": "catalog:dev",
     "@types/node": "catalog:dev",
     "ava": "catalog:dev",
     "c8": "catalog:dev",

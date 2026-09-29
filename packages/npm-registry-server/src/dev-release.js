@@ -13,7 +13,7 @@ const SEMVER =
  * `<major>.<minor>.<patch>-dev.<UTC commit time YYYYMMDDHHMMSS>.g<sha7>`.
  */
 const DEV_VERSION =
-  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-dev\.((\d{4})(\d{2})(\d{2})\d{6})\.g([0-9a-f]{7,40})$/u;
+  /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-dev\.((\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2}))\.g([0-9a-f]{7,40})$/u;
 
 const DATE_TAG = /^dev-(\d{4})-(\d{2})-(\d{2})$/u;
 const DEV_TAG = /^dev-[a-z0-9][a-z0-9.-]*$/u;
@@ -35,12 +35,20 @@ export const parseSemver = version => {
   if (!match) {
     return undefined;
   }
-  return {
-    major: Number(match[1]),
-    minor: Number(match[2]),
-    patch: Number(match[3]),
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  const patch = Number(match[3]);
+  // Like npm's own `semver`, refuse components that a float cannot hold
+  // exactly, so that precedence never silently collapses two versions.
+  if (![major, minor, patch].every(Number.isSafeInteger)) {
+    return undefined;
+  }
+  return harden({
+    major,
+    minor,
+    patch,
     prerelease: match[4] === undefined ? [] : match[4].split('.'),
-  };
+  });
 };
 harden(parseSemver);
 
@@ -73,7 +81,12 @@ export const compareSemver = (a, b) => {
       const xn = /^\d+$/u.test(x);
       const yn = /^\d+$/u.test(y);
       if (xn && yn) {
-        return Number(x) - Number(y);
+        // Numeric identifiers have no leading zeros, so the longer one is
+        // larger and equal lengths compare as strings, at any magnitude.
+        if (x.length !== y.length) {
+          return x.length - y.length;
+        }
+        return x < y ? -1 : 1;
       }
       if (xn !== yn) {
         return xn ? -1 : 1;
@@ -100,11 +113,14 @@ export const devDateTagForVersion = version => {
       `Version ${q(version)} is not a development coordinate <major>.<minor>.<patch>-dev.<YYYYMMDDHHMMSS>.g<sha>`,
     );
   }
-  const [, , , , , year, month, day] = match;
+  const [, , , , , year, month, day, hour, minute, second] = match;
   const date = new Date(`${year}-${month}-${day}T00:00:00Z`);
   if (
     Number.isNaN(date.getTime()) ||
-    date.toISOString().slice(0, 10) !== `${year}-${month}-${day}`
+    date.toISOString().slice(0, 10) !== `${year}-${month}-${day}` ||
+    Number(hour) > 23 ||
+    Number(minute) > 59 ||
+    Number(second) > 59
   ) {
     throw RegistryHttpError(400, `Version ${q(version)} has an invalid date`);
   }
@@ -120,6 +136,26 @@ export const isDateTag = tag => DATE_TAG.test(tag);
 harden(isDateTag);
 
 /**
+ * Whether the tag is in the `dev-*` namespace this service reserves for
+ * its own publishes and tag moves.
+ *
+ * @param {string} tag
+ * @returns {boolean}
+ */
+export const isDevTag = tag => DEV_TAG.test(tag);
+harden(isDevTag);
+
+/**
+ * Whether the version has the development coordinate's shape, whether or
+ * not its date is valid.
+ *
+ * @param {string} version
+ * @returns {boolean}
+ */
+export const isDevVersion = version => DEV_VERSION.test(version);
+harden(isDevVersion);
+
+/**
  * Whether the tag is one this service may create or move: a date channel,
  * or one of the reserved moving `dev-*` pointers.
  *
@@ -128,5 +164,5 @@ harden(isDateTag);
  * @returns {boolean}
  */
 export const isWritableDevTag = (tag, reservedTags) =>
-  DEV_TAG.test(tag) && (isDateTag(tag) || reservedTags.includes(tag));
+  isDevTag(tag) && (isDateTag(tag) || reservedTags.includes(tag));
 harden(isWritableDevTag);
