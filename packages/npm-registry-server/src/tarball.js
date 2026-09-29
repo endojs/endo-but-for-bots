@@ -3,7 +3,14 @@
 import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { q } from '@endo/errors';
-import { readTarEntries, tarPathSegments } from '@endo/tar/reader.js';
+import {
+  isZeroTarBlock,
+  parsePaxRecords,
+  readTarEntries,
+  tarOctal,
+  tarPathSegments,
+  tarString,
+} from '@endo/tar/reader.js';
 import { RegistryHttpError, isRegistryHttpError } from './errors.js';
 
 /** @import { FileCas } from './cas.js' */
@@ -88,6 +95,97 @@ export const verifyTarball = (bytes, { integrity, shasum }) => {
 };
 harden(verifyTarball);
 
+const TAR_BLOCK_SIZE = 512;
+const USTAR_MAGIC = 'ustar\u000000';
+
+/**
+ * Refuse tar framing on which `@endo/tar`'s reader and node-tar (what npm
+ * extracts with) could disagree, so the `package.json` this server reads
+ * is the one installers unpack.
+ *
+ * - Every header's checksum must be valid. node-tar skips a header whose
+ *   checksum is wrong; `@endo/tar` does not check it.
+ * - The ustar `prefix` field must be empty unless the header carries POSIX
+ *   `ustar\0` magic and version `00`. node-tar reads `prefix` only then;
+ *   `@endo/tar` reads it regardless.
+ * - The first zero block ends the archive, and every byte after it must be
+ *   zero. node-tar continues past a single zero block; `@endo/tar` stops.
+ * - A pax `size` override must equal the size in the header it governs,
+ *   so the content span does not depend on which field a reader honors.
+ *
+ * @param {Uint8Array} tar The expanded archive.
+ * @returns {string | undefined} The reason for refusal, if any.
+ */
+export const tarFramingDivergence = tar => {
+  /** @type {number | undefined} */
+  let paxSize;
+  let offset = 0;
+  while (offset < tar.byteLength) {
+    if (offset + TAR_BLOCK_SIZE > tar.byteLength) {
+      return 'Tarball ends inside a header block';
+    }
+    const header = tar.subarray(offset, offset + TAR_BLOCK_SIZE);
+    if (isZeroTarBlock(header)) {
+      return tar.subarray(offset).every(byte => byte === 0)
+        ? undefined
+        : 'Tarball has data after its end-of-archive marker';
+    }
+    let sum = 0;
+    for (let index = 0; index < TAR_BLOCK_SIZE; index += 1) {
+      sum += index >= 148 && index < 156 ? 0x20 : header[index];
+    }
+    /** @type {number} */
+    let checksum;
+    /** @type {number} */
+    let size;
+    try {
+      checksum = tarOctal(header.subarray(148, 156));
+      size = tarOctal(header.subarray(124, 136));
+    } catch {
+      return `Tarball header at byte ${offset} has a malformed numeric field`;
+    }
+    if (checksum !== sum) {
+      return `Tarball header at byte ${offset} has a bad checksum`;
+    }
+    const magic = new TextDecoder().decode(header.subarray(257, 265));
+    if (header[345] !== 0 && magic !== USTAR_MAGIC) {
+      return `Tarball header at byte ${offset} has a prefix without ustar magic`;
+    }
+    const typeFlag = tarString(header.subarray(156, 157));
+    if (typeFlag !== 'x' && typeFlag !== 'g') {
+      if (paxSize !== undefined && paxSize !== size) {
+        return `Tarball header at byte ${offset} disagrees with its pax size`;
+      }
+      paxSize = undefined;
+    }
+    const contentStart = offset + TAR_BLOCK_SIZE;
+    const contentEnd =
+      contentStart + Math.ceil(size / TAR_BLOCK_SIZE) * TAR_BLOCK_SIZE;
+    if (contentEnd > tar.byteLength) {
+      return `Tarball entry at byte ${offset} runs past the end of the archive`;
+    }
+    if (typeFlag === 'x' || typeFlag === 'g') {
+      let overrides;
+      try {
+        overrides = parsePaxRecords(
+          tar.subarray(contentStart, contentStart + size),
+        );
+      } catch {
+        return `Tarball pax header at byte ${offset} is malformed`;
+      }
+      if (overrides.size !== undefined) {
+        if (typeFlag === 'g') {
+          return 'Tarball global pax header overrides size';
+        }
+        paxSize = overrides.size;
+      }
+    }
+    offset = contentEnd;
+  }
+  return undefined;
+};
+harden(tarFramingDivergence);
+
 /**
  * @typedef {object} IngestedTarball
  * @property {string} tarballHash sha256 of the exact `.tgz` blob.
@@ -136,6 +234,11 @@ export const ingestTarball = async (
       400,
       `Tarball is not a gzip archive within the expanded size limit: ${/** @type {Error} */ (error).message}`,
     );
+  }
+
+  const divergence = tarFramingDivergence(tar);
+  if (divergence !== undefined) {
+    throw RegistryHttpError(400, divergence);
   }
 
   /** @type {Map<string, Uint8Array>} */

