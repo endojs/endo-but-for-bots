@@ -890,12 +890,15 @@ fn resume_shared(
                 machine_to_sup_tx,
             ));
         let result = xsnap::run_xs_worker_inproc(transport);
-        if let Err(e) = result {
+        if let Err(e) = &result {
             eprintln!("endor: resumed worker {handle} exited with error: {e}");
         } else {
             eprintln!("endor: resumed worker {handle} exited cleanly");
         }
-        sup_for_exit.unregister(handle);
+        sup_for_exit.retire(
+            handle,
+            crate::worker_outcome::WorkerOutcome::from_xs_run(&result),
+        );
     });
 }
 

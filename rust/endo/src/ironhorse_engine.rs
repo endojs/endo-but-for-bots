@@ -314,13 +314,12 @@ pub mod engine {
     /// discard the embargoed effects, and only `Panicked` additionally
     /// enters the terminate/restore/replay policy.
     ///
-    /// **Scope note.** This classifier is landable now, but the
-    /// *delivery-path* surfacing — where the supervisor actually acts on a
-    /// `Panicked` to discard a crank — rides on the not-yet-complete
-    /// `-e ironhorse` engine-selection integration (roadmap stage 8/9) and
-    /// is deliberately not wired to a live delivery path here. The type and
-    /// its classifier are the landable interpreter-side half; the seam that
-    /// consumes them is a deferred follow-on.
+    /// **Scope note.** The supervisor consumes outcomes as
+    /// [`crate::worker_outcome::WorkerOutcome`]; `From<ExecutionOutcome>`
+    /// joins this type onto the same arms the live C-XS adapter produces.
+    /// An Ironhorse worker on the delivery path rides on the not-yet-complete
+    /// `-e ironhorse` engine-selection integration (roadmap stage 8/9), so
+    /// only the C-XS adapter has a live consumer today.
     #[derive(Debug, Clone, PartialEq)]
     #[non_exhaustive]
     pub enum ExecutionOutcome {
