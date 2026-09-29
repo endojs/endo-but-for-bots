@@ -11,9 +11,11 @@
 //! mirror of the `05264cccae42245a` tie class. The spacing between doubles
 //! here is 512, and `2513641910770336000` lies exactly halfway between the
 //! value and its upper neighbor `...336256`. The value's significand is even,
-//! so round-half-even takes that tie back to the value itself. ECMA-262
+//! so round-half-even takes that tie back to the value itself. (This is a
+//! binary rounding tie when the decimal is parsed back, not a decimal tie
+//! between two digit candidates, which step 5 would leave open.) ECMA-262
 //! §6.1.6.1.20 therefore admits the 16-digit spelling `2513641910770336000`,
-//! and ironhorse and V8 both print it. XS's `fx_dtoa` excludes the even
+//! the only 16-digit `s`, and ironhorse prints it (as V8 does). XS's `fx_dtoa` excludes the even
 //! boundary and prints the longer 17-digit `2513641910770335700`, which also
 //! round-trips but is not the shortest.
 //!
