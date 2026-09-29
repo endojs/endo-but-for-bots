@@ -45,7 +45,15 @@ npm-registry-server
 
 The publisher grant variables are optional; when present, the server records
 the grant (storing only the token's SHA-256) and removes the token from its
-environment. An empty `UPSTREAM_REGISTRY_URL` makes a local-only registry.
+environment. `REGISTRY_PUBLISHER_SUBJECT` names the grant's subject (default
+`garden-llm-publisher`). A grant the store refuses, such as a revoked id, is
+logged and the server keeps serving reads. An empty `UPSTREAM_REGISTRY_URL`
+makes a local-only registry, and `UPSTREAM_TTL_SECONDS` sets how long cached
+upstream metadata is fresh.
+
+`REGISTRY_STATE_DIR` is persistent deployment state, not part of the source
+tree: the operator backs it up and never discards it, since it holds the only
+copy of every staged development release.
 The server verifies that every stored version's tarball and tree are present
 before it binds its socket, and checkpoints SQLite on `SIGTERM`.
 

@@ -1,4 +1,10 @@
 // @ts-check
+// reexport-policy-exempt: this is the package's own entry point, not a
+// compatibility shim; each name has no older home to deprecate.
+//
+// Deliberately omitted: `src/config.js` (environment parsing for the
+// `npm-registry-server` bin, not a library surface) and `STATUS_ERRORS`
+// from `src/errors.js` (the HTTP adapter's internal status-to-code table).
 
 export { makeFileCas } from './src/cas.js';
 export {
