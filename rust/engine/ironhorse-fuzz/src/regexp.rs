@@ -336,4 +336,555 @@ mod tests {
         assert!(matched_any, "sweep should include real matches");
         assert!(used_group, "sweep should exercise capturing groups");
     }
+
+    /// Regression for continuous-fuzz finding `12aca768c2e73c73`. The exact
+    /// 10-byte input used to expose the XS shim's 32-bit truncation of its
+    /// 64-bit regexp match meter. With the shim fields widened, both engines
+    /// must agree on the full value rather than the wrapped low 32 bits.
+    #[test]
+    fn finding_12aca768c2e73c73_match_meter_agrees_at_full_width() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-12aca768c2e73c73.input.bin");
+        let case = gen_regexp(data);
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+
+        assert!(
+            !outcome.matched,
+            "the exact finding pattern must remain a no-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 6_840_385_536);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        match differential_check_regexp(&case) {
+            Ok(false) => {}
+            Ok(true) => panic!("finding must remain a compiled no-match case"),
+            Err(divergence) => {
+                panic!("finding 12aca768c2e73c73 must not diverge: {divergence:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn finding_1dc231089278c110_regexp_meter_overflow_agrees() {
+        // Fuzz finding 1dc231089278c110: the 3-byte input `68 68 bc` folds
+        // into a nested `\n*`/`0*`/`0{1,3}` alternation over "00\n00"@2
+        // that backtracks 83775 metered steps (raw meter 5490278400 >
+        // u32::MAX). The pre-c8497fd8 oracle wrapped the pin's meter to
+        // 32 bits; with the widened oracle both engines agree bit-exact.
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-1dc231089278c110.input.bin");
+        assert_eq!(data, &[0x68, 0x68, 0xbc]);
+        let case = gen_regexp(data);
+        assert_eq!(case.2, "00\n00");
+        assert_eq!(case.3, 2);
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
+
+    #[test]
+    fn finding_13b68e2edb67861a_regexp_meter_overflow_agrees() {
+        // Fuzz finding 13b68e2edb67861a: the 12-byte input `3b 2b bc ... bc`
+        // folds into a backreference-heavy (`\1`/`\3`/`\4`) nested
+        // alternation, flags `i`, over "\n\n\n0 "@2 that backtracks
+        // 91920681 metered steps (raw meter 6024113750016 > u32::MAX). The
+        // pre-c8497fd8 oracle wrapped the pin's meter to 32 bits; with the
+        // widened oracle both engines agree bit-exact.
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-13b68e2edb67861a.input.bin");
+        assert_eq!(data.len(), 12);
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "i");
+        assert_eq!(case.2, "\n\n\n0 ");
+        assert_eq!(case.3, 2);
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
+
+    #[test]
+    fn finding_45f4af87eaf627c7_regexp_meter_overflow_agrees() {
+        // Fuzz finding 45f4af87eaf627c7: the 3-byte input `50 bc 5b` folds
+        // into optional runs of starred empty backreferences between
+        // `\n{1,3}` repetitions, over "a\n\na\n"@1. It matches empty at 1
+        // after 82118 metered steps (raw meter 5381685248 > u32::MAX). The
+        // pre-c8497fd8 oracle wrapped the pin's meter to 32 bits; with the
+        // widened oracle both engines agree bit-exact.
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-45f4af87eaf627c7.input.bin");
+        assert_eq!(data.len(), 3);
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "");
+        assert_eq!(case.2, "a\n\na\n");
+        assert_eq!(case.3, 1);
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
+
+    /// Regression for continuous-fuzz finding `29a24c1b1052ec91`. The exact
+    /// 3-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter. With the shim fields widened, both engines
+    /// must agree on the full value rather than the wrapped low 32 bits.
+    #[test]
+    fn finding_29a24c1b1052ec91_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-29a24c1b1052ec91.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "i");
+        assert_eq!(case.2, " bb b");
+        assert_eq!(case.3, 1);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(outcome.matched, "the exact finding must remain a match");
+        assert_eq!(outcome.match_meter_raw, 7_676_821_504);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
+
+    /// Regression for continuous-fuzz finding `51c6a212946102f6`. The exact
+    /// 31-byte input drives a nested quantified-group match whose 64-bit
+    /// meter exceeds `u32::MAX`; the XS shim formerly truncated it to 32
+    /// bits. With the shim fields widened, both engines must agree.
+    #[test]
+    fn finding_51c6a212946102f6_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-51c6a212946102f6.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "s");
+        assert_eq!(case.2, "aaaaaaaa");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(outcome.matched, "the exact finding must remain a match");
+        assert_eq!(outcome.match_meter_raw, 4_658_495_488);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
+
+    /// Regression for continuous-fuzz finding `5e7a173f899ae7a1`. The exact
+    /// 3-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter. With the shim fields widened, both engines
+    /// must agree on the full value rather than the wrapped low 32 bits.
+    #[test]
+    fn finding_5e7a173f899ae7a1_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-5e7a173f899ae7a1.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "m");
+        assert_eq!(case.2, "00\n00");
+        assert_eq!(case.3, 2);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(outcome.matched, "the exact finding must remain a match");
+        assert_eq!(outcome.captures, vec![(2, 3)]);
+        assert_eq!(outcome.match_meter_raw, 14_145_421_312);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
+
+    /// Regression for continuous-fuzz finding `5eeb0aadb2004075`. The exact
+    /// 30-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter. With the shim fields widened, both engines
+    /// must agree on the full value rather than the wrapped low 32 bits.
+    #[test]
+    fn finding_5eeb0aadb2004075_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-5eeb0aadb2004075.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "");
+        assert_eq!(case.2, "11111111");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.captures, vec![(-1, -1)]);
+        assert_eq!(outcome.match_meter_raw, 11_901_468_672);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `7072dc2d72d9e2fd`. The exact
+    /// 10-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter. With the shim fields widened, both engines
+    /// must agree on the full value rather than the wrapped low 32 bits.
+    #[test]
+    fn finding_7072dc2d72d9e2fd_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-7072dc2d72d9e2fd.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "s");
+        assert_eq!(case.2, "aaabaaaa");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 4_973_199_360);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `6be90176ff07c648`. The exact
+    /// 9-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter (wrapped by `2^33`). With the shim fields
+    /// widened, both engines must agree on the full value.
+    #[test]
+    fn finding_6be90176ff07c648_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-6be90176ff07c648.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "m");
+        assert_eq!(case.2, "\n  ab\n");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 9_965_535_232);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `822848c732a1b805`. The exact
+    /// 20-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter (wrapped by `2^32`). With the shim fields
+    /// widened, both engines must agree on the full value.
+    #[test]
+    fn finding_822848c732a1b805_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-822848c732a1b805.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "m");
+        assert_eq!(case.2, "  bbb");
+        assert_eq!(case.3, 2);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 4_976_410_624);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `79f0475dd0440b2d`. The exact
+    /// 3-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter (1243873280 instead of 30435382132736).
+    /// With the shim fields widened, both engines must agree on the full value.
+    #[test]
+    fn finding_79f0475dd0440b2d_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-79f0475dd0440b2d.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "m");
+        assert_eq!(case.2, " \n\n \n");
+        assert_eq!(case.3, 1);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(outcome.matched, "the exact finding must remain a match");
+        assert_eq!(outcome.match_meter_raw, 30_435_382_132_736);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
+
+    /// Regression for continuous-fuzz finding `8ea950859db8a5f7`. The exact
+    /// 3-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter (879886336 instead of 5174853632).
+    /// With the shim fields widened, both engines must agree on the full value.
+    #[test]
+    fn finding_8ea950859db8a5f7_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-8ea950859db8a5f7.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "");
+        assert_eq!(case.2, " \n\n \n");
+        assert_eq!(case.3, 1);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(outcome.matched, "the exact finding must remain a match");
+        assert_eq!(outcome.match_meter_raw, 5_174_853_632);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
+
+    /// Regression for continuous-fuzz finding `ac8a8e3d9d3d7f96`. The exact
+    /// 11-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter (410320896 instead of 39065026560) on a
+    /// failing match. With the shim fields widened, both engines must agree.
+    #[test]
+    fn finding_ac8a8e3d9d3d7f96_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ac8a8e3d9d3d7f96.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "m");
+        assert_eq!(case.2, " ccc");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 39_065_026_560);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `7637ac162a0b916a`. The exact
+    /// 6-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter (729612288 instead of 490355884032) on a
+    /// failing match. With the shim fields widened, both engines must agree.
+    #[test]
+    fn finding_7637ac162a0b916a_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-7637ac162a0b916a.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "i");
+        assert_eq!(case.2, "b");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 490_355_884_032);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `ab41c5d203ace017`. The exact
+    /// 6-byte input exposed the XS shim's former 32-bit truncation of its
+    /// 64-bit regexp match meter (2573467648 instead of 11163402240).
+    /// With the shim fields widened, both engines must agree on the full value.
+    #[test]
+    fn finding_ab41c5d203ace017_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ab41c5d203ace017.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "");
+        assert_eq!(case.2, "0");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(outcome.matched, "the exact finding must remain a match");
+        assert_eq!(outcome.match_meter_raw, 11_163_402_240);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
+
+    /// Regression for continuous-fuzz finding `bf6cfbd74a7487fc`. The exact
+    /// 6-byte input folds into an 822-byte nested `b*bb*` / starred
+    /// backreference / `\n{2}0*\n{2}` alternation, flags `m`, over "\n"@0
+    /// that backtracks 22238862 metered steps (raw meter 1457446060032 >
+    /// u32::MAX). The pre-c8497fd8 oracle wrapped the pin's meter to 32 bits
+    /// (pin=1452146688); with the widened oracle both engines agree.
+    #[test]
+    fn finding_bf6cfbd74a7487fc_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-bf6cfbd74a7487fc.input.bin");
+        assert_eq!(data, b"G+8h88");
+        let case = gen_regexp(data);
+        assert_eq!(
+            case.0,
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-bf6cfbd74a7487fc.pattern.txt")
+        );
+        assert_eq!(case.1, "m");
+        assert_eq!(case.2, "\n");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert_eq!(outcome.match_meter_raw, 1_457_446_060_032);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(outcome.matched));
+    }
+
+    /// Regression for continuous-fuzz finding `cfdc1a28296f23a1`. The exact
+    /// 6-byte input folds into a 371-byte nested backreference pattern, flags
+    /// `s`, over `"0"` at offset zero. The failed match dispatches 164938
+    /// metered steps (raw meter 10809376768 > u32::MAX). The pre-c8497fd8
+    /// oracle wrapped the pin's meter to 2219442176; with the widened oracle
+    /// both engines agree on the full value.
+    #[test]
+    fn finding_cfdc1a28296f23a1_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-cfdc1a28296f23a1.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(
+            case.0,
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-cfdc1a28296f23a1.pattern.txt")
+        );
+        assert_eq!(case.1, "s");
+        assert_eq!(case.2, "0");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 10_809_376_768);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `ed616f6ec22095dc`. The exact
+    /// 18-byte input folds into a nested `a*`/`a?`/`{1,2}` capture-group
+    /// pattern, flags `s`, over `"aaaaaaaa"`. The failed match dispatches
+    /// 240323 metered steps (raw meter 15749808128 > u32::MAX). The
+    /// pre-c8497fd8 oracle wrapped that to 2864906240; the widened oracle must
+    /// agree with the port at full width.
+    #[test]
+    fn finding_ed616f6ec22095dc_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ed616f6ec22095dc.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(case.1, "s");
+        assert_eq!(case.2, "aaaaaaaa");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 15_749_808_128);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `fd8517d5f3071227`. The exact
+    /// 30-byte input folds into a 395-byte nested `\s*`/`\w*` quantifier
+    /// pattern, flags `m`, over `"0000000"`. The failed match dispatches 74765
+    /// metered steps (raw meter 4899799040 > u32::MAX). The pre-c8497fd8
+    /// oracle wrapped that to 604831744; the widened oracle must agree with
+    /// the port at full width.
+    #[test]
+    fn finding_fd8517d5f3071227_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-fd8517d5f3071227.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(
+            case.0,
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-fd8517d5f3071227.pattern.txt")
+        );
+        assert_eq!(case.1, "m");
+        assert_eq!(case.2, "0000000");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 4_899_799_040);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `e2a75557f762cd9c`. The exact
+    /// 6-byte input folds into a 349-byte nested-backreference pattern over a
+    /// single space. The failed match dispatches 84388 metered steps (raw
+    /// meter 5530451968 > u32::MAX). The pre-c8497fd8 oracle wrapped that to
+    /// 1235484672; the widened oracle must agree with the port at full width.
+    #[test]
+    fn finding_e2a75557f762cd9c_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-e2a75557f762cd9c.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(
+            case.0,
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-e2a75557f762cd9c.pattern.txt")
+        );
+        assert_eq!(case.1, "");
+        assert_eq!(case.2, " ");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 5_530_451_968);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `f2f53bb078bc8a4e`. The exact
+    /// 21-byte input folds into a 73-byte nested empty-able quantifier
+    /// pattern, flags `s`, over `"aaaaaaaa"` at offset zero. The failed match
+    /// dispatches 170633 metered steps (raw meter 11182604288 > u32::MAX). The
+    /// pre-c8497fd8 oracle wrapped the pin's meter to 2592669696; with the
+    /// widened oracle both engines agree on the full value.
+    #[test]
+    fn finding_f2f53bb078bc8a4e_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-f2f53bb078bc8a4e.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(
+            case.0,
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-f2f53bb078bc8a4e.pattern.txt")
+        );
+        assert_eq!(case.1, "s");
+        assert_eq!(case.2, "aaaaaaaa");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(
+            !outcome.matched,
+            "the exact finding must remain a non-match"
+        );
+        assert_eq!(outcome.match_meter_raw, 11_182_604_288);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(false));
+    }
+
+    /// Regression for continuous-fuzz finding `ccb76a40851925f9`. The exact
+    /// 5-byte input folds into a 922-byte nested backreference and `\s{1,3}`
+    /// alternation pattern, flags `i`, over `" \n\n\n\n"` at offset zero.
+    /// The match succeeds after 78620 metered steps (raw meter 5152440320 >
+    /// u32::MAX). The pre-c8497fd8 oracle wrapped the pin's meter to
+    /// 857473024; with the widened oracle both engines agree on the full
+    /// value.
+    #[test]
+    fn finding_ccb76a40851925f9_regexp_meter_overflow_agrees() {
+        let data =
+            include_bytes!("../../ironhorse-vm/tests/fixtures/finding-ccb76a40851925f9.input.bin");
+        let case = gen_regexp(data);
+        assert_eq!(
+            case.0,
+            include_str!("../../ironhorse-vm/tests/fixtures/finding-ccb76a40851925f9.pattern.txt")
+        );
+        assert_eq!(case.1, "i");
+        assert_eq!(case.2, " \n\n\n\n");
+        assert_eq!(case.3, 0);
+
+        let program = ironhorse_regexp::compile(&case.0, &case.1).expect("finding compiles");
+        let outcome = ironhorse_regexp::match_regexp(&program, case.2.as_bytes(), case.3);
+        assert!(outcome.matched, "the exact finding must still match");
+        assert_eq!(outcome.match_meter_raw, 5_152_440_320);
+        assert!(outcome.match_meter_raw > u64::from(u32::MAX));
+        assert_eq!(differential_check_regexp(&case), Ok(true));
+    }
 }

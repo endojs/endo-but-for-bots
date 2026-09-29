@@ -1782,7 +1782,13 @@ fn module_dual_run(
     DualRun {
         source: source.into(),
         agreement,
-        result_agrees: oracle.completed && ironhorse.completed && oracle.result == ironhorse.result,
+        result_agrees: oracle.completed
+            && ironhorse.completed
+            && xs_oracle::completion_agrees(
+                &oracle.result,
+                oracle.result_number(),
+                &ironhorse.result,
+            ),
         oracle_result: oracle.result,
         ironhorse_result: ironhorse.result,
         computrons_agree: false,
@@ -1890,6 +1896,7 @@ fn run_accepted_module(
             exit_status: 0,
             completed: ironhorse.completed,
             result: ironhorse.result.clone(),
+            result_number_bits: None,
             error: match &ironhorse.halt {
                 Halt::Throw { rendered, .. } => rendered.clone(),
                 _ => String::new(),
@@ -2524,6 +2531,15 @@ mod tests {
     fn accepted_single_file_module_executes_end_to_end() {
         let source = "/*---\nflags: [module, raw]\n---*/\nexport const value = 1;";
         let result = run_case(&Config::default(), Path::new("."), source);
+        assert_eq!(result.verdict, Verdict::Covered);
+    }
+
+    #[test]
+    fn module_number_completion_uses_oracle_exact_double() {
+        let expression = "((((226492416 + 27.27) << (838860800 << 226492416)) * ((226492416 + 27.27) << (838860800 << 226492416))) + (((27.27 * 27.27) + (838860800 << 226492416)) << ((226492416 + 27.27) << (838860800 << 226492416))))";
+        let source =
+            format!("/*---\nflags: [module, raw]\n---*/\nglobalThis.result = {expression};");
+        let result = run_case(&Config::default(), Path::new("."), &source);
         assert_eq!(result.verdict, Verdict::Covered);
     }
 

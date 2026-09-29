@@ -36,6 +36,10 @@ struct XsOracleResultRaw {
     /// holds a truncated prefix.
     result_len: u32,
     exit_status: i32,
+    /// Nonzero when the completion value was a Number; `result_number` then
+    /// holds its exact double.
+    result_is_number: u32,
+    result_number: f64,
 }
 
 impl Default for XsOracleResultRaw {
@@ -52,6 +56,8 @@ impl Default for XsOracleResultRaw {
             error: [0u8; 256],
             result_len: 0,
             exit_status: 0,
+            result_is_number: 0,
+            result_number: 0.0,
         }
     }
 }
@@ -235,6 +241,9 @@ pub struct OracleOutcome {
     /// faithfully represent this result" and skip the comparison rather than
     /// reading a divergence from the truncation (finding `493390fc0397`).
     pub result_truncated: bool,
+    /// The IEEE-754 bits of the completion value when it was a Number (valid
+    /// when `completed`), else `None`; see [`result_number`](Self::result_number).
+    pub result_number_bits: Option<u64>,
     /// The thrown value stringified (valid when `!completed`).
     pub error: String,
     /// Run-only computrons: `meterIndex >> 16` measured over execution,
@@ -245,6 +254,68 @@ pub struct OracleOutcome {
     pub meter_raw: u32,
     /// Original XS machine abort status; zero for ordinary guest exceptions.
     pub exit_status: i32,
+}
+
+impl OracleOutcome {
+    /// The completion value's exact double when it was a Number. XS's
+    /// `String()` rendering of a Number does not always round-trip (finding
+    /// `05264cccae42245a`), so a differential caller compares Numbers by this
+    /// value rather than by re-parsing [`result`](Self::result).
+    pub fn result_number(&self) -> Option<f64> {
+        self.result_number_bits.map(f64::from_bits)
+    }
+}
+
+/// Oracle-side ECMA-262 `Number::toString` spelling for an exact double.
+///
+/// The shortest digits come from Ryu rather than IronHorse's dtoa, so a VM
+/// dtoa regression cannot agree with itself in the differential; only the
+/// spec's digit placement is shared ([`ironhorse_text::number`]).
+pub fn number_to_ecma_string(number: f64) -> String {
+    ironhorse_text::number::number_to_ecma_string_with(number, ryu_shortest_digits)
+}
+
+/// Whether IronHorse's rendered completion denotes the oracle's completion,
+/// the one result policy every IronHorse-against-XS differential applies.
+///
+/// A Number completion (`oracle_number`) must be spelled exactly as
+/// [`number_to_ecma_string`] of the oracle's exact double; XS's own rendering
+/// is ignored because it does not always round-trip (finding
+/// 05264cccae42245a). Both spellers resolve an exact decimal tie to the even
+/// digit (6.1.6.1.20 Note 2), so the spelling is fully determined and any other
+/// digits are a divergence. Every other completion must match XS's rendering
+/// byte for byte. `ironhorse-fuzz`'s dependency-free `results_agree` applies
+/// the same rule to a caller-derived spelling.
+pub fn completion_agrees(
+    oracle_result: &str,
+    oracle_number: Option<f64>,
+    ironhorse_result: &str,
+) -> bool {
+    match oracle_number {
+        Some(number) => number_to_ecma_string(number) == ironhorse_result,
+        None => oracle_result == ironhorse_result,
+    }
+}
+
+/// Ryu spells a magnitude as `123.45`, `0.001`, or `1e21`; renormalize to
+/// significant digits and the exponent of the first one.
+fn ryu_shortest_digits(magnitude: f64) -> (String, i32) {
+    let mut buffer = ryu::Buffer::new();
+    let shortest = buffer.format_finite(magnitude);
+    let (mantissa, exponent) =
+        shortest
+            .split_once(['e', 'E'])
+            .map_or((shortest, 0), |(mantissa, exponent)| {
+                (
+                    mantissa,
+                    exponent.parse::<i32>().expect("Ryu exponent is an integer"),
+                )
+            });
+    let decimal_position = mantissa.find('.').unwrap_or(mantissa.len()) as i32;
+    let digits: String = mantissa.chars().filter(|c| *c != '.').collect();
+    let leading_zeroes = digits.bytes().take_while(|byte| *byte == b'0').count();
+    let point = decimal_position + exponent - leading_zeroes as i32;
+    (digits[leading_zeroes..].to_string(), point - 1)
 }
 
 /// Whether an explicit XS abort status means memory or stack exhaustion.
@@ -297,6 +368,7 @@ pub fn run(source: &str) -> Option<OracleOutcome> {
         completed: raw.ok != 0,
         result: cstr_field(&raw.result),
         result_truncated: (raw.result_len as usize) > RESULT_BUF_CAP - 1,
+        result_number_bits: (raw.result_is_number != 0).then_some(raw.result_number.to_bits()),
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
@@ -364,6 +436,7 @@ fn outcome_from_raw(raw: &mut XsOracleResultRaw) -> OracleOutcome {
         // and a differential caller must skip the comparison rather than
         // read the truncation as a divergence.
         result_truncated: (raw.result_len as usize) > RESULT_BUF_CAP - 1,
+        result_number_bits: (raw.result_is_number != 0).then_some(raw.result_number.to_bits()),
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
@@ -512,6 +585,8 @@ pub struct ModuleRunOutcome {
     /// `globalThis.result`, `String()`-coerced (valid when `completed`;
     /// `"undefined"` when the fixture set none).
     pub result: String,
+    /// The exact IEEE-754 bits when `result` came from a Number completion.
+    pub result_number_bits: Option<u64>,
     /// The rejection reason stringified (valid when `!completed`).
     pub error: String,
     /// meterIndex over the whole import+drain. Parse of the graph is
@@ -523,6 +598,13 @@ pub struct ModuleRunOutcome {
     pub meter_raw: u32,
     /// Original XS machine abort status; zero for ordinary guest exceptions.
     pub exit_status: i32,
+}
+
+impl ModuleRunOutcome {
+    /// The module fixture's exact Number result, before XS stringified it.
+    pub fn result_number(&self) -> Option<f64> {
+        self.result_number_bits.map(f64::from_bits)
+    }
 }
 
 /// Link and evaluate the module rooted at `dir`/`main_rel` on XS and
@@ -556,6 +638,7 @@ pub fn run_module_dir(dir: &std::path::Path, main_rel: &str) -> Option<ModuleRun
     let outcome = ModuleRunOutcome {
         completed: raw.ok != 0,
         result: cstr_field(&raw.result),
+        result_number_bits: (raw.result_is_number != 0).then_some(raw.result_number.to_bits()),
         error: cstr_field(&raw.error),
         computrons: raw.computrons as u64,
         meter_raw: raw.meter_raw,
@@ -574,6 +657,126 @@ fn cstr_field(buf: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn independent_number_spelling_matches_ecma_boundaries() {
+        assert_eq!(number_to_ecma_string(f64::NAN), "NaN");
+        assert_eq!(number_to_ecma_string(f64::INFINITY), "Infinity");
+        assert_eq!(number_to_ecma_string(f64::NEG_INFINITY), "-Infinity");
+        assert_eq!(number_to_ecma_string(-0.0), "0");
+        assert_eq!(number_to_ecma_string(1e21), "1e+21");
+        assert_eq!(number_to_ecma_string(1e20), "100000000000000000000");
+        assert_eq!(number_to_ecma_string(1e-7), "1e-7");
+        assert_eq!(number_to_ecma_string(1e-6), "0.000001");
+        assert_eq!(
+            number_to_ecma_string(51298827675632344.0),
+            "51298827675632344"
+        );
+    }
+
+    #[test]
+    fn independent_number_spelling_matches_vm_at_placement_corners() {
+        for number in [
+            f64::MAX,
+            f64::MIN_POSITIVE,
+            5e-324,
+            -1.5,
+            0.5,
+            123000.0,
+            1.5e20,
+            123.456,
+            1.25e-6,
+            -2.5e-7,
+            // Exact decimal ties, where the VM's std digits alone pick the odd
+            // candidate and Ryu the even one.
+            -(125343939420064.0 + 0.625),
+            -(614423824407840.0 + 0.25),
+        ] {
+            assert_eq!(
+                number_to_ecma_string(number),
+                ironhorse_vm::value::number_to_ecma_string(number),
+                "{number:e}"
+            );
+        }
+    }
+
+    #[test]
+    fn completion_agrees_with_the_exact_spec_spelling_only() {
+        // An exact decimal tie: Note 2's even digit agrees, the odd one does
+        // not, whatever XS itself rendered.
+        let tie = Some(-(125343939420064.0 + 0.625));
+        assert!(completion_agrees("", tie, "-125343939420064.62"));
+        assert!(!completion_agrees("", tie, "-125343939420064.63"));
+        assert!(!completion_agrees(
+            "-125343939420064.63",
+            tie,
+            "-125343939420064.63"
+        ));
+        // Another spelling of the same double is a divergence.
+        assert!(!completion_agrees("100", Some(100.0), "1e2"));
+        // A non-Number completion compares byte for byte with XS.
+        assert!(completion_agrees("1e2", None, "1e2"));
+        assert!(!completion_agrees("1e2", None, "100"));
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn independent_number_spelling_round_trips(bits in proptest::num::u64::ANY) {
+            let number = f64::from_bits(bits);
+            proptest::prop_assume!(number.is_finite());
+            let spelled = number_to_ecma_string(number);
+            let parsed: f64 = spelled.parse().expect("an ECMA Number spelling parses");
+            proptest::prop_assert_eq!(parsed, number, "{}", spelled);
+        }
+
+        #[test]
+        fn independent_number_spelling_matches_vm(bits in proptest::num::u64::ANY) {
+            let number = f64::from_bits(bits);
+            // Both spellers resolve an exact decimal tie to the even digit
+            // (6.1.6.1.20 Note 2), so the spellings are byte-identical.
+            proptest::prop_assert_eq!(
+                number_to_ecma_string(number),
+                ironhorse_vm::value::number_to_ecma_string(number)
+            );
+        }
+    }
+
+    #[test]
+    fn non_finite_completions_are_captured_as_numbers() {
+        for (source, spelling) in [("1/0", "Infinity"), ("-1/0", "-Infinity"), ("0/0", "NaN")] {
+            let outcome = run(source).expect("oracle machine must start");
+            assert!(outcome.completed, "{source}: {}", outcome.error);
+            let number = outcome.result_number().expect("a Number completion");
+            assert_eq!(number_to_ecma_string(number), spelling, "{source}");
+        }
+    }
+
+    #[test]
+    fn negative_zero_completion_keeps_its_sign_bit() {
+        let outcome = run("-0").expect("oracle machine must start");
+        assert!(outcome.completed, "{}", outcome.error);
+        assert_eq!(outcome.result, "0");
+        assert_eq!(outcome.result_number_bits, Some(0x8000_0000_0000_0000));
+        let outcome = run("0 * -1").expect("oracle machine must start");
+        assert_eq!(outcome.result_number_bits, Some((-0.0_f64).to_bits()));
+    }
+
+    #[test]
+    fn non_number_completions_are_not_captured_as_numbers() {
+        for source in [
+            "12345678901234567890n",
+            "1n",
+            "'42'",
+            "true",
+            "undefined",
+            "null",
+            "Object(42)",
+        ] {
+            let outcome = run(source).expect("oracle machine must start");
+            assert!(outcome.completed, "{source}: {}", outcome.error);
+            assert_eq!(outcome.result_number_bits, None, "{source}");
+        }
+    }
 
     /// Regression for continuous-fuzz finding `493390fc03979205`: a completion
     /// value longer than the old 1024-byte capture buffer used to be silently
@@ -636,6 +839,16 @@ mod tests {
         assert!(o.completed, "graph should fulfill, err={:?}", o.error);
         assert_eq!(o.result, "42");
         assert!(o.computrons > 0, "evaluating a graph costs computrons");
+    }
+
+    #[test]
+    fn module_run_captures_number_before_xs_stringifies_it() {
+        let expression = "((((226492416 + 27.27) << (838860800 << 226492416)) * ((226492416 + 27.27) << (838860800 << 226492416))) + (((27.27 * 27.27) + (838860800 << 226492416)) << ((226492416 + 27.27) << (838860800 << 226492416))))";
+        let source = format!("globalThis.result = {expression};");
+        let outcome = run_module_graph("number-tie", &[("main.mjs", &source)], "main.mjs");
+        assert!(outcome.completed, "module should fulfill: {outcome:?}");
+        assert_eq!(outcome.result, "51298827675632340");
+        assert_eq!(outcome.result_number(), Some(51298827675632344.0));
     }
 
     #[test]

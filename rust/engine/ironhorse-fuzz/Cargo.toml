@@ -23,3 +23,6 @@ ironhorse-compile = { path = "../ironhorse-compile" }
 # Fuzzability). The substance stays here in the forbid(unsafe_code) lib so it
 # builds and unit-tests without a libFuzzer toolchain.
 ironhorse-snapshot = { path = "../ironhorse-snapshot", features = ["unchecked-tooling"] }
+
+[dev-dependencies]
+proptest = { version = "1", default-features = false, features = ["std"] }

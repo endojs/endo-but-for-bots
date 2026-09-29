@@ -55,7 +55,7 @@ See [Architecture](ARCHITECTURE.md) for dependency direction and the four seams.
 | Crate | Purpose |
 |---|---|
 | `ironhorse-meter` | Frozen XS-derived weights, default keys, canonical SHA-256 identity and release pins. |
-| `ironhorse-text` | CESU-8 symbol-name encoding, preserving lone surrogates across compiler/VM boundaries. |
+| `ironhorse-text` | CESU-8 symbol-name encoding, preserving lone surrogates across compiler/VM boundaries, and ECMA-262 Number spelling shared by the compiler, VM and XS oracle. |
 | `ironhorse-unicode` | Pinned Unicode character classifications shared by compiler and runtime. |
 | `ironhorse-runtime` | Oracle-free compiler adapter installed by production embedders and the conformance harness. |
 | `ironhorse-vm` | Index arenas, interpreter, built-ins, modules, GC and metering integration; guest string values use UTF-16. |
