@@ -55,10 +55,16 @@
 //! proven commit is recovered as aborted with its inbound row kept for
 //! diagnosis and explicit retry; the transcript never re-drives it.
 //!
+//! The release side of the contract, one release authority per worker
+//! driven by the crank's verdict, and the receiver's duplicate suppression
+//! live in [`Embargo`] and [`DuplicateSuppressor`] (§ The Slot Machine
+//! Message Embargo Contract).
+//!
 //! The deterministic fault-injection seam that drives the crash matrix is
 //! [`FaultPlan`].
 
 mod cas;
+mod embargo;
 mod fault;
 
 use std::path::{Path, PathBuf};
@@ -66,6 +72,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
 pub use cas::{blob_hash, sync_dir, CasError, CasStore};
+pub use embargo::{CrankVerdict, DuplicateSuppressor, Embargo, FrameSink, Received, Settlement};
 pub use fault::{FaultMode, FaultPlan};
 
 /// The schema version this crate writes.
