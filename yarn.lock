@@ -1655,6 +1655,7 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "@endo/claude@workspace:packages/claude"
   dependencies:
+    "@endo/agent-tools": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
@@ -1667,8 +1668,6 @@ __metadata:
     eslint: "catalog:dev"
     fast-check: "npm:^4.9.0"
     typescript: "catalog:dev"
-  bin:
-    endo-claude-shim: ./src/shim.js
   languageName: unknown
   linkType: soft
 
@@ -10226,7 +10225,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"fast-check@npm:^3.0.0 || ^4.0.0, fast-check@npm:^4.0.0, fast-check@npm:^4.10.2":
+"fast-check@npm:^3.0.0 || ^4.0.0, fast-check@npm:^4.0.0, fast-check@npm:^4.10.2, fast-check@npm:^4.9.0":
   version: 4.10.2
   resolution: "fast-check@npm:4.10.2"
   dependencies:
