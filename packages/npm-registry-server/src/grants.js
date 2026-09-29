@@ -2,6 +2,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { q } from '@endo/errors';
+import { isAllowlistEntry } from './names.js';
 
 /** @import { RegistryStore } from './store.js' */
 
@@ -11,6 +12,8 @@ import { q } from '@endo/errors';
  * @property {string} subject
  * @property {string[]} packages Exact names or `@scope/*` entries.
  * @property {number} expiresAt Milliseconds since the epoch.
+ * @property {string} tokenSha256 The credential the grant was authenticated
+ *   with, so a re-check after an `await` can tell a rotated token apart.
  */
 
 /**
@@ -40,7 +43,7 @@ export const makeGrants = ({ store, now = Date.now }) => {
   /**
    * Record (or replace, while unrevoked) a grant by id.
    *
-   * @param {PublishGrant & { token: string }} grant
+   * @param {Omit<PublishGrant, 'tokenSha256'> & { token: string }} grant
    */
   const putGrant = ({ id, subject, packages, expiresAt, token }) => {
     if (!/^[A-Za-z0-9._-]+$/u.test(id)) {
@@ -51,6 +54,11 @@ export const makeGrants = ({ store, now = Date.now }) => {
     }
     if (packages.length === 0) {
       throw Error('A grant must allow at least one package');
+    }
+    for (const entry of packages) {
+      if (!isAllowlistEntry(entry)) {
+        throw Error(`Invalid grant allowlist entry ${q(entry)}`);
+      }
     }
     store.transaction(() => {
       const result = statements.upsertGrant.run(
@@ -104,7 +112,8 @@ export const makeGrants = ({ store, now = Date.now }) => {
     if (!token) {
       return undefined;
     }
-    const row = statements.getGrantByToken.get(hashToken(token));
+    const tokenSha256 = hashToken(token);
+    const row = statements.getGrantByToken.get(tokenSha256);
     if (!row || row.revoked_at !== null || Number(row.expires_at) <= now()) {
       return undefined;
     }
@@ -113,6 +122,7 @@ export const makeGrants = ({ store, now = Date.now }) => {
       subject: row.subject,
       packages: JSON.parse(row.packages_json),
       expiresAt: row.expires_at,
+      tokenSha256,
     });
   };
 

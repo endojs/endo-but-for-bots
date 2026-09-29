@@ -60,6 +60,22 @@ export const tarballFileName = (name, version) => {
 };
 harden(tarballFileName);
 
+const SCOPE_WILDCARD = /^@[a-z0-9][a-z0-9._~-]*\/\*$/u;
+
+/**
+ * Whether a string is a well-formed grant allowlist entry: a canonical
+ * package name or a whole scope spelled `@scope/*`. Anything else, such as
+ * a bare `/*`, would either match nothing or widen to every package.
+ *
+ * @param {string} entry
+ * @returns {boolean}
+ */
+export const isAllowlistEntry = entry =>
+  SCOPE_WILDCARD.test(entry) ||
+  (entry.length <= MAX_NAME_LENGTH &&
+    (SCOPED_NAME.test(entry) || UNSCOPED_NAME.test(entry)));
+harden(isAllowlistEntry);
+
 /**
  * Whether a grant's package allowlist covers a canonical name. Entries are
  * exact names or a whole scope spelled `@scope/*`.

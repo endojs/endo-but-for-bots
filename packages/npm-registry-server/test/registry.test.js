@@ -1,8 +1,12 @@
+// @ts-check
+
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { makePublishDocument, makeTestRegistry, makeTgz } from './_fixtures.js';
 import { digestTarball } from '../src/tarball.js';
 import { isRegistryHttpError } from '../src/errors.js';
+
+/** @import { UpstreamFetch } from '../src/node-fetch.js' */
 
 const V1 = '1.7.0-dev.20260928101010.gaaaaaaa';
 const V2 = '1.7.0-dev.20260928231903.g3aa902d';
@@ -49,6 +53,31 @@ test('an identical retry is a no-op and different bytes conflict', async t => {
   });
   await t.throwsAsync(registry.publish(grant, '@endo/errors', changed), {
     message: /different content/,
+  });
+});
+
+test('a token rotated after authentication cannot finish a publish', async t => {
+  const { registry, grants, grant } = makeTestRegistry();
+  grants.putGrant({
+    id: 'test-grant',
+    subject: 'garden-llm-publisher',
+    packages: ['@endo/*', 'solo'],
+    expiresAt: Date.now() + 3_600_000,
+    token: 'y'.repeat(40),
+  });
+  const document = makePublishDocument({ name: '@endo/errors', version: V1 });
+  await t.throwsAsync(registry.publish(grant, '@endo/errors', document), {
+    message: /no longer live/,
+  });
+});
+
+test('a forged grant record is not a credential', async t => {
+  const { registry, grant } = makeTestRegistry();
+  if (!grant) throw Error('the fixture grant authenticates');
+  const forged = harden({ ...grant, subject: 'someone-else' });
+  const document = makePublishDocument({ name: '@endo/errors', version: V1 });
+  await t.throwsAsync(registry.publish(forged, '@endo/errors', document), {
+    message: /no longer live/,
   });
 });
 
@@ -163,7 +192,7 @@ test('upstream read-through rewrites URLs, verifies, and serves stale on error',
   const { integrity, shasum } = digestTarball(tgz);
   let online = true;
   const requests = [];
-  /** @type {import("../src/node-fetch.js").UpstreamFetch} */
+  /** @type {UpstreamFetch} */
   const fakeFetch = async (url, init) => {
     requests.push(String(url));
     if (!online) throw TypeError('fetch failed');
@@ -283,7 +312,7 @@ test('local published tags are not replaced by upstream metadata', async t => {
 });
 
 test('an upstream body interrupted mid-read is a 502, not an internal error', async t => {
-  /** @type {import("../src/node-fetch.js").UpstreamFetch} */
+  /** @type {UpstreamFetch} */
   const fakeFetch = async () => ({
     status: 200,
     ok: true,

@@ -47,7 +47,7 @@ if (command === 'grants' && subcommand === 'list') {
   grants.putGrant({
     id,
     subject,
-    packages: packages.split(','),
+    packages: packages.split(',').map(entry => entry.trim()),
     expiresAt,
     token,
   });

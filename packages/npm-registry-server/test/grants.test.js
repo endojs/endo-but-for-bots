@@ -75,6 +75,7 @@ test('authenticate honors absence, expiry, and revocation', t => {
     subject: 'publisher',
     packages: ['@endo/*', 'solo'],
     expiresAt: 2000,
+    tokenSha256: hashToken(TOKEN),
   });
 
   clock.value = 2000;
@@ -145,4 +146,31 @@ test('listGrants reports ISO timestamps and revocation', t => {
       revokedAt: new Date(clock.value).toISOString(),
     },
   ]);
+});
+
+test('putGrant refuses allowlist entries outside the package-name grammar', t => {
+  const { grants } = makeTestGrants({ value: 1000 });
+  for (const entry of ['/*', '*', '@endo/', '@Endo/*', ' @endo/*', 'a/b/c']) {
+    t.throws(
+      () =>
+        grants.putGrant({
+          id: 'g1',
+          subject: 'publisher',
+          packages: ['solo', entry],
+          expiresAt: 2000,
+          token: TOKEN,
+        }),
+      { message: /Invalid grant allowlist entry/ },
+      entry,
+    );
+  }
+  t.notThrows(() =>
+    grants.putGrant({
+      id: 'g1',
+      subject: 'publisher',
+      packages: ['solo', '@endo/*', '@endo/patterns'],
+      expiresAt: 2000,
+      token: TOKEN,
+    }),
+  );
 });

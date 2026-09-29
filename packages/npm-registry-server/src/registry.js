@@ -181,6 +181,22 @@ const decodeBase64 = data => {
  */
 
 /**
+ * The reason a publish conflicts with a version row already present. A row
+ * indexed from upstream is refused whatever its content, so only a
+ * published row with a different integrity is reported as different
+ * content.
+ *
+ * @param {string} name
+ * @param {string} version
+ * @param {{ source: string, integrity: string }} existing
+ * @returns {string}
+ */
+const conflictReason = (name, version, existing) =>
+  existing.source === 'published'
+    ? `${name}@${version} already exists with different content`
+    : `${name}@${version} already exists from the upstream registry`;
+
+/**
  * The registry core: the publish transaction, dist-tag moves, packument
  * synthesis, and demand-filled upstream read-through. Every served tarball
  * URL is rooted at `publicOrigin`, and every tarball is served from the
@@ -230,18 +246,20 @@ export const makeRegistry = ({
   };
 
   /**
-   * Re-check, inside the storage transaction, that the grant is still live
-   * and still covers the package.
+   * Re-check, inside the storage transaction, that the grant is still live,
+   * still held under the same token, and still covers the package. The row
+   * is found by the credential, not by the grant's id, so a token rotated
+   * while a publish was awaiting its tarball cannot finish that publish.
    *
    * @param {PublishGrant} grant
    * @param {string} name
    */
   const recheckGrant = (grant, name) => {
-    const row = statements.listGrants
-      .all()
-      .find(candidate => candidate.id === grant.id);
+    const row = statements.getGrantByToken.get(grant.tokenSha256);
     if (
       !row ||
+      row.id !== grant.id ||
+      row.subject !== grant.subject ||
       row.revoked_at !== null ||
       Number(row.expires_at) <= now() ||
       !allowlistCovers(JSON.parse(row.packages_json), name)
@@ -398,10 +416,7 @@ export const makeRegistry = ({
         'conflict',
         integrity,
       );
-      throw RegistryHttpError(
-        409,
-        `${name}@${version} already exists with different content`,
-      );
+      throw RegistryHttpError(409, conflictReason(name, version, existing));
     }
 
     // CAS writes precede the visibility transaction.
@@ -435,10 +450,7 @@ export const makeRegistry = ({
         if (raced.integrity === integrity && raced.source === 'published') {
           return { version, tag: expectedTag, integrity, created: false };
         }
-        throw RegistryHttpError(
-          409,
-          `${name}@${version} already exists with different content`,
-        );
+        throw RegistryHttpError(409, conflictReason(name, version, raced));
       }
       checkMonotonic(name, expectedTag, version);
       const at = now();

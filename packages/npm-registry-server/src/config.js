@@ -75,7 +75,7 @@ harden(readPublisherGrantEnv);
  * thrown: reads keep serving and a crash loop would not repair the secret.
  *
  * @param {Pick<Grants, 'putGrant'>} grants
- * @param {PublishGrant & { token: string }} grant
+ * @param {Omit<PublishGrant, 'tokenSha256'> & { token: string }} grant
  * @param {(line: string) => void} report
  * @returns {boolean} whether the grant was recorded
  */
