@@ -142,8 +142,25 @@ const makePassStyleOf = passStyleHelpers => {
     };
 
     const passStyleOfInternal = inner => {
-      const typestr = typeof inner;
+      // `document.all` is the only known value for which `typeof` returns
+      // `'undefined'` even though the value is actually an object (it has the
+      // [[IsHTMLDDA]] internal slot). It is `== null` (loose equality) but
+      // neither `=== null` nor `=== undefined`. We classify it as `'object'`
+      // so the object branch can reject it (it is not frozen and cannot be
+      // frozen) rather than mis-classifying it as the primitive `undefined`.
+      let typestr;
+      if (inner != null) {
+        typestr = typeof inner;
+      } else if (inner === null) {
+        typestr = 'null';
+      } else if (inner === undefined) {
+        typestr = 'undefined';
+      } else {
+        // probably document.all
+        typestr = 'object';
+      }
       switch (typestr) {
+        case 'null':
         case 'undefined':
         case 'boolean':
         case 'number':
@@ -159,9 +176,6 @@ const makePassStyleOf = passStyleHelpers => {
           return 'symbol';
         }
         case 'object': {
-          if (inner === null) {
-            return 'null';
-          }
           if (!isFrozen(inner)) {
             assert.fail(
               // TypedArrays get special treatment in harden()
