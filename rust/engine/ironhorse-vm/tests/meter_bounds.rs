@@ -10,7 +10,7 @@
 //!   many: armed and un-armed runs of the same program agree on the
 //!   meter bit-exactly, so the differential harness is unaffected.
 
-use ironhorse_vm::{Halt, Interp};
+use ironhorse_vm::{Halt, Interp, PanicKind};
 
 fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (b, s) = ironhorse_compile::compile_atoms(src).expect("compiles");
@@ -34,7 +34,7 @@ fn an_armed_meter_halts_a_catastrophic_regexp_match_mid_way() {
     m.arm_meter(1_000, Box::new(|computrons| computrons <= LIMIT));
     let out = m.run(&b);
     assert!(
-        matches!(out.halt, Halt::MeterAbort),
+        matches!(out.halt, Halt::Panic(PanicKind::MeterAbort)),
         "the host's refusal must halt the crank: {:?}",
         out.halt
     );
@@ -111,7 +111,11 @@ fn a_fresh_machine_is_unarmed_and_a_host_refusal_aborts() {
     armed.arm_meter(100, Box::new(|computrons| computrons <= 5_000));
     assert!(armed.meter_is_armed() && armed.meter_host_attached());
     let out = armed.run(&b);
-    assert!(matches!(out.halt, Halt::MeterAbort), "{:?}", out.halt);
+    assert!(
+        matches!(out.halt, Halt::Panic(PanicKind::MeterAbort)),
+        "{:?}",
+        out.halt
+    );
 }
 
 #[test]
@@ -133,7 +137,7 @@ fn builtin_allocation_admission_interrupts_before_the_temporary_buffer() {
         armed.arm_meter(1, Box::new(move |spent| spent <= limit));
         let before = armed.chunks().byte_size();
         let out = armed.run(&code);
-        assert_eq!(out.halt, Halt::MeterAbort, "{source}");
+        assert_eq!(out.halt, Halt::Panic(PanicKind::MeterAbort), "{source}");
         assert!(
             armed.chunks().byte_size() < before + 10000,
             "result was allocated: {source}"
@@ -213,7 +217,7 @@ fn guest_regexp_source_rendering_has_an_admission_checkpoint() {
     let mut metered = Interp::new();
     metered.link_intrinsics(&names);
     metered.arm_meter(1, Box::new(move |n| n <= limit));
-    assert_eq!(metered.run(&code).halt, Halt::MeterAbort);
+    assert_eq!(metered.run(&code).halt, Halt::Panic(PanicKind::MeterAbort));
 }
 
 #[test]
@@ -231,7 +235,11 @@ fn unicode_and_dense_array_work_check_before_running() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
         vm.arm_meter(1, Box::new(|n| n <= 3_000));
-        assert_eq!(vm.run(&code).halt, Halt::MeterAbort, "{source}");
+        assert_eq!(
+            vm.run(&code).halt,
+            Halt::Panic(PanicKind::MeterAbort),
+            "{source}"
+        );
     }
 }
 
@@ -274,6 +282,6 @@ fn parse_and_argument_expansion_cannot_hide_host_refusal_in_a_catch() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
         vm.arm_meter(1, Box::new(|n| n <= 10_000));
-        assert_eq!(vm.run(&code).halt, Halt::MeterAbort, "{source}");
+        assert_eq!(vm.run(&code).halt, Halt::Panic(PanicKind::MeterAbort), "{source}");
     }
 }

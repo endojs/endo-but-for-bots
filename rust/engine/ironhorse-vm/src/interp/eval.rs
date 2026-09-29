@@ -65,12 +65,16 @@ impl Interp {
         // Refusal wins even if an embedding compiler mistakenly returns
         // successful output or a syntax error after its callback said stop.
         if refused {
-            return Err(Step::Host(Halt::MeterAbort));
+            return Err(Step::Host(Halt::Panic(PanicKind::MeterAbort)));
         }
         let compiled = match result {
-            Err(SourceCompileError::HeapExhausted) => return Err(Step::Host(Halt::HeapExhausted)),
+            Err(SourceCompileError::HeapExhausted) => {
+                return Err(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))
+            }
             Ok(compiled) => compiled,
-            Err(SourceCompileError::MeterAbort) => return Err(Step::Host(Halt::MeterAbort)),
+            Err(SourceCompileError::MeterAbort) => {
+                return Err(Step::Host(Halt::Panic(PanicKind::MeterAbort)))
+            }
             Err(SourceCompileError::Syntax(message)) => {
                 return Err(self.catchable_syntax_error_with_message(message))
             }
@@ -83,13 +87,15 @@ impl Interp {
             // detail is deliberately dropped: a panic message is arbitrary
             // text from inside the compiler and a guest must not read it.
             Err(SourceCompileError::Invariant(_)) => {
-                return Err(Step::Host(Halt::EngineInvariant("eval:compiler-invariant")))
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                    "eval:compiler-invariant",
+                ))))
             }
         };
         if compiled.parse_meter_raw != charged {
-            return Err(Step::Host(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "eval:compile-charge-receipt",
-            )));
+            ))));
         }
         let eval_names =
             crate::symbols::parse_symbols_checked(&compiled.symbols).map_err(Step::Host)?;

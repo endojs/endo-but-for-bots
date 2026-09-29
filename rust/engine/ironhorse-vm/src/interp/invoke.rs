@@ -414,7 +414,7 @@ impl Interp {
                         .args
                         .len()
                         .checked_add(combined.len())
-                        .ok_or(Step::Host(Halt::HeapExhausted))?;
+                        .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
                     self.charge_and_check(BIND_CALL_METERING + length as u64 * BIND_CALL_PER_ARG)?;
                     let mut next = self.reserve_scratch(length)?;
                     next.extend_from_slice(&self.bound_functions[&current].args);

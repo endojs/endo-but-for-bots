@@ -129,7 +129,10 @@ fn an_endless_drop_stops_on_the_step_bound_like_its_siblings() {
             "{endless} var h = {helper}; String(h.next().done)"
         ));
         assert!(
-            matches!(outcome.halt, ironhorse_vm::Halt::StepLimit(_)),
+            matches!(
+                outcome.halt,
+                ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::StepLimit(_))
+            ),
             "{helper}: expected a step-limit halt, got {:?}",
             outcome.halt
         );
@@ -165,7 +168,10 @@ fn a_heap_exhausted_unwind_does_not_poison_a_helper() {
     vm.link_intrinsics(&parse_symbols_checked(&symbols).unwrap());
     let halted = vm.run(&bytecode);
     assert!(
-        matches!(halted.halt, ironhorse_vm::Halt::HeapExhausted),
+        matches!(
+            halted.halt,
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::HeapExhausted)
+        ),
         "the fixture must actually exhaust the heap inside the mapper, or this \
          proves nothing (got {:?})",
         halted.halt

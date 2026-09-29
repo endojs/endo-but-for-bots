@@ -462,7 +462,7 @@ fn every_engine_can_be_released_through_the_trait() {
 /// It reached `Engine` in the first version, in the same bucket as a relink
 /// failure, and worse: the SAME refusal took two different kinds depending on
 /// whether a limit was attached to it (`MachineError::MeterAbort {..}` against
-/// `MachineError::Halt(Halt::MeterAbort)`). `MachineError`'s own comment calls
+/// `MachineError::Halt(Halt::Panic(PanicKind::MeterAbort))`). `MachineError`'s own comment calls
 /// `MeterAbort` "distinct from every other halt because it is the one a
 /// supervisor budgets for", so collapsing it is the F157 mistake in miniature.
 #[test]

@@ -2,7 +2,7 @@
 mod common;
 use common::TestCompiler;
 
-use ironhorse_vm::{Compartment, CompartmentOptions, Halt, Machine, Slot};
+use ironhorse_vm::{Compartment, CompartmentOptions, Halt, Machine, PanicKind, Slot};
 
 fn evaluate(compartment: &Compartment, source: &str) -> ironhorse_vm::RunOutcome {
     let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
@@ -587,7 +587,10 @@ fn metered_machine_pump_resumes_the_existing_receipt_and_detaches_host() {
     .unwrap();
     let before = a.evaluate_with_symbols_metered(&code, &symbols, 1, Box::new(|_| true));
     assert!(!before.completed);
-    assert_eq!(machine.run_promise_jobs().halt, Halt::MeterAbort);
+    assert_eq!(
+        machine.run_promise_jobs().halt,
+        Halt::Panic(PanicKind::MeterAbort)
+    );
     let lease = Rc::new(());
     let weak = Rc::downgrade(&lease);
     let resumed = machine.resume_promise_jobs(Box::new(move |_| {

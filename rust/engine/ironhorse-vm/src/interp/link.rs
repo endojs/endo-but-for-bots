@@ -1114,7 +1114,7 @@ impl Interp {
         eval_names: &[SymbolName],
     ) -> Result<Vec<u8>, Step> {
         let (site_order, accesses) = Self::template_site_accesses(code)
-            .map_err(|_| Step::Host(Halt::EngineInvariant("eval:relink")))?;
+            .map_err(|_| Step::Host(Halt::Panic(PanicKind::EngineInvariant("eval:relink"))))?;
         let novel: std::collections::HashSet<_> = eval_names
             .iter()
             .filter(|name| !self.symbol_ids.contains_key(*name))
@@ -1147,15 +1147,17 @@ impl Interp {
             }
             Some(out)
         })();
-        let mut out = remapped.ok_or(Step::Host(Halt::EngineInvariant("eval:relink")))?;
+        let mut out = remapped.ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+            "eval:relink",
+        ))))?;
         match self.apply_template_site_ids(&mut out, site_order, accesses) {
             Ok(()) => Ok(out),
             Err(RelinkError::TableFull) => {
                 Err(self.catchable_range_error_msg("property key space exhausted".into()))
             }
-            Err(RelinkError::MalformedBytecode) => {
-                Err(Step::Host(Halt::EngineInvariant("eval:relink")))
-            }
+            Err(RelinkError::MalformedBytecode) => Err(Step::Host(Halt::Panic(
+                PanicKind::EngineInvariant("eval:relink"),
+            ))),
         }
     }
 

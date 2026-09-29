@@ -14,7 +14,7 @@ impl Interp {
     /// unbounded while reporting itself metered. The host callback
     /// cannot travel in a snapshot, so the only correct resume of an
     /// armed machine reattaches one; anything else is a configuration
-    /// error, and the run halts [`Halt::MeterAbort`] rather than
+    /// error, and the run halts [`PanicKind::MeterAbort`] rather than
     /// silently disabling the bound the snapshot says is in force. The
     /// rule fires only where checks fire: a crank with no loop-closing
     /// point (straight-line code) still completes on such a machine,
@@ -37,7 +37,7 @@ impl Interp {
             None => self.meter.charge_and_check(raw, &mut |_| true),
         };
         if check == MeterCheck::Abort {
-            Err(Step::Host(Halt::MeterAbort))
+            Err(Step::Host(Halt::Panic(PanicKind::MeterAbort)))
         } else {
             Ok(())
         }
@@ -46,7 +46,7 @@ impl Interp {
     pub(super) fn charge_builtin_work(&mut self, count: u64) -> Result<(), Step> {
         let raw = count
             .checked_mul(crate::meter::BUILTIN_METERING)
-            .ok_or(Step::Host(Halt::MeterAbort))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::MeterAbort)))?;
         self.charge_and_check(raw)
     }
 
@@ -56,7 +56,7 @@ impl Interp {
             .map(|n| n & !(ironhorse_meter::CHUNK_ALIGNMENT - 1))
             .and_then(|n| n.checked_add(ironhorse_meter::CHUNK_HEADER_BYTES))
             .and_then(|n| n.checked_mul(crate::meter::CHUNK_ALLOCATION_METERING))
-            .ok_or(Step::Host(Halt::MeterAbort))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::MeterAbort)))?;
         self.charge_and_check(aligned)
     }
 
@@ -79,7 +79,7 @@ impl Interp {
         }
         let units = units as usize;
         if !self.chunks.can_allocate(units * 2) {
-            return Err(Step::Host(Halt::HeapExhausted));
+            return Err(Step::Host(Halt::Panic(PanicKind::HeapExhausted)));
         }
         let charge = |length: u64| {
             if length == 0 {
@@ -101,17 +101,17 @@ impl Interp {
         let length = output
             .len()
             .checked_add(addition.len())
-            .ok_or(Step::Host(Halt::HeapExhausted))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         let bytes = length
             .checked_mul(std::mem::size_of::<T>())
-            .ok_or(Step::Host(Halt::HeapExhausted))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         if !self.chunks.can_allocate(bytes) {
-            return Err(Step::Host(Halt::HeapExhausted));
+            return Err(Step::Host(Halt::Panic(PanicKind::HeapExhausted)));
         }
         self.reserve_units_growth(output.len() as u64, length as u64)?;
         output
             .try_reserve(addition.len())
-            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         output.extend_from_slice(addition);
         Ok(())
     }
@@ -129,7 +129,7 @@ impl Interp {
         self.admit_scratch::<T>(capacity)?;
         let raw = (capacity as u64)
             .checked_mul(crate::meter::BUILTIN_METERING)
-            .ok_or(Step::Host(Halt::MeterAbort))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::MeterAbort)))?;
         self.charge_and_check(raw)?;
         Self::reserved_vec(capacity)
     }
@@ -144,15 +144,15 @@ impl Interp {
         let length = output
             .len()
             .checked_add(addition.len())
-            .ok_or(Step::Host(Halt::HeapExhausted))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         self.admit_scratch::<T>(length)?;
         let charge = (addition.len() as u64)
             .checked_mul(crate::meter::BUILTIN_METERING)
-            .ok_or(Step::Host(Halt::MeterAbort))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::MeterAbort)))?;
         self.charge_and_check(charge)?;
         output
             .try_reserve(addition.len())
-            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         output.extend_from_slice(addition);
         Ok(())
     }
@@ -165,11 +165,11 @@ impl Interp {
         let length = output
             .len()
             .checked_add(addition.len())
-            .ok_or(Step::Host(Halt::HeapExhausted))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         self.admit_scratch::<T>(length)?;
         output
             .try_reserve(addition.len())
-            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         output.extend_from_slice(addition);
         Ok(())
     }
@@ -182,11 +182,11 @@ impl Interp {
         let length = output
             .len()
             .checked_add(1)
-            .ok_or(Step::Host(Halt::HeapExhausted))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         self.admit_scratch::<T>(length)?;
         output
             .try_reserve(1)
-            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         output.push(value);
         Ok(())
     }
@@ -208,9 +208,9 @@ impl Interp {
     pub(super) fn admit_scratch<T>(&mut self, capacity: usize) -> Result<(), Step> {
         let bytes = capacity
             .checked_mul(std::mem::size_of::<T>())
-            .ok_or(Step::Host(Halt::HeapExhausted))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         if !self.chunks.can_allocate(bytes) {
-            return Err(Step::Host(Halt::HeapExhausted));
+            return Err(Step::Host(Halt::Panic(PanicKind::HeapExhausted)));
         }
         self.charge_and_check(0)
     }
@@ -234,7 +234,7 @@ impl Interp {
         let mut buffer = Vec::new();
         buffer
             .try_reserve_exact(capacity)
-            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            .map_err(|_| Step::Host(Halt::Panic(PanicKind::HeapExhausted)))?;
         Ok(buffer)
     }
 

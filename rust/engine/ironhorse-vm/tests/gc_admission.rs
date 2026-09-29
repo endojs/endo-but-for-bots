@@ -1,6 +1,6 @@
 //! Whole-machine collection is an explicit request at quiescence.
 use ironhorse_vm::gc::GcAdmissionError;
-use ironhorse_vm::{Halt, Interp, SlotIndex};
+use ironhorse_vm::{Halt, Interp, PanicKind, SlotIndex};
 
 fn assert_refused_unchanged(vm: &mut Interp) {
     assert!(!vm.is_quiescent());
@@ -53,11 +53,11 @@ fn halts_and_uncaught_throws_do_not_admit_collection() {
         let result = vm.run_bounded(&code, limit);
         assert!(
             match case {
-                0 => matches!(result.halt, Halt::StepLimit(_)),
-                1 => matches!(result.halt, Halt::MeterAbort),
-                2 => matches!(result.halt, Halt::StackOverflow(_)),
+                0 => matches!(result.halt, Halt::Panic(PanicKind::StepLimit(_))),
+                1 => matches!(result.halt, Halt::Panic(PanicKind::MeterAbort)),
+                2 => matches!(result.halt, Halt::Panic(PanicKind::StackOverflow(_))),
                 3 => matches!(result.halt, Halt::Throw { .. }),
-                4 => matches!(result.halt, Halt::HeapExhausted),
+                4 => matches!(result.halt, Halt::Panic(PanicKind::HeapExhausted)),
                 _ => unreachable!(),
             },
             "{source}: {:?}",
@@ -69,7 +69,7 @@ fn halts_and_uncaught_throws_do_not_admit_collection() {
     // Admission must use the lifecycle predicate even without activation frames.
     let mut vm = Interp::new();
     vm.set_chunk_ceiling(0);
-    assert_eq!(vm.run(&[]).halt, Halt::HeapExhausted);
+    assert_eq!(vm.run(&[]).halt, Halt::Panic(PanicKind::HeapExhausted));
     assert_refused_unchanged(&mut vm);
 }
 

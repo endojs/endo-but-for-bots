@@ -158,7 +158,7 @@ pub enum StoreError {
     /// a supervisor to tear down a healthy session.
     BatchRejected(Box<StoreError>),
     /// The VM reported that its own state is wrong
-    /// (`ironhorse_vm::Halt::EngineInvariant` or `Halt::Panic`). Never a
+    /// (`ironhorse_vm::PanicKind::EngineInvariant` or `Halt::Panic`). Never a
     /// refusal: the machine cannot be trusted to continue.
     EngineInvariant(String),
     /// A decode/validation failure in the shared snapshot vocabulary

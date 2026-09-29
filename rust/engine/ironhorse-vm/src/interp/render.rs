@@ -18,10 +18,10 @@ impl Interp {
     /// diagnostic render at the very ceiling — and only nesting is refused.
     pub(super) fn render_descend(&self, depth: usize) -> Result<usize, Step> {
         if depth + LIGHT_FRAME_COST > NATIVE_DEPTH_LIMIT {
-            return Err(Step::Host(Halt::ReentryLimit {
+            return Err(Step::Host(Halt::Panic(PanicKind::ReentryLimit {
                 depth: depth + LIGHT_FRAME_COST,
                 limit: NATIVE_DEPTH_LIMIT,
-            }));
+            })));
         }
         Ok(depth + LIGHT_FRAME_COST)
     }
@@ -274,7 +274,7 @@ impl Interp {
         // A finite `step_limit` bounds dispatches AND, via the bounded-mode
         // wedge guard (`dispatch.rs:193`), live slots at
         // `BOUNDED_RUN_SLOT_CEILING` — so an allocating render trips
-        // `Halt::StepLimit` instead of panicking through `heap_exhausted()`
+        // `PanicKind::StepLimit` instead of panicking through `heap_exhausted()`
         // and rewriting the run's verdict to `HeapExhausted`. Either way the
         // halt propagates below rather than becoming a string.
         let step_limit = self.step_limit;

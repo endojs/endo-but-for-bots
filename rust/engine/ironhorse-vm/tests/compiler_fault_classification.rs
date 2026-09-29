@@ -26,7 +26,9 @@
 
 use std::rc::Rc;
 
-use ironhorse_vm::{CompiledSource, Halt, Interp, RunOutcome, SourceCompileError, SourceCompiler};
+use ironhorse_vm::{
+    CompiledSource, Halt, Interp, PanicKind, RunOutcome, SourceCompileError, SourceCompiler,
+};
 
 /// A compiler whose every compile is an engine fault.
 struct Faulting;
@@ -89,7 +91,7 @@ fn a_compiler_fault_and_a_coverage_gap_are_different_halts() {
     let gap = run_with(Rc::new(Gapped), "eval('1')");
     assert_eq!(
         fault.halt,
-        Halt::EngineInvariant("eval:compiler-invariant"),
+        Halt::Panic(PanicKind::EngineInvariant("eval:compiler-invariant")),
         "a compiler fault must name itself as one"
     );
     assert_eq!(
@@ -131,7 +133,10 @@ fn a_compiler_fault_cannot_be_caught_by_the_guest() {
         "the guest caught an engine fault and completed with {:?}",
         out.result
     );
-    assert_eq!(out.halt, Halt::EngineInvariant("eval:compiler-invariant"));
+    assert_eq!(
+        out.halt,
+        Halt::Panic(PanicKind::EngineInvariant("eval:compiler-invariant"))
+    );
     assert!(
         out.halt.is_panic(),
         "a compiler fault must sit in the settled uncatchable core"
@@ -161,7 +166,7 @@ fn the_utf16_bridge_classifies_a_fault_the_same_way() {
     let out = run_with(Rc::new(Faulting), "eval('\\u0031')");
     assert_eq!(
         out.halt,
-        Halt::EngineInvariant("eval:compiler-invariant"),
+        Halt::Panic(PanicKind::EngineInvariant("eval:compiler-invariant")),
         "the units path must not launder a fault into a coverage gap"
     );
 }

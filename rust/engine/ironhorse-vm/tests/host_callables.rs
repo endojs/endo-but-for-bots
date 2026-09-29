@@ -1,7 +1,7 @@
 //! Oracle-free embedding ABI controls through the ordinary callable dispatcher.
 use ironhorse_vm::{
     Compartment, Halt, HostCallContext, HostCallError, HostCallable, HostCallableId, HostResult,
-    Machine, Slot,
+    Machine, PanicKind, Slot,
 };
 use std::{cell::Cell, rc::Rc};
 
@@ -153,7 +153,11 @@ fn ignored_meter_stop_is_terminal_and_siblings_recover() {
         1,
         Box::new(|computrons| computrons < 1000),
     );
-    assert!(matches!(out.halt, Halt::MeterAbort), "{:?}", out.halt);
+    assert!(
+        matches!(out.halt, Halt::Panic(PanicKind::MeterAbort)),
+        "{:?}",
+        out.halt
+    );
     assert_eq!(eval(&m.new_compartment(), "42"), "42");
 }
 struct Reentry {
@@ -279,7 +283,11 @@ fn ignored_guest_allocation_failure_is_terminal() {
         .unwrap();
     let out = evaluate(&c, "host(allocate)");
     assert!(visited.get());
-    assert!(matches!(out.halt, Halt::HeapExhausted), "{:?}", out.halt);
+    assert!(
+        matches!(out.halt, Halt::Panic(PanicKind::HeapExhausted)),
+        "{:?}",
+        out.halt
+    );
     m.with_persistence(|i| i.set_slot_ceiling(u32::MAX))
         .unwrap();
     assert_eq!(eval(&m.new_compartment(), "42"), "42");
@@ -320,7 +328,7 @@ fn caught_meter_callback_panic_cannot_resume_activation() {
     assert!(visited.get());
     assert!(matches!(
         out.halt,
-        Halt::EngineInvariant("host:meter-panicked")
+        Halt::Panic(PanicKind::EngineInvariant("host:meter-panicked"))
     ));
     assert_eq!(eval(&m.new_compartment(), "42"), "42");
 }

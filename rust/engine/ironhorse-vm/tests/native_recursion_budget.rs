@@ -1,7 +1,7 @@
 //! Guest code halts the crank, never the process: every guest-reachable
 //! native recursion is bounded by the engine's one native-recursion budget
 //! ([`NATIVE_DEPTH_LIMIT`]) and degrades to a structured
-//! [`Halt::ReentryLimit`] — the abort-to-host XS raises from
+//! [`PanicKind::ReentryLimit`] — the abort-to-host XS raises from
 //! `fxCheckCStack` — instead of overflowing the host thread's stack, which is
 //! a `SIGABRT` no `catch_unwind` can contain.
 //!
@@ -29,7 +29,7 @@
 //! and the throw-site render, a diagnostic, falls back to a stub rather than
 //! halt a crank a native driver may still catch.
 
-use ironhorse_vm::{Halt, Interp, RunOutcome, NATIVE_DEPTH_LIMIT, NATIVE_STACK_BYTES};
+use ironhorse_vm::{Halt, Interp, PanicKind, RunOutcome, NATIVE_DEPTH_LIMIT, NATIVE_STACK_BYTES};
 
 fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (b, s) = ironhorse_compile::compile_atoms(src).expect("fixture compiles");
@@ -76,7 +76,7 @@ fn on_contract_stack_with_global(
 
 fn assert_stack_overflow(out: &RunOutcome, what: &str) {
     assert!(
-        matches!(out.halt, Halt::ReentryLimit { depth, limit } if depth > limit && limit == NATIVE_DEPTH_LIMIT),
+        matches!(out.halt, Halt::Panic(PanicKind::ReentryLimit { depth, limit }) if depth > limit && limit == NATIVE_DEPTH_LIMIT),
         "{what} must halt with ReentryLimit at the native-recursion budget; halt: {:?}",
         out.halt
     );
@@ -716,7 +716,7 @@ fn regexp_compilation_refusal_bypasses_guest_catch_in_constructor_and_eval() {
         machine.arm_meter(1, Box::new(|computrons| computrons < 10_000));
         let out = machine.run(&bytecode);
         assert!(
-            matches!(out.halt, Halt::MeterAbort),
+            matches!(out.halt, Halt::Panic(PanicKind::MeterAbort)),
             "{source}: {:?}",
             out.halt
         );

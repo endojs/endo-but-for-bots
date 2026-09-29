@@ -964,7 +964,7 @@ impl Interp {
                     self.discard_inactive_environment(partial);
                 }
                 if payload.is::<crate::value::HeapExhausted>() {
-                    Err(Halt::HeapExhausted)
+                    Err(Halt::Panic(PanicKind::HeapExhausted))
                 } else {
                     std::panic::resume_unwind(payload)
                 }
@@ -1026,14 +1026,14 @@ impl Interp {
 
     pub(crate) fn environment_symbol(&mut self, name: SymbolName) -> Result<u16, Halt> {
         if !self.symbol_ids.contains_key(&name) && !self.has_guest_key_capacity(1) {
-            return Err(Halt::HeapExhausted);
+            return Err(Halt::Panic(PanicKind::HeapExhausted));
         }
         Ok(self.intern_program_symbol(name))
     }
 
     pub(crate) fn relink_unlinked_realm_program(&mut self, code: &[u8]) -> Result<Vec<u8>, Halt> {
         let (site_order, accesses) = Self::template_site_accesses(code)
-            .map_err(|_| Halt::Decode(DecodeError::InvalidSymbols))?;
+            .map_err(|_| Halt::Panic(PanicKind::Decode(DecodeError::InvalidSymbols)))?;
         let mut new_names = std::collections::BTreeSet::new();
         crate::opcode::remap_ids(code, |id| {
             if id != 0 {
@@ -1044,9 +1044,9 @@ impl Interp {
             }
             Some(id)
         })
-        .ok_or(Halt::Decode(DecodeError::InvalidSymbols))?;
+        .ok_or(Halt::Panic(PanicKind::Decode(DecodeError::InvalidSymbols)))?;
         if !self.has_guest_key_capacity(new_names.len() + site_order.len()) {
-            return Err(Halt::HeapExhausted);
+            return Err(Halt::Panic(PanicKind::HeapExhausted));
         }
         let mut remapped = crate::opcode::remap_ids(code, |id| {
             if id == 0 {
@@ -1056,9 +1056,9 @@ impl Interp {
                     .ok()
             }
         })
-        .ok_or(Halt::Decode(DecodeError::InvalidSymbols))?;
+        .ok_or(Halt::Panic(PanicKind::Decode(DecodeError::InvalidSymbols)))?;
         self.apply_template_site_ids(&mut remapped, site_order, accesses)
-            .map_err(|_| Halt::Decode(DecodeError::InvalidSymbols))?;
+            .map_err(|_| Halt::Panic(PanicKind::Decode(DecodeError::InvalidSymbols)))?;
         Ok(remapped)
     }
 
@@ -1090,7 +1090,9 @@ impl Interp {
     /// Native reentry remains excluded by the outer Machine borrow.
     pub(crate) fn reap_environments(&mut self) -> Result<(), Halt> {
         if self.gc_failed {
-            return Err(Halt::EngineInvariant("gc:previous-collection-failed"));
+            return Err(Halt::Panic(PanicKind::EngineInvariant(
+                "gc:previous-collection-failed",
+            )));
         }
         self.reset_activation();
         self.identity_roots
@@ -1179,7 +1181,7 @@ impl Interp {
         })) {
             Ok(root) => root,
             Err(payload) if payload.is::<crate::value::HeapExhausted>() => {
-                return Err(Halt::HeapExhausted)
+                return Err(Halt::Panic(PanicKind::HeapExhausted))
             }
             Err(payload) => std::panic::resume_unwind(payload),
         };
@@ -1284,7 +1286,7 @@ mod tests {
         let before = machine.symbol_names.to_vec();
         assert_eq!(
             machine.relink_unlinked_realm_program(&code),
-            Err(Halt::HeapExhausted)
+            Err(Halt::Panic(PanicKind::HeapExhausted))
         );
         assert_eq!(machine.symbol_names.as_slice(), before.as_slice());
     }

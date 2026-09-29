@@ -319,7 +319,9 @@ impl JsMachine for xsnap::Machine {
 #[cfg(feature = "ironhorse-engine")]
 mod ironhorse {
     use super::{JsMachine, JsMachineError, JsMachineErrorKind};
-    use crate::ironhorse_engine::engine::{Halt, Machine, MachineError, PersistentMachine};
+    use crate::ironhorse_engine::engine::{
+        Halt, Machine, MachineError, PanicKind, PersistentMachine,
+    };
 
     /// Every `MachineError` keeps its own identity under the coarse kind.
     ///
@@ -332,12 +334,12 @@ mod ironhorse {
     ///   singles out as "distinct from every other halt because it is the one
     ///   a supervisor budgets for". Worse, the same refusal took two different
     ///   kinds depending on whether a limit was attached
-    ///   (`MachineError::MeterAbort {..}` vs `Halt(Halt::MeterAbort)`).
+    ///   (`MachineError::MeterAbort {..}` vs `Halt(Halt::Panic(PanicKind::MeterAbort))`).
     /// * `Halt::NotImplemented` and `Halt::Refused` are engine gaps and
     ///   profile refusals, not things the program did. They belong with
     ///   `MachineError::Unavailable`, which is the same statement from the
     ///   other of IronHorse's two "not built yet" channels.
-    /// * `Halt::Decode` is malformed bytecode, which is an engine-side fault
+    /// * `PanicKind::Decode` is malformed bytecode, which is an engine-side fault
     ///   rather than a guest one, so it goes to `Engine`.
     fn classify(error: MachineError) -> JsMachineError {
         let kind = match &error {
@@ -346,7 +348,7 @@ mod ironhorse {
             MachineError::Unavailable(_) => JsMachineErrorKind::Unavailable,
             MachineError::Halt(halt) => match halt {
                 Halt::NotImplemented(_) | Halt::Refused(_) => JsMachineErrorKind::Unavailable,
-                Halt::Decode(_) => JsMachineErrorKind::Engine,
+                Halt::Panic(PanicKind::Decode(_)) => JsMachineErrorKind::Engine,
                 _ => JsMachineErrorKind::Halt,
             },
             _ => JsMachineErrorKind::Engine,

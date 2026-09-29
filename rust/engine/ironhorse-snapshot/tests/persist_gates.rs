@@ -257,7 +257,10 @@ fn a_resumed_machine_rearms_without_losing_its_meter() {
         .expect("relink");
     let o2 = resumed.machine_mut().run(&b2);
     assert!(
-        matches!(o2.halt, ironhorse_vm::Halt::MeterAbort),
+        matches!(
+            o2.halt,
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::MeterAbort)
+        ),
         "the re-armed meter must fire: {:?}",
         o2.halt
     );
@@ -1045,7 +1048,10 @@ fn a_meter_aborted_crank_refuses_every_persist_verb() {
     m.arm_meter(1, Box::new(|_| false));
     let o = m.run(&b);
     assert!(
-        matches!(o.halt, ironhorse_vm::Halt::MeterAbort),
+        matches!(
+            o.halt,
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::MeterAbort)
+        ),
         "fixture: {:?}",
         o.halt
     );
@@ -1064,7 +1070,10 @@ fn a_step_limited_crank_refuses_every_persist_verb() {
     m.link_intrinsics(&n);
     let o = m.run_bounded(&b, 50);
     assert!(
-        matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)),
+        matches!(
+            o.halt,
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::StepLimit(_))
+        ),
         "fixture: {:?}",
         o.halt
     );
@@ -1083,7 +1092,10 @@ fn a_crank_that_halted_before_dispatching_refuses_every_persist_verb() {
     m.link_intrinsics(&n);
     let o = m.run_bounded(&b, 0);
     assert!(
-        matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)),
+        matches!(
+            o.halt,
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::StepLimit(_))
+        ),
         "fixture: {:?}",
         o.halt
     );
@@ -1093,7 +1105,10 @@ fn a_crank_that_halted_before_dispatching_refuses_every_persist_verb() {
     m.link_intrinsics(&n);
     let o = m.run(&[]);
     assert!(
-        matches!(o.halt, ironhorse_vm::Halt::Decode(_)),
+        matches!(
+            o.halt,
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::Decode(_))
+        ),
         "fixture: {:?}",
         o.halt
     );
@@ -1123,7 +1138,10 @@ fn a_meter_aborted_crank_refuses_checkpoint_and_writes_nothing() {
     session.machine_mut().arm_meter(1, Box::new(|_| false));
     let o = session.machine_mut().run(&b1);
     assert!(
-        matches!(o.halt, ironhorse_vm::Halt::MeterAbort),
+        matches!(
+            o.halt,
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::MeterAbort)
+        ),
         "fixture: {:?}",
         o.halt
     );
@@ -1170,7 +1188,10 @@ fn a_completed_crank_after_a_halt_restores_quiescence() {
     m.link_intrinsics(&n);
     let o = m.run_bounded(&b_halt, 0);
     assert!(
-        matches!(o.halt, ironhorse_vm::Halt::StepLimit(_)),
+        matches!(
+            o.halt,
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::StepLimit(_))
+        ),
         "fixture: {:?}",
         o.halt
     );

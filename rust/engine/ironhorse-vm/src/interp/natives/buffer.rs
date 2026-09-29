@@ -497,7 +497,9 @@ impl Interp {
                     }
                     values.push(self.mop_get(code, step_inst, value_id, step)?);
                 }
-                return Err(Step::Host(Halt::StepLimit(self.n_dispatched)));
+                return Err(Step::Host(Halt::Panic(PanicKind::StepLimit(
+                    self.n_dispatched,
+                ))));
             }
 
             let array_like = match items.value {
@@ -2089,7 +2091,7 @@ impl Interp {
         byte_length: u32,
     ) -> Result<crate::value::SlotIndex, Step> {
         if !self.chunks.can_allocate(byte_length as usize) {
-            return Err(Step::Host(Halt::HeapExhausted));
+            return Err(Step::Host(Halt::Panic(PanicKind::HeapExhausted)));
         }
         self.charge_and_check(((byte_length as u64 + 7) & !7) + 16)?;
         let mut bytes = Self::reserved_vec(byte_length as usize)?;

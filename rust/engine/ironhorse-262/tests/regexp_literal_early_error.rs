@@ -7,7 +7,7 @@
 //! program containing an invalid RegExp literal (e.g. `/(a)\2/`, a
 //! backreference to a group that does not exist) was cleanly *rejected* by
 //! `ironhorse-compile` at parse time, but the harness then ran the resulting
-//! empty bytecode, which halted with `Halt::Decode("pc 0 past end 0")` and was
+//! empty bytecode, which halted with `PanicKind::Decode("pc 0 past end 0")` and was
 //! misreported as `parse-or-decode`. Both engines reject the source with a
 //! SyntaxError; the differential must cover the case without depending on
 //! XS's platform-dependent diagnostic detail or parse-stub metering. The
@@ -56,7 +56,7 @@ fn regexp_literal_out_of_range_backreference_is_covered_rejection() {
 fn invalid_regexp_literal_does_not_decode_empty_bytecode() {
     // The defect signature: `ironhorse-compile` cleanly rejects the literal, so
     // the runner must NOT execute the empty bytecode a rejection returns (which
-    // decoded past the end). A `Halt::Throw`, never a `Halt::Decode`.
+    // decoded past the end). A `Halt::Throw`, never a `PanicKind::Decode`.
     let run = dual_run("var r = /(a)\\2/; r").expect("oracle must start");
     match &run.ironhorse_halt {
         ironhorse_vm::Halt::Throw { rendered, .. } => {

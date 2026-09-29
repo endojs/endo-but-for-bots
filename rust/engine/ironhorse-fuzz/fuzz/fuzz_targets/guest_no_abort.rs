@@ -7,7 +7,7 @@
 //! The program runs on a thread of the engine's documented stack size
 //! (`ironhorse_vm::NATIVE_STACK_BYTES`), the size the native-recursion budget
 //! is calibrated for, under a dispatch-count ceiling so a non-terminating
-//! program is a bounded `Halt::StepLimit` rather than a libFuzzer timeout.
+//! program is a bounded `PanicKind::StepLimit` rather than a libFuzzer timeout.
 //! Generators are rotated by the leading byte so the recursion families —
 //! callbacks and re-entrant built-ins, JSON, regexps, arbitrary text through
 //! the compiler — are all on the fuzzed surface.

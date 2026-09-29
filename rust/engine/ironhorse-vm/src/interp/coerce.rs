@@ -352,9 +352,9 @@ impl Interp {
     pub(super) fn binary_arith(&mut self, code: &[u8], op: ArithOp) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Step::Host(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "arithmetic:stack-underflow",
-            )));
+            ))));
         }
         let a_value = self.stack[n - 2];
         let b_value = self.stack[n - 1];
@@ -372,9 +372,9 @@ impl Interp {
                 }
                 None => {}
             }
-            return Err(Step::Host(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "bigint:missing-binary-result",
-            )));
+            ))));
         }
         self.push(apply_arith(op, &a, &b));
         Ok(())
@@ -383,7 +383,9 @@ impl Interp {
     pub(super) fn binary_bit(&mut self, code: &[u8], op: BitOp) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Step::Host(Halt::EngineInvariant("bitwise:stack-underflow")));
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "bitwise:stack-underflow",
+            ))));
         }
         let a_value = self.stack[n - 2];
         let b_value = self.stack[n - 1];
@@ -453,9 +455,9 @@ impl Interp {
     pub(super) fn relational(&mut self, code: &[u8], op: RelOp) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Step::Host(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "comparison:stack-underflow",
-            )));
+            ))));
         }
         let a_value = self.stack[n - 2];
         let b_value = self.stack[n - 1];
@@ -883,9 +885,9 @@ impl Interp {
             Kind::Symbol => {
                 Err(self.catchable_type_error_msg("cannot coerce symbol to number".into()))
             }
-            _ => Err(Step::Host(Halt::EngineInvariant(
+            _ => Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "to_numeric:non-value-kind",
-            ))),
+            )))),
         }
     }
 
@@ -920,7 +922,9 @@ impl Interp {
     pub(super) fn op_add(&mut self, code: &[u8]) -> Result<(), Step> {
         let n = self.stack.len();
         if n < 2 {
-            return Err(Step::Host(Halt::EngineInvariant("add:stack-underflow")));
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "add:stack-underflow",
+            ))));
         }
         let a = self.to_primitive_default(code, self.stack[n - 2])?;
         let b = self.to_primitive_default(code, self.stack[n - 1])?;
@@ -941,9 +945,9 @@ impl Interp {
                 self.push(r);
                 return Ok(());
             }
-            return Err(Step::Host(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "bigint:missing-binary-result",
-            )));
+            ))));
         }
         self.stack.truncate(n - 2);
         self.push(a);

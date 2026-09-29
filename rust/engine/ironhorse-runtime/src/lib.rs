@@ -16,7 +16,7 @@
 /// an uncatchable, self-naming `Halt::NotImplemented`. A *caught panic* is not
 /// that: it is the compiler breaking its own invariant, and it becomes
 /// [`ironhorse_vm::SourceCompileError::Invariant`], which the VM surfaces as
-/// `Halt::EngineInvariant("eval:compiler-invariant")`. Until this distinction
+/// `PanicKind::EngineInvariant("eval:compiler-invariant")`. Until this distinction
 /// existed both arrived as `Unsupported`, so a guest-triggerable compiler fault
 /// was indistinguishable from an honest coverage gap — in the harness's
 /// accounting and in the `NotImplemented` label the guest saw.

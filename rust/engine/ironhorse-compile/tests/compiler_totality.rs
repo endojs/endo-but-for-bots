@@ -12,7 +12,7 @@
 //! with lexical declarations is `Unsupported` (a fold this compiler has not
 //! ported, and an honest coverage gap). The classification now survives the
 //! whole way out: `SourceCompileError::Invariant` reaches the VM as an
-//! uncatchable `Halt::EngineInvariant`, and the test262 harness files a
+//! uncatchable `PanicKind::EngineInvariant`, and the test262 harness files a
 //! caught panic under `compiler-panicked:<phase>` rather than sharing
 //! `compiler-unimplemented:<phase>` with real coverage gaps, so
 //! `XstReport::compiler_panics` can be — and is — asserted at zero over the

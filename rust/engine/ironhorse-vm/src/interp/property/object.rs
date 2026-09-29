@@ -298,7 +298,9 @@ impl Interp {
                 return Ok(Err(error));
             }
         }
-        Err(Step::Host(Halt::StepLimit(self.n_dispatched)))
+        Err(Step::Host(Halt::Panic(PanicKind::StepLimit(
+            self.n_dispatched,
+        ))))
     }
 
     /// `Object.prototype.hasOwnProperty(V)` (ECMA-262 20.1.3.2). Matches XS's
@@ -580,9 +582,9 @@ impl Interp {
             }
             _ => {
                 let _ = argc;
-                Err(Step::Host(Halt::EngineInvariant(
+                Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "Object-static:unexpected-proxy",
-                )))
+                ))))
             }
         }
     }

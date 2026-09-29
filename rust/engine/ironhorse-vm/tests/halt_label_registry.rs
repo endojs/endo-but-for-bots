@@ -10,7 +10,7 @@
 //! that
 //!
 //! 1. every literal `Halt::NotImplemented("…")` label is in
-//!    `NOT_IMPLEMENTED_LABELS`, and every literal `Halt::EngineInvariant("…")`
+//!    `NOT_IMPLEMENTED_LABELS`, and every literal `PanicKind::EngineInvariant("…")`
 //!    label is in `ENGINE_INVARIANT_LABELS` — so a new label fails the build
 //!    until it is deliberately classified, and a stale registry entry is
 //!    removed rather than left as a silent exemption;
@@ -19,8 +19,8 @@
 //!    return only the literals in `NOT_IMPLEMENTED_HELPER_LABELS`, and every other
 //!    non-literal argument is one of the enumerated [`DECLINED_DYNAMIC_FORMS`];
 //! 3. the variants are only ever spelled `Halt::NotImplemented(` /
-//!    `Halt::EngineInvariant(` — never imported, aliased (a `Halt::{…}` or
-//!    `Halt::*` group anywhere), or taken as a function value — so the scan
+//!    `PanicKind::EngineInvariant(` — never imported, aliased (a `Halt::{…}`,
+//!    `Halt::*`, `PanicKind::{…}`, or `PanicKind::*` group anywhere), or taken as a function value — so the scan
 //!    sees every construction;
 //! 4. no `Halt::NotImplemented(` site sits within eight lines below a value-stack
 //!    or frame-depth scrutinee (`stack.len()`, `checked_sub(`,
@@ -75,7 +75,7 @@ const DECLINED_DYNAMIC_FORMS: &[&str] = &[
 /// stack guard cannot borrow the opcode-mnemonic family to stay unclassified.
 const MNEMONIC_SITES: usize = 1;
 
-/// The non-literal forms a `Halt::EngineInvariant(…)` may take: only the
+/// The non-literal forms a `PanicKind::EngineInvariant(…)` may take: only the
 /// pattern wildcard. An invariant guard names itself, always.
 const ENGINE_INVARIANT_DYNAMIC_FORMS: &[&str] = &["_"];
 
@@ -134,11 +134,12 @@ fn lexed_sources() -> &'static [(PathBuf, String)] {
     })
 }
 
-/// Every construction site of `Halt::<variant>(…)` across the scanned
-/// crates' sources.
-fn sites(variant: &str) -> Vec<Site> {
-    let marker = format!("Halt::{variant}(");
-    let bare = format!("Halt::{variant}");
+/// Every construction site of `<path>(…)` across the scanned crates'
+/// sources, where `path` is the variant's qualified spelling
+/// (`Halt::NotImplemented`, `PanicKind::EngineInvariant`).
+fn sites(path: &str) -> Vec<Site> {
+    let marker = format!("{path}(");
+    let bare = path.to_string();
     let mut out = Vec::new();
     for (file, src) in lexed_sources() {
         let src = src.as_str();
@@ -155,10 +156,19 @@ fn sites(variant: &str) -> Vec<Site> {
                 src[..at].matches('\n').count() + 1
             );
         }
-        for glob in ["Halt::*", "Halt::{", "Halt as ", "= Halt;"] {
+        for glob in [
+            "Halt::*",
+            "Halt::{",
+            "Halt as ",
+            "= Halt;",
+            "PanicKind::*",
+            "PanicKind::{",
+            "PanicKind as ",
+            "= PanicKind;",
+        ] {
             assert!(
                 marker_positions(&src, glob).is_empty(),
-                "{}: `{glob}` imports, aliases, or renames `Halt` or its variants (in a \
+                "{}: `{glob}` imports, aliases, or renames `Halt`/`PanicKind` or their variants (in a \
                  `use` group spanning any number of lines, or a type alias), which \
                  would hide constructions from the registry scan",
                 file.display()
@@ -278,7 +288,7 @@ fn diff(name: &str, found: &BTreeSet<String>, pinned: &BTreeSet<String>) {
 
 #[test]
 fn declined_labels_mirror_the_construction_sites() {
-    let sites = sites("NotImplemented");
+    let sites = sites("Halt::NotImplemented");
     let literals: BTreeSet<String> = sites.iter().flat_map(|s| s.literals.clone()).collect();
     diff(
         "Halt::NotImplemented",
@@ -312,7 +322,7 @@ fn declined_labels_mirror_the_construction_sites() {
 
 #[test]
 fn refused_labels_mirror_literal_construction_sites() {
-    let sites = sites("Refused");
+    let sites = sites("Halt::Refused");
     assert!(
         sites
             .iter()
@@ -354,10 +364,10 @@ fn the_regexp_crate_constructs_no_declined_labels() {
 
 #[test]
 fn engine_invariant_labels_mirror_the_construction_sites() {
-    let sites = sites("EngineInvariant");
+    let sites = sites("PanicKind::EngineInvariant");
     let literals: BTreeSet<String> = sites.iter().flat_map(|s| s.literals.clone()).collect();
     diff(
-        "Halt::EngineInvariant",
+        "PanicKind::EngineInvariant",
         &literals,
         &as_set(ENGINE_INVARIANT_LABELS),
     );
@@ -373,7 +383,7 @@ fn engine_invariant_labels_mirror_the_construction_sites() {
         .collect();
     assert!(
         unknown.is_empty(),
-        "Halt::EngineInvariant must name its guard with a literal; found {unknown:?}"
+        "PanicKind::EngineInvariant must name its guard with a literal; found {unknown:?}"
     );
 }
 
@@ -395,9 +405,9 @@ fn declined_helpers_return_only_registered_labels() {
 
 #[test]
 fn no_declined_site_is_an_underflow_guard() {
-    let offenders: Vec<_> = sites("NotImplemented")
+    let offenders: Vec<_> = sites("Halt::NotImplemented")
         .into_iter()
-        .chain(sites("Refused"))
+        .chain(sites("Halt::Refused"))
         .filter(|s| {
             UNDERFLOW_SCRUTINEES
                 .iter()
@@ -408,10 +418,10 @@ fn no_declined_site_is_an_underflow_guard() {
     assert!(
         offenders.is_empty(),
         "Halt::NotImplemented under a stack-depth or frame-depth scrutinee at {offenders:?}: \
-         an underflow guard is an engine invariant and belongs on Halt::EngineInvariant"
+         an underflow guard is an engine invariant and belongs on PanicKind::EngineInvariant"
     );
     // And the check is not vacuous: the invariant guards it would catch exist.
-    let guarded = sites("EngineInvariant")
+    let guarded = sites("PanicKind::EngineInvariant")
         .iter()
         .filter(|s| {
             UNDERFLOW_SCRUTINEES

@@ -1,5 +1,5 @@
 //! F069: public per-machine queue inspection and metered draining.
-use ironhorse_vm::{parse_symbols, Halt, Interp};
+use ironhorse_vm::{parse_symbols, Halt, Interp, PanicKind};
 
 fn run(vm: &mut Interp, source: &str) -> ironhorse_vm::RunOutcome {
     let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
@@ -37,7 +37,7 @@ fn pump_reports_meter_refusal_and_keeps_queued_followers() {
     let limit = (vm.meter_index() >> 16) + 100;
     vm.rearm_meter(1, Box::new(move |spent| spent <= limit));
     let pump = vm.run_promise_jobs();
-    assert_eq!(pump.halt, Halt::MeterAbort);
+    assert_eq!(pump.halt, Halt::Panic(PanicKind::MeterAbort));
     assert!(!pump.completed);
     assert!(!vm.is_quiescent());
     assert!(vm.has_pending_jobs());
@@ -54,7 +54,7 @@ fn native_only_jobs_cannot_drain_past_the_host_ceiling() {
     let limit = (vm.meter_index() >> 16) + 1;
     vm.rearm_meter(1, Box::new(move |spent| spent <= limit));
     let pump = vm.run_promise_jobs();
-    assert_eq!(pump.halt, Halt::MeterAbort);
+    assert_eq!(pump.halt, Halt::Panic(PanicKind::MeterAbort));
     assert_eq!(pump.dispatched_this_run, 0, "native-only drain");
     assert!(pump.meter_raw_this_run > 0);
     assert!(vm.has_pending_jobs());

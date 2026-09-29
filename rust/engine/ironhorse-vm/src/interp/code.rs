@@ -126,9 +126,9 @@ impl Interp {
         let buf = match self.segment_buffer(callee_segment) {
             Some(buf) => buf,
             None => {
-                return Err(Step::Host(Halt::EngineInvariant(
+                return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                     "function:missing-segment",
-                )))
+                ))))
             }
         };
         let return_depth = self.call_stack.len();

@@ -1,6 +1,6 @@
 //! W2: arena admission refuses before mutation and escapes guest handlers.
 use ironhorse_vm::value::{ChunkArena, Slot, SlotArena};
-use ironhorse_vm::{Halt, Interp};
+use ironhorse_vm::{Halt, Interp, PanicKind};
 
 fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (code, symbols) = ironhorse_compile::compile_atoms(source).unwrap();
@@ -40,7 +40,7 @@ fn guest_cannot_catch_slot_exhaustion() {
     vm.link_intrinsics(&names);
     vm.set_slot_ceiling(vm.slots().capacity() + 100);
     let out = vm.run_bounded(&code, 10_000);
-    assert_eq!(out.halt, Halt::HeapExhausted);
+    assert_eq!(out.halt, Halt::Panic(PanicKind::HeapExhausted));
     assert!(out.halt.is_panic());
     assert!(!out.completed);
     assert!(!vm.is_quiescent());
@@ -54,7 +54,7 @@ fn guest_cannot_catch_chunk_exhaustion() {
     vm.link_intrinsics(&names);
     vm.set_chunk_ceiling(vm.chunks().byte_size() + 4096);
     let out = vm.run_bounded(&code, 10_000);
-    assert_eq!(out.halt, Halt::HeapExhausted);
+    assert_eq!(out.halt, Halt::Panic(PanicKind::HeapExhausted));
     assert!(!out.completed);
     assert!(!vm.is_quiescent());
 }
@@ -63,7 +63,7 @@ fn guest_cannot_catch_chunk_exhaustion() {
 fn lowering_ceiling_below_existing_heap_refuses_even_allocation_free_code() {
     let mut vm = Interp::new();
     vm.set_chunk_ceiling(0);
-    assert_eq!(vm.run(&[]).halt, Halt::HeapExhausted);
+    assert_eq!(vm.run(&[]).halt, Halt::Panic(PanicKind::HeapExhausted));
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn guest_sized_temporary_buffers_are_refused_before_they_are_created() {
         vm.link_intrinsics(&names);
         vm.set_chunk_ceiling(vm.chunks().byte_size() + 4096);
         let out = vm.run(&code);
-        assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
+        assert_eq!(out.halt, Halt::Panic(PanicKind::HeapExhausted), "{source}");
     }
 }
 
@@ -148,7 +148,7 @@ fn element_scratch_is_bounded_by_bytes_instead_of_source_element_count() {
         vm.link_intrinsics(&names);
         vm.set_chunk_ceiling(vm.chunks().byte_size() + 1_000_000);
         let out = vm.run(&code);
-        assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
+        assert_eq!(out.halt, Halt::Panic(PanicKind::HeapExhausted), "{source}");
         assert!(!vm.is_quiescent());
     }
 }
@@ -164,7 +164,11 @@ fn replacement_expansion_checks_each_append() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
         vm.set_chunk_ceiling(vm.chunks().byte_size() + 100_000);
-        assert_eq!(vm.run(&code).halt, Halt::HeapExhausted, "{source}");
+        assert_eq!(
+            vm.run(&code).halt,
+            Halt::Panic(PanicKind::HeapExhausted),
+            "{source}"
+        );
     }
 }
 
@@ -204,7 +208,7 @@ fn concat_unicode_expansion_and_dense_copies_share_admission() {
         };
         vm.set_chunk_ceiling(vm.chunks().byte_size() + headroom);
         let out = vm.run(&code);
-        assert_eq!(out.halt, Halt::HeapExhausted, "{source}");
+        assert_eq!(out.halt, Halt::Panic(PanicKind::HeapExhausted), "{source}");
     }
 }
 
@@ -219,7 +223,11 @@ fn compact_json_and_argument_lists_obey_element_storage_limits() {
         let mut vm = Interp::new();
         vm.link_intrinsics(&names);
         vm.set_chunk_ceiling(vm.chunks().byte_size() + 60_000);
-        assert_eq!(vm.run(&code).halt, Halt::HeapExhausted, "{source}");
+        assert_eq!(
+            vm.run(&code).halt,
+            Halt::Panic(PanicKind::HeapExhausted),
+            "{source}"
+        );
     }
 }
 
@@ -229,5 +237,5 @@ fn bound_name_growth_obeys_the_heap_ceiling() {
     let mut vm = Interp::new();
     vm.link_intrinsics(&names);
     vm.set_chunk_ceiling(vm.chunks().byte_size() + 100_000);
-    assert_eq!(vm.run(&code).halt, Halt::HeapExhausted);
+    assert_eq!(vm.run(&code).halt, Halt::Panic(PanicKind::HeapExhausted));
 }

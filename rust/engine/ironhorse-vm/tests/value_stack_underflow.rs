@@ -1,5 +1,5 @@
 //! F162: malformed operands must not become guest-visible undefined values.
-use ironhorse_vm::{Halt, Interp, Opcode};
+use ironhorse_vm::{Halt, Interp, Opcode, PanicKind};
 
 #[test]
 fn missing_operands_refuse_instead_of_executing_with_undefined() {
@@ -55,7 +55,7 @@ fn missing_operands_refuse_instead_of_executing_with_undefined() {
             let mut vm = Interp::new();
             let out = vm.run_bounded(&code, 100);
             assert!(
-                matches!(out.halt, Halt::EngineInvariant(_)),
+                matches!(out.halt, Halt::Panic(PanicKind::EngineInvariant(_))),
                 "{opcode:?} with {supplied} operands: {:?}",
                 out.halt
             );
@@ -79,7 +79,9 @@ fn malformed_variadic_call_counts_are_engine_faults() {
         assert!(
             matches!(
                 out.halt,
-                Halt::EngineInvariant("value-stack:underflow" | "run:argument-count")
+                Halt::Panic(PanicKind::EngineInvariant(
+                    "value-stack:underflow" | "run:argument-count"
+                ))
             ),
             "{:?}",
             out.halt

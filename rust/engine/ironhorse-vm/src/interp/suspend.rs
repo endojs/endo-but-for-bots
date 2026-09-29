@@ -1,11 +1,12 @@
 //! Activation capture, reinstallation, and generator/async resume drivers.
 use super::{
     AsyncGenRunFrame, AsyncGeneratorRequest, AsyncGeneratorState, AsyncRunFrame, CallerHandlers,
-    CallerState, CatchJump, GenRunFrame, GenStatus, GeneratorState, Halt, Interp, Kind, Payload,
-    ReactionKind, ResumeStatus, SavedFrame, SavedJump, Slot, Step, ASYNC_AWAIT_FASTPATH_CREDIT,
-    ASYNC_AWAIT_GENERAL_METERING, ASYNC_GENERATOR_BRAND_REJECT_CALL_METERING,
-    ASYNC_START_REJECT_BOUNDARY_METERING, ASYNC_STEP_SETTLE_METERING, FRAME_OVERHEAD_SLOTS,
-    GENERATOR_RESULT_METERING, GENERATOR_RESUME_METERING, GENERATOR_YIELD_METERING,
+    CallerState, CatchJump, GenRunFrame, GenStatus, GeneratorState, Halt, Interp, Kind, PanicKind,
+    Payload, ReactionKind, ResumeStatus, SavedFrame, SavedJump, Slot, Step,
+    ASYNC_AWAIT_FASTPATH_CREDIT, ASYNC_AWAIT_GENERAL_METERING,
+    ASYNC_GENERATOR_BRAND_REJECT_CALL_METERING, ASYNC_START_REJECT_BOUNDARY_METERING,
+    ASYNC_STEP_SETTLE_METERING, FRAME_OVERHEAD_SLOTS, GENERATOR_RESULT_METERING,
+    GENERATOR_RESUME_METERING, GENERATOR_YIELD_METERING,
 };
 
 pub(super) enum Suspension {
@@ -27,8 +28,12 @@ impl Interp {
     ) -> Result<SavedFrame, Halt> {
         if stack_base > self.stack.len() {
             return Err(match suspension {
-                Suspension::Yield => Halt::EngineInvariant("yield:stack-underflow"),
-                Suspension::Await => Halt::EngineInvariant("await:stack-underflow"),
+                Suspension::Yield => {
+                    Halt::Panic(PanicKind::EngineInvariant("yield:stack-underflow"))
+                }
+                Suspension::Await => {
+                    Halt::Panic(PanicKind::EngineInvariant("await:stack-underflow"))
+                }
             });
         }
         let stack_slice = self.stack.split_off(stack_base);
@@ -240,7 +245,9 @@ impl Interp {
             .generators
             .get_mut(&gen)
             .and_then(|g| g.frame.take())
-            .ok_or(Step::Host(Halt::EngineInvariant("generator:no-frame")))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "generator:no-frame",
+            ))))?;
         // Admit the complete restored activation before changing the driver.
         // A resumed expression also receives the sent value on its stack.
         let extra = saved.stack_slice.len()
@@ -253,7 +260,9 @@ impl Interp {
                 .get_mut(&gen)
                 .expect("instance exists")
                 .frame = Some(saved);
-            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
+            return Err(Step::Host(Halt::Panic(PanicKind::StackOverflow(
+                self.stack_slots_in_use(),
+            ))));
         }
         // The per-resume native-frame residual (`fx_Generator_prototype_aux` +
         // `fxRunID` re-entry) over the `RUN` trampoline already metered.
@@ -357,9 +366,9 @@ impl Interp {
                             g.state = GeneratorState::Completed;
                             g.frame = None;
                         }
-                        return Err(Step::Host(Halt::EngineInvariant(
+                        return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                             "generator:non-boundary-return",
-                        )));
+                        ))));
                     }
                     let ret = machine.pop_checked()?;
                     machine.stack.truncate(stack_base);
@@ -400,9 +409,9 @@ impl Interp {
         status: GenStatus,
     ) -> Result<Slot, Step> {
         if !self.async_generators.contains_key(&gen) {
-            return Err(Step::Host(Halt::EngineInvariant(
+            return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "async-generator:not-an-async-generator",
-            )));
+            ))));
         }
         let (promise, resolve, reject) = self.new_promise_capability();
         self.async_generators
@@ -551,9 +560,9 @@ impl Interp {
             .async_generators
             .get_mut(&gen)
             .and_then(|g| g.active.take())
-            .ok_or(Step::Host(Halt::EngineInvariant(
+            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "async-generator:no-active-request",
-            )))?;
+            ))))?;
         self.settle_via_function(
             code,
             if reject {
@@ -577,9 +586,9 @@ impl Interp {
             .async_generators
             .get_mut(&gen)
             .and_then(|g| g.frame.take())
-            .ok_or(Step::Host(Halt::EngineInvariant(
+            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                 "async-generator:no-frame",
-            )))?;
+            ))))?;
         // Admit the complete restored activation before changing the driver.
         // A resumed expression also receives the sent value on its stack.
         let extra = saved.stack_slice.len()
@@ -592,7 +601,9 @@ impl Interp {
                 .get_mut(&gen)
                 .expect("instance exists")
                 .frame = Some(saved);
-            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
+            return Err(Step::Host(Halt::Panic(PanicKind::StackOverflow(
+                self.stack_slots_in_use(),
+            ))));
         }
         if !is_start {
             self.meter.tick_raw(GENERATOR_RESUME_METERING);
@@ -695,9 +706,9 @@ impl Interp {
                         let data = machine.async_generators.get_mut(&gen).unwrap();
                         data.state = AsyncGeneratorState::Completed;
                         data.frame = None;
-                        return Err(Step::Host(Halt::EngineInvariant(
+                        return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                             "async-generator:non-boundary-return",
-                        )));
+                        ))));
                     }
                     let value = machine.pop_checked()?;
                     machine.stack.truncate(stack_base);
@@ -787,7 +798,9 @@ impl Interp {
             .async_instances
             .get_mut(&inst)
             .and_then(|a| a.frame.take())
-            .ok_or(Step::Host(Halt::EngineInvariant("async:no-frame")))?;
+            .ok_or(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "async:no-frame",
+            ))))?;
         // Admit the complete restored activation before changing the driver.
         // A resumed expression also receives the sent value on its stack.
         let extra = saved.stack_slice.len()
@@ -800,7 +813,9 @@ impl Interp {
                 .get_mut(&inst)
                 .expect("instance exists")
                 .frame = Some(saved);
-            return Err(Step::Host(Halt::StackOverflow(self.stack_slots_in_use())));
+            return Err(Step::Host(Halt::Panic(PanicKind::StackOverflow(
+                self.stack_slots_in_use(),
+            ))));
         }
         if !is_start {
             // The per-resume native-frame residual (`fxResolveAwait`/
@@ -910,9 +925,9 @@ impl Interp {
                             a.done = true;
                             a.frame = None;
                         }
-                        return Err(Step::Host(Halt::EngineInvariant(
+                        return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
                             "async:non-boundary-return",
-                        )));
+                        ))));
                     }
                     let ret = machine.pop_checked()?;
                     machine.stack.truncate(stack_base);
@@ -1051,7 +1066,7 @@ mod tests {
             let result = vm.suspend_activation(vm.stack.len() + 1, 0, 0, 12, kind);
             assert_eq!(
                 result.err().map(|halt| format!("{halt:?}")),
-                Some(format!("EngineInvariant({label:?})")),
+                Some(format!("Panic(EngineInvariant({label:?}))")),
             );
             assert_eq!(vm.locals.len(), 1);
             assert!(matches!(vm.locals[0].value, Payload::Integer(42)));

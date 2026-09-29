@@ -219,7 +219,9 @@ impl Interp {
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
                 self.construct_value(code, arg0, &args, new_target)
             }
-            _ => Err(Step::Host(Halt::EngineInvariant("Reflect:unexpected"))),
+            _ => Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                "Reflect:unexpected",
+            )))),
         }
     }
 }

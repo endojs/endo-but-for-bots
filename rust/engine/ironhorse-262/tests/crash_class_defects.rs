@@ -11,6 +11,7 @@
 
 use ironhorse_262::{dual_run, Agreement};
 use ironhorse_vm::Halt;
+use ironhorse_vm::PanicKind;
 
 /// Both engines complete with the same completion value.
 fn agrees(source: &str) {
@@ -136,7 +137,7 @@ var o={};Object.defineProperty(o,'constructor',d);o.constructor=1;'done'";
         "both engines must abort: {run:?}",
     );
     assert!(
-        matches!(run.ironhorse_halt, Halt::ReentryLimit { depth, limit } if depth > limit),
+        matches!(run.ironhorse_halt, Halt::Panic(PanicKind::ReentryLimit { depth, limit }) if depth > limit),
         "ironhorse must report the native reentry limit, got {:?}",
         run.ironhorse_halt,
     );

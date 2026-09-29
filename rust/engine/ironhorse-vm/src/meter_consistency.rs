@@ -1,5 +1,5 @@
 // W4: independent runtime-cost laws, separate from oracle telemetry.
-use super::{Halt, Interp, Opcode};
+use super::{Halt, Interp, Opcode, PanicKind};
 
 fn run(source: &str) -> (String, u64) {
     let (code, names) = ironhorse_compile::compile_atoms(source).unwrap();
@@ -63,7 +63,7 @@ fn straight_line_code_consults_an_armed_host_before_end() {
     let mut machine = Interp::new();
     machine.arm_meter(1, Box::new(|_| false));
     let outcome = machine.run(&code);
-    assert_eq!(outcome.halt, Halt::MeterAbort);
+    assert_eq!(outcome.halt, Halt::Panic(PanicKind::MeterAbort));
     assert_eq!(outcome.dispatched, 4096);
 
     let mut unarmed = Interp::new();
@@ -122,7 +122,9 @@ fn proxy_own_keys_duplicate_scan_checks_before_quadratic_work_finishes() {
         machine.link_intrinsics(&crate::parse_symbols(&names));
         assert!(machine.run(&code).completed);
         let id = *machine.symbol_ids.get("p").unwrap();
-        let prop = machine.find_property(machine.environment.global_obj, id).unwrap();
+        let prop = machine
+            .find_property(machine.environment.global_obj, id)
+            .unwrap();
         let Payload::Reference(proxy) = machine.slots.get(prop).value else {
             panic!("proxy")
         };
@@ -136,6 +138,6 @@ fn proxy_own_keys_duplicate_scan_checks_before_quadratic_work_finishes() {
     bounded.arm_meter(1, Box::new(move |spent| spent < full));
     assert!(matches!(
         bounded.proxy_own_keys(&code, proxy),
-        Err(Step::Host(Halt::MeterAbort))
+        Err(Step::Host(Halt::Panic(PanicKind::MeterAbort)))
     ));
 }

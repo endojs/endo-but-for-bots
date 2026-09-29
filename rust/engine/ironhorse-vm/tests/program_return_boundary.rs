@@ -2,7 +2,7 @@
 //! as a completed, persistable crank, whether entered inline or by a native.
 
 use ironhorse_vm::opcode::{instruction_len, Opcode};
-use ironhorse_vm::{parse_symbols, Halt, Interp, RunOutcome};
+use ironhorse_vm::{parse_symbols, Halt, Interp, PanicKind, RunOutcome};
 
 #[test]
 fn program_return_refuses_live_function_frames() {
@@ -31,7 +31,7 @@ fn program_return_refuses_live_function_frames() {
         let outcome = machine.run_bounded(&code, 10_000);
         assert_eq!(
             outcome.halt,
-            Halt::EngineInvariant("return:non-program-frame"),
+            Halt::Panic(PanicKind::EngineInvariant("return:non-program-frame")),
             "{source}"
         );
         assert!(!outcome.completed, "{source}");
@@ -84,7 +84,7 @@ fn a_new_crank_discards_abandoned_operands_and_handlers() {
     let mut machine = Interp::new();
     machine.link_intrinsics(&parse_symbols(&symbols));
     let failed = machine.run_bounded(&code, 1_000);
-    assert!(matches!(failed.halt, Halt::StepLimit(_)));
+    assert!(matches!(failed.halt, Halt::Panic(PanicKind::StepLimit(_))));
     assert!(!machine.is_quiescent());
 
     let recovered = next_crank(&mut machine, "caught+','+(this===globalThis)");

@@ -12,7 +12,7 @@ use guest_compile::compile;
 
 use ironhorse_snapshot::machine::{from_snapshot_bytes, MachineSnapshot};
 use ironhorse_snapshot::Signature;
-use ironhorse_vm::{Halt, Interp};
+use ironhorse_vm::{Halt, Interp, PanicKind};
 
 fn sig() -> Signature {
     Signature::new("ironhorse-worker-v1")
@@ -46,7 +46,7 @@ fn a_restored_armed_machine_without_a_host_fails_closed() {
     let b = restored.relink_crank(&b, &n).expect("relink");
     let out = restored.run(&b);
     assert!(
-        matches!(out.halt, Halt::MeterAbort),
+        matches!(out.halt, Halt::Panic(PanicKind::MeterAbort)),
         "armed without a host must abort at the first check point, not \
          run unbounded: {:?}",
         out.halt
@@ -86,7 +86,10 @@ fn attach_meter_host_rearms_an_unarmed_or_differently_armed_snapshot() {
     assert_eq!(restored.meter_index(), spent, "the index is preserved");
     let (b, n) = compile(LOOP);
     let b = restored.relink_crank(&b, &n).expect("relink");
-    assert!(matches!(restored.run(&b).halt, Halt::MeterAbort));
+    assert!(matches!(
+        restored.run(&b).halt,
+        Halt::Panic(PanicKind::MeterAbort)
+    ));
 
     // Written under another interval: re-armed under the configured one.
     let bytes = armed_snapshot(1_000);

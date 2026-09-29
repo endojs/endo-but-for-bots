@@ -89,6 +89,9 @@ fn malformed_symbol_atoms_decline_without_panicking() {
     ] {
         let result = run_program_with_symbols(&[], atom);
         assert!(!result.completed);
-        assert!(matches!(result.halt, ironhorse_vm::Halt::Decode(_)));
+        assert!(matches!(
+            result.halt,
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::Decode(_))
+        ));
     }
 }

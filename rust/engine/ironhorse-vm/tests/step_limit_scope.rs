@@ -15,7 +15,10 @@ fn a_bounded_run_does_not_latch_its_ceiling_onto_later_runs() {
     m.link_intrinsics(&n);
     let bounded = m.run_bounded(&b, 10);
     assert!(
-        matches!(bounded.halt, ironhorse_vm::Halt::StepLimit(_)),
+        matches!(
+            bounded.halt,
+            ironhorse_vm::Halt::Panic(ironhorse_vm::PanicKind::StepLimit(_))
+        ),
         "the bounded run hits its ceiling: {:?}",
         bounded.halt
     );

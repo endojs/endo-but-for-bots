@@ -23,7 +23,11 @@ impl Interp {
                     Payload::String(off) => self
                         .str_scalar_text(off)
                         .ok_or_else(|| self.catchable_syntax_error())?,
-                    _ => return Err(Step::Host(Halt::EngineInvariant("to-bigint:string"))),
+                    _ => {
+                        return Err(Step::Host(Halt::Panic(PanicKind::EngineInvariant(
+                            "to-bigint:string",
+                        ))))
+                    }
                 };
                 // `StringToBigInt`: an integer body (decimal or `0x`/`0o`/`0b`,
                 // empty ⇒ `0n`) reduced to the low 64 bits; a non-integer body

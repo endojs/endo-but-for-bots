@@ -29,7 +29,7 @@
 //! differential and line-splitting primitives the converter and the runner
 //! share.
 
-use ironhorse_vm::{Halt, RunOutcome};
+use ironhorse_vm::{Halt, PanicKind, RunOutcome};
 
 pub use ironhorse_runtime::IronhorseSourceCompiler;
 
@@ -445,7 +445,7 @@ pub fn dual_run_with(source: &str, compiler: Compiler) -> Option<DualRun> {
     // throws that SyntaxError before any evaluation, exactly as XS represents a
     // lexer-owned rejection with a small bytecode stub that throws. Running the
     // *empty* bytecode `compile_for` returns for a rejection would instead decode
-    // past the end and surface a spurious `Halt::Decode` ("parse-or-decode"),
+    // past the end and surface a spurious `PanicKind::Decode` ("parse-or-decode"),
     // masking a correct, oracle-agreeing rejection (e.g. a RegExp literal whose
     // backreference is out of range). Present the rejection as the SyntaxError
     // throw it is — the same bare `SyntaxError` the runtime `new RegExp(bad)`
@@ -542,7 +542,9 @@ pub fn dual_run_cranks(sources: &[&str]) -> Option<Vec<DualRun>> {
                         computrons: 0,
                         dispatched: 0,
                         meter_raw: 0,
-                        halt: ironhorse_vm::Halt::Decode(ironhorse_vm::DecodeError::Relink(e)),
+                        halt: ironhorse_vm::Halt::Panic(PanicKind::Decode(
+                            ironhorse_vm::DecodeError::Relink(e),
+                        )),
                     },
                 },
             }
@@ -640,7 +642,7 @@ fn run_compiled_script(
                         .host_coerced()
                 };
             }
-            Err(error) => Halt::Decode(ironhorse_vm::DecodeError::Relink(error)),
+            Err(error) => Halt::Panic(PanicKind::Decode(ironhorse_vm::DecodeError::Relink(error))),
         }
     };
     RunOutcome {
@@ -699,7 +701,9 @@ pub(crate) fn ironhorse_only_scripts(setup: &str, source: &str) -> Halt {
             )
             .halt
         }
-        _ => Halt::Decode(ironhorse_vm::DecodeError::MissingBytecode),
+        _ => Halt::Panic(PanicKind::Decode(
+            ironhorse_vm::DecodeError::MissingBytecode,
+        )),
     }
 }
 
@@ -838,7 +842,11 @@ pub fn ironhorse_only_run(source: &str) -> Halt {
         // A structured reject or a coder panic: ironhorse produced no bytecode,
         // a terminal (non-hanging) outcome — ironhorse did not fail to
         // terminate, so the hang, if any, was not on the ironhorse side.
-        _ => return Halt::Decode(ironhorse_vm::DecodeError::MissingBytecode),
+        _ => {
+            return Halt::Panic(PanicKind::Decode(
+                ironhorse_vm::DecodeError::MissingBytecode,
+            ))
+        }
     };
     let names = ironhorse_vm::parse_symbols(&symbols);
     interp_with_source_bridge(&names)
@@ -976,10 +984,10 @@ fn boot_run_verdict(r: &DualRun) -> BootVerdict {
     // — never a gap the ledger can wait on, and never excused by the pin's
     // own unrelated abort.
     match &r.ironhorse_halt {
-        Halt::Panic(ironhorse_vm::PanicKind::EngineFault { message, .. }) => {
+        Halt::Panic(PanicKind::EngineFault { message, .. }) => {
             return BootVerdict::Divergent(format!("engine-fault:{message}"));
         }
-        Halt::EngineInvariant(label) => {
+        Halt::Panic(PanicKind::EngineInvariant(label)) => {
             return BootVerdict::Divergent(format!(
                 "ironhorse violated an engine invariant: {label} (pin completed={})",
                 xst::oracle_completed(r.agreement)
@@ -1165,14 +1173,14 @@ mod tests {
         // premise (ironhorse terminates alone) is false. No oracle involved.
         let halt = ironhorse_only_run("for (const i = 0; i < 1; i++) {}");
         assert!(
-            !matches!(halt, Halt::StepLimit(_)),
+            !matches!(halt, Halt::Panic(PanicKind::StepLimit(_))),
             "ironhorse should terminate naturally, not by a step ceiling: {halt:?}"
         );
         // A compiler reject/panic is also terminal (empty bytecode → decode).
         let rejected = ironhorse_only_run("for (const {");
         assert!(matches!(
             rejected,
-            Halt::Decode(_) | Halt::Return | Halt::Throw { .. }
+            Halt::Panic(PanicKind::Decode(_)) | Halt::Return | Halt::Throw { .. }
         ));
     }
 
@@ -1426,7 +1434,7 @@ mod tests {
         ] {
             let run = abort_run(
                 agreement,
-                Halt::Panic(ironhorse_vm::PanicKind::EngineFault {
+                Halt::Panic(PanicKind::EngineFault {
                     message: "synthetic defect".into(),
                     location: None,
                 }),
@@ -1478,7 +1486,9 @@ mod tests {
         // agreement.
         let decode = abort_run(
             Agreement::BothAbort,
-            Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 }),
+            Halt::Panic(PanicKind::Decode(
+                ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 },
+            )),
         );
         assert!(
             !decode.is_bit_exact(),
@@ -1522,10 +1532,9 @@ mod tests {
             abort_run(Agreement::BothAbort, Halt::NotImplemented("XS_CODE_CALL")),
             abort_run(
                 Agreement::BothAbort,
-                Halt::Decode(ironhorse_vm::DecodeError::ProgramCounterOutOfBounds {
-                    pc: 0,
-                    len: 0,
-                }),
+                Halt::Panic(PanicKind::Decode(
+                    ironhorse_vm::DecodeError::ProgramCounterOutOfBounds { pc: 0, len: 0 },
+                )),
             ),
         ];
         let mut s = Summary::default();
@@ -1625,7 +1634,7 @@ mod tests {
         let (halt, completed, consulted) = metered_run("(function(){return 1})()", 1, 1);
         assert_eq!(
             halt,
-            ironhorse_vm::Halt::MeterAbort,
+            ironhorse_vm::Halt::Panic(PanicKind::MeterAbort),
             "must abort at the call-entry check"
         );
         assert!(
@@ -1649,7 +1658,7 @@ mod tests {
         let (halt, completed, _consulted) = metered_run(src, 1, 3);
         assert_eq!(
             halt,
-            ironhorse_vm::Halt::MeterAbort,
+            ironhorse_vm::Halt::Panic(PanicKind::MeterAbort),
             "the backward branch must abort"
         );
         assert!(!completed);
