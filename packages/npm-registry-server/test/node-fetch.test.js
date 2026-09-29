@@ -107,10 +107,14 @@ test('makeNodeFetch surfaces a timeout after the headers as the signal reason', 
     response.writeHead(200, { 'content-length': '100' });
     response.write('x');
   });
+  // Fire the timeout only once the headers are in hand, so a slow runner
+  // cannot turn this into a request-phase timeout.
+  const controller = new AbortController();
   const response = await makeNodeFetch()(`${origin}/pkg`, {
-    signal: AbortSignal.timeout(200),
+    signal: controller.signal,
   });
   t.true(response.ok);
+  controller.abort(new DOMException('The operation timed out', 'TimeoutError'));
   const error = await t.throwsAsync(async () => {
     /** @type {Uint8Array[]} */
     const chunks = [];
