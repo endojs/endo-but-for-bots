@@ -6,6 +6,9 @@
   },
   "references": [
     {
+      "path": "../agent-tools/tsconfig.composite.json"
+    },
+    {
       "path": "../errors/tsconfig.composite.json"
     },
     {
