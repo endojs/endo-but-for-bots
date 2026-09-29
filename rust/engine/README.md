@@ -168,10 +168,10 @@ The invariant, not the sites, is what landed:
   what the runtime ceilings above, the value-stack geometry, and the storage
   and matcher caps that return `Halt::HeapExhausted` do. The default
   `ResourceLimitPolicy::Panic` stops the crank uncatchably, as XS's `fxAbort`
-  does. `ResourceLimitPolicy::Throw` raises a guest `RangeError`
-  (`resource limit: ...`) at the dispatch loop that observes the halt, so the
-  guest can catch it and the harness classifies the case as a pass or a
-  failure (`endot-ih --resource-limits throw`, the hardened262
+  does. `ResourceLimitPolicy::Throw` raises a guest `RangeError` (for example
+  `resource limit: heap exhausted`) at the dispatch loop that observes the
+  halt, so the guest can catch it and the harness classifies the case as a
+  pass or a failure (`endot-ih --resource-limits throw`, the hardened262
   `ironhorseThrowOnLimit` agent). The meter, profile refusals, engine
   invariants, and an arena refusal that unwinds the Rust stack stop the crank
   under both policies.
