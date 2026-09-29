@@ -1077,9 +1077,9 @@ const makePatternKit = () => {
         reject,
       ),
 
-    getRankCover: (_matchPayload, _encodePassable) =>
+    getRankCover: (_matchPayload, encodePassable) =>
       // TODO Could be more precise
-      getPassStyleCover('number'),
+      getPassStyleCover('number', encodePassable),
   });
 
   /** @type {MatchHelper<[Limits?]>} */
