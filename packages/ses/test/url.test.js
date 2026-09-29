@@ -18,6 +18,20 @@ test('URL is present on the start compartment when the host provides it', t => {
   t.true('revokeObjectURL' in globalThis.URL);
 });
 
+test('the start compartment can invoke the retained blob methods', t => {
+  if (!hasURL || typeof globalThis.Blob !== 'function') {
+    t.pass('host does not provide URL and Blob');
+    return;
+  }
+  // Presence alone does not show that `%InitialURL%` is the working host
+  // constructor under the default `urlBlobTaming: 'retain'`: actually mint
+  // and revoke an object URL through it.
+  const url = URL.createObjectURL(new Blob(['hello']));
+  t.is(typeof url, 'string');
+  t.true(url.startsWith('blob:'));
+  URL.revokeObjectURL(url);
+});
+
 test('URLSearchParams is present on the start compartment when the host provides it', t => {
   if (!hasURLSearchParams) {
     t.pass('host does not provide URLSearchParams; nothing to permit');
@@ -244,4 +258,57 @@ test('URLSearchParams built from an iterable stores only string copies', t => {
   t.is(params.get('b'), '2');
   t.is(typeof params.get('a'), 'string');
   t.is(typeof params.get('b'), 'string');
+});
+
+test('URL can be subclassed in a shared compartment', t => {
+  if (!hasURL) {
+    t.pass('host does not provide URL');
+    return;
+  }
+  // `%SharedURL%` delegates construction with `new.target`, so a subclass
+  // defined inside a compartment gets real URL internal slots and keeps its
+  // own prototype chain.
+  const c = new Compartment();
+  const url = c.evaluate(`
+    class MyURL extends URL {
+      get label() {
+        return \`<\${this.href}>\`;
+      }
+    }
+    new MyURL('http://example.com/a?b=1');
+  `);
+  t.is(url.href, 'http://example.com/a?b=1');
+  t.is(url.searchParams.get('b'), '1');
+  t.is(url.label, '<http://example.com/a?b=1>');
+  t.true(url instanceof URL);
+  t.true(c.evaluate('u => u instanceof URL')(url));
+  t.is(Object.getPrototypeOf(url.constructor), c.globalThis.URL);
+  t.not(url.constructor, c.globalThis.URL);
+});
+
+test('a shared-compartment URL subclass does not regain the blob methods', t => {
+  if (!hasURL) {
+    t.pass('host does not provide URL');
+    return;
+  }
+  // A subclass inherits its statics from `%SharedURL%`, which never carries
+  // the blob-registry authority.
+  const c = new Compartment();
+  const MyURL = c.evaluate('(class MyURL extends URL {})');
+  t.false('createObjectURL' in MyURL);
+  t.false('revokeObjectURL' in MyURL);
+});
+
+test('URL can be subclassed in the start compartment', t => {
+  if (!hasURL) {
+    t.pass('host does not provide URL');
+    return;
+  }
+  class MyURL extends URL {}
+  const url = new MyURL('http://example.com/');
+  t.is(url.href, 'http://example.com/');
+  t.true(url instanceof MyURL);
+  t.true(url instanceof URL);
+  const c = new Compartment();
+  t.true(c.evaluate('u => u instanceof URL')(url));
 });

@@ -66,3 +66,32 @@ test('round-trip URL parsing still works under remove', t => {
   }
   t.is(new URL('http://example.com/a?b=1').searchParams.get('b'), '1');
 });
+
+test('the start compartment cannot invoke the blob methods under remove', t => {
+  if (!hasURL) {
+    t.pass('host does not provide URL');
+    return;
+  }
+  t.is(/** @type {any} */ (URL).createObjectURL, undefined);
+  t.is(/** @type {any} */ (URL).revokeObjectURL, undefined);
+  if (typeof globalThis.Blob === 'function') {
+    t.throws(() => /** @type {any} */ (URL).createObjectURL(new Blob(['x'])), {
+      instanceOf: TypeError,
+    });
+  }
+});
+
+test('URL can be subclassed in the start compartment under remove', t => {
+  if (!hasURL) {
+    t.pass('host does not provide URL');
+    return;
+  }
+  // Under `remove` the start compartment's `URL` is `%SharedURL%`, so this
+  // exercises its `new.target` delegation from the start compartment.
+  class MyURL extends URL {}
+  const url = new MyURL('http://example.com/');
+  t.is(url.href, 'http://example.com/');
+  t.true(url instanceof MyURL);
+  t.true(url instanceof URL);
+  t.false('createObjectURL' in MyURL);
+});
