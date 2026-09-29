@@ -40,18 +40,21 @@
 //     9P mounter. An empty value is unset; a present program is checked with
 //     the mounter's own program check, and a present NINEP_SUDO must be
 //     exactly `1`
-//   ENDO_CLAUDE_DIAGNOSTICS=1 — also log the broker's per-request admission
-//     events. Off by default; applied only when a broker service is
-//     minted. Failures are logged regardless (the slice only ever sees a
-//     bare 502, so the broker worker's log is where a cause is found)
+//   ENDO_CLAUDE_MAX_SESSIONS, ENDO_CLAUDE_PUBLIC_INTERNET=1,
+//     ENDO_CLAUDE_DIAGNOSTICS=1 — the broker's operator settings: concurrent
+//     session capacity (1–256; unset keeps the broker's), public egress, and
+//     a log line per admission. Applied to a retained broker at every start,
+//     no retirement; turning public egress off stops live public listeners.
+//     Failures are logged regardless (the slice only ever sees a bare 502,
+//     so the broker worker's log is where a cause is found)
 //   ENDO_CLAUDE_BROKER_LISTENER_IMAGE — digest-pinned listener image;
 //     required unless a broker service is retained
 //   ENDO_CLAUDE_BROKER_DIR, ENDO_CLAUDE_BROKER_OWNER_ID,
-//     ENDO_CLAUDE_PUBLIC_INTERNET, ENDO_CLAUDE_ANTHROPIC_BETA — the broker's
-//     directory, owner label (derived from the host identity by default),
-//     public egress flag, and the `anthropic-beta` capabilities it sends
-//     (the OAuth default for subscription tokens when unset); applied only
-//     when a broker service is minted, ignored when one is retained
+//     ENDO_CLAUDE_ANTHROPIC_BETA — the broker's directory, owner label
+//     (derived from the host identity by default), and the `anthropic-beta`
+//     capabilities it sends (the OAuth default for subscription tokens when
+//     unset); applied only when a broker service is minted, ignored when one
+//     is retained
 //
 // Idempotent: the credential, the broker, the storage owner, and the session
 // base directories are reused; the backend caplet — the one formula whose
@@ -70,11 +73,14 @@ import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import {
   assertRetainedBrokerImages,
+  configureBroker,
+  forgetBrokerSettings,
   mintWithPowersPath,
   providePrivateDirectory,
   publishAccountOracle,
   publishBrokerSubscription,
   readAccountAuthority,
+  readBrokerSettings,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedCredentials } from '@endo/hosted-agent/managed-credentials.js';
 import { BROKER_OWNER_PATTERN } from '@endo/hosted-agent/provider-broker-service.js';
@@ -162,13 +168,14 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   const listenerImageRef = env.ENDO_CLAUDE_BROKER_LISTENER_IMAGE || '';
   const brokerDir =
     env.ENDO_CLAUDE_BROKER_DIR || path.join(os.homedir(), 'claude-broker');
-  const publicInternet = env.ENDO_CLAUDE_PUBLIC_INTERNET === '1';
-  // The host-side admission trail: a line per request (admitted, completed,
-  // revoked) in the broker worker's log. Off by default, because it is
-  // volume, not because it is sensitive. Failures are not behind this
-  // switch: an upstream or listener failure is always logged there, since
-  // the slice is only ever told 502.
-  const diagnostics = env.ENDO_CLAUDE_DIAGNOSTICS === '1';
+  // Session capacity, public egress and the admission trail: the broker's
+  // operator settings, applied at every start (see configureBroker below).
+  // The admission trail is a line per request (admitted, completed, revoked)
+  // in the broker worker's log. Off by default, because it is volume, not
+  // because it is sensitive. Failures are not behind this switch: an
+  // upstream or listener failure is always logged there, since the slice is
+  // only ever told 502.
+  const brokerSettings = readBrokerSettings(env, 'ENDO_CLAUDE');
   const anthropicBeta = env.ENDO_CLAUDE_ANTHROPIC_BETA || '';
   // The rootless mount settings a session's own 9P mounter needs, recorded
   // into every plan through the backend. A hosted daemon forwards only
@@ -369,6 +376,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   } else {
     const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs, exec);
     await providePrivateDirectory('ENDO_CLAUDE_BROKER_DIR', brokerDir);
+    await forgetBrokerSettings(brokerDir);
     const brokerConfig = JSON.stringify({
       ownerId: brokerOwnerId,
       directory: brokerDir,
@@ -379,8 +387,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       accountAuthority,
       ...(pool ? { pool: true } : {}),
       ...(anthropicBeta ? { anthropicBeta } : {}),
-      ...(publicInternet ? { publicInternet: true } : {}),
-      ...(diagnostics ? { diagnostics: true } : {}),
+      ...brokerSettings,
     });
     readClaudeBrokerConfig({ CLAUDE_BROKER_CONFIG: brokerConfig });
     await mintWithPowersPath(hostAgent, {
@@ -394,6 +401,12 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     });
     console.log(`Minted ${SANDBOX_DIR}/broker-service`);
   }
+  await configureBroker(
+    hostAgent,
+    [SANDBOX_DIR, 'broker-service'],
+    brokerSettings,
+    'Claude',
+  );
 
   // Session storage owner — the `storage` role the daemon owner records with
   // each session and invokes inside record removal. Its powers is the state

@@ -10,18 +10,23 @@
  * Optional workspace/private roots, Secrets name/account, session concurrency,
  * public-internet/diagnostics switches and rootless NINEP settings remain.
  * No volume registry, storage lease, project-id range or quota helper.
- * Retained service changes require explicit retirement, never live replacement.
+ * Retained service identity changes require explicit retirement, never live
+ * replacement. The broker's operator settings (session capacity, public
+ * internet, diagnostics) are applied to it at every start instead.
  * @module
  */
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import {
+  configureBroker,
+  forgetBrokerSettings,
   mintWithPowersPath,
   providePrivateDirectory,
   publishAccountOracle,
   publishBrokerSubscription,
   republishDelegatedRunners,
   readAccountAuthority,
+  readBrokerSettings,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedRenewableCredentials } from '@endo/hosted-agent/managed-renewable-credentials.js';
 import { normalizeSubscriptionSet } from '@endo/hosted-agent/subscription-pool.js';
@@ -56,6 +61,20 @@ const current = relative =>
   );
 const brokerSpecifier = current('./src/codex-broker-service-agent.js');
 const storageSpecifier = current('./src/codex-session-storage-module.js');
+
+// A retained formula's environment without the broker's operator settings,
+// which `configureBroker` applies at every start instead of a retirement.
+/** @param {Record<string, string>} formulaEnv */
+const retainedIdentity = formulaEnv => {
+  if (formulaEnv.CODEX_BROKER_CONFIG === undefined) return formulaEnv;
+  const {
+    maxSessions: _maxSessions,
+    publicInternet: _publicInternet,
+    diagnostics: _diagnostics,
+    ...identity
+  } = JSON.parse(formulaEnv.CODEX_BROKER_CONFIG);
+  return { ...formulaEnv, CODEX_BROKER_CONFIG: identity };
+};
 
 /**
  * @param {Record<string,string | undefined>} env
@@ -392,6 +411,7 @@ export const main = async (host, { exec } = {}) => {
       env.ENDO_CODEX_ACCOUNT_REF,
     );
   }
+  const brokerSettings = readBrokerSettings(env, 'ENDO_CODEX');
   const brokerEnv = harden({
     CODEX_BROKER_CONFIG: JSON.stringify({
       ownerId,
@@ -401,11 +421,9 @@ export const main = async (host, { exec } = {}) => {
       listenerImageRef,
       accountAuthority,
       ...(accountRef === undefined ? {} : { accountRef }),
-      ...(env.ENDO_CODEX_MAX_SESSIONS
-        ? { maxSessions: Number(env.ENDO_CODEX_MAX_SESSIONS) }
-        : {}),
-      publicInternet: env.ENDO_CODEX_PUBLIC_INTERNET === '1',
-      diagnostics: env.ENDO_CODEX_DIAGNOSTICS === '1',
+      // Where a new broker's settings start; `configureBroker` below keeps
+      // them current at every start, so they are not compared.
+      ...brokerSettings,
       ...(pooled ? { pool: true } : {}),
     }),
   });
@@ -438,11 +456,14 @@ export const main = async (host, { exec } = {}) => {
       (formula.properties?.powers?.kind === 'reference' &&
         formula.properties.powers.identifier === powersId) ||
         Fail`Codex retained service dependency changed; retire it deliberately`;
-      JSON.stringify(existing.env) === JSON.stringify(formulaEnv) ||
+      JSON.stringify(retainedIdentity(existing.env)) ===
+        JSON.stringify(retainedIdentity(formulaEnv)) ||
         Fail`Codex retained service configuration changed; retire it deliberately`;
     } else {
       // eslint-disable-next-line no-await-in-loop
       await providePrivateDirectory('Codex broker directory', brokerDir);
+      // eslint-disable-next-line no-await-in-loop
+      if (name === 'broker-service') await forgetBrokerSettings(brokerDir);
       // eslint-disable-next-line no-await-in-loop
       await mintWithPowersPath(host, {
         powersPath,
@@ -453,6 +474,12 @@ export const main = async (host, { exec } = {}) => {
       });
     }
   }
+  await configureBroker(
+    host,
+    [SANDBOX_DIR, 'broker-service'],
+    brokerSettings,
+    'Codex',
+  );
   const next = [SANDBOX_DIR, 'backend-next'];
   const backend = [SANDBOX_DIR, 'backend'];
   if (await E(host).has(...next)) await E(host).remove(...next);

@@ -35,6 +35,8 @@ const makeFakeHost = ({
   const copies = [];
   const removed = [];
   const stored = [];
+  /** @type {Array<Record<string, unknown>>} */
+  const configured = [];
   const profileValues = new Map();
   const publications = [];
   const profile = Far('TestFlootProfile', {
@@ -78,6 +80,7 @@ const makeFakeHost = ({
     copies,
     removed,
     stored,
+    configured,
     profileValues,
     publications,
     environments,
@@ -128,6 +131,13 @@ const makeFakeHost = ({
           }
           if (pathParts[1] === 'catalog') {
             return harden({ list: async () => [] });
+          }
+          if (key(pathParts) === key('opencode-sandbox', 'broker-service')) {
+            return harden({
+              configure: async settings => {
+                configured.push(settings);
+              },
+            });
           }
           return harden({ createBase64: async () => {} });
         },
@@ -523,6 +533,9 @@ test.serial(
     const base = await baseEnv(t);
     await withEnv(t, {
       ENDO_OPENCODE_BROKER_LISTENER_IMAGE: `localhost/listener@sha256:${'c'.repeat(64)}`,
+      // Settings the persisted broker was not minted with: applied, no retirement.
+      ENDO_OPENCODE_MAX_SESSIONS: '12',
+      ENDO_OPENCODE_PUBLIC_INTERNET: '1',
     });
     const fake = preflightHost();
     for (const name of ['broker-service', 'session-storage']) {
@@ -559,6 +572,9 @@ test.serial(
     );
     t.true(fake.reads.some(([, id]) => id === 'broker-service-id'));
     t.true(fake.reads.some(([, id]) => id === 'session-storage-id'));
+    t.deepEqual(fake.configured, [
+      { maxSessions: 12, publicInternet: true, diagnostics: false },
+    ]);
     const backend = fake.mints.find(mint =>
       /opencode-backend-module\.js$/.test(mint.specifier),
     );

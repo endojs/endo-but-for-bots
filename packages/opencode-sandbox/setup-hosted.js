@@ -33,15 +33,17 @@
 //     a present program is checked with the mounter's own program check, and
 //     a present NINEP_SUDO must be exactly `1` (the mounter would silently
 //     treat anything else as off)
-//   ENDO_OPENCODE_DIAGNOSTICS=1 — also log the broker's per-request admission
-//     events. Off by default; applied only when a broker service is
-//     minted. Failures are logged regardless (the slice only ever sees a
-//     bare 502, so the broker worker's log is where a cause is found)
+//   ENDO_OPENCODE_MAX_SESSIONS, ENDO_OPENCODE_PUBLIC_INTERNET=1,
+//     ENDO_OPENCODE_DIAGNOSTICS=1 — the broker's operator settings: concurrent
+//     session capacity (1–256; unset keeps the broker's), public egress, and
+//     a log line per admission. Applied to a retained broker at every start,
+//     no retirement; turning public egress off stops live public listeners.
+//     Failures are logged regardless (the slice only ever sees a bare 502,
+//     so the broker worker's log is where a cause is found)
 //   ENDO_OPENCODE_BROKER_LISTENER_IMAGE — digest-pinned listener image;
 //     required unless a broker service is retained
-//   ENDO_OPENCODE_BROKER_DIR, ENDO_OPENCODE_BROKER_OWNER_ID,
-//     ENDO_OPENCODE_PUBLIC_INTERNET — the broker's directory, owner label
-//     (derived from the host identity by default), and public egress flag;
+//   ENDO_OPENCODE_BROKER_DIR, ENDO_OPENCODE_BROKER_OWNER_ID — the broker's
+//     directory and owner label (derived from the host identity by default);
 //     applied only when a broker service is minted, ignored when one is
 //     retained
 //
@@ -57,11 +59,14 @@ import path from 'node:path';
 import { E } from '@endo/eventual-send';
 import {
   assertRetainedBrokerImages,
+  configureBroker,
+  forgetBrokerSettings,
   mintWithPowersPath,
   providePrivateDirectory,
   publishAccountOracle,
   publishBrokerSubscription,
   readAccountAuthority,
+  readBrokerSettings,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { Fail, q } from '@endo/errors';
 
@@ -129,13 +134,14 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   const listenerImageRef = env.ENDO_OPENCODE_BROKER_LISTENER_IMAGE || '';
   const brokerDir =
     env.ENDO_OPENCODE_BROKER_DIR || path.join(os.homedir(), 'opencode-broker');
-  const publicInternet = env.ENDO_OPENCODE_PUBLIC_INTERNET === '1';
-  // The host-side admission trail: a line per request (admitted, completed,
-  // revoked) in the broker worker's log. Off by default, because it is
-  // volume, not because it is sensitive. Failures are not behind this
-  // switch: an upstream or listener failure is always logged there, since
-  // the slice is only ever told 502.
-  const diagnostics = env.ENDO_OPENCODE_DIAGNOSTICS === '1';
+  // Session capacity, public egress and the admission trail: the broker's
+  // operator settings, applied at every start (see configureBroker below).
+  // The admission trail is a line per request (admitted, completed, revoked)
+  // in the broker worker's log. Off by default, because it is volume, not
+  // because it is sensitive. Failures are not behind this switch: an
+  // upstream or listener failure is always logged there, since the slice is
+  // only ever told 502.
+  const brokerSettings = readBrokerSettings(env, 'ENDO_OPENCODE');
   // The rootless mount settings a session's own 9P mounter needs, recorded
   // into every plan through the backend. A hosted daemon forwards only
   // ENDO_-prefixed variables to its ENDO_EXTRA subprocesses, so the mounter's
@@ -277,6 +283,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   } else {
     const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs, exec);
     await providePrivateDirectory('ENDO_OPENCODE_BROKER_DIR', brokerDir);
+    await forgetBrokerSettings(brokerDir);
     const brokerConfig = JSON.stringify({
       ownerId: brokerOwnerId,
       directory: brokerDir,
@@ -284,8 +291,7 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       imageDigest,
       listenerImageRef,
       accountAuthority,
-      ...(publicInternet ? { publicInternet: true } : {}),
-      ...(diagnostics ? { diagnostics: true } : {}),
+      ...brokerSettings,
     });
     readOpencodeBrokerConfig({ OPENCODE_BROKER_CONFIG: brokerConfig });
     await mintWithPowersPath(hostAgent, {
@@ -297,6 +303,12 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     });
     console.log(`Minted ${SANDBOX_DIR}/broker-service`);
   }
+  await configureBroker(
+    hostAgent,
+    [SANDBOX_DIR, 'broker-service'],
+    brokerSettings,
+    'OpenCode',
+  );
 
   // Session storage owner — the `storage` role the daemon owner records with
   // each session and invokes inside record removal. It has null powers:
