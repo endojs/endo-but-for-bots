@@ -5,33 +5,30 @@
 | **Created** | 2026-05-04 |
 | **Updated** | 2026-09-29 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | **Implemented** (Phases 1–2) |
+| **Status** | **Implemented** (Phases 1-2) |
 
 ## Status
 
-**Implemented (Phases 1–2).** The permits, the global sampling
-(§ Sampling and degradation on hosts without the codecs), the tests, and the
-changeset merged upstream in
+**Implemented (Phases 1-2).** The permits, the global sampling, the
+tests, and the changeset merged upstream in
 [endojs/endo#3322](https://github.com/endojs/endo/pull/3322) on 2026-07-22
-as merge commit `8021d268e777e3edb51136a31e63c2032dcc37f7`, and reached this
-repository's `llm` integration branch through the upstream merges.
+(merge commit `8021d268e7`). They reached `llm`, this repository's
+integration branch that carries upstream `endojs/endo` plus fork-only work,
+through the regular upstream merges. § Sampling and degradation on hosts
+without the codecs describes the sampling.
+
 The change put `TextEncoder` and `TextDecoder` on `universalPropertyNames`
-in `packages/ses/src/permits.js` with exactly the
-prototype permits in the table below. It added 18 focused tests in
-`packages/ses/test/text-codecs.test.js` (16) and
-`packages/ses/test/text-codecs-missing.test.js` (2), covering items 1–5
-of the § Test plan below, and a changeset
-(`.changeset/hardened-text-codecs.md`, released by
+in `packages/ses/src/permits.js` with the prototype permits in the table
+below. It added 18 focused tests covering items 1-5 of the § Test plan
+below, and a changeset (`.changeset/hardened-text-codecs.md`, released by
 [endojs/endo#3302](https://github.com/endojs/endo/pull/3302)).
 
-A follow-up, [endojs/endo#3340](https://github.com/endojs/endo/pull/3340)
-(merged 2026-08-11, `dc504ca9934eba18e3100a170a070382cbd6b344`, also on
-`llm`), explicitly denies Node's non-standard
-`Symbol(nodejs.util.inspect.custom)` method on both prototypes. Before that
-change, lockdown on Node warned while removing that method.
+A follow-up PR, [endojs/endo#3340](https://github.com/endojs/endo/pull/3340)
+(merged 2026-08-11 as `dc504ca993`, also on `llm`), explicitly denies
+Node's non-standard `Symbol(nodejs.util.inspect.custom)` method on both
+prototypes.
 
-Remaining items, none of which gate Milestone 2 (M2 in
-[`README.md`](README.md) § Milestones):
+Remaining items:
 
 - **§ Test plan item 6 (XS smoke test):** open as draft
   [endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349).
@@ -40,8 +37,8 @@ Remaining items, none of which gate Milestone 2 (M2 in
   path exercises pass-through-and-harden rather than the missing-codecs
   case this design assumed. § Sampling and degradation and Design
   Decision 3 below note this.
-- **Phase 3 (downstream audit):** not performed on `llm`. As of `7ff30afbce`,
-  `packages/*/src` has 16 `Buffer.from(` / `.toString('utf...')` call sites
+- **Phase 3 (downstream audit, optional):** not performed on `llm`. As of
+  `llm` commit `7ff30afbce`, `packages/*/src` has 16 `Buffer.from(` / `.toString('utf...')` call sites
   in 10 files. All are Node-host powers, drivers, and backends
   (`9p-server`, `cli`, `daemon`, `git`, `platform`, `sandbox`, and the
   `*-sandbox` packages), not
@@ -103,9 +100,13 @@ compartment.
 | `TextEncoder` | `prototype` | ✓ | Required for instances. |
 | `TextEncoder` | `prototype.encode`, `encodeInto` | ✓ | Pure. |
 | `TextEncoder` | `prototype.encoding` | ✓ | Pure (always `'utf-8'`). |
+| `TextEncoder` | `prototype[@@toStringTag]` | ✓ | String data. |
+| `TextEncoder` | `prototype[Symbol(nodejs.util.inspect.custom)]` | ✗ | Node-only, non-standard; denied by [endojs/endo#3340](https://github.com/endojs/endo/pull/3340). |
 | `TextDecoder` | `prototype` | ✓ | Required for instances. |
 | `TextDecoder` | `prototype.decode` | ✓ | Pure. |
 | `TextDecoder` | `prototype.encoding`, `fatal`, `ignoreBOM` | ✓ | Pure. |
+| `TextDecoder` | `prototype[@@toStringTag]` | ✓ | String data. |
+| `TextDecoder` | `prototype[Symbol(nodejs.util.inspect.custom)]` | ✗ | Node-only, non-standard; denied by [endojs/endo#3340](https://github.com/endojs/endo/pull/3340). |
 
 These constructors return `Uint8Array` (already a permitted
 intrinsic) or `string`.
@@ -174,8 +175,13 @@ Tests live under `packages/ses/test/`.
    No throw, and the post-lockdown compartments lack the bindings.
 
 6. **XS smoke test.**
-   The existing XS test runner exercises (1) and (5) on a host that
-   never provided the codecs.
+   The existing XS test runner exercises (1) on XS.
+   This design assumed XS never provides the codecs, so the XS run
+   would also cover (5).
+   Current Moddable `xst` defines both codecs
+   ([endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349)),
+   so on today's toolchain the XS run exercises pass-through-and-harden,
+   and (5) is covered only by the deletion test on Node.
 
 ### Compatibility considerations
 
@@ -210,6 +216,8 @@ Tests live under `packages/ses/test/`.
   intrinsics and the behavior on hosts without them.
 
 ### Phase 3: Downstream audit (S)
+
+Optional cleanup; it does not gate the **Implemented** status.
 
 - Grep the monorepo for `Buffer.from(` and `.toString('utf` in code
   that runs under SES.
