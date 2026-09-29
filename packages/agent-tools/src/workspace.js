@@ -20,6 +20,7 @@ import { makeGitMountTools } from './json-tools/git-mount.js';
 import { makeGitRemoteTool } from './json-tools/git-remote.js';
 import { makeShellTool } from './json-tools/shell.js';
 import { makeMountFsTools } from './json-tools/fs.js';
+import { concatDistinctTools } from './catalog.js';
 
 /**
  * Capability-based provisioning for one agent workspace: the thin adapter that
@@ -51,59 +52,6 @@ import { makeMountFsTools } from './json-tools/fs.js';
  * individual makers keep their established names, while a combined workspace
  * catalog remains unambiguous.
  */
-
-/**
- * Apply a group's explicit catalog names without changing a capability tool
- * maker's standalone surface. The rename table is a `Map` so a tool name that
- * coincides with an `Object.prototype` property (`constructor`, `toString`)
- * cannot resolve to an inherited value.
- *
- * @param {ToolRecord[]} records
- * @param {Map<string, string>} [names]
- * @returns {ToolRecord[]}
- */
-const nameWorkspaceTools = (records, names) => {
-  if (names === undefined) {
-    return records;
-  }
-  return records.map(record => {
-    const name = names.get(record.name);
-    return name === undefined ? record : harden({ ...record, name });
-  });
-};
-
-/**
- * Concatenate tool-group record arrays into one catalog, failing closed if two
- * groups would emit the same tool name. A catalog with two identically-named
- * tools is ambiguous the moment a harness dispatches by name, so the collision
- * is an error at composition time rather than a silent shadow.
- *
- * Each group may carry its own `names` table, attached where the group is
- * composed, so the qualification travels with the records it renames.
- *
- * @param {{ group: string, records: ToolRecord[], names?: Map<string, string> }[]} groups
- * @returns {ToolRecord[]}
- */
-export const concatDistinctTools = groups => {
-  /** @type {ToolRecord[]} */
-  const catalog = [];
-  /** @type {Map<string, string>} */
-  const sourceByName = new Map();
-  for (const { group, records, names } of groups) {
-    for (const record of nameWorkspaceTools(records, names)) {
-      const priorGroup = sourceByName.get(record.name);
-      if (priorGroup !== undefined) {
-        throw new Error(
-          `agent-tool catalog name collision: "${record.name}" is emitted by both the "${priorGroup}" and "${group}" tool groups; grant only one to a single catalog, or disambiguate the tool names before composing`,
-        );
-      }
-      sourceByName.set(record.name, group);
-      catalog.push(record);
-    }
-  }
-  return harden(catalog);
-};
-harden(concatDistinctTools);
 
 /**
  * Compose the agent-tool catalog from a set of already-held capabilities.

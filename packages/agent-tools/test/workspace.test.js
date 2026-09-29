@@ -8,10 +8,10 @@ import test from 'ava';
 import { Far } from '@endo/pass-style';
 
 import {
-  concatDistinctTools,
   makeWorkspaceTools,
   provisionWorkspaceTools,
 } from '../src/workspace.js';
+import { concatDistinctTools } from '../src/catalog.js';
 
 /**
  * The provisioning adapter composes its catalog purely from the tool makers'
