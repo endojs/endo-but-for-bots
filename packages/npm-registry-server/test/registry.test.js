@@ -625,3 +625,68 @@ test('an upstream body refused by its declared length is released', async t => {
   t.is(/** @type {any} */ (error).statusCode, 502);
   t.true(destroyed);
 });
+
+test('the upstream size limit holds at its boundary however the length is declared', async t => {
+  const body = new TextEncoder().encode(
+    JSON.stringify({
+      name: 'left-pad',
+      'dist-tags': { latest: '1.3.0' },
+      versions: {
+        '1.3.0': {
+          name: 'left-pad',
+          version: '1.3.0',
+          dist: { integrity: `sha512-${'A'.repeat(86)}==` },
+        },
+      },
+    }),
+  );
+  /** @type {Array<[string, (length: number) => string | null]>} */
+  const declarations = [
+    ['truthful content-length', length => String(length)],
+    ['absent content-length', () => null],
+    ['understated content-length', () => '1'],
+  ];
+  for (const [label, declare] of declarations) {
+    for (const [maxPackumentBytes, fits] of /** @type {const} */ ([
+      [body.byteLength, true],
+      [body.byteLength - 1, false],
+    ])) {
+      /** @type {UpstreamFetch} */
+      const fakeFetch = async () => ({
+        status: 200,
+        ok: true,
+        headers: {
+          get: name =>
+            name === 'content-length' ? declare(body.byteLength) : null,
+        },
+        body: {
+          async *[Symbol.asyncIterator]() {
+            // Split the body so the limit is crossed mid-stream.
+            yield body.subarray(0, 8);
+            yield body.subarray(8);
+          },
+        },
+      });
+      const { registry } = makeTestRegistry({
+        upstreamOrigin: 'https://upstream.example',
+        fetch: fakeFetch,
+        upstreamTtlMs: 0,
+        maxPackumentBytes,
+      });
+      const description = `${label}, limit ${maxPackumentBytes}`;
+      if (fits) {
+        // eslint-disable-next-line no-await-in-loop
+        const packument = await registry.getPackument('left-pad');
+        t.deepEqual(Object.keys(packument.versions), ['1.3.0'], description);
+      } else {
+        // eslint-disable-next-line no-await-in-loop
+        const error = await t.throwsAsync(
+          () => registry.getPackument('left-pad'),
+          { message: /size limit/ },
+          description,
+        );
+        t.is(/** @type {any} */ (error).statusCode, 502, description);
+      }
+    }
+  }
+});
