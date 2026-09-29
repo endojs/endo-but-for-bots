@@ -2890,6 +2890,7 @@ __metadata:
     "@endo/init": "workspace:^"
     "@endo/ses-ava": "workspace:^"
     "@endo/tar": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
     "@types/node": "catalog:dev"
     ava: "catalog:dev"
     better-sqlite3: "npm:^12.0.0"
