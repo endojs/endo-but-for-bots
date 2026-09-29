@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS dist_tags (
   PRIMARY KEY (name, tag),
   FOREIGN KEY (name, version) REFERENCES package_versions(name, version)
 );
-CREATE TABLE IF NOT EXISTS package_meta (
+CREATE TABLE IF NOT EXISTS package_metadata (
   name TEXT PRIMARY KEY,
   upstream_json TEXT,
   upstream_etag TEXT,
@@ -148,9 +148,11 @@ export const makeRegistryStore = database => {
          version = excluded.version, updated_at = excluded.updated_at
        WHERE dist_tags.source = 'upstream'`,
     ),
-    getMeta: database.prepare('SELECT * FROM package_meta WHERE name = ?'),
-    upsertMeta: database.prepare(
-      `INSERT INTO package_meta
+    getMetadata: database.prepare(
+      'SELECT * FROM package_metadata WHERE name = ?',
+    ),
+    upsertMetadata: database.prepare(
+      `INSERT INTO package_metadata
          (name, upstream_json, upstream_etag, expires_at, fetched_at)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT (name) DO UPDATE SET

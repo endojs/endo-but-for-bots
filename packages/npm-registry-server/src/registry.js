@@ -728,7 +728,7 @@ export const makeRegistry = ({
           statements.setUpstreamTag.run(name, tag, version, at);
         }
       }
-      statements.upsertMeta.run(
+      statements.upsertMetadata.run(
         name,
         JSON.stringify({ modified: document.modified ?? null }),
         etag,
@@ -751,8 +751,8 @@ export const makeRegistry = ({
     if (upstream === undefined) {
       return Promise.resolve();
     }
-    const meta = statements.getMeta.get(name);
-    if (meta && Number(meta.expires_at) > now()) {
+    const metadata = statements.getMetadata.get(name);
+    if (metadata && Number(metadata.expires_at) > now()) {
       return Promise.resolve();
     }
     const pending = metaInFlight.get(name);
@@ -765,8 +765,8 @@ export const makeRegistry = ({
         accept:
           'application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8',
       };
-      if (meta?.upstream_etag) {
-        headers['if-none-match'] = meta.upstream_etag;
+      if (metadata?.upstream_etag) {
+        headers['if-none-match'] = metadata.upstream_etag;
       }
       /** @type {UpstreamResponse} */
       let response;
@@ -777,7 +777,7 @@ export const makeRegistry = ({
           signal: AbortSignal.timeout(upstreamTimeoutMs),
         });
       } catch (error) {
-        if (meta) {
+        if (metadata) {
           return;
         }
         const timedOut = /** @type {Error} */ (error).name === 'TimeoutError';
@@ -789,11 +789,11 @@ export const makeRegistry = ({
       if (!response.ok || response.status === 304) {
         discard(response);
       }
-      if (response.status === 304 && meta) {
-        statements.upsertMeta.run(
+      if (response.status === 304 && metadata) {
+        statements.upsertMetadata.run(
           name,
-          meta.upstream_json,
-          meta.upstream_etag,
+          metadata.upstream_json,
+          metadata.upstream_etag,
           now() + upstreamTtlMs,
           now(),
         );
@@ -801,7 +801,7 @@ export const makeRegistry = ({
       }
       if (response.status === 404) {
         // Negative cache: this package exists only locally, if at all.
-        statements.upsertMeta.run(
+        statements.upsertMetadata.run(
           name,
           null,
           null,
@@ -811,7 +811,7 @@ export const makeRegistry = ({
         return;
       }
       if (!response.ok) {
-        if (meta) {
+        if (metadata) {
           return;
         }
         throw RegistryHttpError(
@@ -836,7 +836,7 @@ export const makeRegistry = ({
         }
         indexUpstream(name, document, response.headers.get('etag'));
       } catch (error) {
-        if (meta) {
+        if (metadata) {
           console.error(
             JSON.stringify({
               event: 'upstream-refresh-failed',

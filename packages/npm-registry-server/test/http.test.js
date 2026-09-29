@@ -92,17 +92,17 @@ const serve = async (t, options = {}) => {
   );
   t.teardown(() => server.close());
   const { port } = /** @type {AddressInfo} */ (server.address());
-  const auth = { authorization: `Bearer ${fixture.token}` };
+  const authorizationHeaders = { authorization: `Bearer ${fixture.token}` };
   /**
    * @param {string} pathname
    * @param {RequestOptions} [init]
    */
   const request = (pathname, init) => requestOver(port, pathname, init);
-  return { ...fixture, logs, request, auth };
+  return { ...fixture, logs, request, authorizationHeaders };
 };
 
 test('ping and whoami', async t => {
-  const { request, auth, logs, token } = await serve(t);
+  const { request, authorizationHeaders, logs, token } = await serve(t);
   t.is((await request('/-/ping')).status, 200);
   t.is((await request('/-/whoami')).status, 401);
   t.is(
@@ -114,7 +114,7 @@ test('ping and whoami', async t => {
     401,
     'only bearer credentials are accepted',
   );
-  const whoami = await request('/-/whoami', { headers: auth });
+  const whoami = await request('/-/whoami', { headers: authorizationHeaders });
   t.deepEqual(await whoami.json(), { username: 'garden-llm-publisher' });
   t.false(JSON.stringify(logs).includes(token), 'bearer is never logged');
   t.like(logs.at(-1), { path: '/-/whoami', status: 200 });
@@ -136,8 +136,10 @@ test('unsupported and malformed routes', async t => {
   );
 });
 
-test('publish over HTTP: auth, body limits, and conditional reads', async t => {
-  const { request, auth } = await serve(t, { maxBodyBytes: 64 * 1024 });
+test('publish over HTTP: authorization, body limits, and conditional reads', async t => {
+  const { request, authorizationHeaders } = await serve(t, {
+    maxBodyBytes: 64 * 1024,
+  });
   const document = makePublishDocument({
     name: '@endo/patterns',
     version: VERSION,
@@ -148,21 +150,30 @@ test('publish over HTTP: auth, body limits, and conditional reads', async t => {
 
   t.is((await put({ body })).status, 401);
   t.is(
-    (await put({ body: '{', headers: { ...auth } })).status,
+    (await put({ body: '{', headers: { ...authorizationHeaders } })).status,
     400,
     'non-JSON body',
   );
   t.is(
-    (await put({ body: 'x'.repeat(65 * 1024), headers: { ...auth } })).status,
+    (
+      await put({
+        body: 'x'.repeat(65 * 1024),
+        headers: { ...authorizationHeaders },
+      })
+    ).status,
     413,
   );
   const created = await put({
     body,
-    headers: { ...auth, 'content-type': 'application/json' },
+    headers: { ...authorizationHeaders, 'content-type': 'application/json' },
   });
   t.is(created.status, 201);
   t.like(await created.json(), { ok: true, id: '@endo/patterns' });
-  t.is((await put({ body, headers: auth })).status, 200, 'identical retry');
+  t.is(
+    (await put({ body, headers: authorizationHeaders })).status,
+    200,
+    'identical retry',
+  );
 
   const packument = await request('/@endo/patterns');
   t.is(packument.status, 200);
@@ -209,7 +220,7 @@ test('publish over HTTP: auth, body limits, and conditional reads', async t => {
 });
 
 test('dist-tags over HTTP', async t => {
-  const { request, auth, registry, grant } = await serve(t);
+  const { request, authorizationHeaders, registry, grant } = await serve(t);
   await registry.publish(
     grant,
     '@endo/patterns',
@@ -253,17 +264,17 @@ test('dist-tags over HTTP', async t => {
   t.is((await setTag('dev-latest', {})).status, 401);
   // Authentication is checked before the body is read.
   t.is((await setTag('dev-latest', { body: 'not json' })).status, 401);
-  t.is((await setTag('latest', { headers: auth })).status, 403);
+  t.is((await setTag('latest', { headers: authorizationHeaders })).status, 403);
   t.is(
     (
       await setTag('dev-latest', {
-        headers: auth,
+        headers: authorizationHeaders,
         body: '"x"'.padEnd(5000, ' '),
       })
     ).status,
     413,
   );
-  const set = await setTag('dev-latest', { headers: auth });
+  const set = await setTag('dev-latest', { headers: authorizationHeaders });
   t.is(set.status, 201);
   t.deepEqual(await set.json(), { ok: true, 'dev-latest': VERSION });
 });
