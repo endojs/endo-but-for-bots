@@ -19,7 +19,7 @@ import { makeTemporaryDirectory, makeTestRegistry } from './_fixtures.js';
 const TOKEN = 'p'.repeat(40);
 
 const SERVER_ENV = {
-  REGISTRY_STATE_DIR: '/state',
+  REGISTRY_STATE_DIRECTORY: '/state',
   PUBLIC_REGISTRY_URL: 'https://npm.example',
 };
 
@@ -155,7 +155,7 @@ test('the server entry point keeps serving when its grant is refused', async t =
   const child = spawn(process.execPath, [bin], {
     env: {
       ...process.env,
-      REGISTRY_STATE_DIR: stateDirectory,
+      REGISTRY_STATE_DIRECTORY: stateDirectory,
       PUBLIC_REGISTRY_URL: 'https://npm.example',
       UPSTREAM_REGISTRY_URL: '',
       PORT: '0',

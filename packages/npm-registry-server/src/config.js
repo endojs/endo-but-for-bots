@@ -7,16 +7,18 @@ import { q } from '@endo/errors';
 /**
  * Read the service configuration from the environment the minion.town unit
  * sets (`HOST`, `PORT`, `PUBLIC_REGISTRY_URL`, `UPSTREAM_REGISTRY_URL`,
- * `REGISTRY_STATE_DIR`). An empty `UPSTREAM_REGISTRY_URL` selects a
+ * `REGISTRY_STATE_DIRECTORY`). An empty `UPSTREAM_REGISTRY_URL` selects a
  * local-only registry.
  *
  * @param {Record<string, string | undefined>} env
  */
 export const readServerEnv = env => {
-  const stateDirectory = env.REGISTRY_STATE_DIR;
+  const stateDirectory = env.REGISTRY_STATE_DIRECTORY;
   const publicOrigin = env.PUBLIC_REGISTRY_URL;
   if (!stateDirectory || !publicOrigin) {
-    throw Error('REGISTRY_STATE_DIR and PUBLIC_REGISTRY_URL are required');
+    throw Error(
+      'REGISTRY_STATE_DIRECTORY and PUBLIC_REGISTRY_URL are required',
+    );
   }
   const upstream =
     env.UPSTREAM_REGISTRY_URL === undefined

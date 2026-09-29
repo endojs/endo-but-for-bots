@@ -15,10 +15,10 @@ const usage = `usage: npm-registry-admin <command>
   grants revoke <id>
   verify
       exit 1 if any stored version is missing its tarball or tree
-Reads REGISTRY_STATE_DIR (and PUBLIC_REGISTRY_URL, default https://npm.minion.town).`;
+Reads REGISTRY_STATE_DIRECTORY (and PUBLIC_REGISTRY_URL, default https://npm.minion.town).`;
 
 const [command, subcommand, ...operands] = process.argv.slice(2);
-const stateDirectory = process.env.REGISTRY_STATE_DIR;
+const stateDirectory = process.env.REGISTRY_STATE_DIRECTORY;
 if (!stateDirectory || !command) {
   console.error(usage);
   process.exit(2);

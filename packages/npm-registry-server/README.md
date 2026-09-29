@@ -34,7 +34,7 @@ client side is Endo-specific.
 ## Running
 
 ```sh
-REGISTRY_STATE_DIR=/var/lib/npm-minion-registry \
+REGISTRY_STATE_DIRECTORY=/var/lib/npm-minion-registry \
 PUBLIC_REGISTRY_URL=https://npm.minion.town \
 UPSTREAM_REGISTRY_URL=https://registry.npmjs.org \
 HOST=127.0.0.1 PORT=3003 \
@@ -53,14 +53,14 @@ logged and the server keeps serving reads. An empty `UPSTREAM_REGISTRY_URL`
 makes a local-only registry, and `UPSTREAM_TTL_SECONDS` sets how long cached
 upstream metadata is fresh.
 
-`REGISTRY_STATE_DIR` is persistent deployment state, not part of the source
+`REGISTRY_STATE_DIRECTORY` is persistent deployment state, not part of the source
 tree: the operator backs it up and never discards it, since it holds the only
 copy of every staged development release.
 The server verifies that every stored version's tarball and tree are present
 before it binds its socket, and checkpoints SQLite on `SIGTERM`.
 
 `npm-registry-admin` manages grants (`grants list|issue|revoke`) and runs the
-same store verification (`verify`) against `REGISTRY_STATE_DIR`.
+same store verification (`verify`) against `REGISTRY_STATE_DIRECTORY`.
 
 ## Publishing
 
