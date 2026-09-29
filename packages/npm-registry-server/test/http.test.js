@@ -32,7 +32,7 @@ const TAG = 'dev-2026-09-28';
  */
 const requestOver = (port, pathname, { method = 'GET', headers, body } = {}) =>
   new Promise((resolve, reject) => {
-    const req = http.request(
+    const request = http.request(
       {
         host: '127.0.0.1',
         port,
@@ -41,18 +41,18 @@ const requestOver = (port, pathname, { method = 'GET', headers, body } = {}) =>
         headers,
         agent: false,
       },
-      res => {
+      response => {
         /** @type {Buffer[]} */
         const chunks = [];
-        res.on('data', chunk => chunks.push(chunk));
-        res.on('error', reject);
-        res.on('end', () => {
+        response.on('data', chunk => chunks.push(chunk));
+        response.on('error', reject);
+        response.on('end', () => {
           const text = Buffer.concat(chunks).toString('utf8');
           resolve({
-            status: res.statusCode ?? 0,
+            status: response.statusCode ?? 0,
             headers: {
               get: (/** @type {string} */ name) => {
-                const value = res.headers[name.toLowerCase()];
+                const value = response.headers[name.toLowerCase()];
                 return value === undefined ? null : String(value);
               },
             },
@@ -62,8 +62,8 @@ const requestOver = (port, pathname, { method = 'GET', headers, body } = {}) =>
         });
       },
     );
-    req.on('error', reject);
-    req.end(body);
+    request.on('error', reject);
+    request.end(body);
   });
 
 /**
@@ -80,8 +80,8 @@ const serve = async (t, options = {}) => {
     log: entry => logs.push(entry),
     ...options,
   });
-  const server = http.createServer((req, res) => {
-    handler(req, res);
+  const server = http.createServer((request, response) => {
+    handler(request, response);
   });
   await new Promise(resolve =>
     server.listen(0, '127.0.0.1', () => resolve(undefined)),

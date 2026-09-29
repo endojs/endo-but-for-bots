@@ -44,19 +44,19 @@ const splitPackagePath = segments => {
 };
 
 /**
- * @param {IncomingMessage} req
+ * @param {IncomingMessage} request
  * @param {number} maxBytes
  * @returns {Promise<any>}
  */
-const readJsonBody = async (req, maxBytes) => {
-  const declared = Number(req.headers['content-length']);
+const readJsonBody = async (request, maxBytes) => {
+  const declared = Number(request.headers['content-length']);
   if (declared > maxBytes) {
     throw RegistryHttpError(413, 'Request body exceeds the size limit');
   }
   /** @type {Buffer[]} */
   const chunks = [];
   let total = 0;
-  for await (const chunk of req) {
+  for await (const chunk of request) {
     total += chunk.length;
     if (total > maxBytes) {
       throw RegistryHttpError(413, 'Request body exceeds the size limit');
@@ -71,11 +71,11 @@ const readJsonBody = async (req, maxBytes) => {
 };
 
 /**
- * @param {IncomingMessage} req
+ * @param {IncomingMessage} request
  * @returns {string | undefined}
  */
-const bearerOf = req => {
-  const header = req.headers.authorization;
+const bearerOf = request => {
+  const header = request.headers.authorization;
   const match = header && /^Bearer\s+(\S+)$/iu.exec(header);
   return match ? match[1] : undefined;
 };
@@ -99,38 +99,38 @@ export const makeRequestHandler = ({
   log = () => {},
 }) => {
   /**
-   * @param {IncomingMessage} req
-   * @param {ServerResponse} res
+   * @param {IncomingMessage} request
+   * @param {ServerResponse} response
    * @param {number} status
    * @param {unknown} value
    * @param {string} [contentType]
    */
-  const sendJson = (req, res, status, value, contentType) => {
+  const sendJson = (request, response, status, value, contentType) => {
     const body = Buffer.from(JSON.stringify(value));
     const etag = `"${createHash('sha256').update(body).digest('base64url')}"`;
-    if (status === 200 && req.headers['if-none-match'] === etag) {
-      res.writeHead(304, { etag, 'cache-control': 'no-cache' });
-      res.end();
+    if (status === 200 && request.headers['if-none-match'] === etag) {
+      response.writeHead(304, { etag, 'cache-control': 'no-cache' });
+      response.end();
       return 304;
     }
-    res.writeHead(status, {
+    response.writeHead(status, {
       'content-type': contentType ?? 'application/json',
       'content-length': body.length,
       'cache-control': 'no-cache',
       etag,
     });
-    res.end(req.method === 'HEAD' ? undefined : body);
+    response.end(request.method === 'HEAD' ? undefined : body);
     return status;
   };
 
   /**
-   * @param {IncomingMessage} req
-   * @param {ServerResponse} res
+   * @param {IncomingMessage} request
+   * @param {ServerResponse} response
    * @returns {Promise<{ status: number, subject?: string }>}
    */
-  const route = async (req, res) => {
-    const method = req.method ?? 'GET';
-    const url = new URL(req.url ?? '/', 'http://registry.invalid');
+  const route = async (request, response) => {
+    const method = request.method ?? 'GET';
+    const url = new URL(request.url ?? '/', 'http://registry.invalid');
     const segments = url.pathname.split('/').filter(Boolean);
     const read = method === 'GET' || method === 'HEAD';
 
@@ -139,15 +139,15 @@ export const makeRequestHandler = ({
     }
     if (segments[0] === '-') {
       if (read && segments[1] === 'ping' && segments.length === 2) {
-        return { status: sendJson(req, res, 200, {}) };
+        return { status: sendJson(request, response, 200, {}) };
       }
       if (read && segments[1] === 'whoami' && segments.length === 2) {
-        const grant = grants.authenticate(bearerOf(req));
+        const grant = grants.authenticate(bearerOf(request));
         if (!grant) {
           throw RegistryHttpError(401, 'Authentication required');
         }
         return {
-          status: sendJson(req, res, 200, { username: grant.subject }),
+          status: sendJson(request, response, 200, { username: grant.subject }),
           subject: grant.subject,
         };
       }
@@ -161,19 +161,19 @@ export const makeRequestHandler = ({
         if (read) {
           const tags = await registry.getDistTags(name);
           if (tag === undefined) {
-            return { status: sendJson(req, res, 200, tags) };
+            return { status: sendJson(request, response, 200, tags) };
           }
           if (tags[tag] === undefined) {
             throw RegistryHttpError(404, `Tag ${tag} not found`);
           }
-          return { status: sendJson(req, res, 200, tags[tag]) };
+          return { status: sendJson(request, response, 200, tags[tag]) };
         }
         if (method === 'PUT' && tag !== undefined) {
-          const grant = grants.authenticate(bearerOf(req));
-          const body = await readJsonBody(req, 4096);
+          const grant = grants.authenticate(bearerOf(request));
+          const body = await readJsonBody(request, 4096);
           const result = registry.setDistTag(grant, name, tag, body);
           return {
-            status: sendJson(req, res, 201, { ok: true, ...result }),
+            status: sendJson(request, response, 201, { ok: true, ...result }),
             subject: grant?.subject,
           };
         }
@@ -188,12 +188,12 @@ export const makeRequestHandler = ({
     const { name, rest } = splitPackagePath(segments);
     if (rest.length === 0) {
       if (read) {
-        const abbreviated = (req.headers.accept ?? '').includes(INSTALL_V1);
+        const abbreviated = (request.headers.accept ?? '').includes(INSTALL_V1);
         const packument = await registry.getPackument(name, { abbreviated });
         return {
           status: sendJson(
-            req,
-            res,
+            request,
+            response,
             200,
             packument,
             abbreviated ? INSTALL_V1 : 'application/json',
@@ -201,14 +201,14 @@ export const makeRequestHandler = ({
         };
       }
       if (method === 'PUT') {
-        const grant = grants.authenticate(bearerOf(req));
+        const grant = grants.authenticate(bearerOf(request));
         if (!grant) {
           throw RegistryHttpError(401, 'Authentication required to publish');
         }
-        const document = await readJsonBody(req, maxBodyBytes);
+        const document = await readJsonBody(request, maxBodyBytes);
         const result = await registry.publish(grant, name, document);
         return {
-          status: sendJson(req, res, result.created ? 201 : 200, {
+          status: sendJson(request, response, result.created ? 201 : 200, {
             ok: true,
             id: name,
             ...result,
@@ -223,7 +223,7 @@ export const makeRequestHandler = ({
         name,
         decodeURIComponent(rest[0]),
       );
-      return { status: sendJson(req, res, 200, manifest) };
+      return { status: sendJson(request, response, 200, manifest) };
     }
     if (rest.length === 2 && rest[0] === '-' && read) {
       const { bytes, tarballHash } = await registry.getTarball(
@@ -231,18 +231,18 @@ export const makeRequestHandler = ({
         decodeURIComponent(rest[1]),
       );
       const etag = `"${tarballHash}"`;
-      if (req.headers['if-none-match'] === etag) {
-        res.writeHead(304, { etag });
-        res.end();
+      if (request.headers['if-none-match'] === etag) {
+        response.writeHead(304, { etag });
+        response.end();
         return { status: 304 };
       }
-      res.writeHead(200, {
+      response.writeHead(200, {
         'content-type': 'application/octet-stream',
         'content-length': bytes.byteLength,
         'cache-control': 'public, max-age=31536000, immutable',
         etag,
       });
-      res.end(method === 'HEAD' ? undefined : bytes);
+      response.end(method === 'HEAD' ? undefined : bytes);
       return { status: 200 };
     }
     if (!read) {
@@ -255,15 +255,15 @@ export const makeRequestHandler = ({
   };
 
   /**
-   * @param {IncomingMessage} req
-   * @param {ServerResponse} res
+   * @param {IncomingMessage} request
+   * @param {ServerResponse} response
    */
-  const handle = async (req, res) => {
+  const handle = async (request, response) => {
     const started = Date.now();
     /** @type {{ status: number, subject?: string }} */
     let outcome;
     try {
-      outcome = await route(req, res);
+      outcome = await route(request, response);
     } catch (error) {
       const status = isRegistryHttpError(error) ? error.statusCode : 500;
       const reason = isRegistryHttpError(error)
@@ -272,24 +272,24 @@ export const makeRequestHandler = ({
       if (!isRegistryHttpError(error)) {
         console.error(error);
       }
-      if (!res.headersSent) {
+      if (!response.headersSent) {
         const body = Buffer.from(
           JSON.stringify({ error: STATUS_ERRORS[status] ?? 'error', reason }),
         );
-        res.writeHead(status, {
+        response.writeHead(status, {
           'content-type': 'application/json',
           'content-length': body.length,
           'cache-control': 'no-store',
         });
-        res.end(req.method === 'HEAD' ? undefined : body);
+        response.end(request.method === 'HEAD' ? undefined : body);
       } else {
-        res.destroy();
+        response.destroy();
       }
       outcome = { status };
     }
     log({
-      method: req.method ?? 'GET',
-      path: new URL(req.url ?? '/', 'http://registry.invalid').pathname,
+      method: request.method ?? 'GET',
+      path: new URL(request.url ?? '/', 'http://registry.invalid').pathname,
       status: outcome.status,
       ms: Date.now() - started,
       ...(outcome.subject ? { subject: outcome.subject } : {}),

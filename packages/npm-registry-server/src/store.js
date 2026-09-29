@@ -88,46 +88,46 @@ CREATE TABLE IF NOT EXISTS audit_events (
 /**
  * Open (and migrate) the registry tables on an injected SQLite database.
  *
- * @param {SqlDatabase} db
+ * @param {SqlDatabase} database
  */
-export const makeRegistryStore = db => {
-  db.exec('PRAGMA journal_mode = WAL');
-  db.exec('PRAGMA foreign_keys = ON');
-  const { user_version: userVersion } = db.prepare('PRAGMA user_version').get();
+export const makeRegistryStore = database => {
+  database.exec('PRAGMA journal_mode = WAL');
+  database.exec('PRAGMA foreign_keys = ON');
+  const { user_version: userVersion } = database.prepare('PRAGMA user_version').get();
   if (Number(userVersion) > SCHEMA_VERSION) {
     throw Error(
       `Registry schema version ${userVersion} is newer than this server (${SCHEMA_VERSION})`,
     );
   }
-  db.exec(SCHEMA);
-  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
+  database.exec(SCHEMA);
+  database.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 
   const statements = {
-    getVersion: db.prepare(
+    getVersion: database.prepare(
       'SELECT * FROM package_versions WHERE name = ? AND version = ?',
     ),
-    listVersions: db.prepare(
+    listVersions: database.prepare(
       'SELECT * FROM package_versions WHERE name = ? ORDER BY indexed_at, version',
     ),
-    insertVersion: db.prepare(
+    insertVersion: database.prepare(
       `INSERT INTO package_versions
          (name, version, manifest_json, integrity, shasum, source, indexed_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (name, version) DO NOTHING`,
     ),
-    getPackage: db.prepare(
+    getPackage: database.prepare(
       'SELECT * FROM packages WHERE name = ? AND version = ?',
     ),
-    listPackages: db.prepare('SELECT * FROM packages'),
-    insertPackage: db.prepare(
+    listPackages: database.prepare('SELECT * FROM packages'),
+    insertPackage: database.prepare(
       `INSERT INTO packages
          (name, version, tree_hash, tarball_hash, integrity, shasum, fetched_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT (name, version) DO NOTHING`,
     ),
-    listTags: db.prepare('SELECT * FROM dist_tags WHERE name = ?'),
-    getTag: db.prepare('SELECT * FROM dist_tags WHERE name = ? AND tag = ?'),
-    setPublishedTag: db.prepare(
+    listTags: database.prepare('SELECT * FROM dist_tags WHERE name = ?'),
+    getTag: database.prepare('SELECT * FROM dist_tags WHERE name = ? AND tag = ?'),
+    setPublishedTag: database.prepare(
       `INSERT INTO dist_tags (name, tag, version, source, updated_at)
        VALUES (?, ?, ?, 'published', ?)
        ON CONFLICT (name, tag) DO UPDATE SET
@@ -136,15 +136,15 @@ export const makeRegistryStore = db => {
     ),
     // Upstream metadata may add or refresh upstream-sourced tags but can
     // never replace a locally published one.
-    setUpstreamTag: db.prepare(
+    setUpstreamTag: database.prepare(
       `INSERT INTO dist_tags (name, tag, version, source, updated_at)
        VALUES (?, ?, ?, 'upstream', ?)
        ON CONFLICT (name, tag) DO UPDATE SET
          version = excluded.version, updated_at = excluded.updated_at
        WHERE dist_tags.source = 'upstream'`,
     ),
-    getMeta: db.prepare('SELECT * FROM package_meta WHERE name = ?'),
-    upsertMeta: db.prepare(
+    getMeta: database.prepare('SELECT * FROM package_meta WHERE name = ?'),
+    upsertMeta: database.prepare(
       `INSERT INTO package_meta
          (name, upstream_json, upstream_etag, expires_at, fetched_at)
        VALUES (?, ?, ?, ?, ?)
@@ -154,11 +154,11 @@ export const makeRegistryStore = db => {
          expires_at = excluded.expires_at,
          fetched_at = excluded.fetched_at`,
     ),
-    getGrantByToken: db.prepare('SELECT * FROM grants WHERE token_sha256 = ?'),
-    listGrants: db.prepare(
+    getGrantByToken: database.prepare('SELECT * FROM grants WHERE token_sha256 = ?'),
+    listGrants: database.prepare(
       'SELECT id, subject, packages_json, expires_at, revoked_at, issued_at FROM grants ORDER BY issued_at',
     ),
-    upsertGrant: db.prepare(
+    upsertGrant: database.prepare(
       `INSERT INTO grants
          (id, subject, token_sha256, packages_json, expires_at, issued_at)
        VALUES (?, ?, ?, ?, ?, ?)
@@ -168,10 +168,10 @@ export const makeRegistryStore = db => {
          expires_at = excluded.expires_at
        WHERE grants.revoked_at IS NULL`,
     ),
-    revokeGrant: db.prepare(
+    revokeGrant: database.prepare(
       'UPDATE grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL',
     ),
-    audit: db.prepare(
+    audit: database.prepare(
       `INSERT INTO audit_events
          (at, subject, action, name, version, tag, outcome, integrity, detail)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -188,19 +188,19 @@ export const makeRegistryStore = db => {
    * @returns {T}
    */
   const transaction = thunk => {
-    db.exec('BEGIN IMMEDIATE');
+    database.exec('BEGIN IMMEDIATE');
     try {
       const result = thunk();
-      db.exec('COMMIT');
+      database.exec('COMMIT');
       return result;
     } catch (error) {
-      db.exec('ROLLBACK');
+      database.exec('ROLLBACK');
       throw error;
     }
   };
 
   const checkpoint = () => {
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+    database.exec('PRAGMA wal_checkpoint(TRUNCATE)');
   };
 
   // Frozen, not hardened: hardening would walk into and freeze the

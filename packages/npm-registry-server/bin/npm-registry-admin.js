@@ -23,7 +23,7 @@ if (!stateDir || !command) {
   console.error(usage);
   process.exit(2);
 }
-const { grants, registry, db } = openRegistry({
+const { grants, registry, database } = openRegistry({
   stateDir,
   publicOrigin: process.env.PUBLIC_REGISTRY_URL || 'https://npm.minion.town',
   openDatabase: file => new Database(file),
@@ -68,5 +68,5 @@ if (command === 'grants' && subcommand === 'list') {
   console.error(usage);
   status = 2;
 }
-/** @type {any} */ (db).close?.();
+/** @type {any} */ (database).close?.();
 process.exit(status);

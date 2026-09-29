@@ -11,6 +11,8 @@ import { makeRequestHandler } from './http.js';
 
 /** @import { SqlDatabase } from './store.js' */
 /** @import { RequestLog } from './http.js' */
+/** @import { UpstreamFetch } from './node-fetch.js' */
+/** @import { AddressInfo } from 'node:net' */
 
 /**
  * @typedef {object} ServerConfig
@@ -20,7 +22,7 @@ import { makeRequestHandler } from './http.js';
  * @property {string} [upstreamOrigin]
  * @property {string} [host]
  * @property {number} [port] 0 picks a free port.
- * @property {import('./node-fetch.js').UpstreamFetch} [fetch]
+ * @property {UpstreamFetch} [fetch]
  * @property {number} [upstreamTtlMs]
  * @property {(entry: RequestLog) => void} [log]
  */
@@ -34,8 +36,8 @@ import { makeRequestHandler } from './http.js';
  */
 export const openRegistry = config => {
   fs.mkdirSync(config.stateDir, { recursive: true, mode: 0o750 });
-  const db = config.openDatabase(path.join(config.stateDir, 'registry.sqlite'));
-  const store = makeRegistryStore(db);
+  const database = config.openDatabase(path.join(config.stateDir, 'registry.sqlite'));
+  const store = makeRegistryStore(database);
   const cas = makeFileCas(path.join(config.stateDir, 'cas'));
   const grants = makeGrants({ store });
   const registry = makeRegistry({
@@ -47,7 +49,7 @@ export const openRegistry = config => {
     fetch: config.fetch,
     upstreamTtlMs: config.upstreamTtlMs,
   });
-  return { db, store, cas, grants, registry };
+  return { database, store, cas, grants, registry };
 };
 harden(openRegistry);
 
@@ -67,10 +69,10 @@ export const startRegistryServer = async config => {
     grants: opened.grants,
     log: config.log,
   });
-  const server = http.createServer((req, res) => {
-    handler(req, res).catch(error => {
+  const server = http.createServer((request, response) => {
+    handler(request, response).catch(error => {
       console.error(error);
-      res.destroy();
+      response.destroy();
     });
   });
   server.requestTimeout = 120_000;
@@ -80,7 +82,7 @@ export const startRegistryServer = async config => {
       resolve(undefined),
     );
   });
-  const address = /** @type {import('node:net').AddressInfo} */ (
+  const address = /** @type {AddressInfo} */ (
     server.address()
   );
 
@@ -90,7 +92,7 @@ export const startRegistryServer = async config => {
       server.closeIdleConnections();
     });
     opened.store.checkpoint();
-    /** @type {any} */ (opened.db).close?.();
+    /** @type {any} */ (opened.database).close?.();
   };
 
   return {
