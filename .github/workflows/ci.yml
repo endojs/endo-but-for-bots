@@ -765,6 +765,9 @@ jobs:
       - name: Check SQLite heap-store formatting
         run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check
 
+      - name: Check Slot Machine transcript formatting
+        run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package slot-machine-transcript -- --check
+
   test-thixotrope-ironhorse:
     needs: changes
     if: ${{ !cancelled() && (needs.changes.result != 'success' || fromJSON(needs.changes.outputs.jobs)['test-thixotrope-ironhorse']) }}
@@ -923,6 +926,14 @@ jobs:
           if [ "$PROFILE" = release ]; then flags+=(--release); fi
           cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity
           cargo test --locked "${flags[@]}" -p ironhorse-store-sqlite --features ironhorse-vm/store-integrity --example vat_surgery
+
+      - name: Test Slot Machine transcript crash matrix (root workspace)
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: |
+          flags=()
+          if [ "$PROFILE" = release ]; then flags+=(--release); fi
+          cargo test --locked "${flags[@]}" -p slot-machine-transcript
 
   test-ironhorse-calibration:
     needs: changes
