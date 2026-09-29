@@ -467,3 +467,78 @@ test('a pax size that disagrees with its header is refused', async t => {
     /disagrees with its pax size/,
   );
 });
+
+/**
+ * @param {'x' | 'g'} typeFlag
+ * @param {string} record
+ */
+const paxBlocks = (typeFlag, record) => {
+  const header = tarFileHeader('PaxHeader', record.length);
+  header[156] = typeFlag.charCodeAt(0);
+  return [
+    resum(header),
+    new TextEncoder().encode(record),
+    tarFilePadding(record.length),
+  ];
+};
+
+test('a pax header that follows another pax header is refused', async t => {
+  // node-tar merges consecutive per-entry pax headers, so the first one's
+  // path would rename the decoy; `@endo/tar` keeps only the second.
+  await refused(
+    t,
+    ingest(
+      gzipParts([
+        ...fileBlocks('package/package.json', HARMLESS),
+        ...paxBlocks('x', '29 path=package/package.json\n'),
+        ...paxBlocks('x', '15 mtime=12345\n'),
+        ...fileBlocks('package/decoy', HARMLESS),
+        tarEndMarker(),
+      ]),
+    ),
+    400,
+    /follows another pax header/,
+  );
+});
+
+test('a global pax header that overrides path is refused', async t => {
+  // node-tar ignores a global path; `@endo/tar` applies it.
+  await refused(
+    t,
+    ingest(
+      gzipParts([
+        ...paxBlocks('g', '29 path=package/package.json\n'),
+        ...fileBlocks('package/package.json', HARMLESS),
+        tarEndMarker(),
+      ]),
+    ),
+    400,
+    /global pax header overrides path/,
+  );
+});
+
+test('a global pax header that overrides linkpath is refused', async t => {
+  await refused(
+    t,
+    ingest(
+      gzipParts([
+        ...paxBlocks('g', '18 linkpath=other\n'),
+        ...fileBlocks('package/package.json', HARMLESS),
+        tarEndMarker(),
+      ]),
+    ),
+    400,
+    /global pax header overrides linkpath/,
+  );
+});
+
+test('a single pax header governing its entry is accepted', async t => {
+  const { paths } = await ingest(
+    gzipParts([
+      ...paxBlocks('x', '29 path=package/package.json\n'),
+      ...fileBlocks('package/placeholder', HARMLESS),
+      tarEndMarker(),
+    ]),
+  );
+  t.deepEqual(paths, ['package.json']);
+});

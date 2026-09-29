@@ -97,6 +97,7 @@ harden(verifyTarball);
 
 const TAR_BLOCK_SIZE = 512;
 const USTAR_MAGIC = 'ustar\u000000';
+const textDecoder = new TextDecoder();
 
 /**
  * Refuse tar framing on which `@endo/tar`'s reader and node-tar (what npm
@@ -112,6 +113,12 @@ const USTAR_MAGIC = 'ustar\u000000';
  *   zero. node-tar continues past a single zero block; `@endo/tar` stops.
  * - A pax `size` override must equal the size in the header it governs,
  *   so the content span does not depend on which field a reader honors.
+ * - A per-entry pax header (`x`) must be followed by the entry it governs,
+ *   not by another pax header. node-tar merges consecutive `x` headers;
+ *   `@endo/tar` keeps only the last.
+ * - A global pax header (`g`) must not override `path`, `linkpath`, or
+ *   `size`. node-tar ignores a global `path`; `@endo/tar` applies it to
+ *   every entry that follows.
  *
  * @param {Uint8Array} tar The expanded archive.
  * @returns {string | undefined} The reason for refusal, if any.
@@ -119,6 +126,7 @@ const USTAR_MAGIC = 'ustar\u000000';
 export const tarFramingDivergence = tar => {
   /** @type {number | undefined} */
   let paxSize;
+  let pendingPax = false;
   let offset = 0;
   while (offset < tar.byteLength) {
     if (offset + TAR_BLOCK_SIZE > tar.byteLength) {
@@ -147,16 +155,21 @@ export const tarFramingDivergence = tar => {
     if (checksum !== sum) {
       return `Tarball header at byte ${offset} has a bad checksum`;
     }
-    const magic = new TextDecoder().decode(header.subarray(257, 265));
+    const magic = textDecoder.decode(header.subarray(257, 265));
     if (header[345] !== 0 && magic !== USTAR_MAGIC) {
       return `Tarball header at byte ${offset} has a prefix without ustar magic`;
     }
     const typeFlag = tarString(header.subarray(156, 157));
-    if (typeFlag !== 'x' && typeFlag !== 'g') {
+    if (typeFlag === 'x' || typeFlag === 'g') {
+      if (pendingPax) {
+        return `Tarball pax header at byte ${offset} follows another pax header`;
+      }
+    } else {
       if (paxSize !== undefined && paxSize !== size) {
         return `Tarball header at byte ${offset} disagrees with its pax size`;
       }
       paxSize = undefined;
+      pendingPax = false;
     }
     const contentStart = offset + TAR_BLOCK_SIZE;
     const contentEnd =
@@ -173,10 +186,14 @@ export const tarFramingDivergence = tar => {
       } catch {
         return `Tarball pax header at byte ${offset} is malformed`;
       }
-      if (overrides.size !== undefined) {
-        if (typeFlag === 'g') {
-          return 'Tarball global pax header overrides size';
+      if (typeFlag === 'g') {
+        for (const key of ['path', 'linkpath', 'size']) {
+          if (Object.hasOwn(overrides, key)) {
+            return `Tarball global pax header overrides ${key}`;
+          }
         }
+      } else {
+        pendingPax = true;
         paxSize = overrides.size;
       }
     }
@@ -309,7 +326,7 @@ export const ingestTarball = async (
   if (!manifestBytes) {
     throw refuse('Tarball has no root package.json');
   }
-  const manifestText = new TextDecoder().decode(manifestBytes);
+  const manifestText = textDecoder.decode(manifestBytes);
   /** @type {Record<string, any>} */
   let packageJson;
   try {
