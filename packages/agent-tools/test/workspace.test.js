@@ -128,3 +128,20 @@ test('provisionWorkspaceTools with no grants derives nothing', async t => {
   const catalog = await provisionWorkspaceTools();
   t.deepEqual(catalog, []);
 });
+
+test('each qualified inspect name reaches its own capability', async t => {
+  await null;
+  const tools = makeWorkspaceTools({
+    remote: Far('GitRemote', { inspect: () => harden({ from: 'remote' }) }),
+    shell: Far('Shell', { inspect: () => harden({ from: 'shell' }) }),
+  });
+  const byName = new Map(tools.map(record => [record.name, record]));
+  const inspectShell = byName.get('inspectShell');
+  const inspectGitRemote = byName.get('inspectGitRemote');
+  if (inspectShell === undefined || inspectGitRemote === undefined) {
+    t.fail('both qualified inspect tools are present');
+    return;
+  }
+  t.deepEqual(await inspectShell.invoke({}), { from: 'shell' });
+  t.deepEqual(await inspectGitRemote.invoke({}), { from: 'remote' });
+});
