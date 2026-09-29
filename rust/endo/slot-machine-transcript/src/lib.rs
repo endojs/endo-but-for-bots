@@ -11,8 +11,13 @@
 //!   `panic-on-reference-error` setting pinned for replay;
 //! - `crank`: monotonic crank ids with `started` / `committed` / `aborted`
 //!   state, the inbound event that started each, and its starting epoch;
-//! - `event`: inbound and outbound rows with monotonic sequence numbers that
-//!   are never reused, so `<worker>:<seq>` is a stable idempotency key.
+//! - `event`: inbound, outbound, host-call request/reply, and post-commit
+//!   host-effect rows with monotonic sequence numbers that are never reused,
+//!   so `<worker>:<seq>` is a stable idempotency key;
+//! - `host_call` and `host_handle`: the classification of each recorded host
+//!   call, and durable logical handles with their reconstruction
+//!   descriptors (§ Host functions are messages too; see the `host` module
+//!   and [`Transcript::host_call`]).
 //!
 //! The supervisor is the only writer, and the crank protocol is the design's:
 //!
@@ -66,6 +71,7 @@
 mod cas;
 mod embargo;
 mod fault;
+mod host;
 
 use std::path::{Path, PathBuf};
 
@@ -74,9 +80,14 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 pub use cas::{blob_hash, sync_dir, CasError, CasStore};
 pub use embargo::{CrankVerdict, DuplicateSuppressor, Embargo, FrameSink, Received, Settlement};
 pub use fault::{FaultMode, FaultPlan};
+pub use host::{
+    AdmissionError, AdmittedCallbacks, CallbackRegistry, HandleId, HandleRecord, HostCallError,
+    HostClass, HostOutcome, HostReplay, HostReply, RecoveryStop, ReleasableEffect, ReplayStop,
+    ReseatReport,
+};
 
 /// The schema version this crate writes.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// The per-worker transcript database path.
 pub fn transcript_path(endo_dir: &Path, worker_handle: &str) -> PathBuf {
@@ -334,6 +345,7 @@ struct ActiveCrank {
     crank: CrankId,
     pending: Vec<Vec<u8>>,
     pending_bytes: usize,
+    host: Vec<host::Staged>,
 }
 
 /// One worker's write-ahead transcript. See the crate documentation.
@@ -515,13 +527,14 @@ impl Transcript {
                  CREATE TABLE IF NOT EXISTS event (
                      seq INTEGER PRIMARY KEY AUTOINCREMENT,
                      crank_id INTEGER NOT NULL REFERENCES crank (crank_id),
-                     kind TEXT NOT NULL CHECK (kind IN ('inbound', 'outbound', 'host-request', 'host-reply')),
+                     kind TEXT NOT NULL CHECK (kind IN ('inbound', 'outbound', 'host-request', 'host-reply', 'host-effect')),
                      payload BLOB NOT NULL,
                      released INTEGER NOT NULL DEFAULT 0
                  ) STRICT;
                  CREATE INDEX IF NOT EXISTS event_by_crank ON event (crank_id, seq);
                  CREATE INDEX IF NOT EXISTS crank_by_state ON crank (state, crank_id);",
             )?;
+            tx.execute_batch(host::SCHEMA)?;
             let existing: Option<String> = tx
                 .query_row("SELECT value FROM meta WHERE key = 'worker'", [], |r| r.get(0))
                 .optional()?;
@@ -677,6 +690,7 @@ impl Transcript {
                     crank,
                     pending: Vec::new(),
                     pending_bytes: 0,
+                    host: Vec::new(),
                 });
                 Ok(crank)
             }
@@ -724,6 +738,7 @@ impl Transcript {
         let crank = active.crank;
         let worker = self.worker.clone();
         let frames = self.transact(Operation::Commit, Some(crank), |tx| {
+            host::commit_staged(tx, crank, &active.host)?;
             let mut frames = Vec::with_capacity(active.pending.len());
             {
                 let mut insert = tx.prepare(
@@ -913,8 +928,13 @@ impl Transcript {
             tx.execute(
                 "DELETE FROM event WHERE crank_id <= ?1
                    AND crank_id IN (SELECT crank_id FROM crank WHERE state = 'committed')
-                   AND (kind != 'outbound' OR released = 1)",
+                   AND (kind NOT IN ('outbound', 'host-effect') OR released = 1)",
                 [wm],
+            )?;
+            tx.execute(
+                "DELETE FROM host_call WHERE NOT EXISTS
+                   (SELECT 1 FROM event e WHERE e.seq = host_call.request_seq)",
+                [],
             )?;
             tx.execute(
                 "DELETE FROM crank WHERE crank_id <= ?1 AND state = 'committed'
@@ -1051,8 +1071,9 @@ fn flush_acks(tx: &rusqlite::Transaction<'_>, acks: &[Seq]) -> rusqlite::Result<
     if acks.is_empty() {
         return Ok(());
     }
-    let mut stmt =
-        tx.prepare("UPDATE event SET released = 1 WHERE seq = ?1 AND kind = 'outbound'")?;
+    let mut stmt = tx.prepare(
+        "UPDATE event SET released = 1 WHERE seq = ?1 AND kind IN ('outbound', 'host-effect')",
+    )?;
     for seq in acks {
         stmt.execute([*seq as i64])?;
     }
