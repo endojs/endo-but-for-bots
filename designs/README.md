@@ -399,6 +399,7 @@ LLM-agent stack).*
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | In Progress |
 | [daemon-capability-bus](daemon-capability-bus.md) | 2026-02-25 | 2026-04-11 | In Progress |
 | [daemon-sqlite-shutdown-checkpoint](daemon-sqlite-shutdown-checkpoint.md) | 2026-08-06 | 2026-08-06 | Not Started |
+| [daemon-lifecycle-idempotency](daemon-lifecycle-idempotency.md) | 2026-09-29 | 2026-09-29 | Proposed |
 | [daemon-endo-rust-sqlite](daemon-endo-rust-sqlite.md) | 2026-04-14 | 2026-08-06 | **Complete** |
 | [daemon-endor-sqlite-iterate-streaming](daemon-endor-sqlite-iterate-streaming.md) | 2026-08-06 | — | Proposed |
 | [daemon-xs-worker-debugger](daemon-xs-worker-debugger.md) | 2026-04-14 | 2026-04-15 | In Progress |
