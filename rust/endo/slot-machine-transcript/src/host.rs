@@ -37,7 +37,11 @@
 //!   delivery that reports the loss ([`Transcript::acknowledge_loss`]).
 //! - [`HostReplay`] returns the recorded replies of the committed suffix
 //!   without invoking any adapter, checks each request byte for byte, and
-//!   halts at a recorded barrier rather than re-running its effect.
+//!   halts at a recorded barrier rather than re-running its effect. Each
+//!   recorded call carries its per-crank call ordinal, and replay follows
+//!   that order, not event sequence: a barrier's request is written before
+//!   the crank's other staged calls, so its event sequence can precede
+//!   calls the guest made first.
 //!
 //! The event log is authoritative for handle state. The `host_handle.open`
 //! column is a cache refreshed in the same transaction that appends the
@@ -301,6 +305,8 @@ pub enum ReplayStop {
 /// One call staged in the active crank.
 pub(crate) enum Staged {
     Call {
+        /// The call's position among the crank's recorded calls.
+        ordinal: u64,
         callback: String,
         class: HostClass,
         handle: Option<HandleId>,
@@ -314,6 +320,8 @@ pub(crate) enum Staged {
         write: Option<TransactionalWrite>,
     },
     Effect {
+        /// The call's position among the crank's recorded calls.
+        ordinal: u64,
         callback: String,
         request: Vec<u8>,
     },
@@ -341,6 +349,7 @@ pub(crate) const SCHEMA: &str = "
     CREATE TABLE IF NOT EXISTS host_call (
         request_seq INTEGER PRIMARY KEY,
         crank_id INTEGER NOT NULL,
+        call_ordinal INTEGER NOT NULL,
         callback TEXT NOT NULL,
         class TEXT NOT NULL,
         handle_id INTEGER,
@@ -349,7 +358,7 @@ pub(crate) const SCHEMA: &str = "
         closes INTEGER NOT NULL DEFAULT 0,
         cleared INTEGER NOT NULL DEFAULT 0
     ) STRICT;
-    CREATE INDEX IF NOT EXISTS host_call_by_crank ON host_call (crank_id, request_seq);
+    CREATE INDEX IF NOT EXISTS host_call_by_crank ON host_call (crank_id, call_ordinal);
     CREATE TABLE IF NOT EXISTS host_handle (
         handle_id INTEGER PRIMARY KEY,
         created_by_seq INTEGER NOT NULL,
@@ -381,6 +390,7 @@ pub(crate) fn commit_staged(
     for s in staged {
         match s {
             Staged::Call {
+                ordinal,
                 callback,
                 class,
                 handle,
@@ -399,9 +409,17 @@ pub(crate) fn commit_staged(
                     None => {
                         let seq = insert_event(tx, crank, "host-request", request)?;
                         tx.execute(
-                            "INSERT INTO host_call (request_seq, crank_id, callback, class, handle_id)
-                             VALUES (?1, ?2, ?3, ?4, ?5)",
-                            params![seq as i64, crank as i64, callback, class.tag(), handle.map(|h| h as i64)],
+                            "INSERT INTO host_call
+                               (request_seq, crank_id, call_ordinal, callback, class, handle_id)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                            params![
+                                seq as i64,
+                                crank as i64,
+                                *ordinal as i64,
+                                callback,
+                                class.tag(),
+                                handle.map(|h| h as i64)
+                            ],
                         )?;
                         seq
                     }
@@ -431,12 +449,16 @@ pub(crate) fn commit_staged(
                     )?;
                 }
             }
-            Staged::Effect { callback, request } => {
+            Staged::Effect {
+                ordinal,
+                callback,
+                request,
+            } => {
                 let seq = insert_event(tx, crank, "host-effect", request)?;
                 tx.execute(
-                    "INSERT INTO host_call (request_seq, crank_id, callback, class)
-                     VALUES (?1, ?2, ?3, 'outbound')",
-                    params![seq as i64, crank as i64, callback],
+                    "INSERT INTO host_call (request_seq, crank_id, call_ordinal, callback, class)
+                     VALUES (?1, ?2, ?3, ?4, 'outbound')",
+                    params![seq as i64, crank as i64, *ordinal as i64, callback],
                 )?;
             }
             Staged::Loss { handle } => {
@@ -500,6 +522,17 @@ impl Transcript {
             Some(r) if r.open && r.broken => HandleState::Broken,
             Some(r) if r.open => HandleState::Open,
             _ => HandleState::Closed,
+        })
+    }
+
+    /// The next recorded call's position in the active crank. Pure calls
+    /// and loss acknowledgments are not recorded calls.
+    fn next_call_ordinal(&self) -> u64 {
+        self.active.as_ref().map_or(0, |a| {
+            a.host
+                .iter()
+                .filter(|s| matches!(s, Staged::Call { .. } | Staged::Effect { .. }))
+                .count() as u64
         })
     }
 
@@ -583,12 +616,14 @@ impl Transcript {
                 HandleState::Closed => return Err(HostCallError::UnknownHandle(h)),
             }
         }
+        let ordinal = self.next_call_ordinal();
         if let HostClass::Outbound { .. } = class {
             self.active
                 .as_mut()
                 .expect("active crank")
                 .host
                 .push(Staged::Effect {
+                    ordinal,
                     callback: callback.to_string(),
                     request: request.to_vec(),
                 });
@@ -600,9 +635,16 @@ impl Transcript {
             Some(self.transact(Operation::Commit, Some(crank), |tx| {
                 let seq = insert_event(tx, crank, "host-request", request)?;
                 tx.execute(
-                    "INSERT INTO host_call (request_seq, crank_id, callback, class, handle_id)
-                     VALUES (?1, ?2, ?3, 'barrier', ?4)",
-                    params![seq as i64, crank as i64, cb, handle.map(|h| h as i64)],
+                    "INSERT INTO host_call
+                       (request_seq, crank_id, call_ordinal, callback, class, handle_id)
+                     VALUES (?1, ?2, ?3, ?4, 'barrier', ?5)",
+                    params![
+                        seq as i64,
+                        crank as i64,
+                        ordinal as i64,
+                        cb,
+                        handle.map(|h| h as i64)
+                    ],
                 )?;
                 Ok(seq)
             })?)
@@ -632,6 +674,7 @@ impl Transcript {
             .expect("active crank")
             .host
             .push(Staged::Call {
+                ordinal,
                 callback: callback.to_string(),
                 class,
                 handle,
@@ -762,15 +805,19 @@ impl Transcript {
 
     /// Whether replay or retry may proceed. Stays stopped while a barrier
     /// ran in a crank that never committed, or while any handle is broken.
+    /// The active crank has not failed to commit, so a barrier it has
+    /// already run does not stop the gate.
     pub fn recovery_gate(&self) -> Result<Result<(), RecoveryStop>, TranscriptError> {
+        let active = self.active_crank().map_or(-1, |c| c as i64);
         let escaped = self
             .conn
             .query_row(
                 "SELECT h.crank_id, h.request_seq, h.callback FROM host_call h
                  JOIN crank c ON c.crank_id = h.crank_id
                  WHERE h.class = 'barrier' AND h.cleared = 0 AND c.state != 'committed'
+                   AND c.crank_id != ?1
                  ORDER BY h.request_seq LIMIT 1",
-                [],
+                [active],
                 |r| {
                     Ok(RecoveryStop::EscapedBarrier {
                         crank: r.get::<_, i64>(0)? as CrankId,
@@ -827,7 +874,7 @@ impl Transcript {
                  JOIN event req ON req.seq = h.request_seq
                  LEFT JOIN event rep ON rep.seq = h.reply_seq
                  WHERE c.state = 'committed' AND h.crank_id > ?1
-                 ORDER BY h.request_seq",
+                 ORDER BY h.crank_id, h.call_ordinal",
             )?;
             let rows = stmt.query_map([watermark as i64], |r| {
                 Ok(Recorded {

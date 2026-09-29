@@ -202,6 +202,72 @@ fn barrier_in_a_crank_that_never_committed_stops_retry_until_cleared() {
 }
 
 #[test]
+fn replay_follows_the_guest_call_order_around_a_barrier() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    {
+        let (mut t, _) = open(root.path());
+        t.begin_crank(b"d1").unwrap();
+        // The barrier's request is durable before the read's, which is
+        // written at commit, yet replay must see the read first.
+        t.host_call(&cb, "now", None, b"clock", |_| reply(b"t=1"))
+            .unwrap();
+        t.host_call(&cb, "launch-missile", None, b"target", |_| {
+            reply(b"launched")
+        })
+        .unwrap();
+        t.host_call(&cb, "post-webhook", None, b"hook", |_| {
+            panic!("outbound effects are not invoked during the crank")
+        })
+        .unwrap();
+        t.host_call(&cb, "now", None, b"clock-2", |_| reply(b"t=2"))
+            .unwrap();
+        // The active crank's own barrier is not an escaped one.
+        assert_eq!(t.recovery_gate().unwrap(), Ok(()));
+        t.commit_crank().unwrap();
+    }
+    let mut t = reopen(root.path());
+    let mut replay = t.host_replay().unwrap();
+    replay.begin_crank(1);
+    assert_eq!(
+        replay.call("now", None, b"clock"),
+        Ok(HostReply::Reply {
+            reply: b"t=1".to_vec(),
+            opened: None
+        })
+    );
+    let Err(ReplayStop::Barrier { seq, .. }) = replay.call("launch-missile", None, b"target")
+    else {
+        panic!("expected the barrier second");
+    };
+    // Once cleared, replay answers the barrier and the calls after it in
+    // the order the guest made them.
+    t.clear_barrier(seq).unwrap();
+    let mut replay = t.host_replay().unwrap();
+    replay.begin_crank(1);
+    replay.call("now", None, b"clock").unwrap();
+    assert_eq!(
+        replay.call("launch-missile", None, b"target"),
+        Ok(HostReply::Reply {
+            reply: b"launched".to_vec(),
+            opened: None
+        })
+    );
+    assert_eq!(
+        replay.call("post-webhook", None, b"hook"),
+        Ok(HostReply::Deferred)
+    );
+    assert_eq!(
+        replay.call("now", None, b"clock-2"),
+        Ok(HostReply::Reply {
+            reply: b"t=2".to_vec(),
+            opened: None
+        })
+    );
+    replay.end_crank().unwrap();
+}
+
+#[test]
 fn outbound_effect_runs_only_after_commit_with_a_stable_idempotency_key() {
     let root = tempfile::tempdir().unwrap();
     let cb = callbacks();
