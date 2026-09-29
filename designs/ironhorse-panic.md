@@ -196,11 +196,16 @@ tables therefore belong to the dedicated worker thread. Thread exit drops these
 resources. Handle identifiers remain globally allocated, and a lookup resolves
 only against the calling thread's table. This also closes the pre-existing
 cross-worker handle lookup gap: the former process-wide tables did not check
-ownership even in runs without a panic. Reconstruction after restart remains
-separate work in § Slot Machine Termination and Retry. Until those handles can
-be reconstructed, a supervised suspend request with open native handles returns
-`suspend-error` and leaves the worker running. The caller must close its file,
-directory, SQLite, and hasher handles before retrying suspension.
+ownership even in runs without a panic. A worker that has attached its host
+transcript (the `host-transcript` control envelope) routes these tables through
+`Transcript::host_call`, so each handle is a logical id with a reconstruction
+descriptor that tracks its committed position, and suspension with open handles
+is allowed. Attaching on resume re-seats every open handle before any delivery
+can use it; a handle with no descriptor (an in-memory database, a hasher fed
+more than its recording limit) is re-seated as broken and every use is refused
+(§ Host functions are messages too). A worker with no attached transcript still
+answers a suspend request with open native handles with `suspend-error` and keeps
+running, because nothing durable could rebuild them.
 
 **Limits of the unwind boundary.** `catch_unwind` catches unwinding Rust panics.
 It cannot contain native stack overflow, explicit process abort, allocation

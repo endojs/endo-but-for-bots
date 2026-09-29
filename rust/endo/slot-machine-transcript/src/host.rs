@@ -191,6 +191,14 @@ pub struct HostOutcome {
     pub opens: Option<Option<Vec<u8>>>,
     /// Whether the call closed its target handle.
     pub closes: bool,
+    /// Other handles the call closed along with its target: closing a
+    /// database finalizes its statements.
+    pub also_closes: Vec<HandleId>,
+    /// `Some(descriptor)` replaces the target handle's reconstruction
+    /// descriptor when the crank commits, so it tracks the committed
+    /// position (a reader's offset, a hasher's fed bytes). `Some(None)`
+    /// records that the resource can no longer be rebuilt.
+    pub redescribes: Option<Option<Vec<u8>>>,
 }
 
 /// What the guest gets back from a host call.
@@ -295,6 +303,8 @@ pub(crate) enum Staged {
         reply: Vec<u8>,
         opens: Option<(HandleId, Option<Vec<u8>>)>,
         closes: bool,
+        also_closes: Vec<HandleId>,
+        redescribes: Option<Option<Vec<u8>>>,
     },
     Effect {
         callback: String,
@@ -372,6 +382,8 @@ pub(crate) fn commit_staged(
                 reply,
                 opens,
                 closes,
+                also_closes,
+                redescribes,
             } => {
                 let request_seq = match request_seq {
                     Some(seq) => *seq,
@@ -403,7 +415,14 @@ pub(crate) fn commit_staged(
                         params![*h as i64, request_seq as i64, callback, descriptor],
                     )?;
                 }
-                if let (true, Some(h)) = (*closes, handle) {
+                if let (Some(descriptor), Some(h)) = (redescribes, handle) {
+                    tx.execute(
+                        "UPDATE host_handle SET descriptor = ?1 WHERE handle_id = ?2",
+                        params![descriptor, *h as i64],
+                    )?;
+                }
+                let target = handle.filter(|_| *closes);
+                for h in target.iter().chain(also_closes) {
                     tx.execute(
                         "UPDATE host_handle SET open = 0 WHERE handle_id = ?1",
                         [*h as i64],
@@ -466,6 +485,9 @@ impl Transcript {
                         closes: true,
                         ..
                     } if *h == handle => return Ok(HandleState::Closed),
+                    Staged::Call { also_closes, .. } if also_closes.contains(&handle) => {
+                        return Ok(HandleState::Closed)
+                    }
                     Staged::Call {
                         opens: Some((h, _)),
                         ..
@@ -576,6 +598,8 @@ impl Transcript {
                 reply: outcome.reply.clone(),
                 opens: opened,
                 closes: outcome.closes,
+                also_closes: outcome.also_closes,
+                redescribes: outcome.redescribes,
             });
         Ok(HostReply::Reply {
             reply: outcome.reply,

@@ -11,19 +11,18 @@
 //!   ed25519Sign(privateKeyHex, messageHex) -> string (signature hex)
 
 use crate::ffi::*;
+use crate::host_ledger::{self, Descriptor, Outcome};
 use crate::worker_io::{abort_if_ffi_panicked, arg_str, set_result_string};
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
+use slot_machine_transcript::HostClass;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 // Handle tables belong to the dedicated worker thread. A caught callback panic
 // cannot expose a torn mutation to a sibling worker, and thread exit drops all
-// remaining native resources. Global IDs prevent a sibling's handle from aliasing
-// an entry in this worker's table.
-static NEXT_HASHER_HANDLE: AtomicU32 = AtomicU32::new(1);
+// remaining native resources. `host_ledger::call` allocates the ids.
 thread_local! {
     static HASHER_MAP: RefCell<HashMap<u32, Sha256>> = RefCell::new(HashMap::new());
 }
@@ -151,14 +150,56 @@ pub unsafe extern "C" fn host_ed25519_sign(the: *mut XsMachine) {
 /// Creates a new incremental SHA-256 hasher and returns its handle.
 pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        HASHER_MAP.with(|hasher_map| {
-            let handle = NEXT_HASHER_HANDLE.fetch_add(1, Ordering::SeqCst);
-            let mut map = hasher_map.borrow_mut();
-            map.insert(handle, Sha256::new());
-            fxInteger(the, &mut (*the).scratch, handle as i32);
-            *(*the).frame.add(1) = (*the).scratch;
+        let result = host_ledger::call("sha256Init", None, b"", || Outcome {
+            opens: Some(Descriptor::hasher(b"")),
+            ..Outcome::default()
         });
+        match result {
+            Ok(Some(handle)) => {
+                HASHER_MAP.with(|m| m.borrow_mut().insert(handle, Sha256::new()));
+                fxInteger(the, &mut (*the).scratch, handle as i32);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
+            Err(msg) => set_result_string(the, &msg),
+            Ok(None) => {}
+        }
     });
+}
+
+/// Feed `data` to a hasher under the host-call ledger. Under a transcript
+/// the descriptor records every fed byte, up to
+/// [`host_ledger::HASHER_DESCRIPTOR_LIMIT`].
+///
+/// # Safety
+/// `the` must be valid.
+unsafe fn feed(the: *mut XsMachine, callback: &str, handle: u32, data: &[u8]) {
+    let mut request = handle.to_be_bytes().to_vec();
+    request.extend_from_slice(data);
+    let describe = host_ledger::attached();
+    let result = host_ledger::call(callback, Some(handle), &request, || {
+        let fed = HASHER_MAP.with(|m| match m.borrow_mut().get_mut(&handle) {
+            Some(hasher) => {
+                hasher.update(data);
+                true
+            }
+            None => false,
+        });
+        let redescribes = (fed && describe).then(|| {
+            host_ledger::descriptor(handle)
+                .and_then(|d| d.hasher_fed())
+                .and_then(|mut all| {
+                    all.extend_from_slice(data);
+                    Descriptor::hasher(&all)
+                })
+        });
+        Outcome {
+            redescribes,
+            ..Outcome::default()
+        }
+    });
+    if let Err(msg) = result {
+        set_result_string(the, &msg);
+    }
 }
 
 /// `sha256Update(handle, data) -> undefined`
@@ -166,17 +207,11 @@ pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
 /// Feeds data into an incremental SHA-256 hasher.
 pub unsafe extern "C" fn host_sha256_update(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        HASHER_MAP.with(|hasher_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-            let data = arg_str(the, 1);
-
-            let mut map = hasher_map.borrow_mut();
-            if let Some(hasher) = map.get_mut(&handle) {
-                hasher.update(data.as_bytes());
-            }
-        });
+        let handle_slot = (*the).frame.sub(1);
+        let handle = fxToInteger(the, handle_slot) as u32;
+        abort_if_ffi_panicked();
+        let data = arg_str(the, 1);
+        feed(the, "sha256Update", handle, data.as_bytes());
     });
 }
 
@@ -186,18 +221,13 @@ pub unsafe extern "C" fn host_sha256_update(the: *mut XsMachine) {
 /// This bypasses the slow TextDecoder path used by `sha256Update`.
 pub unsafe extern "C" fn host_sha256_update_bytes(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        HASHER_MAP.with(|hasher_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-            let data_slot = (*the).frame.sub(2);
-            if let Some(buf) = crate::worker_io::read_typed_array_bytes(the, data_slot) {
-                let mut map = hasher_map.borrow_mut();
-                if let Some(hasher) = map.get_mut(&handle) {
-                    hasher.update(&buf);
-                }
-            }
-        });
+        let handle_slot = (*the).frame.sub(1);
+        let handle = fxToInteger(the, handle_slot) as u32;
+        abort_if_ffi_panicked();
+        let data_slot = (*the).frame.sub(2);
+        if let Some(buf) = crate::worker_io::read_typed_array_bytes(the, data_slot) {
+            feed(the, "sha256UpdateBytes", handle, &buf);
+        }
     });
 }
 
@@ -207,22 +237,25 @@ pub unsafe extern "C" fn host_sha256_update_bytes(the: *mut XsMachine) {
 /// The handle is consumed and cannot be reused.
 pub unsafe extern "C" fn host_sha256_finish(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        HASHER_MAP.with(|hasher_map| {
-            let handle_slot = (*the).frame.sub(1);
-            let handle = fxToInteger(the, handle_slot) as u32;
-            abort_if_ffi_panicked();
-
-            let mut map = hasher_map.borrow_mut();
-            match map.remove(&handle) {
-                Some(hasher) => {
-                    let hash = hasher.finalize();
-                    set_result_string(the, &hex::encode(hash));
-                }
-                None => {
-                    set_result_string(the, "Error: invalid hasher handle");
-                }
+        let handle_slot = (*the).frame.sub(1);
+        let handle = fxToInteger(the, handle_slot) as u32;
+        abort_if_ffi_panicked();
+        let request = handle.to_string().into_bytes();
+        let result = host_ledger::call("sha256Finish", Some(handle), &request, || {
+            let text = match HASHER_MAP.with(|m| m.borrow_mut().remove(&handle)) {
+                Some(hasher) => hex::encode(hasher.finalize()),
+                None => "Error: invalid hasher handle".to_string(),
+            };
+            set_result_string(the, &text);
+            Outcome {
+                closes: !text.starts_with("Error"),
+                reply: text.into_bytes(),
+                ..Outcome::default()
             }
         });
+        if let Err(msg) = result {
+            set_result_string(the, &msg);
+        }
     });
 }
 
@@ -230,6 +263,30 @@ pub unsafe extern "C" fn host_sha256_finish(the: *mut XsMachine) {
 pub(crate) fn has_open_handles() -> bool {
     HASHER_MAP.with(|map| !map.borrow().is_empty())
 }
+
+/// Rebuild a hasher from its descriptor by re-feeding its recorded bytes.
+pub(crate) fn reseat(handle: u32, descriptor: &Descriptor) -> Result<(), String> {
+    let fed = descriptor.hasher_fed().ok_or("not a hasher descriptor")?;
+    let mut hasher = Sha256::new();
+    hasher.update(&fed);
+    HASHER_MAP.with(|m| m.borrow_mut().insert(handle, hasher));
+    Ok(())
+}
+
+/// Every callback in [`CALLBACKS`], by guest name, with its host-call
+/// classification.
+pub const CLASSES: &[(&str, HostClass)] = &[
+    ("sha256", HostClass::Pure),
+    ("randomHex256", HostClass::Read),
+    ("randomFillBytes", HostClass::Read),
+    ("ed25519Keygen", HostClass::Read),
+    ("ed25519Sign", HostClass::Pure),
+    ("sha256Init", HostClass::Read),
+    ("sha256Update", HostClass::Read),
+    ("sha256UpdateBytes", HostClass::Read),
+    ("sha256Finish", HostClass::Read),
+    ("sha256Bytes", HostClass::Pure),
+];
 
 /// All host callbacks in registration order for snapshot tables.
 pub const CALLBACKS: &[crate::ffi::XsCallback] = &[

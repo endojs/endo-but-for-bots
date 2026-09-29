@@ -59,7 +59,7 @@ fn opens(bytes: &[u8], descriptor: Option<&[u8]>) -> HostOutcome {
     HostOutcome {
         reply: bytes.to_vec(),
         opens: Some(descriptor.map(<[u8]>::to_vec)),
-        closes: false,
+        ..HostOutcome::default()
     }
 }
 
@@ -476,4 +476,99 @@ fn compaction_keeps_open_handles_and_unreleased_effects() {
     let mut replay = t.host_replay().unwrap();
     replay.begin_crank(1);
     replay.end_crank().unwrap();
+}
+
+#[test]
+fn committed_redescription_replaces_the_descriptor_and_an_aborted_one_does_not() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    let file;
+    {
+        let (mut t, _) = open(root.path());
+        t.begin_crank(b"d1").unwrap();
+        file = opened(
+            t.host_call(&cb, "open-file", None, b"/a.txt", |_| {
+                opens(b"fd", Some(b"cap:/a.txt@0"))
+            })
+            .unwrap(),
+        );
+        t.host_call(&cb, "read-file", Some(file), b"4", |_| HostOutcome {
+            reply: b"abcd".to_vec(),
+            redescribes: Some(Some(b"cap:/a.txt@4".to_vec())),
+            ..HostOutcome::default()
+        })
+        .unwrap();
+        t.commit_crank().unwrap();
+        t.begin_crank(b"d2").unwrap();
+        t.host_call(&cb, "read-file", Some(file), b"4", |_| HostOutcome {
+            reply: b"efgh".to_vec(),
+            redescribes: Some(Some(b"cap:/a.txt@8".to_vec())),
+            ..HostOutcome::default()
+        })
+        .unwrap();
+        t.abort_crank().unwrap();
+    }
+    let t = reopen(root.path());
+    let open = t.open_handles().unwrap();
+    assert_eq!(open[0].descriptor.as_deref(), Some(&b"cap:/a.txt@4"[..]));
+}
+
+#[test]
+fn redescription_to_none_reseats_the_handle_as_broken() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    let file;
+    {
+        let (mut t, _) = open(root.path());
+        t.begin_crank(b"d1").unwrap();
+        file = opened(
+            t.host_call(&cb, "open-file", None, b"/a.txt", |_| {
+                opens(b"fd", Some(b"cap:/a.txt@0"))
+            })
+            .unwrap(),
+        );
+        t.host_call(&cb, "read-file", Some(file), b"4", |_| HostOutcome {
+            redescribes: Some(None),
+            ..HostOutcome::default()
+        })
+        .unwrap();
+        t.commit_crank().unwrap();
+    }
+    let mut t = reopen(root.path());
+    let report = t.reseat_handles(|_| Ok(())).unwrap();
+    assert_eq!(report.reseated, Vec::<u64>::new());
+    assert_eq!(
+        report.broken.iter().map(|(h, _)| *h).collect::<Vec<_>>(),
+        vec![file]
+    );
+}
+
+#[test]
+fn also_closed_handles_close_with_the_target() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    let (mut t, _) = open(root.path());
+    t.begin_crank(b"d1").unwrap();
+    let parent = opened(
+        t.host_call(&cb, "open-file", None, b"db", |_| opens(b"db", Some(b"db")))
+            .unwrap(),
+    );
+    let child = opened(
+        t.host_call(&cb, "open-file", Some(parent), b"stmt", |_| {
+            opens(b"stmt", Some(b"stmt"))
+        })
+        .unwrap(),
+    );
+    t.host_call(&cb, "close", Some(parent), b"", |_| HostOutcome {
+        closes: true,
+        also_closes: vec![child],
+        ..HostOutcome::default()
+    })
+    .unwrap();
+    assert_eq!(
+        t.host_call(&cb, "read-file", Some(child), b"", |_| unreachable!()),
+        Err(HostCallError::UnknownHandle(child))
+    );
+    t.commit_crank().unwrap();
+    assert!(t.open_handles().unwrap().is_empty());
 }

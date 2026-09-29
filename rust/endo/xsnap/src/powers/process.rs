@@ -129,6 +129,15 @@ pub unsafe extern "C" fn host_real_path(the: *mut XsMachine) {
     });
 }
 
+/// Every callback in [`CALLBACKS`], by guest name, with its host-call
+/// classification.
+pub const CLASSES: &[(&str, slot_machine_transcript::HostClass)] = &[
+    ("getPid", slot_machine_transcript::HostClass::Read),
+    ("getEnv", slot_machine_transcript::HostClass::Read),
+    ("joinPath", slot_machine_transcript::HostClass::Pure),
+    ("realPath", slot_machine_transcript::HostClass::Read),
+];
+
 /// All host callbacks in registration order for snapshot tables.
 pub const CALLBACKS: &[crate::ffi::XsCallback] = &[
     host_get_pid,

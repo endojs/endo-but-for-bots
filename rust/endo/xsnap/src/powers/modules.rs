@@ -82,6 +82,13 @@ fn normalize_path(path: &str) -> String {
     parts.join("/")
 }
 
+/// Every callback in [`CALLBACKS`], by guest name, with its host-call
+/// classification.
+pub const CLASSES: &[(&str, slot_machine_transcript::HostClass)] = &[
+    ("loadModuleSource", slot_machine_transcript::HostClass::Read),
+    ("resolveModule", slot_machine_transcript::HostClass::Pure),
+];
+
 /// All host callbacks in registration order for snapshot tables.
 pub const CALLBACKS: &[crate::ffi::XsCallback] = &[
     host_load_module_source,

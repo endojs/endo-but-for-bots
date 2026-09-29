@@ -8,6 +8,7 @@ pub mod archive;
 pub mod cesu8;
 pub mod envelope;
 pub mod ffi;
+pub mod host_ledger;
 pub mod powers;
 pub mod worker_io;
 
@@ -78,6 +79,7 @@ pub struct Machine {
 // This is intentional: each worker gets its own machine.
 
 /// Result of evaluating JavaScript.
+#[derive(Debug, PartialEq)]
 pub enum JsValue {
     Undefined,
     Null,
@@ -1282,6 +1284,10 @@ fn handle_envelope(machine: &Machine, data: &[u8]) -> EnvelopeAction {
             "suspend" => {
                 return handle_suspend(machine, env.nonce, &env.payload);
             }
+            "host-transcript" => {
+                handle_host_transcript(machine, env.nonce, &env.payload);
+                return EnvelopeAction::Continue;
+            }
             "meter-config" => {
                 // Decode CBOR map: {"hard_limit": u64}
                 if let Some(limit) = decode_meter_config(&env.payload) {
@@ -1306,13 +1312,16 @@ fn handle_envelope(machine: &Machine, data: &[u8]) -> EnvelopeAction {
 /// sent back to the supervisor — the snapshot never transits the
 /// envelope bus.
 fn handle_suspend(machine: &Machine, nonce: i64, cas_dir: &[u8]) -> EnvelopeAction {
-    if powers::fs::has_open_handles()
-        || powers::sqlite::has_open_handles()
-        || powers::crypto::has_open_handles()
-    {
-        send_suspend_error(nonce, "suspend: close native file, directory, SQLite, and hasher handles first");
+    if host_ledger::suspend_blocked() {
+        send_suspend_error(
+            nonce,
+            "suspend: close native file, directory, SQLite, and hasher handles first, \
+             or attach a host transcript that can re-seat them",
+        );
         return EnvelopeAction::Continue;
     }
+    // The snapshot must agree with the committed handle descriptors.
+    host_ledger::end_delivery(true);
     let cas_path = match std::str::from_utf8(cas_dir) {
         Ok(s) if !s.is_empty() => std::path::PathBuf::from(s),
         _ => {
@@ -1320,7 +1329,17 @@ fn handle_suspend(machine: &Machine, nonce: i64, cas_dir: &[u8]) -> EnvelopeActi
             return EnvelopeAction::Continue;
         }
     };
-    match machine.suspend_to_cas(SNAPSHOT_SIGNATURE, &cas_path) {
+    let published = machine
+        .suspend_to_cas(SNAPSHOT_SIGNATURE, &cas_path)
+        .and_then(|hash| {
+            if host_ledger::attached() {
+                let heap = std::fs::read(cas_path.join(&hash)).map_err(SnapshotError::Io)?;
+                host_ledger::publish_heap(&heap)
+                    .map_err(|e| SnapshotError::Io(std::io::Error::other(e)))?;
+            }
+            Ok(hash)
+        });
+    match published {
         Ok(hash) => {
             let env = envelope::Envelope {
                 handle: 0,
@@ -1337,6 +1356,40 @@ fn handle_suspend(machine: &Machine, nonce: i64, cas_dir: &[u8]) -> EnvelopeActi
             EnvelopeAction::Continue
         }
     }
+}
+
+/// Attach the worker's host transcript (the payload is its path) and
+/// re-seat every handle it records as open. Replies `host-transcript-attached`
+/// with the re-seat report as JSON, or `host-transcript-error`.
+fn handle_host_transcript(machine: &Machine, nonce: i64, path: &[u8]) {
+    let context = unsafe { (*machine.raw).context } as *const powers::HostPowers;
+    let result = match std::str::from_utf8(path) {
+        Ok(path) if !path.is_empty() && !context.is_null() => {
+            let path = std::path::Path::new(path);
+            let worker = path
+                .file_stem()
+                .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+            host_ledger::attach(path, &worker, unsafe { &*context }, || {
+                machine
+                    .suspend(SNAPSHOT_SIGNATURE)
+                    .map(|data| data.snapshot)
+                    .map_err(|e| format!("snapshot heap: {e}"))
+            })
+        }
+        _ => Err("host-transcript: missing path or host powers".to_string()),
+    };
+    let (verb, payload) = match result {
+        Ok(attachment) => ("host-transcript-attached", attachment.to_json()),
+        Err(e) => ("host-transcript-error", e),
+    };
+    let env = envelope::Envelope {
+        handle: 0,
+        verb: verb.to_string(),
+        payload: payload.into_bytes(),
+        nonce,
+    };
+    let encoded = envelope::encode_envelope(&env);
+    let _ = worker_io::with_transport(|t| t.send_raw_frame(&encoded));
 }
 
 fn send_suspend_error(nonce: i64, msg: &str) {
@@ -1360,6 +1413,7 @@ fn send_suspend_error(nonce: i64, msg: &str) {
 /// O(n²) hex-parse approach, which is critical for large envelopes
 /// (e.g. 1 MB CapTP payloads from storeBlob).
 fn dispatch_envelope(machine: &Machine, data: &[u8]) {
+    host_ledger::begin_delivery(data);
     worker_io::set_pending_envelope(data.to_vec());
     machine.eval(
         "try { \
@@ -2215,6 +2269,9 @@ pub fn run_xs_program(
                 break 'outer;
             }
 
+            // A metered-out delivery's host calls never happened.
+            host_ledger::end_delivery(abort_status.is_none());
+
             if let Some(status) = abort_status {
                 // The meter report keeps its worker-death spelling; the run's
                 // return value carries which exit fired.
@@ -2235,6 +2292,9 @@ pub fn run_xs_program(
             }
         }
 
+        // A delivery the loop left open died with its worker.
+        host_ledger::end_delivery(false);
+        host_ledger::detach();
         machine.end_metering();
     } else if ffi_death.is_none() {
         // Run until idle: drain promise jobs and fire timers until
@@ -4556,6 +4616,219 @@ mod tests {
         assert!(!powers::crypto::has_open_handles());
         assert!(matches!(handle_suspend(&machine, 124, path), EnvelopeAction::Suspend));
         worker_io::clear_transport();
+    }
+
+    /// The worker side of § Verification's host-handle / effect contract,
+    /// driven against a live XS worker: suspend with open native handles
+    /// under a host transcript, resume in a fresh worker thread, and re-seat.
+    #[test]
+    fn host_transcript_lifts_the_suspend_refusal_and_resume_reseats_handles() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(data.join("sub")).unwrap();
+        std::fs::write(data.join("a.txt"), "abcdefgh").unwrap();
+        std::fs::write(data.join("sub/inner.txt"), "inner").unwrap();
+        let transcript = root.path().join("worker.sqlite");
+        let database = root.path().join("guest.sqlite");
+        let cas = root.path().join("cas");
+        std::fs::create_dir_all(&cas).unwrap();
+
+        let worker = |data: std::path::PathBuf| {
+            setup();
+            let mut powers = powers::HostPowers::new();
+            powers.add_dir(
+                "test",
+                cap_std::fs::Dir::open_ambient_dir(&data, cap_std::ambient_authority()).unwrap(),
+            );
+            Box::into_raw(Box::new(powers))
+        };
+        let attach = |machine: &Machine, sent: &std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>| {
+            let request = envelope::encode_envelope(&envelope::Envelope {
+                handle: 0,
+                verb: "host-transcript".into(),
+                payload: transcript.to_str().unwrap().as_bytes().to_vec(),
+                nonce: 7,
+            });
+            assert!(matches!(
+                handle_envelope(machine, &request),
+                EnvelopeAction::Continue
+            ));
+            let reply = envelope::decode_envelope(sent.lock().unwrap().last().unwrap()).unwrap();
+            assert_eq!(
+                reply.verb,
+                "host-transcript-attached",
+                "{}",
+                String::from_utf8_lossy(&reply.payload)
+            );
+            serde_json::from_slice::<serde_json::Value>(&reply.payload).unwrap()
+        };
+
+        let (data_path, db_path, cas_dir) = (data.clone(), database.clone(), cas.clone());
+        let (hash, callbacks) = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let powers = worker(data_path);
+                    let machine = Machine::new(&DEFAULT_CREATION, "live").unwrap();
+                    machine.register_powers(powers);
+                    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+                    worker_io::install_transport(Box::new(MockTransport { sent: sent.clone() }));
+                    let report = attach(&machine, &sent);
+                    assert_eq!(report["reseated"], serde_json::json!([]));
+                    host_ledger::begin_delivery(b"d1");
+                    machine.eval(&format!(
+                        "var r = openReader('test', 'a.txt');
+                     var first = String.fromCharCode(...new Uint8Array(read(r, 4)));
+                     var w = openWriter('test', 'out.bin');
+                     write(w, new Uint8Array([1, 2, 3]));
+                     var h = sha256Init();
+                     sha256Update(h, 'ab');
+                     var db = sqliteOpen({db:?});
+                     sqliteExec(db, 'CREATE TABLE t (x); INSERT INTO t VALUES (1)');
+                     var s = sqlitePrepare(db, 'SELECT count(*) AS n FROM t');
+                     var d = openDir('test', 'sub');
+                     var m = sqliteOpen(':memory:');",
+                        db = db_path.to_str().unwrap(),
+                    ));
+                    assert_eq!(machine.eval("first"), Some(JsValue::String("abcd".into())));
+                    host_ledger::end_delivery(true);
+                    let callbacks = machine.registered_callbacks.borrow().clone();
+                    let cas_bytes = cas_dir.to_str().unwrap().as_bytes();
+                    assert!(matches!(
+                        handle_suspend(&machine, 9, cas_bytes),
+                        EnvelopeAction::Suspend
+                    ));
+                    let reply =
+                        envelope::decode_envelope(sent.lock().unwrap().last().unwrap()).unwrap();
+                    assert_eq!(reply.verb, "suspended");
+                    host_ledger::detach();
+                    worker_io::clear_transport();
+                    (String::from_utf8(reply.payload).unwrap(), callbacks)
+                })
+                .join()
+                .unwrap()
+        });
+
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let powers = worker(data.clone());
+                    let mut callbacks = callbacks;
+                    let machine = Machine::resume_from_cas(
+                        &cas,
+                        &hash,
+                        "resumed",
+                        SNAPSHOT_SIGNATURE,
+                        &mut callbacks,
+                    )
+                    .unwrap();
+                    machine.register_powers(powers);
+                    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+                    worker_io::install_transport(Box::new(MockTransport { sent: sent.clone() }));
+                    let report = attach(&machine, &sent);
+                    let handle = |name: &str| match machine.eval(name) {
+                        Some(JsValue::Integer(h)) => h as u64,
+                        other => panic!("{name} is not a handle: {other:?}"),
+                    };
+                    let memory = handle("m");
+                    let mut reseated: Vec<u64> = ["r", "w", "h", "db", "s", "d"]
+                        .iter()
+                        .map(|n| handle(n))
+                        .collect();
+                    reseated.sort_unstable();
+                    assert_eq!(report["reseated"], serde_json::json!(reseated));
+                    assert_eq!(report["broken"][0][0], serde_json::json!(memory));
+                    assert!(report["stopped"]
+                        .as_str()
+                        .unwrap()
+                        .contains("BrokenHandles"));
+
+                    host_ledger::begin_delivery(b"d2");
+                    let eval = |code: &str| machine.eval(code);
+                    // Each re-seated handle resumes from its committed position.
+                    assert_eq!(
+                        eval("String.fromCharCode(...new Uint8Array(read(r, 4)))"),
+                        Some(JsValue::String("efgh".into()))
+                    );
+                    eval("write(w, new Uint8Array([4])); closeWriter(w)");
+                    assert_eq!(
+                        std::fs::read(data.join("out.bin")).unwrap(),
+                        vec![1, 2, 3, 4]
+                    );
+                    eval("sha256Update(h, 'c')");
+                    assert_eq!(
+                        eval("sha256Finish(h) === sha256('abc')"),
+                        Some(JsValue::Boolean(true))
+                    );
+                    assert_eq!(
+                        eval("sqliteStmtGet(s, '[]')"),
+                        Some(JsValue::String(r#"{"n":{"$bigint":"1"}}"#.into()))
+                    );
+                    assert_eq!(
+                        eval("readFileText(d, 'inner.txt')"),
+                        Some(JsValue::String("inner".into()))
+                    );
+                    // The in-memory database had no descriptor: its use is refused
+                    // without reaching a fabricated connection.
+                    let refused = format!("Error: handle {memory} was not re-seated");
+                    assert_eq!(
+                        eval("sqliteExec(m, 'SELECT 1')"),
+                        Some(JsValue::String(refused))
+                    );
+                    assert!(powers::sqlite::has_open_handles());
+                    // Closing it records the loss, which reopens recovery.
+                    eval("sqliteClose(m)");
+                    host_ledger::end_delivery(true);
+                    let transcript = host_ledger::detach().unwrap();
+                    assert_eq!(transcript.recovery_gate().unwrap(), Ok(()));
+                    worker_io::clear_transport();
+                })
+                .join()
+                .unwrap();
+        });
+    }
+
+    /// A barrier (a file write) in a delivery that never committed
+    /// keeps recovery stopped for the next incarnation.
+    #[test]
+    fn host_transcript_barrier_in_an_aborted_delivery_stops_recovery() {
+        let root = tempfile::tempdir().unwrap();
+        let transcript = root.path().join("worker.sqlite");
+        let incarnation = |abort: bool| {
+            let root = root.path().to_owned();
+            let transcript = transcript.clone();
+            std::thread::spawn(move || {
+                setup();
+                let mut powers = powers::HostPowers::new();
+                powers.add_dir(
+                    "test",
+                    cap_std::fs::Dir::open_ambient_dir(&root, cap_std::ambient_authority())
+                        .unwrap(),
+                );
+                let machine = Machine::new(&DEFAULT_CREATION, "barrier").unwrap();
+                let powers = Box::into_raw(Box::new(powers));
+                machine.register_powers(powers);
+                let heap = || Ok(machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot);
+                let attachment =
+                    host_ledger::attach(&transcript, "barrier", unsafe { &*powers }, heap).unwrap();
+                if abort {
+                    host_ledger::begin_delivery(b"d1");
+                    machine.eval(
+                        "var w = openWriter('test', 'escaped'); write(w, new Uint8Array([1]))",
+                    );
+                    host_ledger::end_delivery(false);
+                }
+                host_ledger::detach();
+                attachment
+            })
+            .join()
+            .unwrap()
+        };
+        assert_eq!(incarnation(true).stopped, None);
+        assert!(root.path().join("escaped").exists());
+        assert!(matches!(
+            incarnation(false).stopped,
+            Some(slot_machine_transcript::RecoveryStop::EscapedBarrier { .. })
+        ));
     }
 
     /// Mock transport that captures sent frames.
