@@ -27,10 +27,17 @@ const makeMockController = () => {
     async *followIdNameChanges(_id) {
       yield harden({ names: [] });
     },
-    storeIdentifier: async () => {},
-    storeLocator: async () => {},
-    remove: async () => {},
-    rename: async () => {},
+    storeIdentifier: async (name, targetId) => entries.set(name, targetId),
+    storeLocator: async (name, locator) => entries.set(name, locator),
+    remove: async name => entries.delete(name),
+    rename: async (fromName, toName) => {
+      const targetId = entries.get(fromName);
+      if (targetId === undefined) {
+        throw new Error(`Formula does not exist for pet name ${fromName}`);
+      }
+      entries.delete(fromName);
+      entries.set(toName, targetId);
+    },
     seedGcEdges: async () => {},
     testEntries: entries,
   };
@@ -107,4 +114,32 @@ test('reverseIdentify excludes non-matching special names', t => {
   const sitter = makePetSitter(ctrl, { '@agent': id('other:node') });
   const names = sitter.reverseIdentify(id('target:node'));
   t.false(names.includes('@agent'));
+});
+
+test('non-extensible sitter preserves existing entries without permitting extension', async t => {
+  const controller = makeMockController();
+  controller.testEntries.set('first', id('first:node'));
+  controller.testEntries.set('second', id('second:node'));
+  const sitter = makePetSitter(
+    controller,
+    { '@agent': id('agent:node') },
+    true,
+  );
+
+  await sitter.storeIdentifier('first', id('replacement:node'));
+  t.is(sitter.identifyLocal('first'), id('replacement:node'));
+
+  await sitter.rename('first', 'second');
+  t.false(sitter.has('first'));
+  t.is(sitter.identifyLocal('second'), id('replacement:node'));
+
+  await t.throwsAsync(sitter.storeIdentifier('third', id('third:node')), {
+    message: 'Cannot add pet name "third" to a non-extensible directory',
+  });
+
+  await sitter.remove('second');
+  t.false(sitter.has('second'));
+  await t.throwsAsync(sitter.storeIdentifier('second', id('again:node')), {
+    message: 'Cannot add pet name "second" to a non-extensible directory',
+  });
 });

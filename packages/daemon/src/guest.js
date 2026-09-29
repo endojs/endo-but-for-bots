@@ -70,6 +70,7 @@ export const makeGuestMaker = ({
    * @param {FormulaIdentifier} planesDirectoryId
    * @param {FormulaIdentifier | undefined} guestPinsDirectoryId
    * @param {FormulaIdentifier | undefined} hostPinsDirectoryId
+   * @param {boolean} nonExtensible
    * @param {Context} context
    */
   const makeGuest = async (
@@ -86,6 +87,7 @@ export const makeGuestMaker = ({
     planesDirectoryId,
     guestPinsDirectoryId,
     hostPinsDirectoryId,
+    nonExtensible,
     context,
   ) => {
     context.thisDiesIfThatDies(hostHandleId);
@@ -122,7 +124,11 @@ export const makeGuestMaker = ({
     if (guestPinsDirectoryId !== undefined) {
       specialNames['@pins'] = guestPinsDirectoryId;
     }
-    const specialStore = makePetSitter(baseController, specialNames);
+    const specialStore = makePetSitter(
+      baseController,
+      specialNames,
+      nonExtensible,
+    );
 
     const getNetworkAddresses = () =>
       getAllNetworkAddresses(networksDirectoryId);

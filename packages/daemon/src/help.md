@@ -418,14 +418,16 @@ Store a passable value (number, string, array, record, etc.) with a name.
 Create or retrieve a confined guest agent.
 - provideGuest() creates an anonymous guest
 - provideGuest("my-guest") creates/retrieves a named guest
-Options: { agentName, introducedNames, pins, networks }
+Options: { agentName, introducedNames, pins, networks, nonExtensible }
+- nonExtensible: prevent the new agent from adding names to its own directory
 
 ## provideHost(petName?, options?) -> Promise<EndoHost>
 
 Create or retrieve another host agent.
 - provideHost() creates an anonymous host
 - provideHost("my-host") creates/retrieves a named host
-Options: { agentName, introducedNames, pins, networks }
+Options: { agentName, introducedNames, pins, networks, nonExtensible }
+- nonExtensible: prevent the new agent from adding names to its own directory
 
 ## provideWorker(petNamePath) -> Promise<EndoWorker>
 
@@ -854,8 +856,8 @@ options.followSymlinks: boolean — Let `**` descend through directory symlinks 
 (default false). This is `rg -L`, and like it, the sweep can become very large: in a
 workspace checkout every node_modules link points back into the tree, so the walk
 enumerates every route to every package rather than every file.
-Example: glob("**/*.js") → all JavaScript files at any depth.
-Example: glob("src/*") → the immediate children of src.
+Example: glob("**/*.js") -> all JavaScript files at any depth.
+Example: glob("src/*") -> the immediate children of src.
 
 ## grep(pattern, paths?, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -874,8 +876,8 @@ Each matching line yields one { file, line, text } record: file is the mount-fac
 path, line is 1-based, and text is the whole line with any trailing carriage return stripped
 (CRLF normalization). A path that is denied, escapes the mount, resolves into a denied
 directory, is a directory, or cannot be read is skipped silently.
-Example: grep("TODO", await glob("src/**/*.js")) → every TODO line under src.
-Example: grep("^export") → up to 1000 exported-symbol lines across the whole mount.
+Example: grep("TODO", await glob("src/**/*.js")) -> every TODO line under src.
+Example: grep("^export") -> up to 1000 exported-symbol lines across the whole mount.
 
 ## glorp(globPattern, grepPattern, options?) -> Promise<Array<{ file, line, text }>>
 
@@ -892,7 +894,7 @@ options.maxResults: number — Non-negative safe-integer cap on match records (d
 options.followSymlinks: boolean — Passed to the glob half only (see glob); the grep half
 receives the enumerated paths, which are named and so always read.
 glorp(g, p) is the fused equivalent of grep(p, glob(g)); prefer it when you have both patterns up front.
-Example: glorp("src/**/*.js", "TODO") → every TODO line in a .js file under src.
+Example: glorp("src/**/*.js", "TODO") -> every TODO line in a .js file under src.
 
 ## lookup(path) -> Promise<EndoMount | EndoMountFile>
 

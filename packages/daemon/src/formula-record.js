@@ -95,6 +95,10 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
           identifier: formula.hostPins,
         };
       }
+      properties.nonExtensible = {
+        kind: 'literal',
+        value: formula.nonExtensible ?? false,
+      };
       break;
     }
     case 'host': {
@@ -138,6 +142,10 @@ export const makeFormulaRecord = (formula, number, options = {}) => {
         identifier: formula.planes,
       };
       properties.pins = { kind: 'reference', identifier: formula.pins };
+      properties.nonExtensible = {
+        kind: 'literal',
+        value: formula.nonExtensible ?? false,
+      };
       break;
     }
     case 'make-archive': {
