@@ -142,6 +142,50 @@ test('selectOutgoingCandidates skips a leading hint with no registered transport
   fabric.shutdown();
 });
 
+test('provideSession falls back to the next hint when a connect fails', async t => {
+  // A dialable-scheme hint whose connect rejects must not abort the
+  // dial: the initiator tries the next candidate in priority order.
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
+  const keyA = addFreshKey(netA).keyId;
+  const keyB = addFreshKey(netB).keyId;
+  await netA.addTransport(fabric.transportFor('A'));
+  await netB.addTransport(fabric.transportFor('B'));
+  // First hint names a mesh listener that does not exist, so its
+  // connect rejects; the second routes to B.
+  const locB = {
+    ...netB.locationFor(keyB),
+    hints: { 0: 'mesh:nobody', 1: 'mesh:B' },
+  };
+
+  const [sessionA, sessionB] = await Promise.all([
+    netA.provideSession(locB),
+    netB.waitForInboundSession(keyA),
+  ]);
+  t.is(sessionA.remoteLocation.designator, keyB);
+  t.is(sessionB.remoteLocation.designator, keyA);
+
+  sessionA.close();
+  sessionB.close();
+});
+
+test('provideSession rejects when every hint fails to connect', async t => {
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netB = makeNetworkForTest(t, { codec: cborCodec });
+  addFreshKey(netA);
+  const keyB = addFreshKey(netB).keyId;
+  await netA.addTransport(fabric.transportFor('A'));
+  const locB = {
+    ...netB.locationFor(keyB),
+    hints: { 0: 'mesh:nobody', 1: 'mesh:nobody-else' },
+  };
+  await t.throwsAsync(() => netA.provideSession(locB), {
+    message: /every transport hint .* failed to connect/,
+  });
+});
+
 test('two peers handshake and exchange encrypted messages via mock transport', async t => {
   const netA = makeNetworkForTest(t, { codec: cborCodec });
   const netB = makeNetworkForTest(t, { codec: cborCodec });

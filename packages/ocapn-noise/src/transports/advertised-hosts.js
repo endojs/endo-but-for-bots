@@ -28,7 +28,7 @@ import os from 'node:os';
 const WILDCARD_HOSTS = new Set(['0.0.0.0', '::', '::ffff:0.0.0.0', '']);
 
 /** @param {string} host */
-export const isWildcardHost = host => WILDCARD_HOSTS.has(host);
+const isWildcardHost = host => WILDCARD_HOSTS.has(host);
 
 /** @param {string} addr */
 const isIpv6 = addr => addr.includes(':');
