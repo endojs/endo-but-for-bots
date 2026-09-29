@@ -19,7 +19,20 @@ const running = await startRegistryServer({
   log: entry => console.log(JSON.stringify(entry)),
 });
 if (grant) {
-  running.grants.putGrant(grant);
+  // A refused grant (for example a revoked id still in a stale secret) is
+  // logged rather than fatal: reads keep serving and a crash loop would not
+  // repair the secret.
+  try {
+    running.grants.putGrant(grant);
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        event: 'publisher-grant-refused',
+        id: grant.id,
+        reason: /** @type {Error} */ (error).message,
+      }),
+    );
+  }
 }
 console.log(
   JSON.stringify({
