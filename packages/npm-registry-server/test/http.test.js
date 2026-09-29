@@ -4,6 +4,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import { Buffer } from 'node:buffer';
 import http from 'node:http';
 
 import { makeRequestHandler } from '../src/http.js';
@@ -11,6 +12,59 @@ import { makePublishDocument, makeTestRegistry } from './_fixtures.js';
 
 const VERSION = '1.7.0-dev.20260928101010.gaaaaaaa';
 const TAG = 'dev-2026-09-28';
+
+/**
+ * @typedef {object} RequestOptions
+ * @property {string} [method]
+ * @property {Record<string, string>} [headers]
+ * @property {string} [body]
+ */
+
+/**
+ * A one-shot request over `node:http` without connection pooling. The
+ * tests run under SES lockdown, where Node's built-in `fetch` (undici)
+ * raises unhandled override-mistake rejections when pooled connections
+ * are destroyed at teardown.
+ *
+ * @param {number} port
+ * @param {string} pathname
+ * @param {RequestOptions} [init]
+ */
+const requestOver = (port, pathname, { method = 'GET', headers, body } = {}) =>
+  new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port,
+        path: pathname,
+        method,
+        headers,
+        agent: false,
+      },
+      res => {
+        /** @type {Buffer[]} */
+        const chunks = [];
+        res.on('data', chunk => chunks.push(chunk));
+        res.on('error', reject);
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: {
+              get: (/** @type {string} */ name) => {
+                const value = res.headers[name.toLowerCase()];
+                return value === undefined ? null : String(value);
+              },
+            },
+            text: async () => text,
+            json: async () => JSON.parse(text),
+          });
+        });
+      },
+    );
+    req.on('error', reject);
+    req.end(body);
+  });
 
 /**
  * @param {import('ava').ExecutionContext} t
@@ -36,13 +90,12 @@ const serve = async (t, options = {}) => {
   const { port } = /** @type {import('node:net').AddressInfo} */ (
     server.address()
   );
-  const origin = `http://127.0.0.1:${port}`;
   const auth = { authorization: `Bearer ${fixture.token}` };
   /**
    * @param {string} pathname
-   * @param {RequestInit} [init]
+   * @param {RequestOptions} [init]
    */
-  const request = (pathname, init) => fetch(`${origin}${pathname}`, init);
+  const request = (pathname, init) => requestOver(port, pathname, init);
   return { ...fixture, logs, request, auth };
 };
 
@@ -88,7 +141,7 @@ test('publish over HTTP: auth, body limits, and conditional reads', async t => {
     version: VERSION,
   });
   const body = JSON.stringify(document);
-  const put = (/** @type {RequestInit} */ init) =>
+  const put = (/** @type {RequestOptions} */ init) =>
     request('/@endo%2fpatterns', { method: 'PUT', ...init });
 
   t.is((await put({ body })).status, 401);
@@ -169,7 +222,10 @@ test('dist-tags over HTTP', async t => {
     404,
   );
 
-  const setTag = (/** @type {string} */ tag, /** @type {RequestInit} */ init) =>
+  const setTag = (
+    /** @type {string} */ tag,
+    /** @type {RequestOptions} */ init,
+  ) =>
     request(`/-/package/@endo%2fpatterns/dist-tags/${tag}`, {
       method: 'PUT',
       body: JSON.stringify(VERSION),
