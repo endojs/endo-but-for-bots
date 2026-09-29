@@ -2,6 +2,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { makePublishDocument, makeTestRegistry, makeTgz } from './_fixtures.js';
 import { digestTarball } from '../src/tarball.js';
+import { isRegistryHttpError } from '../src/errors.js';
 
 const V1 = '1.7.0-dev.20260928101010.gaaaaaaa';
 const V2 = '1.7.0-dev.20260928231903.g3aa902d';
@@ -279,4 +280,27 @@ test('local published tags are not replaced by upstream metadata', async t => {
     'dev-2026-09-28': V1,
   });
   t.deepEqual(Object.keys(packument.versions).sort(), ['1.2.0', V1].sort());
+});
+
+test('an upstream body interrupted mid-read is a 502, not an internal error', async t => {
+  /** @type {import("../src/node-fetch.js").UpstreamFetch} */
+  const fakeFetch = async () => ({
+    status: 200,
+    ok: true,
+    headers: { get: () => null },
+    body: {
+      async *[Symbol.asyncIterator]() {
+        yield new TextEncoder().encode('{"name":');
+        throw Error('read ECONNRESET');
+      },
+    },
+  });
+  const { registry } = makeTestRegistry({
+    upstreamOrigin: 'https://upstream.example',
+    fetch: fakeFetch,
+    upstreamTtlMs: 0,
+  });
+  const error = await t.throwsAsync(() => registry.getPackument('left-pad'));
+  t.true(isRegistryHttpError(error));
+  t.is(/** @type {any} */ (error).statusCode, 502);
 });

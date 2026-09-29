@@ -5,7 +5,7 @@
 import { Buffer } from 'node:buffer';
 
 import { q } from '@endo/errors';
-import { RegistryHttpError } from './errors.js';
+import { RegistryHttpError, isRegistryHttpError } from './errors.js';
 import { makeNodeFetch } from './node-fetch.js';
 import {
   allowlistCovers,
@@ -101,14 +101,30 @@ const readLimited = async (response, maxBytes) => {
   /** @type {Uint8Array[]} */
   const chunks = [];
   let total = 0;
-  for await (const chunk of /** @type {AsyncIterable<Uint8Array>} */ (
-    /** @type {unknown} */ (response.body)
-  )) {
-    total += chunk.byteLength;
-    if (total > maxBytes) {
-      throw RegistryHttpError(502, 'Upstream response exceeds the size limit');
+  try {
+    for await (const chunk of /** @type {AsyncIterable<Uint8Array>} */ (
+      /** @type {unknown} */ (response.body)
+    )) {
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        throw RegistryHttpError(
+          502,
+          'Upstream response exceeds the size limit',
+        );
+      }
+      chunks.push(chunk);
     }
-    chunks.push(chunk);
+  } catch (error) {
+    if (isRegistryHttpError(error)) {
+      throw error;
+    }
+    // A connection reset or timeout mid-body is an upstream failure like
+    // any other, not an internal error.
+    const timedOut = /** @type {Error} */ (error).name === 'TimeoutError';
+    throw RegistryHttpError(
+      timedOut ? 504 : 502,
+      'Upstream response was interrupted',
+    );
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
