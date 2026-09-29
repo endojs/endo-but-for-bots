@@ -2,6 +2,8 @@
 
 import { q } from '@endo/errors';
 
+/** @import { Grants, PublishGrant } from './grants.js' */
+
 /**
  * Read the service configuration from the environment the minion.town unit
  * sets (`HOST`, `PORT`, `PUBLIC_REGISTRY_URL`, `UPSTREAM_REGISTRY_URL`,
@@ -66,3 +68,30 @@ export const readPublisherGrantEnv = env => {
   };
 };
 harden(readPublisherGrantEnv);
+
+/**
+ * Record the deployment's publisher grant at startup. A refused grant (for
+ * example a revoked id still in a stale secret) is reported rather than
+ * thrown: reads keep serving and a crash loop would not repair the secret.
+ *
+ * @param {Pick<Grants, 'putGrant'>} grants
+ * @param {PublishGrant & { token: string }} grant
+ * @param {(line: string) => void} report
+ * @returns {boolean} whether the grant was recorded
+ */
+export const installPublisherGrant = (grants, grant, report) => {
+  try {
+    grants.putGrant(grant);
+    return true;
+  } catch (error) {
+    report(
+      JSON.stringify({
+        event: 'publisher-grant-refused',
+        id: grant.id,
+        reason: /** @type {Error} */ (error).message,
+      }),
+    );
+    return false;
+  }
+};
+harden(installPublisherGrant);
