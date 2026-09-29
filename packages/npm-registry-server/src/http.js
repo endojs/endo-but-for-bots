@@ -189,11 +189,14 @@ export const makeRequestHandler = ({
         }
         if (method === 'PUT' && tag !== undefined) {
           const grant = grants.authenticate(bearerOf(request));
+          if (!grant) {
+            throw RegistryHttpError(401, 'Authentication required to tag');
+          }
           const body = await readJsonBody(request, 4096);
           const result = registry.setDistTag(grant, name, tag, body);
           return {
             status: sendJson(request, response, 201, { ok: true, ...result }),
-            subject: grant?.subject,
+            subject: grant.subject,
           };
         }
         throw RegistryHttpError(405, 'Dist-tags advance; they are not removed');

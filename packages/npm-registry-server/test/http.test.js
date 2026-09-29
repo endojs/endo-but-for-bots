@@ -251,6 +251,8 @@ test('dist-tags over HTTP', async t => {
       ...init,
     });
   t.is((await setTag('dev-latest', {})).status, 401);
+  // Authentication is checked before the body is read.
+  t.is((await setTag('dev-latest', { body: 'not json' })).status, 401);
   t.is((await setTag('latest', { headers: auth })).status, 403);
   t.is(
     (
