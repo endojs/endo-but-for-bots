@@ -7,11 +7,83 @@ import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 
-import { installPublisherGrant } from '../src/config.js';
+import {
+  installPublisherGrant,
+  parseIsoInstant,
+  readPublisherGrantEnv,
+  readServerEnv,
+} from '../src/config.js';
 import { openRegistry } from '../src/server.js';
 import { makeTemporaryDirectory, makeTestRegistry } from './_fixtures.js';
 
 const TOKEN = 'p'.repeat(40);
+
+const SERVER_ENV = {
+  REGISTRY_STATE_DIR: '/state',
+  PUBLIC_REGISTRY_URL: 'https://npm.example',
+};
+
+test('readServerEnv distinguishes an empty upstream from an absent one', t => {
+  t.is(readServerEnv(SERVER_ENV).upstreamOrigin, 'https://registry.npmjs.org');
+  t.is(
+    readServerEnv({ ...SERVER_ENV, UPSTREAM_REGISTRY_URL: '' }).upstreamOrigin,
+    undefined,
+  );
+  t.throws(() =>
+    readServerEnv({ ...SERVER_ENV, UPSTREAM_REGISTRY_URL: 'http://x.example' }),
+  );
+  t.throws(() => readServerEnv({ PUBLIC_REGISTRY_URL: 'https://npm.example' }));
+});
+
+test('readServerEnv refuses ports and TTLs out of range', t => {
+  t.is(readServerEnv(SERVER_ENV).port, 3003);
+  t.is(readServerEnv({ ...SERVER_ENV, PORT: '0' }).port, 0);
+  t.is(readServerEnv({ ...SERVER_ENV, PORT: '65535' }).port, 65_535);
+  for (const PORT of ['abc', '-1', '65536', '1.5']) {
+    t.throws(() => readServerEnv({ ...SERVER_ENV, PORT }), undefined, PORT);
+  }
+  t.is(
+    readServerEnv({ ...SERVER_ENV, UPSTREAM_TTL_SECONDS: '2' }).upstreamTtlMs,
+    2000,
+  );
+  t.throws(() => readServerEnv({ ...SERVER_ENV, UPSTREAM_TTL_SECONDS: 'x' }));
+});
+
+test('expiry dates must carry an explicit offset', t => {
+  t.is(parseIsoInstant('2027-01-01'), Date.UTC(2027, 0, 1));
+  t.is(parseIsoInstant('2027-01-01T00:00:00Z'), Date.UTC(2027, 0, 1));
+  t.is(parseIsoInstant('2027-01-01T01:00+01:00'), Date.UTC(2027, 0, 1));
+  // No offset means host-local time to `Date.parse`; other formats are
+  // engine heuristics.
+  for (const text of ['2027-01-01T00:00', 'Jan 1 2027', '2027-13-01', '']) {
+    t.is(parseIsoInstant(text), undefined, text);
+  }
+});
+
+test('a publisher token without an allowlist fails closed', t => {
+  const env = {
+    REGISTRY_PUBLISHER_TOKEN: TOKEN,
+    REGISTRY_PUBLISHER_EXPIRES: '2027-01-01',
+  };
+  t.throws(() => readPublisherGrantEnv(env), {
+    message: /REGISTRY_PUBLISHER_PACKAGES is required/,
+  });
+  t.deepEqual(
+    readPublisherGrantEnv({
+      ...env,
+      REGISTRY_PUBLISHER_PACKAGES: ' @endo/* , solo ',
+    })?.packages,
+    ['@endo/*', 'solo'],
+  );
+  t.throws(() =>
+    readPublisherGrantEnv({
+      ...env,
+      REGISTRY_PUBLISHER_PACKAGES: 'solo',
+      REGISTRY_PUBLISHER_EXPIRES: '2027-01-01T00:00',
+    }),
+  );
+  t.is(readPublisherGrantEnv({}), undefined);
+});
 
 test('installPublisherGrant records an acceptable grant', t => {
   const { grants } = makeTestRegistry();
