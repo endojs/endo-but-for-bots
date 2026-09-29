@@ -91,14 +91,23 @@ const agent = await makeAgent({
 });
 ```
 
-When Shell and GitRemote are both present, their generic standalone `inspect`
-records appear as `inspectShell` and `inspectGitRemote` in the composed catalog.
-The underlying capability-specific makers retain their existing names.
+In the composed catalog, the Shell grant's standalone `inspect` record always
+appears as `inspectShell`, and the GitRemote grant's as `inspectGitRemote`,
+whether or not the other grant is present. The underlying capability-specific
+makers retain their existing names.
+
+`workspaceGrants.readOnly` only drops the file tools' write slice
+(`mountWriteText`). It does not attenuate the other grants: a `git` grant still
+carries `add` and `commit`, a `shell` grant still carries `exec`, and the
+worktree Filesystem those grants reach stays writable. For a read-only agent,
+pass only read-only capabilities, for example a `readOnly(fs)` filesystem and
+no `git`, `remote`, or `shell` grant.
 
 `workspaceGrants` is not the code-mode `grants` record of
 `@endo/agentry/code-mode-provisioning`. Code-mode `grants` are host pet-name
 paths that trusted provisioning resolves once and binds as opaque code-mode
-capabilities; the agent reaches them only through code it evaluates. `workspaceGrants` are capability references the caller already
+capabilities; the agent reaches them only through code it evaluates.
+`workspaceGrants` are capability references the caller already
 holds and passes directly, and each one is projected as a JSON tool record. The
 two share no resolution step, and neither consults the other.
 
