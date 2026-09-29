@@ -204,6 +204,14 @@ class Repository(unittest.TestCase):
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 
+    def test_halt_classification_lint_inputs(self):
+        for path in ["rust/endo/src/ironhorse_engine.rs",
+                     "rust/thixotrope-ironhorse-worker/src/main.rs",
+                     "rust/halt-classification-lint/Cargo.toml",
+                     "rust/halt-classification-lint/fixtures/commit_path_raw_match.rs",
+                     "Cargo.lock"]:
+            self.assertTrue(self.selected(path)["format-ironhorse"], path)
+
     def test_row_schema_guard_inputs(self):
         for path in ["rust/engine/scripts/check-row-schema.py",
                      "rust/engine/scripts/test-row-schema.py",
