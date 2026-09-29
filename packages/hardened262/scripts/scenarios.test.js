@@ -335,8 +335,8 @@ test('agentRunsScenario preserves the module matrix for JavaScript agents', () =
   assert.equal(agentRunsScenario('sesXs', 'lockdownCompartmentModule'), false);
 });
 
-test('agentRunsScenario exposes script modes for both Ironhorse deliveries', () => {
-  for (const agent of ['ironhorse', 'sesIronhorse']) {
+test('agentRunsScenario exposes script modes for every Ironhorse delivery', () => {
+  for (const agent of ['ironhorse', 'sesIronhorse', 'ironhorseThrowOnLimit']) {
     assert.equal(agentRunsScenario(agent, 'sloppy'), true);
     assert.equal(agentRunsScenario(agent, 'strict'), true);
     assert.equal(agentRunsScenario(agent, 'lockdownSloppy'), true);

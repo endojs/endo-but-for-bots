@@ -24,4 +24,5 @@ test/intrinsics/SetIteratorPrototype/intrinsic-metadata.js
 test/intrinsics/TypedArray/copying-methods.js
 test/intrinsics/TypedArray/in-place-methods.js
 test/intrinsics/TypedArray/intrinsic-metadata.js
+test/ironhorse/resource-limits/within-ceilings.js
 test/ironhorse/smoke.js
