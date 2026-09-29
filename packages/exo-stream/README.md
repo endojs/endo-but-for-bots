@@ -279,10 +279,20 @@ the `stream` method on a custom Exo.
 #### `bytesReaderFromIterator(bytesIterator, options?)`
 
 Wrap a local `AsyncIterator<Uint8Array>` as a `PassableBytesReader` Exo.
-Bytes are automatically base64-encoded for transmission over CapTP.
+The Exo offers two methods over the same chunks:
 
-Uses `streamBase64()` method instead of `stream()` to allow future migration
-to direct bytes transport when CapTP supports it.
+- `stream()` yields each chunk as a passable byte array (a frozen `Uint8Array`
+  over an immutable `ArrayBuffer`). Consume it with `iterateReader()`.
+- `streamBase64()` yields each chunk as a base64 string. Consume it with
+  `iterateBytesReader()`. It is retained for compatibility and is slated for
+  deprecation.
+
+A reader is consumed once, through whichever method an initiator calls.
+
+Chunks from `stream()` are frozen. Under the immutable-ArrayBuffer shim they
+are not genuine `ArrayBuffer` views, so APIs such as `Uint8Array#set` and
+`TextDecoder#decode` cannot read them directly. Copy each chunk into a mutable
+`Uint8Array` with `thawedBytes()` from `@endo/immutable-arraybuffer` first.
 
 **Options:**
 - `buffer` (number, default 0): Number of values to pre-pull
@@ -326,12 +336,11 @@ for transmission over CapTP.
 
 ### Migration Path for Bytes Streams
 
-Currently, bytes are transmitted as base64-encoded strings via `streamBase64()`.
-When CapTP and pass-style support direct binary transport, bytes-streamable
-Exos can implement the `stream()` method directly, allowing initiators to
-gracefully transition to using `iterateReader()` instead of
-`iterateBytesReader()`, and `iterateWriter()` instead of
-`iterateBytesWriter()`.
+Bytes readers made with `bytesReaderFromIterator()` offer both `stream()`,
+which yields passable byte arrays, and the older `streamBase64()`, which yields
+base64 strings. Initiators can migrate from `iterateBytesReader()` to
+`iterateReader()` at their own pace. Bytes writers still use `streamBase64()`
+only; `iterateWriter()` is not yet a substitute for `iterateBytesWriter()`.
 
 ## Design
 

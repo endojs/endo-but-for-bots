@@ -91,6 +91,7 @@
     "@endo/far": "workspace:^",
     "@endo/harden": "workspace:^",
     "@endo/hex": "workspace:^",
+    "@endo/immutable-arraybuffer": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/patterns": "workspace:^",
     "@endo/sha256": "workspace:^",
