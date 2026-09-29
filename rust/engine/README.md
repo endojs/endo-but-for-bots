@@ -164,6 +164,17 @@ The invariant, not the sites, is what landed:
   before the engine knows whether a native driver (an async body's rejection,
   a promise reaction, `Array.fromAsync`) will catch it, so that render is a
   diagnostic that falls back to the `[object Object]` stub and never halts.
+- **Resource-limit policy** — `Interp::set_resource_limit_policy` chooses
+  what the runtime ceilings above, the value-stack geometry, and the storage
+  and matcher caps that return `Halt::HeapExhausted` do. The default
+  `ResourceLimitPolicy::Panic` stops the crank uncatchably, as XS's `fxAbort`
+  does. `ResourceLimitPolicy::Throw` raises a guest `RangeError`
+  (`resource limit: …`) at the dispatch loop that observes the halt, so the
+  guest can catch it and the harness classifies the case as a pass or a
+  failure (`endot-ih --resource-limits throw`, the hardened262
+  `ironhorseThrowOnLimit` agent). The meter, profile refusals, engine
+  invariants, and an arena refusal that unwinds the Rust stack stop the crank
+  under both policies.
 - **Parser** — `PARSER_STACK_BUDGET` (1,024 units) charged by frame class: a
   full expression-cascade re-entry costs `CASCADE_COST` (8) plus the operand
   charges on the way down (about 90 nested parentheses, brackets, calls,
