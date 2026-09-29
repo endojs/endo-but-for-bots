@@ -115,3 +115,20 @@ test('workspace agent fails closed when an endow hook returns no endowments', as
     { message: /endow hook must return an endowments object/ },
   );
 });
+
+test('workspace agent endow hook does not freeze caller-owned options', async t => {
+  const credentials = { anthropic: 'key' };
+  const makeAgent = defineWorkspaceAgent({
+    endow: (_definition, options) => {
+      t.true(Object.isFrozen(options));
+      return {};
+    },
+  });
+  await makeAgent(
+    /** @type {any} */ ({
+      workspaceGrants: testGrants({ filesystem: grant('Filesystem') }),
+      credentials,
+    }),
+  );
+  t.false(Object.isFrozen(credentials));
+});

@@ -5,11 +5,14 @@
 /** @import { AgentConfig, AgentMakeOptions } from './types.js' */
 /** @import { ProvisionWorkspaceGrants } from '@endo/agent-tools/types-index.js' */
 
+import { makeError, X } from '@endo/errors';
 import { toPiAgentTool } from '@endo/agent-tools/pi';
 import { toolResultToSmallcaps } from '@endo/agent-tools/adapters/smallcaps.js';
 import { provisionWorkspaceTools } from '@endo/agent-tools/workspace.js';
 
 import { defineAgent } from './define-agent.js';
+
+const { freeze } = Object;
 
 /**
  * Define a Pi agent whose tool surface is assembled from an explicit set of
@@ -34,8 +37,9 @@ import { defineAgent } from './define-agent.js';
  */
 export const defineWorkspaceAgent = (config = {}) => {
   if (/** @type {AgentConfig} */ (config).tools !== undefined) {
-    throw TypeError(
-      'defineWorkspaceAgent: tools come only from workspaceGrants; remove config.tools',
+    throw makeError(
+      X`defineWorkspaceAgent: tools come only from workspaceGrants; remove config.tools`,
+      TypeError,
     );
   }
   const { endow } = config;
@@ -45,15 +49,20 @@ export const defineWorkspaceAgent = (config = {}) => {
       endow &&
       ((definition, options) => {
         const { tools: _granted, ...grantFreeOptions } = options;
-        const endowments = endow(definition, harden(grantFreeOptions));
+        // A shallow freeze: `harden` would deep-freeze the caller's
+        // `messages`, `credentials`, `streamFn`, and `convertToLlm`, which the
+        // caller still owns.
+        const endowments = endow(definition, freeze(grantFreeOptions));
         if (endowments === null || typeof endowments !== 'object') {
-          throw TypeError(
-            'defineWorkspaceAgent: an endow hook must return an endowments object',
+          throw makeError(
+            X`defineWorkspaceAgent: an endow hook must return an endowments object`,
+            TypeError,
           );
         }
         if (endowments.tools !== undefined) {
-          throw TypeError(
-            'defineWorkspaceAgent: tools come only from workspaceGrants; an endow hook may not return tools',
+          throw makeError(
+            X`defineWorkspaceAgent: tools come only from workspaceGrants; an endow hook may not return tools`,
+            TypeError,
           );
         }
         return endowments;
@@ -66,8 +75,9 @@ export const defineWorkspaceAgent = (config = {}) => {
   const makeWorkspaceAgent = async ({ workspaceGrants, ...options }) => {
     await null;
     if (/** @type {AgentMakeOptions} */ (options).tools !== undefined) {
-      throw TypeError(
-        'defineWorkspaceAgent: tools come only from workspaceGrants; remove options.tools',
+      throw makeError(
+        X`defineWorkspaceAgent: tools come only from workspaceGrants; remove options.tools`,
+        TypeError,
       );
     }
     const records = await provisionWorkspaceTools(workspaceGrants);
