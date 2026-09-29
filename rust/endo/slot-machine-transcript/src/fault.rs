@@ -228,10 +228,6 @@ fn injected(label: &str) -> io::Error {
     io::Error::other(format!("injected fault at {label}"))
 }
 
-// ---------------------------------------------------------------------------
-// The wrapping VFS.
-// ---------------------------------------------------------------------------
-
 /// VFS-level application data: the platform VFS we delegate to and the plan.
 struct VfsApp {
     real: *mut ffi::sqlite3_vfs,
@@ -423,8 +419,6 @@ unsafe extern "C" fn vfs_current_time_int64(
         }
     }
 }
-
-// --- io methods -------------------------------------------------------------
 
 static FAULT_IO_METHODS: ffi::sqlite3_io_methods = ffi::sqlite3_io_methods {
     // Version 2: shared memory is delegated; memory-mapped I/O (version 3)
