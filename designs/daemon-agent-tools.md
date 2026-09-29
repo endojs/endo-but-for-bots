@@ -44,8 +44,8 @@ What has shipped, by layer:
   confinement core) and `@endo/exo-http-client` (the `HttpClient` /
   `HttpClientControl` capability), realizing
   [endoclaw-network-fetch](endoclaw-network-fetch.md). The daemon formula was
-  superseded by the `@endo/fetch` plugin; its policy store and the
-  `makeHttpTool` binding have landed (#661 and follow-up reconciliation).
+  superseded by the plugin provisioning of [endo-fetch](endo-fetch.md), which
+  tracks its own status; the `makeHttpTool` binding has landed (#661).
 - **Package-management tier.** `@endo/exo-package-manager` provides the
   portable reader, safe-installer, and project-executor facets (#948).
   The daemon-backed base-session design is #949, the grant-sensitive
@@ -116,7 +116,7 @@ What this document owns is the remainder:
 | Shell | `makeShell({ cwd, allowedCommands, … })` from a raw path | `Shell` capability derived from a writable `EndoMount`, executing through the `Spawner` seam (§ Shell Capability) | capability + `makeShellTool` landed (#615, host-spawner engine); sandbox engine (Phase 2c) remaining |
 | Git (local) | `Git` exo over a repository path string | `Git` over `EndoMount` via `provideGit(mountCap, petName)` ([daemon-git-capability](daemon-git-capability.md)) | capability landed (#364); facet-derived catalogs landed (`makeGitTool`); mount-bridged `status` / `add` landed (#616), with conflict checkout added in Phase 6 |
 | Git (remote) | deliberately omitted ("network access is a separate capability") | `GitRemote` = `Git` + bounded HTTPS transport + non-extractable credential ([daemon-git-remotes](daemon-git-remotes.md)) | capability landed (#365, #368); `makeGitRemoteTool` landed (#705) |
-| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `makeHttpTool` landed (#661); plugin provisioning landed in `@endo/fetch` |
+| Network (HTTP) | not in sketch (network excluded from `Git`, Design Decision 3) | `HttpClient` / `HttpClientControl` from `@endo/exo-http-client` over the `@endo/http-confine` core, granted standalone from an injected `fetch` seam (not mount-derived) | capability landed (#566); `makeHttpTool` landed (#661); plugin provisioning tracked in [endo-fetch](endo-fetch.md) |
 | Package management | not in sketch | Portable `EndoPackageManager` reader, safe-installer, and project-executor facets over an injected, snapshot-revalidating backend | portable facets in #948; daemon-backed base-session design in #949; grant-sensitive agent-tools projection in #950; optional backend design in #953 |
 | Search | `grep` / `glob` on `Dir` | interim: `Filesystem` walks plus the Shell group's allowlisted `grep`; a capability-backed search substrate is an open question | not started |
 
@@ -396,9 +396,9 @@ endows it plus a state directory to `@endo/confined-fetch`. The confined
 plugin mints the `HttpClient` / `HttpClientControl` pair, retains the
 policy-bearing control facet, and binds only the use-facing `HttpClient` into
 the guest petstore. #566 landed the package pair (`@endo/http-confine` plus
-`@endo/exo-http-client`); the two plugins, their durable virtual-file-system
-policy store (`@endo/fetch`), and the `makeHttpTool` binding (#661) have
-since landed (§ Implementation Plan, Network tier). The
+`@endo/exo-http-client`), and the `makeHttpTool` binding landed in #661;
+the plugins and their durable virtual-file-system policy store are tracked in
+[endo-fetch](endo-fetch.md) (§ Implementation Plan, Network tier). The
 conditional-composition rule is unchanged: the network tool group is
 absent from the catalog unless the agent holds the `HttpClient`.
 
