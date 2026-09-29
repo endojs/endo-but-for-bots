@@ -132,8 +132,13 @@ test('provisionWorkspaceTools with no grants derives nothing', async t => {
 test('each qualified inspect name reaches its own capability', async t => {
   await null;
   const tools = makeWorkspaceTools({
-    remote: Far('GitRemote', { inspect: () => harden({ from: 'remote' }) }),
-    shell: Far('Shell', { inspect: () => harden({ from: 'shell' }) }),
+    // Partial stand-ins: only the `inspect` method these calls reach.
+    remote: /** @type {any} */ (
+      Far('GitRemote', { inspect: () => harden({ from: 'remote' }) })
+    ),
+    shell: /** @type {any} */ (
+      Far('Shell', { inspect: () => harden({ from: 'shell' }) })
+    ),
   });
   const byName = new Map(tools.map(record => [record.name, record]));
   const inspectShell = byName.get('inspectShell');
