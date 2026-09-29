@@ -79,7 +79,7 @@ test.serial('provideGuest retains a neutral named authority graph', async t => {
   });
   const guest = await E(host).provideGuest('coding-session', {
     authority,
-    introducedNames: { calendar: 'calendar' },
+    endowments: { calendar: 'calendar' },
   });
 
   const workspace = /** @type {EndoMount} */ (
@@ -131,7 +131,7 @@ test.serial('provideGuest retains a neutral named authority graph', async t => {
   const repoId = await E(guest).identify('repo');
   const repeated = await E(host).provideGuest('coding-session', {
     authority,
-    introducedNames: { calendar: 'calendar' },
+    endowments: { calendar: 'calendar' },
   });
   t.is(await E(host).identify('coding-session'), guestId);
   t.is(await E(repeated).identify('repo'), repoId);
@@ -151,7 +151,7 @@ test.serial('provideGuest retains a neutral named authority graph', async t => {
   await t.throwsAsync(
     E(host).provideGuest('coding-session', {
       authority,
-      introducedNames: {},
+      endowments: {},
     }),
     { message: /cannot widen or change retained authority/ },
   );
@@ -181,7 +181,7 @@ test.serial(
     const alternateId = await E(host).identify('alternate-worker');
     const guest = await E(host).provideGuest('special-session', {
       authority,
-      endowSpecialNames: { 'alternate-worker': '@main' },
+      endowments: { '@main': 'alternate-worker' },
     });
     const guestId = await E(host).identify('special-session');
     t.is(await E(guest).identify('@main'), alternateId);
@@ -199,20 +199,20 @@ test.serial(
     await t.throwsAsync(
       E(host).provideGuest('special-session', {
         authority,
-        endowSpecialNames: { absent: '@main' },
+        endowments: { '@main': 'absent' },
       }),
       { message: /SPECIAL_NAME_SOURCE_UNAVAILABLE/ },
     );
     await t.throwsAsync(
       E(host).provideGuest('special-session', {
         authority,
-        endowSpecialNames: { 'alternate-worker': '@agent' },
+        endowments: { '@agent': 'alternate-worker' },
       }),
-      { message: /other than daemon-reserved names/ },
+      { message: /daemon-reserved special name/ },
     );
     await t.throwsAsync(
       E(defaultGuest).provideGuest('attempted-escalation', {
-        endowSpecialNames: { '@main': '@main' },
+        endowments: { '@main': '@main' },
       }),
       { message: /target has no method "provideGuest"/ },
     );
@@ -220,16 +220,21 @@ test.serial(
       message: /Invalid pet name "@main"/,
     });
     await E(host).provideWorker('replacement-worker');
-    await t.throwsAsync(
-      E(host).provideGuest('duplicate-special', {
-        authority,
-        endowSpecialNames: {
-          'alternate-worker': '@meter',
-          'replacement-worker': '@meter',
-        },
-      }),
-      { message: /multiple host names to one guest special name/ },
-    );
+    // A single endowments map carries both an ordinary (mutable) introduction
+    // and a special (indelible) endowment, partitioned solely by the `@` prefix.
+    const unifiedGuest = await E(host).provideGuest('unified-endowments', {
+      authority,
+      endowments: { '@main': 'replacement-worker', tool: 'alternate-worker' },
+    });
+    const replacementId = await E(host).identify('replacement-worker');
+    t.is(await E(unifiedGuest).identify('@main'), replacementId);
+    t.is(await E(unifiedGuest).identify('tool'), alternateId);
+    // Ordinary endowments remain mutable; special endowments are indelible.
+    await E(unifiedGuest).remove('tool');
+    t.false(await E(unifiedGuest).has('tool'));
+    await t.throwsAsync(E(unifiedGuest).remove('@main'), {
+      message: /Invalid pet name "@main"/,
+    });
 
     await fixture.restartDaemon();
     const restartedHost = await fixture.connectHost('special-name-restart');
@@ -238,7 +243,7 @@ test.serial(
     await t.throwsAsync(
       E(restartedHost).provideGuest('special-session', {
         authority,
-        endowSpecialNames: { 'replacement-worker': '@main' },
+        endowments: { '@main': 'replacement-worker' },
       }),
       { message: /cannot widen or change retained authority/ },
     );
@@ -361,7 +366,7 @@ test.serial(
       'missing-introduction',
       {
         authority: {},
-        introducedNames: { absent: 'optionalTool' },
+        endowments: { optionalTool: 'absent' },
       },
     );
     t.false(await E(missingIntroduction).has('optionalTool'));

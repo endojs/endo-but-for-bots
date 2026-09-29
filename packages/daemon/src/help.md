@@ -359,10 +359,13 @@ Store a passable value (number, string, array, record, etc.) with a name.
 Create or retrieve a confined guest agent.
 - provideGuest() creates an anonymous guest
 - provideGuest("my-guest") creates/retrieves a named guest
-Options: { introducedNames: { hostName: guestName }, endowSpecialNames?: { hostName: "@specialName" }, authority?: { mount, git, gitRemote } }
+Options: { authority?: { mount, git, gitRemote }, endowments?: { "@main": hostName, guestName: hostName }, introducedNames?: { hostName: guestName } }
 Each singular authority category is an object whose keys become guest binding
-names. Missing introduced host names are ignored. A retained guest defaults to
-its own `@main` worker; endowSpecialNames is creator-only and can replace it.
+names. A retained guest (created with authority) is endowed through the single
+`endowments` map from guest-side names to providing-host pet names: a key
+beginning with `@` is a special, indelible endowment (such as replacing the
+default `@main` worker) and any other key is an ordinary, mutable introduction
+whose missing host source is ignored. Unprovisioned guests use `introducedNames`.
 
 ## provideHost(petName?, options?) -> Promise<EndoHost>
 

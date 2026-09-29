@@ -82,7 +82,7 @@ const assertPowersNameOrPath = nameOrPath => {
 /**
  * Normalizes host or guest options, providing default values.
  * @param {MakeGuestOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, authority?: EndoGuestAuthority, endowSpecialNames?: Record<Name, string> }}
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, authority?: EndoGuestAuthority, endowments?: Record<Name, string> }}
  */
 const normalizeHostOrGuestOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
@@ -92,10 +92,8 @@ const normalizeHostOrGuestOptions = opts => {
     ),
     ...(agentName !== undefined && { agentName }),
     ...(opts?.authority !== undefined && { authority: opts.authority }),
-    ...(opts?.endowSpecialNames !== undefined && {
-      endowSpecialNames: /** @type {Record<Name, string>} */ (
-        opts.endowSpecialNames
-      ),
+    ...(opts?.endowments !== undefined && {
+      endowments: /** @type {Record<Name, string>} */ (opts.endowments),
     }),
   };
 };
@@ -1986,12 +1984,16 @@ export const makeHostMaker = ({
         petNamePathFrom(petName);
       }
       const normalizedOpts = normalizeHostOrGuestOptions(opts);
+      const retainedAuthorityForName =
+        petName !== undefined &&
+        (await hasGuestAuthority(petNamePathFrom(petName).namePath));
       if (
-        normalizedOpts.endowSpecialNames !== undefined &&
-        (petName === undefined || normalizedOpts.authority === undefined)
+        normalizedOpts.endowments !== undefined &&
+        (petName === undefined ||
+          (normalizedOpts.authority === undefined && !retainedAuthorityForName))
       ) {
         throw makeError(
-          X`endowSpecialNames requires retained guest authority and a host pet name`,
+          X`endowments requires retained guest authority and a host pet name`,
         );
       }
       if (petName === undefined) {
@@ -2031,52 +2033,48 @@ export const makeHostMaker = ({
                 // the previously granted authority, so the collision guard
                 // must consult what was actually retained.
                 await retainedAuthorityBindings(namePath);
-          for (const [hostName, guestName] of Object.entries(
-            normalizedOpts.introducedNames,
-          )) {
-            if (!isName(hostName) || !isPetName(guestName)) {
-              throw makeError(
-                X`introducedNames must map host names to guest pet names`,
-              );
-            }
-            if (authorityBindings.has(guestName)) {
-              throw makeError(
-                X`Introduced name ${q(guestName)} conflicts with provisioned authority`,
-              );
-            }
-          }
-          const endowments = Object.entries(
-            normalizedOpts.endowSpecialNames ?? {},
-          );
-          const endowmentNames = new Set(endowments.map(([, name]) => name));
-          if (endowmentNames.size !== endowments.length) {
+          // A retained guest is endowed through the single `endowments`
+          // surface; the ordinary-only `introducedNames` is for unprovisioned
+          // agents.
+          if (Object.keys(normalizedOpts.introducedNames).length !== 0) {
             throw makeError(
-              X`endowSpecialNames must not map multiple host names to one guest special name`,
+              X`Provisioned guests must endow names through endowments, not introducedNames`,
             );
           }
-          for (const [hostName, specialName] of endowments) {
-            if (
-              !isName(hostName) ||
-              !isSpecialName(specialName) ||
-              [
-                '@agent',
-                '@self',
-                '@host',
-                '@mail',
-                '@nets',
-                '@planes',
-              ].includes(specialName)
-            ) {
+          for (const [guestName, hostName] of Object.entries(
+            normalizedOpts.endowments ?? {},
+          )) {
+            if (!isName(hostName)) {
               throw makeError(
-                X`endowSpecialNames must map host names to guest special names other than daemon-reserved names`,
+                X`endowments must map guest names to host pet names`,
+              );
+            }
+            if (isSpecialName(guestName)) {
+              if (
+                ['@agent', '@self', '@host', '@mail', '@nets', '@planes'].includes(
+                  guestName,
+                )
+              ) {
+                throw makeError(
+                  X`endowments must not map a daemon-reserved special name ${q(guestName)}`,
+                );
+              }
+            } else if (isPetName(guestName)) {
+              if (authorityBindings.has(guestName)) {
+                throw makeError(
+                  X`Endowed name ${q(guestName)} conflicts with provisioned authority`,
+                );
+              }
+            } else {
+              throw makeError(
+                X`endowments must map guest names to host pet names`,
               );
             }
           }
           return provideGuestAuthority(
             namePath,
             normalizedOpts.authority,
-            opts?.introducedNames,
-            opts?.endowSpecialNames,
+            opts?.endowments,
             async endowedSpecialNames => {
               const { value } = await makeGuest(
                 /** @type {NameOrPath} */ (

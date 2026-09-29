@@ -1441,11 +1441,17 @@ export type MakeGuestOptions = MakeHostOptions & {
   /** Immutable named capability graph for a retained guest. */
   authority?: EndoGuestAuthority;
   /**
-   * Host names to indelible guest special names. This is accepted only while
-   * creating a retained guest with `authority`; a repeat must resolve to the
-   * same formula identifiers.
+   * A single endowment mapping from guest-side names to providing-host pet
+   * names, endowed while creating a retained guest with `authority`. The
+   * guest-side name (the map key) determines policy: a name beginning with `@`
+   * is a special, indelible endowment (for example an `@main` worker
+   * replacement) and may not name a daemon-reserved slot; any other name is an
+   * ordinary, mutable introduction. The values are the providing host's pet
+   * names, never formula identifiers; the daemon resolves them to formula
+   * identifiers behind its boundary. A repeat must resolve to the same
+   * identifiers.
    */
-  endowSpecialNames?: Record<string, string>;
+  endowments?: Record<string, string>;
 };
 
 export type MakeCapletOptions = {

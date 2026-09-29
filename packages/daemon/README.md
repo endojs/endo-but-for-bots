@@ -60,8 +60,10 @@ const guest = await E(host).provideGuest('documentation-agent', {
       },
     },
   },
-  introducedNames: { 'calendar-service': 'calendar' },
-  endowSpecialNames: { 'documentation-worker': '@main' },
+  endowments: {
+    '@main': 'documentation-worker',
+    calendar: 'calendar-service',
+  },
 });
 ```
 
@@ -92,21 +94,31 @@ the retained policy and revalidates credential references and audiences.
 Callers do not persist or resubmit a normalized authority record.
 Changing or widening a retained policy fails closed.
 
-Every freshly provisioned guest receives its own worker at `@main`.
-The creating host may replace that binding, or add another non-daemon-reserved
-special name, with `endowSpecialNames: { hostName: '@special-name' }` while it
-first supplies retained authority. Endowments resolve the host name to a formula
-identifier once and persist that identity in the guest formula. A guest cannot
-remove or rebind a special name, a bare reacquisition preserves the original
-policy, and a later provisioning call that differs is rejected.
+A retained guest is endowed through a single `endowments` map from guest-side
+names to the providing host's pet names. The guest-side name (the map key)
+determines policy: a key beginning with `@` is a special, indelible endowment
+and any other key is an ordinary, mutable introduction. The map's values are the
+providing host's pet names, never formula identifiers; the daemon resolves each
+to a formula identifier behind its boundary.
 
-`introducedNames` keeps the existing `provideGuest` direction and missing-source
-behavior: each host `Name` key maps to the guest pet name that receives it, and
-a missing host source is ignored.
-For an authority-bearing guest, the introduction map is also part of the
-immutable retained policy, so a repeated provide must supply the same map.
-Credential references use host pet names or name paths; credential material and
-live capabilities never enter the inert authority record.
+Every freshly provisioned guest receives its own worker at `@main`. The creating
+host may replace that binding, or add another non-daemon-reserved special name,
+by mapping it under an `@` key (`endowments: { '@main': 'a-worker' }`) while it
+first supplies retained authority. A special endowment resolves its host source
+once and persists that identity in the guest formula, retaining the formula-graph
+edge; its host source must exist. A guest cannot remove or rebind a special name.
+
+An ordinary endowment (a non-`@` key) keeps the existing `provideGuest`
+missing-source behavior: the guest receives the named guest-side pet name, and a
+missing host source is simply ignored so binding the host pet name and
+reconnecting repairs it. An ordinary key must not collide with a provisioned
+authority binding.
+
+The whole `endowments` map is part of the immutable retained policy, so a
+repeated provide must supply a map that resolves to the same identifiers; a bare
+reacquisition preserves the original policy and a later provisioning call that
+differs is rejected. Credential references use host pet names or name paths;
+credential material and live capabilities never enter the inert authority record.
 
 ## Debugging
 
