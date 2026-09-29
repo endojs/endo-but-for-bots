@@ -52,25 +52,17 @@ import { makeMountFsTools } from './json-tools/fs.js';
  * catalog remains unambiguous.
  */
 
-const composedNames = harden(
-  new Map([
-    ['gitRemote', harden(new Map([['inspect', 'inspectGitRemote']]))],
-    ['shell', harden(new Map([['inspect', 'inspectShell']]))],
-  ]),
-);
-
 /**
- * Apply the workspace catalog's explicit names without changing a capability
- * tool maker's standalone surface. The name tables are `Map`s so a group or
- * tool name that coincides with an `Object.prototype` property (`constructor`,
- * `toString`) cannot resolve to an inherited value.
+ * Apply a group's explicit catalog names without changing a capability tool
+ * maker's standalone surface. The rename table is a `Map` so a tool name that
+ * coincides with an `Object.prototype` property (`constructor`, `toString`)
+ * cannot resolve to an inherited value.
  *
- * @param {string} group
  * @param {ToolRecord[]} records
+ * @param {Map<string, string>} [names]
  * @returns {ToolRecord[]}
  */
-const nameWorkspaceTools = (group, records) => {
-  const names = composedNames.get(group);
+const nameWorkspaceTools = (records, names) => {
   if (names === undefined) {
     return records;
   }
@@ -86,16 +78,19 @@ const nameWorkspaceTools = (group, records) => {
  * tools is ambiguous the moment a harness dispatches by name, so the collision
  * is an error at composition time rather than a silent shadow.
  *
- * @param {{ group: string, records: ToolRecord[] }[]} groups
+ * Each group may carry its own `names` table, attached where the group is
+ * composed, so the qualification travels with the records it renames.
+ *
+ * @param {{ group: string, records: ToolRecord[], names?: Map<string, string> }[]} groups
  * @returns {ToolRecord[]}
  */
-const concatDistinctTools = groups => {
+export const concatDistinctTools = groups => {
   /** @type {ToolRecord[]} */
   const catalog = [];
   /** @type {Map<string, string>} */
   const sourceByName = new Map();
-  for (const { group, records } of groups) {
-    for (const record of nameWorkspaceTools(group, records)) {
+  for (const { group, records, names } of groups) {
+    for (const record of nameWorkspaceTools(records, names)) {
       const priorGroup = sourceByName.get(record.name);
       if (priorGroup !== undefined) {
         throw new Error(
@@ -108,6 +103,7 @@ const concatDistinctTools = groups => {
   }
   return harden(catalog);
 };
+harden(concatDistinctTools);
 
 /**
  * Compose the agent-tool catalog from a set of already-held capabilities.
@@ -128,7 +124,7 @@ export const makeWorkspaceTools = ({
   maxChars,
   shellOptions,
 } = {}) => {
-  /** @type {{ group: string, records: ToolRecord[] }[]} */
+  /** @type {{ group: string, records: ToolRecord[], names?: Map<string, string> }[]} */
   const groups = [];
   if (filesystem !== undefined) {
     groups.push({
@@ -144,12 +140,17 @@ export const makeWorkspaceTools = ({
     groups.push({ group: 'gitMount', records: makeGitMountTools(git) });
   }
   if (remote !== undefined) {
-    groups.push({ group: 'gitRemote', records: makeGitRemoteTool(remote) });
+    groups.push({
+      group: 'gitRemote',
+      records: makeGitRemoteTool(remote),
+      names: new Map([['inspect', 'inspectGitRemote']]),
+    });
   }
   if (shell !== undefined) {
     groups.push({
       group: 'shell',
       records: makeShellTool(shell, shellOptions),
+      names: new Map([['inspect', 'inspectShell']]),
     });
   }
   return concatDistinctTools(groups);

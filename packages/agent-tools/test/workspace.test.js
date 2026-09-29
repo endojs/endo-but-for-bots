@@ -8,6 +8,7 @@ import test from 'ava';
 import { Far } from '@endo/pass-style';
 
 import {
+  concatDistinctTools,
   makeWorkspaceTools,
   provisionWorkspaceTools,
 } from '../src/workspace.js';
@@ -109,6 +110,41 @@ test('a shell + remote catalog explicitly qualifies both inspect tools', t => {
   t.true(names.has('inspectShell'));
   t.true(names.has('inspectGitRemote'));
   t.false(names.has('inspect'));
+});
+
+test('the catalog fails closed when two groups emit the same tool name', t => {
+  /** @param {string} name */
+  const record = name =>
+    /** @type {any} */ (harden({ name, invoke: async () => undefined }));
+  t.throws(
+    () =>
+      concatDistinctTools([
+        { group: 'first', records: [record('inspect')] },
+        { group: 'second', records: [record('inspect')] },
+      ]),
+    {
+      message:
+        /agent-tool catalog name collision: "inspect" is emitted by both the "first" and "second" tool groups/,
+    },
+  );
+});
+
+test('a group names table disambiguates an otherwise colliding tool', t => {
+  /** @param {string} name */
+  const record = name =>
+    /** @type {any} */ (harden({ name, invoke: async () => undefined }));
+  const catalog = concatDistinctTools([
+    { group: 'first', records: [record('inspect')] },
+    {
+      group: 'second',
+      records: [record('inspect')],
+      names: new Map([['inspect', 'inspectSecond']]),
+    },
+  ]);
+  t.deepEqual(
+    catalog.map(({ name }) => name),
+    ['inspect', 'inspectSecond'],
+  );
 });
 
 test('provisionWorkspaceTools passes an explicit filesystem straight through', async t => {
