@@ -1779,13 +1779,16 @@ fn module_dual_run(
         Halt::Throw { rendered, .. } => rendered.clone(),
         _ => String::new(),
     };
-    let oracle_result = oracle.result_number().map(xs_oracle::number_to_ecma_string);
     DualRun {
         source: source.into(),
         agreement,
         result_agrees: oracle.completed
             && ironhorse.completed
-            && oracle_result.as_deref().unwrap_or(&oracle.result) == ironhorse.result,
+            && xs_oracle::completion_agrees(
+                &oracle.result,
+                oracle.result_number(),
+                &ironhorse.result,
+            ),
         oracle_result: oracle.result,
         ironhorse_result: ironhorse.result,
         computrons_agree: false,

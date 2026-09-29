@@ -275,6 +275,28 @@ pub fn number_to_ecma_string(number: f64) -> String {
     ironhorse_text::number::number_to_ecma_string_with(number, ryu_shortest_digits)
 }
 
+/// Whether IronHorse's rendered completion denotes the oracle's completion,
+/// the one result policy every IronHorse-against-XS differential applies.
+///
+/// A Number completion (`oracle_number`) must be spelled exactly as
+/// [`number_to_ecma_string`] of the oracle's exact double; XS's own rendering
+/// is ignored because it does not always round-trip (finding
+/// 05264cccae42245a). Both spellers resolve an exact decimal tie to the even
+/// digit (6.1.6.1.20 Note 2), so the spelling is fully determined and any other
+/// digits are a divergence. Every other completion must match XS's rendering
+/// byte for byte. `ironhorse-fuzz`'s dependency-free `results_agree` applies
+/// the same rule to a caller-derived spelling.
+pub fn completion_agrees(
+    oracle_result: &str,
+    oracle_number: Option<f64>,
+    ironhorse_result: &str,
+) -> bool {
+    match oracle_number {
+        Some(number) => number_to_ecma_string(number) == ironhorse_result,
+        None => oracle_result == ironhorse_result,
+    }
+}
+
 /// Ryu spells a magnitude as `123.45`, `0.001`, or `1e21`; renormalize to
 /// significant digits and the exponent of the first one.
 fn ryu_shortest_digits(magnitude: f64) -> (String, i32) {
@@ -676,6 +698,25 @@ mod tests {
                 "{number:e}"
             );
         }
+    }
+
+    #[test]
+    fn completion_agrees_with_the_exact_spec_spelling_only() {
+        // An exact decimal tie: Note 2's even digit agrees, the odd one does
+        // not, whatever XS itself rendered.
+        let tie = Some(-(125343939420064.0 + 0.625));
+        assert!(completion_agrees("", tie, "-125343939420064.62"));
+        assert!(!completion_agrees("", tie, "-125343939420064.63"));
+        assert!(!completion_agrees(
+            "-125343939420064.63",
+            tie,
+            "-125343939420064.63"
+        ));
+        // Another spelling of the same double is a divergence.
+        assert!(!completion_agrees("100", Some(100.0), "1e2"));
+        // A non-Number completion compares byte for byte with XS.
+        assert!(completion_agrees("1e2", None, "1e2"));
+        assert!(!completion_agrees("1e2", None, "100"));
     }
 
     proptest::proptest! {

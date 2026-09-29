@@ -591,14 +591,9 @@ fn build_dual_run(
     // coded the source. Captured before `oracle` is consumed below.
     let oracle_parsed = !oracle.bytecode.is_empty();
 
-    // XS's decimal rendering does not always round-trip to the Number it
-    // completed with (finding 05264cccae42245a). Compare Number completions
-    // against the ECMA-262 spelling of the oracle's exact double, just as the
-    // fuzz differential does; retain byte identity for every other value.
-    let oracle_result = oracle.result_number().map(xs_oracle::number_to_ecma_string);
     let result_agrees = oracle.completed
         && ironhorse.completed
-        && oracle_result.as_deref().unwrap_or(&oracle.result) == ironhorse.result;
+        && xs_oracle::completion_agrees(&oracle.result, oracle.result_number(), &ironhorse.result);
     let computrons_agree =
         oracle.completed && ironhorse.completed && oracle.computrons == ironhorse.computrons;
 
@@ -950,16 +945,12 @@ impl CompartmentDualRun {
     /// one machine. A completion mismatch or a cross-compartment
     /// disagreement is a divergence, never a silent pass.
     pub fn result_agrees(&self) -> bool {
-        let oracle_result = self
-            .oracle_result_number_bits
-            .map(f64::from_bits)
-            .map(xs_oracle::number_to_ecma_string);
-        let expected = oracle_result.as_deref().unwrap_or(&self.oracle_result);
+        let oracle_number = self.oracle_result_number_bits.map(f64::from_bits);
         self.oracle_completed
             && self.both_completed
             && self.shared_intrinsics
-            && self.a_result == expected
-            && self.b_result == expected
+            && xs_oracle::completion_agrees(&self.oracle_result, oracle_number, &self.a_result)
+            && xs_oracle::completion_agrees(&self.oracle_result, oracle_number, &self.b_result)
     }
 
     /// The same bytecode evaluated in a compartment reproduces the
