@@ -36,7 +36,9 @@ import { makeRequestHandler } from './http.js';
  */
 export const openRegistry = config => {
   fs.mkdirSync(config.stateDir, { recursive: true, mode: 0o750 });
-  const database = config.openDatabase(path.join(config.stateDir, 'registry.sqlite'));
+  const database = config.openDatabase(
+    path.join(config.stateDir, 'registry.sqlite'),
+  );
   const store = makeRegistryStore(database);
   const cas = makeFileCas(path.join(config.stateDir, 'cas'));
   const grants = makeGrants({ store });
@@ -82,9 +84,7 @@ export const startRegistryServer = async config => {
       resolve(undefined),
     );
   });
-  const address = /** @type {AddressInfo} */ (
-    server.address()
-  );
+  const address = /** @type {AddressInfo} */ (server.address());
 
   const close = async () => {
     await new Promise(resolve => {

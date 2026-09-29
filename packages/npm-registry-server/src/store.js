@@ -93,7 +93,9 @@ CREATE TABLE IF NOT EXISTS audit_events (
 export const makeRegistryStore = database => {
   database.exec('PRAGMA journal_mode = WAL');
   database.exec('PRAGMA foreign_keys = ON');
-  const { user_version: userVersion } = database.prepare('PRAGMA user_version').get();
+  const { user_version: userVersion } = database
+    .prepare('PRAGMA user_version')
+    .get();
   if (Number(userVersion) > SCHEMA_VERSION) {
     throw Error(
       `Registry schema version ${userVersion} is newer than this server (${SCHEMA_VERSION})`,
@@ -126,7 +128,9 @@ export const makeRegistryStore = database => {
        ON CONFLICT (name, version) DO NOTHING`,
     ),
     listTags: database.prepare('SELECT * FROM dist_tags WHERE name = ?'),
-    getTag: database.prepare('SELECT * FROM dist_tags WHERE name = ? AND tag = ?'),
+    getTag: database.prepare(
+      'SELECT * FROM dist_tags WHERE name = ? AND tag = ?',
+    ),
     setPublishedTag: database.prepare(
       `INSERT INTO dist_tags (name, tag, version, source, updated_at)
        VALUES (?, ?, ?, 'published', ?)
@@ -154,7 +158,9 @@ export const makeRegistryStore = database => {
          expires_at = excluded.expires_at,
          fetched_at = excluded.fetched_at`,
     ),
-    getGrantByToken: database.prepare('SELECT * FROM grants WHERE token_sha256 = ?'),
+    getGrantByToken: database.prepare(
+      'SELECT * FROM grants WHERE token_sha256 = ?',
+    ),
     listGrants: database.prepare(
       'SELECT id, subject, packages_json, expires_at, revoked_at, issued_at FROM grants ORDER BY issued_at',
     ),

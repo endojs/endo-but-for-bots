@@ -3,7 +3,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 
 import { spawn } from 'node:child_process';
-import { once } from 'node:events';
+import http from 'node:http';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 
@@ -123,7 +123,17 @@ test('the server entry point keeps serving when its grant is refused', async t =
     .find(entry => entry?.event === 'publisher-grant-refused');
   t.truthy(refused, stderr);
   t.is(refused.id, grant.id);
-  child.kill('SIGTERM');
-  const [code] = await once(child, 'exit');
-  t.is(code, 0);
+  const { url } = JSON.parse(
+    stdout.split('\n').find(line => line.includes('"event":"listening"')) ??
+      '{}',
+  );
+  const status = await new Promise((resolve, reject) => {
+    http
+      .get(`${url}/-/ping`, { agent: false }, response => {
+        response.resume();
+        resolve(response.statusCode);
+      })
+      .on('error', reject);
+  });
+  t.is(status, 200, 'reads keep serving');
 });
