@@ -1663,7 +1663,7 @@ pub mod engine {
         /// `checkpoint_every > 1` cadence opens, without consuming the
         /// machine (`close`) or perturbing the free list (`collect`).
         /// A supervisor calls it before copying `heap_store_path` or
-        /// before an external acknowledgement. A no-op at a checkpoint
+        /// before an external acknowledgment. A no-op at a checkpoint
         /// boundary; on failure the machine rewinds to the last
         /// checkpoint and the error says the pending cranks were never
         /// durable.

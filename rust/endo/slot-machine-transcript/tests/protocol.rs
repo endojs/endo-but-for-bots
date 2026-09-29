@@ -1,6 +1,7 @@
 //! The transcript's crank protocol, storage-fault disposition, durability
 //! bound, and release idempotency (designs/ironhorse-panic.md § Slot Machine
-//! per-worker write-ahead transcript, Q6, Q7, § Verification).
+//! per-worker write-ahead transcript, § Open Questions on SQLite I/O failure
+//! and fsync cost, § Verification).
 
 mod common;
 
@@ -13,8 +14,8 @@ use slot_machine_transcript::{
 fn fresh(root: &std::path::Path, worker: &str) -> (WorkerFiles, Supervisor, Wire) {
     let files = WorkerFiles::new(root, worker);
     let mut wire = Wire::default();
-    let sup = Supervisor::start(&files, None, &mut wire).expect("start");
-    (files, sup, wire)
+    let supervisor = Supervisor::start(&files, None, &mut wire).expect("start");
+    (files, supervisor, wire)
 }
 
 #[test]
@@ -44,8 +45,8 @@ fn admission_requires_a_published_snapshot() {
 #[test]
 fn aborted_crank_leaves_no_outbound_and_keeps_its_inbound() {
     let root = tempfile::tempdir().unwrap();
-    let (_files, mut sup, _wire) = fresh(root.path(), "w");
-    let t = &mut sup.transcript;
+    let (_files, mut supervisor, _wire) = fresh(root.path(), "w");
+    let t = &mut supervisor.transcript;
     let crank = t.begin_crank(b"doomed").unwrap();
     t.stage_outbound(b"leak-1".to_vec()).unwrap();
     t.stage_outbound(b"leak-2".to_vec()).unwrap();
@@ -61,8 +62,8 @@ fn aborted_crank_leaves_no_outbound_and_keeps_its_inbound() {
 #[test]
 fn committed_frames_release_in_sequence_with_stable_keys() {
     let root = tempfile::tempdir().unwrap();
-    let (_files, mut sup, _wire) = fresh(root.path(), "w");
-    let t = &mut sup.transcript;
+    let (_files, mut supervisor, _wire) = fresh(root.path(), "w");
+    let t = &mut supervisor.transcript;
     let crank = t.begin_crank(b"in").unwrap();
     for i in 0..3 {
         t.stage_outbound(format!("f{i}").into_bytes()).unwrap();
@@ -260,35 +261,35 @@ fn an_ambiguous_commit_releases_nothing_until_reconciled() {
 }
 
 #[test]
-fn a_crash_after_release_before_acknowledgement_is_observed_once() {
+fn a_crash_after_release_before_acknowledgment_is_observed_once() {
     let root = tempfile::tempdir().unwrap();
     let files = WorkerFiles::new(root.path(), "w");
     let mut wire = Wire::default();
-    let mut sup = Supervisor::start(&files, None, &mut wire).unwrap();
-    sup.crank(b"one", &mut wire).unwrap();
-    // The acknowledgement for "one" is still in memory: crash now.
-    drop(sup);
-    let sup = Supervisor::start(&files, None, &mut wire).unwrap();
-    assert_eq!(sup.recovery.unreleased, 2);
+    let mut supervisor = Supervisor::start(&files, None, &mut wire).unwrap();
+    supervisor.crank(b"one", &mut wire).unwrap();
+    // The acknowledgment for "one" is still in memory: crash now.
+    drop(supervisor);
+    let supervisor = Supervisor::start(&files, None, &mut wire).unwrap();
+    assert_eq!(supervisor.recovery.unreleased, 2);
     assert_eq!(wire.duplicates, 2, "the re-release is dropped by sequence");
     assert_eq!(wire.accepted, oracle(&[b"one"]).1);
-    assert_eq!(sup.replayed, 1);
+    assert_eq!(supervisor.replayed, 1);
 }
 
 #[test]
 fn compaction_keeps_aborted_cranks_and_never_reuses_ids() {
     let root = tempfile::tempdir().unwrap();
-    let (_files, mut sup, mut wire) = fresh(root.path(), "w");
-    sup.crank(b"one", &mut wire).unwrap();
-    sup.transcript.flush_acks().unwrap();
-    let t = &mut sup.transcript;
+    let (_files, mut supervisor, mut wire) = fresh(root.path(), "w");
+    supervisor.crank(b"one", &mut wire).unwrap();
+    supervisor.transcript.flush_acks().unwrap();
+    let t = &mut supervisor.transcript;
     t.begin_crank(b"doomed").unwrap();
     t.abort_crank().unwrap();
-    sup.crank(b"two", &mut wire).unwrap();
+    supervisor.crank(b"two", &mut wire).unwrap();
     let last_seq = wire.accepted_keys.last().unwrap().clone();
-    let s = sup.publish().unwrap();
+    let s = supervisor.publish().unwrap();
     assert_eq!(s.watermark_crank, 3);
-    let t = &mut sup.transcript;
+    let t = &mut supervisor.transcript;
     let superseded = t.compact().unwrap();
     assert_eq!(superseded.len(), 1, "the initial snapshot is superseded");
     assert!(t.releasable().unwrap().is_empty());
@@ -311,31 +312,37 @@ fn compaction_keeps_aborted_cranks_and_never_reuses_ids() {
 #[test]
 fn compaction_retains_unreleased_frames() {
     let root = tempfile::tempdir().unwrap();
-    let (_files, mut sup, _wire) = fresh(root.path(), "w");
-    let t = &mut sup.transcript;
+    let (_files, mut supervisor, _wire) = fresh(root.path(), "w");
+    let t = &mut supervisor.transcript;
     t.begin_crank(b"in").unwrap();
     t.stage_outbound(b"held".to_vec()).unwrap();
     t.commit_crank().unwrap();
     // Never handed to the transport, so never acknowledged.
-    let cas = sup.cas.clone();
-    sup.transcript
+    let cas = supervisor.cas.clone();
+    supervisor
+        .transcript
         .publish_snapshot(&cas, &snapshot_bytes(7), meta())
         .unwrap();
-    sup.transcript.compact().unwrap();
-    let held = sup.transcript.releasable().unwrap();
+    supervisor.transcript.compact().unwrap();
+    let held = supervisor.transcript.releasable().unwrap();
     assert_eq!(held.len(), 1);
     assert_eq!(held[0].payload, b"held");
-    assert!(sup.transcript.replay_plan(&cas).unwrap().cranks.is_empty());
+    assert!(supervisor
+        .transcript
+        .replay_plan(&cas)
+        .unwrap()
+        .cranks
+        .is_empty());
 }
 
 #[test]
 fn a_corrupt_or_missing_published_snapshot_is_a_fault_not_a_fallback() {
     let root = tempfile::tempdir().unwrap();
-    let (files, mut sup, mut wire) = fresh(root.path(), "w");
-    sup.crank(b"one", &mut wire).unwrap();
-    let s = sup.publish().unwrap();
-    drop(sup);
-    let blob = files.cas_dir().join(&s.hash);
+    let (files, mut supervisor, mut wire) = fresh(root.path(), "w");
+    supervisor.crank(b"one", &mut wire).unwrap();
+    let s = supervisor.publish().unwrap();
+    drop(supervisor);
+    let blob = files.cas_directory().join(&s.hash);
     std::fs::write(&blob, b"vat-state:999").unwrap();
     let err = Supervisor::start(&files, None, &mut wire)
         .err()
@@ -354,14 +361,14 @@ fn a_corrupt_or_missing_published_snapshot_is_a_fault_not_a_fallback() {
 #[test]
 fn resume_under_a_different_pinned_configuration_is_rejected() {
     let root = tempfile::tempdir().unwrap();
-    let (_files, sup, _wire) = fresh(root.path(), "w");
-    sup.transcript.check_resume(&meta()).unwrap();
+    let (_files, supervisor, _wire) = fresh(root.path(), "w");
+    supervisor.transcript.check_resume(&meta()).unwrap();
     let flipped = SnapshotMeta {
         panic_on_reference_error: true,
         ..meta()
     };
     assert!(matches!(
-        sup.transcript.check_resume(&flipped),
+        supervisor.transcript.check_resume(&flipped),
         Err(TranscriptError::Protocol(_))
     ));
     let other_engine = SnapshotMeta {
@@ -369,7 +376,7 @@ fn resume_under_a_different_pinned_configuration_is_rejected() {
         ..meta()
     };
     assert!(matches!(
-        sup.transcript.check_resume(&other_engine),
+        supervisor.transcript.check_resume(&other_engine),
         Err(TranscriptError::Protocol(_))
     ));
 }
@@ -393,20 +400,20 @@ fn a_blob_write_fault_poisons_before_anything_is_published() {
     drop(Supervisor::start(&files, None, &mut wire).unwrap());
     let plan = FaultPlan::counting();
     let (mut t, _) = Transcript::open(files.transcript(), TranscriptConfig::new("w")).unwrap();
-    let cas = CasStore::open(files.cas_dir())
+    let cas = CasStore::open(files.cas_directory())
         .unwrap()
         .with_fault_plan(plan.clone());
     let before = t.latest_snapshot().unwrap();
     // Aim at the directory sync, the step xsnap's suspend_to_cas omitted.
     let plan2 = FaultPlan::fail_at(4, FaultMode::FailOnce);
-    let cas2 = CasStore::open(files.cas_dir())
+    let cas2 = CasStore::open(files.cas_directory())
         .unwrap()
         .with_fault_plan(plan2.clone());
     let Err(TranscriptError::Fault(fault)) = t.publish_snapshot(&cas2, &snapshot_bytes(1), meta())
     else {
         panic!("expected a fault");
     };
-    assert_eq!(plan2.log()[3], "cas:sync-dir");
+    assert_eq!(plan2.log()[3], "cas:sync-directory");
     assert_eq!(fault.operation, Operation::WriteSnapshotBlob);
     assert_eq!(
         t.latest_snapshot().unwrap(),

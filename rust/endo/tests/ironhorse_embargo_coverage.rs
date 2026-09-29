@@ -53,9 +53,9 @@ fn run(source: &str) -> ExecutionOutcome {
     outcome_of(Machine::with_bounds(MeterBounds::per_crank(200_000)).evaluate(source, false))
 }
 
-fn embargo(dir: &std::path::Path) -> (Embargo<Wire>, Rc<RefCell<Vec<ReleasableFrame>>>) {
-    let path = slot_machine_transcript::transcript_path(dir, "vat-1");
-    let cas = CasStore::open(dir.join("snapshots")).unwrap();
+fn embargo(directory: &std::path::Path) -> (Embargo<Wire>, Rc<RefCell<Vec<ReleasableFrame>>>) {
+    let path = slot_machine_transcript::transcript_path(directory, "vat-1");
+    let cas = CasStore::open(directory.join("snapshots")).unwrap();
     let (mut transcript, _) = Transcript::open(&path, TranscriptConfig::new("vat-1")).unwrap();
     if transcript.latest_snapshot().unwrap().is_none() {
         let meta = SnapshotMeta {
@@ -81,8 +81,8 @@ fn crank_to(
     usize,
     Settlement<std::convert::Infallible>,
 ) {
-    let dir = tempfile::tempdir().unwrap();
-    let (mut embargo, seen) = embargo(dir.path());
+    let directory = tempfile::tempdir().unwrap();
+    let (mut embargo, seen) = embargo(directory.path());
     embargo.admit(b"deliver").unwrap();
     for frame in FRAMES {
         embargo.send(frame.to_vec()).unwrap();
@@ -93,10 +93,10 @@ fn crank_to(
     }
     let settlement = embargo.settle(outcome.verdict()).unwrap();
     let released = seen.borrow().clone();
-    // Crash before any acknowledgement is durable; a restart re-releases
+    // Crash before any acknowledgment is durable; a restart re-releases
     // exactly the committed, unacknowledged frames.
     drop(embargo);
-    let (restarted, _) = self::embargo(dir.path());
+    let (restarted, _) = self::embargo(directory.path());
     (released, restarted.queued().len(), settlement)
 }
 
@@ -147,7 +147,8 @@ fn row_normal_quiescence_commits_then_releases_in_sequence() {
 
 #[test]
 fn row_normal_quiescence_includes_a_handled_rejection() {
-    // Q5: an ordinary rejection the delivery handles is a normal result,
+    // § Open Questions, "Should an uncaught `Throw`":
+    // an ordinary rejection the delivery handles is a normal result,
     // committed and released, not an uncaught throw.
     assert_released_in_order(run(
         "var r = 'none'; try { throw new Error('rejected'); } catch (e) { r = e.message; } r",

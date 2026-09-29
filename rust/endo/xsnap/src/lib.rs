@@ -780,12 +780,9 @@ impl Machine {
         std::fs::rename(&tmp_path, &final_path).map_err(SnapshotError::Io)?;
         // The rename is durable only once its directory is synced; a
         // published snapshot must survive power loss
-        // (designs/ironhorse-panic.md § Backend selection and snapshot
-        // ordering (Q3)).
-        #[cfg(unix)]
-        std::fs::File::open(cas_dir)
-            .and_then(|dir| dir.sync_all())
-            .map_err(SnapshotError::Io)?;
+        // (designs/ironhorse-panic.md § Open Questions, "Which worker
+        // backend"). The shared helper states the per-platform rationale.
+        slot_machine_transcript::sync_directory(cas_dir).map_err(SnapshotError::Io)?;
         Ok(hash)
     }
 

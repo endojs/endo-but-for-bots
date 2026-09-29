@@ -6,7 +6,7 @@
 //! compacted crank behind it, and a committed replay suffix. The measured
 //! phase then restarts that worker under a [`FaultPlan`] and does one full
 //! committing crank's lifecycle: admission, staging, the release commit,
-//! release and acknowledgement, snapshot publication (blob write, blob sync,
+//! release and acknowledgment, snapshot publication (blob write, blob sync,
 //! rename, directory sync, snapshot record), and compaction. A counting dry
 //! run numbers every mutating durability operation in that phase; the matrix
 //! then replays the phase once per (operation, fault mode), restarts the
@@ -34,22 +34,22 @@ const TARGET: &[u8] = b"delta";
 const AFTER: &[u8] = b"epsilon";
 
 fn setup(files: &WorkerFiles, wire: &mut Wire) {
-    let mut sup = Supervisor::start(files, None, wire).expect("fresh start");
-    sup.crank(SETUP[0], wire).expect("alpha");
-    sup.crank(SETUP[1], wire).expect("beta");
-    sup.publish().expect("publish after beta");
-    sup.compact().expect("compact after beta");
-    // gamma is committed and released, but its acknowledgement is still
+    let mut supervisor = Supervisor::start(files, None, wire).expect("fresh start");
+    supervisor.crank(SETUP[0], wire).expect("alpha");
+    supervisor.crank(SETUP[1], wire).expect("beta");
+    supervisor.publish().expect("publish after beta");
+    supervisor.compact().expect("compact after beta");
+    // gamma is committed and released, but its acknowledgment is still
     // pending when the worker stops: the restart must re-release it.
-    sup.crank(SETUP[2], wire).expect("gamma");
+    supervisor.crank(SETUP[2], wire).expect("gamma");
 }
 
 /// The measured phase. Stops at the first error, as a supervisor whose
 /// transcript faulted stops serving the worker.
-fn measured(sup: &mut Supervisor, wire: &mut Wire) -> Result<(), TranscriptError> {
-    sup.crank(TARGET, wire)?;
-    sup.publish()?;
-    sup.compact()
+fn measured(supervisor: &mut Supervisor, wire: &mut Wire) -> Result<(), TranscriptError> {
+    supervisor.crank(TARGET, wire)?;
+    supervisor.publish()?;
+    supervisor.compact()
 }
 
 struct Outcome {
@@ -76,16 +76,16 @@ fn run_case(n: Option<(u64, FaultMode)>) -> (Outcome, FaultPlan) {
 
     let mut surfaced = None;
     match Supervisor::start(&files, Some(plan.clone()), &mut wire) {
-        Ok(mut sup) => {
-            if let Err(e) = measured(&mut sup, &mut wire) {
+        Ok(mut supervisor) => {
+            if let Err(e) = measured(&mut supervisor, &mut wire) {
                 if let TranscriptError::Fault(_) = &e {
                     assert!(
-                        sup.transcript.poisoned().is_some(),
+                        supervisor.transcript.poisoned().is_some(),
                         "{label}: a fault must poison the transcript"
                     );
                     assert!(
                         matches!(
-                            sup.transcript.begin_crank(AFTER),
+                            supervisor.transcript.begin_crank(AFTER),
                             Err(TranscriptError::Poisoned(_))
                         ),
                         "{label}: a poisoned transcript must refuse admission"
@@ -106,12 +106,15 @@ fn run_case(n: Option<(u64, FaultMode)>) -> (Outcome, FaultPlan) {
 
     // Restart cleanly: the supervisor after a process kill, or after a
     // reconcile-before-retry.
-    let mut sup = Supervisor::start(&files, None, &mut wire)
+    let mut supervisor = Supervisor::start(&files, None, &mut wire)
         .unwrap_or_else(|e| panic!("{label}: restart failed: {e}"));
-    let committed = if sup.state == post_state {
+    let committed = if supervisor.state == post_state {
         true
     } else {
-        assert_eq!(sup.state, pre_state, "{label}: replay reached a torn state");
+        assert_eq!(
+            supervisor.state, pre_state,
+            "{label}: replay reached a torn state"
+        );
         false
     };
     let expected_frames = if committed { &post_frames } else { &pre_frames };
@@ -120,13 +123,13 @@ fn run_case(n: Option<(u64, FaultMode)>) -> (Outcome, FaultPlan) {
         "{label}: receiver saw the wrong frames"
     );
 
-    for (seq, crank, state) in sup.transcript.outbound_audit().expect("audit") {
+    for (seq, crank, state) in supervisor.transcript.outbound_audit().expect("audit") {
         assert_eq!(
             state, "committed",
             "{label}: outbound seq {seq} of crank {crank} is on record uncommitted"
         );
     }
-    for aborted in sup.transcript.aborted_cranks().expect("aborted") {
+    for aborted in supervisor.transcript.aborted_cranks().expect("aborted") {
         assert!(
             !committed,
             "{label}: the target committed yet crank {} is aborted",
@@ -137,7 +140,7 @@ fn run_case(n: Option<(u64, FaultMode)>) -> (Outcome, FaultPlan) {
             "{label}: only the target crank may be in doubt"
         );
     }
-    let snapshot = sup
+    let snapshot = supervisor
         .transcript
         .latest_snapshot()
         .expect("snapshot")
@@ -151,14 +154,16 @@ fn run_case(n: Option<(u64, FaultMode)>) -> (Outcome, FaultPlan) {
 
     // Converge: retry the target if it did not commit, then one more crank.
     if !committed {
-        sup.crank(TARGET, &mut wire)
+        supervisor
+            .crank(TARGET, &mut wire)
             .unwrap_or_else(|e| panic!("{label}: retry failed: {e}"));
     }
-    sup.crank(AFTER, &mut wire)
+    supervisor
+        .crank(AFTER, &mut wire)
         .unwrap_or_else(|e| panic!("{label}: follow-on failed: {e}"));
-    sup.publish().expect("publish");
-    sup.compact().expect("compact");
-    drop(sup);
+    supervisor.publish().expect("publish");
+    supervisor.compact().expect("compact");
+    drop(supervisor);
     let final_sup = Supervisor::start(&files, None, &mut wire).expect("final restart");
     let all: Vec<&[u8]> = SETUP.iter().copied().chain([TARGET, AFTER]).collect();
     let (final_state, final_frames) = oracle(&all);
@@ -191,7 +196,7 @@ fn crash_matrix_xs_cas_watermark_ordering() {
         "cas:write-blob",
         "cas:sync-blob",
         "cas:rename-blob",
-        "cas:sync-dir",
+        "cas:sync-directory",
     ] {
         assert!(
             ops.iter().any(|op| op.starts_with(needle)),

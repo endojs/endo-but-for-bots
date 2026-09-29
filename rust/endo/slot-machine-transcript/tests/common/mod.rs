@@ -87,24 +87,24 @@ impl Wire {
 
 /// A worker's files.
 pub struct WorkerFiles {
-    pub dir: PathBuf,
+    pub directory: PathBuf,
     pub worker: String,
 }
 
 impl WorkerFiles {
     pub fn new(root: &Path, worker: &str) -> WorkerFiles {
         WorkerFiles {
-            dir: root.join(worker),
+            directory: root.join(worker),
             worker: worker.to_string(),
         }
     }
 
     pub fn transcript(&self) -> PathBuf {
-        slot_machine_transcript::transcript_path(&self.dir, &self.worker)
+        slot_machine_transcript::transcript_path(&self.directory, &self.worker)
     }
 
-    pub fn cas_dir(&self) -> PathBuf {
-        self.dir.join("snapshots")
+    pub fn cas_directory(&self) -> PathBuf {
+        self.directory.join("snapshots")
     }
 }
 
@@ -129,13 +129,13 @@ impl Supervisor {
         wire: &mut Wire,
     ) -> Result<Supervisor, TranscriptError> {
         let mut config = TranscriptConfig::new(&files.worker);
-        let mut cas = CasStore::open(files.cas_dir()).expect("cas dir");
+        let mut cas = CasStore::open(files.cas_directory()).expect("cas directory");
         if let Some(plan) = &plan {
             config = config.with_fault_plan(plan.clone());
             cas = cas.with_fault_plan(plan.clone());
         }
         let (transcript, recovery) = Transcript::open(files.transcript(), config)?;
-        let mut sup = Supervisor {
+        let mut supervisor = Supervisor {
             transcript,
             cas,
             state: 0,
@@ -143,12 +143,12 @@ impl Supervisor {
             replayed: 0,
             plan,
         };
-        if sup.transcript.latest_snapshot()?.is_none() {
+        if supervisor.transcript.latest_snapshot()?.is_none() {
             // A fresh worker: the initial durable snapshot precedes the
             // first retryable delivery.
-            sup.publish()?;
+            supervisor.publish()?;
         } else {
-            let plan = sup.transcript.replay_plan(&sup.cas)?;
+            let plan = supervisor.transcript.replay_plan(&supervisor.cas)?;
             let mut state = restore(&plan.snapshot_bytes);
             for crank in &plan.cranks {
                 let (next, out) = deliver(state, &crank.inbound);
@@ -161,15 +161,17 @@ impl Supervisor {
                 );
                 state = next;
             }
-            sup.replayed = plan.cranks.len();
-            sup.state = state;
+            supervisor.replayed = plan.cranks.len();
+            supervisor.state = state;
         }
-        let frames = sup.transcript.releasable()?;
+        let frames = supervisor.transcript.releasable()?;
         for frame in &frames {
             wire.receive(frame);
         }
-        sup.transcript.mark_released(frames.iter().map(|f| f.seq));
-        Ok(sup)
+        supervisor
+            .transcript
+            .mark_released(frames.iter().map(|f| f.seq));
+        Ok(supervisor)
     }
 
     /// Run one crank to quiescence and release its frames. On any error the

@@ -27,7 +27,7 @@ struct Peer {
 
 /// The transport into a [`Peer`]. It may be told to crash the worker after
 /// a fixed number of hand-offs: the frame is on the wire, but the worker
-/// never records the acknowledgement.
+/// never records the acknowledgment.
 struct Link {
     peer: Rc<RefCell<Peer>>,
     handoffs: usize,
@@ -61,7 +61,7 @@ fn open(
     peer: &Rc<RefCell<Peer>>,
     crash_after: Option<usize>,
 ) -> (Embargo<Link>, CasStore) {
-    let cas = CasStore::open(files.cas_dir()).expect("cas dir");
+    let cas = CasStore::open(files.cas_directory()).expect("cas directory");
     let (mut transcript, _recovery) =
         Transcript::open(files.transcript(), TranscriptConfig::new(&files.worker))
             .expect("open transcript");
@@ -280,7 +280,7 @@ fn a_crash_after_send_before_ack_is_observed_exactly_once_at_every_point() {
                     break;
                 }
             }
-            // The process dies here: in-memory acknowledgements are lost.
+            // The process dies here: in-memory acknowledgments are lost.
         }
         let on_wire_before = peer.borrow().wire.len();
         assert_eq!(on_wire_before, crash_at.min(total));
@@ -302,8 +302,8 @@ fn a_crash_after_send_before_ack_is_observed_exactly_once_at_every_point() {
 
         let peer = peer.borrow();
         assert_eq!(peer.delivered, expected, "crash at hand-off {crash_at}");
-        // Acknowledgements ride each later admission, so only frames on the
-        // wire with no durable acknowledgement are re-sent, and every one of
+        // Acknowledgments ride each later admission, so only frames on the
+        // wire with no durable acknowledgment are re-sent, and every one of
         // them is dropped by sequence.
         let never_sent = committed - on_wire_before;
         assert_eq!(
@@ -311,7 +311,7 @@ fn a_crash_after_send_before_ack_is_observed_exactly_once_at_every_point() {
             unacknowledged - never_sent,
             "crash at hand-off {crash_at}"
         );
-        // Once acknowledgements are durable, nothing is re-released again.
+        // Once acknowledgments are durable, nothing is re-released again.
         drop(peer);
         drop(embargo);
         let (embargo, _cas) = open(&files, &Rc::new(RefCell::new(Peer::default())), None);
@@ -319,10 +319,10 @@ fn a_crash_after_send_before_ack_is_observed_exactly_once_at_every_point() {
     }
 }
 
-/// An acknowledgement that rode a later transaction is durable, so a crash
+/// An acknowledgment that rode a later transaction is durable, so a crash
 /// after it re-releases only the frames handed off since.
 #[test]
-fn a_durable_acknowledgement_narrows_re_release_to_the_unacknowledged_suffix() {
+fn a_durable_acknowledgment_narrows_re_release_to_the_unacknowledged_suffix() {
     let root = tempfile::tempdir().unwrap();
     let files = WorkerFiles::new(root.path(), "w1");
     let peer = Rc::new(RefCell::new(Peer::default()));
@@ -333,7 +333,7 @@ fn a_durable_acknowledgement_narrows_re_release_to_the_unacknowledged_suffix() {
             embargo.send(frame).unwrap();
         }
         embargo.settle(CrankVerdict::Quiesced).unwrap();
-        // The next admission carries crank a's acknowledgements.
+        // The next admission carries crank a's acknowledgments.
         embargo.admit(b"b").unwrap();
         for frame in frames(1, 3) {
             embargo.send(frame).unwrap();
