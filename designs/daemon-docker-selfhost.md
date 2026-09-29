@@ -25,10 +25,13 @@ Self-hosting requires:
 3. **Network exposure.** The gateway's HTTP/WebSocket endpoint must be
    reachable from outside the container, with TLS termination handled
    either by the daemon or a reverse proxy.
-4. **Remote authentication.** The gateway currently rejects non-localhost
-   connections. A self-hosted daemon must accept authenticated remote
-   connections. (See [gateway-bearer-token-auth](gateway-bearer-token-auth.md)
-   for the authentication design.)
+4. **Remote authentication.** The gateway performs no peer-address
+   admission check today; its only barrier is the default loopback bind
+   of `ENDO_ADDR`. A self-hosted daemon must both bind wide and gate
+   remote peers behind explicit opt-in and the bearer token. (See
+   [gateway-bearer-token-auth](gateway-bearer-token-auth.md) for the
+   admission-control design; that wiring is Phase A there, not yet
+   landed.)
 
 ## Design
 
@@ -72,9 +75,9 @@ if [ ! -d "$ENDO_STATE/state" ]; then
   node bundles/endo-cli.cjs init --state "$ENDO_STATE"
 fi
 
+# The bind address is the ENDO_ADDR env var (set above), not a flag.
 exec node bundles/endo-daemon.cjs \
-  --state "$ENDO_STATE" \
-  --addr "$ENDO_ADDR"
+  --state "$ENDO_STATE"
 ```
 
 ### State persistence
@@ -115,7 +118,7 @@ not required for the initial Docker image.
 
 The gateway must accept remote connections authenticated by bearer token.
 See [gateway-bearer-token-auth](gateway-bearer-token-auth.md) for the
-full design. In Docker mode, the `ENDO_GATEWAY_REMOTE=true` environment
+full design. In Docker mode, the `ENDO_GATEWAY=remote` environment
 variable enables remote authentication.
 
 ### Bundled agents (optional)
@@ -148,7 +151,7 @@ services:
     volumes:
       - endo-state:/data/endo
     environment:
-      - ENDO_GATEWAY_REMOTE=true
+      - ENDO_GATEWAY=remote
     restart: unless-stopped
 
   # Optional: TLS reverse proxy
@@ -205,8 +208,8 @@ docker build -t endojs/daemon:latest docker/
 | `docker/Dockerfile` | New — Docker image definition |
 | `docker/docker-entrypoint.sh` | New — entrypoint script |
 | `docker/docker-compose.yml` | New — example compose file |
-| `packages/daemon/src/daemon-node.js` | Add `--addr` flag for bind address override |
-| `packages/daemon/src/gateway.js` | Support `ENDO_GATEWAY_REMOTE` for remote auth mode |
+| `packages/daemon/src/daemon-node.js` | Read `ENDO_ADDR` for the bind address (the bind address is the `ENDO_ADDR` env var; there is no `--addr` flag) and `ENDO_GATEWAY`/`ENDO_GATEWAY_ALLOWED_CIDRS` for admission |
+| `packages/daemon/src/ws-gateway.js` | Enforce `ENDO_GATEWAY=remote` admission via `makeAddressChecker` (`cidr.js`) for remote auth mode |
 
 ## Design Decisions
 

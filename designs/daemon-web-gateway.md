@@ -10,14 +10,24 @@
 
 **Implemented.** The gateway is a built-in daemon service in
 `packages/daemon/src/web-server-node.js`, started as the `APPS` unconfined
-guest formula in `packages/daemon/src/daemon-node.js`. Address filtering is
-in `packages/daemon/src/cidr.js`. CapTP message framing is in
-`packages/daemon/src/connection.js`. Chat's client-side connection is in
-`packages/chat/connection.js`. The Familiar's `localhttp://` protocol
-handler is in `packages/familiar/src/protocol-handler.js`.
+guest formula in `packages/daemon/src/daemon-node.js`. CapTP message
+framing is in `packages/daemon/src/connection.js`. Chat's client-side
+connection is in `packages/chat/connection.js`. The Familiar's
+`localhttp://` protocol handler is in
+`packages/familiar/src/protocol-handler.js`.
 
-**Design deviations:** None significant — the implementation matches the
-design described below.
+**Design deviation, address filtering is not wired.** The CIDR predicate
+`makeAddressChecker` exists and is unit-tested in
+`packages/daemon/src/cidr.js`, but nothing imports it: the shipped
+gateway performs no peer-address admission check, no code reads
+`ENDO_GATEWAY`/`ENDO_GATEWAY_ALLOWED_CIDRS`, and the only barrier is the
+default loopback bind of `ENDO_ADDR`. Wiring the checker into the gateway
+is Phase A of
+[gateway-bearer-token-auth](gateway-bearer-token-auth.md), not yet
+landed. Aside from that, the implementation matches the design described
+below. (The gateway migrated to `packages/daemon/src/ws-gateway.js`; the
+`web-server-node.js` name below predates
+[familiar-gateway-migration](familiar-gateway-migration.md).)
 
 ## What is the Problem Being Solved?
 
@@ -128,7 +138,12 @@ weblet's URL — either `localhttp://<accessToken>` in unified mode or
 
 ### Address filtering
 
-Access control is configured via environment variables:
+This is the intended admission model. It is **not yet wired**: the
+`makeAddressChecker`/`cidr.js` predicate below exists and is tested, but
+no code imports it and the gateway performs no address check today. See
+the Status deviation above and Phase A of
+[gateway-bearer-token-auth](gateway-bearer-token-auth.md). Access control
+is configured via environment variables:
 
 | Mode | Configuration | Allowed clients |
 |------|--------------|----------------|

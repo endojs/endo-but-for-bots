@@ -16,24 +16,26 @@ This record previously claimed **Implemented**, citing an
 (`feat: Docker self-hosting image for the daemon`) tripped over it: its
 survey of the master lineage found no gateway at all and proposed
 resetting this design to Not Started. Neither status is accurate. The
-truth is split across the fork's two lineages:
+truth is split across the fork's two lineages (a lineage here is a
+long-lived branch line: `llm`, the roadmap branch where forward work
+lands, and `master`, the upstream-tracking line PR #608 builds from):
 
 **On `llm` (the roadmap branch), shipped:**
 
 - `packages/daemon/src/ws-gateway.js` (`startWsGateway`, started
-  unconditionally by `daemon-node.js`) — the HTTP+WebSocket CapTP
+  unconditionally by `daemon-node.js`): the HTTP+WebSocket CapTP
   gateway, bound to `ENDO_ADDR` (default `127.0.0.1:8920`). Each
   connection receives a `GatewayBootstrap` exo whose
   `fetch(token)` forwards to `E(endoBootstrap).gateway()`'s
-  `provide(token)` — the bearer-token gate this design specifies.
+  `provide(token)`, the bearer-token gate this design specifies.
   Landed via [familiar-gateway-migration](familiar-gateway-migration.md)
   (whose own Status prose still cites the pre-migration
   `web-server-node.js` filename).
 - The per-IP rate limiter on failed `fetch()` attempts
-  (`makeRateLimiter` in `ws-gateway.js`) — exactly this design's
-  § Rate limiting: 1-second accruing penalty, failures only, lazy sweep
+  (`makeRateLimiter` in `ws-gateway.js`), exactly this design's
+  sec. Rate limiting: 1-second accruing penalty, failures only, lazy sweep
   at 10× the penalty interval.
-- `packages/daemon/src/cidr.js` — `makeAddressChecker({ allowRemote,
+- `packages/daemon/src/cidr.js`: `makeAddressChecker({ allowRemote,
   allowedCIDRs })` implementing the full admission policy this design
   calls for (localhost-only default, `allowRemote` bypass,
   comma-separated CIDR allowlist, IPv4/IPv6 with v4-mapped-v6
@@ -43,7 +45,7 @@ truth is split across the fork's two lineages:
 
 - **Nothing imports `cidr.js`.** It is an orphaned module: no code
   reads `ENDO_GATEWAY` or `ENDO_GATEWAY_ALLOWED_CIDRS`, and
-  `ws-gateway.js` performs **no address check of any kind** — neither
+  `ws-gateway.js` performs **no address check of any kind**: neither
   the localhost rejection this design's problem statement presumed nor
   the remote-mode opt-in it specified. The only barrier is the default
   loopback bind; an operator who sets `ENDO_ADDR=0.0.0.0` today exposes
@@ -75,13 +77,13 @@ remote access. The division is:
 
 - **This design owns bearer-token admission control**: the
   token-as-credential model, the `fetch(token)` gate, the failure rate
-  limiter, and the local/CIDR/remote admission policy — wherever the
+  limiter, and the local/CIDR/remote admission policy, wherever the
   gateway lives. Today that is the daemon's `ws-gateway.js` (Phases A
   and B below).
 - **[gateway-package](gateway-package.md) owns the transport
-  surfaces** — virtual hosting (Feature 2), the `/ocapn-cbor-np`
+  surfaces**: virtual hosting (Feature 2), the `/ocapn-cbor-np`
   WebSocket subprotocol (Feature 8), trusted-proxy compatibility
-  (Feature 9) — and, per its own Dependencies table, hoists this
+  (Feature 9). It also, per its own Dependencies table, hoists this
   design's rate-limit and CIDR machinery into its request-handling
   layer when `@endo/gateway` replaces the daemon-inline gateway
   (Phase C below). Feature 3 (Git smart-HTTP) reuses the same
@@ -113,17 +115,17 @@ single method:
 fetch(token) → agent powers
 ```
 
-The `token` is the agent's formula identifier — a 256-bit hex string
+The `token` is the agent's formula identifier, a 256-bit hex string
 (64 characters). Knowing the identifier grants full control of that
 agent's profile, the same authority model as SSH keys or API tokens.
 
 The Chat UI receives the agent ID via URL fragment
-(`#gateway=<host>&agent=<id>`). Per RFC 3986 § 3.5 the fragment is
+(`#gateway=<host>&agent=<id>`). Per RFC 3986 sec. 3.5 the fragment is
 never sent to the server in HTTP requests. The client extracts the
 agent ID from `window.location.hash` and passes it to
 `GatewayBootstrap.fetch()` over the CapTP WebSocket connection.
 
-No additional JSON auth handshake is needed — CapTP provides the
+No additional JSON auth handshake is needed. CapTP provides the
 channel, and `fetch(token)` is the gate. **This part is shipped** on
 `llm`; what follows is the admission-control wiring that is not.
 
@@ -140,6 +142,16 @@ read once at daemon startup in `daemon-node.js` alongside `ENDO_ADDR`:
 | `ENDO_GATEWAY_ALLOWED_CIDRS=<list>` | Local+CIDR | Loopback plus peers inside the listed CIDRs |
 | `ENDO_GATEWAY=remote` | Remote | Every peer; bearer token is the gate |
 
+`ENDO_GATEWAY` and `ENDO_GATEWAY_ALLOWED_CIDRS` are two independent env
+vars, not the values of one selector, and `ENDO_GATEWAY=remote` takes
+precedence: when it is set, the shipped `makeAddressChecker`
+(`cidr.js`) short-circuits to allow-all and the CIDR allowlist is
+ignored (its `compile()` returns before consulting `allowedCIDRs`). An
+operator who sets both, expecting the list to narrow remote access,
+gets unrestricted remote access. Use the CIDR allowlist without
+`ENDO_GATEWAY=remote` to narrow admission; use `ENDO_GATEWAY=remote`
+only when every peer should reach the bearer gate.
+
 The predicate is the existing `makeAddressChecker` from `cidr.js`,
 finally imported:
 
@@ -152,10 +164,12 @@ const checkAddress = makeAddressChecker({
 
 `startWsGateway` accepts the checker and consults it in the
 `connection` handler, before any CapTP is spoken: a disallowed peer's
-socket is closed immediately (WebSocket close code 1008, policy
-violation) and the attempt logged. Binding `ENDO_ADDR=0.0.0.0` without
+socket is closed immediately with WebSocket close code 1008 (policy
+violation) and a close reason naming the fix
+(`"remote access not enabled; set ENDO_GATEWAY=remote"`), and the
+attempt is logged. Binding `ENDO_ADDR=0.0.0.0` without
 `ENDO_GATEWAY=remote` therefore accepts TCP connections on all
-interfaces but refuses non-loopback peers at the WebSocket layer — the
+interfaces but refuses non-loopback peers at the WebSocket layer: the
 operator must opt in to remote access explicitly. This closes the
 current hazard where a wide bind silently exposes the gate, and it is
 a deliberate behavior change for any operator relying on that
@@ -169,18 +183,22 @@ sequenceDiagram
     B->>G: WebSocket upgrade
     G->>G: checkAddress(remoteAddress)
     alt disallowed
-        G-->>B: close 1008
+        G-->>B: close 1008 (reason: set ENDO_GATEWAY=remote)
     else allowed
         B->>G: CapTP: fetch(token)
         G->>G: rate limiter check(remoteAddress)
-        G->>D: provide(token)
-        alt unknown token
-            D-->>G: throw
-            G->>G: recordFailure(remoteAddress)
-            G-->>B: error
-        else known token
-            D-->>G: agent powers
-            G-->>B: agent powers
+        alt rate limited
+            G-->>B: error (throttled)
+        else within limit
+            G->>D: provide(token)
+            alt unknown token
+                D-->>G: throw
+                G->>G: recordFailure(remoteAddress)
+                G-->>B: error
+            else known token
+                D-->>G: agent powers
+                G-->>B: agent powers
+            end
         end
     end
 ```
@@ -200,7 +218,7 @@ When remote mode is active, the gateway logs at startup:
 
 ```
 [Gateway] Remote mode active. Ensure TLS termination (reverse proxy)
-is configured — bearer tokens are transmitted over the WebSocket
+is configured. Bearer tokens are transmitted over the WebSocket
 connection.
 ```
 
@@ -208,13 +226,30 @@ The gateway itself never terminates TLS; that posture is pinned by
 [gateway-package](gateway-package.md) Feature 9, whose
 trusted-proxy `X-Forwarded-*` parsing lands in its Phase 4. Until
 then the rate limiter and address checker key on the raw socket peer
-address — behind a reverse proxy, all clients share the proxy's
+address. Behind a reverse proxy, all clients share the proxy's
 address for rate-limiting purposes (acceptable: the limiter only
 throttles failures, and the token space is unguessable).
 
+### Interim caveat: do not front local mode with a same-host proxy
+
+Until the trusted-proxy `X-Forwarded-*` handling above lands (gateway-package
+Feature 9, Phase 4), the admission checker cannot distinguish a proxied
+internet client from a genuine loopback process: both arrive at
+`ws-gateway.js` with peer address `127.0.0.1`. A same-host reverse proxy
+terminating TLS and forwarding to the loopback-bound `ENDO_ADDR` (the
+ordinary same-box topology) therefore defeats local-mode admission
+entirely, and the "explicit opt-in gates remote reachability" invariant
+Phase A establishes does not survive it. So for Phases A and B the
+supported proxied deployment is **remote mode** (`ENDO_GATEWAY=remote`,
+optionally narrowed by `ENDO_GATEWAY_ALLOWED_CIDRS` to the proxy's own
+subnet): a same-host proxy in front of local mode is an unsupported
+configuration that silently grants remote access, and operators must not
+use it. Proper `X-Forwarded-For`-aware admission (so a same-host proxy can
+front local mode safely) is Phase C's gateway-package hoist, not Phase A/B.
+
 ## Phased Implementation
 
-**Phase A — wire the shipped pieces (daemon, `llm`).** Import
+**Phase A: wire the shipped pieces (daemon, `llm`).** Import
 `makeAddressChecker` into the gateway path: read `ENDO_GATEWAY` /
 `ENDO_GATEWAY_ALLOWED_CIDRS` in `daemon-node.js`, thread the checker
 through `startWsGateway`, enforce at connection admission, add the
@@ -225,7 +260,7 @@ admission, remote-mode acceptance, rate-limit behavior across a
 rejected/accepted boundary. Small, self-contained: one new option
 threading, no new modules. This is the M3 remote-control keystone.
 
-**Phase B — self-host enablement (rides PR #608's follow-up).** The
+**Phase B: self-host enablement (rides PR #608's follow-up).** The
 container recipe publishes the gateway port and sets
 `ENDO_GATEWAY=remote`, with a reverse-proxy TLS recipe (Caddy or
 nginx) and the Chat `#gateway=<host>&agent=<id>` connection flow
@@ -233,7 +268,7 @@ documented end to end. Blocked on Phase A and on the lineage question
 below (#608's image builds from the master lineage, which has no
 gateway to expose).
 
-**Phase C — hoist into `@endo/gateway`.** When the gateway-package
+**Phase C: hoist into `@endo/gateway`.** When the gateway-package
 stack replaces the daemon-inline gateway (its Phase 1 wiring), the
 admission checker, rate limiter, and `fetch(token)` gate move into the
 package's request-handling layer, applying uniformly to the Chat
@@ -268,16 +303,17 @@ here; this design's residual scope ends at Phase B.
    `fetch(token)` is the gate. Confirmed by the shipped code.
 2. **Agent ID as bearer token.** Reuses the existing 256-bit formula
    identifier rather than a separate credential.
-3. **URL fragment, not query parameter** (RFC 3986 § 3.5: fragments
+3. **URL fragment, not query parameter** (RFC 3986 sec. 3.5: fragments
    are not transmitted), reducing accidental logging.
 4. **No OAuth/OIDC for admission.** The bearer token scopes authority
    to the holder without redirect flows or IdP configuration.
    Operator-side recovery of a lost bearer via OAuth
-   proof-of-identity is a named M5 gap (`gateway-key-recovery` in the
+   proof-of-identity is a named Milestone 5 (M5) gap
+   (`gateway-key-recovery` in the
    designs README), out of scope here.
 5. **Explicit opt-in to remote.** Binding wide is not consent to
    remote access; `ENDO_GATEWAY=remote` is. Considered and rejected:
-   inferring remote mode from a non-loopback `ENDO_ADDR` — it would
+   inferring remote mode from a non-loopback `ENDO_ADDR`. It would
    silently arm remote access for operators binding to a LAN
    interface for local convenience.
 6. **Reuse the orphaned `cidr.js` rather than rewrite.** The module
@@ -295,19 +331,27 @@ here; this design's residual scope ends at Phase B.
 2. Should local mode's loopback enforcement land behind a
    deprecation notice? It changes behavior for any operator who
    deliberately binds `ENDO_ADDR` wide today and relies on the
-   (unauthenticated) exposure. The design's position: no notice —
-   the current exposure is a hazard, not a contract.
+   (unauthenticated) exposure. The design's position: no notice.
+   The current exposure is a hazard, not a contract.
 
 ## Related Designs
 
-- [gateway-package](gateway-package.md) — owns the gateway's transport
+- [gateway-package](gateway-package.md): owns the gateway's transport
   surfaces and absorbs this design's machinery in its Phase C hoist;
   absorbed the removed `endo-gateway` design (2026-05-29).
-- [familiar-gateway-migration](familiar-gateway-migration.md) — landed
+- [familiar-gateway-migration](familiar-gateway-migration.md): landed
   the daemon-hosted gateway (`ws-gateway.js`) this design gates; its
   Status prose still names the pre-migration `web-server-node.js`.
-- [daemon-docker-selfhost](daemon-docker-selfhost.md) — PR #608; its
+- [daemon-web-gateway](daemon-web-gateway.md): the sibling record for
+  the same shipped `ws-gateway.js`/`cidr.js` pair. Its Status claimed
+  address filtering ships in `cidr.js` with "no significant deviation";
+  reconciled in the same pass as this revision to record that `cidr.js`
+  is present but unwired (no importer, no `ENDO_GATEWAY` reader) until
+  Phase A lands.
+- [daemon-docker-selfhost](daemon-docker-selfhost.md): PR #608; its
   remote-access follow-up is Phase B. Its "gateway rejects
-  non-localhost connections" premise is corrected by this revision.
-- [endo-gateway-mcp](endo-gateway-mcp.md) — the MCP bridge reuses the
-  formula-identifier bearer scheme over the gateway (M6).
+  non-localhost connections" premise, its stale `ENDO_GATEWAY_REMOTE`
+  env var, and its stale `gateway.js` file path are corrected in the
+  same pass as this revision.
+- [endo-gateway-mcp](endo-gateway-mcp.md): the MCP bridge reuses the
+  formula-identifier bearer scheme over the gateway (Milestone 6, M6).
