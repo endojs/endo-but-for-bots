@@ -15,7 +15,7 @@
  * CapTP serialisation without extra marshalling.
  */
 
-/** @import { DebugSession, BreakEvent, Frame, Property } from './types.js' */
+/** @import { DebugSession, BreakEvent, PanicEvent, Frame, Property } from './types.js' */
 
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
@@ -25,6 +25,13 @@ import { M } from '@endo/patterns';
 // ---------------------------------------------------------------------------
 
 const BreakEventShape = M.splitRecord({
+  path: M.string(),
+  line: M.number(),
+  message: M.string(),
+});
+
+const PanicEventShape = M.splitRecord({
+  kind: M.string(),
   path: M.string(),
   line: M.number(),
   message: M.string(),
@@ -53,6 +60,8 @@ export const DebuggerInterface = M.interface('EndoDebugger', {
   getTitle: M.call().returns(M.opt(M.string())),
   getTag: M.call().returns(M.opt(M.string())),
   getLastBreak: M.call().returns(M.or(BreakEventShape, M.null())),
+  isPanicked: M.call().returns(M.boolean()),
+  getLastPanic: M.call().returns(M.or(PanicEventShape, M.null())),
 });
 harden(DebuggerInterface);
 
@@ -85,6 +94,8 @@ harden(DebuggerInterface);
  *   getTitle(): string | undefined,
  *   getTag(): string | undefined,
  *   getLastBreak(): BreakEvent | null,
+ *   isPanicked(): boolean,
+ *   getLastPanic(): PanicEvent | null,
  * }>}
  */
 export const makeDebugger = session => {
@@ -150,6 +161,12 @@ export const makeDebugger = session => {
     },
     getLastBreak() {
       return session.getLastBreak();
+    },
+    isPanicked() {
+      return session.isPanicked();
+    },
+    getLastPanic() {
+      return session.getLastPanic();
     },
   });
 };

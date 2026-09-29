@@ -666,6 +666,13 @@ jobs:
       - name: Build xsnap crate
         run: cargo check --locked --manifest-path rust/endo/xsnap/Cargo.toml
 
+      - name: Test the xsbug debug protocol and panic stop (xsnap, mxDebug)
+        # The debug feature compiles XS with mxDebug, which no other lane
+        # does, so this is the only place the <break>/<panic> wire and
+        # the panic stop (designs/ironhorse-panic.md § Debugger
+        # Interaction) are exercised.
+        run: cargo test --locked -p xsnap --features debug --lib debug_protocol_tests
+
       - name: Test the store-backed worker lifecycle (endo crate)
         # The supervisor's Ironhorse heap-persistence option
         # (HeapStoreOptions + PersistentMachine + mark_suspended_store,
