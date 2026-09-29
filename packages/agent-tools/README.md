@@ -108,6 +108,10 @@ qualifies the Shell and GitRemote bounds records as `inspectShell` and
 `inspectGitRemote`, so both capabilities can coexist without name shadowing.
 `provisionWorkspaceTools` can derive the filesystem view from a supplied Git
 worktree; it never discovers grants from a petstore.
+`provisionHistoryTools({ git, ref, maxChars })` composes the read-only read,
+list, and stat tools over `git.filesystemAt(ref)`, so an agent can inspect a
+historical ref as an ordinary filesystem without any path to mutate the
+worktree.
 
 Scoped imports expose each layer:
 
