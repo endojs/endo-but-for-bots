@@ -287,7 +287,9 @@ comparative analysis of the pi agent harness against endo's daemon +
 chat + familiar + cli; sibling of `endoclaw.md`; spins out eight
 gap-closing designs prefixed `endopi-*`),
 [hardened-text-codecs-shim](hardened-text-codecs-shim.md)
-(added 2026-05-06; permits `TextEncoder`/`TextDecoder` in SES intrinsics),
+(added 2026-05-06, Phases 1-2 implemented upstream 2026-07-22 via
+[endojs/endo#3322](https://github.com/endojs/endo/pull/3322); permits
+`TextEncoder`/`TextDecoder` in SES intrinsics),
 [hardened-url-shim](hardened-url-shim.md) (added 2026-05-06; vetted-shim
 treatment for the `URL` constructor and `URLSearchParams`).*
 
@@ -475,7 +477,7 @@ LLM-agent stack).*
 | [familiar-unified-weblet-server](familiar-unified-weblet-server.md) | 2026-02-14 | 2026-05-06 | In Progress |
 | [formula-inspector](formula-inspector.md) | 2026-02-14 | 2026-06-13 | In Progress |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | 2026-03-02 | 2026-03-06 | **Implemented** |
-| [hardened-text-codecs-shim](hardened-text-codecs-shim.md) | 2026-05-04 | 2026-05-04 | Not Started |
+| [hardened-text-codecs-shim](hardened-text-codecs-shim.md) | 2026-05-04 | 2026-09-29 | **Implemented** (Phases 1-2, [endojs/endo#3322](https://github.com/endojs/endo/pull/3322); XS smoke #1349 open) |
 | [hardened-url-shim](hardened-url-shim.md) | 2026-05-04 | 2026-05-04 | Not Started |
 | [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | 2026-02-14 | 2026-03-13 | In Progress |
 | [inventory-drag-and-drop](inventory-drag-and-drop.md) | 2026-02-14 | 2026-02-24 | **Complete** |
@@ -569,7 +571,7 @@ LLM-agent stack).*
 | [thixotrope/message-delivery](../packages/thixotrope/designs/message-delivery.md) | 2026-09-08 | — | **Implemented** |
 | [thixotrope/vat-replacement](../packages/thixotrope/designs/vat-replacement.md) | 2026-09-08 | — | Proposed (exploratory) |
 
-**Current totals (2026-09-27 full corpus reconciliation):** 76 Complete/Implemented, 83 In Progress, 19 Not Started, 23 Proposed, 3 Active, 20 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**240 indexed records**). The bucket sum is 240. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase.
+**Current totals (2026-09-29, hardened-text-codecs-shim to Implemented):** 77 Complete/Implemented, 83 In Progress, 18 Not Started, 23 Proposed, 3 Active, 20 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**240 indexed records**). The bucket sum is 240. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase.
 
 ## Roadmap
 
