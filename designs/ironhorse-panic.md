@@ -913,6 +913,20 @@ fourth exception mode. Concretely:
   is far rarer than a `line` opcode, so the disarmed cost is nil and the armed
   cost is one hook call on the dying path.
 
+### C-XS implementation
+
+On the live C-XS worker, the panic hook is xsnap's `fxAbort`. It calls
+`fxDebugPanic` (`rust/endo/xsnap/xsnap-debug.c`) when a debugger is connected
+and the exit is in the panic category. The kinds are `stack-overflow` (both the
+JavaScript and the native stack exits), `meter-abort`, `heap-exhausted`, and
+`keys-exhausted`. The unhandled-exception and unhandled-rejection exits are
+uncaught throws, so they get no `<panic>`. The element is echoed before the
+frame listings, so a consumer still receives it if listing frames at an
+exhausted stack aborts again. A second abort from inside the stop exits to the
+host. An FFI callback panic (`engine-fault`) has no stop yet: the guard records
+the poison and returns to the guest, so the site is gone by the time a crank
+boundary observes it. `reference-error` waits for the Coda.
+
 ## Coda: An Option to Panic on Reference Errors
 
 This design proposes an Ironhorse **configuration option, off by default**,

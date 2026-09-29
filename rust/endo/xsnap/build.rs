@@ -44,6 +44,8 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed=xsnap-platform.h");
+    println!("cargo:rerun-if-changed=xsnap-platform.c");
+    println!("cargo:rerun-if-changed=xsnap-debug.c");
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=prebuilt/libxs.a");
     // Link math and pthread
@@ -70,7 +72,6 @@ fn compile_xs(manifest_dir: &PathBuf, moddable_dir: &PathBuf) {
         "xsCommon.c",
         "xsDataView.c",
         "xsDate.c",
-        "xsDebug.c",
         "xsDefaults.c",
         "xsdtoa.c",
         "xsError.c",
@@ -168,6 +169,10 @@ fn compile_xs(manifest_dir: &PathBuf, moddable_dir: &PathBuf) {
     for source in &sources {
         build.file(xs_sources.join(source));
     }
+
+    // xsDebug.c, compiled through a wrapper that adds the panic stop
+    // (fxDebugPanic) beside xsDebug.c's file-static helpers.
+    build.file(manifest_dir.join("xsnap-debug.c"));
 
     // Our platform stubs (replaces GLib-dependent lin_xs.c)
     build.file(manifest_dir.join("xsnap-platform.c"));

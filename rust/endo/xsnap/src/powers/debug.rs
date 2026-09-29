@@ -39,6 +39,12 @@ struct DebugState {
     outbound: VecDeque<u8>,
     /// Bytes from Rust → XS (debug commands to the VM).
     inbound: VecDeque<u8>,
+    /// Commands held back until the VM stops and blocks for one (a
+    /// break, a panic stop, or the login handshake). XS polls
+    /// `fxIsReadable` at every line, which would otherwise consume a
+    /// command a test queued for a later stop.
+    #[cfg(test)]
+    on_stop: VecDeque<Vec<u8>>,
 }
 
 impl DebugState {
@@ -48,6 +54,8 @@ impl DebugState {
             connected: false,
             outbound: VecDeque::new(),
             inbound: VecDeque::new(),
+            #[cfg(test)]
+            on_stop: VecDeque::new(),
         }
     }
 }
@@ -83,6 +91,33 @@ pub fn debug_push_inbound(data: &[u8]) {
     });
 }
 
+/// Queue one debug command for the next time the VM stops and waits
+/// for a command. Unlike [`debug_push_inbound`], it is invisible to
+/// `fxIsReadable`, so the per-line poll cannot consume it early.
+#[cfg(test)]
+pub fn debug_push_on_stop(data: &[u8]) {
+    DEBUG_STATE.with(|cell| {
+        cell.borrow_mut().on_stop.push_back(data.to_vec());
+    });
+}
+
+/// Make every command queued by [`debug_push_on_stop`] readable now.
+#[cfg(test)]
+pub fn debug_release_on_stop() {
+    DEBUG_STATE.with(|cell| {
+        let mut s = cell.borrow_mut();
+        while let Some(command) = s.on_stop.pop_front() {
+            s.inbound.extend(command);
+        }
+    });
+}
+
+/// Whether any command queued by [`debug_push_on_stop`] is unread.
+#[cfg(test)]
+pub fn debug_on_stop_pending() -> bool {
+    DEBUG_STATE.with(|cell| !cell.borrow().on_stop.is_empty())
+}
+
 /// Drain all pending outbound bytes (XS debug responses).
 /// Returns `None` if the buffer is empty.
 pub fn debug_drain_outbound() -> Option<Vec<u8>> {
@@ -110,6 +145,8 @@ pub fn debug_reset() {
         s.connected = false;
         s.outbound.clear();
         s.inbound.clear();
+        #[cfg(test)]
+        s.on_stop.clear();
     });
 }
 
@@ -188,6 +225,12 @@ pub extern "C" fn rust_debug_recv(
     crate::worker_io::guard_ffi_ret(0, || {
         DEBUG_STATE.with(|cell| {
             let mut s = cell.borrow_mut();
+            #[cfg(test)]
+            if s.inbound.is_empty() {
+                if let Some(command) = s.on_stop.pop_front() {
+                    s.inbound.extend(command);
+                }
+            }
             let n = std::cmp::min(s.inbound.len(), capacity as usize);
             if n == 0 {
                 return 0;

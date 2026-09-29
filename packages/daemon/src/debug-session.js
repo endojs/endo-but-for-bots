@@ -5,7 +5,7 @@
 /// <reference types="ses" />
 
 /**
- * @import { DebugSession, BreakEvent, Frame, Property } from './types.js'
+ * @import { DebugSession, BreakEvent, PanicEvent, Frame, Property } from './types.js'
  */
 
 import { makePromiseKit } from '@endo/promise-kit';
@@ -189,6 +189,8 @@ export const makeDebugSession = sendToWorker => {
   let broken = false;
   /** @type {BreakEvent | null} */
   let lastBreak = null;
+  /** @type {PanicEvent | null} */
+  let lastPanic = null;
   /** @type {Frame[]} */
   let lastFrames = [];
   /** @type {Property[]} */
@@ -203,6 +205,8 @@ export const makeDebugSession = sendToWorker => {
   // Break listeners (for followBreaks).
   /** @type {Array<(event: BreakEvent) => void>} */
   const breakListeners = [];
+  /** @type {Array<(event: PanicEvent) => void>} */
+  const panicListeners = [];
 
   // Pending command promises, keyed by expected response element.
   /** @type {Map<string, PendingCommand>} */
@@ -219,6 +223,20 @@ export const makeDebugSession = sendToWorker => {
     if (p) {
       pending.delete(key);
       p.resolve(value);
+    }
+  };
+
+  /**
+   * Reject a pending command if one exists for the given key.
+   *
+   * @param {string} key
+   * @param {Error} reason
+   */
+  const rejectPending = (key, reason) => {
+    const p = pending.get(key);
+    if (p) {
+      pending.delete(key);
+      p.reject(reason);
     }
   };
 
@@ -249,6 +267,7 @@ export const makeDebugSession = sendToWorker => {
           el.children = [];
           break;
         case 'break':
+        case 'panic':
         case 'bubble':
         case 'eval':
         case 'log':
@@ -294,6 +313,37 @@ export const makeDebugSession = sendToWorker => {
           broken = true;
           resolvePending('break', event);
           for (const listener of breakListeners) {
+            try {
+              listener(event);
+            } catch (_e) {
+              // ignore listener errors
+            }
+          }
+          break;
+        }
+        case 'panic': {
+          // A panic is uncatchable by category, so it has its own element
+          // rather than a <break> attribute, and it arrives whatever the
+          // exception-break mode (designs/ironhorse-panic.md § Debugger
+          // Interaction). The worker is stopped at the panic site; it is
+          // torn down once released, never resumed.
+          const event = harden({
+            kind: el.attrs.kind || '',
+            path: el.attrs.path || '',
+            line: Number(el.attrs.line || '0'),
+            message: el.data || '',
+          });
+          lastPanic = event;
+          broken = true;
+          resolvePending('panic', event);
+          // A step in flight ends at the panic, not at a break.
+          rejectPending(
+            'break',
+            Error(
+              `Worker panicked (${event.kind}) at ${event.path}:${event.line}`,
+            ),
+          );
+          for (const listener of panicListeners) {
             try {
               listener(event);
             } catch (_e) {
@@ -517,9 +567,19 @@ export const makeDebugSession = sendToWorker => {
       });
     },
 
+    onPanic(listener) {
+      panicListeners.push(listener);
+      return harden(() => {
+        const idx = panicListeners.indexOf(listener);
+        if (idx >= 0) panicListeners.splice(idx, 1);
+      });
+    },
     // Accessors
     isBroken() {
       return broken;
+    },
+    isPanicked() {
+      return lastPanic !== null;
     },
     getTitle() {
       return title;
@@ -529,6 +589,9 @@ export const makeDebugSession = sendToWorker => {
     },
     getLastBreak() {
       return lastBreak;
+    },
+    getLastPanic() {
+      return lastPanic;
     },
 
     help() {

@@ -3373,6 +3373,20 @@ export interface BreakEvent {
   readonly message: string;
 }
 
+/**
+ * A `<panic kind="...">` report: the worker hit an uncatchable panic
+ * (designs/ironhorse-panic.md § Debugger Interaction) and is stopped at
+ * the panic site. It is reported whatever the exception-break mode, and
+ * releasing it tears the worker down instead of resuming it.
+ */
+export interface PanicEvent {
+  /** `stack-overflow`, `meter-abort`, `heap-exhausted`, `keys-exhausted`, `engine-fault`, or `reference-error`. */
+  readonly kind: string;
+  readonly path: string;
+  readonly line: number;
+  readonly message: string;
+}
+
 export interface Frame {
   readonly name: string;
   readonly value: string;
@@ -3407,16 +3421,19 @@ export interface DebugSession {
   stopProfiling(): void;
   setExceptionBreakMode(mode: 'none' | 'all' | 'uncaught'): void;
   onBreak(listener: (event: BreakEvent) => void): () => void;
+  onPanic(listener: (event: PanicEvent) => void): () => void;
   isBroken(): boolean;
+  isPanicked(): boolean;
   getTitle(): string | undefined;
   getTag(): string | undefined;
   getLastBreak(): BreakEvent | null;
+  getLastPanic(): PanicEvent | null;
   help(): string;
 }
 
 /**
  * Remotable debugger exo — a CapTP-safe wrapper around DebugSession.
- * Methods match DebugSession but omit `feedXml` and `onBreak`
+ * Methods match DebugSession but omit `feedXml`, `onBreak`, and `onPanic`
  * (which are not serialisable over CapTP).
  */
 export interface Debugger {
@@ -3437,9 +3454,11 @@ export interface Debugger {
   evaluate(source: string): Promise<string>;
   setExceptionBreakMode(mode: 'none' | 'all' | 'uncaught'): void;
   isBroken(): boolean;
+  isPanicked(): boolean;
   getTitle(): string | undefined;
   getTag(): string | undefined;
   getLastBreak(): BreakEvent | null;
+  getLastPanic(): PanicEvent | null;
 }
 
 export interface RemoteControlState {
