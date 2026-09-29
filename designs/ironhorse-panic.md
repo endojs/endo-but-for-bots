@@ -842,6 +842,20 @@ supervisor, because `ironhorse_engine` is not on the delivery path. The
 point at which an Ironhorse `Halt::Panic` becomes the same supervisor-visible
 worker-death that the XS `"terminated"` meter report is today.
 
+The supervisor side of this sequence is `slot_machine_transcript::Supervisor`.
+It drops the incarnation on any verdict but `Quiesced`. `recover` checks the
+pinned configuration, re-seats handles, restores the latest published snapshot,
+and replays the committed suffix through `Replay`: recorded frames are matched
+and suppressed, recorded host replies answer host calls, and any divergence is a
+`ReplayStop`. `retry` re-delivers the pending crank only under a fix its
+`PanicSource` admits (the table below) and only while `recovery_gate` is open.
+`discard_pending` drops it instead. On the live XS worker, an attached host
+transcript stages outbound frames in the delivery's crank. `host_ledger::replay`
+re-runs the committed suffix on a worker restored from
+`host_ledger::published_heap`. The handle-table callbacks record their guest
+result as a tagged reply, so replay can set it without a native call. A
+callback that has no reply encoding yet, such as the SQLite reads, stops replay.
+
 ### What "fixed" means in practice
 
 "Fix and retry" is not one thing; the panic source determines it:

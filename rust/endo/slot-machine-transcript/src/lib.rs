@@ -65,6 +65,9 @@
 //! live in [`Embargo`] and [`DuplicateSuppressor`] (§ The Slot Machine
 //! Message Embargo Contract).
 //!
+//! Termination, restore-and-replay recovery, and the retry policy live in
+//! [`Supervisor`] and [`Replay`] (§ Slot Machine Termination and Retry).
+//!
 //! The deterministic fault-injection seam that drives the crash matrix is
 //! [`FaultPlan`].
 
@@ -72,6 +75,7 @@ mod cas;
 mod embargo;
 mod fault;
 mod host;
+mod retry;
 
 use std::path::{Path, PathBuf};
 
@@ -84,6 +88,10 @@ pub use host::{
     AdmissionError, AdmittedCallbacks, CallbackRegistry, HandleId, HandleRecord, HostCallError,
     HostClass, HostOutcome, HostReplay, HostReply, RecoveryStop, ReleasableEffect, ReplayStop,
     ReseatReport,
+};
+pub use retry::{
+    CrankIo, Delivered, IoRefusal, PanicSource, Recovered, Replay, RetryFix, Supervisor,
+    SupervisorError, Worker, WorkerFactory,
 };
 
 /// The schema version this crate writes.

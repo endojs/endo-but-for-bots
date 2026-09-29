@@ -16,6 +16,15 @@
 //! Without an attached transcript the callbacks run directly, and a
 //! supervised suspend still refuses open native handles: nothing durable
 //! could rebuild them.
+//!
+//! Under a transcript the worker's outbound frames are also staged in the
+//! delivery's crank ([`outbound`]), so the committed record carries them.
+//! [`replay`] re-runs the committed suffix after the published snapshot a
+//! resumed worker was restored from (designs/ironhorse-panic.md § Slot
+//! Machine Termination and Retry): outbound frames must match the record and
+//! are suppressed, and host calls are answered from the record through
+//! [`call_in`] without reaching a native resource. A callback whose reply
+//! has no guest-value encoding stops replay rather than guessing.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -26,11 +35,14 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use slot_machine_transcript::{
-    AdmittedCallbacks, CallbackRegistry, CasStore, HandleRecord, HostCallError, HostClass,
-    HostOutcome, HostReply, RecoveryStop, SnapshotMeta, Transcript, TranscriptConfig,
+    AdmittedCallbacks, CallbackRegistry, CasStore, CrankVerdict, HandleRecord, HostCallError,
+    HostClass, HostOutcome, HostReply, RecoveryStop, Replay, ReplayStop, Seq, SnapshotMeta,
+    Transcript, TranscriptConfig,
 };
 
+use crate::ffi::{fxArrayBuffer, fxInteger, fxNull, XsMachine};
 use crate::powers::{self, HostPowers};
+use crate::worker_io::set_result_string;
 
 /// The most bytes an incremental hasher's descriptor records. A hasher fed
 /// more has no descriptor and is re-seated as broken.
@@ -134,8 +146,83 @@ struct Ledger {
 // so a sibling worker's handle never aliases an entry in this worker's tables.
 static NEXT_HANDLE: AtomicU32 = AtomicU32::new(1);
 
+/// The guest's result of a host call, as its recorded reply encodes it,
+/// so replay can hand the guest the same value without the native call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum GuestValue {
+    /// The callback leaves the result unset (or returns a handle it opened).
+    Unset,
+    Null,
+    Text(String),
+    Bytes(Vec<u8>),
+}
+
+impl GuestValue {
+    pub(crate) fn encode(&self) -> Vec<u8> {
+        let (tag, body): (&[u8], &[u8]) = match self {
+            GuestValue::Unset => return Vec::new(),
+            GuestValue::Null => (b"n", b""),
+            GuestValue::Text(text) => (b"s", text.as_bytes()),
+            GuestValue::Bytes(bytes) => (b"b", bytes),
+        };
+        [tag, body].concat()
+    }
+
+    fn decode(reply: &[u8]) -> Result<GuestValue, String> {
+        match reply.split_first() {
+            None => Ok(GuestValue::Unset),
+            Some((b'n', [])) => Ok(GuestValue::Null),
+            Some((b's', text)) => String::from_utf8(text.to_vec())
+                .map(GuestValue::Text)
+                .map_err(|_| "recorded text reply is not UTF-8".to_string()),
+            Some((b'b', bytes)) => Ok(GuestValue::Bytes(bytes.to_vec())),
+            Some(_) => Err("recorded reply has no guest-value encoding".to_string()),
+        }
+    }
+
+    /// Set the guest's result.
+    ///
+    /// # Safety
+    /// `the` must be the machine running the host callback.
+    unsafe fn set(&self, the: *mut XsMachine) {
+        match self {
+            GuestValue::Unset => return,
+            GuestValue::Null => fxNull(the, &mut (*the).scratch),
+            GuestValue::Text(text) => return set_result_string(the, text),
+            GuestValue::Bytes(bytes) => {
+                let mut bytes = bytes.clone();
+                fxArrayBuffer(
+                    the,
+                    &mut (*the).scratch,
+                    bytes.as_mut_ptr() as *mut _,
+                    bytes.len() as i32,
+                    bytes.len() as i32,
+                );
+            }
+        }
+        *(*the).frame.add(1) = (*the).scratch;
+    }
+}
+
+struct Replaying {
+    replay: Replay,
+    suppressed: Vec<Seq>,
+    stop: Option<ReplayStop>,
+}
+
+impl Replaying {
+    fn note<T>(&mut self, result: Result<T, ReplayStop>) -> Result<T, String> {
+        result.map_err(|stop| {
+            let message = format!("Error: replay stopped: {stop:?}");
+            self.stop.get_or_insert(stop);
+            message
+        })
+    }
+}
+
 thread_local! {
     static LEDGER: RefCell<Option<Ledger>> = const { RefCell::new(None) };
+    static REPLAY: RefCell<Option<Replaying>> = const { RefCell::new(None) };
     /// The descriptor of every handle open in this worker, used to compose a
     /// child's authority from its parent directory or database.
     static DESCRIPTORS: RefCell<HashMap<u32, Option<Descriptor>>> = RefCell::new(HashMap::new());
@@ -327,7 +414,13 @@ pub(crate) fn end_delivery(commit: bool) {
         if let Some(ledger) = l.borrow_mut().as_mut() {
             if ledger.transcript.active_crank().is_some() {
                 let result = if commit {
-                    ledger.transcript.commit_crank().map(drop)
+                    // The frames went out as they were sent; the record is
+                    // for replay, so nothing is left to release.
+                    ledger.transcript.commit_crank().map(|frames| {
+                        ledger
+                            .transcript
+                            .mark_released(frames.iter().map(|f| f.seq))
+                    })
                 } else {
                     ledger.transcript.abort_crank()
                 };
@@ -337,6 +430,115 @@ pub(crate) fn end_delivery(commit: bool) {
             }
         }
     });
+}
+
+/// Whether the worker should transmit an outbound frame it sent. Under a
+/// transcript the frame is staged in the open delivery's crank. During
+/// replay it must match the next recorded frame and is suppressed.
+pub(crate) fn outbound(frame: &[u8]) -> bool {
+    let replayed = REPLAY.with(|r| {
+        let mut borrowed = r.borrow_mut();
+        let replaying = borrowed.as_mut()?;
+        let result = replaying.replay.send(frame);
+        if let Ok(seq) = replaying.note(result) {
+            replaying.suppressed.push(seq);
+        }
+        Some(())
+    });
+    if replayed.is_some() {
+        return false;
+    }
+    LEDGER.with(|l| {
+        if let Some(ledger) = l.borrow_mut().as_mut() {
+            if ledger.transcript.active_crank().is_some() {
+                if let Err(e) = ledger.transcript.stage_outbound(frame.to_vec()) {
+                    eprintln!("host transcript: stage outbound: {e}");
+                }
+            }
+        }
+    });
+    true
+}
+
+/// The heap of the latest snapshot the transcript at `path` published,
+/// verified: the state a resumed worker is restored from before it
+/// attaches and replays.
+pub fn published_heap(path: &Path, worker: &str) -> Result<Option<Vec<u8>>, String> {
+    let (transcript, _) = Transcript::open(path, TranscriptConfig::new(worker))
+        .map_err(|e| format!("open host transcript: {e}"))?;
+    let heaps = CasStore::open(path.with_extension("heaps"))
+        .map_err(|e| format!("open heap store: {e}"))?;
+    match transcript.latest_snapshot().map_err(|e| e.to_string())? {
+        None => Ok(None),
+        Some(_) => transcript
+            .replay_plan(&heaps)
+            .map(|plan| Some(plan.snapshot_bytes))
+            .map_err(|e| format!("published heap: {e}")),
+    }
+}
+
+/// What [`replay`] did.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Replayed {
+    /// Committed deliveries replayed.
+    pub cranks: usize,
+    /// Recorded outbound frames the replayed deliveries sent, suppressed.
+    pub suppressed: Vec<Seq>,
+    /// The aborted delivery that ended the last incarnation, awaiting a
+    /// retry or a discard.
+    pub pending: Option<Vec<u8>>,
+}
+
+/// Replay the committed suffix after the published snapshot this worker
+/// was restored from. The worker must have attached its transcript (which
+/// re-seated its handles) and run nothing since. `deliver` runs one
+/// delivery and reports whether it quiesced.
+pub fn replay(mut deliver: impl FnMut(&[u8]) -> bool) -> Result<Replayed, String> {
+    let replay = LEDGER.with(|l| match l.borrow().as_ref() {
+        Some(ledger) => ledger
+            .transcript
+            .replay(&ledger.heaps)
+            .map_err(|e| format!("replay: {e}")),
+        None => Err("replay needs an attached host transcript".into()),
+    })?;
+    let pending = replay.pending().map(|c| c.inbound.clone());
+    REPLAY.with(|r| {
+        *r.borrow_mut() = Some(Replaying {
+            replay,
+            suppressed: Vec::new(),
+            stop: None,
+        })
+    });
+    let mut cranks = 0;
+    let outcome = loop {
+        let next = REPLAY.with(|r| r.borrow_mut().as_mut().and_then(|r| r.replay.next_crank()));
+        let Some((crank, inbound)) = next else {
+            break Ok(());
+        };
+        let verdict = if deliver(&inbound) {
+            CrankVerdict::Quiesced
+        } else {
+            CrankVerdict::Panicked
+        };
+        let stop = REPLAY.with(|r| {
+            let mut borrowed = r.borrow_mut();
+            let replaying = borrowed.as_mut().expect("replaying");
+            match replaying.stop.take() {
+                Some(stop) => Some(stop),
+                None => replaying.replay.end_crank(verdict).err(),
+            }
+        });
+        if let Some(stop) = stop {
+            break Err(format!("replay of crank {crank} stopped: {stop:?}"));
+        }
+        cranks += 1;
+    };
+    let replaying = REPLAY.with(|r| r.borrow_mut().take()).expect("replaying");
+    outcome.map(|()| Replayed {
+        cranks,
+        suppressed: replaying.suppressed,
+        pending,
+    })
 }
 
 fn refusal(e: HostCallError) -> String {
@@ -357,6 +559,77 @@ fn refusal(e: HostCallError) -> String {
 /// Coerce every guest argument before calling: `invoke` runs while the
 /// ledger is borrowed and must not re-enter guest code.
 pub(crate) fn call(
+    callback: &str,
+    target: Option<u32>,
+    request: &[u8],
+    invoke: impl FnOnce() -> Outcome,
+) -> Result<Option<u32>, String> {
+    if let Some(stopped) = REPLAY.with(|r| {
+        r.borrow_mut().as_mut().map(|replaying| {
+            let result = replaying
+                .replay
+                .host_call(callback, target.map(u64::from), request)
+                .and_then(|_| {
+                    Err(ReplayStop::Mismatch {
+                        crank: 0,
+                        detail: format!("{callback} has no replayable reply encoding"),
+                    })
+                });
+            replaying.note::<()>(result).unwrap_err()
+        })
+    }) {
+        return Err(stopped);
+    }
+    call_live(callback, target, request, invoke)
+}
+
+/// [`call`] for a callback whose reply is a [`GuestValue`] encoding of the
+/// guest's result. During replay the recorded reply sets the result (and a
+/// recorded handle is returned to the guest) without running `invoke`, and
+/// this returns `Ok(None)`, so the caller builds no native resource.
+///
+/// # Safety
+/// `the` must be the machine running the host callback.
+pub(crate) unsafe fn call_in(
+    the: *mut XsMachine,
+    callback: &str,
+    target: Option<u32>,
+    request: &[u8],
+    invoke: impl FnOnce() -> Outcome,
+) -> Result<Option<u32>, String> {
+    let replayed = REPLAY.with(|r| {
+        r.borrow_mut().as_mut().map(|replaying| {
+            let result = replaying
+                .replay
+                .host_call(callback, target.map(u64::from), request);
+            replaying.note(result)
+        })
+    });
+    match replayed {
+        None => call_live(callback, target, request, invoke),
+        Some(Err(message)) => Err(message),
+        Some(Ok(HostReply::Deferred)) => Ok(None),
+        Some(Ok(HostReply::Reply { reply, opened })) => {
+            let value = GuestValue::decode(&reply).map_err(|detail| {
+                REPLAY.with(|r| {
+                    let mut borrowed = r.borrow_mut();
+                    let replaying = borrowed.as_mut().expect("replaying");
+                    replaying
+                        .note::<()>(Err(ReplayStop::Mismatch { crank: 0, detail }))
+                        .unwrap_err()
+                })
+            })?;
+            value.set(the);
+            if let Some(handle) = opened {
+                fxInteger(the, &mut (*the).scratch, handle as i32);
+                *(*the).frame.add(1) = (*the).scratch;
+            }
+            Ok(None)
+        }
+    }
+}
+
+fn call_live(
     callback: &str,
     target: Option<u32>,
     request: &[u8],

@@ -4841,6 +4841,171 @@ mod tests {
     }
 
     /// Mock transport that captures sent frames.
+    /// Everything but the `CREA` atom, which records the allocator's current
+    /// chunk sizes: a property of the incarnation's allocation history, not
+    /// of the heap's contents.
+    fn heap_contents(snapshot: &[u8]) -> Vec<u8> {
+        let at = snapshot
+            .windows(4)
+            .position(|w| w == b"CREA")
+            .expect("snapshot has a CREA atom");
+        let start = at - 4;
+        let size = u32::from_be_bytes(snapshot[start..at].try_into().unwrap()) as usize;
+        [&snapshot[..start], &snapshot[start + size..]].concat()
+    }
+
+    /// § Verification, metamorphic replay == live, against a live XS worker
+    /// (designs/ironhorse-panic.md § Slot Machine Termination and Retry): a
+    /// worker runs deliveries that open, read, and hash through re-seatable
+    /// handles and send frames, then dies in a delivery that aborts. A fresh
+    /// worker restores the published snapshot, attaches (re-seating the
+    /// handles), and replays the committed suffix. Its heap is byte-identical
+    /// to the live worker's before the aborted delivery, the replay sends
+    /// nothing and re-derives exactly the live frames, no replayed call
+    /// reaches a native resource, and the re-seated handles continue from
+    /// their committed positions when the aborted delivery is retried.
+    #[test]
+    fn replay_after_an_aborted_delivery_equals_live_and_reseats_handles() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(data.join("sub")).unwrap();
+        std::fs::write(data.join("a.txt"), "abcdefghijklmnop").unwrap();
+        std::fs::write(data.join("sub/inner.txt"), "inner").unwrap();
+        let transcript = root.path().join("worker.sqlite");
+        let powers_for = |data: &std::path::Path| {
+            setup();
+            let mut powers = powers::HostPowers::new();
+            powers.add_dir(
+                "test",
+                cap_std::fs::Dir::open_ambient_dir(data, cap_std::ambient_authority()).unwrap(),
+            );
+            Box::into_raw(Box::new(powers))
+        };
+        let deliveries = [
+            "var r = openReader('test', 'a.txt');
+             log.push(text(read(r, 3)));
+             emit('d1:' + log.join());",
+            "var h = sha256Init();
+             sha256Update(h, 'ab');
+             log.push(text(read(r, 2)));
+             emit('d2:' + log.join());",
+            "var d = openDir('test', 'sub');
+             var n = openReader(d, 'inner.txt');
+             log.push(text(read(n, 2)));
+             closeReader(n);
+             log.push(read(r, 0) === null ? 'eof' : 'data');
+             emit('d3:' + log.join());",
+        ];
+        let aborted = "sha256Update(h, 'c');
+             log.push(text(read(r, 4)));
+             emit('d4:' + log.join() + ':' + sha256Finish(h));";
+        let run = |machine: &Machine, code: &str, commit: bool| {
+            host_ledger::begin_delivery(code.as_bytes());
+            machine.eval(code);
+            host_ledger::end_delivery(commit);
+        };
+
+        let (live_heap, live_frames, callbacks) = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let machine = Machine::new(&DEFAULT_CREATION, "live").unwrap();
+                    machine.register_powers(powers_for(&data));
+                    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+                    worker_io::install_transport(Box::new(MockTransport { sent: sent.clone() }));
+                    machine.register_worker_io();
+                    machine.eval(
+                        "globalThis.log = [];
+                         globalThis.text = b => String.fromCharCode(...new Uint8Array(b));
+                         globalThis.emit = s =>
+                           sendRawFrame(new Uint8Array([...s].map(c => c.charCodeAt(0))));",
+                    );
+                    let attached = host_ledger::attach(
+                        &transcript,
+                        "worker",
+                        unsafe { &*((*machine.raw).context as *const powers::HostPowers) },
+                        || Ok(machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot),
+                    )
+                    .unwrap();
+                    assert!(attached.reseated.is_empty());
+                    for code in deliveries {
+                        run(&machine, code, true);
+                    }
+                    let heap = machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot;
+                    let frames = sent.lock().unwrap().clone();
+                    // The worker dies in the next delivery: its crank aborts,
+                    // as the run loop's metering-abort path does.
+                    run(&machine, aborted, false);
+                    let callbacks = machine.registered_callbacks.borrow().clone();
+                    host_ledger::detach();
+                    worker_io::clear_transport();
+                    (heap, frames, callbacks)
+                })
+                .join()
+                .unwrap()
+        });
+        assert_eq!(
+            live_frames.iter().map(|f| String::from_utf8_lossy(f).into_owned()).collect::<Vec<_>>(),
+            ["d1:abc", "d2:abc,de", "d3:abc,de,in,eof"]
+        );
+
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let heap = host_ledger::published_heap(&transcript, "worker")
+                        .unwrap()
+                        .expect("attach published the initial heap");
+                    let mut callbacks = callbacks;
+                    let machine =
+                        Machine::from_snapshot(&heap, "restored", SNAPSHOT_SIGNATURE, &mut callbacks)
+                            .unwrap();
+                    let powers = powers_for(&data);
+                    machine.set_context(powers);
+                    let sent = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+                    worker_io::install_transport(Box::new(MockTransport { sent: sent.clone() }));
+                    let attached =
+                        host_ledger::attach(&transcript, "worker", unsafe { &*powers }, || {
+                            unreachable!("a snapshot is already published")
+                        })
+                        .unwrap();
+                    // The reader, the hasher, and the directory were open at
+                    // the last commit; the nested reader was closed.
+                    assert_eq!(attached.reseated, vec![1, 2, 3]);
+                    assert_eq!(attached.stopped, None);
+                    // Replay must not reach a native resource: put the file
+                    // out of reach of any reopen.
+                    std::fs::rename(data.join("sub"), data.join("moved")).unwrap();
+
+                    let replayed = host_ledger::replay(|inbound| {
+                        machine.eval(std::str::from_utf8(inbound).unwrap());
+                        true
+                    })
+                    .unwrap();
+                    assert_eq!(replayed.cranks, 3);
+                    assert_eq!(replayed.pending.as_deref(), Some(aborted.as_bytes()));
+                    assert_eq!(replayed.suppressed.len(), live_frames.len());
+                    assert!(sent.lock().unwrap().is_empty(), "replay sent a frame");
+                    let replayed_heap = machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot;
+                    assert_eq!(heap_contents(&replayed_heap), heap_contents(&live_heap));
+
+                    // Retry the aborted delivery: the re-seated reader and
+                    // hasher continue from their committed positions.
+                    run(&machine, aborted, true);
+                    let sent = sent.lock().unwrap();
+                    assert_eq!(
+                        String::from_utf8_lossy(sent.last().unwrap()),
+                        format!(
+                            "d4:abc,de,in,eof,fghi:{}",
+                            hex::encode(sha2::Sha256::digest(b"abc"))
+                        )
+                    );
+                    host_ledger::detach();
+                    worker_io::clear_transport();
+                })
+                .join()
+                .unwrap()
+        });
+    }
+
     struct MockTransport {
         sent: std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>,
     }

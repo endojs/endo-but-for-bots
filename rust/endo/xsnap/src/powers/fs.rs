@@ -20,7 +20,7 @@
 //!   link(dirOrToken, srcPath, dstPath) -> undefined
 
 use crate::ffi::*;
-use crate::host_ledger::{self, join, Base, Descriptor, Outcome};
+use crate::host_ledger::{self, join, Base, Descriptor, GuestValue, Outcome};
 use crate::powers::HostPowers;
 use crate::worker_io::{abort_if_ffi_panicked, arg_str, read_typed_array_bytes, set_result_string};
 use slot_machine_transcript::HostClass;
@@ -231,7 +231,7 @@ unsafe fn open_file(the: *mut XsMachine, callback: &str, writer: bool) {
     let dir = resolve_dir(the, 0);
     let request = serde_json::to_vec(&(target, &base, &path)).unwrap_or_default();
     let mut opened = None;
-    let result = host_ledger::call(callback, target, &request, || {
+    let result = host_ledger::call_in(the, callback, target, &request, || {
         let dir = match dir {
             Ok(dir) => dir,
             Err(msg) => return error_outcome(the, msg),
@@ -285,7 +285,7 @@ unsafe fn open_file(the: *mut XsMachine, callback: &str, writer: bool) {
 unsafe fn error_outcome(the: *mut XsMachine, msg: String) -> Outcome {
     set_result_string(the, &msg);
     Outcome {
-        reply: msg.into_bytes(),
+        reply: GuestValue::Text(msg).encode(),
         ..Outcome::default()
     }
 }
@@ -324,7 +324,7 @@ unsafe fn close_handle(the: *mut XsMachine, callback: &str, close: impl FnOnce(u
     let handle = fxToInteger(the, (*the).frame.sub(1)) as u32;
     abort_if_ffi_panicked();
     let request = handle.to_string().into_bytes();
-    let _ = host_ledger::call(callback, Some(handle), &request, || Outcome {
+    let _ = host_ledger::call_in(the, callback, Some(handle), &request, || Outcome {
         closes: close(handle),
         ..Outcome::default()
     });
@@ -352,7 +352,7 @@ pub unsafe extern "C" fn host_read_chunk(the: *mut XsMachine) {
         let max_bytes = fxToInteger(the, max_slot) as usize;
         abort_if_ffi_panicked();
         let request = format!("{handle},{max_bytes}").into_bytes();
-        let result = host_ledger::call("read", Some(handle), &request, || {
+        let result = host_ledger::call_in(the, "read", Some(handle), &request, || {
             FILE_MAP.with(|file_map| {
                 let mut map = file_map.borrow_mut();
                 match map.get_mut(&handle) {
@@ -363,7 +363,10 @@ pub unsafe extern "C" fn host_read_chunk(the: *mut XsMachine) {
                                 // EOF — return null
                                 fxNull(the, &mut (*the).scratch);
                                 *(*the).frame.add(1) = (*the).scratch;
-                                Outcome::default()
+                                Outcome {
+                                    reply: GuestValue::Null.encode(),
+                                    ..Outcome::default()
+                                }
                             }
                             Ok(n) => {
                                 fxArrayBuffer(
@@ -376,7 +379,7 @@ pub unsafe extern "C" fn host_read_chunk(the: *mut XsMachine) {
                                 *(*the).frame.add(1) = (*the).scratch;
                                 buf.truncate(n);
                                 Outcome {
-                                    reply: buf,
+                                    reply: GuestValue::Bytes(buf).encode(),
                                     redescribes: advanced(handle, n as u64),
                                     ..Outcome::default()
                                 }
@@ -433,7 +436,7 @@ pub unsafe extern "C" fn host_write_chunk(the: *mut XsMachine) {
         let flush = host_ledger::attached();
         let mut request = handle.to_be_bytes().to_vec();
         request.extend_from_slice(&buf);
-        let result = host_ledger::call("write", Some(handle), &request, || {
+        let result = host_ledger::call_in(the, "write", Some(handle), &request, || {
             FILE_MAP.with(|file_map| {
                 let mut map = file_map.borrow_mut();
                 match map.get_mut(&handle) {
@@ -1004,7 +1007,7 @@ pub unsafe extern "C" fn host_open_dir(the: *mut XsMachine) {
         };
         let request = serde_json::to_vec(&(target, &base, &path)).unwrap_or_default();
         let mut opened = None;
-        let result = host_ledger::call("openDir", target, &request, || match dir {
+        let result = host_ledger::call_in(the, "openDir", target, &request, || match dir {
             Ok(sub) => {
                 opened = Some(sub);
                 Outcome {

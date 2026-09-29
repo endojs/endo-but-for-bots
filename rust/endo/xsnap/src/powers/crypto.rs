@@ -11,7 +11,7 @@
 //!   ed25519Sign(privateKeyHex, messageHex) -> string (signature hex)
 
 use crate::ffi::*;
-use crate::host_ledger::{self, Descriptor, Outcome};
+use crate::host_ledger::{self, Descriptor, GuestValue, Outcome};
 use crate::worker_io::{abort_if_ffi_panicked, arg_str, set_result_string};
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
@@ -150,7 +150,7 @@ pub unsafe extern "C" fn host_ed25519_sign(the: *mut XsMachine) {
 /// Creates a new incremental SHA-256 hasher and returns its handle.
 pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let result = host_ledger::call("sha256Init", None, b"", || Outcome {
+        let result = host_ledger::call_in(the, "sha256Init", None, b"", || Outcome {
             opens: Some(Descriptor::hasher(b"")),
             ..Outcome::default()
         });
@@ -176,7 +176,7 @@ unsafe fn feed(the: *mut XsMachine, callback: &str, handle: u32, data: &[u8]) {
     let mut request = handle.to_be_bytes().to_vec();
     request.extend_from_slice(data);
     let describe = host_ledger::attached();
-    let result = host_ledger::call(callback, Some(handle), &request, || {
+    let result = host_ledger::call_in(the, callback, Some(handle), &request, || {
         let fed = HASHER_MAP.with(|m| match m.borrow_mut().get_mut(&handle) {
             Some(hasher) => {
                 hasher.update(data);
@@ -241,7 +241,7 @@ pub unsafe extern "C" fn host_sha256_finish(the: *mut XsMachine) {
         let handle = fxToInteger(the, handle_slot) as u32;
         abort_if_ffi_panicked();
         let request = handle.to_string().into_bytes();
-        let result = host_ledger::call("sha256Finish", Some(handle), &request, || {
+        let result = host_ledger::call_in(the, "sha256Finish", Some(handle), &request, || {
             let text = match HASHER_MAP.with(|m| m.borrow_mut().remove(&handle)) {
                 Some(hasher) => hex::encode(hasher.finalize()),
                 None => "Error: invalid hasher handle".to_string(),
@@ -249,7 +249,7 @@ pub unsafe extern "C" fn host_sha256_finish(the: *mut XsMachine) {
             set_result_string(the, &text);
             Outcome {
                 closes: !text.starts_with("Error"),
-                reply: text.into_bytes(),
+                reply: GuestValue::Text(text).encode(),
                 ..Outcome::default()
             }
         });
