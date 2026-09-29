@@ -46,8 +46,8 @@
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/eventual-send';
 import { q } from '@endo/errors';
+import { thawedBytes } from '@endo/immutable-arraybuffer';
 
-import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 
 import {
@@ -108,9 +108,13 @@ export const withCachedReads = (inner, cas) => {
         /** @type {Uint8Array[]} */
         const chunks = [];
         let total = 0;
-        for await (const chunk of iterateBytesReader(fullReader)) {
-          chunks.push(chunk);
-          total += chunk.length;
+        // `stream()` yields passable byte arrays. Thaw each one: under the
+        // immutable-ArrayBuffer shim a frozen chunk is not a genuine view,
+        // so `merged.set` below would silently copy zeros from it.
+        for await (const chunk of iterateReader(fullReader)) {
+          const bytes = thawedBytes(/** @type {Uint8Array} */ (chunk));
+          chunks.push(bytes);
+          total += bytes.length;
         }
         const merged = new Uint8Array(total);
         let off = 0;
