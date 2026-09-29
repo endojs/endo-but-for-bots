@@ -48,12 +48,25 @@ export const makeFileCas = directory => {
         );
         const fd = fs.openSync(temporary, 'wx', 0o644);
         try {
-          fs.writeSync(fd, bytes);
+          // writeSync may write fewer bytes than requested; a short write
+          // renamed into place would sit under the hash of the full bytes.
+          let offset = 0;
+          while (offset < bytes.byteLength) {
+            offset += fs.writeSync(fd, bytes, offset);
+          }
           fs.fsyncSync(fd);
         } finally {
           fs.closeSync(fd);
         }
         fs.renameSync(temporary, target);
+        // Make the rename itself durable before the caller commits a row
+        // that names this blob.
+        const directoryFd = fs.openSync(directory, 'r');
+        try {
+          fs.fsyncSync(directoryFd);
+        } finally {
+          fs.closeSync(directoryFd);
+        }
       }
       return hash;
     },

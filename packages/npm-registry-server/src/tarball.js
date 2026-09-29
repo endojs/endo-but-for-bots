@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { gunzipSync } from 'node:zlib';
 import { q } from '@endo/errors';
 import { readTarEntries, tarPathSegments } from '@endo/tar/reader.js';
-import { RegistryHttpError } from './errors.js';
+import { RegistryHttpError, isRegistryHttpError } from './errors.js';
 
 /** @import { FileCas } from './cas.js' */
 
@@ -23,6 +23,11 @@ export const defaultArchiveLimits = harden({
   maxEntries: 20_000,
   maxPathLength: 1024,
 });
+
+/** Hash algorithms accepted in an integrity string, weakest first. */
+const SRI_ALGORITHMS = harden(['sha1', 'sha256', 'sha384', 'sha512']);
+const SRI_ENTRY =
+  /^(sha512|sha384|sha256|sha1)-([A-Za-z0-9+/]+={0,2})(?:\?\S*)?$/u;
 
 /**
  * @typedef {object} Digests
@@ -44,9 +49,10 @@ export const digestTarball = bytes => ({
 harden(digestTarball);
 
 /**
- * Whether bytes satisfy an SRI string (any listed sha512/sha384/sha256/sha1
- * hash matching suffices, as in npm's own check) or, lacking one, a legacy
- * SHA-1 `shasum`.
+ * Whether bytes satisfy an SRI string or, lacking one, a legacy SHA-1
+ * `shasum`. Only the hashes of the strongest listed algorithm are compared
+ * (W3C SRI § Get the strongest metadata from set, and npm's `ssri`), so a
+ * matching weak hash cannot vouch for a mismatched strong one.
  *
  * @param {Uint8Array} bytes
  * @param {{ integrity?: string, shasum?: string }} expected
@@ -54,15 +60,19 @@ harden(digestTarball);
  */
 export const verifyTarball = (bytes, { integrity, shasum }) => {
   if (typeof integrity === 'string' && integrity.length > 0) {
-    return integrity.split(/\s+/u).some(entry => {
-      const match = /^(sha512|sha384|sha256|sha1)-([A-Za-z0-9+/=]+)/u.exec(
-        entry,
-      );
-      return (
-        match !== null &&
-        createHash(match[1]).update(bytes).digest('base64') === match[2]
-      );
-    });
+    const matches = integrity
+      .split(/\s+/u)
+      .map(entry => SRI_ENTRY.exec(entry))
+      .filter(match => match !== null);
+    const strongest = Math.max(
+      -1,
+      ...matches.map(match => SRI_ALGORITHMS.indexOf(match[1])),
+    );
+    return matches.some(
+      match =>
+        SRI_ALGORITHMS.indexOf(match[1]) === strongest &&
+        createHash(match[1]).update(bytes).digest('base64') === match[2],
+    );
   }
   if (typeof shasum === 'string' && /^[0-9a-f]{40}$/u.test(shasum)) {
     return createHash('sha1').update(bytes).digest('hex') === shasum;
@@ -175,7 +185,7 @@ export const ingestTarball = async (
       files.set(relative, [relative, entry.size, cas.put(bytes)]);
     }
   } catch (error) {
-    if (/** @type {any} */ (error).statusCode) {
+    if (isRegistryHttpError(error)) {
       throw error;
     }
     throw refuse(
