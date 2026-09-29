@@ -163,15 +163,24 @@ export interface ReaderIterator<
 
 /**
  * A passable bytes reader reference.
- * Uses streamBase64() to allow future migration to direct bytes transport.
+ * `stream()` yields passable byte arrays (frozen `Uint8Array`s over immutable
+ * `ArrayBuffer`s) for initiators using `iterateReader()`. `streamBase64()`
+ * yields the same chunks as base64 strings (decoded to Uint8Array by
+ * `iterateBytesReader()`); it is retained for compatibility and is slated for
+ * deprecation. A reader is consumed once, through either method. `stream()`
+ * is optional because a hand-rolled or older remote bytes reader may offer
+ * only `streamBase64()`; readers made by `bytesReaderFromIterator()` offer
+ * both.
  * The final synchronization node carries the argument value passed to the
  * initiator's return(value) call when closing early; if the responder is backed
  * by a JavaScript iterator with a return(value) method, it may replace that
  * argument with its own return value. All other synchronization values are flow
  * control (`undefined`).
- * Yields base64-encoded strings (decoded to Uint8Array by initiator).
  */
 export interface PassableBytesReader<TReadReturn extends Passable = undefined> {
+  stream?(
+    synPromise: ERef<StreamNode<Passable, TReadReturn>>,
+  ): Promise<StreamNode<Uint8Array, TReadReturn>>;
   streamBase64(
     synPromise: ERef<StreamNode<Passable, TReadReturn>>,
   ): Promise<StreamNode<string, TReadReturn>>;

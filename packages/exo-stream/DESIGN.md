@@ -81,7 +81,7 @@ mirrored in data flow direction.
 
 | Module | Function | Role |
 |--------|----------|------|
-| `bytes-reader-from-iterator.js` | `bytesReaderFromIterator(bytesIterator, options?)` | Responder: wraps `AsyncIterator<Uint8Array>` as `PassableBytesReader` Exo (base64 encoding). |
+| `bytes-reader-from-iterator.js` | `bytesReaderFromIterator(bytesIterator, options?)` | Responder: wraps `AsyncIterator<Uint8Array>` as `PassableBytesReader` Exo (byte arrays via `stream()`, base64 via `streamBase64()`). |
 | `iterate-bytes-reader.js` | `iterateBytesReader(bytesReaderRef, options?)` | Initiator: converts remote `PassableBytesReader` to local `AsyncIterableIterator<Uint8Array>` (base64 decoding). |
 
 ### Bytes Writer Modules
@@ -271,8 +271,11 @@ without waiting for the acknowledge chain to resolve first, avoiding datalock.
 
 The `streamBase64()` method exists to support graceful migration:
 
-1. **Current**: `streamBase64()` yields base64 strings
-2. **Future**: When CapTP supports binary, implement `stream()` yielding `Uint8Array`
+1. **Before**: `streamBase64()` yields base64 strings
+2. **Current**: bytes readers made with `bytesReaderFromIterator()` also
+   implement `stream()`, yielding passable byte arrays (frozen `Uint8Array`s
+   over immutable `ArrayBuffer`s). Bytes writers still use `streamBase64()`
+   only.
 3. **Migration**:
    - Responders implement both `stream()` and `streamBase64()`
    - Initiators elect to migrate from `iterateBytesReader()` to `iterateReader()`,
