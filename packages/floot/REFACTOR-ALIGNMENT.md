@@ -38,18 +38,21 @@ endo-host `ops/explicit-journal-deployment-20260924.md`.
 | RA-04 admission conformance | Partial | The shared harness covers cancellation before/during preparation and during restoration on all three adapters. Cancel at the write, after dispatch, and failure-then-next-turn are per-adapter only; Codex's successor disposition deliberately differs |
 | RA-05 rebaseline and accept | Partial; Codex blocked by quota | Paired deployment done. Claude and OpenCode pass the hosted matrix (create, tools, network policy, cancel, delete) and restart recall; Fae passes its matrix and restart recall; the Claude pin is now restoration-verified. Codex could not run: both subscriptions returned `usage_limit_reached` until 2026-09-30/10-01. The generation-173 Codex owner stop and opaque grant-admission refusal remain open. The matrix's Claude seed logged one non-fatal capture failure ("Divergent or missing suffix ancestry"), an unseen native record chain still to reproduce |
 
-**Divergence: per-backend concurrent-session caps.** Hosted Codex is capped at
-two concurrent sessions (endo-host `codexSandbox.maxSessions = 2`, also the
-module default; mapped to the listener runtime's `maxListeners`). Claude and
-OpenCode have no host option and run at the runtime default of 16. The design
-requires each numeric limit to be justified by capacity, parser, provider or
-budget rather than copied, and no justification for two is recorded; it likely
-survives from the retired project-id scheme. Codex setup refuses a changed
-retained configuration, so raising it means retiring the Codex broker; if an
-option is added for Claude and OpenCode, it must also join their
-retained-configuration checks, which today compare only authority, credential
-kind and images. Align the three (one option, a justified shared default) as part of
-RA-04/RA-05.
+**Divergence: per-backend concurrent-session caps — resolved 2026-09-29.**
+Hosted Codex was capped at two concurrent sessions (endo-host
+`codexSandbox.maxSessions = 2`) while Claude and OpenCode ran at the listener
+runtime's default of 16 with no option, and no justification for two was
+recorded. Changing it also required retiring the Codex broker, because a
+broker's capacity, public-egress ceiling and admission trail were fixed at
+mint (Codex refused any changed setting; Claude and OpenCode silently kept
+the minted values). `85a473fc9` and `9fd9876c8` make those three operator
+settings, not identity: setup applies them to the retained broker at every
+start through an operator-only `configure()`, the broker saves the intent in
+its private directory before applying it so a revived incarnation never
+reopens what was closed, and turning public egress off stops live public
+listeners. Each backend now has the same host option (`maxSessions`, default
+16). Owner, directory, account, images and pool mode still require a
+retirement.
 
 ## Requirements and current evidence
 
