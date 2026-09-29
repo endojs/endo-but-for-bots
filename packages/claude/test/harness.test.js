@@ -32,7 +32,7 @@ const makeHarness = (overrides = {}) => {
     async transport() {
       return /** @type {McpTransport} */ ({
         kind: 'stdio',
-        command: '/opt/endo-claude-shim',
+        command: '/opt/endo-mcp-relay',
       });
     },
   };
@@ -65,7 +65,7 @@ const makeHarness = (overrides = {}) => {
         mcpConfigPath: `/run/spawn/${sessionTag}/mcp.json`,
         settingsPath: `/run/spawn/${sessionTag}/settings.json`,
         apiKeyHelperCommand: '/run/spawn/helper',
-        pathValue: '/opt/shim/bin',
+        pathValue: '/opt/adapter/bin',
         async cleanup() {
           observed.cleaned += 1;
         },
@@ -200,7 +200,7 @@ test('a cancel during spawn-file preparation prevents launch and cleans up', asy
         mcpConfigPath: `/run/spawn/${sessionTag}/mcp.json`,
         settingsPath: `/run/spawn/${sessionTag}/settings.json`,
         apiKeyHelperCommand: '/run/spawn/helper',
-        pathValue: '/opt/shim/bin',
+        pathValue: '/opt/adapter/bin',
         async cleanup() {
           cleaned += 1;
         },

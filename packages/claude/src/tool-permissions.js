@@ -16,26 +16,24 @@
 // with `evaluate` after pinning and the bridge would dispatch it — reverting the
 // boundary to belt-only.
 
+import { renderAllowedTools } from '@endo/agent-tools/adapters/mcp.js';
 import { makeError, X, q } from '@endo/errors';
 
 /** @import { McpToolDescriptor, PinnedCatalog } from './claude.types.js' */
 
 /**
- * The one syntactic charset a tool name (and a server name) may use before it is
- * rendered into a comma/space-joined `--allowedTools` value or an
- * `mcp__<server>__<tool>` token. Membership in the catalog is validated
- * separately (§ Design Decision 2); this is the rendering-safety conjunct that
- * pins out `a,b` (splits into extra allow entries), `a b` (same), `*` and `read*`
- * (a wildcard grant after the literal `mcp__<server>__` prefix).
- *
- * Note it deliberately admits `_`, so `foo__bar` passes the charset yet is caught
- * by the separate `__`-sequence prune below (which would otherwise render
- * `mcp__endo__foo__bar`, ambiguous against the CLI's own grammar).
+ * The adapter's interface-native tool-name grammar. Membership in the catalog
+ * is validated separately (§ Design Decision 2); matching the landed adapter
+ * keeps this harness from allowing a name the server cannot serve, and pins out
+ * separators and wildcards before rendering `mcp__<server>__<tool>`.
  */
-const SAFE_NAME = /^[A-Za-z0-9_-]+$/;
+const SAFE_TOOL_NAME = /^[a-z][A-Za-z0-9]{0,63}$/;
+
+/** The server label occupies its own segment in Claude Code's MCP grammar. */
+const SAFE_SERVER_NAME = /^[A-Za-z0-9_-]+$/;
 
 /**
- * Reserved / dunder property names an unguarded shim could dispatch into an
+ * Reserved / dunder property names an unguarded adapter could dispatch into an
  * inherited intrinsic (prototype pollution / intrinsic-shadow). Pruned from the
  * snapshot at construction, not merely denied at the belt.
  */
@@ -75,7 +73,7 @@ const CODE_EVAL_NAMES = harden(['evaluate', 'eval', 'define']);
  */
 export const isAdmissibleToolName = name => {
   if (typeof name !== 'string') return false;
-  if (!SAFE_NAME.test(name)) return false;
+  if (!SAFE_TOOL_NAME.test(name)) return false;
   if (name.includes('__')) return false;
   if (RESERVED_NAMES.includes(name)) return false;
   if (CODE_EVAL_NAMES.includes(name)) return false;
@@ -85,15 +83,15 @@ harden(isAdmissibleToolName);
 
 /**
  * A server name flows into the `mcp__<server>__<tool>` grammar and into JSON /
- * argv, so it is charset-validated and `__`-free like a tool name (a server name
- * containing `__` would fracture the three-part `mcp__server__tool` split).
+ * argv, so it is charset-validated and `__`-free (a server name containing `__`
+ * would fracture the three-part `mcp__server__tool` split).
  *
  * @param {unknown} serverName
  * @returns {serverName is string}
  */
 export const isAdmissibleServerName = serverName => {
   if (typeof serverName !== 'string') return false;
-  if (!SAFE_NAME.test(serverName)) return false;
+  if (!SAFE_SERVER_NAME.test(serverName)) return false;
   if (serverName.includes('__')) return false;
   return true;
 };
@@ -184,16 +182,15 @@ export const deriveAllowList = (pinnedCatalog, serverName) => {
   if (!isAdmissibleServerName(serverName)) {
     throw makeError(X`invalid MCP server name: ${q(serverName)}`);
   }
-  const entries = [];
-  for (const name of catalogToolNames(pinnedCatalog)) {
+  const names = catalogToolNames(pinnedCatalog);
+  for (const name of names) {
     // Re-assert at render time (the pinned record could, in principle, have been
     // built by a path that skipped `pruneAndPinCatalog`).
     if (!isAdmissibleToolName(name)) {
       throw makeError(X`inadmissible tool name reached allow-list: ${q(name)}`);
     }
-    entries.push(`mcp__${serverName}__${name}`);
   }
-  if (entries.length === 0) {
+  if (names.length === 0) {
     // A post-prune catalog exposing no tools is a hard error, not a silent
     // confinement pass (§ Design Decision 2, the empty-catalog boundary). The
     // caller (`makeGuestInference`) surfaces this before any spawn.
@@ -201,7 +198,7 @@ export const deriveAllowList = (pinnedCatalog, serverName) => {
       X`empty post-prune tool catalog for server ${q(serverName)}: refusing to grant a zero-tool inference`,
     );
   }
-  return harden(entries);
+  return renderAllowedTools({ names }, serverName);
 };
 harden(deriveAllowList);
 

@@ -36,6 +36,10 @@ test('pruneAndPinCatalog prunes code-eval, dunder, __-bearing, and charset-viola
       '__proto__', // dunder
       'constructor',
       'foo__bar', // __ sequence
+      'ReadText', // adapter grammar: lower camelCase only
+      'read_text',
+      'read-text',
+      `a${'b'.repeat(64)}`, // adapter grammar: at most 64 characters
       'a,b', // charset (comma)
       'a b', // charset (space)
       '*', // wildcard
@@ -95,7 +99,7 @@ test('isDispatchable is server-side membership against the pinned snapshot', t =
 // --- property: allow-list round-trip -------------------------------------
 
 const admissibleName = fc
-  .stringMatching(/^[A-Za-z0-9_-]{1,24}$/)
+  .stringMatching(/^[a-z][A-Za-z0-9]{0,23}$/)
   .filter(isAdmissibleToolName);
 
 test('property: admissible names round-trip to exactly their mcp entries', t => {
@@ -109,7 +113,7 @@ test('property: admissible names round-trip to exactly their mcp entries', t => 
         t.deepEqual([...allow], expected);
         // No entry ever contains a comma-splittable or wildcard artefact.
         for (const entry of allow) {
-          t.regex(entry, /^mcp__endo__[A-Za-z0-9_-]+$/);
+          t.regex(entry, /^mcp__endo__[a-z][A-Za-z0-9]{0,63}$/);
           t.false(entry.slice('mcp__endo__'.length).includes('__'));
         }
       },
@@ -122,7 +126,17 @@ test('property: inadmissible names are always pruned / fail closed', t => {
   const hostile = fc.oneof(
     fc.constantFrom('evaluate', 'eval', 'define'),
     fc.constantFrom('__proto__', 'constructor', 'prototype', 'toString'),
-    fc.constantFrom('a,b', 'a b', '*', 'read*', 'foo__bar', 'x__'),
+    fc.constantFrom(
+      'a,b',
+      'a b',
+      '*',
+      'read*',
+      'foo__bar',
+      'x__',
+      'ReadText',
+      'read_text',
+      'read-text',
+    ),
     fc.string().filter(s => !isAdmissibleToolName(s)),
   );
   fc.assert(
@@ -135,7 +149,7 @@ test('property: inadmissible names are always pruned / fail closed', t => {
   );
 });
 
-test('server-name admissibility matches the tool-name charset rules', t => {
+test('server-name admissibility preserves the MCP segment grammar', t => {
   t.true(isAdmissibleServerName('endo'));
   t.false(isAdmissibleServerName('endo__x'));
   t.false(isAdmissibleServerName(''));

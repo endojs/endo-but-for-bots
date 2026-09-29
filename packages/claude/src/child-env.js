@@ -21,7 +21,7 @@ import { makeError, X, q } from '@endo/errors';
  * The only environment variable names the constructed child env may carry. Every
  * one is set by the harness itself; nothing is copied from the parent.
  *
- *   PATH   — scoped to the shim / apiKeyHelper directory, not the harness's PATH.
+ *   PATH   — scoped to the adapter / apiKeyHelper directory, not the harness's PATH.
  *   LANG / LC_ALL — a locale so `claude` renders deterministically.
  *   ENDO_CLAUDE_SESSION_TAG — the one-per-spawn tag, for the apiKeyHelper's fixed
  *                             inputs (never prompt- or guest-derived).
@@ -55,7 +55,7 @@ export const FORBIDDEN_ENV_KEYS = harden([
 
 /**
  * @typedef {object} ChildEnvSpec
- * @property {string} pathValue   The PATH the child sees (scoped to the shim).
+ * @property {string} pathValue   The PATH the child sees (scoped to the adapter).
  * @property {string} sessionTag  The one-per-spawn session tag.
  * @property {string} [lang]      Locale (defaults to `C.UTF-8`).
  */

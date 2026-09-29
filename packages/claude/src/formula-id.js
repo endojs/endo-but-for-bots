@@ -2,7 +2,7 @@
 //
 // The formula id is validated as 64 hex at the harness boundary and carried as a
 // branded type thereafter (§ Routing a call to that guest's facet). It flows into
-// a JSON `--mcp-config`, into the shim argv, and (HTTP transport) into an
+// a JSON `--mcp-config`, into the adapter argv, and (HTTP transport) into an
 // `Authorization: Bearer` line, so an unvalidated designator carrying a `"`, a
 // newline, or a CR would break the JSON, split the argv, or inject a header.
 //

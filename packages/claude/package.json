@@ -25,9 +25,6 @@
   },
   "type": "module",
   "main": "./index.js",
-  "bin": {
-    "endo-claude-shim": "./src/shim.js"
-  },
   "exports": {
     ".": {
       "types": "./claude.types.d.ts",
@@ -48,6 +45,7 @@
     "test:xs": "exit 0"
   },
   "dependencies": {
+    "@endo/agent-tools": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",

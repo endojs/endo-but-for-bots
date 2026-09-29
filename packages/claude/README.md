@@ -98,10 +98,10 @@ never rejects.
 - **Preferred (v1): a claude-spawned stdio adapter reaching a separate,
   harness-owned facet broker.** No listening port, no bearer on a wire; the
   broker holds the attenuated CapTP fd (never inherited into the claude tree) and
-  the adapter reaches it over a harness-private channel. The
-  [`endo-claude-shim`](./src/shim.js) `bin` is the **opt-in v1 stopgap** for this
-  path (gated on `ENDO_CLAUDE_SHIM_OPT_IN=1`), to be deleted once the
-  `@endo/agent-tools` MCP adapter lands.
+  the adapter reaches it over a harness-private channel. The MCP projection has
+  landed in `@endo/agent-tools`, with hosting seams in `@endo/agent-mcp-stdio`;
+  the injected broker transport must keep its daemon connection outside the
+  confined process tree.
 - **Alternative (v2): a `127.0.0.1` loopback HTTP listener** carrying
   `Authorization: Bearer <64-hex formula id>`, one endpoint discriminated by
   bearer. Gated on the `@endo/sandbox` `network: private` egress profile landing.
@@ -122,9 +122,11 @@ an inherited `ANTHROPIC_API_KEY` cannot silently bypass the pool.
 
 This increment is honest about what it does **not** yet do:
 
-- **The `@endo/agent-tools` MCP adapter** (today a declared stub) — the real
-  facet-to-MCP projection. Until it lands, the opt-in stopgap shim covers the
-  local path.
+- **The confined `@endo/agent-mcp-stdio` hosting seam** — the MCP projection and
+  single-tenant stdio server have landed, including `makeGuestMcpServer`, but the
+  harness-owned broker or scoped bootstrap outside the sandbox slice and its
+  private relay into the confined process tree remain to be built. The package's
+  injected `connectBroker` / `transport` boundary is the seam for that work.
 - **A live negative-and-positive confinement test** against a real `claude -p`:
   no built-in runs, no `/skill-name` resolves, no other MCP server is reachable,
   an unanchored `mcp__*` grants nothing — *and* the guest's tools do invoke, an

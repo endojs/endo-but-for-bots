@@ -3,7 +3,7 @@
 // Render the `--mcp-config` file content naming EXACTLY one endpoint. Two
 // transports (§ The facet-to-MCP bridge, § Local deployment):
 //
-//   - stdio (preferred, v1): the file names a stdio-shim command; the confined
+//   - stdio (preferred, v1): the file names a stdio-adapter command; the confined
 //     process reaches the facet only through the claude-spawned adapter, which
 //     forwards to the harness-owned broker. NO bearer on a wire.
 //   - http (alternative, v2): the file names one `127.0.0.1` URL and the guest's

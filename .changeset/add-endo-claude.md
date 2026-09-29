@@ -30,9 +30,10 @@ This first increment implements the dependency-injected confinement core with
 fast-check property tests (the argv construction invariant, the five-flag
 spawn-refusal predicate, the env allowlist, the `--tools`/`--setting-sources`
 value assertions, the allow-list round-trip, and the credential-pool lifecycle),
-plus a DD8 hardened/passable result taxonomy and an opt-in v1 stopgap stdio MCP
-shim (`bin`, deleted once the `@endo/agent-tools` MCP adapter lands). The live
-negative-and-positive confinement test against a real `claude -p`, the
-`@endo/agent-tools` MCP adapter, the DD6 `@endo/sandbox` slice network profile,
+plus a DD8 hardened/passable result taxonomy. The `@endo/agent-tools` MCP
+adapter has since landed, so this package now reuses its allow-list renderer and
+no longer carries the temporary stdio shim. The confined
+`@endo/agent-mcp-stdio` hosting seam, a live negative-and-positive confinement
+test against a real `claude -p`, the DD6 `@endo/sandbox` slice network profile,
 and the credential-path / entitlement verifications remain named prerequisites
 (package README, design Known Gaps).

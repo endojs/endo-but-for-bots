@@ -1,4 +1,5 @@
 // @ts-check
+// spell-out-exempt: `args` is the MCP stdio transport field name.
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
@@ -11,19 +12,19 @@ test('stdio transport renders one named server with no bearer on a wire', t => {
     serverName: 'endo',
     transport: {
       kind: 'stdio',
-      command: '/opt/endo-claude-shim',
+      command: '/opt/endo-mcp-relay',
       args: ['--x'],
     },
   });
   t.deepEqual(config, {
     mcpServers: {
-      endo: { type: 'stdio', command: '/opt/endo-claude-shim', args: ['--x'] },
+      endo: { type: 'stdio', command: '/opt/endo-mcp-relay', args: ['--x'] },
     },
   });
   // Round-trips through JSON.
   t.deepEqual(JSON.parse(serializeMcpConfig(config)), {
     mcpServers: {
-      endo: { type: 'stdio', command: '/opt/endo-claude-shim', args: ['--x'] },
+      endo: { type: 'stdio', command: '/opt/endo-mcp-relay', args: ['--x'] },
     },
   });
 });
