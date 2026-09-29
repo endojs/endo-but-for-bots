@@ -56,3 +56,26 @@ test('workspace agent does not discover capabilities omitted by the caller', asy
     new Set(['mountReadText', 'mountList', 'mountStat', 'mountWriteText']),
   );
 });
+
+test('workspace agent rejects tools from any source other than its grants', async t => {
+  const workspaceGrants = testGrants({ filesystem: grant('Filesystem') });
+  t.throws(() => defineWorkspaceAgent(/** @type {any} */ ({ tools: [] })), {
+    message: /remove config\.tools/,
+  });
+  await t.throwsAsync(
+    () =>
+      defineWorkspaceAgent()(
+        /** @type {any} */ ({ workspaceGrants, tools: [] }),
+      ),
+    { message: /remove options\.tools/ },
+  );
+  const endowed = defineWorkspaceAgent({ endow: () => ({ tools: [] }) });
+  await t.throwsAsync(() => endowed({ workspaceGrants }), {
+    message: /endow hook may not return tools/,
+  });
+  const credentialed = defineWorkspaceAgent({
+    endow: () => ({ getApiKey: () => 'key' }),
+  });
+  const agent = await credentialed({ workspaceGrants });
+  t.is(agent.state.tools.length, 4);
+});

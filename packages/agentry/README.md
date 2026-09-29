@@ -71,7 +71,11 @@ const makeAgent = defineAgent({
 ## Explicit workspace agent
 
 `defineWorkspaceAgent` composes only the capabilities the caller supplies. It
-does not enumerate or probe a guest petstore for additional authority:
+does not enumerate or probe a guest petstore for additional authority. The
+workspace grants are the agent's only tool source: a `tools` entry in the
+config or make options, or tools returned by an `endow` hook, throw rather than
+being silently replaced. An `endow` hook may still supply `getApiKey`, and
+whatever that hook reads to do so is the caller's authority, not the harness's:
 
 ```js
 import { defineWorkspaceAgent } from '@endo/agentry/workspace-agent';
