@@ -105,7 +105,8 @@ const decodeSegment = (segment, what) => {
  *
  * @param {object} options
  * @param {Registry} options.registry
- * @param {Grants} options.grants
+ * @param {Pick<Grants, 'authenticate'>} options.grants only
+ *   authentication; the handler never writes grants.
  * @param {number} [options.maxBodyBytes] publish document ceiling
  * @param {(entry: RequestLog) => void} [options.log]
  */

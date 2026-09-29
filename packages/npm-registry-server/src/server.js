@@ -45,13 +45,14 @@ export const openRegistry = config => {
   const registry = makeRegistry({
     store,
     cas,
-    grants,
     publicOrigin: config.publicOrigin,
     upstreamOrigin: config.upstreamOrigin,
     fetch: config.fetch,
     upstreamTtlMs: config.upstreamTtlMs,
   });
-  return { database, store, cas, grants, registry };
+  // Not hardened: a deep freeze would reach into the native better-sqlite3
+  // database and statement objects.
+  return Object.freeze({ database, store, cas, grants, registry });
 };
 harden(openRegistry);
 
@@ -68,7 +69,7 @@ export const startRegistryServer = async config => {
   }
   const handler = makeRequestHandler({
     registry: opened.registry,
-    grants: opened.grants,
+    grants: { authenticate: opened.grants.authenticate },
     log: config.log,
   });
   const server = http.createServer((request, response) => {
@@ -95,12 +96,14 @@ export const startRegistryServer = async config => {
     /** @type {any} */ (opened.database).close?.();
   };
 
-  return {
+  // Not hardened: a deep freeze would reach into the native database and
+  // the Node `http.Server`.
+  return Object.freeze({
     ...opened,
     server,
     port: address.port,
     url: `http://${address.address}:${address.port}`,
     close,
-  };
+  });
 };
 harden(startRegistryServer);

@@ -211,8 +211,13 @@ export const makeRegistryStore = database => {
   };
 
   // Frozen, not hardened: hardening would walk into and freeze the
-  // native statement objects' prototypes.
-  return Object.freeze({ statements, transaction, checkpoint });
+  // native statement objects' prototypes. The statement table is frozen
+  // too, so no holder can swap the statement that authenticates grants.
+  return Object.freeze({
+    statements: Object.freeze(statements),
+    transaction,
+    checkpoint,
+  });
 };
 harden(makeRegistryStore);
 
