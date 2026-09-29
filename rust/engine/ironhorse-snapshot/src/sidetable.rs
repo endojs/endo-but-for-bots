@@ -767,6 +767,10 @@ mod tests {
             "meter_host",
             "cost",
             "step_limit",
+            // The Coda's `panic-on-reference-error` construction option:
+            // re-applied by the embedder at every resume and pinned in its
+            // replay fingerprint, never carried in the heap.
+            "panic_on_reference_error",
             "n_dispatched",
         ];
         const BOOT_DERIVED: &[&str] = &[

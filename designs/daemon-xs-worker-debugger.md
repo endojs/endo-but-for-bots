@@ -86,6 +86,7 @@ The existing reference implementation is in
 |---------|---------|
 | `<login>` | Machine name and tag |
 | `<break>` | Breakpoint hit: path, line, context |
+| `<panic>` | Endo extension, not xsbug: an uncatchable panic stopped the VM at its site. Carries `kind`, path, line, message ([ironhorse-panic](ironhorse-panic.md) § Debugger Interaction) |
 | `<frames>` | Call stack frames |
 | `<local>` | Local variables with property trees |
 | `<global>` | Global scope |
@@ -912,6 +913,16 @@ flushes the outbound debug buffer.
   returning to the caller.
   For very long profiles, streaming would be better but is
   deferred.
+
+- **A stop does not pump the transport.**
+  The `debug` envelope handler pushes commands into a thread-local
+  buffer, and a stopped VM (a `<break>` or a `<panic>` stop) reads only
+  that buffer, on the same worker thread that would read the next
+  envelope.
+  A live stop therefore cannot receive the `go` that releases it.
+  The protocol tests pre-queue their replies.
+  Pulling `debug` envelopes from the transport while stopped (and
+  holding other envelopes for later) is the missing piece.
 
 - **Production deployments.**
   Production builds should disable the `debug` cargo feature

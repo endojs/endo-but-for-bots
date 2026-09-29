@@ -58,11 +58,13 @@ impl Interp {
             if let Payload::Reference(inst) = envref.value {
                 if self.is_environment_instance(inst) {
                     let Some(v) = self.environment_get(inst, name) else {
-                        let error = self.internal_error(
-                            "ReferenceError",
-                            format!("get {}: undefined variable", self.id_name(name)),
-                        );
-                        return Err(self.raise_js(error));
+                        let name = self.id_name(name);
+                        let message = format!("get {name}: undefined variable");
+                        return Err(self.raise_reference_error(
+                            name,
+                            message,
+                            RaiseSite::VariableLookup,
+                        ));
                     };
                     self.push(v);
                     return Ok(());
@@ -164,11 +166,9 @@ impl Interp {
                 self.push(Slot::undefined());
             }
             None => {
-                let error = self.internal_error(
-                    "ReferenceError",
-                    format!("get {}: undefined variable", self.id_name(name)),
-                );
-                return Err(self.raise_js(error));
+                let name = self.id_name(name);
+                let message = format!("get {name}: undefined variable");
+                return Err(self.raise_reference_error(name, message, RaiseSite::VariableLookup));
             }
         }
         Ok(())

@@ -194,6 +194,24 @@ pub struct Interp {
     shared_compartments: bool,
     #[boot_new(false)]
     #[gc_root(none)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The Coda's `panic-on-reference-error` construction option (design
+    /// `ironhorse-panic.md` § Coda), off by default. When set, the
+    /// engine-raised reference-error sites return
+    /// `Halt::Panic(PanicKind::ReferenceError)` instead of raising a
+    /// catchable throw. Host configuration, not heap state: it is not
+    /// snapshotted, so the embedder sets it again on every create and
+    /// resume and pins it in its replay fingerprint.
+    panic_on_reference_error: bool,
+    #[boot_new(false)]
+    #[gc_root(none)]
     #[quiescent(false)]
     #[persist_refs(none)]
     #[runtime_keys(none)]

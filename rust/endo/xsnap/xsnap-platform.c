@@ -158,7 +158,11 @@ void fxSetTimer(txMachine* the, txNumber interval, txBoolean repeat)
 void fxRunDebugger(txMachine* the)
 {
 #ifdef mxDebug
-	fxDebugCommand(the);
+	/* fxDebugCommand loops until a command arrives, and the in-memory
+	   transport is filled on this same thread, so only enter it when a
+	   command is already waiting (as XS's own line hook does). */
+	if (fxIsReadable(the))
+		fxDebugCommand(the);
 #endif
 }
 
@@ -352,9 +356,65 @@ int fxRunPromiseJobsMetered(txMachine* the)
  * abort conditions so the process is not killed.  Only truly fatal
  * conditions (debugger exit, fatal check) call exit().
  */
+#ifdef mxDebug
+/* Defined in xsnap-debug.c. */
+extern void fxDebugPanic(txMachine* the, txString kind, txString message);
+
+/* Set while fxDebugPanic runs, so an abort raised while listing frames
+   at an exhausted stack or heap exits to the host instead of stopping
+   again. One machine runs per thread. */
+static __thread int gxDebugPanicking = 0;
+
+/*
+ * The panic-category exits and their <panic kind="..."> names
+ * (designs/ironhorse-panic.md § Debugger Interaction). The unhandled
+ * exception and rejection exits are uncaught throws, not panics: they
+ * return NULL and reach the debugger through the exception breakpoints.
+ */
+static txString fxPanicKind(int status, txString* message)
+{
+	switch (status) {
+	case XS_TOO_MUCH_COMPUTATION_EXIT:
+		*message = "too much computation";
+		return "meter-abort";
+	case XS_JAVASCRIPT_STACK_OVERFLOW_EXIT:
+		*message = "JavaScript stack overflow";
+		return "stack-overflow";
+	case XS_NATIVE_STACK_OVERFLOW_EXIT:
+		*message = "native stack overflow";
+		return "stack-overflow";
+	case XS_NOT_ENOUGH_MEMORY_EXIT:
+		*message = "not enough memory";
+		return "heap-exhausted";
+	case XS_NO_MORE_KEYS_EXIT:
+		*message = "no more keys";
+		return "keys-exhausted";
+	default:
+		*message = C_NULL;
+		return C_NULL;
+	}
+}
+#endif
+
 void fxAbort(txMachine* the, int status)
 {
 	the->exitStatus = status;
+#ifdef mxDebug
+	if (gxDebugPanicking) {
+		/* A second abort from inside the panic stop: leave now. */
+		gxDebugPanicking = 0;
+	}
+	else {
+		txString message;
+		txString kind = fxPanicKind(status, &message);
+		if (kind && fxIsConnected(the)) {
+			gxDebugPanicking = 1;
+			fxDebugPanic(the, kind, message);
+			gxDebugPanicking = 0;
+			the->exitStatus = status;
+		}
+	}
+#endif
 	switch (status) {
 	case XS_TOO_MUCH_COMPUTATION_EXIT:
 	case XS_JAVASCRIPT_STACK_OVERFLOW_EXIT:

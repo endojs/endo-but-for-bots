@@ -31,6 +31,7 @@ fn persistent_compiler_is_attached_at_boot_resume_and_rewind() {
         cadence: CadencePolicy::default(),
         meter: MeterBounds::per_crank(200_000),
         global_names: None,
+        replay: Default::default(),
     };
     let mut machine = PersistentMachine::open(&options).unwrap();
     assert_eq!(
@@ -78,6 +79,7 @@ fn persistent_global_names_survive_boot_resume_and_rewind() {
         cadence: CadencePolicy::default(),
         meter: MeterBounds::per_crank(200_000),
         global_names: Some(vec!["JSON".to_string()]),
+        replay: Default::default(),
     };
     fn assert_denied(machine: &mut PersistentMachine, name: &str) {
         // The first crank interns the denied name through JSON's runtime key

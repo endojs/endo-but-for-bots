@@ -913,6 +913,25 @@ fourth exception mode. Concretely:
   is far rarer than a `line` opcode, so the disarmed cost is nil and the armed
   cost is one hook call on the dying path.
 
+### C-XS implementation
+
+On the live C-XS worker, the panic hook is xsnap's `fxAbort`. It calls
+`fxDebugPanic` (`rust/endo/xsnap/xsnap-debug.c`) when a debugger is connected
+and the exit is in the panic category. The kinds are `stack-overflow` (both the
+JavaScript and the native stack exits), `meter-abort`, `heap-exhausted`, and
+`keys-exhausted`. The unhandled-exception and unhandled-rejection exits are
+uncaught throws, so they get no `<panic>`. The element is echoed before the
+frame listings, so a consumer still receives it if listing frames at an
+exhausted stack aborts again. A second abort from inside the stop exits to the
+host. An FFI callback panic (`engine-fault`) has no stop yet: the guard records
+the poison and returns to the guest, so the site is gone by the time a crank
+boundary observes it. The daemon's `DebugSession` already parses
+`reference-error` as a panic under every exception-break mode, and Ironhorse's
+`PanicKind::wire_kind` spells the Coda's panic that way, but only C-XS emits
+`<panic>` today. The Ironhorse engine has no debugger transport yet, and the
+C-XS worker has no Coda switch, so no live worker emits
+`<panic kind="reference-error">` yet.
+
 ## Coda: An Option to Panic on Reference Errors
 
 This design proposes an Ironhorse **configuration option, off by default**,
@@ -985,6 +1004,37 @@ Because the switch lives **at the raise helper**, adding the Coda does not
 perturb emitted bytecode and so does not threaten the port's byte-identity
 acceptance bar (the same reason the debugger design preferred a target-opcode
 peek over a `flag == 2` compiler change).
+
+### As built
+
+The switch is `Interp::raise_reference_error`, next to `raise_js` in
+`rust/engine/ironhorse-vm/src/interp/unwind.rs`. The `GET_LOCAL`,
+`GET_VARIABLE`/`GET_THIS_VARIABLE` (both the unresolved arm and the
+`with`/eval environment arm) and `GET_CLOSURE` sites call it. The closure read
+was already routed through `raise_js` on `llm`. With the option off, the helper
+is exactly `raise_js`. With it on, it returns
+`Halt::Panic(PanicKind::ReferenceError { name, site })` without building an
+error or consulting `jumps`. `RaiseSite` is `LocalTdz`, `VariableLookup` or
+`ClosureTdz`. Other engine-raised `ReferenceError`s are not repointed:
+`this` before `super()`, `delete` of an unresolvable reference, and strict
+writes to an unresolvable name.
+
+The option is `ReplayConfig { panic_on_reference_error }`. It is set with
+`ironhorse_vm::Machine::apply_replay_config`, and the Endor wrapper takes it
+through `Machine::with_config` and `HeapStoreOptions::replay`. It is host
+configuration, not heap state, so `PersistentMachine` re-applies it at boot,
+resume and rewind. `ReplayConfig::fingerprint` joins the store signature when
+the config is not the default, so a store keeps its signature when the option
+is off. Resuming a heap under a different setting then fails the store's
+signature check, deterministically. `ReplayConfig::check_replay` is the same
+comparison, for a supervisor that pins the config in the Slot Machine
+transcript's `snapshot` record.
+
+With the option on, a reference error in an async body panics rather than
+rejecting the body's promise. So while the option is armed, reference errors
+that would otherwise become rejections are the panic's to report, which answers
+[ironhorse-rejection-handling](https://github.com/endojs/endo-but-for-bots/pull/1016)'s
+Open Question 5. That design's rejection-tracker scope stays with it.
 
 ### Where the switch lives, and both-active behavior
 

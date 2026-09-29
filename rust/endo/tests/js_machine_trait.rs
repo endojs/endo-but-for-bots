@@ -40,6 +40,7 @@ fn store_options(dir: &std::path::Path) -> HeapStoreOptions {
         cadence: CadencePolicy::default(),
         meter: MeterBounds::per_crank(50_000_000),
         global_names: None,
+        replay: Default::default(),
     }
 }
 
