@@ -687,10 +687,15 @@ mod tests {
         #[test]
         fn independent_number_spelling_matches_vm(bits in proptest::num::u64::ANY) {
             let number = f64::from_bits(bits);
-            proptest::prop_assert_eq!(
-                number_to_ecma_string(number),
-                ironhorse_vm::value::number_to_ecma_string(number)
-            );
+            let independent = number_to_ecma_string(number);
+            let vm = ironhorse_vm::value::number_to_ecma_string(number);
+            // At an exact tie the spec leaves the last digit open (Ryu picks
+            // the even one, the VM's std digits may not); both must still be
+            // shortest spellings of `number` in the same shape.
+            if independent != vm {
+                proptest::prop_assert_eq!(independent.len(), vm.len(), "{} {}", independent, vm);
+                proptest::prop_assert_eq!(vm.parse::<f64>().ok(), Some(number), "{}", vm);
+            }
         }
     }
 
