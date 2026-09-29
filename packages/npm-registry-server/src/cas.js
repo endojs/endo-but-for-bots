@@ -3,6 +3,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { q } from '@endo/errors';
 
 /**
  * @typedef {object} FileCas
@@ -25,6 +26,16 @@ const HASH = /^[0-9a-f]{64}$/u;
  * archive limits, and synchronous writes keep the write-then-commit
  * ordering obvious.
  *
+ * This is deliberately not `@endo/mem-cas`'s `CasInterface` or
+ * `@endo/daemon-cas`'s `makeContentStore`. Those are asynchronous and
+ * exposed as remotable objects for the daemon's CapTP world; here every
+ * write must be durable (fsynced file and directory) before a synchronous
+ * better-sqlite3 transaction commits, and the store is a module-private
+ * helper of a plain Node service, with no remote callers. Sharing the
+ * on-disk layout keeps a later move onto `@endo/daemon-cas` (or the Rust
+ * CAS that replaces it) a change of implementation, not of data. That
+ * move is tracked with the design's storage phase (#1361).
+ *
  * @param {string} directory
  * @returns {FileCas}
  */
@@ -33,7 +44,7 @@ export const makeFileCas = directory => {
   /** @param {string} hash */
   const pathOf = hash => {
     if (!HASH.test(hash)) {
-      throw Error(`Invalid CAS hash ${hash}`);
+      throw Error(`Invalid CAS hash ${q(hash)}`);
     }
     return path.join(directory, hash);
   };

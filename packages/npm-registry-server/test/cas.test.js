@@ -1,6 +1,7 @@
 // @ts-check
 
 import test from '@endo/ses-ava/prepare-endo.js';
+import { fc } from '@fast-check/ava';
 
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
@@ -19,6 +20,18 @@ test('put returns the sha256 of the bytes and get returns them', t => {
     t.true(cas.has(hash));
     t.deepEqual(cas.get(hash), bytes);
   }
+});
+
+test('put and get round-trip arbitrary bytes', t => {
+  const cas = makeFileCas(path.join(makeTemporaryDirectory(), 'cas'));
+  fc.assert(
+    fc.property(fc.uint8Array({ maxLength: 8192 }), bytes => {
+      const hash = cas.put(bytes);
+      t.is(hash, createHash('sha256').update(bytes).digest('hex'));
+      t.deepEqual(cas.get(hash), bytes);
+    }),
+    { numRuns: 50 },
+  );
 });
 
 test('put is idempotent and leaves no temporary files', t => {
