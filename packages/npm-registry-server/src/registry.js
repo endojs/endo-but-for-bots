@@ -16,8 +16,8 @@ import {
   compareSemver,
   devDateTagForVersion,
   isDateTag,
+  isDevNamespaceVersion,
   isDevTag,
-  isDevVersion,
   isWritableDevTag,
   parseSemver,
 } from './dev-release.js';
@@ -688,10 +688,10 @@ export const makeRegistry = ({
       const at = now();
       for (const [version, manifest] of Object.entries(document.versions)) {
         // Development coordinates are this service's own namespace; an
-        // upstream publisher must not plant or pre-empt one.
+        // upstream publisher must not plant, pre-empt, or tie one.
         if (
           parseSemver(version) &&
-          !isDevVersion(version) &&
+          !isDevNamespaceVersion(version) &&
           manifest &&
           typeof manifest === 'object' &&
           manifest.dist &&
@@ -722,7 +722,7 @@ export const makeRegistry = ({
           !isDevTag(tag) &&
           !parseSemver(tag) &&
           typeof version === 'string' &&
-          !isDevVersion(version) &&
+          !isDevNamespaceVersion(version) &&
           statements.getVersion.get(name, version)
         ) {
           statements.setUpstreamTag.run(name, tag, version, at);

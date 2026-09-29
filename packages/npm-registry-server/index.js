@@ -20,6 +20,7 @@ export {
   devDateTagForVersion,
   isDateTag,
   isDevTag,
+  isDevNamespaceVersion,
   isDevVersion,
   isWritableDevTag,
   parseSemver,

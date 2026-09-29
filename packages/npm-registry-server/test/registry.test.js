@@ -364,6 +364,19 @@ test('upstream metadata cannot plant development versions or dev-* tags', async 
               dist: { integrity },
             },
             [V1]: { name: '@endo/errors', version: V1, dist: { integrity } },
+            // Versions in the dev namespace that are not the minted shape
+            // would still outrank or tie a staged build.
+            ...Object.fromEntries(
+              [
+                '1.7.0-dev.99999999999999',
+                `${V1}.1`,
+                `${V1}+x`,
+                V1.replace('-dev.', '-DEV.'),
+              ].map(version => [
+                version,
+                { name: '@endo/errors', version, dist: { integrity } },
+              ]),
+            ),
           },
         }),
       ),

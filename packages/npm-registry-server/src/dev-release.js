@@ -157,6 +157,27 @@ export const isDevVersion = version => DEV_VERSION.test(version);
 harden(isDevVersion);
 
 /**
+ * Whether the version falls in the development namespace this service
+ * reserves: any SemVer whose first prerelease identifier is `dev`, in any
+ * case, whatever follows it. Reserving only the exact minted shape would
+ * let an upstream version such as `1.7.0-dev.99999999999999` or
+ * `<dev version>+build` outrank or tie a staged build under SemVer
+ * precedence.
+ *
+ * @param {string} version
+ * @returns {boolean}
+ */
+export const isDevNamespaceVersion = version => {
+  const parsed = parseSemver(version);
+  return (
+    parsed !== undefined &&
+    parsed.prerelease.length > 0 &&
+    parsed.prerelease[0].toLowerCase() === 'dev'
+  );
+};
+harden(isDevNamespaceVersion);
+
+/**
  * Whether the tag is one this service may create or move: a date channel,
  * or one of the reserved moving `dev-*` pointers.
  *
