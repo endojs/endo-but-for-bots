@@ -50,9 +50,14 @@ harden(digestTarball);
 
 /**
  * Whether bytes satisfy an SRI string or, lacking one, a legacy SHA-1
- * `shasum`. Only the hashes of the strongest listed algorithm are compared
- * (W3C SRI § Get the strongest metadata from set, and npm's `ssri`), so a
- * matching weak hash cannot vouch for a mismatched strong one.
+ * `shasum`. Only the hashes of the strongest listed algorithm are compared,
+ * so a matching weak hash cannot vouch for a mismatched strong one.
+ *
+ * This follows npm's `ssri`, not W3C SRI: `sha1` is ranked (lowest), and an
+ * integrity string with no usable entry fails closed. W3C SRI does not
+ * recognize `sha1` and treats metadata that does not parse as a match
+ * ("Do bytes match metadataList", step 3), which is the wrong default for
+ * a registry.
  *
  * @param {Uint8Array} bytes
  * @param {{ integrity?: string, shasum?: string }} expected
@@ -64,9 +69,11 @@ export const verifyTarball = (bytes, { integrity, shasum }) => {
       .split(/\s+/u)
       .map(entry => SRI_ENTRY.exec(entry))
       .filter(match => match !== null);
-    const strongest = Math.max(
+    // A reduce, not a spread into `Math.max`: the entry count comes from
+    // upstream metadata, and engines bound the arguments of a spread call.
+    const strongest = matches.reduce(
+      (best, match) => Math.max(best, SRI_ALGORITHMS.indexOf(match[1])),
       -1,
-      ...matches.map(match => SRI_ALGORITHMS.indexOf(match[1])),
     );
     return matches.some(
       match =>
@@ -86,6 +93,8 @@ harden(verifyTarball);
  * @property {string} tarballHash sha256 of the exact `.tgz` blob.
  * @property {string} treeHash sha256 of the tree manifest blob.
  * @property {Record<string, any>} packageJson The archive's root package.json.
+ * @property {readonly string[]} paths The file paths in the tree, relative
+ *   to the archive's root directory.
  */
 
 /**
@@ -96,8 +105,8 @@ harden(verifyTarball);
  * tarballs, occasionally another name); the tree is rooted inside it. The
  * extraction is pure data parsing: no entry is written to a real path and
  * no lifecycle script runs. Absolute paths, `.`/`..` segments, duplicate
- * paths, entries outside the single root, symbolic links, and every
- * non-file/non-directory entry type are refused.
+ * paths, entries outside the single root, symbolic links, hard links, and
+ * every other non-file/non-directory entry type are refused.
  *
  * The tree manifest is canonical JSON, `{ type, entries }` with entries
  * sorted by path as `[path, size, sha256]`, stored as its own blob so an
@@ -129,7 +138,7 @@ export const ingestTarball = async (
     );
   }
 
-  /** @type {Map<string, [string, number, string]>} */
+  /** @type {Map<string, Uint8Array>} */
   const files = new Map();
   /** @type {string | undefined} */
   let root;
@@ -182,7 +191,7 @@ export const ingestTarball = async (
         bytes.set(chunk, offset);
         offset += chunk.byteLength;
       }
-      files.set(relative, [relative, entry.size, cas.put(bytes)]);
+      files.set(relative, bytes);
     }
   } catch (error) {
     if (isRegistryHttpError(error)) {
@@ -193,16 +202,15 @@ export const ingestTarball = async (
     );
   }
 
-  const manifestEntry = files.get('package.json');
-  if (!manifestEntry) {
+  const manifestBytes = files.get('package.json');
+  if (!manifestBytes) {
     throw refuse('Tarball has no root package.json');
   }
+  const manifestText = new TextDecoder().decode(manifestBytes);
   /** @type {Record<string, any>} */
   let packageJson;
   try {
-    packageJson = JSON.parse(
-      new TextDecoder().decode(cas.get(manifestEntry[2])),
-    );
+    packageJson = JSON.parse(manifestText);
   } catch {
     throw refuse('Tarball package.json is not JSON');
   }
@@ -214,15 +222,29 @@ export const ingestTarball = async (
     throw refuse('Tarball package.json is not an object');
   }
 
-  const entries = [...files.values()].sort(([a], [b]) =>
-    a < b ? -1 : a > b ? 1 : 0,
-  );
+  // Storage failures past this point are the server's, not the archive's,
+  // so they propagate as internal errors rather than as a refusal.
+  const entries = [...files.entries()]
+    .map(
+      ([path, bytes]) =>
+        /** @type {[string, number, string]} */ ([
+          path,
+          bytes.byteLength,
+          cas.put(bytes),
+        ]),
+    )
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
   const treeHash = cas.put(
     new TextEncoder().encode(
       JSON.stringify({ type: 'npm-package-tree/v1', entries }),
     ),
   );
   const tarballHash = cas.put(tarball);
-  return harden({ tarballHash, treeHash, packageJson });
+  return harden({
+    tarballHash,
+    treeHash,
+    packageJson,
+    paths: [...files.keys()],
+  });
 };
 harden(ingestTarball);

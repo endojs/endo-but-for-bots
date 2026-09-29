@@ -2,8 +2,11 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 
+import path from 'node:path';
+import Database from 'better-sqlite3';
+
 import { makePublishDocument, makeTestRegistry, makeTgz } from './_fixtures.js';
-import { digestTarball } from '../src/tarball.js';
+import { defaultArchiveLimits, digestTarball } from '../src/tarball.js';
 import { isRegistryHttpError } from '../src/errors.js';
 
 /** @import { UpstreamFetch } from '../src/node-fetch.js' */
@@ -334,9 +337,9 @@ test('an upstream body interrupted mid-read is a 502, not an internal error', as
   t.is(/** @type {any} */ (error).statusCode, 502);
 });
 
-test('publishing over an upstream-indexed version names the upstream', async t => {
+test('upstream metadata cannot plant development versions or dev-* tags', async t => {
   const tgz = makeTgz({
-    'package.json': JSON.stringify({ name: '@endo/errors', version: V1 }),
+    'package.json': JSON.stringify({ name: '@endo/errors', version: '1.0.0' }),
   });
   const { integrity } = digestTarball(tgz);
   const { registry, grant } = makeTestRegistry({
@@ -345,22 +348,166 @@ test('publishing over an upstream-indexed version names the upstream', async t =
       new Response(
         JSON.stringify({
           name: '@endo/errors',
-          'dist-tags': {},
+          'dist-tags': {
+            latest: '1.0.0',
+            'dev-2026-09-28': '1.0.0',
+            'dev-latest': V1,
+            // Prototype method names are ordinary tag names, and must
+            // neither throw under lockdown nor vanish from the packument.
+            constructor: '1.0.0',
+            hasOwnProperty: '1.0.0',
+          },
           versions: {
+            '1.0.0': {
+              name: '@endo/errors',
+              version: '1.0.0',
+              dist: { integrity },
+            },
             [V1]: { name: '@endo/errors', version: V1, dist: { integrity } },
           },
         }),
       ),
   });
-  await registry.getPackument('@endo/errors');
+  const packument = await registry.getPackument('@endo/errors');
+  t.deepEqual(Object.keys(packument.versions), ['1.0.0']);
+  t.deepEqual(packument['dist-tags'], {
+    latest: '1.0.0',
+    constructor: '1.0.0',
+    hasOwnProperty: '1.0.0',
+  });
+  t.deepEqual(
+    await registry.getDistTags('@endo/errors'),
+    packument['dist-tags'],
+  );
+  const result = await registry.publish(
+    grant,
+    '@endo/errors',
+    makePublishDocument({ name: '@endo/errors', version: V1 }),
+  );
+  t.true(result.created);
+});
+
+test('an upstream packument with null versions is a 502', async t => {
+  const { registry } = makeTestRegistry({
+    upstreamOrigin: 'https://upstream.example',
+    fetch: async () =>
+      new Response(JSON.stringify({ name: 'left-pad', versions: null })),
+  });
+  const error = await t.throwsAsync(() => registry.getPackument('left-pad'));
+  t.is(/** @type {any} */ (error).statusCode, 502);
+});
+
+test('every refusal after authentication is audited', async t => {
+  const { registry, grant, directory } = makeTestRegistry({
+    limits: { ...defaultArchiveLimits, maxTarballBytes: 64 },
+  });
+  // Refused before the transaction: the tarball is over the size limit.
   await t.throwsAsync(
     registry.publish(
       grant,
-      '@endo/errors',
-      makePublishDocument({ name: '@endo/errors', version: V1 }),
+      '@endo/patterns',
+      makePublishDocument({ name: '@endo/patterns', version: V1 }),
     ),
-    { message: /already exists from the upstream registry/ },
+    { message: /size limit/ },
   );
+  const {
+    registry: tagged,
+    grant: taggedGrant,
+    directory: taggedDirectory,
+  } = makeTestRegistry();
+  await tagged.publish(
+    taggedGrant,
+    '@endo/patterns',
+    makePublishDocument({ name: '@endo/patterns', version: V2 }),
+  );
+  // Refused inside the transaction: the date tag would move backward.
+  await t.throwsAsync(
+    tagged.publish(
+      taggedGrant,
+      '@endo/patterns',
+      makePublishDocument({ name: '@endo/patterns', version: V1 }),
+    ),
+    { message: /newer/ },
+  );
+  // Refused before the transaction: a date tag for another date.
+  t.throws(
+    () =>
+      tagged.setDistTag(taggedGrant, '@endo/patterns', 'dev-2026-09-27', V2),
+    { message: /from that date/ },
+  );
+
+  const outcomes = (/** @type {string} */ directoryPath) =>
+    new Database(path.join(directoryPath, 'db.sqlite'), { readonly: true })
+      .prepare(
+        "SELECT action, version, tag, outcome, detail FROM audit_events WHERE action != 'grant-issue' ORDER BY seq",
+      )
+      .all();
+  t.like(outcomes(directory), [
+    { action: 'publish', version: V1, outcome: 'refused' },
+  ]);
+  t.like(outcomes(taggedDirectory), [
+    { action: 'publish', version: V2, outcome: 'ok' },
+    { action: 'publish', version: V1, outcome: 'conflict' },
+    {
+      action: 'dist-tag',
+      version: V2,
+      tag: 'dev-2026-09-27',
+      outcome: 'refused',
+    },
+  ]);
+});
+
+test('install facts come from the tarball, not the publish document', async t => {
+  const { registry, grant } = makeTestRegistry();
+  const packageJson = {
+    name: '@endo/patterns',
+    version: V1,
+    scripts: { postinstall: 'node setup.js' },
+  };
+  const document = makePublishDocument({
+    name: '@endo/patterns',
+    version: V1,
+    extraFiles: {
+      'package.json': JSON.stringify(packageJson),
+      'npm-shrinkwrap.json': '{}',
+    },
+  });
+  /** @type {any} */ (document.versions[V1]).hasInstallScript = false;
+  await registry.publish(grant, '@endo/patterns', document);
+  const packument = await registry.getPackument('@endo/patterns', {
+    abbreviated: true,
+  });
+  t.is(packument.versions[V1].hasInstallScript, true);
+  // eslint-disable-next-line no-underscore-dangle -- npm wire field name
+  t.is(packument.versions[V1]._hasShrinkwrap, true);
+});
+
+test('publish refuses platform fields that differ from the tarball', async t => {
+  const { registry, grant } = makeTestRegistry();
+  const document = makePublishDocument({ name: '@endo/patterns', version: V1 });
+  /** @type {any} */ (document.versions[V1]).os = ['linux'];
+  await t.throwsAsync(registry.publish(grant, '@endo/patterns', document), {
+    message: /os differ/,
+  });
+});
+
+test('publish folds bundledDependencies the way npm publishes it', async t => {
+  const { registry, grant } = makeTestRegistry();
+  const packageJson = {
+    name: '@endo/patterns',
+    version: V1,
+    dependencies: { a: '^1.0.0' },
+    bundledDependencies: true,
+  };
+  const document = makePublishDocument({
+    name: '@endo/patterns',
+    version: V1,
+    dependencies: { a: '^1.0.0' },
+    extraFiles: { 'package.json': JSON.stringify(packageJson) },
+  });
+  /** @type {any} */ (document.versions[V1]).bundleDependencies = ['a'];
+  const result = await registry.publish(grant, '@endo/patterns', document);
+  t.true(result.created);
 });
 
 test('an upstream failure after a 200 still serves cached rows', async t => {

@@ -86,5 +86,8 @@ With Yarn, set `npmRegistryServer: "https://npm.minion.town"`.
   reuse. The design allows a temporary adapter only when its handler is
   already written against the tree interface, and this one is not, so this
   package does not yet conform to the design.
-- Tarballs containing hard links or symbolic links are refused, including
-  upstream ones; such a dependency returns `502` rather than installing.
+- Tarballs containing hard links or symbolic links are refused: `@endo/tar`
+  reads only files, directories, and symbolic links, and the ingester refuses
+  the symbolic links.
+  A publish carrying one is refused with `400`, and an upstream dependency
+  carrying one returns `502` rather than installing.

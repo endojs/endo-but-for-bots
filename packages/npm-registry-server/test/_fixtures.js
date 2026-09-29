@@ -64,7 +64,6 @@ export const makeTestRegistry = (options = {}) => {
   const registry = makeRegistry({
     store,
     cas,
-    grants,
     publicOrigin: 'https://npm.example',
     ...options,
   });

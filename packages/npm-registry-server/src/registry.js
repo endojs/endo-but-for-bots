@@ -16,6 +16,8 @@ import {
   compareSemver,
   devDateTagForVersion,
   isDateTag,
+  isDevTag,
+  isDevVersion,
   isWritableDevTag,
   parseSemver,
 } from './dev-release.js';
@@ -28,7 +30,7 @@ import {
 
 /** @import { FileCas } from './cas.js' */
 /** @import { RegistryStore } from './store.js' */
-/** @import { Grants, PublishGrant } from './grants.js' */
+/** @import { PublishGrant } from './grants.js' */
 /** @import { ArchiveLimits } from './tarball.js' */
 /** @import { UpstreamFetch, UpstreamResponse } from './node-fetch.js' */
 
@@ -61,14 +63,57 @@ const ABBREVIATED_FIELDS = harden([
   'hasInstallScript',
 ]);
 
-/** Dependency fields whose publish-document spelling must match the tarball. */
+/**
+ * Install-relevant fields whose publish-document value must match the
+ * tarball's `package.json`, so the metadata installers read agrees with
+ * the bytes they extract. npm's publish-time normalization leaves these
+ * untouched, apart from the bundled-dependency spellings, which
+ * `bundleDependenciesOf` folds together first.
+ */
 const GRAPH_FIELDS = harden([
   'dependencies',
   'optionalDependencies',
   'peerDependencies',
-  'bundleDependencies',
-  'bundledDependencies',
+  'peerDependenciesMeta',
+  'os',
+  'cpu',
+  'libc',
+  'engines',
 ]);
+
+/** Lifecycle scripts that make npm report `hasInstallScript`. */
+const INSTALL_SCRIPTS = harden(['preinstall', 'install', 'postinstall']);
+
+/**
+ * The bundled dependency list as npm publishes it: `bundledDependencies`
+ * folded into `bundleDependencies`, and `true` expanded to every
+ * dependency name. An absent or empty list is `undefined`.
+ *
+ * @param {Record<string, any>} manifest
+ * @returns {unknown}
+ */
+const bundleDependenciesOf = manifest => {
+  let bundle = manifest.bundleDependencies ?? manifest.bundledDependencies;
+  if (bundle === true) {
+    bundle = Object.keys(manifest.dependencies ?? {});
+  }
+  if (bundle === false || (Array.isArray(bundle) && bundle.length === 0)) {
+    return undefined;
+  }
+  return bundle;
+};
+
+/**
+ * An absent field and an empty object or list compare as equal, because
+ * npm may drop or add either when it normalizes a publish document.
+ *
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+const presentOrUndefined = value =>
+  value && typeof value === 'object' && Object.keys(value).length === 0
+    ? undefined
+    : value;
 
 /**
  * Stable JSON with sorted object keys, for comparing manifests.
@@ -165,7 +210,6 @@ const decodeBase64 = data => {
  * @typedef {object} RegistryOptions
  * @property {RegistryStore} store
  * @property {FileCas} cas
- * @property {Grants} grants
  * @property {string} publicOrigin Origin (and optional path prefix) that
  *   served tarball URLs are rooted at, e.g. `https://npm.minion.town`.
  * @property {string} [upstreamOrigin] The single pinned upstream registry;
@@ -179,6 +223,16 @@ const decodeBase64 = data => {
  * @property {number} [maxPackumentBytes]
  * @property {ArchiveLimits} [limits]
  * @property {() => number} [now]
+ */
+
+/**
+ * What an audit entry for a refusal records about the attempt, filled in
+ * as the attempt is validated.
+ *
+ * @typedef {object} AuditContext
+ * @property {string | null} version
+ * @property {string | null} tag
+ * @property {string | null} integrity
  */
 
 /**
@@ -209,7 +263,6 @@ const conflictReason = (name, version, existing) =>
 export const makeRegistry = ({
   store,
   cas,
-  grants,
   publicOrigin,
   upstreamOrigin,
   fetch = makeNodeFetch(),
@@ -324,28 +377,43 @@ export const makeRegistry = ({
   };
 
   /**
-   * Accept one `npm publish` document for a development version.
+   * Record a rejected publish or tag move in the audit log. It runs after
+   * any storage transaction has rolled back, so a refusal found inside the
+   * transaction (a race, a revoked grant, a backward tag move) is logged
+   * as reliably as one found before it.
    *
-   * @param {PublishGrant | undefined} maybeGrant
-   * @param {string} name canonical package name from the request path
-   * @param {any} document the npm publish body
+   * @param {PublishGrant} grant
+   * @param {string} action
+   * @param {string} name
+   * @param {AuditContext} context
+   * @param {unknown} error
+   */
+  const auditRejection = (grant, action, name, context, error) => {
+    if (!isRegistryHttpError(error)) {
+      return;
+    }
+    audit(
+      grant.subject,
+      action,
+      name,
+      context.version,
+      context.tag,
+      error.statusCode === 409 ? 'conflict' : 'refused',
+      context.integrity,
+      error.reason,
+    );
+  };
+
+  /**
+   * @param {PublishGrant} grant
+   * @param {string} name
+   * @param {any} document
+   * @param {AuditContext} context
    * @returns {Promise<{ version: string, tag: string, integrity: string, created: boolean }>}
    */
-  const publish = async (maybeGrant, name, document) => {
-    const grant = authorize(maybeGrant, name, 'publish');
-    const refuse = (/** @type {string} */ reason) => {
-      audit(
-        grant.subject,
-        'publish',
-        name,
-        null,
-        null,
-        'refused',
-        null,
-        reason,
-      );
-      return RegistryHttpError(400, reason);
-    };
+  const publishAuthorized = async (grant, name, document, context) => {
+    const refuse = (/** @type {string} */ reason) =>
+      RegistryHttpError(400, reason);
     if (!document || typeof document !== 'object') {
       throw refuse('Publish body must be a JSON object');
     }
@@ -361,7 +429,9 @@ export const makeRegistry = ({
       throw refuse('Publish must carry exactly one version and one tarball');
     }
     const [version] = versions;
+    context.version = version;
     const expectedTag = devDateTagForVersion(version);
+    context.tag = expectedTag;
     const tags = Object.entries(document['dist-tags'] ?? {});
     if (
       tags.length !== 1 ||
@@ -394,6 +464,7 @@ export const makeRegistry = ({
     }
 
     const { integrity, shasum } = digestTarball(tarball);
+    context.integrity = integrity;
     const existing = statements.getVersion.get(name, version);
     if (existing) {
       if (existing.source === 'published' && existing.integrity === integrity) {
@@ -408,29 +479,33 @@ export const makeRegistry = ({
         );
         return { version, tag: expectedTag, integrity, created: false };
       }
-      audit(
-        grant.subject,
-        'publish',
-        name,
-        version,
-        expectedTag,
-        'conflict',
-        integrity,
-      );
       throw RegistryHttpError(409, conflictReason(name, version, existing));
     }
 
+    // Re-check the grant against storage before any CAS write, so a stale
+    // or revoked grant cannot spend disk.
+    recheckGrant(grant, name);
+
     // CAS writes precede the visibility transaction.
-    const { tarballHash, treeHash, packageJson } = await ingestTarball(
+    const { tarballHash, treeHash, packageJson, paths } = await ingestTarball(
       tarball,
       { cas, limits },
     );
     if (packageJson.name !== name || packageJson.version !== version) {
       throw refuse('Tarball package.json name/version do not match');
     }
+    if (
+      canonicalJson(bundleDependenciesOf(manifest)) !==
+      canonicalJson(bundleDependenciesOf(packageJson))
+    ) {
+      throw refuse(
+        'Publish manifest bundleDependencies differ from the tarball package.json',
+      );
+    }
     for (const field of GRAPH_FIELDS) {
       if (
-        canonicalJson(manifest[field]) !== canonicalJson(packageJson[field])
+        canonicalJson(presentOrUndefined(manifest[field])) !==
+        canonicalJson(presentOrUndefined(packageJson[field]))
       ) {
         throw refuse(
           `Publish manifest ${field} differ from the tarball package.json`,
@@ -443,6 +518,20 @@ export const makeRegistry = ({
       dist: { integrity, shasum },
     };
     delete stored.readme;
+    // Facts installers act on without reading the tarball come from the
+    // tarball, not from the publish document.
+    const scripts = packageJson.scripts ?? {};
+    const hasInstallScript =
+      INSTALL_SCRIPTS.some(script => typeof scripts[script] === 'string') ||
+      paths.includes('binding.gyp');
+    delete stored.hasInstallScript;
+    delete stored._hasShrinkwrap;
+    if (hasInstallScript) {
+      stored.hasInstallScript = true;
+    }
+    if (paths.includes('npm-shrinkwrap.json')) {
+      stored._hasShrinkwrap = true;
+    }
 
     return store.transaction(() => {
       recheckGrant(grant, name);
@@ -488,20 +577,37 @@ export const makeRegistry = ({
   };
 
   /**
-   * `npm dist-tag add name@version tag`.
+   * Accept one `npm publish` document for a development version. Every
+   * refusal after authentication is recorded in the audit log.
    *
    * @param {PublishGrant | undefined} maybeGrant
+   * @param {string} name canonical package name from the request path
+   * @param {any} document the npm publish body
+   * @returns {Promise<{ version: string, tag: string, integrity: string, created: boolean }>}
+   */
+  const publish = async (maybeGrant, name, document) => {
+    const grant = authorize(maybeGrant, name, 'publish');
+    /** @type {AuditContext} */
+    const context = { version: null, tag: null, integrity: null };
+    try {
+      return harden(await publishAuthorized(grant, name, document, context));
+    } catch (error) {
+      auditRejection(grant, 'publish', name, context, error);
+      throw error;
+    }
+  };
+
+  /**
+   * @param {PublishGrant} grant
    * @param {string} name
    * @param {string} tag
    * @param {unknown} version
    */
-  const setDistTag = (maybeGrant, name, tag, version) => {
-    const grant = authorize(maybeGrant, name, 'set a dist-tag');
+  const setDistTagAuthorized = (grant, name, tag, version) => {
     if (typeof version !== 'string') {
       throw RegistryHttpError(400, 'Dist-tag body must be a version string');
     }
     if (!isWritableDevTag(tag, reservedTags)) {
-      audit(grant.subject, 'dist-tag', name, version, tag, 'refused');
       throw RegistryHttpError(
         403,
         `Tag ${q(tag)} is not a writable development tag`,
@@ -525,8 +631,33 @@ export const makeRegistry = ({
       checkMonotonic(name, tag, version);
       statements.setPublishedTag.run(name, tag, version, now());
       audit(grant.subject, 'dist-tag', name, version, tag, 'ok', row.integrity);
-      return { [tag]: version };
+      return harden({ [tag]: version });
     });
+  };
+
+  /**
+   * `npm dist-tag add name@version tag`. Every refusal after
+   * authentication is recorded in the audit log.
+   *
+   * @param {PublishGrant | undefined} maybeGrant
+   * @param {string} name
+   * @param {string} tag
+   * @param {unknown} version
+   */
+  const setDistTag = (maybeGrant, name, tag, version) => {
+    const grant = authorize(maybeGrant, name, 'set a dist-tag');
+    /** @type {AuditContext} */
+    const context = {
+      version: typeof version === 'string' ? version : null,
+      tag,
+      integrity: null,
+    };
+    try {
+      return setDistTagAuthorized(grant, name, tag, version);
+    } catch (error) {
+      auditRejection(grant, 'dist-tag', name, context, error);
+      throw error;
+    }
   };
 
   /** @type {Map<string, Promise<void>>} */
@@ -545,7 +676,8 @@ export const makeRegistry = ({
       !document ||
       typeof document !== 'object' ||
       document.name !== name ||
-      typeof document.versions !== 'object'
+      typeof document.versions !== 'object' ||
+      document.versions === null
     ) {
       throw RegistryHttpError(
         502,
@@ -555,8 +687,11 @@ export const makeRegistry = ({
     store.transaction(() => {
       const at = now();
       for (const [version, manifest] of Object.entries(document.versions)) {
+        // Development coordinates are this service's own namespace; an
+        // upstream publisher must not plant or pre-empt one.
         if (
           parseSemver(version) &&
+          !isDevVersion(version) &&
           manifest &&
           typeof manifest === 'object' &&
           manifest.dist &&
@@ -580,6 +715,7 @@ export const makeRegistry = ({
         document['dist-tags'] ?? {},
       )) {
         if (
+          !isDevTag(tag) &&
           typeof version === 'string' &&
           statements.getVersion.get(name, version)
         ) {
@@ -695,6 +831,13 @@ export const makeRegistry = ({
         indexUpstream(name, document, response.headers.get('etag'));
       } catch (error) {
         if (meta) {
+          console.error(
+            JSON.stringify({
+              event: 'upstream-refresh-failed',
+              name,
+              reason: /** @type {Error} */ (error).message,
+            }),
+          );
           return;
         }
         throw error;
@@ -753,10 +896,14 @@ export const makeRegistry = ({
       time[row.version] = new Date(row.indexed_at).toISOString();
       modified = Math.max(modified, row.indexed_at);
     }
-    /** @type {Record<string, string>} */
-    const distTags = {};
-    for (const row of statements.listTags.all(name)) {
-      distTags[row.tag] = row.version;
+    // Tag names come from upstream metadata, so the map is built from
+    // entries, never by assignment: under lockdown, assigning a key such as
+    // `constructor` to a plain object throws (the override mistake).
+    const tagRows = statements.listTags.all(name);
+    const distTags = Object.fromEntries(
+      tagRows.map(row => [row.tag, row.version]),
+    );
+    for (const row of tagRows) {
       modified = Math.max(modified, row.updated_at);
     }
     const modifiedIso = new Date(modified).toISOString();
@@ -854,9 +1001,14 @@ export const makeRegistry = ({
       try {
         ingested = await ingestTarball(bytes, { cas, limits });
       } catch (error) {
+        // Only the archive's own refusals become a 502; a storage failure
+        // is this server's, and stays an internal error.
+        if (!isRegistryHttpError(error)) {
+          throw error;
+        }
         throw RegistryHttpError(
           502,
-          `Upstream tarball for ${key} was refused: ${/** @type {Error} */ (error).message}`,
+          `Upstream tarball for ${key} was refused: ${error.reason}`,
         );
       }
       store.transaction(() => {
