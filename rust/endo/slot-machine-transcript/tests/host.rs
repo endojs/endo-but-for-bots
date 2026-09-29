@@ -7,8 +7,8 @@ use std::path::Path;
 
 use slot_machine_transcript::{
     AdmissionError, AdmittedCallbacks, CallbackRegistry, CasStore, HostCallError, HostClass,
-    HostOutcome, HostReply, RecoveryStop, ReplayStop, SnapshotMeta, Transcript, TranscriptConfig,
-    TranscriptError,
+    HostOutcome, HostReply, RecoveryStop, ReplayStop, SnapshotMeta, TransactionalWrite, Transcript,
+    TranscriptConfig, TranscriptError,
 };
 
 fn meta() -> SnapshotMeta {
@@ -387,7 +387,7 @@ fn handles_with_descriptors_reseat_and_replay_the_recorded_reply_stream() {
         let r1 = t
             .host_call(&cb, "read-file", Some(file), b"4", |_| reply(b"abcd"))
             .unwrap();
-        t.host_call(&cb, "put-row", None, b"k=v", |_| reply(b"ok"))
+        t.host_call_transactional(&cb, "put-row", None, b"k=v", |r| (reply(b"ok"), put_row(r)))
             .unwrap();
         t.commit_crank().unwrap();
         t.begin_crank(b"d2").unwrap();
@@ -520,6 +520,87 @@ fn host_call_refuses_an_unknown_callback_and_a_call_outside_a_crank() {
         t.host_call(&cb, "read-file", Some(99), b"4", |_| unreachable!())
             .unwrap_err(),
         HostCallError::UnknownHandle(99)
+    );
+    t.abort_crank().unwrap();
+}
+
+/// A transactional effect: append the request to a local table.
+fn put_row(request: &[u8]) -> TransactionalWrite {
+    let request = request.to_vec();
+    Box::new(move |tx| {
+        tx.execute(
+            "CREATE TABLE IF NOT EXISTS applied (request BLOB NOT NULL) STRICT",
+            [],
+        )?;
+        tx.execute("INSERT INTO applied (request) VALUES (?1)", [&request])?;
+        Ok(())
+    })
+}
+
+/// How many times `put_row` has been applied durably.
+fn applied(root: &Path) -> i64 {
+    let connection = rusqlite::Connection::open(root.join("t.sqlite")).unwrap();
+    let exists: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name = 'applied'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    if exists == 0 {
+        return 0;
+    }
+    connection
+        .query_row("SELECT COUNT(*) FROM applied", [], |r| r.get(0))
+        .unwrap()
+}
+
+#[test]
+fn transactional_effects_commit_with_the_crank_and_apply_once_across_a_retry() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    let (mut t, _) = open(root.path());
+    t.begin_crank(b"d1").unwrap();
+    let invoked = Cell::new(0);
+    t.host_call_transactional(&cb, "put-row", None, b"k=v", |r| {
+        invoked.set(invoked.get() + 1);
+        (reply(b"ok"), put_row(r))
+    })
+    .unwrap();
+    // The crank panics: its staged effect never runs. The transcript holds
+    // its database exclusively, so inspect it closed.
+    t.abort_crank().unwrap();
+    drop(t);
+    assert_eq!(applied(root.path()), 0);
+    // The supervisor retries the same delivery; the effect applies once.
+    let mut t = reopen(root.path());
+    t.begin_crank(b"d1").unwrap();
+    t.host_call_transactional(&cb, "put-row", None, b"k=v", |r| {
+        invoked.set(invoked.get() + 1);
+        (reply(b"ok"), put_row(r))
+    })
+    .unwrap();
+    t.commit_crank().unwrap();
+    drop(t);
+    assert_eq!(invoked.get(), 2);
+    assert_eq!(applied(root.path()), 1);
+}
+
+#[test]
+fn transactional_callbacks_have_their_own_entry_point() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    let (mut t, _) = open(root.path());
+    t.begin_crank(b"d1").unwrap();
+    assert_eq!(
+        t.host_call(&cb, "put-row", None, b"k=v", |_| unreachable!())
+            .unwrap_err(),
+        HostCallError::WrongEntryPoint("put-row".into())
+    );
+    assert_eq!(
+        t.host_call_transactional(&cb, "now", None, b"clock", |_| unreachable!())
+            .unwrap_err(),
+        HostCallError::WrongEntryPoint("now".into())
     );
     t.abort_crank().unwrap();
 }

@@ -85,7 +85,7 @@ pub use fault::{FaultMode, FaultPlan};
 pub use host::{
     AdmissionError, AdmittedCallbacks, CallbackRegistry, HandleId, HandleRecord, HostCallError,
     HostClass, HostOutcome, HostReplay, HostReply, RecoveryStop, ReleasableEffect, ReplayStop,
-    ReseatReport,
+    ReseatReport, TransactionalWrite,
 };
 
 /// The schema version this crate writes.
@@ -719,7 +719,11 @@ impl Transcript {
                 active.crank, limits.max_outbound_events
             )));
         }
-        if active.pending_bytes + payload.len() > limits.max_outbound_bytes {
+        if active
+            .pending_bytes
+            .checked_add(payload.len())
+            .is_none_or(|sum| sum > limits.max_outbound_bytes)
+        {
             return Err(TranscriptError::Backpressure(format!(
                 "crank {} would exceed {} outbound bytes",
                 active.crank, limits.max_outbound_bytes

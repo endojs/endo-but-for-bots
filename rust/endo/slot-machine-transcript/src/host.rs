@@ -11,9 +11,13 @@
 //!   unclassified callback or a non-idempotent outbound provider. Such a
 //!   provider must gain an idempotency protocol or be declared a
 //!   [`HostClass::Barrier`].
-//! - [`Transcript::host_call`] stages each `read` or `transactional` call's
-//!   request and reply as `host-request` / `host-reply` events that commit
-//!   with the crank, so an aborted crank leaves none. An `outbound` call is
+//! - [`Transcript::host_call`] stages each `read` call's request and reply
+//!   as `host-request` / `host-reply` events that commit with the crank, so
+//!   an aborted crank leaves none. A `transactional` call goes through
+//!   [`Transcript::host_call_transactional`] instead: its adapter performs
+//!   no effect when invoked and returns a [`TransactionalWrite`] that runs
+//!   inside the crank's commit transaction, so an aborted crank applies
+//!   nothing and a retried crank applies the effect once. An `outbound` call is
 //!   not invoked during the crank. It is staged as a `host-effect` event and
 //!   becomes releasable only after commit ([`Transcript::releasable_effects`]),
 //!   keyed by `<worker>:<seq>` for the provider's idempotency protocol. A
@@ -56,7 +60,9 @@ pub enum HostClass {
     Pure,
     /// Reads nondeterministic state: recorded so replay returns the value.
     Read,
-    /// A local effect that joins the worker's crank commit.
+    /// A local effect that joins the worker's crank commit: it is staged as
+    /// a [`TransactionalWrite`] through [`Transcript::host_call_transactional`]
+    /// and applied only inside the commit transaction.
     Transactional,
     /// A non-transactional external effect, invoked only after commit.
     /// `idempotent` says whether the provider honors an idempotency key;
@@ -193,6 +199,11 @@ pub struct HostOutcome {
     pub closes: bool,
 }
 
+/// A transactional callback's local effect, applied inside the crank's
+/// commit transaction on the worker's transcript database. An aborted
+/// crank never runs it, so a retry cannot apply the effect twice.
+pub type TransactionalWrite = Box<dyn Fn(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>>;
+
 /// What the guest gets back from a host call.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HostReply {
@@ -216,6 +227,10 @@ pub enum HostCallError {
     /// The target handle was re-seated as broken: its native resource is
     /// gone and nothing may stand in for it.
     BrokenHandle(HandleId),
+    /// The callback's classification does not match the entry point: a
+    /// `transactional` callback must use
+    /// [`Transcript::host_call_transactional`], and only it may.
+    WrongEntryPoint(String),
     /// The transcript refused the write.
     Transcript(TranscriptError),
 }
@@ -295,6 +310,8 @@ pub(crate) enum Staged {
         reply: Vec<u8>,
         opens: Option<(HandleId, Option<Vec<u8>>)>,
         closes: bool,
+        /// A transactional callback's effect, run by the commit.
+        write: Option<TransactionalWrite>,
     },
     Effect {
         callback: String,
@@ -372,7 +389,11 @@ pub(crate) fn commit_staged(
                 reply,
                 opens,
                 closes,
+                write,
             } => {
+                if let Some(write) = write {
+                    write(tx)?;
+                }
                 let request_seq = match request_seq {
                     Some(seq) => *seq,
                     None => {
@@ -502,7 +523,9 @@ impl Transcript {
 
     /// Make a host call during the active crank. `invoke` runs the live
     /// adapter; it is never called for an outbound effect (deferred until
-    /// after commit) or for a broken or closed target handle.
+    /// after commit) or for a broken or closed target handle. A
+    /// `transactional` callback is refused here; use
+    /// [`Transcript::host_call_transactional`].
     pub fn host_call(
         &mut self,
         callbacks: &AdmittedCallbacks,
@@ -511,6 +534,38 @@ impl Transcript {
         request: &[u8],
         invoke: impl FnOnce(&[u8]) -> HostOutcome,
     ) -> Result<HostReply, HostCallError> {
+        self.stage_host_call(callbacks, callback, handle, request, false, |r| {
+            (invoke(r), None)
+        })
+    }
+
+    /// Make a `transactional` host call during the active crank. `invoke`
+    /// must not perform the effect: it returns the reply together with a
+    /// [`TransactionalWrite`] that the crank's commit transaction runs, so
+    /// the effect commits or aborts with the crank.
+    pub fn host_call_transactional(
+        &mut self,
+        callbacks: &AdmittedCallbacks,
+        callback: &str,
+        handle: Option<HandleId>,
+        request: &[u8],
+        invoke: impl FnOnce(&[u8]) -> (HostOutcome, TransactionalWrite),
+    ) -> Result<HostReply, HostCallError> {
+        self.stage_host_call(callbacks, callback, handle, request, true, |r| {
+            let (outcome, write) = invoke(r);
+            (outcome, Some(write))
+        })
+    }
+
+    fn stage_host_call(
+        &mut self,
+        callbacks: &AdmittedCallbacks,
+        callback: &str,
+        handle: Option<HandleId>,
+        request: &[u8],
+        transactional: bool,
+        invoke: impl FnOnce(&[u8]) -> (HostOutcome, Option<TransactionalWrite>),
+    ) -> Result<HostReply, HostCallError> {
         self.check_healthy()?;
         let Some(crank) = self.active_crank() else {
             return Err(TranscriptError::Protocol("no active crank".into()).into());
@@ -518,6 +573,9 @@ impl Transcript {
         let Some(class) = callbacks.class(callback) else {
             return Err(HostCallError::UnknownCallback(callback.to_string()));
         };
+        if (class == HostClass::Transactional) != transactional {
+            return Err(HostCallError::WrongEntryPoint(callback.to_string()));
+        }
         if let Some(h) = handle {
             match self.live_handle_state(h)? {
                 HandleState::Open => {}
@@ -551,8 +609,14 @@ impl Transcript {
         } else {
             None
         };
-        let outcome = invoke(request);
+        let (outcome, write) = invoke(request);
         if class == HostClass::Pure {
+            // A pure callback has no effect, so an adapter reporting one
+            // is misclassified and would leak an untracked handle.
+            debug_assert!(
+                outcome.opens.is_none() && !outcome.closes,
+                "pure callback {callback} reported a handle effect",
+            );
             return Ok(HostReply::Reply {
                 reply: outcome.reply,
                 opened: None,
@@ -576,6 +640,7 @@ impl Transcript {
                 reply: outcome.reply.clone(),
                 opens: opened,
                 closes: outcome.closes,
+                write,
             });
         Ok(HostReply::Reply {
             reply: outcome.reply,
