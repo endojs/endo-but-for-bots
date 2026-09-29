@@ -3,8 +3,51 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
+| **Updated** | 2026-09-29 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | **Implemented** (Phases 1–2) |
+
+## Status
+
+**Implemented (Phases 1–2).** The permits, sampling, tests, and changeset
+merged upstream in
+[endojs/endo#3322](https://github.com/endojs/endo/pull/3322) on 2026-07-22
+as merge commit `8021d268e777e3edb51136a31e63c2032dcc37f7`, and reached `llm`
+through the upstream merges. The change put `TextEncoder` and `TextDecoder`
+on `universalPropertyNames` in `packages/ses/src/permits.js` with exactly the
+prototype permits in the table below. It added 18 focused tests in
+`packages/ses/test/text-codecs.test.js` (16) and
+`packages/ses/test/text-codecs-missing.test.js` (2), covering test-plan
+items 1–5, and a changeset (`.changeset/hardened-text-codecs.md`, released by
+[endojs/endo#3302](https://github.com/endojs/endo/pull/3302)).
+
+A follow-up, [endojs/endo#3340](https://github.com/endojs/endo/pull/3340)
+(merged 2026-08-11, `dc504ca9934eba18e3100a170a070382cbd6b344`, also on
+`llm`), explicitly denies Node's non-standard
+`Symbol(nodejs.util.inspect.custom)` method on both prototypes. Before it,
+lockdown on Node warned while removing that method.
+
+Remaining items, none of which gate the M2 milestone:
+
+- **Test-plan item 6 (XS smoke test):** open as draft
+  [endojs/endo-but-for-bots#1349](https://github.com/endojs/endo-but-for-bots/pull/1349).
+  It extends `packages/ses/test/_xs.js`. It also found that the current
+  Moddable `xst` *does* define both codecs, so on today's toolchain the XS
+  path exercises pass-through-and-harden rather than the absence path this
+  design assumed.
+- **Phase 3 (downstream audit):** not performed on `llm`. As of `7ff30afbce`,
+  `packages/*/src` has 17 `Buffer.from(` / `.toString('utf…')` sites in 10
+  files. All are Node-host powers, drivers, and backends (`9p-server`, `cli`,
+  `daemon`, `git`, `platform`, `sandbox`, and the `*-sandbox` packages), not
+  code that runs inside a compartment. An audit, if wanted, is a separate
+  cleanup job.
+- **Node `TextDecoder` fast-path flags:** hardening a `TextDecoder`
+  *instance* on recent Node releases makes the next `decode()` throw.
+  Tracked upstream as
+  [endojs/endo#2813](https://github.com/endojs/endo/issues/2813), with the
+  open fix [endojs/endo#3245](https://github.com/endojs/endo/pull/3245)
+  (`@endo/lockdown` accessor patch). This concerns hardened instances, not
+  the permitted constructor and prototype this design covers.
 
 ## What is the Problem Being Solved?
 
