@@ -8,6 +8,7 @@ use std::path::Path;
 use slot_machine_transcript::{
     AdmissionError, AdmittedCallbacks, CallbackRegistry, CasStore, HostCallError, HostClass,
     HostOutcome, HostReply, RecoveryStop, ReplayStop, SnapshotMeta, Transcript, TranscriptConfig,
+    TranscriptError,
 };
 
 fn meta() -> SnapshotMeta {
@@ -19,6 +20,7 @@ fn meta() -> SnapshotMeta {
 
 fn callbacks() -> AdmittedCallbacks {
     CallbackRegistry::new()
+        .classify("hash", HostClass::Pure)
         .classify("now", HostClass::Read)
         .classify("open-file", HostClass::Read)
         .classify("read-file", HostClass::Read)
@@ -60,6 +62,14 @@ fn opens(bytes: &[u8], descriptor: Option<&[u8]>) -> HostOutcome {
         reply: bytes.to_vec(),
         opens: Some(descriptor.map(<[u8]>::to_vec)),
         closes: false,
+    }
+}
+
+fn closes(bytes: &[u8]) -> HostOutcome {
+    HostOutcome {
+        reply: bytes.to_vec(),
+        opens: None,
+        closes: true,
     }
 }
 
@@ -476,4 +486,182 @@ fn compaction_keeps_open_handles_and_unreleased_effects() {
     let mut replay = t.host_replay().unwrap();
     replay.begin_crank(1);
     replay.end_crank().unwrap();
+}
+
+#[test]
+fn admission_errors_name_the_refused_callbacks() {
+    assert_eq!(
+        AdmissionError::Unclassified(vec!["a".into(), "b".into()]).to_string(),
+        "retryable worker refuses unclassified host callbacks: a, b"
+    );
+    assert!(
+        AdmissionError::NonIdempotentOutbound(vec!["send-email".into()])
+            .to_string()
+            .ends_with("declare a barrier): send-email")
+    );
+}
+
+#[test]
+fn host_call_refuses_an_unknown_callback_and_a_call_outside_a_crank() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    let (mut t, _) = open(root.path());
+    assert!(matches!(
+        t.host_call(&cb, "now", None, b"clock", |_| unreachable!()),
+        Err(HostCallError::Transcript(_))
+    ));
+    t.begin_crank(b"d1").unwrap();
+    assert_eq!(
+        t.host_call(&cb, "mystery", None, b"", |_| unreachable!())
+            .unwrap_err(),
+        HostCallError::UnknownCallback("mystery".into())
+    );
+    assert_eq!(
+        t.host_call(&cb, "read-file", Some(99), b"4", |_| unreachable!())
+            .unwrap_err(),
+        HostCallError::UnknownHandle(99)
+    );
+    t.abort_crank().unwrap();
+}
+
+#[test]
+fn pure_calls_run_live_and_are_not_recorded() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    {
+        let (mut t, _) = open(root.path());
+        t.begin_crank(b"d1").unwrap();
+        assert_eq!(
+            t.host_call(&cb, "hash", None, b"abc", |r| reply(&r.len().to_be_bytes()))
+                .unwrap(),
+            HostReply::Reply {
+                reply: 3usize.to_be_bytes().to_vec(),
+                opened: None
+            }
+        );
+        t.commit_crank().unwrap();
+    }
+    // Nothing to replay: the replayed guest re-runs the pure call itself.
+    let t = reopen(root.path());
+    let mut replay = t.host_replay().unwrap();
+    replay.begin_crank(1);
+    replay.end_crank().unwrap();
+}
+
+#[test]
+fn a_committed_outbound_effect_replays_as_deferred_without_the_provider() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    {
+        let (mut t, _) = open(root.path());
+        t.begin_crank(b"d1").unwrap();
+        t.host_call(&cb, "post-webhook", None, b"hello", |_| unreachable!())
+            .unwrap();
+        t.commit_crank().unwrap();
+    }
+    let t = reopen(root.path());
+    let mut replay = t.host_replay().unwrap();
+    replay.begin_crank(1);
+    assert_eq!(
+        replay.call("post-webhook", None, b"hello"),
+        Ok(HostReply::Deferred)
+    );
+    replay.end_crank().unwrap();
+}
+
+#[test]
+fn a_closed_handle_is_refused_in_its_own_crank_and_after_commit() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    let file;
+    {
+        let (mut t, _) = open(root.path());
+        t.begin_crank(b"d1").unwrap();
+        file = opened(
+            t.host_call(&cb, "open-file", None, b"/a.txt", |_| {
+                opens(b"fd", Some(b"cap:/a.txt@0"))
+            })
+            .unwrap(),
+        );
+        t.commit_crank().unwrap();
+        t.begin_crank(b"d2").unwrap();
+        t.host_call(&cb, "close", Some(file), b"", |_| closes(b"closed"))
+            .unwrap();
+        // The staged close already takes effect within the crank.
+        assert_eq!(
+            t.host_call(&cb, "read-file", Some(file), b"4", |_| unreachable!())
+                .unwrap_err(),
+            HostCallError::UnknownHandle(file)
+        );
+        t.commit_crank().unwrap();
+        assert!(t.open_handles().unwrap().is_empty());
+    }
+    let mut t = reopen(root.path());
+    // Nothing is left to re-seat, and a later use is refused.
+    let report = t
+        .reseat_handles(|_| panic!("a closed handle is not rebuilt"))
+        .unwrap();
+    assert_eq!(report, Default::default());
+    t.begin_crank(b"d3").unwrap();
+    assert_eq!(
+        t.host_call(&cb, "read-file", Some(file), b"4", |_| unreachable!())
+            .unwrap_err(),
+        HostCallError::UnknownHandle(file)
+    );
+    t.abort_crank().unwrap();
+    // Replay answers the close from the record.
+    let mut replay = t.host_replay().unwrap();
+    replay.begin_crank(2);
+    assert_eq!(
+        replay.call("close", Some(file), b""),
+        Ok(HostReply::Reply {
+            reply: b"closed".to_vec(),
+            opened: None
+        })
+    );
+    replay.end_crank().unwrap();
+}
+
+#[test]
+fn recovery_operations_refuse_targets_in_the_wrong_state() {
+    let root = tempfile::tempdir().unwrap();
+    let cb = callbacks();
+    let (mut t, _) = open(root.path());
+    t.begin_crank(b"d1").unwrap();
+    let file = opened(
+        t.host_call(&cb, "open-file", None, b"/a.txt", |_| {
+            opens(b"fd", Some(b"cap:/a.txt@0"))
+        })
+        .unwrap(),
+    );
+    let sock = opened(
+        t.host_call(&cb, "connect", None, b"peer:80", |_| opens(b"ok", None))
+            .unwrap(),
+    );
+    assert_ne!(file, sock);
+    t.commit_crank().unwrap();
+    t.reseat_handles(|_| Ok(())).unwrap();
+    // A healthy handle has no loss to report and needs no replacement.
+    t.begin_crank(b"lost:file").unwrap();
+    assert!(matches!(
+        t.acknowledge_loss(file),
+        Err(TranscriptError::Protocol(_))
+    ));
+    // A loss already acknowledged in this crank is not acknowledged twice.
+    t.acknowledge_loss(sock).unwrap();
+    assert!(t.acknowledge_loss(sock).is_err());
+    t.abort_crank().unwrap();
+    assert!(t
+        .supply_replacement(file, b"cap:/a.txt@0".to_vec(), |_| unreachable!())
+        .is_err());
+    // A loss is acknowledged only by the crank that delivers it.
+    assert!(t.acknowledge_loss(sock).is_err());
+    // Clearing a barrier that was never recorded is refused.
+    assert!(t.clear_barrier(12345).is_err());
+    // A replayed call before any crank begins is a mismatch.
+    let mut replay = t.host_replay().unwrap();
+    assert!(matches!(
+        replay.call("now", None, b"clock"),
+        Err(ReplayStop::Mismatch { crank: 0, .. })
+    ));
 }
