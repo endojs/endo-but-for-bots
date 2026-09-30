@@ -38,9 +38,10 @@ SturdyRef.isSturdyRef(ref); // true
 What a SturdyRef captures is defined **entirely** by its handler: a CapTP, for
 example, closes over its own peer id, swiss number, and hints. The handler is
 held in a `WeakMap` inside the constructor and is never reachable from the
-ref. The shim captures the `WeakMap.prototype` methods it uses when it is
-first imported, so code that later tampers with `WeakMap.prototype` (before
-`lockdown` freezes it) cannot observe or redirect that map. Code that runs
+ref. The shim captures `WeakMap`, `Promise`, and the prototype methods it
+uses from both when it is first imported, so code that later replaces or
+tampers with them (before `lockdown` freezes them) cannot observe or redirect
+that map or the result of enlivening. Code that runs
 before the shim's first import is trusted, as it is for every shim. Refs have **no identification**: two refs made from the same handler are
 distinct. Any notion of "same referent" belongs to the handler.
 
@@ -86,10 +87,11 @@ lockdown();
 ```
 
 Before `lockdown`, the shim does not use [`@endo/harden`](../harden/README.md),
-because a harden installed before `lockdown` makes `lockdown` throw. It freezes
-the constructor, its prototype, and its statics, and leaves hardening to
-`lockdown`. Once a harden is present (after `lockdown`, or after another
-library installed one), it hardens with `@endo/harden` instead. Every ref is
+because a harden installed before `lockdown` makes `lockdown` throw. It always freezes
+the constructor, its prototype, and its statics. Once a harden is present
+(after `lockdown`, or after another library installed one), it also hardens
+with `@endo/harden`; the freeze comes first because that harden may be a
+no-op. Every ref is
 frozen at construction.
 
 Importing the shim after `lockdown()` also works, but then SES never sees the
