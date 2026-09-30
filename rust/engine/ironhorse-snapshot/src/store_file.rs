@@ -52,7 +52,7 @@
 use crate::store::HeapStoreCommit;
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use crate::format::SnapshotError;
@@ -132,7 +132,9 @@ struct Layout<'a> {
 
 impl Layout<'_> {
     /// Write the file to `out`, streaming each prior row from `prior`.
-    fn write(&self, out: &mut File, prior: Option<&RefCell<File>>) -> Result<(), StoreError> {
+    /// The writer is buffered by the caller: the edge summaries go out
+    /// four bytes at a time.
+    fn write(&self, out: &mut impl Write, prior: Option<&RefCell<File>>) -> Result<(), StoreError> {
         let rows = || self.pages.iter().chain(&self.extents);
         let edges_bytes: u64 = self.edges.iter().map(|ts| 4 + 4 * ts.len() as u64).sum();
         let free_bytes: u64 = 4 + self
@@ -250,8 +252,9 @@ impl FileStore {
         // a flaky disk does not accumulate `.tmp-*` litter beside the
         // store. Leftovers are inert but can accumulate across retries.
         let write_tmp = || -> Result<(), StoreError> {
-            let mut tmp = File::create(&tmp_path).map_err(io_err)?;
+            let mut tmp = BufWriter::new(File::create(&tmp_path).map_err(io_err)?);
             layout.write(&mut tmp, prior)?;
+            let tmp = tmp.into_inner().map_err(|e| io_err(e.into_error()))?;
             tmp.sync_all().map_err(io_err)?;
             Ok(())
         };
@@ -517,6 +520,9 @@ impl HeapStore for FileStore {
     /// the durable file's rows, summaries and free segments, and no leaf
     /// hashes. The comparison with `from` runs against the file as it is
     /// on disk, under the single-writer discipline the module documents.
+    /// `to` must keep `from`'s geometry, as every ladder step does: the
+    /// rows are the durable file's, and a file whose directories disagree
+    /// with its manifest would be renamed into place and then refused.
     fn replace_for_migration(
         &mut self,
         from: &StoreManifest,
@@ -525,6 +531,13 @@ impl HeapStore for FileStore {
     ) -> Result<(), StoreError> {
         let (durable, file) = self.load_durable()?.ok_or(StoreError::Empty)?;
         check_migration_baseline(&durable.manifest, from)?;
+        if (to.slot_count, to.chunk_len, to.free_len)
+            != (from.slot_count, from.chunk_len, from.free_len)
+        {
+            return Err(StoreError::Unsupported(
+                "a migration that changes the store's geometry",
+            ));
+        }
         let layout = Layout {
             manifest: to.encode(),
             small,
