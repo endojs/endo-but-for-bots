@@ -770,10 +770,12 @@ fn rebinding_a_machine_whose_old_store_fails_a_read_unwinds_with_that_stores_err
 /// rebound or dropped, and no checkpoint is left to refuse it if that store
 /// moves: a rebind or a snapshot would persist a heap mixing the backing's
 /// rows with another commit's. Its faults check the pairing instead. A
-/// machine whose own session last committed into that store rebinds
-/// cleanly; one whose store another session has since committed to
-/// unwinds out of the rebind with the old store's epoch mismatch, and
-/// nothing is committed.
+/// machine whose own session last committed into that store, directly or
+/// through a forwarding wrapper, rebinds cleanly and reads what an eager
+/// resume of the store reads. One whose store another session has since
+/// committed to, or that now holds a fork at the same epoch, unwinds out
+/// of the rebind with the old store's epoch or token mismatch, and nothing
+/// is committed.
 #[test]
 fn an_unbound_lazy_machine_refuses_a_fault_from_a_store_that_moved() {
     use ironhorse_snapshot::machine::store_fault_of;
@@ -790,8 +792,16 @@ fn an_unbound_lazy_machine_refuses_a_fault_from_a_store_that_moved() {
         let outcome = session.machine_mut().run(&code);
         assert!(outcome.completed, "{:?}", outcome.halt);
     };
-    let evict_all = |session: &StoreSession, store: &MemoryStore| {
-        let manifest = store.manifest().unwrap();
+    let built = || {
+        let (build, names) =
+            compile("var backed = []; for (var i = 0; i < 2048; i++) backed.push({v: i});");
+        let mut m = Interp::new();
+        m.link_intrinsics(&names);
+        assert!(m.run(&build).completed);
+        m
+    };
+    let evict_all = |session: &StoreSession, store: &Rc<RefCell<MemoryStore>>| {
+        let manifest = store.borrow().manifest().unwrap();
         let mut evicted = 0;
         for page in 0..slot_page_count(manifest.slot_count) {
             evicted += session.machine().slots().evict_page(page) as u32;
@@ -801,13 +811,36 @@ fn an_unbound_lazy_machine_refuses_a_fault_from_a_store_that_moved() {
             "the rebind has pages to read from the old store"
         );
     };
-    let (build, names) =
-        compile("var backed = []; for (var i = 0; i < 2048; i++) backed.push({v: i});");
-    let mut m = Interp::new();
-    m.link_intrinsics(&names);
-    assert!(m.run(&build).completed);
+    // The rebind reads what an eager resume of the old store reads.
+    let rebinds = |machine: Interp, old: &Rc<RefCell<MemoryStore>>| {
+        let mut new = MemoryStore::new();
+        drop(begin(machine, &mut new));
+        let eager = resume_from_store(&*old.borrow(), &sig()).unwrap();
+        assert_eq!(
+            store_to_image(&new).unwrap(),
+            eager
+                .machine()
+                .snapshot_image_for_testing(&sig())
+                .expect("gated image")
+        );
+    };
+    let refuses = |machine: Interp| -> StoreError {
+        let mut new = MemoryStore::new();
+        let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            begin_store_session(machine, &sig(), &mut new)
+                .map(drop)
+                .map_err(|(_, error)| error)
+        }))
+        .expect_err("the fault from the moved store unwinds out of the rebind");
+        assert_eq!(
+            new.manifest(),
+            Err(StoreError::Empty),
+            "nothing was committed"
+        );
+        store_fault_of(payload).unwrap_or_else(|_| panic!("expected a store fault"))
+    };
     let old = Rc::new(RefCell::new(MemoryStore::new()));
-    drop(begin(m, &mut *old.borrow_mut()));
+    drop(begin(built(), &mut *old.borrow_mut()));
 
     // The session's own checkpoint advances what its backing describes.
     let mut lazy = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
@@ -816,41 +849,238 @@ fn an_unbound_lazy_machine_refuses_a_fault_from_a_store_that_moved() {
         checkpoint_to_store(&mut lazy, &sig(), &mut *old.borrow_mut()).unwrap(),
         2
     );
-    evict_all(&lazy, &old.borrow());
-    let mut new = MemoryStore::new();
-    drop(begin(lazy.into_machine(), &mut new));
+    evict_all(&lazy, &old);
+    rebinds(lazy.into_machine(), &old);
+
+    // A checkpoint through a forwarding wrapper lands in the same store
+    // without advancing the backing; the session's own commit still pairs.
+    let mut lazy = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
+    crank(&mut lazy, "backed[1].v = -1;");
+    assert_eq!(
+        checkpoint_to_store(&mut lazy, &sig(), &mut Forward(&mut *old.borrow_mut())).unwrap(),
+        3
+    );
+    evict_all(&lazy, &old);
+    rebinds(lazy.into_machine(), &old);
 
     // Another session's commit moves the store under an unbound machine.
     let lazy = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
-    evict_all(&lazy, &old.borrow());
+    evict_all(&lazy, &old);
     let machine = lazy.into_machine();
     let mut other = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
     crank(&mut other, "backed[2047].v = -1;");
     assert_eq!(
         checkpoint_to_store(&mut other, &sig(), &mut *old.borrow_mut()).unwrap(),
-        3
+        4
     );
     drop(other);
-    let mut new = MemoryStore::new();
-    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        begin_store_session(machine, &sig(), &mut new)
-            .map(drop)
-            .map_err(|(_, error)| error)
+    assert_eq!(
+        refuses(machine),
+        StoreError::EpochMismatch {
+            expected: 3,
+            found: 4
+        }
+    );
+
+    // A fork of the same content at the same epoch replaces the store.
+    let forked = Rc::new(RefCell::new(MemoryStore::new()));
+    drop(begin(built(), &mut *forked.borrow_mut()));
+    let lazy = resume_from_store_lazy(forked.clone(), &sig()).expect("lazy resume");
+    evict_all(&lazy, &forked);
+    let machine = lazy.into_machine();
+    let token = forked.borrow().manifest().unwrap().token;
+    let mut fork = MemoryStore::new();
+    drop(begin(built(), &mut fork));
+    let fork_token = fork.manifest().unwrap().token;
+    assert_ne!(token, fork_token);
+    *forked.borrow_mut() = fork;
+    assert_eq!(
+        refuses(machine),
+        StoreError::BaselineMismatch {
+            expected: token.to_hex(),
+            found: fork_token.to_hex(),
+        }
+    );
+}
+
+/// Forwards every call to the store it wraps: a commit through it lands in
+/// that store, but not by the address a lazy session pinned.
+struct Forward<'a>(&'a mut MemoryStore);
+
+impl HeapStore for Forward<'_> {
+    fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
+        self.0.manifest()
+    }
+    fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+        self.0.read_small_state()
+    }
+    fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+        self.0.read_slot_page(page)
+    }
+    fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+        self.0.read_chunk_extent(ext)
+    }
+    fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+        self.0.inventory()
+    }
+    fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+        self.0.page_edges()
+    }
+    fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+        self.0.read_free_seg(seg)
+    }
+    fn small_section_hashes(
+        &self,
+    ) -> Result<[[u8; 32]; ironhorse_snapshot::store_sections::SMALL_SECTION_COUNT], StoreError>
+    {
+        self.0.small_section_hashes()
+    }
+    fn commit_verified(
+        &mut self,
+        verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
+    ) -> Result<(), StoreError> {
+        self.0.commit_verified(verify)
+    }
+}
+
+/// A lazy fault checks the row's exact length, in both arenas: open no
+/// longer reads every row, so this is what stops a short or torn row from
+/// installing placeholder records (or leaving chunk bytes zero) beside the
+/// real ones. The refusal is the crashed-crank path, named.
+#[test]
+fn a_lazy_fault_refuses_a_row_of_the_wrong_length() {
+    use ironhorse_snapshot::store::chunk_extent_count;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    /// Serves every row one record (or one byte) short once `short` is set.
+    struct ShortRows {
+        inner: MemoryStore,
+        short: Cell<bool>,
+    }
+    impl HeapStore for ShortRows {
+        fn manifest(&self) -> Result<ironhorse_snapshot::store::StoreManifest, StoreError> {
+            self.inner.manifest()
+        }
+        fn read_small_state(&self) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_small_state()
+        }
+        fn read_slot_page(&self, page: u32) -> Result<Vec<u8>, StoreError> {
+            let mut row = self.inner.read_slot_page(page)?;
+            if self.short.get() {
+                row.truncate(row.len() - ironhorse_snapshot::SLOT_RECORD_BYTES);
+            }
+            Ok(row)
+        }
+        fn read_chunk_extent(&self, ext: u32) -> Result<Vec<u8>, StoreError> {
+            let mut row = self.inner.read_chunk_extent(ext)?;
+            if self.short.get() {
+                row.pop();
+            }
+            Ok(row)
+        }
+        fn inventory(&self) -> Result<(Vec<usize>, Vec<usize>), StoreError> {
+            self.inner.inventory()
+        }
+        fn page_edges(&self) -> Result<Vec<Vec<u32>>, StoreError> {
+            self.inner.page_edges()
+        }
+        fn read_free_seg(&self, seg: u32) -> Result<Vec<u8>, StoreError> {
+            self.inner.read_free_seg(seg)
+        }
+        fn commit_verified(
+            &mut self,
+            verify: &mut ironhorse_snapshot::store::CommitVerifier<'_>,
+        ) -> Result<(), StoreError> {
+            self.inner.commit_verified(verify)
+        }
+    }
+    fn message(payload: Box<dyn std::any::Any + Send>) -> String {
+        match payload.downcast::<String>() {
+            Ok(message) => *message,
+            Err(payload) => payload
+                .downcast::<&str>()
+                .map(|message| message.to_string())
+                .unwrap_or_default(),
+        }
+    }
+
+    let (build, names) = ironhorse_compile::compile_atoms(
+        "var backed = []; for (var i = 0; i < 2048; i++) backed.push({name: 'row' + i});",
+    )
+    .unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&ironhorse_vm::parse_symbols(&names));
+    assert!(m.run(&build).completed);
+    let store = Rc::new(RefCell::new(ShortRows {
+        inner: MemoryStore::new(),
+        short: Cell::new(false),
+    }));
+    drop(begin(m, &mut *store.borrow_mut()));
+    let lazy = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
+    let manifest = store.borrow().manifest().unwrap();
+    let page = (0..slot_page_count(manifest.slot_count))
+        .find(|&page| lazy.machine().slots().evict_page(page))
+        .expect("a clean page to evict");
+    let ext = (0..chunk_extent_count(manifest.chunk_len))
+        .find(|&ext| lazy.machine().chunks().evict_extent(ext))
+        .expect("a clean extent to evict");
+    store.borrow().short.set(true);
+
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lazy.machine().slots().touch_page(page);
     }))
-    .expect_err("the fault from the moved store unwinds out of the rebind");
+    .expect_err("a short slot page is refused at its fault");
+    let refused = message(refused);
+    assert!(
+        refused.contains(&format!("for page {page}"))
+            && refused.contains("(corrupt or torn store row)"),
+        "{refused:?}"
+    );
+    let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lazy.machine().chunks().touch_extent(ext);
+    }))
+    .expect_err("a short chunk extent is refused at its fault");
+    let refused = message(refused);
+    assert!(
+        refused.contains(&format!("for extent {ext}"))
+            && refused.contains("(corrupt or torn store row)"),
+        "{refused:?}"
+    );
+}
+
+/// A fault while the caller holds the store mutably for a commit (a
+/// checkpoint walking a page it never faulted) is an engine defect, and it
+/// unwinds as a store fault that says so rather than as a borrow panic.
+#[test]
+fn a_fault_while_the_store_is_borrowed_is_an_engine_invariant_store_fault() {
+    use ironhorse_snapshot::machine::store_fault_of;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let mut m = Interp::new();
+    assert!(m.run(&PROG_A).completed);
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    drop(begin(m, &mut *store.borrow_mut()));
+    let lazy = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
+    let manifest = store.borrow().manifest().unwrap();
+    let page = (0..slot_page_count(manifest.slot_count))
+        .find(|&page| lazy.machine().slots().evict_page(page))
+        .expect("a clean page to evict");
+    let held = store.borrow_mut();
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        lazy.machine().slots().touch_page(page);
+    }))
+    .expect_err("the fault cannot read the borrowed store");
+    drop(held);
     match store_fault_of(payload) {
-        Ok(StoreError::EpochMismatch {
-            expected: 2,
-            found: 3,
-        }) => {}
-        Ok(other) => panic!("expected the old store's epoch mismatch, got {other:?}"),
+        Ok(StoreError::EngineInvariant(message)) => assert_eq!(
+            message,
+            "lazy fault while the store is borrowed for a commit"
+        ),
+        Ok(other) => panic!("expected an engine-invariant store fault, got {other:?}"),
         Err(_) => panic!("expected a store fault"),
     }
-    assert_eq!(
-        new.manifest(),
-        Err(StoreError::Empty),
-        "nothing was committed"
-    );
 }
 
 /// A store wrapper whose next `commit` fails with an injected I/O
@@ -952,6 +1182,70 @@ fn checkpoint_recovers_through_a_failed_commit() {
             .expect("gated image"),
         "a resume sees exactly the recovered history"
     );
+}
+
+/// The free list's low-water mark is acknowledged only once a commit
+/// succeeds: a failed commit leaves it where the crank lowered it, so the
+/// retry ships every free segment the crank changed. A crank that pops
+/// across the segment boundaries of a multi-segment list and then frees
+/// again is the case an acknowledgement taken before the commit would
+/// lose: the retry would ship only the tail, and the store's free list
+/// would no longer be the machine's.
+#[test]
+fn a_failed_commit_keeps_the_free_list_mark_for_the_retry() {
+    use ironhorse_snapshot::store::FREE_SEG_ENTRIES;
+
+    let compile = |source: &str| {
+        let (code, names) = ironhorse_compile::compile_atoms(source).unwrap();
+        (code, ironhorse_vm::parse_symbols(&names))
+    };
+    let (build, names) =
+        compile("var junk = []; for (var i = 0; i < 12000; i++) junk.push({v: i}); junk = null;");
+    let mut m = Interp::new();
+    m.link_intrinsics(&names);
+    assert!(m.run(&build).completed);
+    m.collect_garbage().unwrap();
+    let listed = m.slots().free_list().len();
+    assert!(
+        listed > 2 * FREE_SEG_ENTRIES as usize,
+        "a free list of three segments or more ({listed})"
+    );
+    let mut store = FailOnceStore {
+        inner: MemoryStore::new(),
+        fail_next: std::cell::Cell::new(false),
+    };
+    let mut session = begin(m, &mut store);
+
+    let (code, names) = compile(
+        "var made = []; for (var i = 0; i < 5000; i++) made.push({v: i}); \
+         for (var i = 0; i < 5000; i += 2) made[i] = null;",
+    );
+    let code = session.machine_mut().relink_crank(&code, &names).unwrap();
+    assert!(session.machine_mut().run(&code).completed);
+    session.machine_mut().collect_garbage().unwrap();
+    assert!(
+        session.machine().slots().free_list().len() + (FREE_SEG_ENTRIES as usize) < listed,
+        "the crank popped across a segment boundary"
+    );
+
+    store.fail_next.set(true);
+    match checkpoint_to_store(&mut session, &sig(), &mut store) {
+        Err(StoreError::Io(msg)) => assert_eq!(msg, "injected commit failure"),
+        other => panic!("expected the injected failure, got {other:?}"),
+    }
+    assert_eq!(
+        checkpoint_to_store(&mut session, &sig(), &mut store).unwrap(),
+        2
+    );
+    assert_eq!(
+        store_to_image(&store).unwrap(),
+        session
+            .machine()
+            .snapshot_image_for_testing(&sig())
+            .expect("gated image"),
+        "the retried checkpoint carries the whole changed free list"
+    );
+    ironhorse_snapshot::store::validate_store_content(&store, &sig()).unwrap();
 }
 
 #[test]
