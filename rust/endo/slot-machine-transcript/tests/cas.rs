@@ -46,6 +46,16 @@ fn a_name_one_digit_too_long_is_not_a_blob_name() {
 }
 
 #[test]
+fn an_uppercase_name_is_not_a_blob_name() {
+    let (_root, blob_store) = store();
+    let upper = blob_store.write_blob(b"heap").unwrap().to_uppercase();
+    assert!(matches!(
+        blob_store.read_blob(&upper),
+        Err(ContentAddressedStoreError::InvalidName(name)) if name == upper
+    ));
+}
+
+#[test]
 fn reclaim_with_an_empty_keep_list_empties_the_store() {
     let (root, blob_store) = store();
     blob_store.write_blob(b"a").unwrap();

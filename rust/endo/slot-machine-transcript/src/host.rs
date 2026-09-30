@@ -216,8 +216,9 @@ pub struct HostOutcome {
 /// The write runs under an SQLite authorizer that confines it to the
 /// adapter's own tables: it may not read or write the transcript's tables
 /// (`meta`, `snapshot`, `crank`, `event`, `host_call`, `host_handle`), end or
-/// nest the transaction, attach a database, or change a pragma. A denied
-/// statement fails the write, which fails the crank's commit.
+/// nest the transaction, attach a database, or change a pragma. Any action
+/// the authorizer does not allow-list is denied. A denied statement fails
+/// the write, which fails the crank's commit.
 pub type TransactionalWrite = Box<dyn Fn(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>>;
 
 /// What the guest gets back from a host call.
@@ -253,6 +254,9 @@ pub enum HostCallError {
     /// authoritative handle log in agreement with the native resources.
     /// The callback must be reclassified.
     Misclassified(String),
+    /// The crank refused a barrier's reply and can only abort, so it
+    /// admits no further effect.
+    MustAbort(CrankId),
     /// The transcript refused the write.
     Transcript(TranscriptError),
 }
@@ -333,27 +337,39 @@ const TRANSCRIPT_TABLES: [&str; 6] = [
     "host_handle",
 ];
 
+/// Allow-list what a table write needs and deny everything else, so an
+/// action this list does not name (a virtual table, `REINDEX`, an action a
+/// newer SQLite reports as `Unknown`) fails closed. Function calls are
+/// allowed: the crate enables neither rusqlite's `functions` nor its `vtab`
+/// feature, so only SQLite's built-in functions exist on the connection.
 fn confine_transactional_write(context: AuthContext<'_>) -> Authorization {
     let table = match context.action {
-        AuthAction::Transaction { .. }
-        | AuthAction::Savepoint { .. }
-        | AuthAction::Attach { .. }
-        | AuthAction::Detach { .. }
-        | AuthAction::Pragma { .. } => return Authorization::Deny,
+        AuthAction::Select | AuthAction::Recursive | AuthAction::Function { .. } => {
+            return Authorization::Allow
+        }
+        AuthAction::CreateView { .. }
+        | AuthAction::CreateTempView { .. }
+        | AuthAction::DropView { .. }
+        | AuthAction::DropTempView { .. } => return Authorization::Allow,
         AuthAction::CreateIndex { table_name, .. }
+        | AuthAction::CreateTempIndex { table_name, .. }
         | AuthAction::CreateTable { table_name }
+        | AuthAction::CreateTempTable { table_name }
         | AuthAction::CreateTrigger { table_name, .. }
         | AuthAction::CreateTempTrigger { table_name, .. }
         | AuthAction::Delete { table_name }
         | AuthAction::DropIndex { table_name, .. }
+        | AuthAction::DropTempIndex { table_name, .. }
         | AuthAction::DropTable { table_name }
+        | AuthAction::DropTempTable { table_name }
         | AuthAction::DropTrigger { table_name, .. }
+        | AuthAction::DropTempTrigger { table_name, .. }
         | AuthAction::Insert { table_name }
         | AuthAction::Read { table_name, .. }
         | AuthAction::Update { table_name, .. }
         | AuthAction::AlterTable { table_name, .. }
         | AuthAction::Analyze { table_name } => table_name,
-        _ => return Authorization::Allow,
+        _ => return Authorization::Deny,
     };
     if TRANSCRIPT_TABLES.contains(&table) {
         Authorization::Deny
@@ -408,6 +424,11 @@ pub(crate) enum Staged {
     /// bars the crank from committing: the crank must abort, which leaves
     /// the barrier escaped for [`Transcript::recovery_gate`].
     RefusedBarrier,
+    /// A handle effect refused after the live adapter ran, durably
+    /// recorded by [`Transcript::record_escape`]. It counts toward the
+    /// crank's call bound, so a misclassified callback cannot write
+    /// unboundedly many escape records in one crank.
+    Escaped,
 }
 
 /// A committed outbound effect awaiting release to its provider.
@@ -431,7 +452,8 @@ pub(crate) const SCHEMA: &str = "
         crank_id INTEGER NOT NULL,
         call_ordinal INTEGER NOT NULL,
         callback TEXT NOT NULL,
-        class TEXT NOT NULL,
+        class TEXT NOT NULL
+            CHECK (class IN ('pure', 'read', 'transactional', 'outbound', 'barrier')),
         handle_id INTEGER,
         reply_seq INTEGER,
         opened_handle INTEGER,
@@ -537,8 +559,14 @@ pub(crate) fn commit_staged(
                 let seq = insert_event(transaction, crank, "host-effect", request)?;
                 transaction.execute(
                     "INSERT INTO host_call (request_seq, crank_id, call_ordinal, callback, class)
-                     VALUES (?1, ?2, ?3, ?4, 'outbound')",
-                    params![seq as i64, crank as i64, *ordinal as i64, callback],
+                     VALUES (?1, ?2, ?3, ?4, ?5)",
+                    params![
+                        seq as i64,
+                        crank as i64,
+                        *ordinal as i64,
+                        callback,
+                        HostClass::Outbound { idempotent: true }.tag()
+                    ],
                 )?;
             }
             Staged::Loss { handle } => {
@@ -547,7 +575,7 @@ pub(crate) fn commit_staged(
                     [*handle as i64],
                 )?;
             }
-            Staged::RefusedBarrier => {}
+            Staged::RefusedBarrier | Staged::Escaped => {}
         }
     }
     Ok(())
@@ -647,7 +675,8 @@ impl Transcript {
                     calls += 1;
                     bytes = bytes.saturating_add(request.len());
                 }
-                Staged::Loss { .. } | Staged::RefusedBarrier => {}
+                Staged::RefusedBarrier | Staged::Escaped => calls += 1,
+                Staged::Loss { .. } => {}
             }
         }
         if calls >= limits.max_host_calls {
@@ -749,8 +778,24 @@ impl Transcript {
                 HandleState::Closed => return Err(HostCallError::UnknownHandle(h)),
             }
         }
+        let (refused_barrier, escaped) = self.active.as_ref().map_or((false, false), |a| {
+            (
+                a.host.iter().any(|s| matches!(s, Staged::RefusedBarrier)),
+                a.host.iter().any(|s| matches!(s, Staged::Escaped)),
+            )
+        });
         if class != HostClass::Pure {
+            // The crank can only abort, so a further effect would escape
+            // for nothing.
+            if refused_barrier {
+                return Err(HostCallError::MustAbort(crank));
+            }
             self.check_host_call_bounds(request.len(), 0)?;
+        } else if escaped {
+            // A pure call stages nothing, but one that escapes writes a
+            // durable record, so once a crank has an escape its pure calls
+            // are bounded too.
+            self.check_host_call_bounds(0, 0)?;
         }
         let ordinal = self.next_call_ordinal();
         if let HostClass::Outbound { .. } = class {
@@ -774,12 +819,13 @@ impl Transcript {
                     transaction.execute(
                         "INSERT INTO host_call
                        (request_seq, crank_id, call_ordinal, callback, class, handle_id)
-                     VALUES (?1, ?2, ?3, ?4, 'barrier', ?5)",
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                         params![
                             seq as i64,
                             crank as i64,
                             ordinal as i64,
                             callback,
+                            HostClass::Barrier.tag(),
                             handle.map(|h| h as i64)
                         ],
                     )?;
@@ -875,6 +921,9 @@ impl Transcript {
         };
         let closed = handle.filter(|_| outcome.closes);
         let callback = callback.to_string();
+        if let Some(active) = self.active.as_mut() {
+            active.host.push(Staged::Escaped);
+        }
         self.transact(Operation::HostEscape, Some(crank), |transaction| {
             if let Some((h, descriptor)) = &opened {
                 let seq = insert_event(transaction, crank, "host-escape", request)?;
@@ -1024,10 +1073,10 @@ impl Transcript {
             .query_row(
                 "SELECT h.crank_id, h.request_seq, h.callback FROM host_call h
                  JOIN crank c ON c.crank_id = h.crank_id
-                 WHERE h.class = 'barrier' AND h.cleared = 0 AND c.state != 'committed'
+                 WHERE h.class = ?2 AND h.cleared = 0 AND c.state != 'committed'
                    AND c.crank_id != ?1
                  ORDER BY h.request_seq LIMIT 1",
-                [active],
+                params![active, HostClass::Barrier.tag()],
                 |r| {
                     Ok(RecoveryStop::EscapedBarrier {
                         crank: r.get::<_, i64>(0)? as CrankId,
@@ -1065,8 +1114,8 @@ impl Transcript {
         self.check_healthy()?;
         let changed = self.transact(Operation::Recover, None, |transaction| {
             transaction.execute(
-                "UPDATE host_call SET cleared = 1 WHERE request_seq = ?1 AND class = 'barrier'",
-                [seq as i64],
+                "UPDATE host_call SET cleared = 1 WHERE request_seq = ?1 AND class = ?2",
+                params![seq as i64, HostClass::Barrier.tag()],
             )
         })?;
         if changed != 1 {
@@ -1210,14 +1259,14 @@ impl HostReplay {
                 ),
             });
         }
-        if rec.class == "barrier" && !rec.cleared {
+        if rec.class == HostClass::Barrier.tag() && !rec.cleared {
             return Err(ReplayStop::Barrier {
                 crank,
                 seq: rec.seq,
                 callback: rec.callback,
             });
         }
-        if rec.class == "outbound" {
+        if rec.class == (HostClass::Outbound { idempotent: true }).tag() {
             return Ok(HostReply::Deferred);
         }
         Ok(HostReply::Reply {

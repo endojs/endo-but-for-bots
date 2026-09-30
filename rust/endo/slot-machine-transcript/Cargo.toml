@@ -1,8 +1,5 @@
-# The Slot Machine per-worker write-ahead transcript
-# (designs/ironhorse-panic.md § Slot Machine per-worker write-ahead
-# transcript). A sibling crate rather than an endo module so it builds and
-# tests without the XS C toolchain the xsnap crate needs, and without the
-# engine crates: the transcript is supervisor state, not engine state.
+# Slot Machine per-worker write-ahead transcript (designs/ironhorse-panic.md).
+# A sibling crate so it builds without the XS toolchain or the engine crates.
 [package]
 name = "slot-machine-transcript"
 version = "0.1.0"

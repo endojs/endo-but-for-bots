@@ -4,6 +4,7 @@
 
 use std::cell::Cell;
 use std::path::Path;
+use std::rc::Rc;
 
 use slot_machine_transcript::{
     AdmissionError, AdmittedCallbacks, CallbackRegistry, ContentAddressedStore, HostCallError,
@@ -934,17 +935,68 @@ fn a_reply_past_the_byte_bound_is_refused_and_its_handle_recorded_broken() {
     assert!(handles[0].broken);
 }
 
+/// Run `statement` as a transactional write and report whether the
+/// authorizer denied it. The write swallows the error so the crank's own
+/// commit bookkeeping cannot stand in for the authorizer.
+fn authorizer_denies(statement: &'static str) -> bool {
+    let root = tempfile::tempdir().unwrap();
+    let callbacks = callbacks();
+    let (mut t, _) = open(root.path());
+    let denied = Rc::new(Cell::new(None));
+    t.begin_crank(b"d1").unwrap();
+    let observed = denied.clone();
+    t.host_call_transactional(&callbacks, "put-row", None, b"k=v", move |_| {
+        let observed = observed.clone();
+        let write: TransactionalWrite = Box::new(move |transaction| {
+            let outcome = transaction.execute_batch(statement);
+            observed.set(Some(matches!(
+                outcome,
+                Err(rusqlite::Error::SqliteFailure(e, _))
+                    if e.code == rusqlite::ErrorCode::AuthorizationForStatementDenied
+            )));
+            Ok(())
+        });
+        (reply(b"ok"), write)
+    })
+    .unwrap();
+    t.commit_crank().unwrap();
+    denied.get().expect("the write ran")
+}
+
 #[test]
 fn a_transactional_write_cannot_touch_the_transcript_tables() {
+    for statement in [
+        "SELECT count(*) FROM event",
+        "UPDATE crank SET state = 'aborted' WHERE crank_id = 0",
+        "INSERT INTO meta (key, value) VALUES ('k', 'v')",
+        "DELETE FROM host_handle",
+        "CREATE INDEX evil ON event (payload)",
+        "DROP TABLE snapshot",
+        "PRAGMA user_version = 7",
+        "SAVEPOINT s",
+        "ATTACH DATABASE ':memory:' AS other",
+        "REINDEX",
+    ] {
+        assert!(authorizer_denies(statement), "{statement} was allowed");
+    }
+    // The adapter's own tables stay writable.
+    for statement in [
+        "CREATE TABLE own (v INTEGER)",
+        "CREATE TABLE own (v INTEGER); INSERT INTO own VALUES (abs(-1)); SELECT count(*) FROM own",
+    ] {
+        assert!(!authorizer_denies(statement), "{statement} was denied");
+    }
+}
+
+#[test]
+fn a_denied_transactional_write_fails_the_commit() {
     let root = tempfile::tempdir().unwrap();
     let callbacks = callbacks();
     let (mut t, _) = open(root.path());
     t.begin_crank(b"d1").unwrap();
     t.host_call_transactional(&callbacks, "put-row", None, b"k=v", |_| {
-        let write: TransactionalWrite = Box::new(|transaction| {
-            transaction.execute("UPDATE crank SET state = 'committed'", [])?;
-            Ok(())
-        });
+        let write: TransactionalWrite =
+            Box::new(|transaction| transaction.execute_batch("SELECT count(*) FROM event"));
         (reply(b"ok"), write)
     })
     .unwrap();
@@ -990,8 +1042,17 @@ fn a_barrier_reply_past_the_byte_bound_forces_abort_and_stops_recovery() {
         t.host_call(&callbacks, "launch-missile", None, b"a", |_| reply(&[0; 8])),
         Err(HostCallError::Transcript(TranscriptError::Backpressure(_)))
     ));
-    // A later call does not reuse the barrier's durable ordinal.
-    t.host_call(&callbacks, "now", None, b"b", |_| reply(b"1"))
+    // The crank can only abort, so no further effect may run in it.
+    assert_eq!(
+        t.host_call(&callbacks, "launch-missile", None, b"b", |_| unreachable!()),
+        Err(HostCallError::MustAbort(1))
+    );
+    assert_eq!(
+        t.host_call(&callbacks, "now", None, b"c", |_| unreachable!()),
+        Err(HostCallError::MustAbort(1))
+    );
+    // A pure call has no effect to escape.
+    t.host_call(&callbacks, "hash", None, b"d", |_| reply(b"1"))
         .unwrap();
     // The crank may not commit past the refused barrier.
     assert!(matches!(
@@ -1004,6 +1065,44 @@ fn a_barrier_reply_past_the_byte_bound_forces_abort_and_stops_recovery() {
         matches!(&stop, RecoveryStop::EscapedBarrier { crank: 1, callback, .. } if callback == "launch-missile"),
         "expected an escaped barrier, got {stop:?}"
     );
+    // Only the one barrier ran, so clearing it clears the gate.
+    let RecoveryStop::EscapedBarrier { seq, .. } = stop else {
+        unreachable!()
+    };
+    t.clear_barrier(seq).unwrap();
+    assert_eq!(t.recovery_gate().unwrap(), Ok(()));
+}
+
+#[test]
+fn misclassified_escapes_per_crank_are_bounded() {
+    let root = tempfile::tempdir().unwrap();
+    let callbacks = callbacks();
+    let mut config = TranscriptConfig::new("w");
+    config.limits.max_host_calls = 2;
+    let blob_store = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
+    t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
+    t.begin_crank(b"d1").unwrap();
+    for _ in 0..2 {
+        assert_eq!(
+            t.host_call(&callbacks, "hash", None, b"a", |_| opens(
+                b"",
+                Some(b"cap:x")
+            )),
+            Err(HostCallError::Misclassified("hash".into()))
+        );
+    }
+    // Each escape was a durable record, so the crank's bound now refuses
+    // further calls, pure ones included, before the adapter runs.
+    assert!(matches!(
+        t.host_call(&callbacks, "hash", None, b"a", |_| unreachable!()),
+        Err(HostCallError::Transcript(TranscriptError::Backpressure(_)))
+    ));
+    assert!(matches!(
+        t.host_call(&callbacks, "now", None, b"b", |_| unreachable!()),
+        Err(HostCallError::Transcript(TranscriptError::Backpressure(_)))
+    ));
+    assert_eq!(t.open_handles().unwrap().len(), 2);
 }
 
 #[test]
