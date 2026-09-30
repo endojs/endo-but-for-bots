@@ -42,7 +42,7 @@ export type PrimitiveStyle = AtomStyle;
 export type ContainerStyle = 'copyRecord' | 'copyArray' | 'tagged';
 
 export type PassStyle =
-  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise';
+  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'sturdyRef';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -123,6 +123,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
+  (p: SturdyRef): 'sturdyRef';
   (p: readonly any[]): 'copyArray';
   // A `Uint8Array` is also `Iterable<number>`; place its byteArray
   // overload before the Iterable-as-remotable fallback so the more
@@ -183,6 +184,18 @@ export type RemotableObject<I extends InterfaceSpec = string> = PassStyled<
 // to type method names of Remotables.
 // export type RemotableMethodName = string | symbol;
 export type RemotableMethodName = PropertyKey;
+
+/**
+ * A SturdyRef is passable, analogous to a presence: it has object identity and
+ * no data. `passStyleOf` returns `'sturdyRef'` for a value that the realm's
+ * `SturdyRef.isSturdyRef` brand check accepts (see `@endo/sturdyref`). The ref
+ * is frozen, has no own properties, and inherits only `constructor` and
+ * `Symbol.toStringTag` from `SturdyRef.prototype`. What it refers to is known
+ * only to the handler it was constructed with.
+ */
+export interface SturdyRef {
+  readonly [Symbol.toStringTag]: 'SturdyRef';
+}
 
 /**
  * The authority-bearing leaves of a Passable's pass-by-copy superstructure.
