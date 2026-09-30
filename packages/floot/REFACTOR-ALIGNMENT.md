@@ -35,9 +35,12 @@ boundary. Three old-format sessions were retired after workspace-root retention;
 Secrets and renewal owners remain intact. The new source passes 777 Floot tests.
 Claude/Codex retain native checkpoints on both restoration turns; Claude's
 initial tool-heavy lifecycle seed lacked one and remains a capture follow-up.
-Next simplification: remove Claude argument normalization from Floot context
-projection by reusing the adapter's conversion at the local composition boundary,
-without changing journal evidence or adding a durable/remote codec mechanism.
+Source cleanup `c3089ee18` removes duplicate Claude argument normalization from
+Floot context projection by reusing the adapter's conversion at composition.
+Journal evidence is unchanged; no durable/remote codec mechanism is added.
+The 784 Floot tests and 27 Claude transcript tests pass, including codec selection
+after journal reconstruction; types, lint, docs and independent review pass.
+This cleanup is pushed but not deployed.
 Detailed current evidence is in [the architecture audit](ARCHITECTURE-AUDIT.md)
 and endo-host `ops/explicit-journal-deployment-20260924.md`.
 

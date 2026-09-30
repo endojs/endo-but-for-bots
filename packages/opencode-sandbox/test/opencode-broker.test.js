@@ -3,14 +3,13 @@ import '@endo/init';
 import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { makeProviderBrokerKit } from '@endo/hosted-agent/provider-broker-service.js';
 import { admitsModels } from '@endo/hosted-agent/test/admits-models.js';
 
 import {
   OPENROUTER_INFERENCE_PATH,
   OPENROUTER_ORIGIN,
   buildOpencodeBrokerPolicy,
-  makeOpencodeBroker,
-  makeOpencodeBrokerKit,
 } from '../src/opencode-broker.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
@@ -72,7 +71,9 @@ const makeFakeRuntime = () => {
 const OPENCODE_BROKER_ACCOUNT = 'openrouter-main';
 
 const brokerOptions = (runtime, overrides = {}) => ({
-  accountAuthority: OPENCODE_BROKER_ACCOUNT,
+  accountRef: OPENCODE_BROKER_ACCOUNT,
+  label: 'OpenCode',
+  policy: buildOpencodeBrokerPolicy(),
   secret: Far('secret', {
     async readBase64() {
       return btoa('openrouter-key');
@@ -90,8 +91,12 @@ const brokerOptions = (runtime, overrides = {}) => ({
   ...overrides,
 });
 
-const makeBroker = (runtime, overrides = {}) =>
-  makeOpencodeBroker(brokerOptions(runtime, overrides));
+const startBroker = async (t, runtime, overrides = {}) => {
+  const kit = makeProviderBrokerKit(brokerOptions(runtime, overrides));
+  t.teardown(() => kit.close());
+  const broker = await kit.start();
+  return { broker, close: kit.close };
+};
 
 test('policy pins the OpenRouter origin, route, and strip handling', t => {
   const policy = buildOpencodeBrokerPolicy();
@@ -111,7 +116,7 @@ test('policy pins the OpenRouter origin, route, and strip handling', t => {
 
 test('leases report broker-only evidence and listener limits', async t => {
   const runtime = makeFakeRuntime();
-  const broker = await makeBroker(runtime);
+  const { broker, close } = await startBroker(t, runtime);
   t.is(broker.imageRef, `localhost/opencode-sandbox@${digest}`);
 
   const lease = await broker.issuer({
@@ -147,13 +152,12 @@ test('leases report broker-only evidence and listener limits', async t => {
   });
   await E(lease).revoke();
   t.is(runtime.stops(), 1);
-  await broker.dispose();
+  await close();
   t.is(runtime.disposes(), 1);
 });
 
 test('denies leases for other origins, accounts, or models', async t => {
-  const broker = await makeBroker(makeFakeRuntime());
-  t.teardown(() => broker.dispose());
+  const { broker } = await startBroker(t, makeFakeRuntime());
   await t.throwsAsync(
     () =>
       broker.issuer({
@@ -205,13 +209,18 @@ test('denies leases for other origins, accounts, or models', async t => {
 test('accepts a property-less remote-presence secret at composition', async t => {
   // A CapTP SecretBlob presence has no own properties; composition must not
   // introspect it synchronously, or every real deployment fails here.
-  const broker = await makeBroker(makeFakeRuntime(), { secret: harden({}) });
+  const { broker } = await startBroker(t, makeFakeRuntime(), {
+    secret: harden({}),
+  });
   t.truthy(broker.issuer);
 });
 
 test('refuses unpinned images and invalid operator identity', async t => {
   const runtime = makeFakeRuntime();
   const base = {
+    label: 'OpenCode',
+    policy: buildOpencodeBrokerPolicy(),
+    accountRef: OPENCODE_BROKER_ACCOUNT,
     secret: Far('secret', {
       async readBase64() {
         return btoa('openrouter-key');
@@ -225,43 +234,42 @@ test('refuses unpinned images and invalid operator identity', async t => {
     admits: admitsModels(models),
     runtime,
   };
-  await t.throwsAsync(
-    () => makeOpencodeBroker({ ...base, imageDigest: 'localhost/opencode' }),
+  t.throws(
+    () => makeProviderBrokerKit({ ...base, imageDigest: 'localhost/opencode' }),
     { message: /digest must be pinned/ },
   );
-  await t.throwsAsync(
-    () => makeOpencodeBroker({ ...base, ownerId: '../escape' }),
-    { message: /owner id is invalid/ },
-  );
-  await t.throwsAsync(
-    () => makeOpencodeBroker({ ...base, directory: 'relative/dir' }),
+  t.throws(() => makeProviderBrokerKit({ ...base, ownerId: '../escape' }), {
+    message: /owner id is invalid/,
+  });
+  t.throws(
+    () => makeProviderBrokerKit({ ...base, directory: 'relative/dir' }),
     { message: /directory must be absolute/ },
   );
-  await t.throwsAsync(
-    () => makeOpencodeBroker({ ...base, listenerImageRef: 'localhost/x' }),
+  t.throws(
+    () => makeProviderBrokerKit({ ...base, listenerImageRef: 'localhost/x' }),
     { message: /listener image must be digest-pinned/ },
   );
-  await t.throwsAsync(
+  t.throws(
     () =>
-      makeOpencodeBroker({
+      makeProviderBrokerKit({
         ...base,
         imageRef: `localhost/opencode-sandbox@${`sha256:${'b'.repeat(64)}`}`,
       }),
     { message: /image ref must match its digest/ },
   );
-  await t.throwsAsync(
-    () => makeOpencodeBroker({ ...base, ownerId: `a${'b'.repeat(64)}` }),
+  t.throws(
+    () => makeProviderBrokerKit({ ...base, ownerId: `a${'b'.repeat(64)}` }),
     { message: /owner id is invalid/ },
   );
-  await t.throwsAsync(
-    () => makeOpencodeBroker({ ...base, secret: { readBase64: null } }),
+  t.throws(
+    () => makeProviderBrokerKit({ ...base, secret: { readBase64: null } }),
     { message: /SecretBlob read facet/ },
   );
-  await t.throwsAsync(() => makeOpencodeBroker({ ...base, secret: null }), {
+  t.throws(() => makeProviderBrokerKit({ ...base, secret: null }), {
     message: /SecretBlob read facet/,
   });
-  await t.throwsAsync(
-    () => makeOpencodeBroker({ ...base, fetch: /** @type {any} */ (null) }),
+  t.throws(
+    () => makeProviderBrokerKit({ ...base, fetch: /** @type {any} */ (null) }),
     {
       message: /fetch authority/,
     },
@@ -270,8 +278,7 @@ test('refuses unpinned images and invalid operator identity', async t => {
 
 test('public grants use shared egress and revocation removes its authority', async t => {
   const runtime = makeFakeRuntime();
-  const broker = await makeBroker(runtime, { publicInternet: true });
-  t.teardown(broker.dispose);
+  const { broker } = await startBroker(t, runtime, { publicInternet: true });
   const grant = await broker.issuer({
     sessionId: 'public-session',
     providerOrigin: OPENROUTER_ORIGIN,
@@ -308,7 +315,7 @@ test('broker kit fences same-tick startup before opening its runtime', async t =
       closes += 1;
     },
   };
-  const kit = makeOpencodeBrokerKit(brokerOptions(undefined, { runtimeKit }));
+  const kit = makeProviderBrokerKit(brokerOptions(undefined, { runtimeKit }));
   t.teardown(kit.close);
   t.is(opens, 0);
   t.is(closes, 0);
@@ -342,7 +349,7 @@ test('broker retains late runtime acquisition and fences issuer construction', a
       await runtime.dispose();
     },
   };
-  const kit = makeOpencodeBrokerKit(
+  const kit = makeProviderBrokerKit(
     brokerOptions(undefined, {
       runtimeKit,
       makeIssuer: () => {
@@ -377,7 +384,7 @@ test('failed issuer construction retains failed runtime cleanup for retry', asyn
   let failClose = true;
   let closes = 0;
   const runtime = makeFakeRuntime();
-  const kit = makeOpencodeBrokerKit(
+  const kit = makeProviderBrokerKit(
     brokerOptions(runtime, {
       runtime: {
         ...runtime,
@@ -408,7 +415,7 @@ test('broker retries failed grant revocation without repeating released runtime 
   let failStop = true;
   let stops = 0;
   const runtime = makeFakeRuntime();
-  const kit = makeOpencodeBrokerKit(
+  const kit = makeProviderBrokerKit(
     brokerOptions({
       ...runtime,
       start: async input => {

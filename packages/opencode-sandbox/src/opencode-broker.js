@@ -18,7 +18,6 @@ import {
   DEFAULT_MAX_REQUEST_BYTES,
   DEFAULT_MAX_RESPONSE_BYTES,
   DEFAULT_REQUEST_TIMEOUT_MS,
-  makeProviderBrokerKit,
 } from '@endo/hosted-agent/provider-broker-service.js';
 
 /** @import { BrokerPolicy } from '@endo/hosted-agent/provider-broker.js' */
@@ -69,46 +68,3 @@ export const buildOpencodeBrokerPolicy = ({
     maxResponseBytes,
   });
 };
-
-/**
- * Construct an inert OpenRouter broker owner over the shared provider broker
- * kit (`@endo/hosted-agent/provider-broker-service.js`), bound to the
- * OpenRouter policy and account. Retain the kit before start().
- *
- * @param {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'> & { accountAuthority: string }} options
- *   `accountAuthority` is the account authority the broker serves, the id
- *   its grants report (`@endo/hosted-agent/account-authority.js`).
- */
-export const makeOpencodeBrokerKit = ({ accountAuthority, ...options }) =>
-  makeProviderBrokerKit({
-    ...options,
-    label: 'OpenCode',
-    policy: buildOpencodeBrokerPolicy(),
-    accountRef: accountAuthority,
-  });
-harden(makeOpencodeBrokerKit);
-
-/**
- * Transitional convenience entrypoint. If startup and rollback both fail, the
- * rejected promise does not retain a public cleanup handle or prove release.
- * Native owners must retain makeOpencodeBrokerKit() before starting instead.
- * @param {Parameters<typeof makeOpencodeBrokerKit>[0]} options
- */
-export const makeOpencodeBroker = async options => {
-  const kit = makeOpencodeBrokerKit(options);
-  try {
-    const broker = await kit.start();
-    return harden({ ...broker, dispose: kit.close });
-  } catch (error) {
-    try {
-      await kit.close();
-    } catch (cleanupError) {
-      throw AggregateError(
-        [error, cleanupError],
-        'OpenCode broker startup and cleanup failed',
-      );
-    }
-    throw error;
-  }
-};
-harden(makeOpencodeBroker);

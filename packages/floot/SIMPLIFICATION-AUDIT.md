@@ -210,6 +210,32 @@ Clean root declarations, all 14 type-contract tasks and documentation pass.
 Independent adversarial review approves the ownership split and tests.
 Not deployed; no journal schema or formula identity changes.
 
+Removed test-only vendor broker constructors: Claude's kit wrapper
+and unused service-kit wrapper, plus OpenCode's kit wrapper and transitional
+eager-start convenience entrypoint.
+Production service agents already compose `makeProviderBrokerServiceKit` directly
+with the vendor policy builder; those formula entrypoints and policies remain.
+Existing broker tests are retargeted to shared constructors, preserving admission,
+credential stripping, network and lifecycle assertions.
+This deletes 89 runtime lines without introducing replacement production wrappers.
+All 519 Claude and 299 OpenCode tests pass, including the 18 broker tests.
+Claude's package typecheck passes; OpenCode has no package TypeScript project.
+Both package lint runs have zero errors; the root documentation gate passes.
+Independent adversarial review approves the deletion and retained assertions.
+No deployment is claimed.
+
+Next verified compatibility mismatch: Floot's direct-provider constructor accepts
+both `FLOOT_*` and `LAL_*` fields even though its sole production caller already
+has a structured provider/model config and a separately resolved Secret.
+Neither setup nor that caller supplies a custom host.
+An explicit `lal` or an unknown provider currently falls through to default local
+Ollama, ignoring the caller's Floot model and credential fields.
+Replace this internal environment translation with explicit provider/model/key
+arguments, remove legacy aliases and buffered fallback, and reject unsupported
+provider kinds before setup acquires resources.
+Preserve Anthropic/OpenRouter behavior and leave Lal's own environment API alone.
+This follow-up is not implemented yet.
+
 | Mechanisms | Different responsibilities | Decision |
 |---|---|---|
 | Floot lifecycle registry; daemon session record | The registry stores application identity, captured configuration and references. The daemon record stores the execution plan, dependency identities and incarnation lifecycle. | Retain. Neither is a second conversation store; runtime removal and conversation deletion are different operations. |

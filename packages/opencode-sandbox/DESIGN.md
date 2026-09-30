@@ -876,8 +876,9 @@ New package `packages/opencode-sandbox/`.
 
 ## Shared public egress integration
 
-The host-only `makeOpencodeBroker` composition accepts `publicInternet: true`
-to issue separately revocable public-egress capabilities alongside inference.
+The host-only service agent supplies the OpenRouter policy to the shared
+`makeProviderBrokerServiceKit`, accepting `publicInternet: true` to issue
+separately revocable public-egress capabilities alongside inference.
 It uses the shared hosted-agent listeners and destination filtering; the guest
 still receives no real provider credential.
 The hosted backend's public session path uses it: `makePublicNetworkEnvironment`

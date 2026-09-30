@@ -33,6 +33,10 @@ Floot's composition boundary, deleting the duplicate conversion from context
 projection. Floot retains evidence matching; non-Claude formats compare exact
 argument text. The 784-test Floot suite and 27 Claude transcript tests pass;
 independent review approves. This cleanup is not yet deployed.
+The next source cleanup deletes four unused/test-only Claude/OpenCode broker
+constructors (89 runtime lines). Production already uses shared broker services;
+vendor policies and formula entrypoints remain unchanged.
+All 519 Claude and 299 OpenCode tests pass; independent review approves.
 The preceding simplification slice removes Codex's
 second hosted model-list authority in favor of the same account catalog used by
 admission, deletes its native-descriptor normalization API, removes OpenCode's

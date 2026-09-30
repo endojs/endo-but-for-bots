@@ -17,8 +17,6 @@ import { Fail, q } from '@endo/errors';
 import {
   DEFAULT_MAX_REQUEST_BYTES,
   DEFAULT_MAX_RESPONSE_BYTES,
-  makeProviderBrokerKit,
-  makeProviderBrokerServiceKit,
 } from '@endo/hosted-agent/provider-broker-service.js';
 
 import { assertCredentialKind } from './claude-credential-kinds.js';
@@ -119,46 +117,3 @@ export const buildClaudeBrokerPolicy = ({
   });
 };
 harden(buildClaudeBrokerPolicy);
-
-/**
- * `accountAuthority` is the account authority the broker serves, the id
- * its grants report (`@endo/hosted-agent/account-authority.js`).
- * @typedef {Omit<Parameters<typeof makeProviderBrokerKit>[0], 'label' | 'policy' | 'accountRef'> & { credentialKind: string, anthropicBeta?: string, accountAuthority: string }} ClaudeBrokerOptions
- */
-
-/**
- * Construct an inert Anthropic broker owner. Retain the kit before start().
- * @param {ClaudeBrokerOptions} options
- */
-export const makeClaudeBrokerKit = ({
-  credentialKind,
-  anthropicBeta,
-  accountAuthority,
-  ...options
-}) =>
-  makeProviderBrokerKit({
-    ...options,
-    label: 'Claude',
-    policy: buildClaudeBrokerPolicy({ credentialKind, anthropicBeta }),
-    accountRef: accountAuthority,
-  });
-harden(makeClaudeBrokerKit);
-
-/**
- * Retain one operator broker before exposing inert per-session scope facets;
- * see `@endo/hosted-agent/provider-broker-service.js`.
- * @param {ClaudeBrokerOptions} options
- */
-export const makeClaudeBrokerServiceKit = ({
-  credentialKind,
-  anthropicBeta,
-  accountAuthority,
-  ...options
-}) =>
-  makeProviderBrokerServiceKit({
-    ...options,
-    label: 'Claude',
-    policy: buildClaudeBrokerPolicy({ credentialKind, anthropicBeta }),
-    accountRef: accountAuthority,
-  });
-harden(makeClaudeBrokerServiceKit);

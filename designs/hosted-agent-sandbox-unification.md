@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-12 |
-| **Updated** | 2026-09-25 |
+| **Updated** | 2026-09-30 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 | **Source** | Review of PR #1248 and subsequent simplicity and authority-lifetime discussion |
@@ -557,9 +557,11 @@ Codex subscription turns retain their runtime instead of renewing it each turn,
 and the OpenCode broker uses the same grant contract.
 Credential refresh remains separate; lifetime token/dollar budgets remain deferred.
 
-The OpenCode broker and shared provider-listener runtime now expose inert retained kits:
-`makeOpencodeBrokerKit` provides `start`/`close`, and
+The shared broker and provider-listener runtime expose inert retained kits:
+`makeProviderBrokerKit` provides `start`/`close`, and
 `makePodmanProviderListenerRuntimeKit` provides `open`/`close`.
+Current Claude/OpenCode service agents compose the shared service kit with their
+vendor policy builders; test-only vendor constructor wrappers are retired.
 The broker retains the runtime kit before opening it, fences grant admission during
 shutdown, and retries failed issuer/runtime release without repeating successful stages.
 The runtime retains initialization file handles, lock claims, recovery reservations,
