@@ -47,7 +47,6 @@ export const registerAlarmIntegration = (test, kind) => {
         return { supervisor, client };
       };
       let host = await start();
-      await host.client.call('clockGrant', 'clock');
       t.is(
         await host.client.call('evaluate', "E(inventory.get('clock')).now()"),
         '1000n',

@@ -92,7 +92,7 @@ const makeFakeIntroductions = () => {
 /** @param {ReturnType<typeof makeFakeIntroductions>} [network] */
 const makeMailbox = (network = makeFakeIntroductions()) =>
   makeMailAddressBook(
-    makeProtocolMailbox(makeObservableMap),
+    constant(makeProtocolMailbox(makeObservableMap)),
     makeObservableMap(),
     makeMailContact,
     network.introductions,
@@ -119,6 +119,13 @@ const deferred = () => {
   });
   return { promise, resolve, reject };
 };
+
+/**
+ * The mailbox is looked up at each use; these tests hold one.
+ * @template T
+ * @param {T} value
+ */
+const constant = value => () => value;
 
 test('mailbox invitation is single-use and idempotent for the same receiver', async t => {
   t.timeout(10_000);
@@ -262,7 +269,7 @@ test('a failed acceptance can be retried under the same name with accept', async
   const network = makeFakeIntroductions();
   const contacts = makeObservableMap();
   const mailbox = makeMailAddressBook(
-    makeProtocolMailbox(makeObservableMap),
+    constant(makeProtocolMailbox(makeObservableMap)),
     contacts,
     makeMailContact,
     network.introductions,
@@ -629,8 +636,8 @@ test('mailbox sends directly to a contact without any name registry', async t =>
   t.timeout(10_000);
   const alice = makeProtocolMailbox(makeObservableMap);
   const bob = makeProtocolMailbox(makeObservableMap);
-  const bobContact = makeMailContact(alice);
-  const aliceContact = makeMailContact(bob);
+  const bobContact = makeMailContact(constant(alice));
+  const aliceContact = makeMailContact(constant(bob));
   const invitation = await E(bobContact).invite();
   await E(aliceContact).accept(invitation);
   // eslint-disable-next-line no-await-in-loop
@@ -658,7 +665,7 @@ test('renaming a workspace contact preserves the contact and pending messages', 
   const mailbox = makeProtocolMailbox(makeObservableMap);
   const contacts = makeObservableMap();
   const book = makeMailAddressBook(
-    mailbox,
+    constant(mailbox),
     contacts,
     makeMailContact,
     network.introductions,
@@ -691,8 +698,8 @@ test('two mailboxes sharing a correspondent do not reuse delivery sequences', as
   const alice = makeProtocolMailbox(makeObservableMap);
   const secondSender = makeProtocolMailbox(makeObservableMap);
   const bob = makeProtocolMailbox(makeObservableMap);
-  const bobContact = makeMailContact(alice);
-  const aliceContact = makeMailContact(bob);
+  const bobContact = makeMailContact(constant(alice));
+  const aliceContact = makeMailContact(constant(bob));
   await E(aliceContact).accept(await E(bobContact).invite());
   // eslint-disable-next-line no-await-in-loop
   while ((await E(aliceContact).status()).status !== 'ready') {
@@ -719,7 +726,7 @@ test('invitation ownership survives reassignment of its pet name', async t => {
   const mailbox = makeProtocolMailbox(makeObservableMap);
   const contacts = makeObservableMap();
   const book = makeMailAddressBook(
-    mailbox,
+    constant(mailbox),
     contacts,
     makeMailContact,
     network.introductions,
@@ -728,7 +735,7 @@ test('invitation ownership survives reassignment of its pet name', async t => {
   // awaiting publication of the invitation.
   const pending = book.invite('Bob');
   const original = contacts.get('Bob');
-  contacts.set('Bob', makeMailContact(mailbox));
+  contacts.set('Bob', makeMailContact(constant(mailbox)));
   const text = await pending;
   const invitation = network.invitationOf(text);
   t.not(contacts.get('Bob'), original);

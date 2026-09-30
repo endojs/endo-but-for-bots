@@ -24,13 +24,17 @@ import harden from '@endo/harden';
  * A pet name whose introduction failed or was revoked keeps its contact, and
  * `invite` or `accept` with that name retries on the same contact.
  *
- * @param {Mailbox} mailbox
+ * The mailbox is looked up at each use rather than captured: it is an
+ * installation the supervisor provides, and one provided afresh after a
+ * removal must be the one this book and its contacts speak to.
+ *
+ * @param {() => Mailbox} provideMailbox
  * @param {ObservableMap} contacts
- * @param {(mailbox: Mailbox) => MailContact} makeContact
+ * @param {(provideMailbox: () => Mailbox) => MailContact} makeContact
  * @param {MailIntroductions} introductions
  */
 export const makeMailAddressBook = (
-  mailbox,
+  provideMailbox,
   contacts,
   makeContact,
   introductions,
@@ -69,7 +73,7 @@ export const makeMailAddressBook = (
     assertName(name);
     let contact = contacts.get(name);
     if (contact === undefined) {
-      contact = makeContact(mailbox);
+      contact = makeContact(provideMailbox);
       contacts.set(name, contact);
     }
     return contact;
@@ -160,20 +164,20 @@ export const makeMailAddressBook = (
       const contact = contacts.get(name);
       if (!contact || (await E(contact).status()).status !== 'ready')
         throw Error('Contact is not ready');
-      return E(mailbox).send(contact, text, capability);
+      return E(provideMailbox()).send(contact, text, capability);
     },
     inbox: async () =>
-      (await E(mailbox).inbox()).map(message => ({
+      (await E(provideMailbox()).inbox()).map(message => ({
         ...message,
         from: label(message.from),
       })),
     outbox: async () =>
-      (await E(mailbox).outbox()).map(message => ({
+      (await E(provideMailbox()).outbox()).map(message => ({
         ...message,
         to: label(message.to),
       })),
-    take: id => E(mailbox).take(id),
-    discard: id => E(mailbox).discard(id),
+    take: id => E(provideMailbox()).take(id),
+    discard: id => E(provideMailbox()).discard(id),
   });
 };
 harden(makeMailAddressBook);

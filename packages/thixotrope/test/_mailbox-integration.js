@@ -28,7 +28,7 @@ export const registerMailboxIntegration = (test, kind) => {
     test.serial(
       `${recovery ? 'two supervisors recover offline mail' : 'two supervisors exchange capabilities through the mail TUI'} (${kind})`,
       async t => {
-        t.timeout(180_000);
+        t.timeout(recovery ? 240_000 : 180_000);
         const root = await mkdtemp('/tmp/thix-mail-');
         t.teardown(() => rm(root, { recursive: true, force: true }));
         /** @param {string} who */
@@ -222,6 +222,76 @@ export const registerMailboxIntegration = (test, kind) => {
         );
         await until(
           async () => (await alice.client.call('inbox')).length === 1,
+        );
+
+        // Removing the mailbox loses its messages, not the address book or
+        // its contacts: a delivery meanwhile fails with the reason, and the
+        // next start provides a fresh mailbox, which they speak to from then
+        // on.
+        /** @param {{client: any}} host */
+        const mailboxVatOf = async host =>
+          (await host.client.call('status')).workers.find(
+            (/** @type {{debugLabel?: string}} */ worker) =>
+              worker.debugLabel === 'app:mailbox',
+          )?.workerId;
+        const removedMailbox = await mailboxVatOf(bob);
+        t.truthy(removedMailbox);
+        t.true(await bob.client.call('remove', 'mailbox'));
+        await t.throwsAsync(() => bob.client.call('inbox'), {
+          message: /no mailbox/,
+        });
+        t.is(
+          await alice.client.call(
+            'send',
+            'renamed bob',
+            'Into the void',
+            'counter',
+          ),
+          '3',
+        );
+        await until(async () =>
+          (await alice.client.call('outbox')).some(
+            entry => entry.id === '3' && entry.status === 'failed',
+          ),
+        );
+        t.regex(
+          (await alice.client.call('outbox')).find(entry => entry.id === '3')
+            .error,
+          /no mailbox/,
+        );
+        bob.client.close();
+        await bob.supervisor.close();
+        bob = await start('bob');
+        t.like(
+          (await bob.client.call('installations')).find(
+            entry => entry.name === 'mailbox',
+          ),
+          { status: 'ready' },
+        );
+        t.not(await mailboxVatOf(bob), removedMailbox);
+        t.deepEqual(await bob.client.call('inbox'), []);
+        t.like((await bob.client.call('contacts'))[0], {
+          name: 'alice',
+          status: 'ready',
+        });
+        t.is(
+          await alice.client.call(
+            'send',
+            'renamed bob',
+            'After the new mailbox',
+            'counter',
+          ),
+          '4',
+        );
+        await until(async () => (await bob.client.call('inbox')).length === 1);
+        t.deepEqual(
+          (await bob.client.call('inbox')).map(entry => entry.text),
+          ['After the new mailbox'],
+        );
+        t.true(await bob.client.call('takeMessage', '1', 'again'));
+        t.is(
+          await bob.client.call('evaluate', "E(inventory.get('again')).read()"),
+          '2n',
         );
       },
     );
