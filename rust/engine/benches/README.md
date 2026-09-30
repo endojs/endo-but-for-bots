@@ -105,7 +105,9 @@ That is the ratchet: each refactor that lands lowers the marks it claims to lowe
 baseline follows.
 The marks are native; they show whether a refactor shrinks frames, and they do not predict
 which cases trap on Wasmtime or V8, whose frames differ (report §1.2-§1.4).
-The wasm lanes of Phase 0 stay separate work.
+The wasm lanes of Phase 0, which run the same corpus under Wasmtime, Node and
+workerd and report per-function frame sizes, live in `rust/engine/stack-lanes/`
+(its README describes them).
 
 ## XS microbenchmark comparison
 

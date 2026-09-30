@@ -7,12 +7,12 @@ A host that traps is recorded as a trap, never as an output.
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 LANES = ROOT / "stack-lanes"
 NODE_RUNNER = LANES / "node/run.cjs"
-
 
 class Outcome:
     """One probe invocation on one host."""
@@ -25,6 +25,8 @@ class Outcome:
         self.shadow_stack = None
         # The shadow stack's size as linked, read from the module by a painting host.
         self.shadow_stack_top = None
+        # A trap's wasm frames as function indices, innermost first, when asked for.
+        self.trap_frames = None
 
     @property
     def trapped(self):
@@ -47,6 +49,8 @@ class HarnessError(Exception):
 NATIVE_TRAP = ("has overflowed its stack",)
 WASMTIME_TRAP = ("wasm trap:",)
 NODE_TRAP = ("TRAP: ",)  # node/run.cjs, for RangeError and WebAssembly.RuntimeError only
+# A wasm frame in V8's stack trace names its function by index.
+WASM_FRAME = re.compile(r"wasm-function\[(\d+)\]")
 
 
 def _outcome(completed, trap_markers, signal_is_trap):
@@ -95,11 +99,16 @@ def run_wasmtime(wasmtime, wasm, args, max_wasm_stack, stdin=None, timeout=900):
     return _outcome(completed, WASMTIME_TRAP, signal_is_trap=False)
 
 
-def run_node(wasm, args, v8_flags=(), stdin=None, timeout=900, node="node", paint=False):
+def run_node(wasm, args, v8_flags=(), stdin=None, timeout=900, node="node", paint=False, trap_frames=0):
     """Node's WASI preview1 through node/run.cjs, with exnref enabled. With
-    `paint`, the outcome carries the shadow stack's high-water mark in bytes."""
+    `paint`, the outcome carries the shadow stack's high-water mark in bytes;
+    with `trap_frames`, the innermost that many wasm frames of a trap."""
     command = [node, "--experimental-wasm-exnref", *v8_flags, str(NODE_RUNNER), str(wasm), *args]
-    env = dict(os.environ, PAINT_SHADOW_STACK="1") if paint else None
+    env = dict(os.environ)
+    if paint:
+        env["PAINT_SHADOW_STACK"] = "1"
+    if trap_frames:
+        env["TRAP_STACK_FRAMES"] = str(trap_frames)
     completed = _run(command, stdin, timeout, env=env)
     if completed is None:
         return Outcome(trap=f"timeout after {timeout}s", timed_out=True)
@@ -109,7 +118,21 @@ def run_node(wasm, args, v8_flags=(), stdin=None, timeout=900, node="node", pain
             outcome.shadow_stack = int(line.split(": ", 1)[1])
         elif line.startswith("SHADOW_STACK_TOP: "):
             outcome.shadow_stack_top = int(line.split(": ", 1)[1])
+    if trap_frames:
+        outcome.trap_frames = trap_frames_from(completed.stderr)
     return outcome
+
+
+def trap_frames_from(stderr):
+    """The wasm function indices of a trap's `TRAP FRAME:` lines, innermost
+    first; frames that are not wasm (the launcher's own) are skipped."""
+    frames = []
+    for line in stderr.splitlines():
+        if line.startswith("TRAP FRAME: "):
+            m = WASM_FRAME.search(line)
+            if m:
+                frames.append(int(m.group(1)))
+    return frames
 
 
 def dump_cases(probe):

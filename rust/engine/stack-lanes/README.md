@@ -16,7 +16,7 @@ output line byte for byte against a native reference produced in the same run.
 | `lane_a.py` | **Lane A**: native against Wasmtime at a fixed `max_wasm_stack`. |
 | `lane_b_node.py` | **Lane B**: native against Node's V8 with each tier pinned at 440 KiB, and eager tier-up per function at 500 KiB. Paints the shadow stack. |
 | `lane_b_workerd.py`, `workerd/` | **Lane B**: native against workerd with `v8Flags` pinned, at the default stack and at 866 KB. The probe is bundled into a Worker with a WASI shim; one instance per request. |
-| `lane_c.py`, `wasmbin.py` | **Lane C**: per-function frame sizes from five compilers, per-family bytes per level and per budget unit, one level's function chain per family, and the worst per-function tier mix against lane B's margin. |
+| `lane_c.py`, `wasmbin.py` | **Lane C**: per-function frame sizes from five compilers, per-family bytes per level and per budget unit, one level of the deepest recursion per family (from a trap's stack trace under Node), the chains' frames summed against the measured slopes, and the worst per-function tier mix against lane B's headroom. |
 | `sweep.py`, `sweep-pins.json` | The grammar sweep: every folding or right-nested production bisected to its ceiling; a shape with no ceiling is classified by its compile-stack slope. Its pins are also tests in `ironhorse-compile/tests/recursion_bounds.rs`. |
 | `expected-traps/` | One list per host configuration of the cases allowed to trap there. |
 | `../benches/stack_height.py` | The native ratchet over the same corpus (`benches/README.md`). |
@@ -26,7 +26,9 @@ output line byte for byte against a native reference produced in the same run.
 Toolchain: the pinned Rust with `rust-src`, `wasm32-wasip1` and `llvm-tools`
 (`rustup component add rust-src llvm-tools --toolchain 1.91.1-x86_64-unknown-linux-gnu`,
 `rustup target add wasm32-wasip1 --toolchain 1.91.1-x86_64-unknown-linux-gnu`),
-the Wasmtime 49 CLI (`$WASMTIME`), Node 22, and workerd (`npm install workerd`, `$WORKERD`).
+the Wasmtime 49 CLI (`$WASMTIME`), Node 22, and workerd (`$WORKERD`; the binary
+is in the platform package, `npm install @cloudflare/workerd-linux-64`, which
+the `workerd` wrapper package resolves only in a postinstall).
 
 ```sh
 cd rust/engine/stack-lanes
@@ -77,11 +79,16 @@ Node's minima do not predict workerd's, and neither predicts a browser; the
 lanes exist because the hosts differ (report §1.3).
 The workerd lane pins both tiers; default tiering is timing-dependent and a
 per-function mix can need more than either pure tier, which lane C's tier-mix
-model bounds and lane B's margins absorb.
+model bounds and lane B's headroom absorbs.
+Lane C is trend only: its frame tables, slopes and chains are the record, and
+the run fails only when a collector reads nothing.
 
-Two findings from building the lanes on this tree, both recorded in `cases.rs`:
-the report's `flat-fast` ceiling of 1,022 was a probe depth (the compact path
-halts at 2,015 like the generic one), and `instanceof` through bound functions
-halts at the budget with or without a `@@hasInstance` in the chain, so the
-report's U1 composition is a cross-host check of that halt rather than an
-accepted program.
+Three findings from building the lanes on this tree, two recorded in `cases.rs`: the report's `flat-fast` ceiling of 1,022 was a
+probe depth (the compact path halts at 2,015 like the generic one), and
+`instanceof` through bound functions halts at the budget with or without a
+`@@hasInstance` in the chain, so the report's U1 composition is a cross-host
+check of that halt rather than an accepted program.
+Lane C also shows that for the left-folded chain kinds (`&&`, `||`, `??`,
+comparison, computed member, `else if`) the deepest recursion at the ceiling
+is the post-parse `duplicate_proto_setter_line` walk, one frame per level,
+not the parser.

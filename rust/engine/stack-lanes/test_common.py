@@ -121,5 +121,23 @@ class SelectCases(unittest.TestCase):
         self.assertEqual(pick(["slow"], "fast"), [])
 
 
+class TrapFrames(unittest.TestCase):
+    STDERR = (
+        "SHADOW_STACK_TOP: 4195328\n"
+        "TRAP FRAME: probe.wasm._ZN1a1f17h0000000000000001E (wasm://wasm/probe.wasm-01ae661e:wasm-function[757]:0xa3c68)\n"
+        "TRAP FRAME: probe.wasm._ZN1a1g17h0000000000000002E (wasm://wasm/probe.wasm-01ae661e:wasm-function[12]:0x100)\n"
+        "TRAP FRAME: WASI.start (node:wasi:136:7)\n"
+        "TRAP FRAME: main (/x/run.cjs:45:23)\n"
+        "TRAP: Maximum call stack size exceeded\n")
+
+    def test_wasm_frames_are_read_from_the_trap_stack_innermost_first(self):
+        self.assertEqual(common.trap_frames_from(self.STDERR), [757, 12])
+
+    def test_the_frame_lines_do_not_read_as_the_trap_marker(self):
+        o = common._outcome(completed("", self.STDERR, returncode=3), common.NODE_TRAP, False)
+        self.assertTrue(o.trapped)
+        self.assertEqual(o.trap, "TRAP: Maximum call stack size exceeded")
+
+
 if __name__ == "__main__":
     unittest.main()
