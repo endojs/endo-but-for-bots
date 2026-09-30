@@ -71,7 +71,9 @@ for (const phase of ['subscribe', 'unsubscribe']) {
   test.serial(
     `supervisor stop is bounded when inventory ${phase} stalls`,
     async t => {
-      t.timeout(30_000);
+      // Three starts, each restoring the workspace and its provided
+      // installations, on top of the bounded stop under test.
+      t.timeout(60_000);
       const path = await mkdtemp('/tmp/thix-stalled-view-');
       t.teardown(() => rm(path, { recursive: true, force: true }));
       const first = await start(t, path);
@@ -161,7 +163,8 @@ test.serial(
     const recoveredSelection = await connect(t, path);
     const status = await recoveredSelection.call('status');
     t.is(status.workspace, workerId);
-    t.is(status.workers.length, 1);
+    // The workspace and the provided clock and mailbox.
+    t.is(status.workers.length, 3);
     t.is(await recoveredSelection.call('evaluate', 'retained'), '91');
     await recoveredSelection.call('stop');
     t.is((await second.exited)[0], 0);
@@ -247,7 +250,7 @@ test.serial(
     t.is((await restored.call('status')).workspace, before.workspace);
     t.is(await restored.call('evaluate', 'E(counter).incr()'), '3n');
     const after = await restored.call('status');
-    t.is(after.workers.length, 2);
+    t.is(after.workers.length, 4);
     t.not(after.timings.delivery.count, '0');
     // Only the supervisor reads the store; client access is confined to socket.
     // eslint-disable-next-line no-bitwise
@@ -399,7 +402,15 @@ test.serial(
         nextUpdate = resolve;
       });
     }
-    t.deepEqual(updates[0].entries, [['counter', '<object / capability>']]);
+    t.deepEqual(
+      updates[0].entries.filter(([name]) => name === 'counter'),
+      [['counter', '<object / capability>']],
+    );
+    t.deepEqual(
+      updates[0].entries.map(([name]) => name).sort(),
+      ['clock', 'counter', 'mailbox'],
+      'the provided clock and mailbox are inventory entries like any other',
+    );
     t.deepEqual(await admin.call('inventoryStatus'), {
       durable: 1n,
       ephemeral: 1n,
@@ -629,13 +640,13 @@ test.serial(
       ),
       "'undefined:undefined'",
     );
-    t.is((await admin.call('status')).workers.length, 2);
+    t.is((await admin.call('status')).workers.length, 4);
     await admin.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);
     t.is(
       (await admin.call('status')).workers.length,
-      2,
+      4,
       'repeat installation reuses its vat',
     );
     await t.throwsAsync(
@@ -650,7 +661,9 @@ test.serial(
         admin.call('install', 'missing-grant', bundle, [['counter', 'absent']]),
       { message: /Unknown inventory grant/ },
     );
-    t.is((await admin.call('installations')).length, 1);
+    const userInstalled = entries =>
+      entries.filter(entry => !entry.digest.startsWith('builtin:'));
+    t.is(userInstalled(await admin.call('installations')).length, 1);
     await admin.call('stop');
     t.is((await first.exited)[0], 0);
     await rm(file);
@@ -667,11 +680,11 @@ test.serial(
       ),
       '42n',
     );
-    t.is((await restored.call('installations'))[0].digest, digest);
+    t.is(userInstalled(await restored.call('installations'))[0].digest, digest);
     await restored.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);
-    t.is((await restored.call('status')).workers.length, 2);
+    t.is((await restored.call('status')).workers.length, 4);
     await restored.call('stop');
     t.is((await second.exited)[0], 0);
   },
@@ -712,10 +725,11 @@ test.serial(
     t.is(JSON.parse(output).status, 'ready');
     const listed = await transcript(t, path, '', 'installations');
     t.is(listed.code, 0);
-    t.is(JSON.parse(listed.output)[0].name, 'counter');
+    t.truthy(JSON.parse(listed.output).find(entry => entry.name === 'counter'));
     const graph = await transcript(t, path, '', 'reachability');
     t.is(graph.code, 0);
-    t.is(JSON.parse(graph.output).workers.length, 2);
+    // The workspace, the counter, and the provided clock and mailbox.
+    t.is(JSON.parse(graph.output).workers.length, 4);
     const collection = await transcript(t, path, '', 'collect');
     t.is(collection.code, 0);
     t.deepEqual(JSON.parse(collection.output), []);
@@ -757,7 +771,9 @@ test.serial(
       }
     }
     t.true(entered);
-    t.is((await admin.call('installations'))[0].status, 'pending');
+    const pendingEntry = entries =>
+      entries.find(entry => entry.name === 'pending');
+    t.is(pendingEntry(await admin.call('installations')).status, 'pending');
     await admin.call('stop');
     t.is((await first.exited)[0], 0);
     await handled;
@@ -777,7 +793,7 @@ test.serial(
       await restored.call('evaluate', "E(inventory.get('pending')).read()"),
       '8n',
     );
-    t.is((await restored.call('installations'))[0].status, 'ready');
+    t.is(pendingEntry(await restored.call('installations')).status, 'ready');
     // A bundle well past the old 16 KiB request cap is staged into its vat in
     // bounded messages rather than refused.
     await restored.call(

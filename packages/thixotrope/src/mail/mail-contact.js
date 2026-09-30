@@ -16,9 +16,10 @@ import harden from '@endo/harden';
  * with `invite` or `accept`; the last error stays visible until an attempt
  * succeeds.
  *
- * @param {Mailbox} mailbox
+ * @param {() => Mailbox} provideMailbox the mailbox deliveries land in,
+ *   looked up at each delivery so a replaced mailbox is followed
  */
-export const makeMailContact = mailbox => {
+export const makeMailContact = provideMailbox => {
   /** @type {'pending' | 'ready' | 'failed' | 'cancelled'} */
   let status = 'pending';
   let nextSent = 0n;
@@ -44,7 +45,7 @@ export const makeMailContact = mailbox => {
   // binds delivery to the local contact that owns this introduction.
   const receiver = Far('ContactInbox', {
     deliver: (sequence, text, capability) =>
-      E(mailbox).receive(contact, sequence, text, capability),
+      E(provideMailbox()).receive(contact, sequence, text, capability),
   });
   const contact = Far('MailContact', {
     help: () =>

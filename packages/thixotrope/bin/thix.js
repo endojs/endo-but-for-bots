@@ -40,7 +40,6 @@ try {
     }
   } else if (
     [
-      'clock-grant',
       'alarms',
       'install-native',
       'revoke-invite',
@@ -69,9 +68,7 @@ try {
       paths.join(statePath, 'control.sock'),
     );
     try {
-      if (command === 'clock-grant') {
-        logging.log(JSON.stringify(await client.call('clockGrant', args[0])));
-      } else if (command === 'alarms') {
+      if (command === 'alarms') {
         logging.log(JSON.stringify(await client.call('alarmStatus'), null, 2));
       } else if (command === 'install-native') {
         const [name, resourceDirectory] = args;
@@ -167,7 +164,7 @@ try {
     }
   } else {
     logging.log(
-      'Usage: thix serve|attach|install|install-native|installations|remove|inventory|invite|revoke-invite|accept|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|reachability|collect|status|stop [state-directory]',
+      'Usage: thix serve|attach|install|install-native|installations|remove|inventory|invite|revoke-invite|accept|contacts|send|inbox|outbox|take|discard|mail|alarms|reachability|collect|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }

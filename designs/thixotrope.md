@@ -248,7 +248,8 @@ These checks do not authenticate local processes; the guest HTTP interface is av
 
 ### Durable time promises
 
-The supervisor can grant a public clock living in the existing persistent workspace.
+The supervisor provides a public clock as an installation in a vat of its own, under `clock` in the
+inventory, so it has its own budget and failure lifetime and retiring it drops its alarm rows.
 It exposes `now()`, `when(deadline)`, and `arm(deadline)` with a per-alarm cancellation capability.
 The host records deadlines and terminal outcomes in a small manual-persistence ledger.
 It schedules one timer for the earliest pending deadline; there is no periodic guest scan or host
@@ -279,8 +280,8 @@ and permissions.
 
 Workspace metadata carries a version the supervisor bumps whenever a guest closure it ships changes
 shape; the current version includes dedicated native managers, the alarm acknowledgement protocol,
-the mail address book with its introductions resource, manager-owned adapter launchers, and the one
-installation registry.
+the mail address book with its introductions resource, manager-owned adapter launchers, the one
+installation registry, and the clock and mailbox provided through it.
 Earlier workspaces require explicit migration or fresh state; startup rejects them before restoring
 workers, because their heap-persisted registry and clock closures cannot be replaced by loading
 new source.
@@ -353,7 +354,7 @@ Persistent service metadata uses a `SyncStringAtom`: a synchronous `read()` retu
 The file-backed atom is one implementation.
 The host alarm ledger performs its JSON encoding and transitions above this interface.
 HTTP registrations live in their installed manager vat's heap; the public clock's promises live in
-the workspace heap.
+the clock vat's heap.
 The manual persistence boundary is confined to host state that cannot rely on a durable guest heap.
 Platform adapters return plain data, iterator facades, and opaque tokens rather than Node streams,
 servers, or timer objects; callbacks likewise do not receive native objects as their receiver.

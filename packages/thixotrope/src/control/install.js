@@ -103,15 +103,20 @@ const failWith = async (workspace, name, digest, error) => {
  * restarts settles afterwards; the host's own answer is what a restart
  * breaks, not the installation.
  *
+ * A bundle the supervisor itself provides may close over host resources
+ * described by the vat it runs in (the clock's alarm table, say): they arrive
+ * as `endowments` at staging, made once the vat is allocated. A user's bundle
+ * gets an empty record.
+ *
  * @param {ThixotropeDaemon} daemon
  * @param {ThixotropeWorkerFacade} workspace
- * @param {{name: string, digest: string, allocationKey: string, bundle: string, grants: Array<[string, string]>}} options
+ * @param {{name: string, digest: string, allocationKey: string, bundle: string, grants: Array<[string, string]>, makeEndowments?: (workerId: string) => Record<string, unknown>}} options
  * @returns {Promise<{ result: Promise<unknown> }>}
  */
 export const installApplication = async (
   daemon,
   workspace,
-  { name, digest, allocationKey, bundle, grants },
+  { name, digest, allocationKey, bundle, grants, makeEndowments = () => ({}) },
 ) => {
   const { complete, vat } = await allocate(daemon, workspace, {
     name,
@@ -130,7 +135,7 @@ export const installApplication = async (
     try {
       await evaluateSource(
         vat,
-        `(() => {
+        `(endowments => {
           if (globalThis.installation === undefined) {
             const namespace = (\n${bundle}\n);
             if (typeof namespace.make !== 'function')
@@ -139,7 +144,7 @@ export const installApplication = async (
           }
           return true;
         })`,
-        {},
+        makeEndowments(vat.workerId),
       );
     } catch (error) {
       await failWith(workspace, name, digest, error);
