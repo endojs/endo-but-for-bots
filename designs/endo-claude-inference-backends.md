@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-09-28 |
 | **Author** | kriscendobot (prompted) |
-| **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214), then reconciled with [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) per design-panel review, split admission, delivery, classification, and prompt origin per panel round 3, then gated prompt origin and the root canary per panel round 4) |
+| **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214), then reconciled with [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) per design-panel review, split admission, delivery, classification, and prompt origin per panel round 3, then gated prompt origin and the root canary per panel round 4, then routed containment by backend instance and gave `budget` its own result tag per panel round 5) |
 | **Status** | Draft, awaiting production evidence |
 | **Source** | Back-filled from the minion.town Claude CLI and Agent SDK experiments (kriscendobot/minion.town#105, kriscendobot/minion.town#106) and the production observations listed in § Evidence |
 
@@ -40,8 +40,8 @@ read facet and the replace-or-revoke facet of one credential record in the
 
 **Revision of 2026-09-29.** The maintainer's
 [review](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214)
-answered the four open questions (restated in § Resolved Questions). This
-revision records those answers:
+answered the first draft's four open questions. This revision records those
+answers, and the decisions cited below carry the reasoning:
 
 - The deployed root user runs on kriscendobot's subscription
   ([Decision 5](#design-decisions), on where credentials live and how they
@@ -250,9 +250,12 @@ these experiments ready to solidify in Endo, as a small package,
 Each job has one owner. Admission policy (may this turn run?) is the broker's
 and reaches the plugin as a refused `acquire()` carrying an admission reason,
 not a finished `InferResult`. Credential delivery (what bytes the process sees)
-is the `CredentialSource`'s. Outcome classification is the plugin's alone: it
-maps an admission refusal to an `InferResult` tag, and a raw provider response
-through the classifier library. The durable usage record is the sink's.
+is the `CredentialSource`'s. Outcome classification is split by where the
+outcome arises, and each tag has exactly one writer. The prompt-origin gate
+writes `needs-containment` and nothing else, and it writes it before the plugin
+is called. Every other tag is the plugin's: it maps an admission refusal to an
+`InferResult` tag, and a raw provider response through the classifier library.
+The durable usage record is the sink's.
 
 `describe()` reports the provider (`anthropic`, `openai`, and so on) and the
 backend kind (`claude-cli`, `claude-sdk`, or `codex-app-server`) separately, so a
@@ -260,15 +263,17 @@ record never conflates the vendor with the harness.
 
 ```ts
 interface InferenceBackend {
-  describe(): { kind: string; provider: string; version?: string };
+  describe(): { provider: string; kind: string; version?: string };
   infer(request: InferRequest): Promise<InferResult>; // never rejects
 }
 
 interface InferRequest {
   prompt: string;
-  // Set by the caller (Decision 9). Statically required, yet the prompt-origin
-  // gate still fails closed at run time on a missing or unknown value.
-  promptOrigin: 'root-authored' | 'guest-influenced';
+  // Set by the caller (Decision 9). The exo guard admits it as an optional
+  // open string (M.opt(M.string())), deliberately, so a missing or unknown
+  // value reaches the prompt-origin gate and becomes needs-containment rather
+  // than a guard rejection; infer never rejects.
+  promptOrigin?: 'root-authored' | 'guest-influenced' | string;
   guest: GuestToolProjection;
   limits: InferLimits;
   model?: string;
@@ -296,8 +301,8 @@ interface GuestToolProjection {
 }
 
 interface InferLimits {
-  wallClockMs: number;
-  outputBytes: number;
+  maxWallClockMs: number;
+  maxOutputBytes: number;
   maxTurns: number;
 }
 
@@ -306,7 +311,8 @@ type InferResult =
   | { type: 'needs-auth' }
   | { type: 'usage-exhausted'; retryAfterMs?: number }
   | { type: 'rate-limited'; retryAfterMs?: number }
-  | { type: 'limit-exceeded'; which: 'wall-clock' | 'output-bytes' | 'max-turns' | 'budget' }
+  | { type: 'budget-exhausted'; retryAfterMs?: number }
+  | { type: 'limit-exceeded'; which: 'wall-clock' | 'output-bytes' | 'max-turns' }
   | { type: 'cancelled' }
   | { type: 'needs-containment' }
   | { type: 'unavailable'; reason: string };
@@ -331,20 +337,26 @@ why:
   parses `unavailable.reason`. An unrecognized failure is
   `unavailable`, never `needs-auth`, so a CLI upgrade that changes the error wire
   cannot trigger a false reauthentication storm.
-- `budget` joins `limit-exceeded` from the Codex API-key track (#115), where a
-  broker refuses a lease before any request. The broker does not write that
-  tag: it refuses with an `AdmissionRefusal` whose reason is `budget`, and the
-  plugin maps `rate-limited`, `usage-exhausted`, and `budget` to the
-  same-named `InferResult` tags (the last as `limit-exceeded: budget`). The
-  plugin stays the only classifier.
-- `needs-containment` is a policy refusal, not a fault: the prompt-origin gate
-  (Decision 9) returns it for a guest-influenced or unlabeled request sent to
-  an unsliced backend. It is a separate tag because the factory routes on it
-  (to its sliced backend), and no caller branches on `unavailable.reason`.
+- `budget-exhausted` comes from the Codex API-key track (#115), where a broker
+  refuses a lease before any request. The broker does not write that tag: it
+  refuses with an `AdmissionRefusal` whose reason is `budget`, and the plugin
+  maps the three admission reasons, `rate-limited`, `usage-exhausted`, and
+  `budget`, to the three top-level tags `rate-limited`, `usage-exhausted`, and
+  `budget-exhausted`, each carrying the refusal's `retryAfterMs`. It is not a
+  `limit-exceeded` arm, because `limit-exceeded` reports a per-turn
+  `InferLimits` ceiling reached while the turn ran, and a budget refusal
+  happens before any process starts. The plugin stays the only classifier of
+  admission refusals and provider responses.
+- `needs-containment` is a policy refusal, not a fault, and the one tag the
+  plugin does not write: the prompt-origin gate (Decision 9) returns it for a
+  guest-influenced, unlabeled, or unknown-origin request that reached an
+  unsliced backend. Under Decision 9's routing that request should never have
+  reached one, so the tag reports a factory defect; it is a separate tag so the
+  defect is visible and not buried in `unavailable.reason`.
 - Every "come back later" tag spells its timing the same way: an optional
-  `retryAfterMs`, relative to classification time. `usage-exhausted` and
-  `limit-exceeded: budget` carry it when the broker or provider knows the
-  refill, and omit it otherwise.
+  `retryAfterMs`, relative to classification time. `rate-limited`,
+  `usage-exhausted`, and `budget-exhausted` carry it when the broker or
+  provider knows the refill, and omit it otherwise.
 - `needs-auth` means the backend's credential source failed to authenticate,
   whichever provider it is. It says nothing about which credential: a
   deployment with several credentials maps it back to one through the backend
@@ -403,7 +415,7 @@ instance's credential source.
 | Secret manager -> credential source | `SecretBlob` read facet held by the broker (or by the local credential source in the interim delivery) | None in the store; the store does not interpret bytes | The credential bytes, generation, and audit trail ([daemon-secret-manager](daemon-secret-manager.md)) | Holder of the `SecretAdmin` (replace, revoke) | Credential bytes, read fresh per lease, never persisted elsewhere |
 | Plugin -> credential source (broker, or local source in the interim) | `acquire()` / `release()` | Admission: one inference slot per credential, budget | Lease ledger | Broker (or #87's slot lease in the interim) | A grant (an `env`: lease token and loopback endpoint, or the interim credential) or an `AdmissionRefusal` (reason and optional retry time) |
 | Usage recorder -> usage sink | Enricher hands each result's record to the sink; the deployment configures each recorder, at construction, with its backend's credential record identifier | None | Usage records | The sink: the broker's ledger in production, the evaluation harness's store in a comparison run | One usage record per turn |
-| Factory -> backend | `infer(request)` | Which agent may infer, and how often; which credential's backend it holds | Retained-child ledger | Factory | An `InferRequest`; an `InferResult` back |
+| Factory -> backend | `infer(request)` | Which agent may infer, and how often; which credential's backend each path holds, and whether it is the sliced or unsliced one (Decision 9) | Retained-child ledger | Factory | An `InferRequest`; an `InferResult` back |
 
 The four ownership questions, per the repository's ownership-map convention
 for designs that span several owners:
@@ -420,11 +432,11 @@ for designs that span several owners:
 - **Restart and replay:** no turn is replayed. A crashed turn surfaces as
   `unavailable`; the caller decides whether to issue a new `infer`. The broker
   expires an orphaned lease.
-- **Execution classification:** the plugin alone classifies a turn's outcome
-  into `InferResult`, mapping an admission refusal itself and calling the
-  classifier library on the raw provider response. The broker answers only the
-  admission question; the prompt-origin gate answers only the containment
-  question, with its own `needs-containment` tag. It returns an *inference* result, not a crank or agent-step
+- **Execution classification:** each `InferResult` tag has one writer. The
+  prompt-origin gate writes `needs-containment`, before the plugin is called;
+  the plugin writes every other tag, mapping an admission refusal itself and
+  calling the classifier library on the raw provider response. The broker
+  answers only the admission question and writes no tag. The backend returns an *inference* result, not a crank or agent-step
   result. Naming check: nothing in the backend is named for a factory or daemon
   lifecycle concept, and nothing in `@endo/inference` is named for a provider.
 
@@ -695,30 +707,35 @@ for designs that span several owners:
      documented residual, with systemd hardening (`ProtectHome`, a dedicated
      user, no daemon socket in the unit's namespace) as the floor. This is the
      only relaxation, and it is the minion.town root-endowment phase.
-   - **Where the determination is made.** The caller of `infer`, normally the
-     factory, knows where a prompt's text came from, so it sets
-     `InferRequest.promptOrigin`. It sets `root-authored` only for text the
-     root operator wrote or a root-owned program generated from no guest
-     input; anything that includes a guest's message, argument, or tool result
-     is `guest-influenced`. An unsliced backend is always wrapped in the
+   - **Containment is chosen by which backend a call path holds.** This is
+     the rule § One backend instance per credential already uses for
+     credentials. The factory holds two backends over the root's credential:
+     an unsliced root backend, reachable only from the root operator's
+     direct-prompt path, and a sliced backend for every other path (a
+     delegated request, an inbox message, a guest argument, a tool result).
+     Until phase 6 supplies the sliced backend, those other paths hold none
+     and cannot infer. A path that includes guest text therefore never holds
+     the unsliced backend, whatever it would label its request.
+   - **The label is a backstop.** The caller still sets
+     `InferRequest.promptOrigin`: `root-authored` only for text the root
+     operator wrote or a root-owned program generated from no guest input,
+     and `guest-influenced` for anything that includes a guest's message,
+     argument, or tool result. The unsliced backend is always wrapped in the
      prompt-origin gate enricher, which returns `needs-containment` for a
-     `guest-influenced`, missing, or unknown origin, so the fail-closed default
-     is the slice. The factory routes a `needs-containment` result to a sliced
-     backend; phase 6 is when one exists.
-   - **The label is self-asserted, so it is a gated premise.** This design
-     holds elsewhere that a label is not authority (§ The facet is the
-     authority), yet here `promptOrigin` decides whether OS containment is
-     skipped. No structural mechanism, such as taint tracking, checks that a
-     `root-authored` request holds no guest-derived text; one mislabeled
-     request runs a guest's text with no slice and full host network reach.
-     Two things bound that premise. First, gate 8 exercises the real code
-     paths that set the label, end to end through the factory, not only the
-     gate that reads it. Second, until gate 8 passes on every call path that
-     can produce `root-authored`, the unsliced root backend serves only the
-     root operator's own direct prompts, and the factory labels anything it
-     assembles from a delegated request, message, argument, or tool result
-     `guest-influenced` without further analysis. § Known Gaps and TODOs
-     tracks the absence of a structural check.
+     `guest-influenced`, missing, or unknown origin. Under correct routing the
+     gate never fires; when it does, it has caught a factory defect, fails
+     closed, and the factory surfaces the defect rather than retrying on
+     another backend.
+   - **Which path holds the unsliced backend is a gated premise.** No
+     structural mechanism, such as taint tracking, checks that the root
+     operator's direct-prompt path carries no guest-derived text; a path that
+     wrongly holds the unsliced backend and also mislabels its request runs a
+     guest's text with no slice and full host network reach. Gate 8 bounds
+     that premise by exercising the real factory code paths end to end: which
+     backend each path is given, and how it labels its requests. Until gate 8
+     passes, the unsliced root backend serves only the root operator's own
+     direct prompts. § Known Gaps and TODOs tracks the absence of a structural
+     check.
    - Guest bring-your-own-credential, and any guest-influenced prompt, are
      therefore gated on the slice (phase 6), not merely on the secret store.
 
@@ -747,7 +764,8 @@ Nothing below has run yet. Each gate moves a "documented" row in
 Claude backend as a production authority boundary, and gate 1's accounting check
 blocks the root user's subscription deployment (Phase 3); gates 6 and 7 block the
 broker's subscription mode and guest bring-your-own-credential; gate 8 blocks
-serving any factory-assembled prompt on an unsliced backend (Decision 9).
+serving any prompt other than the root operator's direct prompts on the
+unsliced root backend (Decision 9).
 
 1. **Live positive, real daemon guest.** With the production credential kind, one
    turn on each backend causes a write through an allowlisted live daemon guest,
@@ -791,14 +809,20 @@ serving any factory-assembled prompt on an unsliced backend (Decision 9).
    `SecretBlob` credentials run concurrent turns; each turn's usage lands on its
    own credential, a refused lease on one does not block the other, and, in the
    slice, neither turn's process can read the other's environment, config
-   directory, or listener.
-8. **Prompt origin, end to end.** For every factory call path that can set
-   `root-authored`, a real guest-influenced input (an inbox message through the
-   inbox-watch driver, a guest's delegated request, a guest-supplied argument,
-   and a tool result carrying guest text) is threaded through the factory, and
-   the request is observed to arrive at `infer` labeled `guest-influenced` and
-   to be refused with `needs-containment` by the unsliced backend. Gate 2 tests
-   only the enforcement point; this gate tests the code that sets the label.
+   directory, or listener. On one credential, a second concurrent `acquire()`
+   while the first grant is held is refused (Decision 7's one slot per
+   credential), and succeeds once the first grant is released.
+8. **Containment routing, end to end.** Negative: a real guest-influenced
+   input (an inbox message through the inbox-watch driver, a guest's delegated
+   request, a guest-supplied argument, and a tool result carrying guest text)
+   is threaded through the factory, and each such path is observed to hold the
+   sliced backend or none, never the unsliced one, and to label its request
+   `guest-influenced`. Positive: a genuine root-authored prompt on the root
+   operator's direct-prompt path, with no guest-derived text on the same call
+   path, is observed to arrive at `infer` on the unsliced backend labeled
+   `root-authored` and to complete there without `needs-containment`. Gate 2
+   tests only the gate enricher; this gate tests the factory code that picks
+   the backend and sets the label.
 
 ### Evidence probe
 
@@ -855,7 +879,11 @@ be linked here once it exists. Pull request:
    deployment stops and the maintainer decides before it proceeds.
 4. **Evidence.** The probe job's build and deployment, then gates 2–4 and
    gate 8 on the canary, then gate 5, then pick the default Claude backend and
-   update this document's Status with the measured comparison.
+   update this document's Status with the measured comparison. Gate 8 needs the
+   factory ([#1102](https://github.com/endojs/endo-but-for-bots/pull/1102),
+   still open). If #1102 is not ready, gates 2–5 proceed without it and gate 8
+   runs once it lands; until then the root backend keeps Decision 9's
+   restriction to the root operator's direct prompts.
 5. **Broker delivery.** Claude as an `@endo/hosted-agent` provider: a loopback
    listener injecting the credential per lease, API key first, then the
    subscription mode only once gate 6 passes and the `SUBSCRIPTION-AUTH.md`
@@ -912,35 +940,12 @@ be linked here once it exists. Pull request:
       subscription is gated on this as well as on gate 6.
 - [ ] The `@endo/claude-sandbox` exception is due for review on 2026-12-08; this
       design supplies the retirement path, and the review should cite gate 6.
-- [ ] `InferRequest.promptOrigin` is self-asserted by the caller and has no
-      structural check (no taint tracking). Gate 8 tests the factory's call
-      paths that set it, but a new call path is unverified until gate 8 is
-      extended to it (Decision 9).
+- [ ] Which factory call path holds the unsliced root backend, and the
+      `promptOrigin` backstop label, have no structural check (no taint
+      tracking). Gate 8 tests the factory's existing call paths, but a new call
+      path is unverified until gate 8 is extended to it (Decision 9).
 - [ ] The secret manager's owning-principal column, needed before guests'
       credentials are partitioned from the operator's catalog.
-
-## Resolved Questions
-
-The first draft's four open questions were answered in
-[review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214).
-
-1. **May a deployment keep using the owner's own subscription for the owner's own
-   agents?** Yes: the deployed root user runs on kriscendobot's subscription,
-   option (b) of the first draft, stored in the secret manager and delivered as
-   `ANTHROPIC_AUTH_TOKEN` under the `--bare` recipe. Broker injection of a
-   subscription waits on the gate Decision 5 describes.
-   Decision 5.
-2. **Is Decision 9's relaxation acceptable?** Reframed by the requirement for
-   multiple subscriptions and guest-supplied credentials. Claude Code's on-disk
-   credential store does not require the slice; multi-principal inference does.
-   The slice is optional only for root-authored prompts over the root's own
-   credentials; a guest-influenced prompt needs the slice whoever pays.
-   Decisions 9 and 11.
-3. **Where does the provider-neutral seam live?** In a small `@endo/inference`,
-   offering interfaces, provider plugins, and enrichers, with no provider named
-   in it. § The Inference Seam, Decisions 1 and 2.
-4. **Is "enough production evidence" met?** No. The document stays a draft, and
-   the probe job gathers the evidence. § Evidence probe.
 
 ## Open Questions
 
