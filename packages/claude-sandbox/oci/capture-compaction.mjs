@@ -4,8 +4,12 @@ import { open, constants } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { Buffer } from 'node:buffer';
+import {
+  NATIVE_CONTEXT_LIMIT as LIMIT,
+  isNativeAttachment,
+  isUuid,
+} from './native-context-shape.mjs';
 
-const LIMIT = 16 * 1024 * 1024;
 // Only errors minted here from static local messages may explain a refusal.
 // Native JSON parsing and filesystem errors can contain transcript/path data.
 const diagnosticErrors = new WeakMap();
@@ -15,72 +19,19 @@ const diagnosticError = message => {
   return error;
 };
 const uuid = value => {
-  if (
-    typeof value !== 'string' ||
-    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value)
-  )
-    throw diagnosticError('Invalid capture identity');
+  if (!isUuid(value)) throw diagnosticError('Invalid capture identity');
   return value;
 };
 const requireValue = (condition, message) => {
   if (!condition) throw diagnosticError(message);
 };
-const strings = value =>
-  Array.isArray(value) && value.every(item => typeof item === 'string');
-const exactKeys = (value, expected) =>
-  Object.keys(value).length === expected.length &&
-  expected.every(key => Object.hasOwn(value, key));
-// Loader-generated context the pinned CLI writes to its transcript but not to
-// its public stream. The native payload keeps each one byte for byte and in
-// order; none of them is dialogue or evidence that a host effect happened.
-// Keep in step with `nativeAttachment` in src/claude-context-coverage.js.
-const nativeAttachment = attachment =>
-  attachment?.type === 'total_tokens_reminder' ||
-  (attachment?.type === 'max_turns_reached' &&
-    Number.isInteger(attachment.maxTurns) &&
-    attachment.maxTurns > 0 &&
-    Number.isInteger(attachment.turnCount) &&
-    attachment.turnCount > 0) ||
-  (attachment?.type === 'agent_listing_delta' &&
-    exactKeys(attachment, [
-      'type',
-      'addedTypes',
-      'addedLines',
-      'removedTypes',
-      'isInitial',
-      'showConcurrencyNote',
-    ]) &&
-    strings(attachment.addedTypes) &&
-    strings(attachment.addedLines) &&
-    strings(attachment.removedTypes) &&
-    typeof attachment.isInitial === 'boolean' &&
-    typeof attachment.showConcurrencyNote === 'boolean') ||
-  (attachment?.type === 'task_reminder' &&
-    exactKeys(attachment, ['type', 'content', 'itemCount']) &&
-    Array.isArray(attachment.content) &&
-    attachment.content.every(
-      item => item !== null && typeof item === 'object' && !Array.isArray(item),
-    ) &&
-    Number.isSafeInteger(attachment.itemCount) &&
-    attachment.itemCount >= 0) ||
-  (attachment?.type === 'skill_listing' &&
-    exactKeys(attachment, [
-      'type',
-      'content',
-      'skillCount',
-      'isInitial',
-      'names',
-    ]) &&
-    typeof attachment.content === 'string' &&
-    strings(attachment.names) &&
-    typeof attachment.skillCount === 'number' &&
-    typeof attachment.isInitial === 'boolean');
 const projection = row => {
   if (row.type === 'attachment') {
     // Omitted only from portable dialogue; the native payload preserves the
-    // exact attachment for Claude restoration.
+    // exact attachment for Claude restoration. The host validator applies
+    // the same shape from native-context-shape.mjs before accepting it.
     requireValue(
-      nativeAttachment(row.attachment),
+      isNativeAttachment(row.attachment),
       'Unsupported context attachment',
     );
     return [];

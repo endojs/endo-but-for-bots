@@ -1,10 +1,11 @@
 // @ts-check
 import { Fail, b } from '@endo/errors';
+import {
+  NATIVE_CONTEXT_LIMIT as LIMIT,
+  isNativeAttachment,
+  isUuid,
+} from '../oci/native-context-shape.mjs';
 
-const LIMIT = 16 * 1024 * 1024;
-const isUuid = value =>
-  typeof value === 'string' &&
-  /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 // Compare JSON structure, not object insertion order. Arrays, fields and
 // scalar values remain exact. The byte-prefix receipt below is deliberately
 // separate and still compares historical serialization byte for byte.
@@ -572,58 +573,10 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
 
   // Native-only context is preserved byte-for-byte, not certified as streamed
   // dialogue or host effect evidence. The guest may alter its own context.
-  const nativeAttachment = row => {
-    if (row.type !== 'attachment') return false;
-    const attachment = row.attachment;
-    const strings = value =>
-      Array.isArray(value) && value.every(item => typeof item === 'string');
-    const keys = expected =>
-      Object.keys(attachment).length === expected.length &&
-      expected.every(key => Object.hasOwn(attachment, key));
-    if (attachment?.type === 'agent_listing_delta')
-      return (
-        keys([
-          'type',
-          'addedTypes',
-          'addedLines',
-          'removedTypes',
-          'isInitial',
-          'showConcurrencyNote',
-        ]) &&
-        strings(attachment.addedTypes) &&
-        strings(attachment.addedLines) &&
-        strings(attachment.removedTypes) &&
-        typeof attachment.isInitial === 'boolean' &&
-        typeof attachment.showConcurrencyNote === 'boolean'
-      );
-    if (attachment?.type === 'task_reminder')
-      return (
-        keys(['type', 'content', 'itemCount']) &&
-        Array.isArray(attachment.content) &&
-        attachment.content.every(
-          item =>
-            item !== null && typeof item === 'object' && !Array.isArray(item),
-        ) &&
-        Number.isSafeInteger(attachment.itemCount) &&
-        Number(attachment.itemCount) >= 0
-      );
-    if (attachment?.type === 'skill_listing')
-      return (
-        keys(['type', 'content', 'skillCount', 'isInitial', 'names']) &&
-        typeof attachment.content === 'string' &&
-        strings(attachment.names) &&
-        typeof attachment.skillCount === 'number' &&
-        typeof attachment.isInitial === 'boolean'
-      );
-    return (
-      attachment?.type === 'total_tokens_reminder' ||
-      (attachment?.type === 'max_turns_reached' &&
-        [attachment.maxTurns, attachment.turnCount].every(
-          value =>
-            typeof value === 'number' && Number.isInteger(value) && value > 0,
-        ))
-    );
-  };
+  // The shape is the one the in-image capture helper enforces; the host
+  // re-checks it here because the helper's acceptance is not authority.
+  const nativeAttachment = row =>
+    row.type === 'attachment' && isNativeAttachment(row.attachment);
   const ordinaryFlags = row =>
     ['isCompactSummary', 'isVisibleInTranscriptOnly', 'isMeta'].every(
       key => row[key] === undefined || row[key] === false,

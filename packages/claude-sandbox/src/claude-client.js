@@ -52,6 +52,7 @@ import {
 
 import { assertClaudeEffort } from './claude-effort.js';
 import { makeClaudeContextCoverage } from './claude-context-coverage.js';
+import { NATIVE_CONTEXT_LIMIT, isUuid } from '../oci/native-context-shape.mjs';
 
 /** @import { SandboxHandle, ProcessHandle } from '@endo/sandbox/types.js' */
 
@@ -584,11 +585,7 @@ export const makeClaudeClient = args => {
         );
       }
       if (
-        ![restoredReceipt.sessionId, restoredReceipt.leafUuid].every(
-          value =>
-            typeof value === 'string' &&
-            /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value),
-        ) ||
+        ![restoredReceipt.sessionId, restoredReceipt.leafUuid].every(isUuid) ||
         typeof restoredReceipt.prefixSha256 !== 'string' ||
         !/^[a-f0-9]{64}$/.test(restoredReceipt.prefixSha256) ||
         typeof restoredReceipt.payload !== 'string' ||
@@ -727,7 +724,7 @@ export const makeClaudeClient = args => {
             const payload = new TextEncoder().encode(
               JSON.stringify({ checkpoint, suffix }),
             );
-            if (payload.byteLength > 16 * 1024 * 1024) {
+            if (payload.byteLength > NATIVE_CONTEXT_LIMIT) {
               throw Error('Claude native restore exceeds transport limit');
             }
             proc = await E(activeSlice).spawn(
@@ -762,12 +759,7 @@ export const makeClaudeClient = args => {
             if (status?.code !== 0 || status?.signal)
               throw Error('Claude native restoration failed');
             const restored = JSON.parse(output);
-            if (
-              typeof restored?.sessionId !== 'string' ||
-              !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(
-                restored.sessionId,
-              )
-            ) {
+            if (!isUuid(restored?.sessionId)) {
               throw Error('Invalid Claude restored session identity');
             }
             return restored;
@@ -829,12 +821,7 @@ export const makeClaudeClient = args => {
             event.subtype === 'init' &&
             !event.parent_tool_use_id
           ) {
-            if (
-              typeof event.session_id !== 'string' ||
-              !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(
-                event.session_id,
-              )
-            ) {
+            if (!isUuid(event.session_id)) {
               throw Error('Invalid Claude native session identity');
             }
             nativeSessionId = event.session_id;
@@ -952,7 +939,7 @@ export const makeClaudeClient = args => {
               let bytes = 0;
               for await (const chunk of makeStdoutIterable(captureProc)) {
                 bytes += chunk.byteLength;
-                if (bytes > 16 * 1024 * 1024) {
+                if (bytes > NATIVE_CONTEXT_LIMIT) {
                   throw Error(
                     'Claude compaction capture exceeds transport limit',
                   );

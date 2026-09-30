@@ -10,8 +10,11 @@ import { Buffer } from 'node:buffer';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { renderNativeContext } from './native-context-projection.mjs';
+import {
+  NATIVE_CONTEXT_LIMIT as LIMIT,
+  isUuid,
+} from './native-context-shape.mjs';
 
-const LIMIT = 16 * 1024 * 1024;
 const execute = promisify(execFile);
 const capture = fileURLToPath(
   new URL('./capture-compaction.mjs', import.meta.url),
@@ -58,10 +61,7 @@ const main = async () => {
   requireValue(boundaries.length <= 1 && rows.length > 0);
   const boundary = boundaries[0];
   const session = rows[0].sessionId;
-  requireValue(
-    typeof session === 'string' &&
-      /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(session),
-  );
+  requireValue(isUuid(session));
   const config = process.env.CLAUDE_CONFIG_DIR;
   if (typeof config !== 'string' || !path.isAbsolute(config)) {
     throw Error('Missing sandbox configuration directory');
