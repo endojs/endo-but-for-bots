@@ -4290,9 +4290,8 @@ impl Interp {
     /// Stop relying on a lazy backing that belongs to another store: fault
     /// every page and extent in and mark them all unbacked, so nothing is
     /// evicted and nothing faults from that store again. A store session
-    /// calls this when it binds a machine unbound from an earlier session,
-    /// the case the lazy page source's epoch pin used to fence. No-op on a
-    /// detached machine.
+    /// calls this when it binds a machine unbound from an earlier session.
+    /// No-op on a detached machine.
     pub fn abandon_backing(&mut self) {
         self.slots.abandon_backing();
         self.chunks.abandon_backing();

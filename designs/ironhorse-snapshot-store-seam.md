@@ -69,11 +69,12 @@ shared a seal and converged, no longer pair.
 Stores migrated from the same schema-35 state share a token, the first half of their common seal,
 until either commits.
 The pin's re-checks also caught, at the machine's next fault, a second session committing on the
-same store handle, or on the store a machine was unbound from while it still faults from it; that
-guard is given up.
-A session in the first case is still caught when it next checkpoints, by the pairing; a machine in
-the second is not caught, which is why starting a session on it detaches the old backing as soon
-as it has read what it needs.
+same store handle; that guard is given up, and such a session is still caught when it next
+checkpoints, by the pairing.
+They caught the same commit on the store a machine was unbound from while it still faults from it,
+where no checkpoint is left to catch it; there the guard stays, as a pairing check on each fault of
+the unbound machine (a manifest read that a bound session's faults do not pay), and starting a
+session on the machine detaches the old backing as soon as it has read what it needs.
 `PersistentMachine` does neither: it drops a session before resuming another and never unbinds a
 machine, and other connections stay excluded (§ SQLite schema and operational discipline).
 
@@ -4817,9 +4818,9 @@ the 2026-09-24 trust-model entry at the top records the decision:
     with a `HeapStore` hook for derived-index parity, and in stage 1 a migration that ran ended
     with its metadata-scale level.
     Starting a session on an existing machine detaches its old backing once it has read what it
-    needs, which the pin's epoch and seal used to fence; a commit to the old store between
-    unbinding and that point falls under the second-session case given up in the trust-model
-    entry.
+    needs, which the pin's epoch and seal used to fence; in stage 1 a commit to the old store
+    between unbinding and that point fell under the second-session case given up in the
+    trust-model entry, and since stage 2 the unbound machine's faults refuse it (below).
     In stage 1, leaf hashes, roots and seals were still written, and seals still paired sessions
     by equality, but nothing on the run-time path verified a stored one against the content;
     stage 2 removed them.
@@ -4891,6 +4892,11 @@ the 2026-09-24 trust-model entry at the top records the decision:
     both migration writers; `check_migration_baseline` is the comparison every backend makes, and
     `migrate_store` makes it first against the handle's own view, since it reads the small state
     and rows through a handle (a `FileStore`'s cache) that may be behind the durable manifest.
+    An unbound lazy machine, which no checkpoint is left to refuse, checks the pairing on each
+    fault instead: `StoreSession::into_machine` hands the page source the epoch and token its
+    backing describes, and a fault from a store that has moved on since unwinds with that store's
+    `EpochMismatch` or `BaselineMismatch`, so a rebind or a snapshot never persists a mixture of
+    two commits' rows.
     The file store's layout is `IHSTORE6`, without the three leaf sections; it still reads
     `IHSTORE5`, and the migration write rewrites the file in the current layout.
     SQLite stops creating `leaf_hashes`, and the migration write drops the table in the IMMEDIATE
