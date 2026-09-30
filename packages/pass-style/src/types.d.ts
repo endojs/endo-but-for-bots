@@ -123,7 +123,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
-  (p: SturdyRef): 'sturdyRef';
+  (p: SturdyRefObject): 'sturdyRef';
   (p: readonly any[]): 'copyArray';
   // A `Uint8Array` is also `Iterable<number>`; place its byteArray
   // overload before the Iterable-as-remotable fallback so the more
@@ -187,13 +187,16 @@ export type RemotableMethodName = PropertyKey;
 
 /**
  * A SturdyRef is passable, analogous to a presence: it has object identity and
- * no data. `passStyleOf` returns `'sturdyRef'` for a value that the realm's
- * `SturdyRef.isSturdyRef` brand check accepts (see `@endo/sturdyref`). The ref
- * is frozen, has no own properties, and inherits only `constructor` and
- * `Symbol.toStringTag` from `SturdyRef.prototype`. What it refers to is known
- * only to the handler it was constructed with.
+ * no data. `passStyleOf` returns `'sturdyRef'` for a value that is frozen, has
+ * no own properties, inherits directly from `SturdyRef.prototype`, and that
+ * the global `SturdyRef.isSturdyRef` brand check accepts (see
+ * `@endo/sturdyref`). What it refers to is known only to the handler it was
+ * constructed with.
+ *
+ * This is the same shape as the `SturdyRef` type of `@endo/sturdyref`, which
+ * pass-style cannot import without a dependency cycle. Keep the two in step.
  */
-export interface SturdyRef {
+export interface SturdyRefObject {
   readonly [Symbol.toStringTag]: 'SturdyRef';
 }
 

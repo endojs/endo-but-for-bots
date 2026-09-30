@@ -57,9 +57,11 @@ const isHardenInstalled = () =>
 /**
  * An opaque, frozen object with no own properties. What it captures is
  * defined entirely by the handler it was constructed with, which is never
- * reachable from the ref.
+ * reachable from the ref. Its only visible property is the
+ * `Symbol.toStringTag` it inherits, which also lets it match the
+ * `SturdyRefObject` type of `@endo/pass-style`.
  *
- * @typedef {Readonly<Record<never, never>>} SturdyRef
+ * @typedef {{ readonly [Symbol.toStringTag]: 'SturdyRef' }} SturdyRef
  */
 
 /**
@@ -95,7 +97,7 @@ export const makeSturdyRefConstructor = () => {
    * From each ref to the handler and the `enliven` hook read from it at
    * construction. Never reachable from a ref.
    *
-   * @type {WeakMap<SturdyRef, { handler: SturdyRefHandler, enliven: (ref: SturdyRef) => unknown }>}
+   * @type {WeakMap<object, { handler: SturdyRefHandler, enliven: SturdyRefHandler['enliven'] }>}
    */
   const handlers = new WeakMap();
 

@@ -13,6 +13,7 @@ import type {
   Passable,
   PassableCap,
   PassStyle,
+  SturdyRefObject,
 } from './types.js';
 import { PASS_STYLE } from './passStyle-helpers.js';
 import { passableSymbolForName } from './symbol.js';
@@ -58,6 +59,8 @@ expectTypeOf(
   passStyleOf({ [PASS_STYLE]: 'arbitrary' } as const),
 ).toEqualTypeOf<'copyRecord'>();
 expectTypeOf(passStyleOf(remotable)).toEqualTypeOf<'remotable'>();
+declare const sturdyRef: SturdyRefObject;
+expectTypeOf(passStyleOf(sturdyRef)).toEqualTypeOf<'sturdyRef'>();
 expectTypeOf(passStyleOf(someUnknown)).toEqualTypeOf<PassStyle>();
 
 const expectPassable = (val: Passable) => {};
