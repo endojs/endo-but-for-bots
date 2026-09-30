@@ -197,6 +197,12 @@ const decodeToJustin = (encoding, shouldIndent = false, slots = []) => {
           }
           return;
         }
+        case 'sturdyRef': {
+          const { index } = rawTree;
+          assert.typeof(index, 'number');
+          Nat(index);
+          return;
+        }
         case 'hilbert': {
           const { original, rest } = rawTree;
           'original' in rawTree ||
@@ -379,6 +385,23 @@ const decodeToJustin = (encoding, shouldIndent = false, slots = []) => {
           return iface === undefined
             ? out.next(`slot(${index})`)
             : out.next(`slot(${index},${nestedRender(iface)})`);
+        }
+
+        case 'sturdyRef': {
+          const index = Number(Nat(rawTree.index));
+          if (index < slots.length) {
+            const oldOut = out;
+            let renderedSlot;
+            try {
+              out = makeNoIndenter();
+              decode(slots[index]);
+              renderedSlot = out.done();
+            } finally {
+              out = oldOut;
+            }
+            return out.next(`sturdyRefToVal(${renderedSlot})`);
+          }
+          return out.next(`sturdyRef(${index})`);
         }
 
         case 'hilbert': {
