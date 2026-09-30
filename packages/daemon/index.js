@@ -20,7 +20,15 @@ import {
   whereEndoCache,
 } from '@endo/where';
 import { makeEndoClient } from './src/client.js';
-import { socketLockPath } from './src/socket-lock.js';
+import {
+  isProcessAlive,
+  readLiveStateLockOwner,
+  readSocketLockOwner,
+  socketLockPath,
+  socketLockWindowMs,
+  stateLockDeclinedExitCode,
+  stateLockPath,
+} from './src/socket-lock.js';
 
 // Reexports:
 export { makeEndoClient } from './src/client.js';
@@ -233,6 +241,85 @@ const waitForSocket = async (sockPath, timeoutMs = 10_000) => {
   throw Error(`Socket ${sockPath} not ready within ${timeoutMs}ms`);
 };
 
+/** @param {number} ms */
+const delay = ms =>
+  new Promise(resolve => {
+    setTimeout(resolve, ms);
+  });
+
+/**
+ * How long `start` waits for a daemon that has claimed its state directory
+ * but is not serving yet. The claim precedes opening the database and any
+ * migration, so this is generous; a booting daemon that dies ends the wait
+ * early.
+ */
+const daemonBootWaitMs = 60_000;
+
+/**
+ * The live process that owns this configuration's daemon, if any: the holder
+ * of the state lock, which a daemon keeps for its whole life, or else the
+ * holder of the socket lock, which a daemon from before the state lock holds.
+ *
+ * @param {Config} config
+ * @returns {Promise<{ pid: number, booting: boolean } | undefined>}
+ * `booting` is whether the owner is known to be a daemon that has not bound
+ * its socket yet, rather than a socket lock whose pid may have been recycled.
+ */
+const findDaemonOwner = async config => {
+  await null;
+  if (process.platform === 'win32') {
+    return undefined;
+  }
+  const statePid = await readLiveStateLockOwner(
+    stateLockPath(config.ephemeralStatePath),
+  );
+  if (statePid !== undefined) {
+    return { pid: statePid, booting: true };
+  }
+  const socketPid = await readSocketLockOwner(socketLockPath(config.sockPath));
+  if (socketPid !== undefined && isProcessAlive(socketPid)) {
+    return { pid: socketPid, booting: false };
+  }
+  return undefined;
+};
+
+/**
+ * Find the daemon serving this configuration, waiting for one that is still
+ * booting. A state-lock owner gets `daemonBootWaitMs` to start serving. A
+ * socket-lock owner alone gets the window `socket-lock.js` gives a live but
+ * silent owner, after which its marker counts as abandoned.
+ *
+ * @param {Config} config
+ * @returns {Promise<{ pid: number } | undefined>} the serving daemon, or
+ * `undefined` when no live process owns the state.
+ */
+const findRunningDaemon = async config => {
+  /* eslint-disable no-await-in-loop */
+  const pidPath = path.join(config.ephemeralStatePath, 'endo.pid');
+  const start = Date.now();
+  for (;;) {
+    if (await tryConnect(config.sockPath)) {
+      const owner = await findDaemonOwner(config);
+      return { pid: owner?.pid || (await readPidFile(pidPath)) };
+    }
+    const owner = await findDaemonOwner(config);
+    if (owner === undefined) {
+      return undefined;
+    }
+    const waited = Date.now() - start;
+    if (!owner.booting && waited >= socketLockWindowMs) {
+      return undefined;
+    }
+    if (waited >= daemonBootWaitMs) {
+      throw Error(
+        `Endo daemon (pid ${owner.pid}) owns ${config.ephemeralStatePath} but is not serving ${config.sockPath} after ${daemonBootWaitMs}ms`,
+      );
+    }
+    await delay(50);
+  }
+  /* eslint-enable no-await-in-loop */
+};
+
 /**
  * Poll until a file exists on disk.
  *
@@ -266,9 +353,17 @@ export const main = async _args => {
 
   // TODO implement option parsing for final env toggle like GC, LOCKDOWN_ERROR_TAMING, etc
 
-  const child = process.env.ENDO_BIN
-    ? await runEngo(false, config)
-    : await runEndo(false, config);
+  const child = await (
+    process.env.ENDO_BIN ? runEngo(false, config) : runEndo(false, config)
+  ).catch(error => {
+    // The daemon has already said who owns the state on the inherited
+    // stderr; pass its exit status on so a supervisor can tell a declined
+    // duplicate from a crash.
+    if (error.code === 'EX_UNAVAILABLE') {
+      process.exit(stateLockDeclinedExitCode);
+    }
+    throw error;
+  });
   process.exit(await waitForExit(child));
 };
 
@@ -413,7 +508,12 @@ const runEndo = async (detached, config) => {
       typeof message.message === 'string'
     ) {
       releaseChild();
-      throw new Error(message.message);
+      /** @type {Error & { code?: unknown }} */
+      const error = new Error(message.message);
+      if ('code' in message) {
+        error.code = message.code;
+      }
+      throw error;
     }
   }
 
@@ -495,19 +595,40 @@ export const status = async (config = defaultConfig, { verbose = 0 } = {}) => {
 };
 
 /**
+ * Start the daemon in the background, unless one is already serving this
+ * configuration, in which case this succeeds without changing anything. A
+ * daemon that has claimed its state but is still booting is waited for
+ * rather than replaced.
+ *
  * @param {Config} [config]
  * @param {object} [options]
  * @param {boolean} [options.dryRun] - log what would be done, don't do it
+ * @param {boolean} [options.force] - skip the probe and clean as `start` did
+ * before it was idempotent. A live owner of the state lock is still left
+ * alone, and the new daemon declines to start rather than share its state.
  */
 export const start = async (
   config = defaultConfig,
-  { dryRun = false } = {},
+  { dryRun = false, force = false } = {},
 ) => {
+  /** @param {{ pid: number }} running */
+  const reportRunning = ({ pid }) => {
+    console.log(`endo daemon already running${pid ? ` (pid ${pid})` : ''}`);
+  };
+
+  if (!force) {
+    const running = await findRunningDaemon(config);
+    if (running) {
+      reportRunning(running);
+      return;
+    }
+  }
+
   if (dryRun) {
     console.log(`would clean(${config})`);
     // TODO pushdown like await clean(config, {dryRun});
   } else {
-    await clean(config);
+    await clean(config, { force });
   }
 
   // TODO less indirection when running $ENDO_BIN, rather than going back through node just to call runEngo()
@@ -519,11 +640,23 @@ export const start = async (
     return;
   }
 
-  const child = await (process.env.ENDO_BIN
-    ? runEngo(true, config)
-    : runEndo(true, config));
+  const child = await (
+    process.env.ENDO_BIN ? runEngo(true, config) : runEndo(true, config)
+  ).catch(async error => {
+    // Another start claimed the state between our probe and our spawn, so
+    // ours declined. That is the outcome we wanted, once the winner serves.
+    if (force || error.code !== 'EX_UNAVAILABLE') {
+      throw error;
+    }
+    const running = await findRunningDaemon(config);
+    if (!running) {
+      throw error;
+    }
+    reportRunning(running);
+    return undefined;
+  });
 
-  child.unref();
+  child?.unref();
 };
 
 /**
@@ -770,13 +903,35 @@ const killDaemonProcess = async config => {
   });
 };
 
-export const clean = async (config = defaultConfig) => {
+/**
+ * Remove the daemon's socket, its lock markers, and its pid file, but only
+ * when no live daemon owns them.
+ *
+ * @param {Config} [config]
+ * @param {object} [options]
+ * @param {boolean} [options.force] - remove them even if the socket answers
+ * or a live pid holds the socket lock. A live owner of the state lock is left
+ * alone regardless: removing its files would only orphan it, since a new
+ * daemon still could not claim its state.
+ */
+export const clean = async (config = defaultConfig, { force = false } = {}) => {
   await null;
+  const owner = await findDaemonOwner(config);
+  // A socket-lock owner that is alive but not serving has either not bound
+  // yet or inherited a dead daemon's pid. The socket lock reclaims such a
+  // marker, so only a live state-lock owner or a serving socket stops us.
+  if (owner?.booting || (!force && (await tryConnect(config.sockPath)))) {
+    console.log(
+      `endo daemon${owner ? ` (pid ${owner.pid})` : ''} is running; not cleaning`,
+    );
+    return;
+  }
   if (process.platform !== 'win32') {
     await removePath(config.sockPath).catch(enoentOk);
     // The marker sits beside the socket, outside the directories `purge`
     // removes.
     await removePath(socketLockPath(config.sockPath)).catch(enoentOk);
+    await removePath(stateLockPath(config.ephemeralStatePath)).catch(enoentOk);
   }
   const pidPath = path.join(config.ephemeralStatePath, 'endo.pid');
   await fs.promises.rm(pidPath, { force: true }).catch(enoentOk);
