@@ -147,6 +147,155 @@ fn flat_chains_the_grammar_folds_into_deep_trees_are_bounded_by_the_tree_depth_l
 }
 
 #[test]
+fn productions_found_by_the_grammar_sweep_are_bounded() {
+    // The remaining productions that fold operands into a deep tree or nest
+    // on the right: the chain kinds of `rust/engine/stack-lanes/cases.rs` and
+    // the shapes of its `sweep.py` (STACK-DEPTH-REFACTOR §5, lane C). The
+    // tagged-template chain is the corner the report found unpinned; each of
+    // the others is a contract in the same sense as above.
+    pin("tagged templates", |d| format!("f{}", "``".repeat(d)), 2043);
+    pin(
+        "tagged templates with substitutions",
+        |d| format!("f{}", "`${1}`".repeat(d)),
+        2043,
+    );
+    pin("logical and", |d| format!("a{}", " && a".repeat(d)), 2045);
+    pin("logical or", |d| format!("a{}", " || a".repeat(d)), 2045);
+    pin(
+        "nullish coalescing",
+        |d| format!("a{}", " ?? a".repeat(d)),
+        2045,
+    );
+    pin(
+        "comparison chains",
+        |d| format!("a{}", " < a".repeat(d)),
+        2045,
+    );
+    pin(
+        "computed members",
+        |d| format!("a{}", "[0]".repeat(d)),
+        2045,
+    );
+    pin("optional chains", |d| format!("a{}", "?.b".repeat(d)), 1022);
+    pin("optional calls", |d| format!("a{}", "?.()".repeat(d)), 1022);
+    pin("member calls", |d| format!("a{}", ".b()".repeat(d)), 1022);
+    pin(
+        "else-if chains with blocks",
+        |d| {
+            format!(
+                "if (a) {{ x; }} {}else {{ y; }}",
+                "else if (a) { x; } ".repeat(d)
+            )
+        },
+        2041,
+    );
+    pin(
+        "labels",
+        |d| {
+            format!(
+                "{}1;",
+                (0..d).map(|i| format!("l{i}: ")).collect::<String>()
+            )
+        },
+        505,
+    );
+    pin(
+        "labeled blocks",
+        |d| {
+            format!(
+                "{}{}",
+                (0..d).map(|i| format!("l{i}: {{ ")).collect::<String>(),
+                " }".repeat(d)
+            )
+        },
+        256,
+    );
+    pin(
+        "try blocks",
+        |d| wrapped("try { ", "", " } catch (e) {}", d),
+        511,
+    );
+    pin(
+        "switch cases",
+        |d| wrapped("switch (a) { case 1: ", "", " }", d),
+        506,
+    );
+    pin(
+        "for bodies",
+        |d| wrapped("for (;;) { ", "break;", " }", d),
+        255,
+    );
+    pin(
+        "while bodies",
+        |d| wrapped("while (a) { ", "", " }", d),
+        253,
+    );
+    pin(
+        "do-while bodies",
+        |d| wrapped("do { ", "", " } while (a);", d),
+        253,
+    );
+    pin("with bodies", |d| wrapped("with (a) { ", "", " }", d), 253);
+    pin("array spreads", |d| wrapped("[...", "a", "]", d), 91);
+    pin("call spreads", |d| wrapped("f(...", "a", ")", d), 91);
+    pin(
+        "arrow block bodies",
+        |d| wrapped("() => { return ", "1", "; }", d),
+        77,
+    );
+    pin("new with arguments", |d| wrapped("new f(", "1", ")", d), 77);
+    pin(
+        "function expressions in call arguments",
+        |d| wrapped("f(function () { return ", "1", "; })", d),
+        42,
+    );
+    pin(
+        "default parameters",
+        |d| {
+            format!(
+                "function f(a = {}) {{}}",
+                wrapped("(function (b = ", "1", ") {})", d)
+            )
+        },
+        42,
+    );
+    pin(
+        "object getters",
+        |d| format!("({})", wrapped("{ get a() { return ", "1", "; } }", d)),
+        76,
+    );
+    pin(
+        "class heritage",
+        |d| format!("({})", wrapped("class extends (", "Object", ") {}", d)),
+        52,
+    );
+    pin(
+        "class static blocks",
+        |d| wrapped("(class { static { ", "", " } })", d),
+        42,
+    );
+    pin(
+        "await chains",
+        |d| format!("async function f() {{ return {}a; }}", "await ".repeat(d)),
+        1008,
+    );
+    pin(
+        "yield chains",
+        |d| format!("function* f() {{ return {}a; }}", "yield ".repeat(d)),
+        1009,
+    );
+}
+
+#[test]
+fn a_comma_chain_is_a_flat_list_and_needs_no_pin() {
+    // The sweep's one shape without a ceiling: the parser folds a sequence
+    // expression into a list, not a tree, so its compile stack is constant in
+    // the length (`sweep.py` measures 0 B per operand). An 8,192-term chain
+    // compiles; nothing recurses over it.
+    assert!(compile(&format!("1{}", ",1".repeat(8192))).is_ok());
+}
+
+#[test]
 fn a_flat_chain_is_refused_before_any_pass_can_recurse_over_it() {
     // A 100,000-term chain in every context that used to reach a recursive
     // helper or the drop glue with the whole tree already built: an object
