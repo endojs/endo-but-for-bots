@@ -556,12 +556,19 @@ struct LazyPin {
     /// checkpoint that lands in the pinned store.
     backed: (u64, CommitToken),
     /// Shared with the page source. [`StoreSession::into_machine`] sets it
-    /// to [`Self::backed`], after which every fault first checks that the
-    /// store still holds that state, so another session's commit to the
-    /// same store refuses the unbound machine's next fault rather than
-    /// mixing the two epochs' rows into a heap that a later rebind or
+    /// to the states the machine can fault from, [`Self::backed`] and the
+    /// session's own last commit, after which every fault first checks
+    /// that the store holds one of them, so another session's commit to
+    /// the same store refuses the unbound machine's next fault rather than
+    /// mixing the two commits' rows into a heap that a later rebind or
     /// snapshot would persist.
-    unbound: std::rc::Rc<std::cell::Cell<Option<(u64, CommitToken)>>>,
+    ///
+    /// The session's own commit counts because a commit that reached the
+    /// pinned store through a forwarding wrapper leaves [`Self::backed`]
+    /// behind; its token is random, so a store holds it only by holding
+    /// that commit, and a page the commit did not write reads as the
+    /// backing describes it (the pages it wrote stay resident).
+    unbound: std::rc::Rc<std::cell::Cell<Option<UnboundPairing>>>,
     /// Address of the pinned store's data (the `S` inside the
     /// `Rc<RefCell<S>>` the page source reads through). The session
     /// advances the machine's backing after a commit only when the
@@ -581,6 +588,10 @@ struct LazyPin {
     /// backing that does not hold them.
     store_addr: *const (),
 }
+
+/// The store states an unbound machine may fault from: its backing's, then
+/// its session's own last commit or adoption. See [`LazyPin::unbound`].
+type UnboundPairing = [(u64, CommitToken); 2];
 
 /// The panic payload a store-backed page source unwinds with when a row
 /// read fails (a missing row, an I/O error, or a fault while the caller
@@ -768,7 +779,10 @@ impl StoreSession {
     /// [`StoreError::BaselineMismatch`] once it does not.
     pub fn into_machine(self) -> Interp {
         if let Some(pin) = &self.tracking.pin {
-            pin.unbound.set(Some(pin.backed));
+            pin.unbound.set(Some([
+                pin.backed,
+                (self.tracking.epoch, self.tracking.token),
+            ]));
         }
         self.interp
     }
@@ -1226,17 +1240,19 @@ pub fn resume_from_store(
 /// between cranks, so the borrows never overlap.
 ///
 /// A fault reads the committed row and hands it to the arena, which
-/// checks its length and references before installing it. Nothing
-/// re-checks the store's epoch or commit token: the store is trusted (the
-/// store-seam design's trust model). A failed read
+/// checks its length and references before installing it. A bound
+/// session's fault does not re-check the store's epoch or commit token:
+/// the store is trusted (the store-seam design's trust model), and the
+/// session's next checkpoint checks the pairing. An unbound machine's
+/// fault checks it first ([`LazyPin::unbound`]). A failed read
 /// unwinds with a [`StoreFault`] carrying the store's error; a row that
 /// does not decode panics with a named message, the crashed-crank path
 /// the [`ironhorse_vm::PageSource`] contract describes.
 struct StorePageSource<S: HeapStore> {
     store: std::rc::Rc<std::cell::RefCell<S>>,
-    /// [`LazyPin::unbound`]: the state an unbound machine's faults check
+    /// [`LazyPin::unbound`]: the states an unbound machine's faults check
     /// the store against.
-    unbound: std::rc::Rc<std::cell::Cell<Option<(u64, CommitToken)>>>,
+    unbound: std::rc::Rc<std::cell::Cell<Option<UnboundPairing>>>,
 }
 
 /// Unwind out of a fault with the store's own error; see [`StoreFault`].
@@ -1259,19 +1275,23 @@ impl<S: HeapStore> StorePageSource<S> {
                 "lazy fault while the store is borrowed for a commit".to_string(),
             ))
         });
-        if let Some((epoch, token)) = self.unbound.get() {
+        if let Some(pairing) = self.unbound.get() {
             let stored = store.manifest().unwrap_or_else(|e| raise_store_fault(e));
-            if stored.epoch != epoch {
-                raise_store_fault(StoreError::EpochMismatch {
-                    expected: epoch,
-                    found: stored.epoch,
-                });
-            }
-            if stored.token != token {
-                raise_store_fault(StoreError::BaselineMismatch {
-                    expected: token.to_hex(),
-                    found: stored.token.to_hex(),
-                });
+            if !pairing.contains(&(stored.epoch, stored.token)) {
+                // Name the state at the stored epoch, if either is, and
+                // otherwise the session's own.
+                raise_store_fault(
+                    match pairing.iter().find(|(epoch, _)| *epoch == stored.epoch) {
+                        Some((_, token)) => StoreError::BaselineMismatch {
+                            expected: token.to_hex(),
+                            found: stored.token.to_hex(),
+                        },
+                        None => StoreError::EpochMismatch {
+                            expected: pairing[1].0,
+                            found: stored.epoch,
+                        },
+                    },
+                );
             }
         }
         store

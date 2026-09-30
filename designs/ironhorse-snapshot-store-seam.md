@@ -4894,9 +4894,10 @@ the 2026-09-24 trust-model entry at the top records the decision:
     and rows through a handle (a `FileStore`'s cache) that may be behind the durable manifest.
     An unbound lazy machine, which no checkpoint is left to refuse, checks the pairing on each
     fault instead: `StoreSession::into_machine` hands the page source the epoch and token its
-    backing describes, and a fault from a store that has moved on since unwinds with that store's
-    `EpochMismatch` or `BaselineMismatch`, so a rebind or a snapshot never persists a mixture of
-    two commits' rows.
+    backing describes and those of the session's own last commit (which differ after a commit
+    through a forwarding wrapper), and a fault from a store holding neither unwinds with that
+    store's `EpochMismatch` or `BaselineMismatch`, so a rebind or a snapshot never persists a
+    mixture of two commits' rows.
     The file store's layout is `IHSTORE6`, without the three leaf sections; it still reads
     `IHSTORE5`, and the migration write rewrites the file in the current layout.
     SQLite stops creating `leaf_hashes`, and the migration write drops the table in the IMMEDIATE
