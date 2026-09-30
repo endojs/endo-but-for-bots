@@ -13,7 +13,10 @@ import { E } from '@endo/eventual-send';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { Far } from '@endo/far';
+import harden from '@endo/harden';
 import { makeThixotropeDaemon } from '../src/core/daemon.js';
+
 import { makeAdapterKeeper } from '../src/adapter-keeper.js';
 import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeFsStore } from '../src/store/store-fs.js';
@@ -215,4 +218,22 @@ test.serial('retiring the adapter builds another on next use', async t => {
 
   t.is(await E(root).count(), 1, 'a fresh adapter was restored from desired');
   t.is(await E(root).incarnations(), 2n);
+});
+
+test('current() reports the held incarnation without probing or building', async t => {
+  let built = 0;
+  const keeper = makeAdapterKeeper({
+    create: async () => {
+      built += 1;
+      return harden({ adapter: Far('Adapter', {}), retire: async () => {} });
+    },
+  });
+  t.is(keeper.current(), undefined, 'nothing before the first provide');
+  t.is(built, 0, 'current() builds nothing');
+  const adapter = await keeper.provide();
+  t.is(keeper.current(), adapter);
+  t.is(built, 1);
+  t.true(await keeper.retire());
+  t.is(keeper.current(), undefined, 'nothing after retirement');
+  t.is(built, 1, 'retirement builds nothing either');
 });

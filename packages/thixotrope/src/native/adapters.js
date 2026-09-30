@@ -4,6 +4,7 @@ import harden from '@endo/harden';
 import { encodeSwissnum } from '@endo/ocapn/client/util';
 
 import { makeFirstFailure, makeInFlight } from '../in-flight.js';
+import { randomHex128 } from '../random-id.js';
 
 /** @import { NativeWorkerPowers } from '../platform/native-workers.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
@@ -33,7 +34,7 @@ export const makeNativeAdapters = (
           (async () => {
             if (stopped) throw Error('Native adapters are stopped');
             if (!nativeWorkers) throw Error('Native workers are unavailable');
-            const id = `transient:native:${Array.from(random.randomBytes(16), b => b.toString(16).padStart(2, '0')).join('')}`;
+            const id = `transient:native:${randomHex128(random)}`;
             /** @type {any} */
             let sink;
             /** @type {Uint8Array[]} */

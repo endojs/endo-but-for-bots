@@ -8,7 +8,12 @@ import harden from '@endo/harden';
  * @param {{E: any, Far: any, makeKeeper: any, adapters: any}} powers
  */
 export const make = ({ E, Far, makeKeeper, adapters }) => {
-  /** @type {Map<number, {handler: any, policy: any, registration: any}>} */
+  /**
+   * Desired state, one mutable record per port. The handle a caller holds is
+   * bound to its record, so a later registration on the same port cannot be
+   * closed through a handle from an earlier one.
+   * @type {Map<number, {handler: any, policy: {origins: string[]}, handle: any}>}
+   */
   const desired = new Map();
   let chain = Promise.resolve();
   /** @param {() => Promise<any>} operation */
@@ -38,6 +43,22 @@ export const make = ({ E, Far, makeKeeper, adapters }) => {
         ),
       ),
   });
+  /** @param {unknown} policy @returns {{origins: string[]}} */
+  const normalizePolicy = policy => {
+    const origins = /** @type {any} */ (policy)?.origins ?? [];
+    if (
+      !Array.isArray(origins) ||
+      origins.some(origin => typeof origin !== 'string')
+    )
+      throw Error('HTTP origins must be an array of strings');
+    // Origins are a set: sorted, so the same allowance in another order is
+    // the same policy and does not rebind the listener.
+    return harden({ origins: harden([...origins].sort()) });
+  };
+  /** @param {{origins: string[]}} a @param {{origins: string[]}} b */
+  const samePolicy = (a, b) =>
+    a.origins.length === b.origins.length &&
+    a.origins.every((origin, index) => origin === b.origins[index]);
   /**
    * A failed bind retains desired state, but must not withhold its close handle.
    * Status retries reconciliation and reports the current binding outcome.
@@ -76,23 +97,14 @@ export const make = ({ E, Far, makeKeeper, adapters }) => {
           throw Error('Expected HTTP port 1024–65535');
         if (handler?.[Symbol.for('passStyle')] !== 'remotable')
           throw Error('Expected a remotable HTTP handler');
-        const origins = policy.origins ?? [];
-        if (
-          !Array.isArray(origins) ||
-          origins.some(origin => typeof origin !== 'string')
-        )
-          throw Error('HTTP origins must be an array of strings');
+        const wanted = normalizePolicy(policy);
         let entry = desired.get(port);
         if (entry && entry.handler !== handler)
           throw Error('Port is already registered');
         if (!entry) {
-          /** @type {{handler: any, policy: any, registration: any}} */
-          const created = {
-            handler,
-            policy: harden({ ...policy }),
-            registration: undefined,
-          };
-          created.registration = Far('HttpRegistrationHandle', {
+          /** @type {{handler: any, policy: {origins: string[]}, handle: any}} */
+          const created = { handler, policy: wanted, handle: undefined };
+          created.handle = Far('HttpRegistrationHandle', {
             status: () =>
               enqueue(async () => {
                 if (desired.get(port) !== created)
@@ -102,24 +114,38 @@ export const make = ({ E, Far, makeKeeper, adapters }) => {
             close: () =>
               enqueue(async () => {
                 if (desired.get(port) !== created) return false;
+                // Withdrawing desired state is the durable part and is done
+                // first; a future incarnation restores without this port.
                 desired.delete(port);
-                const adapter = await keeper.provide();
+                // Only a live adapter has anything to unbind. Building one
+                // just to tell it about a port it never bound would restore
+                // every other registration as a side effect.
+                const adapter = keeper.current();
+                if (adapter === undefined) return true;
                 try {
                   await E(adapter).unbind(port);
-                } catch (error) {
-                  // Closing an uncertain binding retires all native state; the
-                  // remaining desired registrations will rebuild on next use.
-                  await keeper.retire();
-                  throw error;
+                } catch (_error) {
+                  // The binding is uncertain: retire the whole incarnation so
+                  // the port is released with its process, and the remaining
+                  // registrations rebuild on next use. Retirement kills the
+                  // process before reporting any failure it recorded, so the
+                  // port is released either way; the one case retirement
+                  // cannot reach the host at all is one where unbind could
+                  // not have reached the adapter either.
+                  await keeper.retire().catch(() => {});
                 }
                 return true;
               }),
           });
-          entry = harden(created);
+          entry = created;
           desired.set(port, entry);
+        } else if (!samePolicy(entry.policy, wanted)) {
+          // Same handler, new policy: the desired state changes and the
+          // adapter is told to rebind, so the new origins take effect.
+          entry.policy = wanted;
         }
         await reconcile(port, entry);
-        return entry.registration;
+        return entry.handle;
       }),
   });
   return harden({

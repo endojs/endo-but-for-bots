@@ -65,6 +65,12 @@ export const makeAdapterKeeper = ({ create, restore = async () => {} }) => {
         await dying.retire();
         return true;
       }),
+    /**
+     * The incarnation this keeper holds right now, or undefined when there is
+     * none. Neither probes nor builds: for an operation that only has to undo
+     * something in a live adapter, an absent adapter means nothing to undo.
+     */
+    current: () => current?.adapter,
     status: () =>
       harden({ incarnations, live: current !== undefined, building }),
   });

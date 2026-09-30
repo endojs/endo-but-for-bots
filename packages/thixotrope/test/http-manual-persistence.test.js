@@ -83,7 +83,10 @@ test('an interrupted close retires the adapter before another registration is se
   const handler = Far('Handler', {});
   const first = await E(kit.registration).register(18_080, handler);
   const second = await E(kit.registration).register(18_081, handler);
-  await t.throwsAsync(() => E(first).close(), { message: /Close interrupted/ });
+  // The withdrawal is durable before the adapter is told; an unbind that
+  // fails retires the whole incarnation, so the port is released with its
+  // process and the close reports success.
+  t.true(await E(first).close());
   t.false(bound.has(18_080));
   t.is((await E(second).status()).status, 'listening');
   t.false(bound.has(18_080));

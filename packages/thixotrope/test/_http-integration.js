@@ -6,7 +6,6 @@ import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { bundleApplication } from '../src/control/bundle-application.js';
 import { connectLocalControl } from '../src/control/local-control.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
@@ -28,16 +27,22 @@ export const registerHttpIntegration = (test, kind) => {
       t.timeout(180_000);
       const path = await mkdtemp('/tmp/thix-http-app-');
       t.teardown(() => rm(path, { recursive: true, force: true }));
-      const reservation = createServer();
-      t.teardown(() => reservation.close());
-      await new Promise(resolve =>
-        reservation.listen(0, '127.0.0.1', () => resolve(undefined)),
-      );
-      const address = reservation.address();
-      if (!address || typeof address === 'string')
-        throw Error('Expected TCP port');
-      const { port } = address;
-      await new Promise(resolve => reservation.close(() => resolve(undefined)));
+      const reservePort = async () => {
+        const reservation = createServer();
+        t.teardown(() => reservation.close());
+        await new Promise(resolve =>
+          reservation.listen(0, '127.0.0.1', () => resolve(undefined)),
+        );
+        const address = reservation.address();
+        if (!address || typeof address === 'string')
+          throw Error('Expected TCP port');
+        await new Promise(resolve =>
+          reservation.close(() => resolve(undefined)),
+        );
+        return address.port;
+      };
+      const port = await reservePort();
+      const echoPort = await reservePort();
       const nativeChildren = [];
       const platform = harden({
         ...nodePowers,
@@ -83,8 +88,7 @@ export const registerHttpIntegration = (test, kind) => {
         ),
         "'help,register'",
       );
-      const { bundle } = await bundleApplication(
-        nodePowers.bundler,
+      const { bundle } = await nodePowers.bundler.bundle(
         fileURLToPath(new URL('../examples/http-counter.js', import.meta.url)),
       );
       await host.client.call('install', 'site', bundle, [['http', 'web']]);
@@ -118,7 +122,85 @@ export const registerHttpIntegration = (test, kind) => {
           outgoing.end();
         });
       t.is(await request('POST', '/incr'), '1\n');
+
+      /**
+       * Like `request`, but on any port with extra headers, and reporting the
+       * status instead of asserting it.
+       * @param {number} onPort
+       * @param {Record<string, string>} headers
+       */
+      const requestWith = (onPort, headers) =>
+        new Promise((resolve, reject) => {
+          const outgoing = httpRequest(
+            {
+              host: '127.0.0.1',
+              port: onPort,
+              path: '/',
+              method: 'GET',
+              agent: false,
+              headers,
+            },
+            response => {
+              response.setEncoding('utf8');
+              let body = '';
+              response.on('data', chunk => {
+                body += chunk;
+              });
+              response.once('error', reject);
+              response.once('end', () =>
+                resolve({ status: response.statusCode, body }),
+              );
+            },
+          );
+          t.teardown(() => outgoing.destroy());
+          outgoing.once('error', reject);
+          outgoing.end();
+        });
+      // Re-registering the same handler with a new policy takes effect: the
+      // adapter rebinds rather than keeping the origins it first heard.
+      await host.client.call(
+        'evaluate',
+        "(globalThis.echo = Far('Echo', { handle: () => harden({ status: 200, body: 'echo\\n' }) }), true)",
+      );
+      // Registration is asynchronous: the handle arrives once the port is
+      // bound, and only then may the request go out.
+      await host.client.call(
+        'evaluate',
+        `E(inventory.get('web')).register(${echoPort}, echo, { origins: ['http://a.test'] }).then(handle => { globalThis.echoHandle = handle; return true; })`,
+      );
+      const withOrigin = origin =>
+        requestWith(echoPort, { host: `127.0.0.1:${echoPort}`, origin });
+      t.is((await withOrigin('http://a.test')).status, 200);
+      t.is((await withOrigin('http://b.test')).status, 403);
+      await host.client.call(
+        'evaluate',
+        `E(inventory.get('web')).register(${echoPort}, echo, { origins: ['http://b.test'] })`,
+      );
+      t.is((await withOrigin('http://a.test')).status, 403);
+      t.is((await withOrigin('http://b.test')).status, 200);
+      // Loopback spelled as localhost is this listener too.
+      t.is(
+        (await requestWith(echoPort, { host: `localhost:${echoPort}` })).status,
+        200,
+      );
+      t.is(
+        (await requestWith(echoPort, { host: `example.test:${echoPort}` }))
+          .body,
+        'Request host is not this listener',
+      );
+      // Closing a registration while its adapter is dead withdraws it without
+      // launching a replacement just to tell it about a port it never bound.
       await nativeChildren.at(-1).terminate();
+      const launched = nativeChildren.length;
+      t.is(await host.client.call('evaluate', 'E(echoHandle).close()'), 'true');
+      t.is(nativeChildren.length, launched, 'close launched no adapter');
+      t.is(
+        await host.client.call(
+          'evaluate',
+          'E(echoHandle).status().then(s => s.status)',
+        ),
+        "'closed'",
+      );
       await host.client.call(
         'evaluate',
         `E(E(apps).get('site')).start(${port})`,
