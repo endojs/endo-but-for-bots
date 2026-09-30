@@ -38,13 +38,23 @@ first message.
      initiator static, and an encrypted payload carrying the
      initiator's Ed25519 verifying key and the supported encoding
      versions.
-     Identity hiding (Noise §7.8 property 8): the initiator's static
-     is encrypted on the wire under the responder's static.
+     Identity hiding (Noise §7.8 property 4): the initiator's static
+     is encrypted on the wire under the responder's static, without
+     forward secrecy.
      The verifying key in the payload is only a claim, so the
      responder rejects the SYN unless that key converts to the static
-     X25519 key the initiator actually used in the handshake.
+     X25519 key the initiator actually used in the handshake, and has
+     no small-order component.
      Without this check, an initiator holding any keypair could claim
      any identity.
+     The Edwards-to-Montgomery conversion drops the sign of x, so the
+     holder of key A can also claim -A: a second identity for the same
+     key holder, not an impersonation.
+     Message 1 carries no freshness (Noise §7.7 destination property
+     2), so anyone who has seen a genuine SYN can replay it.
+     A replay never becomes a session, because it cannot produce the
+     channel-bound `op:start-session` below, but the responder does
+     process it until then.
 
 2. **SYNACK (responder to initiator)**:
    - **Noise IK message 2**: responder ephemeral, encrypted payload

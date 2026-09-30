@@ -8,6 +8,13 @@ import {
   PREFIXED_SYN_LENGTH,
   SYNACK_LENGTH,
 } from '../src/bindings.js';
+import {
+  addOrderTwoPoint,
+  edwardsToMontgomery,
+  makePrefixedSyn,
+  scalarFromSeed,
+  x25519,
+} from './_noise-ik-msg1.js';
 
 const path = fileURLToPath(new URL('../gen/ocapn-noise.wasm', import.meta.url));
 const bytes = /** @type {Uint8Array<ArrayBuffer>} */ (readFileSync(path));
@@ -342,4 +349,90 @@ test('SYN claiming a verifying key other than its Noise static is rejected', asy
   t.throws(() => responder.responderReadSynWriteSynack(prefixedSyn, synack), {
     message: /initiator verifying key does not match its Noise static key/,
   });
+});
+
+const makeIdentity = () =>
+  makeOcapnSessionCryptography({ wasmModule, getRandomValues }).asInitiator()
+    .signingKeys;
+
+const makeResponder = () =>
+  makeOcapnSessionCryptography({ wasmModule, getRandomValues }).asResponder();
+
+test('independently built SYN from an honest initiator is accepted', async t => {
+  // Control for the hand-built SYNs below: with honest inputs the
+  // test harness's message 1 is indistinguishable from the WASM's.
+  const responder = makeResponder();
+  const initiator = makeIdentity();
+  const prefixedSyn = makePrefixedSyn({
+    responderVerifyingKey: responder.signingKeys.publicKey,
+    initiatorStatic: edwardsToMontgomery(initiator.publicKey),
+    staticSharedSecret: x25519(
+      scalarFromSeed(initiator.privateKey),
+      edwardsToMontgomery(responder.signingKeys.publicKey),
+    ),
+    claimedVerifyingKey: initiator.publicKey,
+  });
+  const { initiatorVerifyingKey } = responder.responderReadSynWriteSynack(
+    prefixedSyn,
+    new Uint8Array(SYNACK_LENGTH),
+  );
+  t.deepEqual(initiatorVerifyingKey, initiator.publicKey);
+});
+
+test('SYN claiming a small-order verifying key is rejected', async t => {
+  // A small-order static makes `ss` all zeros, so an initiator holding
+  // no keys at all can complete message 1.  The identity point is the
+  // case only the small-order check catches: it is torsion-free and
+  // its Montgomery form (0) matches the static.
+  const identity = new Uint8Array(32);
+  identity[0] = 1;
+  const orderFour = new Uint8Array(32);
+  for (const claimedVerifyingKey of [identity, orderFour]) {
+    const responder = makeResponder();
+    const prefixedSyn = makePrefixedSyn({
+      responderVerifyingKey: responder.signingKeys.publicKey,
+      initiatorStatic: edwardsToMontgomery(claimedVerifyingKey),
+      staticSharedSecret: new Uint8Array(32),
+      claimedVerifyingKey,
+    });
+    t.throws(
+      () =>
+        responder.responderReadSynWriteSynack(
+          prefixedSyn,
+          new Uint8Array(SYNACK_LENGTH),
+        ),
+      {
+        message: /initiator verifying key does not match its Noise static key/,
+      },
+    );
+  }
+});
+
+test('SYN claiming a key with a small-order component is rejected', async t => {
+  // X25519 clamping makes every scalar a multiple of 8, which erases a
+  // small-order component: the holder of A can complete `ss` against a
+  // static of u(A + T).  Without the torsion check, the holder of one
+  // key could claim several.
+  const responder = makeResponder();
+  const holder = makeIdentity();
+  const claimedVerifyingKey = addOrderTwoPoint(holder.publicKey);
+  const prefixedSyn = makePrefixedSyn({
+    responderVerifyingKey: responder.signingKeys.publicKey,
+    initiatorStatic: edwardsToMontgomery(claimedVerifyingKey),
+    staticSharedSecret: x25519(
+      scalarFromSeed(holder.privateKey),
+      edwardsToMontgomery(responder.signingKeys.publicKey),
+    ),
+    claimedVerifyingKey,
+  });
+  t.throws(
+    () =>
+      responder.responderReadSynWriteSynack(
+        prefixedSyn,
+        new Uint8Array(SYNACK_LENGTH),
+      ),
+    {
+      message: /initiator verifying key does not match its Noise static key/,
+    },
+  );
 });

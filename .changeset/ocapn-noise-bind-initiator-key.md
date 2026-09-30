@@ -8,7 +8,12 @@ Noise IK handshake.
 Previously the responder trusted the verifying key carried in the encrypted
 SYN payload without comparing it to the Noise-authenticated static.
 Impersonation was still stopped later by the channel-bound `op:start-session`
-location signature, but before that check an impostor claiming a victim's
-key could close the victim's not-yet-claimed inbound session and occupy the
-victim's in-progress handshake slots.
-Small-order verifying keys are also rejected.
+location signature, but before that check an initiator holding any keypair
+could, by claiming a victim's key, close the victim's not-yet-claimed inbound
+session and occupy the victim's in-progress handshake slots.
+Claimed keys that are small-order or have a small-order component are also
+rejected, so one key holder can no longer present several torsion-shifted
+identities.
+
+This does not stop the same effects when the attacker replays a genuine SYN
+captured from the victim, since IK message 1 has no freshness.

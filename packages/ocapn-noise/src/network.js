@@ -932,9 +932,12 @@ export const makeOcapnNoiseNetwork = ({
       // IK msg 1 (read) + msg 2 (write) finalize the handshake in
       // one bindings call.  No further wire message is required.
       // The bindings reject a SYN whose claimed `initiatorVerifyingKey`
-      // does not match the static key Noise authenticated, so the
-      // per-peer bookkeeping below (in-progress caps, displacing an
-      // unclaimed session) acts only on a proven identity.
+      // does not match the static key Noise authenticated, so an
+      // initiator cannot reach the per-peer bookkeeping below
+      // (in-progress caps, displacing an unclaimed session) under a key
+      // it does not hold.  IK message 1 can be replayed, though: a
+      // captured SYN from a genuine peer still reaches it, and only
+      // `exchangeIdentity` proves the peer is live.
       const { initiatorVerifyingKey, encrypt, decrypt, handshakeHash } =
         asResp.responderReadSynWriteSynack(prefixedSyn, synack);
       const initiatorKeyHex = toHex(initiatorVerifyingKey);
