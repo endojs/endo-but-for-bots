@@ -26,7 +26,7 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
 ## Current work, 2026-09-30
 
-Tokyo is on generation 184, application `3ae3d5321`, host `00da646`.
+Tokyo is on generation 185, application `59fe1a5bd`, host `c6f7d23`.
 All four backends pass seed/restart/recall on this release; Claude and Codex
 retain native checkpoints on both completed turns with the rebuilt images.
 The stopped-incarnation error did not recur.
@@ -49,16 +49,28 @@ pass, including cold restart and late native acquisition.
 Package lint reports no errors (278 warnings), and the root documentation gate
 passes.
 
-Separate tool acceptance found a Claude protocol failure:
-`phase=observe/rate_limit_event, check=5`.
-The failed session `munlenm2-p0cgen-0` retains both tool calls/results but no
-native checkpoint; it was not retried and is not a passing seed.
-Codex and OpenCode pass tool seeds, policy changes, cancellation and inspection;
-cancellation preserves unresolved outcomes rather than claiming effects settled.
-The host evidence and restoration ledger record the successful recall separately
-from this new failure; RA-05 remains open for the full current-release matrix.
-Next: diagnose the retained rate-limit event failure without weakening coverage
-blindly or replaying its failed prompt, then repeat the affected acceptance.
+Generation 184's separate Claude tool failure was initialization ordering:
+`phase=observe/rate_limit_event, check=5` identifies the initialization guard,
+not metadata-schema validation. Capacity arrived before `system/init`.
+`59fe1a5bd` permits a strictly validated capacity event before initialization,
+without allowing it to establish dialogue or completion. Session/size/terminal
+fences and the event schema are unchanged. New tests reproduced the exact
+diagnostic before the fix; 516 Claude tests and 119 focused coverage tests pass.
+
+Generation 185 passes the full hosted matrix on all three adapters: seed/tool use,
+public-internet/off policy changes, private-destination rejection, cancellation,
+inspection and deletion.
+Cancellation retains unresolved outcomes rather than claiming effects settled.
+Fae passes its auto-free tool/pending-cancel/inspect/delete control.
+All four pass fresh seed/restart/recall on this exact release, with Claude/Codex
+native checkpoints observed before and after restart. No failed prompt was replayed.
+RA-05's current-release acceptance gate is satisfied under these recorded scopes;
+this does not close the separate long-context or process-loss questions.
+Host evidence: `ops/explicit-journal-deployment-20260924.md`, generation 185.
+
+Next: finish RA-04's missing admission-boundary tests and remove the unused Codex
+restore receipt/test-only selector surface identified in the updated simplification
+inventory, batching the required image rebuild and renewed image acceptance.
 RA-01 simplification justification and RA-04's remaining conformance coverage stay
 open; RA-03 is implemented, and direct-Fae compaction remains on hold.
 The older chronological entries and final sequence below are historical evidence,
@@ -1255,6 +1267,24 @@ canceled prompt. Keep adapter-specific protocols; introduce a common conformance
 matrix covering cancellation before preparation, during restoration, before
 dispatch, and after dispatch, including failure/next-turn behavior.
 Only factor implementation after the identical responsibilities are established.
+
+Current-source recheck, 2026-09-30: shared preparation/restoration tests cancel
+after entering a held preparation gate; they do not prove cancellation before
+preparation begins. OpenCode separately tests its actual command-write boundary
+and successful queued successor. Codex's held ledger write does not isolate the
+last transport-send microtask, and Claude's restoration gate does not isolate
+pending subprocess acquisition. These distinctions remain open conformance work,
+not evidence that every unshared case lacks a test.
+
+A test-only follow-up now covers a confirmed failed inference followed by a
+successful successor in Claude and OpenCode, using a small common assertion helper.
+Both require exactly one terminal per turn, one admission per prompt and no replay.
+Claude restores explicitly supplied context with a coherent native prefix;
+OpenCode retains its native session and process. Codex's existing failure/revert/
+successful-successor test supplies the third adapter's evidence without duplication.
+Focused client suites pass: Claude 102, Codex 114, OpenCode 37.
+No runtime, durable owner or storage format changes; these are simulated protocol
+tests, not live provider-error injection or process-loss recovery.
 
 The shared cancellation test work reproduced a further Codex defect: interrupting
 a held `thread/inject_items` restoration marked the active turn interrupted but

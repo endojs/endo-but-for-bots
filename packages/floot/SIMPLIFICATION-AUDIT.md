@@ -7,6 +7,44 @@ The target is one owner per responsibility, not the smallest possible line count
 Fae compaction remains on hold.
 Process-loss recovery remains the separate investigation tracked in PR #1323.
 
+## Native-context mechanism inventory, 2026-09-30
+
+Current-source follow-up at `59fe1a5bd`; this supplements the earlier inventory,
+which predates most native capture/restoration code.
+
+| Mechanism | Responsibility and decision |
+|---|---|
+| Claude `claude-context-coverage.js` | Transient comparison of observed stream, restored prefix and captured cut. Retain separately from parsing native files; it does not own durable conversation or certify host effects. |
+| Claude `oci/capture-compaction.mjs` | Selects ordinary/compacted native chains inside the sandbox and preserves supported opaque/signed records. Retain; exports data to the existing Floot journal. |
+| Claude `oci/restore-context.mjs` and `native-context-projection.mjs` | Reuse the capture validator and shared renderer to publish a disposable projection with preserved prefix bytes and permitted dialogue suffix. Retain; no additional durable owner. |
+| Claude `claude-transcript-writer.js` | Still used for initial portable history and the approved transcript-continuity fallback. Not dead code: unlike native import, this cannot preserve signed reasoning. |
+| Codex `oci/native-context.mjs` | Backend-specific rollout selection and rendering, including opaque compaction items and host-selected runtime metadata. Retain protocol-specific logic rather than merging unlike formats. |
+| Codex `oci/context-io.mjs` | Sandbox-local file reads, mutation checks and no-overwrite projection publication. Retain this filesystem boundary separately from pure selection. |
+| Codex `oci/context-command.mjs` and `src/native-context-transport.js` | Bounded one-shot exchange and owned helper cancellation/reaping. Retain separately from the long-lived app-server connection; neither owns conversation state. |
+| Floot `hosted-turn.js`, `turn-journal.js`, `context-transcript.js` | Journal the native envelope before completion/acknowledgement and select host-owned context. Keep this shared ownership boundary; native payloads cannot settle host effects. |
+
+Both adapters now define their native wire shape once in their own
+`oci/native-context-shape.mjs`.
+A coincidentally equal transport limit does not justify merging the different
+native formats or adding another framework.
+These retained layers explain responsibilities, not a claim that the overall
+refactor is smaller or that lifetime context is bounded.
+
+Concrete next deletions:
+
+- Codex `restoreCodexContext` computes and returns a `sha256` receipt that no
+  production caller consumes: `codex-client.js` reads only `sessionId` and
+  `rolloutPath`; only the I/O test asserts the hash.
+  Remove the unused receipt and hash computation with the next Codex image change.
+  Do not confuse it with Claude's actively checked `prefixSha256` receipt.
+- Codex's exported whole-string `selectCodexNativeContext` wrapper is used only
+  in tests; production uses the incremental selector.
+  Move that convenience into test helpers if retained; this is surface cleanup,
+  not a substantive complexity reduction.
+
+No deletion above has landed yet.
+Fae compaction and evidence-storage scaling remain deferred as directed.
+
 ## Decisions on remaining parallel mechanisms
 
 | Mechanisms | Different responsibilities | Decision |
