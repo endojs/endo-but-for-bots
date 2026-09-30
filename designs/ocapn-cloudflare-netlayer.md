@@ -141,8 +141,8 @@ swissnum is a row in the vat's storage.
 
 A new package, `@endo/ocapn-cloudflare`, provides `makeCloudflareNetwork(...)`,
 which returns an `OcapnNetwork` (`packages/ocapn/src/client/types.js`). It is a
-`provideSession` + `inboundSessions` network like `.np`
-([ocapn-noise-network.md](ocapn-noise-network.md)): it owns its handshake and
+`provideSession` + `inboundSessions` network like `.np`, the Noise
+network of [ocapn-noise-network.md](ocapn-noise-network.md): it owns its handshake and
 hands OCapN core a finished, authenticated `NetworkSession`. It does not use
 the connect-style `op:start-session` path.
 
@@ -158,7 +158,7 @@ interface CarrierBindings {
   // string uses for them (`<script>/<class>`).
   doNamespaces?: Record<string, DurableObjectNamespace | Fetcher>;
   // Whether this vat may dial `capnweb+tree` hints (outbound HTTPS).
-  capnweb?: boolean;
+  allowCapnweb?: boolean;
   // Hints this vat publishes in its own location.
   selfHints: Record<string, string>;
 }
@@ -169,6 +169,7 @@ interface CloudflareTuning {
   maxReorder?: number;            // default 64; 0 on ordered carriers (Ordering)
   maxInFlight?: number;           // default 64 (Ordering)
   idleProbeInterval?: number;     // ms, default 30_000 (Failure detection)
+  pingTimeout?: number;           // ms, default idleProbeInterval (Failure detection)
 }
 ```
 
@@ -288,10 +289,16 @@ Mailbox discipline, which the network enforces on both ends:
 
 The platform tells the callee nothing about its caller. The default OCapN
 `op:start-session` check is not enough either: the location signature in
-`packages/ocapn/src/client/handshake.js` "only proves the peer holds the fresh session key it just
-minted — nothing ties that to who the transport says they are". A
-`verifyPeerLocation` hook cannot fill the gap either, because the platform
-supplies no transport fact to check against.
+`packages/ocapn/src/client/handshake.js` only proves that the peer holds the
+fresh session key it just minted. Nothing ties that key to who the transport
+says the peer is. On connect-style networks, OCapN core closes that gap with
+`verifyPeerLocation`, an optional netlayer hook
+(`packages/ocapn/src/client/types.js`) that core calls during
+`op:start-session`, after the location signature validates, so the netlayer
+can bind the peer's claimed location to an identity the transport
+authenticated (for example, an iroh `EndpointId` or a Noise static key). That hook cannot fill the gap here, because the platform
+supplies no transport fact to check against: a DO or service-binding call
+carries no caller identity at all.
 
 The `cf` network therefore authenticates the designator key itself. It reuses
 the proven shape of the two existing authenticating netlayers in this
@@ -414,8 +421,12 @@ rely on a platform ordering guarantee:
   callee rejects rather than hanging is not documented by the platform
   (verification item 6 covers only stubs broken by a disconnect), so the
   network also bounds each `ping` by its own timer: a `ping` unresolved
-  after one further `idleProbeInterval` aborts the session as if it had
-  rejected (*Known Gaps*). A session with nothing outstanding sends no
+  after `pingTimeout` (default: equal to `idleProbeInterval`) aborts the session as if it had
+  rejected (*Known Gaps*). The two knobs are separate because they answer
+  different questions: `idleProbeInterval` is how long an idle session waits
+  before probing, and `pingTimeout` is how long a probed peer has to answer.
+  A caller who shortens the first to detect failure sooner does not thereby
+  shorten the second. A session with nothing outstanding sends no
   heartbeat, so an idle DO is still free to be evicted. The heartbeat rides
   the same `seq` counter, so it cannot be used to reorder frames.
 - **The heartbeat is not a keep-alive.** It is an ordinary `setTimeout` in
@@ -431,7 +442,9 @@ rely on a platform ordering guarantee:
   time for up to one `idleProbeInterval` beyond its last traffic, per probe, until
   the answer arrives or the peer is found dead.
 
-For E-ordering: the platform orders calls on one DO stub (verification
+For E-ordering (the ordering guarantee from the E language, which OCapN
+also assumes: messages sent on one reference arrive in the order sent): the
+platform orders calls on one DO stub (verification
 item 3), so on the binding carrier to a DO the reorder buffer should
 never hold a frame. That is verified only for DO stubs, not for
 `WorkerEntrypoint` service bindings or Cap'n Web (item 6). `seq`
@@ -558,9 +571,14 @@ supervisor. The supervisor is in the facet's trusted computing base:
   construction, the union of its facets' network reach.
 
 A facet that must not trust its supervisor needs end-to-end protection that
-this design does not provide on tree carriers: the ws-bytes carrier with the
-`.np` network (*Interaction with Noise*), with the supervisor forwarding
-opaque ciphertext.
+this design does not provide. The confined facet's only egress is
+`OcapnPort.dial`, which carries tree frames over the binding and capnweb
+carriers; it has no path to a WebSocket. Running the `.np` network over the
+ws-bytes carrier (*Interaction with Noise*) would need an additional port
+operation through which the supervisor relays opaque ciphertext frames
+between a facet and a WebSocket it accepted. That relay is not designed here:
+it is future work, deferred with the ws-bytes carrier to phase 4 (*Known
+Gaps*). Until it exists, a confined facet trusts its supervisor.
 
 This removes the web-key relay and its URL allowlist from #78: there is no
 HTTP relay left, so the HTTP proxying and URL parsing it needed are gone. The
@@ -760,8 +778,9 @@ Noise encrypts bytes, so tree frames and `.np` cannot be layered. The design
 takes a position instead of combining them:
 
 - **Binding carrier:** frames never leave Cloudflare's network. The
-  designator handshake above gives authentication. Noise would add only
-  protection from the platform, which already runs the vat's code. So there
+  designator handshake above gives authentication. Noise would add
+  protection only against the platform operator, which already runs the
+  vat's code. So there
   is no Noise.
 - **capnweb carrier:** TLS protects the transport, and the designator
   handshake authenticates the peer. The trust gap versus Noise is TLS
@@ -825,6 +844,14 @@ carrier stub.
 
 ## Phased Implementation
 
+0. **workerd smoke spike.** Before phase 1, and independent of it: in one
+   DO and one dynamically loaded facet with `globalOutbound: null`, import
+   `@endo/ocapn`, call `lockdown()`, `harden` an exo, and run a loopback
+   `makeOcapn` session over an in-isolate carrier. This answers the
+   foundational *Known Gaps* item (whether SES and `@endo/ocapn` run in the
+   workerd isolate at all) before phases 1 and 2 build toward a shape that
+   depends on the answer. If it fails, the confinement strategy is revisited
+   before any codec work lands.
 1. **Tree codec in `@endo/ocapn`.** Make `OcapnCodec<M>` generic, add
    `signingCodec`, `atEnd`, and `@endo/ocapn/tree` (`treeCodec`). Byte codecs
    are unchanged apart from the alias. No Cloudflare dependency.
@@ -864,7 +891,11 @@ carrier stub.
 - **Network tests:** designator mismatch aborts; a replayed transcript
   signature from another session fails the `binding` check; out-of-order
   `seq` within `maxReorder` is reordered; a gap, a duplicate, or a stub inside
-  a frame aborts; a rejected `deliver` aborts and is not retried; crossed
+  a frame aborts; a rejected `deliver` aborts and is not retried;
+  after that abort, the next `provideSession` to the same designator opens a
+  fresh session and new application traffic (a fresh bootstrap fetch and a
+  call on it) succeeds end to end, while answers from the severed session
+  stay rejected; crossed
   hellos converge on one session, including when both handshakes complete
   before either side sees the other and when one side's pending outbound
   `open` crosses an inbound one; a `ping` or `finish` frame never reaches
@@ -918,8 +949,12 @@ carrier stub.
 
 ## Known Gaps and TODOs
 
-- [ ] Confirm `@endo/ocapn` (and `harden`) loads and runs in workerd; whether
-  to lock down there is part of phase 3.
+- [ ] Confirm `@endo/ocapn` (and `harden`) loads and runs in workerd, with
+  and without `lockdown()`. Phase 0's smoke spike answers this first; phase 3
+  decides whether production vats lock down.
+- [ ] Design the supervisor relay that would give a confined facet
+  end-to-end protection over the ws-bytes carrier (*Trust model of the
+  supervisor*); phase 4.
 - [ ] Per-facet storage quota for DO facets, to be filed with the supervisor
   work.
 - [ ] Verify how a pending `setTimeout` or an in-flight outbound RPC call
@@ -942,7 +977,11 @@ carrier stub.
 
 1. Should the codec become a **per-network** choice (so one `makeOcapn` can
    host a tree network and the byte `.np` network together), or is one
-   `makeOcapn` per codec family acceptable for now?
+   `makeOcapn` per codec family acceptable for now? This is an identity
+   question, not only a code-organization one: each `makeOcapn` owns its own
+   import/export tables and answer positions, so two instances partition the
+   vat's reference space. The same object exported through both would appear
+   to peers as two unrelated references with separate GC refcounts.
 2. Should the **signing codec be canonical Syrup** fixed by the OCapN spec, or
    configurable (for example canonical CBOR, so that CBOR-world `.np` peers
    can verify handoff certificates minted in the tree world)?
