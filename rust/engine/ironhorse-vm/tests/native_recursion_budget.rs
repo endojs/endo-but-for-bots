@@ -31,6 +31,11 @@
 
 use ironhorse_vm::{Halt, Interp, RunOutcome, NATIVE_DEPTH_LIMIT, NATIVE_STACK_BYTES};
 
+/// The stack-lane corpus (`stack-lanes/cases.rs`): the heavy re-entry
+/// families at their measured ceilings, shared with the probe every lane runs.
+#[path = "../../stack-lanes/cases.rs"]
+mod cases;
+
 fn compile(src: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     let (b, s) = ironhorse_compile::compile_atoms(src).expect("fixture compiles");
     (b, ironhorse_vm::parse_symbols(&s))
@@ -730,5 +735,201 @@ fn copied_iterator_setters_fit_the_contract_stack() {
         assert_stack_overflow(&on_contract_stack(format!(
             "var k={key};var d=Object.getOwnPropertyDescriptor(Iterator.prototype,k);var o={{}};Object.defineProperty(o,k,d);o[k]=1;'done'"
         )), "copied Iterator setter recursion");
+    }
+}
+
+// STACK-DEPTH-REFACTOR.md §5, Phase 0, "Native tests": the §3 compositions
+// (U1 bound `instanceof`, U2 the fast-path `flat`, U3 the RegExp compiler, U4
+// the runtime-compile seam) and the ceilings the report measured but did not
+// test.
+
+#[test]
+fn instanceof_through_bound_functions_is_charged_only_through_has_instance() {
+    // U1. `InstanceofOperator` on a bound function with no `@@hasInstance` in
+    // its chain unwraps the bound target inside `OrdinaryHasInstance` with no
+    // native frame charged, so the walk is unbounded by the budget: 2,000
+    // here, 5,000 in §3, as deep as the heap admits. It traps on the
+    // Worker-sized wasm stacks of lane B, and is the defect B2 fixes; this
+    // pin flips when it lands. A chain over an ordinary function inherits the
+    // intrinsic `@@hasInstance`, one charged native activation per layer, and
+    // halts at 126.
+    let uncharged = |layers: usize| {
+        format!(
+            "function F() {{}} Object.setPrototypeOf(F, null); var b = F; \
+             for (var i = 0; i < {layers}; i++) {{ b = Function.prototype.bind.call(b, null); Object.setPrototypeOf(b, null); }} \
+             new F() instanceof b"
+        )
+    };
+    let charged = |layers: usize| {
+        format!(
+            "function F() {{}} var b = F; for (var i = 0; i < {layers}; i++) b = b.bind(null); \
+             new F() instanceof b"
+        )
+    };
+    assert_completes(
+        &on_contract_stack(uncharged(2000)),
+        "true",
+        "instanceof through 2,000 null-prototype bound functions",
+    );
+    assert_completes(
+        &on_contract_stack(charged(125)),
+        "true",
+        "instanceof through 125 bound functions with the intrinsic @@hasInstance",
+    );
+    assert_stack_overflow(
+        &on_contract_stack(charged(126)),
+        "instanceof through 126 bound functions with the intrinsic @@hasInstance",
+    );
+}
+
+#[test]
+fn a_fast_path_flat_and_a_regexp_compile_fit_under_the_deepest_admitted_stacks() {
+    // U2 and U3 at the bottom of the deepest stack the budget admits above
+    // them, and one layer more halts. U2 is the compact fast-path `flat`
+    // over a 1,022-deep nest (its own recursion uncharged, §3), one charged
+    // native activation: 16 units. U3 is a 512-group RegExp (the pattern
+    // nesting limit; its compile uncharged, §3) reached through the
+    // constructor and the `source` getter: 17 units. So the flat sits one
+    // layer deeper than the RegExp under each stack: a `JSON.stringify` nest
+    // of 1,983 / 1,982 arrays (1 unit per level), 2,000 / 1,999 forwarding
+    // Proxies under a getter (1 unit per layer), and 63 / 62 nested
+    // `forEach` callbacks (32 units per level).
+    let flat = "a.flat(Infinity).length";
+    let regexp = "new RegExp('('.repeat(512) + 'a' + ')'.repeat(512)).source.length";
+    let under_json = |levels: usize, body: &str| {
+        format!(
+            "{} var o = {{ toJSON: function () {{ return {body}; }} }}; \
+             var r = o; for (var i = 0; i < {levels}; i++) {{ r = [r]; }} JSON.stringify(r).length",
+            nested_arrays(1022)
+        )
+    };
+    let under_proxies = |layers: usize, body: &str| {
+        format!(
+            "{} var t = {{ get x() {{ return {body}; }} }}; var p = t; \
+             for (var i = 0; i < {layers}; i++) p = new Proxy(p, {{}}); p.x",
+            nested_arrays(1022)
+        )
+    };
+    let under_for_each = |levels: usize, body: &str| {
+        format!(
+            "{} function f(n) {{ if (n > 0) {{ var r; [0].forEach(function () {{ r = f(n - 1); }}); return r; }} \
+             return {body}; }} f({levels})",
+            nested_arrays(1022)
+        )
+    };
+    for (what, body, json, proxies, for_each, results) in [
+        (
+            "the fast-path flat",
+            flat,
+            1983,
+            2000,
+            63,
+            ["3967", "0", "0"],
+        ),
+        (
+            "the 512-group RegExp",
+            regexp,
+            1982,
+            1999,
+            62,
+            ["3968", "1025", "1025"],
+        ),
+    ] {
+        assert_completes(
+            &on_contract_stack(under_json(json, body)),
+            results[0],
+            &format!("{what} under a {json}-deep JSON nest"),
+        );
+        assert_stack_overflow(
+            &on_contract_stack(under_json(json + 1, body)),
+            &format!("{what} under a {}-deep JSON nest", json + 1),
+        );
+        assert_completes(
+            &on_contract_stack(under_proxies(proxies, body)),
+            results[1],
+            &format!("{what} under {proxies} Proxies"),
+        );
+        assert_stack_overflow(
+            &on_contract_stack(under_proxies(proxies + 1, body)),
+            &format!("{what} under {} Proxies", proxies + 1),
+        );
+        assert_completes(
+            &on_contract_stack(under_for_each(for_each, body)),
+            results[2],
+            &format!("{what} under {for_each} forEach levels"),
+        );
+        assert_stack_overflow(
+            &on_contract_stack(under_for_each(for_each + 1, body)),
+            &format!("{what} under {} forEach levels", for_each + 1),
+        );
+    }
+}
+
+#[test]
+fn an_eval_nest_compiling_a_tagged_chain_fits_under_a_for_each_nest() {
+    // U4, the runtime-compile seam, under a re-entry stack: nested `eval`s
+    // (48 units each), the innermost compiling a function whose body is a
+    // 2,038-template tagged chain (the deepest the parser admits inside that
+    // function wrapper), at the bottom of 20 nested `forEach` callbacks
+    // (32 units each). 28 evals fit; 29 sum to the whole budget and the light
+    // frame at the bottom takes them to 2,049, the halt.
+    let source = |evals: usize| {
+        format!(
+            "function g(n) {{ if (n > 0) return eval('g(n - 1)'); \
+               return eval('(function () {{ return f' + '``'.repeat(2038) + '; }})'); }} \
+             function f(n) {{ if (n > 0) {{ var r; [0].forEach(function () {{ r = f(n - 1); }}); return r; }} \
+               return typeof g({evals}); }} f(20)"
+        )
+    };
+    assert_completes(
+        &on_contract_stack_with_compiler(source(28)),
+        "function",
+        "28 evals under 20 forEach levels",
+    );
+    assert_stack_overflow(
+        &on_contract_stack_with_compiler(source(29)),
+        "29 evals under 20 forEach levels",
+    );
+}
+
+#[test]
+fn the_regexp_protocol_iterator_helper_and_thenable_ceilings_are_exact() {
+    // The ceilings the report measured (§2.1) but did not test: each family
+    // returns at its ceiling and halts one level past it, on the corpus
+    // template every lane runs.
+    for (family, ceiling) in [
+        ("replace-re-fn", 42),
+        ("user-exec", 42),
+        ("species", 41),
+        ("lastindex-valueof", 63),
+        ("regexp-test-exec", 63),
+        ("take", 126),
+        ("iter-map", 126),
+        ("tagged-then", 61),
+    ] {
+        let recorded = cases::HEAVY
+            .iter()
+            .find(|(name, _)| *name == family)
+            .map(|(_, n)| *n);
+        assert_eq!(
+            recorded,
+            Some(ceiling),
+            "{family}: the corpus records this ceiling"
+        );
+        let source = |n: usize| {
+            let (source, needs_compiler) = cases::heavy(family, n).expect("a corpus family");
+            assert!(!needs_compiler, "{family} runs without the source compiler");
+            source
+        };
+        let at = on_contract_stack(source(ceiling));
+        assert!(
+            at.completed,
+            "{family} at its ceiling of {ceiling} must return; halt: {:?}",
+            at.halt
+        );
+        assert_stack_overflow(
+            &on_contract_stack(source(ceiling + 1)),
+            &format!("{family} one past its ceiling"),
+        );
     }
 }

@@ -44,6 +44,7 @@
     "proxy-has-10k",
     "proxy-proto-cycle",
     "proxy-set-10k",
+    "u1-uncharged-bound-instanceof-2000",
     "u2-tojson-flat-1022",
     "u2-tojson-regexp-512",
     "u3-eval-nest-tagged-2038",

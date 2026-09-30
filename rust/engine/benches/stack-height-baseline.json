@@ -3,7 +3,7 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "commit": "8eeaf3c6d7ef7c49e4ff0bf9670374663ae825e0"
+    "commit": "73507bdec1ee76cce5fa7e03c65c55ea8f215b86"
   },
   "slack": 0.02,
   "cases": {
@@ -304,7 +304,7 @@
       "outcome": "compiled"
     },
     "regexp-deep.run": {
-      "bytes": 235999,
+      "bytes": 236087,
       "outcome": "completed"
     },
     "proto-chain-ordinary-20k.compile": {
@@ -856,7 +856,7 @@
       "outcome": "compiled"
     },
     "proxy-trap-120.run": {
-      "bytes": 720351,
+      "bytes": 720383,
       "outcome": "ReentryLimit"
     },
     "replace-re-fn-42.compile": {
@@ -1328,7 +1328,7 @@
       "outcome": "compiled"
     },
     "mixed-value-stack-30.run": {
-      "bytes": 426863,
+      "bytes": 426799,
       "outcome": "StackOverflow"
     },
     "mixed-value-stack-60.compile": {
@@ -1339,13 +1339,13 @@
       "bytes": 845423,
       "outcome": "StackOverflow"
     },
-    "u1-bound-instanceof-2000.compile": {
-      "bytes": 9407,
+    "u1-uncharged-bound-instanceof-2000.compile": {
+      "bytes": 11903,
       "outcome": "compiled"
     },
-    "u1-bound-instanceof-2000.run": {
-      "bytes": 1204519,
-      "outcome": "ReentryLimit"
+    "u1-uncharged-bound-instanceof-2000.run": {
+      "bytes": 424575,
+      "outcome": "completed"
     },
     "u2-tojson-flat-1022.compile": {
       "bytes": 14511,

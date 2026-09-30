@@ -492,15 +492,20 @@ pub fn cases() -> Vec<Case> {
             mixed_value_stack(k),
         ));
     }
-    // U1-U4 compositions (§3, §5). U2-U4 are accepted natively and expected
-    // traps on wasm. U1 (`instanceof` through bound functions) halts with
-    // `ReentryLimit` at 2,000 layers on this tree, with or without a
-    // `@@hasInstance` in the chain, so the report's "uncharged, completes at
-    // 5,000" does not reproduce here; it stays as a cross-host check of that
-    // halt.
+    // U1-U4 compositions (§3, §5), accepted natively and expected traps on
+    // wasm. U1 is `instanceof` through 2,000 bound functions with no
+    // `@@hasInstance` in the chain (null prototypes), the walk §3 found
+    // uncharged: `OrdinaryHasInstance` unwraps each bound target with no
+    // native frame charged, so it completes natively at any depth the heap
+    // admits and traps on the Worker-sized wasm stacks of lane B. A chain
+    // over an ordinary function is charged instead, one intrinsic
+    // `@@hasInstance` call per layer, and halts at 126
+    // (`native_recursion_budget.rs`).
     cases.push(run(
-        "u1-bound-instanceof-2000",
-        "function F() {} var b = F; for (var i = 0; i < 2000; i++) b = b.bind(null); new F() instanceof b".into(),
+        "u1-uncharged-bound-instanceof-2000",
+        "function F() {} Object.setPrototypeOf(F, null); var b = F; \
+         for (var i = 0; i < 2000; i++) { b = Function.prototype.bind.call(b, null); Object.setPrototypeOf(b, null); } \
+         new F() instanceof b".into(),
     ));
     cases.push(run(
         "u2-tojson-flat-1022",
