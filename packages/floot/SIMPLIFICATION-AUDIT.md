@@ -255,3 +255,11 @@ beside the helpers and imported by the daemon. A test fails if the shape is
 written down a second time or if the Containerfile misses a module a helper
 imports. Not deployed: the Containerfile changes the Claude image digest, which
 is broker identity.
+
+Same day, the same for Codex (`0385937c5`: the envelope bound and identity
+pattern of three in-image helpers and the host transport, one module, image
+digest moves), and the Claude and OpenCode `setup-hosted.js` scripts now run
+one shared sequence, `hosted-agent/src/hosted-backend-setup.js` (`a26ae97da`):
+their 211 identical lines are written once, each adapter keeps only what is its
+own, and both adapters' setup suites pass unchanged. Codex's setup script is
+structurally different and stays separate.

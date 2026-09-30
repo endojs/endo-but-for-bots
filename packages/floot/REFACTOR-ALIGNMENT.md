@@ -32,7 +32,7 @@ endo-host `ops/explicit-journal-deployment-20260924.md`.
 
 | Item | Status | Evidence |
 |---|---|---|
-| RA-01 simplification | Removals done; target regressed | Every removal named below is in source. The four backend/shared packages measure 42,185 lines (was 39,713 at the snapshot), and the vendor packages 19,028 (was 16,718), mostly new native-context capture/restore code (Claude coverage and helpers, Codex context transport) that the retained-mechanism inventory does not yet cover. The attachment allowlist, the record identity pattern and the transport limit that were repeated across the Claude helpers and validator are written once since `d2effd167` (2026-09-30, below) |
+| RA-01 simplification | Removals done; target regressed | Every removal named below is in source. The four backend/shared packages measure 42,185 lines (was 39,713 at the snapshot), and the vendor packages 19,028 (was 16,718), mostly new native-context capture/restore code (Claude coverage and helpers, Codex context transport) that the retained-mechanism inventory does not yet cover. The attachment allowlist, the record identity pattern and the transport limit that were repeated across the Claude helpers and validator are written once since `d2effd167`, the Codex envelope bound and identity pattern since `0385937c5`, and the Claude and OpenCode `setup-hosted.js` scripts run one shared sequence since `a26ae97da` (all 2026-09-30, below) |
 | RA-02 bounded context | Open | No whole-context bound, no Fae compaction producer, no policy. The portable fallback (`88f9deb23`) and non-fatal capture (`adf25f948`) reverse RA-02's "refuse rather than fall back" for Claude (the transcript-continuity backend with native checkpoints; OpenCode has none to refuse on): a failed, stopped or uncaptured turn now projects the checkpoint's portable context plus everything after it, so bounding relies on the CLI's own compaction until the next Claude checkpoint. Codex still refuses |
 | RA-03 account identity | Done in source; in the deployed code | Explicit bindings, exact-authority merging, reset pairing; not separately accepted live |
 | RA-04 admission conformance | Partial | The shared harness covers cancellation before/during preparation and during restoration on all three adapters. Cancel at the write, after dispatch, and failure-then-next-turn are per-adapter only; Codex's successor disposition deliberately differs |
@@ -73,6 +73,33 @@ one definition, not the count. Deploying it is an image change: the
 Containerfile moves the Claude image digest, and images remain broker
 identity, so it rides the next Claude image redeploy (retire the broker name
 and the Claude sessions, as on September 25), not a daemon-only release.
+
+**Duplicate implementations, continued — 2026-09-30.** `0385937c5` does for
+Codex what `d2effd167` did for Claude: the 16 MiB envelope bound (declared in
+three in-image helpers and the host transport) and the record identity
+pattern (two helpers) are one module, `codex-sandbox/oci/native-context-shape.mjs`,
+copied into the image and guarded by the same two tests; the Codex image
+digest moves with it. `a26ae97da` replaces the 211 identical lines the Claude
+and OpenCode `setup-hosted.js` scripts shared with one sequence in
+`hosted-agent/src/hosted-backend-setup.js`: explicit steps (environment,
+provisioned services, storage roots, retained broker or minted identity,
+session roots, disjoint guest roots, broker mint-or-retain with its settings,
+backend caplet swap, Floot binding, account publication), parameterized by
+label, `ENDO_<PREFIX>` and pet-name directory. Each adapter's own code
+(Claude's credential kinds, pool, `anthropic-beta` profile and
+state-provider-backed storage owner; OpenCode's null-powers storage owner)
+sits between the steps as plain code, not behind hooks. Both adapter setup
+suites pass unchanged (10 and 19 tests), nine unit tests cover the steps, and
+the pre-commit review confirmed side-effect order, console text and the
+persisted broker profiles' key order identical, apart from four documented
+reorderings of pure checks. The scripts shrink from 527 and 414 lines to 388
+and 271. Codex's setup script (64 shared lines) stays separate: it requires
+both images, verifies retained powers identity, mints two services and
+orders its profile differently; `requireProvisioned` and `bindFlootBackend`
+would fit it as-is, `publishHostedAccount` would need `resetCredits`. The
+setup change is daemon-only and exercises the retained-broker path at the
+next start; the mint path runs when the brokers are next retired, which the
+two image changes above call for anyway.
 
 ## Requirements and current evidence
 
