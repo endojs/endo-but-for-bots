@@ -535,7 +535,7 @@ impl HeapStore for FileStore {
             != (from.slot_count, from.chunk_len, from.free_len)
         {
             return Err(StoreError::Unsupported(
-                "a migration that changes the store's geometry",
+                "migrate a store to another geometry",
             ));
         }
         let layout = Layout {
@@ -1154,8 +1154,9 @@ mod tests {
     }
 
     /// The migration write compares the durable manifest with the one the
-    /// migration read, and refuses without writing when they differ or
-    /// the file does not decode.
+    /// migration read, and refuses without writing when they differ, when
+    /// the new manifest names another geometry, or when the file does not
+    /// decode.
     #[test]
     fn migration_write_refuses_a_moved_or_damaged_file() {
         let dir = tmp_dir("migration-write-refusals");
@@ -1186,6 +1187,30 @@ mod tests {
             Err(StoreError::BaselineMismatch { .. })
         ));
         assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        // A `to` at another geometry would put a file whose directories
+        // disagree with its manifest in place of this one.
+        for regeometried in [
+            StoreManifest {
+                slot_count: manifest.slot_count + 1,
+                ..manifest.clone()
+            },
+            StoreManifest {
+                chunk_len: manifest.chunk_len + 1,
+                ..manifest.clone()
+            },
+            StoreManifest {
+                free_len: manifest.free_len + 1,
+                ..manifest.clone()
+            },
+        ] {
+            assert_eq!(
+                store.replace_for_migration(&manifest, &regeometried, &small),
+                Err(StoreError::Unsupported(
+                    "migrate a store to another geometry"
+                ))
+            );
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
         for cut in [0, 8, 11] {
             std::fs::write(&path, &bytes[..cut]).unwrap();
             assert!(store
