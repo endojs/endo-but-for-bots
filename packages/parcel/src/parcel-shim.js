@@ -25,7 +25,7 @@ const isHardenInstalled = () =>
   typeof (/** @type {any} */ (Object)[symbolForHarden]) === 'function' ||
   typeof (/** @type {any} */ (globalThis).harden) === 'function';
 
-/** @typedef {Readonly<Record<never, never>>} Parcel */
+/** @typedef {{ readonly [Symbol.toStringTag]: 'Parcel' }} Parcel */
 
 /**
  * @callback ParcelOpenHook
@@ -59,7 +59,7 @@ const isHardenInstalled = () =>
  * @returns {ParcelConstructor}
  */
 export const makeParcelConstructor = () => {
-  /** @type {WeakMap<Parcel, { location: string, openHook: ParcelOpenHook }>} */
+  /** @type {WeakMap<object, { location: string, openHook: ParcelOpenHook }>} */
   const details = new SafeWeakMap();
 
   class Parcel {
