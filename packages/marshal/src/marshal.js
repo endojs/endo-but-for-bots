@@ -21,7 +21,7 @@ import {
 
 /**
  * @import {ConvertSlotToVal, ConvertValToSlot, FromCapData, MakeMarshalOptions, ToCapData} from './types.js';
- * @import {Passable, PassableCap, RemotableObject} from '@endo/pass-style';
+ * @import {Passable, PassableCap, RemotableObject, SturdyRef} from '@endo/pass-style';
  * @import {InterfaceSpec} from '@endo/pass-style';
  * @import {Encoding} from './types.js';
  */
@@ -82,7 +82,7 @@ export const makeMarshal = (
     const slotMap = new Map();
 
     /**
-     * @param {PassableCap} passable
+     * @param {PassableCap | SturdyRef} passable
      * @returns {{index: number, repeat: boolean}}
      */
     const encodeSlotCommon = passable => {
@@ -165,6 +165,18 @@ export const makeMarshal = (
         encodeSlotToCapData(promise);
 
       /**
+       * A SturdyRef occupies a slot like a remotable or a promise, but its
+       * encoding names its kind, so that the decoder can tell it apart.
+       * It carries no iface.
+       *
+       * @type {(sturdyRef: SturdyRef, encodeRecur: (p: Passable) => Encoding) => Encoding}
+       */
+      const encodeSturdyRefToCapData = (sturdyRef, _encodeRecur) => {
+        const { index } = encodeSlotCommon(sturdyRef);
+        return harden({ [QCLASS]: 'sturdyRef', index });
+      };
+
+      /**
        * Even if an Error is not actually passable, we'd rather send
        * it anyway because the diagnostic info carried by the error
        * is more valuable than diagnosing why the error isn't
@@ -182,6 +194,7 @@ export const makeMarshal = (
       const encodeToCapData = makeEncodeToCapData({
         encodeRemotableToCapData,
         encodePromiseToCapData,
+        encodeSturdyRefToCapData,
         encodeErrorToCapData,
       });
 
@@ -214,6 +227,9 @@ export const makeMarshal = (
       const encodePromiseToSmallcaps = (promise, _encodeRecur) =>
         encodeSlotToSmallcaps('&', promise);
 
+      const encodeSturdyRefToSmallcaps = (sturdyRef, _encodeRecur) =>
+        encodeSlotToSmallcaps("'", sturdyRef);
+
       const encodeErrorToSmallcaps = (err, encodeRecur) => {
         const errData = encodeErrorCommon(err, encodeRecur);
         const { message, ...rest } = errData;
@@ -223,6 +239,7 @@ export const makeMarshal = (
       const encodeToSmallcaps = makeEncodeToSmallcaps({
         encodeRemotableToSmallcaps,
         encodePromiseToSmallcaps,
+        encodeSturdyRefToSmallcaps,
         encodeErrorToSmallcaps,
       });
 
@@ -241,12 +258,12 @@ export const makeMarshal = (
   };
 
   const makeFullRevive = slots => {
-    /** @type {Map<number, RemotableObject | Promise>} */
+    /** @type {Map<number, RemotableObject | Promise | SturdyRef>} */
     const valMap = new Map();
 
     /**
      * @param {{iface?: string, index: number}} slotData
-     * @returns {RemotableObject | Promise}
+     * @returns {RemotableObject | Promise | SturdyRef}
      */
     const decodeSlotCommon = slotData => {
       const { iface = undefined, index, ...rest } = slotData;
@@ -348,7 +365,9 @@ export const makeMarshal = (
     // See https://github.com/Agoric/agoric-sdk/issues/4334
     const decodeRemotableOrPromiseFromCapData = (rawTree, _decodeRecur) => {
       const { [QCLASS]: _, ...slotData } = rawTree;
-      return decodeSlotCommon(slotData);
+      return /** @type {RemotableObject | Promise} */ (
+        decodeSlotCommon(slotData)
+      );
     };
 
     const decodeErrorFromCapData = (rawTree, decodeRecur) => {
@@ -356,9 +375,17 @@ export const makeMarshal = (
       return decodeErrorCommon(errData, decodeRecur);
     };
 
+    const decodeSturdyRefFromCapData = (rawTree, _decodeRecur) => {
+      const { [QCLASS]: _, ...slotData } = rawTree;
+      !hasOwn(slotData, 'iface') ||
+        Fail`unexpected encoded sturdyRef property ${q('iface')}`;
+      return /** @type {SturdyRef} */ (decodeSlotCommon(slotData));
+    };
+
     const reviveFromCapData = makeDecodeFromCapData({
       decodeRemotableFromCapData: decodeRemotableOrPromiseFromCapData,
       decodePromiseFromCapData: decodeRemotableOrPromiseFromCapData,
+      decodeSturdyRefFromCapData,
       decodeErrorFromCapData,
     });
 
@@ -375,14 +402,27 @@ export const makeMarshal = (
         const index = Number(stringEncoding.slice(1, i < 0 ? undefined : i));
         // i < 0 means there was no iface included.
         const iface = i < 0 ? undefined : stringEncoding.slice(i + 1);
-        return decodeSlotCommon({
-          ...(iface !== undefined && { iface }),
-          index,
-        });
+        return /** @type {RemotableObject | Promise} */ (
+          decodeSlotCommon({
+            ...(iface !== undefined && { iface }),
+            index,
+          })
+        );
       };
     };
     const decodeRemotableFromSmallcaps = makeDecodeSlotFromSmallcaps('$');
     const decodePromiseFromSmallcaps = makeDecodeSlotFromSmallcaps('&');
+
+    /**
+     * @param {string} stringEncoding
+     * @param {(e: unknown) => Passable} _decodeRecur
+     * @returns {SturdyRef}
+     */
+    const decodeSturdyRefFromSmallcaps = (stringEncoding, _decodeRecur) => {
+      assert(stringEncoding.charAt(0) === "'");
+      const index = Number(stringEncoding.slice(1));
+      return /** @type {SturdyRef} */ (decodeSlotCommon({ index }));
+    };
 
     const decodeErrorFromSmallcaps = (encoding, decodeRecur) => {
       const { '#error': message, ...restErrData } = encoding;
@@ -396,6 +436,7 @@ export const makeMarshal = (
       decodeRemotableFromSmallcaps,
       // @ts-ignore XXX SmallCapsEncoding
       decodePromiseFromSmallcaps,
+      decodeSturdyRefFromSmallcaps,
       decodeErrorFromSmallcaps,
     });
 

@@ -1,11 +1,11 @@
 // @ts-check
 export {};
 
-/** @import {Passable, PassableCap} from '@endo/pass-style' */
+/** @import {Passable, PassableCap, SturdyRef} from '@endo/pass-style' */
 
 /**
  * @template Slot
- * @template {PassableCap} [Value=any]
+ * @template {PassableCap | SturdyRef} [Value=any]
  * @callback ConvertValToSlot
  * @param {Value} val
  * @returns {Slot}
@@ -13,7 +13,7 @@ export {};
 
 /**
  * @template Slot
- * @template {PassableCap} [Value=any]
+ * @template {PassableCap | SturdyRef} [Value=any]
  * @callback ConvertSlotToVal
  * @param {Slot} slot
  * @param {string} [iface]
@@ -42,6 +42,7 @@ export {};
  *           EncodingClass<'slot'> & { index: number,
  *                                     iface?: string
  *           } |
+ *           EncodingClass<'sturdyRef'> & { index: number } |
  *           EncodingClass<'hilbert'> & { original: Encoding,
  *                                        rest?: Encoding
  *           } |
