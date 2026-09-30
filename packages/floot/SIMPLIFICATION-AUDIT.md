@@ -190,17 +190,25 @@ Clean root type build, all 14 type-contract tasks and docs pass (zero errors,
 Do not repair this by silently treating all empty cancelled turns as safe or by
 overloading transcript completeness with an undocumented dispatch guarantee.
 
-Next verified duplication: context projection's `comparable()` duplicates
-Claude's `toolInput()` object/wrapper conversion from the transcript writer.
-Do not delete evidence deduplication: late host-only/unsettled evidence remains
-eligible after a newer checkpoint, and deleting matching would repeat it.
-Reuse the existing adapter-owned conversion through a local comparison-key
-function supplied at Floot's composition boundary for `claude-code-jsonl-v1`;
-other formats should compare exact arguments.
-Keep pairing, late-result reconciliation and collision handling in Floot.
-No remote API, descriptor schema, codec registry or durable state is needed.
-Test real writer/read-back equivalence for whitespace, scalar, array, null and
-malformed arguments, changed results, and isolation from non-Claude formats.
+Context projection's duplicate Claude object/wrapper conversion
+is removed in favor of `claude-sandbox/src/claude-tool-input.js`, also used by
+the native transcript writer.
+Floot's composition boundary supplies a local comparison-key function only for
+`claude-code-jsonl-v1`; other formats compare exact argument text.
+Pairing, late-result reconciliation and collision handling remain in Floot.
+No remote API, descriptor schema, codec registry or durable state is added.
+This retains explicit Claude format knowledge in composition, not a claim of
+complete backend independence; the codec dependency is now a runtime dependency.
+All 36 projector tests and 27 Claude transcript tests pass, including real
+writer/read-back whitespace, scalar, string, array, null and malformed arguments,
+changed results, exact-default comparisons and unchanged source records.
+All 784 Floot tests pass, including reconstructed-agent coverage that fails if
+Claude's codec is omitted or incorrectly applied to another format.
+The separate 77-test integration run also checks unchanged durable arguments
+through a freshly loaded journal.
+Clean root declarations, all 14 type-contract tasks and documentation pass.
+Independent adversarial review approves the ownership split and tests.
+Not deployed; no journal schema or formula identity changes.
 
 | Mechanisms | Different responsibilities | Decision |
 |---|---|---|

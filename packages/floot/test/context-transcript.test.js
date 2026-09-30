@@ -2,6 +2,13 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
+import { claudeToolInput } from '@endo/claude-sandbox/src/claude-tool-input.js';
+// Test the actual native writer/reader boundary rather than a hand-normalized fixture.
+import {
+  writeClaudeTranscript,
+  readClaudeTranscript,
+  // eslint-disable-next-line import/no-relative-packages
+} from '../../claude-sandbox/src/claude-transcript-writer.js';
 import {
   projectContextTranscript,
   readContextTranscript,
@@ -101,7 +108,10 @@ test('native-required dispatch cannot fall back to portable history before its f
 // records every turn (`continuity: 'transcript'`) gets portable records
 // instead, with the evidence the native bytes could not cover. Nothing is
 // hidden; only native fidelity is lost.
-const fallback = { portableFallback: true };
+const fallback = {
+  portableFallback: true,
+  toolArgumentKey: args => JSON.stringify(claudeToolInput(args)),
+};
 const failedCapture = (turnId, records, extra = {}) =>
   turn(turnId, records, {
     state: 'failed',
@@ -364,38 +374,88 @@ for (const [label, tool, expected] of fallbackCases) {
   });
 }
 
-test('the held-evidence match survives the writer and capture re-serializing arguments', async t => {
-  const native = nativeCheckpoint();
-  const spaced = { ...hostOnly, args: '{ "path" : "/" }' };
-  const later = {
-    ...native,
-    payload: 'later native payload',
-    context: [
-      ...native.context,
-      message(EVIDENCE_NOTICE),
-      {
-        kind: 'tool-call',
-        id: 'recovered-context_20_0',
-        name: 'effect',
-        args: '{"path":"/"}',
-      },
+for (const args of [
+  '{ "path" : "/" }',
+  '42',
+  '"hello"',
+  '[1,2]',
+  'null',
+  '{malformed',
+]) {
+  test(`held evidence uses explicit Claude round-trip semantics for ${args}`, async t => {
+    const native = nativeCheckpoint();
+    const original = [
+      { ...call('recovered-context_20_0', 'effect'), args },
       result('recovered-context_20_0', 'ran'),
-    ],
-  };
-  t.deepEqual(
-    await projectContextTranscript(
-      [
-        turn(10, [native], { nativeContextFormat: native.format }),
-        failedCapture(20, [message('reported')], { tools: [spaced] }),
-        turn(30, [later], { nativeContextFormat: native.format }),
-      ],
+    ];
+    const originalBytes = JSON.stringify(original);
+    const context = readClaudeTranscript(
+      writeClaudeTranscript(original, {
+        sessionUuid: 'normalization-test',
+        cwd: '/workspace',
+        version: 'test',
+        now: () => '2026-09-30T00:00:00.000Z',
+      }),
+    );
+    const capturedCall = context.find(record => record.kind === 'tool-call');
+    t.is(capturedCall?.args, JSON.stringify(claudeToolInput(args)));
+    const later = {
+      ...native,
+      payload: 'later native payload',
+      context,
+    };
+    const turns = [
+      turn(10, [native], { nativeContextFormat: native.format }),
+      failedCapture(20, [message('reported')], {
+        tools: [{ ...hostOnly, args }],
+      }),
+      turn(30, [later], { nativeContextFormat: native.format }),
+    ];
+    const journalBytes = JSON.stringify(turns);
+    t.deepEqual(
+      await projectContextTranscript(turns, noRead, undefined, fallback),
+      later.context,
+    );
+    const exact = await projectContextTranscript(turns, noRead, undefined, {
+      portableFallback: true,
+    });
+    t.is(
+      pairToolCalls(exact).pairs.length,
+      2,
+      'shared selector does not assume Claude wrapping or reserialization',
+    );
+    t.true(
+      exact.some(record => record.kind === 'tool-call' && record.args === args),
+    );
+    const changed = [
+      turns[0],
+      failedCapture(20, [message('reported')], {
+        tools: [{ ...hostOnly, args, result: 'changed outcome' }],
+      }),
+      turns[2],
+    ];
+    const retained = await projectContextTranscript(
+      changed,
       noRead,
       undefined,
       fallback,
-    ),
-    later.context,
-  );
-});
+    );
+    t.deepEqual(pairToolCalls(retained).pairs.map(resultContent), [
+      'ran',
+      'changed outcome',
+    ]);
+    t.is(
+      JSON.stringify(original),
+      originalBytes,
+      'native conversion does not rewrite source records',
+    );
+    t.is(
+      JSON.stringify(turns),
+      journalBytes,
+      'comparison never changes durable arguments or results',
+    );
+  });
+}
 
 test('native context remains atomic with its suffix and refuses direct-provider conversion', async t => {
   const native = nativeCheckpoint();

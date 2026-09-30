@@ -14,7 +14,7 @@ import { assertContextEvidence } from './context-evidence.js';
  * @param {string} [excludeTurnId]
  * @param {{ turnId: string, ordinal: number, sequence: string }} [initialBoundary]
  * @param {(visit: (turn: any) => Promise<void> | void) => Promise<void>} [selectTurns]
- * @param {{ portableFallback?: boolean }} [options] `portableFallback` is for
+ * @param {{ portableFallback?: boolean, toolArgumentKey?: (args: string) => string }} [options] `portableFallback` is for
  *   a backend that rebuilds its conversation from the supplied records on
  *   every turn (`continuity: 'transcript'`). When native context cannot be
  *   restored without hiding evidence, it gets the whole conversation as
@@ -23,6 +23,8 @@ import { assertContextEvidence } from './context-evidence.js';
  *   Nothing is hidden; only native fidelity is lost, until the next turn
  *   captures a new checkpoint. A backend that keeps its own thread (Codex's
  *   `opaque-reconciled`) rolls a failed turn back natively and still refuses.
+ *   `toolArgumentKey` compares arguments through the selected backend's encoding;
+ *   without it, argument text must match exactly. Stored records are unchanged.
  */
 const projectContext = async (
   visitTurns,
@@ -30,7 +32,7 @@ const projectContext = async (
   excludeTurnId,
   initialBoundary,
   selectTurns = visitTurns,
-  { portableFallback = false } = {},
+  { portableFallback = false, toolArgumentKey } = {},
 ) => {
   const eligible = turn =>
     turn.state !== 'pending' &&
@@ -155,23 +157,11 @@ const projectContext = async (
     // A checkpoint captured after an earlier fallback already holds the
     // recovered evidence Floot handed it, under the same id. Repeat only
     // evidence the context does not hold verbatim.
-    // Arguments compare as the Claude writer and capture round-trip them:
-    // parsed and re-serialized when they are JSON.
-    // As the Claude writer's toolInput: an object as itself, anything else
-    // wrapped as `{ value }`.
     const comparable = record => {
-      if (record.kind !== 'tool-call') return JSON.stringify(record);
-      let input;
-      try {
-        const parsed = JSON.parse(record.args);
-        input =
-          parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-            ? parsed
-            : { value: parsed };
-      } catch {
-        input = { value: record.args };
+      if (record.kind !== 'tool-call' || !toolArgumentKey) {
+        return JSON.stringify(record);
       }
-      return JSON.stringify({ ...record, args: JSON.stringify(input) });
+      return JSON.stringify({ ...record, args: toolArgumentKey(record.args) });
     };
     const held = new Set(active.map(comparable));
     const heldPair = id =>
@@ -229,7 +219,7 @@ const projectContext = async (
  * @param {readonly any[]} turns
  * @param {(ref: any) => Promise<string>} readContent
  * @param {string} [excludeTurnId]
- * @param {{ portableFallback?: boolean }} [options] See `projectContext`.
+ * @param {{ portableFallback?: boolean, toolArgumentKey?: (args: string) => string }} [options] See `projectContext`.
  */
 export const projectContextTranscript = (
   turns,
@@ -261,7 +251,7 @@ harden(projectContextTranscript);
  * grow with history; superseded metadata is not accumulated in memory.
  * @param {any} journal
  * @param {string} [excludeTurnId]
- * @param {{ portableFallback?: boolean }} [options] See `projectContext`.
+ * @param {{ portableFallback?: boolean, toolArgumentKey?: (args: string) => string }} [options] See `projectContext`.
  */
 export const readContextTranscript = async (
   journal,

@@ -11,8 +11,10 @@ import { readFile } from 'node:fs/promises';
 import { makeClaudeClient } from '../../claude-sandbox/src/claude-client.js';
 // eslint-disable-next-line import/no-relative-packages
 import { translateClaudeTurn } from '../../claude-sandbox/src/claude-hosted-events.js';
-// eslint-disable-next-line import/no-relative-packages
-import { readClaudeTranscript } from '../../claude-sandbox/src/claude-transcript-writer.js';
+import {
+  readClaudeTranscript,
+  writeClaudeTranscript,
+} from '../../claude-sandbox/src/claude-transcript-writer.js'; // eslint-disable-line import/no-relative-packages
 
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
@@ -115,6 +117,104 @@ const callEffect = () =>
   });
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
+
+for (const format of ['claude-code-jsonl-v1', 'another-native-format']) {
+  test(`agent selects argument comparison only for Claude checkpoints (${format})`, async t => {
+    t.timeout(5000);
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    const options = {
+      input: 'old input',
+      backendId: 'test',
+      modelId: 'test',
+      nativeContextFormat: format,
+    };
+    const old = await journal.begin(options);
+    await journal.dispatch(old);
+    await journal.append(old, {
+      type: 'tool-intent',
+      callId: 'host-effect',
+      name: 'effect',
+      args: '42',
+    });
+    await journal.append(old, {
+      type: 'tool-result',
+      callId: 'host-effect',
+      result: 'ran',
+    });
+    await journal.append(old, { type: 'finish', state: 'failed' });
+    const context = readClaudeTranscript(
+      writeClaudeTranscript(
+        [
+          {
+            kind: 'tool-call',
+            id: `recovered-context_${old}_0`,
+            name: 'effect',
+            args: '42',
+          },
+          {
+            kind: 'tool-result',
+            id: `recovered-context_${old}_0`,
+            content: 'ran',
+          },
+        ],
+        { sessionUuid: 'composition-test', cwd: '/workspace', version: 'test' },
+      ),
+    );
+    const captured = await journal.begin({
+      ...options,
+      input: 'captured input',
+    });
+    await journal.dispatch(captured);
+    await journal.recordTranscript(captured, '0', {
+      kind: 'native-context',
+      format,
+      payload: 'opaque',
+      context,
+    });
+    await journal.completeTranscript(captured, '1');
+    await journal.append(captured, { type: 'finish', state: 'completed' });
+    /** @type {readonly TranscriptRecord[] | undefined} */
+    let received;
+    const client = harden({
+      async send(_text, config) {
+        received = config.transcript;
+        const channel = makeBufferedReader();
+        channel.push({ type: 'end' });
+        return channel.reader;
+      },
+      async terminate() {
+        /* No external resources in this fixture. */
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { kind: 'hosted', provideHostedClient: () => client },
+      'Test',
+      {
+        journalPowers: f.powers,
+        nativeContextFormat: format,
+        portableContextFallback: true,
+      },
+    );
+    t.teardown(() => agent.shutdown());
+    await agent.converse('continue', makeReplyChannel().writer);
+    if (!received) throw Error('Expected backend transcript');
+    const calls = received.filter(record => record.kind === 'tool-call');
+    t.deepEqual(
+      calls.map(record => record.args),
+      format === 'claude-code-jsonl-v1'
+        ? ['{"value":42}']
+        : ['{"value":42}', '42'],
+    );
+    t.is(
+      (await makeTurnJournal(f.powers).get(old)).tools[0].args,
+      '42',
+      'native comparison does not rewrite durable evidence',
+    );
+  });
+}
 
 for (const boundary of ['onBegun', 'setup']) {
   for (const revive of [false, true]) {

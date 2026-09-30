@@ -21,6 +21,7 @@ import { clearTimeout, setTimeout } from 'node:timers';
 import { promisify } from 'node:util';
 
 import { Fail, q } from '@endo/errors';
+import { claudeToolInput } from '@endo/claude-sandbox/src/claude-tool-input.js';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
@@ -1876,6 +1877,10 @@ export const makeStreamingAgent = async (
   const getContextTranscript = async excludeTurnId =>
     readContextTranscript(turnJournal, excludeTurnId, {
       portableFallback: portableContextFallback,
+      toolArgumentKey:
+        nativeContextFormat === 'claude-code-jsonl-v1'
+          ? args => JSON.stringify(claudeToolInput(args))
+          : undefined,
     });
 
   const getHistory = async (excludeTurnId = undefined, settledOnly = false) => {

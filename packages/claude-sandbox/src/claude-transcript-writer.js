@@ -31,6 +31,8 @@ import {
   selectActiveTranscript,
 } from '@endo/hosted-agent/transcript-records.js';
 
+import { claudeToolInput } from './claude-tool-input.js';
+
 /** What Claude Code records for a turn the user typed. */
 const USER_TYPE = 'external';
 
@@ -56,26 +58,6 @@ const recordUuid = (sessionUuid, index) => {
     `a${body.slice(17, 20)}`,
     body.slice(20, 32),
   ].join('-');
-};
-
-/**
- * Arguments as a structure, since the API carries `input` as an object while
- * the record stream carries the provider's own argument text. Text that is not
- * JSON is preserved under a single key rather than dropped, so a call whose
- * arguments this layer cannot parse still restores as that call.
- *
- * @param {string} args
- */
-const toolInput = args => {
-  try {
-    const parsed = JSON.parse(args);
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed;
-    }
-    return { value: parsed };
-  } catch {
-    return { value: args };
-  }
 };
 
 /**
@@ -206,7 +188,7 @@ export const writeClaudeTranscript = (
             type: 'tool_use',
             id: apiId(record),
             name: record.name,
-            input: toolInput(record.args),
+            input: claudeToolInput(record.args),
           },
         ],
         stop_reason: 'tool_use',

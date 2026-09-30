@@ -27,7 +27,13 @@ chronological progress entries below as current implementation status.
 
 Priority reaffirmed by the operator: reduce duplicated code, remove dead code,
 and clearly separate ontological responsibilities. Validation is a gate, not an
-independent refactor objective. The current simplification slice removes Codex's
+independent refactor objective.
+Latest source cleanup shares Claude's argument encoding between its writer and
+Floot's composition boundary, deleting the duplicate conversion from context
+projection. Floot retains evidence matching; non-Claude formats compare exact
+argument text. The 784-test Floot suite and 27 Claude transcript tests pass;
+independent review approves. This cleanup is not yet deployed.
+The preceding simplification slice removes Codex's
 second hosted model-list authority in favor of the same account catalog used by
 admission, deletes its native-descriptor normalization API, removes OpenCode's
 redundant storage wrapper, and deletes unused MCP constants.
