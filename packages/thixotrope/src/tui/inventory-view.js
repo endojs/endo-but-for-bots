@@ -3,20 +3,10 @@
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
 
+import { terminalText } from './terminal-text.js';
 import { bindViewSession } from './view-session.js';
 
 /** @import { connectLocalControl } from '../control/local-control.js' */
-
-/** @param {string} text */
-const terminalText = text =>
-  [...text]
-    .map(character => {
-      const code = character.charCodeAt(0);
-      return code < 32 || (code >= 127 && code <= 159)
-        ? `\\u${code.toString(16).padStart(4, '0')}`
-        : character;
-    })
-    .join('');
 
 /** @param {any} snapshot */
 export const renderInventory = snapshot => {

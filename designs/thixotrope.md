@@ -277,8 +277,9 @@ Disconnecting a terminal leaves guest state available for later attachment.
 The socket carries local administrative authority and is protected by the state directory's ownership
 and permissions.
 
-Workspace metadata version 4 identifies dedicated native managers and includes the alarm
-acknowledgement protocol introduced in version 3.
+Workspace metadata carries a version the supervisor bumps whenever a guest closure it ships changes
+shape; the current version includes dedicated native managers, the alarm acknowledgement protocol,
+and the mail address book with its introductions resource.
 Earlier workspaces require explicit migration or fresh state; startup rejects them before restoring
 workers, because their heap-persisted registry and clock closures cannot be replaced by loading
 new source.

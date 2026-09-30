@@ -4,7 +4,9 @@ import test from '@endo/ses-ava/test.js';
 import { setImmediate } from 'node:timers/promises';
 
 import { makeObservableMap } from '../src/observable-map.js';
+import { silentLogger } from '../src/platform/logging.js';
 import { renderInventory } from '../src/tui/inventory-view.js';
+import { printJson, terminalText } from '../src/tui/terminal-text.js';
 
 const flush = async () => {
   await setImmediate();
@@ -107,4 +109,69 @@ test('inventory display does not emit terminal control sequences from keys or va
   t.false(rendered.includes('\r'));
   t.false(rendered.includes('\x9b'));
   t.true(rendered.includes('evil\\u001b[2J'));
+});
+
+test('keyOf indexes values by their most recently set key', t => {
+  const map = makeObservableMap();
+  const a = Far('A', {});
+  const b = Far('B', {});
+  t.is(map.keyOf(a), undefined);
+  map.set('one', a);
+  t.is(map.keyOf(a), 'one');
+  // The same value under two keys: the key set last wins, and deleting it
+  // falls back to the other holder.
+  map.set('two', a);
+  t.is(map.keyOf(a), 'two');
+  t.true(map.delete('two'));
+  t.is(map.keyOf(a), 'one');
+  // Reassigning a key releases its previous value.
+  map.set('one', b);
+  t.is(map.keyOf(a), undefined);
+  t.is(map.keyOf(b), 'one');
+  map.set('one', b);
+  t.is(map.keyOf(b), 'one');
+  map.set('three', 7n);
+  t.is(map.keyOf(7n), 'three');
+  map.clear();
+  t.is(map.keyOf(b), undefined);
+  t.is(map.keyOf(7n), undefined);
+  t.false(map.delete('one'));
+});
+
+test('printed JSON escapes every terminal control character and still parses', t => {
+  /** @type {string[]} */
+  const lines = [];
+  const logger = {
+    ...silentLogger,
+    /** @param {unknown[]} args */
+    log: (...args) => {
+      lines.push(args.join(' '));
+    },
+  };
+  const value = {
+    text: 'clear\x1b[2J csi\x9b nel\x85 sep\u2028\u2029 del\x7f nul\0',
+    from: 'bob\r\n',
+  };
+  printJson(logger, value);
+  const [output] = lines;
+  for (const raw of [
+    '\x1b',
+    '\x9b',
+    '\x85',
+    '\u2028',
+    '\u2029',
+    '\x7f',
+    '\0',
+    '\r',
+  ]) {
+    t.false(output.includes(raw), JSON.stringify(raw));
+  }
+  t.true(output.includes('\\u001b[2J'));
+  t.true(output.includes('\\u009b'));
+  t.true(output.includes('\\u2028'));
+  // Indentation newlines are structural, and the escapes are JSON escapes.
+  t.is(output.split('\n').length, 4);
+  t.deepEqual(JSON.parse(output), value);
+  t.is(terminalText('plain ☃ text 😀'), 'plain ☃ text 😀');
+  t.is(terminalText('\u0085\u2029'), '\\u0085\\u2029');
 });

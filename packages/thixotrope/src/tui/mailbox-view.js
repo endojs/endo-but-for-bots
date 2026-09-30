@@ -3,13 +3,14 @@
 /** @import { Logger } from '../platform/logging.js' */
 import harden from '@endo/harden';
 
+import { printJson } from './terminal-text.js';
 import { bindViewSession } from './view-session.js';
 
 /** @import { connectLocalControl } from '../control/local-control.js' */
 
 /**
- * A line-oriented view of the mailbox: list the inbox, then take an offer
- * into an inventory key or discard it.
+ * A line-oriented view of the mailbox: list the inbox, then take a message's
+ * capability into an inventory key or discard the message.
  * @param {TerminalSession} session
  * @param {Logger} logging
  * @param {Awaited<ReturnType<typeof connectLocalControl>>} client
@@ -17,10 +18,10 @@ import { bindViewSession } from './view-session.js';
 export const showMailbox = async (session, logging, client) => {
   const { close } = bindViewSession(session, client);
   const refresh = async () => {
-    const offers = await client.call('inbox');
-    // JSON quoting keeps untrusted messages and contact labels from becoming
-    // terminal controls. The view receives descriptions, never capabilities.
-    logging.log(JSON.stringify(offers, null, 2));
+    // Message text and contact labels are remote-controlled: every control
+    // character is escaped before it reaches the terminal. The view receives
+    // descriptions, never capabilities.
+    printJson(logging, await client.call('inbox'));
   };
   try {
     await refresh();
@@ -32,9 +33,9 @@ export const showMailbox = async (session, logging, client) => {
       if (command === 'q') break;
       try {
         if (command === 'take') {
-          await client.call('takeOffer', id, key);
+          await client.call('takeMessage', id, key);
         } else if (command === 'discard') {
-          await client.call('discardOffer', id);
+          await client.call('discardMessage', id);
         } else if (command !== 'r') {
           logging.log('Unknown command');
           // eslint-disable-next-line no-continue
