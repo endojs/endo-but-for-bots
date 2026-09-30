@@ -28,16 +28,17 @@ const DEFAULT_SERVER_NAME = 'endo';
  * ancestry throughout this lifetime. The daemon must prove the predecessor stopped before reusing this directory.
  *
  * @param {object} options
- * @param {(options: {innerDir: string, socketName: string, serverName: string}) => object} options.buildConfig
+ * @param {(options: {innerDir: string, socketName: string, serverName: string}) => object} [options.buildConfig]
+ *   Adapter-owned configuration to write; omitted for transport-only consumers.
  * @param {string} options.socketDir - host directory to hold the socket, the
- *   stdio relay, and the MCP config. Created if absent. This whole directory is
+ *   stdio relay, and any adapter-provided config. Created if absent. This whole directory is
  *   what the provisioner bind-mounts read-only into the slice.
  * @param {{ handleMessage: (message: any) => Promise<object | undefined> }} options.bridge
  * @param {number} [options.maxFrameLength] - longest frame accepted before the
  *   connection is dropped (default `DEFAULT_MAX_FRAME_LENGTH`).
  * @param {string} [options.socketName] - socket file name (default `mcp.sock`).
  * @param {string} [options.innerDir] - slice path the dir mounts at (default
- *   `/endo-mcp`); paths baked into the emitted `mcp.json` use it.
+ *   `/endo-mcp`); adapter-provided configuration may use this path.
  * @param {string} [options.serverName] - MCP server key (default `endo`).
  * @param {typeof net} [options.netModule] - injectable for tests.
  * @param {(specifier: URL, destination: string) => Promise<void>} [options.installBridge]
@@ -51,9 +52,9 @@ const DEFAULT_SERVER_NAME = 'endo';
  *   socketPath: string,
  *   socketName: string,
  *   stdioBridgeName: string,
- *   configFileName: string,
+ *   configFileName?: string,
  *   innerDir: string,
- *   innerConfigPath: string,
+ *   innerConfigPath?: string,
  *   close: () => Promise<void>,
  * }}
  */
@@ -132,15 +133,17 @@ export const makeHostedMcpSocketServer = ({
         path.join(socketDir, STDIO_BRIDGE_NAME),
       );
       assertOpen();
-      await writeConfig(
-        path.join(socketDir, CONFIG_NAME),
-        `${JSON.stringify(
-          buildConfig({ innerDir, socketName, serverName }),
-          null,
-          2,
-        )}\n`,
-      );
-      assertOpen();
+      if (buildConfig !== undefined) {
+        await writeConfig(
+          path.join(socketDir, CONFIG_NAME),
+          `${JSON.stringify(
+            buildConfig({ innerDir, socketName, serverName }),
+            null,
+            2,
+          )}\n`,
+        );
+        assertOpen();
+      }
       // Under the caller's exclusive-placement contract, a file created by
       // this listen attempt belongs to this owner, even if startup fails.
       socketOwned = true;
@@ -183,9 +186,13 @@ export const makeHostedMcpSocketServer = ({
     socketPath,
     socketName,
     stdioBridgeName: STDIO_BRIDGE_NAME,
-    configFileName: CONFIG_NAME,
     innerDir,
-    innerConfigPath: `${innerDir}/${CONFIG_NAME}`,
+    ...(buildConfig === undefined
+      ? {}
+      : {
+          configFileName: CONFIG_NAME,
+          innerConfigPath: `${innerDir}/${CONFIG_NAME}`,
+        }),
     start,
     close,
   });

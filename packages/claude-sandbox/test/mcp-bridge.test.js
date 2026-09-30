@@ -50,6 +50,7 @@ test('socket server relays JSON-RPC over a Unix socket and installs the bridge +
 
   // The stdio relay and MCP config land in the directory that gets mounted.
   await t.notThrowsAsync(() => stat(path.join(dir, server.stdioBridgeName)));
+  if (!server.configFileName) throw Error('Claude requires an MCP config file');
   const config = JSON.parse(
     await readFile(path.join(dir, server.configFileName), 'utf8'),
   );
@@ -59,6 +60,8 @@ test('socket server relays JSON-RPC over a Unix socket and installs the bridge +
     '/endo-mcp/mcp.sock',
   ]);
   t.is(server.innerConfigPath, '/endo-mcp/mcp.json');
+  // eslint-disable-next-line no-bitwise
+  t.is((await stat(path.join(dir, server.configFileName))).mode & 0o777, 0o600);
 
   const reply = await new Promise((resolve, reject) => {
     const socket = net.connect(server.socketPath);

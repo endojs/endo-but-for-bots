@@ -11,6 +11,7 @@ import {
   bindRootOf,
 } from '@endo/hosted-agent/execution-envelope.js';
 import { makeMcpBridgeForToolSet } from '@endo/hosted-agent/mcp-bridge.js';
+import { makeHostedMcpSocketServer } from '@endo/hosted-agent/mcp-server.js';
 import { makePublicNetworkEnvironment } from '@endo/hosted-agent/public-network.js';
 import { makeHostedSessionSupervisor } from '@endo/hosted-agent/session-supervisor.js';
 import { reclaimRecordedMount } from '@endo/hosted-agent/recorded-cleanup.js';
@@ -28,8 +29,7 @@ import {
   DEFAULT_INNER_DIR,
   DEFAULT_SERVER_NAME,
   DEFAULT_SOCKET_NAME,
-  makeMcpSocketServer,
-} from './mcp-socket-server.js';
+} from './opencode-mcp-config.js';
 import { readSessionPlan } from './opencode-session-plan.js';
 
 /** The CLI's home on the slice's own tmpfs; its store is in memory. */
@@ -63,7 +63,7 @@ const OPENCODE_HOME = '/tmp/opencode-home';
  * @param {typeof makeMcpBridgeForToolSet} [powers.makeBridge]
  * @param {typeof reclaimRecordedMount} [powers.reclaimMount] Reclaims a lost
  *   worker's recorded kernel mount. Never mounts anything.
- * @param {typeof makeMcpSocketServer} [powers.makeMcp]
+ * @param {typeof makeHostedMcpSocketServer} [powers.makeMcp]
  * @param {typeof makeOpencodeClient} [powers.makeClient]
  * @param {() => string} [powers.makePassword]
  * @param {Record<string,string>} [powers.env] Trusted native runner configuration.
@@ -75,7 +75,7 @@ export const makeOpencodeNativeController = ({
   makeFilesystem,
   makeBridge = makeMcpBridgeForToolSet,
   reclaimMount = reclaimRecordedMount,
-  makeMcp = makeMcpSocketServer,
+  makeMcp = makeHostedMcpSocketServer,
   makeClient = makeOpencodeClient,
   makePassword = () => randomBytes(24).toString('hex'),
   env = {},

@@ -630,7 +630,7 @@ New package `packages/opencode-sandbox/`.
 | `src/opencode-bridge.mjs` | In-slice: start `opencode serve`, parse listening line, subscribe SSE, nd-JSON commands/events, summary filtering, terminal derivation, turn bounds | new; baked into the image |
 | `src/opencode-protocol.js` | SSE + nd-JSON framing, event normalization, message registry | `codex-protocol.js` |
 | (no separate hosted-events module: the bridge emits the hosted vocabulary directly, `src/opencode-transcript.js` maps transcript records to and from the import route's turns) | | |
-| `@endo/hosted-agent/mcp-bridge.js`, `@endo/hosted-agent/mcp-stdio-bridge.js`, `src/mcp-socket-server.js` | Shared protocol core + relay; opencode config generator | hosted-agent |
+| `@endo/hosted-agent/mcp-bridge.js`, `@endo/hosted-agent/mcp-server.js`, `src/opencode-mcp-config.js` | Shared protocol core, socket owner and relay; OpenCode supplies only its native configuration inside `OPENCODE_CONFIG_CONTENT`, with no duplicate diagnostic file | hosted-agent |
 | `src/managed-credentials*.js` | SecretBlob-backed cap; **ported from `f13c7cbd9`** | `f13c7cbd9:…/managed-credentials.js` |
 | `src/opencode-agent-config.js` | Host-side `OPENCODE_CONFIG_CONTENT` builder: hard-coded `provider.openrouter` block (baseURL, `models`, `whitelist`), agent `prompt`/`disable:false`/`mode`, MCP, permissions | new |
 | `src/opencode-hosted-policy.js` (mount table + `assertContainerMounts`) | Adapter policy declarations; pinned rootfs parsing and current specifiers come directly from hosted-agent. The unused default-image selection parser is retired. | hosted-agent |

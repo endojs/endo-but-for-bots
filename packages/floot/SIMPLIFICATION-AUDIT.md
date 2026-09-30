@@ -149,10 +149,18 @@ reuses `bindFlootBackend` in Codex. Directory `copy` already owns replacement;
 prepublication failure keeps the old binding, and retry remains possible.
 All 57 setup tests and both affected package typechecks pass; independent review
 approves. No persistent schema or environment names change. Not deployed.
-Next: remove OpenCode's diagnostic-only MCP configuration file while retaining
-its actual `OPENCODE_CONFIG_CONTENT`.
-The generic MCP transport should own sockets and relay lifetime; adapters should
-own only the configuration their native runtime actually consumes.
+OpenCode's diagnostic-only MCP configuration file and adapter transport wrapper
+are now removed, retaining its actual `OPENCODE_CONFIG_CONTENT`.
+The shared MCP transport owns sockets and relay lifetime; adapters own only the
+configuration their native runtime actually consumes.
+Transport-only consumers omit the existing config builder; Claude still supplies
+its builder and receives its required config file under the same lifecycle fences.
+The seven transport tests now live in hosted-agent rather than OpenCode.
+Those tests, 22 focused Claude tests and all 299 remaining OpenCode tests pass.
+Root type build, all 14 type-contract tasks and documentation pass (zero errors,
+180 warnings); affected typechecks and scoped lint pass.
+Independent review approves. No durable owner or storage schema changes.
+Not deployed.
 
 The context review also reproduced a distinct intent/execution conflation:
 an `onBegun` cancellation before any native send leaves a cancelled turn carrying

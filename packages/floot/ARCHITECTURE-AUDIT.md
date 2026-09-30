@@ -64,6 +64,16 @@ Affected package typechecks and scoped lint pass; independent review approves.
 No persistent schema, formula entrypoint or credential ownership changes.
 Not deployed.
 
+MCP ownership cleanup: OpenCode no longer writes an unused diagnostic config or
+wraps the shared transport; its native config remains in `OPENCODE_CONFIG_CONTENT`.
+Claude retains its consumed config file and the existing startup/close fences.
+Seven transport tests move to hosted-agent, preserving lifecycle and cleanup
+coverage. They pass alongside 22 focused Claude tests and all 299 OpenCode tests.
+Affected package typechecks, scoped lint, clean root type build, all 14
+type-contract tasks and docs pass (zero errors, 180 warnings).
+Independent review approves; no durable owner or storage schema changes.
+Not deployed.
+
 Current durability evidence includes a generation-186 retirement correction:
 removing broker/source pet names does not withdraw capabilities already stored
 in the profile's account-discovery record. Those capabilities revived the old
