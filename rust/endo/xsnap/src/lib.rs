@@ -773,8 +773,13 @@ impl Machine {
             std::process::id(),
             seq
         ));
-        let file = std::fs::File::create(&tmp_path)
-            .map_err(SnapshotError::Io)?;
+        // The heap holds the worker's secrets, so it is its owner's alone
+        // from the first byte, whatever the umask.
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        let file = options.open(&tmp_path).map_err(SnapshotError::Io)?;
         let mut cbs = self.registered_callbacks.borrow().clone();
         let hash = match self.write_snapshot_to_file(signature, &mut cbs, file) {
             Ok(hash) => hash,
@@ -5167,7 +5172,8 @@ mod tests {
     }
 
     /// `sqliteStmtGet` and `sqliteStmtAll` are classed `Read`, so under a
-    /// transcript they refuse a statement that writes.
+    /// transcript they refuse a statement that writes, including those SQLite
+    /// reports read-only although they change the connection.
     #[test]
     fn host_transcript_refuses_a_write_through_a_read_statement() {
         let root = tempfile::tempdir().unwrap();
@@ -5192,6 +5198,10 @@ mod tests {
             let replies = [
                 "sqliteStmtGet(sqlitePrepare(db, 'INSERT INTO t VALUES (1) RETURNING id'), '[]')",
                 "sqliteStmtAll(sqlitePrepare(db, 'INSERT INTO t VALUES (2) RETURNING id'), '[]')",
+                "sqliteStmtAll(sqlitePrepare(db, 'BEGIN'), '[]')",
+                "sqliteStmtGet(sqlitePrepare(db, ' /* c */ savepoint s'), '[]')",
+                "sqliteStmtAll(sqlitePrepare(db, \"ATTACH ':memory:' AS other\"), '[]')",
+                "sqliteStmtAll(sqlitePrepare(db, 'PRAGMA foreign_keys = OFF'), '[]')",
                 "sqliteStmtAll(sqlitePrepare(db, 'SELECT id FROM t'), '[]')",
             ]
             .map(|source| match machine.eval(source).unwrap() {
@@ -5204,10 +5214,13 @@ mod tests {
         })
         .join()
         .unwrap();
-        for refused in &replies[..2] {
+        let (refused, [selected]) = replies.split_at(replies.len() - 1) else {
+            unreachable!()
+        };
+        for refused in refused {
             assert!(refused.contains("must run through sqliteStmtRun"), "{refused}");
         }
-        assert_eq!(replies[2], "[]");
+        assert_eq!(selected, "[]");
     }
 
     /// Only the supervisor may attach a transcript or suspend: a peer
@@ -5596,6 +5609,12 @@ mod tests {
         assert!(cas_file.exists(), "CAS file should exist at {}", cas_file.display());
         let file_size = std::fs::metadata(&cas_file).unwrap().len();
         assert!(file_size > 0, "CAS file should not be empty");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&cas_file).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "the heap is its owner's alone");
+        }
 
         // Restore from the CAS file and verify state.
         let mut callbacks: Vec<ffi::XsCallback> = Vec::new();

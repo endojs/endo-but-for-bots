@@ -154,22 +154,61 @@ fn execute_statement(
 
 /// `sqliteStmtGet` and `sqliteStmtAll` are classed `Read`, so under a host
 /// transcript they must not reach a statement that writes (an `INSERT ...
-/// RETURNING`, say): a retried crank would repeat the write. Such a
-/// statement goes through the `Barrier`-classed `sqliteStmtRun` instead.
+/// RETURNING`, say): a retried crank would repeat the write, and a replayed
+/// crank would skip it. Such a statement goes through the `Barrier`-classed
+/// `sqliteStmtRun` instead.
+///
+/// SQLite reports transaction control (`BEGIN`, `COMMIT`, `END`,
+/// `ROLLBACK`, `SAVEPOINT`, `RELEASE`), `ATTACH`, `DETACH`, and pragmas as
+/// read-only although they change the connection, so those are refused by
+/// their leading keyword. A pragma is admitted only as a bare read
+/// (`PRAGMA user_version`), never with an argument.
 ///
 /// `transcript` is whether one is attached, read before the host call
 /// borrows the ledger.
 fn refuse_write_under_transcript(
     statement: &rusqlite::Statement<'_>,
+    sql: &str,
     transcript: bool,
 ) -> Result<(), String> {
-    if transcript && !statement.readonly() {
+    if transcript && (!statement.readonly() || changes_connection(sql)) {
         return Err(
             "Error: a statement that writes must run through sqliteStmtRun under a host transcript"
                 .into(),
         );
     }
     Ok(())
+}
+
+/// Whether `sql`, by its leading keyword, changes the connection's state
+/// even though SQLite reports it read-only.
+fn changes_connection(sql: &str) -> bool {
+    let text = skip_leading_trivia(sql);
+    let keyword: String = text
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    match keyword.as_str() {
+        "BEGIN" | "COMMIT" | "END" | "ROLLBACK" | "SAVEPOINT" | "RELEASE" | "ATTACH"
+        | "DETACH" => true,
+        "PRAGMA" => text.contains('=') || text.contains('('),
+        _ => false,
+    }
+}
+
+/// `sql` past leading whitespace and comments.
+fn skip_leading_trivia(mut sql: &str) -> &str {
+    loop {
+        sql = sql.trim_start();
+        if let Some(rest) = sql.strip_prefix("--") {
+            sql = rest.find('\n').map_or("", |at| &rest[at..]);
+        } else if let Some(rest) = sql.strip_prefix("/*") {
+            sql = rest.find("*/").map_or("", |at| &rest[at + 2..]);
+        } else {
+            return sql;
+        }
+    }
 }
 
 /// Query a single row.
@@ -180,7 +219,7 @@ fn query_get(
     transcript: bool,
 ) -> Result<Option<JsonValue>, String> {
     let mut stmt = conn.prepare(sql).map_err(|e| format!("Error: {}", e))?;
-    refuse_write_under_transcript(&stmt, transcript)?;
+    refuse_write_under_transcript(&stmt, sql, transcript)?;
     let col_count = stmt.column_count();
     let col_names: Vec<String> = (0..col_count)
         .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
@@ -232,7 +271,7 @@ fn query_all(
     transcript: bool,
 ) -> Result<JsonValue, String> {
     let mut stmt = conn.prepare(sql).map_err(|e| format!("Error: {}", e))?;
-    refuse_write_under_transcript(&stmt, transcript)?;
+    refuse_write_under_transcript(&stmt, sql, transcript)?;
     let col_count = stmt.column_count();
     let col_names: Vec<String> = (0..col_count)
         .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
@@ -678,6 +717,38 @@ pub unsafe fn register(machine: &crate::Machine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn connection_changes_are_recognized_by_leading_keyword() {
+        for sql in [
+            "BEGIN",
+            "begin immediate",
+            "  COMMIT",
+            "END TRANSACTION",
+            "ROLLBACK TO s",
+            "SAVEPOINT s",
+            "RELEASE s",
+            "ATTACH 'x.db' AS x",
+            "DETACH x",
+            "-- note\nBEGIN",
+            "/* note */ ATTACH ':memory:' AS m",
+            "PRAGMA foreign_keys = OFF",
+            "pragma case_sensitive_like(1)",
+        ] {
+            assert!(changes_connection(sql), "{sql:?}");
+        }
+        for sql in [
+            "SELECT 1",
+            "WITH x AS (SELECT 1) SELECT * FROM x",
+            "PRAGMA user_version",
+            "-- BEGIN\nSELECT 1",
+            "/* ATTACH */ SELECT 1",
+            "BEGINNING",
+            "",
+        ] {
+            assert!(!changes_connection(sql), "{sql:?}");
+        }
+    }
 
     #[test]
     fn private_and_uri_databases_are_not_reopenable() {
