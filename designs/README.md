@@ -424,13 +424,13 @@ LLM-agent stack).*
 | [ironhorse-native-lockdown](ironhorse-native-lockdown.md) | 2026-09-16 | 2026-09-18 | **Complete** |
 | [ironhorse-guest-compartment](ironhorse-guest-compartment.md) | 2026-09-18 | 2026-09-19 | In Progress |
 | [ironhorse-quiescent-gc](ironhorse-quiescent-gc.md) | 2026-09-10 | 2026-09-10 | **Complete** |
-| [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | 2026-09-15 | Approved |
+| [ironhorse-engine](ironhorse-engine.md) | 2026-07-02 | 2026-09-29 | Approved |
 | [ironhorse-meter-opcode-cost-instrumentation](ironhorse-meter-opcode-cost-instrumentation.md) | 2026-07-05 | 2026-09-09 | In Progress |
 | [ironhorse-test262-convergence](ironhorse-test262-convergence.md) | 2026-07-05 | 2026-09-08 | In Progress |
 | [test262-fixture-consolidation](test262-fixture-consolidation.md) | 2026-08-06 | 2026-08-14 | In Progress |
 | [platform-neutral-hash](platform-neutral-hash.md) | 2026-07-22 | 2026-08-12 | **Complete** |
 | [conservative-regexp-subset](conservative-regexp-subset.md) | 2026-07-10 | 2026-07-29 | Not Started |
-| [ironhorse-panic](ironhorse-panic.md) | 2026-08-17 | 2026-09-07 | In Progress |
+| [ironhorse-panic](ironhorse-panic.md) | 2026-08-17 | 2026-09-29 | In Progress |
 | [endor-run-expanded](endor-run-expanded.md) | 2026-04-17 | 2026-08-27 | In Progress |
 | [endor-npm-registry-proxy](endor-npm-registry-proxy.md) | 2026-04-17 | 2026-08-01 | **Complete** |
 | [endor-registry-proxy-worker](endor-registry-proxy-worker.md) | 2026-08-06 | — | Proposed |
