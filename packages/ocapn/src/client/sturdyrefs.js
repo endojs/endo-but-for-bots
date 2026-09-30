@@ -72,21 +72,18 @@ const enlivenUnbound = async () => {
 };
 
 /**
- * Mint a `SturdyRef` value for `(location, secret)`. Sturdyrefs are
- * opaque pointers: user space passes them around as plain values and
- * only the OCapN layer (via `getSturdyRefDetails`) can see inside.
- * `SturdyRef.enliven(ref)` revives it through `enlivenDetails`.
+ * Mint a `SturdyRef` for `(location, secret)` that `SturdyRef.enliven`
+ * revives through `enlivenDetails`. Internal: the OCapN wire codec writes
+ * every ref recorded here by its `(location, secret)`, so only an enliven
+ * that resolves that same pair may be bound to it. Callers outside this
+ * package reach this only through a client's `makeSturdyRef`.
  *
  * @param {OcapnLocation} location
  * @param {string | Uint8Array} secret
- * @param {EnlivenSturdyRefDetails} [enlivenDetails]
+ * @param {EnlivenSturdyRefDetails} enlivenDetails
  * @returns {SturdyRef}
  */
-export const makeSturdyRef = (
-  location,
-  secret,
-  enlivenDetails = enlivenUnbound,
-) => {
+const makeBoundSturdyRef = (location, secret, enlivenDetails) => {
   /** @type {SturdyRefDetails} */
   const details = { location, secret };
   const sturdyRef = /** @type {SturdyRef} */ (
@@ -99,6 +96,24 @@ export const makeSturdyRef = (
   sturdyRefDetails.set(sturdyRef, details);
   return sturdyRef;
 };
+
+/**
+ * Mint a `SturdyRef` value for `(location, secret)` with no client bound.
+ * Sturdyrefs are opaque pointers: user space passes them around as plain
+ * values and only the OCapN layer (via `getSturdyRefDetails`) can see
+ * inside. The OCapN codec can write this ref, and a peer that receives it
+ * enlivens it through its own client, but `SturdyRef.enliven` on this
+ * value rejects. Use a client's `makeSturdyRef` to mint a ref that
+ * enlivens locally. There is deliberately no way to supply a custom
+ * enliven here: it could resolve to something other than the
+ * `(location, secret)` the codec writes.
+ *
+ * @param {OcapnLocation} location
+ * @param {string | Uint8Array} secret
+ * @returns {SturdyRef}
+ */
+export const makeSturdyRef = (location, secret) =>
+  makeBoundSturdyRef(location, secret, enlivenUnbound);
 
 /**
  * Resolve a `(location, secret)` pair to an actual reference: local values
@@ -183,10 +198,13 @@ export const enlivenSturdyRef = async (
  *   tracker mints are enlivened; typically bound to the owning client.
  * @returns {SturdyRefTracker}
  */
-export const makeSturdyRefTracker = (locator, enlivenDetails) => {
+export const makeSturdyRefTracker = (
+  locator,
+  enlivenDetails = enlivenUnbound,
+) => {
   return harden({
     makeSturdyRef: (location, secret) =>
-      makeSturdyRef(location, secret, enlivenDetails),
+      makeBoundSturdyRef(location, secret, enlivenDetails),
     lookup: async secretBytes => {
       const swissNum = swissnumFromBytes(thawedBytes(secretBytes));
       // Try ASCII decoding first so locators keyed by friendly string
