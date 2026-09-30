@@ -1,10 +1,11 @@
 // @ts-check
-import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
+import { passStyleOf } from '@endo/pass-style';
 
 /**
- * Evaluated only in the dedicated manager vat. Keep even a failed synchronous
- * factory attempt so retrying an interrupted installation never executes it twice.
+ * Evaluated only in the dedicated manager vat, so it may import only what the
+ * guest prelude provides. Keep even a failed synchronous factory attempt so
+ * retrying an interrupted installation never executes it twice.
  * @param {() => any} load module evaluation is deferred until the first attempt
  * @param {any} makeKeeper
  * @param {any} makeManagerKit the manager kit factory, bound here to this
@@ -17,14 +18,22 @@ export const makeNativeManager = (
   makeManagerKit,
   adapters,
 ) => {
+  // A module's facets are checked, not marshalled: a value that is not even
+  // passable is refused with the contract's message, not the marshaller's.
+  /** @param {unknown} value */
+  const isRemotable = value => {
+    try {
+      return passStyleOf(value) === 'remotable';
+    } catch (_error) {
+      return false;
+    }
+  };
   try {
     const namespace = load();
     if (typeof namespace.make !== 'function')
       throw Error('Native durable module must export make(powers)');
     const kit = namespace.make(
       harden({
-        E,
-        Far,
         makeKeeper,
         adapters,
         /** @param {any} options */
@@ -32,11 +41,7 @@ export const makeNativeManager = (
           makeManagerKit({ adapters, makeKeeper }, options),
       }),
     );
-    if (
-      !kit ||
-      kit.registration?.[Symbol.for('passStyle')] !== 'remotable' ||
-      kit.lifecycle?.[Symbol.for('passStyle')] !== 'remotable'
-    ) {
+    if (!kit || !isRemotable(kit.registration) || !isRemotable(kit.lifecycle)) {
       throw Error(
         'Native durable module must return registration and lifecycle facets synchronously',
       );

@@ -44,7 +44,8 @@ silently combine an old durable module with newly edited native code.
 The operator command is `thix install-native state-directory inventory-name resource-directory`.
 A state directory selects the daemon's existing single workspace; this change does not introduce
 another user naming or pet-name-path model.
-The durable factory is synchronous and receives `{E, Far, adapters, makeKeeper, makeManager}`.
+The durable factory is synchronous and receives `{adapters, makeKeeper, makeManager}`; the guest
+prelude is in scope as globals.
 It returns `{registration, lifecycle}`, both remotables.
 `makeManager` is the manager kit, bound to the installation's launcher and keeper: it keeps the
 desired registrations, holds one adapter incarnation, reconciles each registration against it,

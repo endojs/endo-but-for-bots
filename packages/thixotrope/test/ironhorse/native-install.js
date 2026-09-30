@@ -23,7 +23,7 @@ test.serial(
     );
     await writeFile(
       join(directory, 'durable.js'),
-      `export const make = ({Far}) => {
+      `export const make = () => {
     let starts = 0;
     return harden({
       registration: Far('Registration', {

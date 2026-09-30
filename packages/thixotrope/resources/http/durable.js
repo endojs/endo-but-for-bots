@@ -1,7 +1,8 @@
 // @ts-check
-import harden from '@endo/harden';
-
+/** @import { GuestGlobals } from '../../guest.js' */
 /** @import { NativeDurablePowers, NativeDurableKit } from '../../src/native/contract.js' */
+
+const { Far, harden, passStyleOf } = /** @type {GuestGlobals} */ (globalThis);
 
 /**
  * What this side registers under a port and the adapter binds; the adapter
@@ -15,11 +16,12 @@ import harden from '@endo/harden';
  * Synchronous installation in the user's durable workspace. The public facet
  * registers handlers on ports; process creation and restart are the manager
  * kit's, and everything HTTP is the adapter's. This module has no native
- * imports.
+ * imports, and nothing to bundle beyond itself: what it needs is in the
+ * guest prelude.
  * @param {NativeDurablePowers} powers
  * @returns {NativeDurableKit}
  */
-export const make = ({ Far, makeManager }) => {
+export const make = ({ makeManager }) => {
   /**
    * Origins are a set: sorted, so the same allowance in another order is
    * the same policy and does not rebind the listener.
@@ -84,7 +86,7 @@ export const make = ({ Far, makeManager }) => {
     register: (port, handler, policy = {}) => {
       if (!Number.isInteger(port) || port < 1024 || port > 65_535)
         throw Error('Expected HTTP port 1024–65535');
-      if (handler?.[Symbol.for('passStyle')] !== 'remotable')
+      if (passStyleOf(handler) !== 'remotable')
         throw Error('Expected a remotable HTTP handler');
       return manager.register(
         port,

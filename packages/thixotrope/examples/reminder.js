@@ -1,9 +1,15 @@
 // @ts-check
-/** @import { E as EType, Far as FarType } from '@endo/far' */
-const { E, Far } =
-  /** @type {typeof globalThis & {E: typeof EType, Far: typeof FarType}} */ (
-    globalThis
-  );
+/** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+const { E, makeExo, M } = /** @type {GuestGlobals} */ (globalThis);
+
+// A signed 64-bit Unix deadline in milliseconds, as the clock takes it.
+const DeadlineShape = M.and(M.bigint(), M.gte(0n), M.lt(2n ** 63n));
+
+const ReminderI = M.interface('ReminderApplication', {
+  help: M.call().returns(M.string()),
+  arm: M.call(DeadlineShape, M.string()).returns(M.boolean()),
+  status: M.call().returns(M.record()),
+});
 
 /** @param {{clock: any}} powers */
 export const make = ({ clock }) => {
@@ -11,7 +17,7 @@ export const make = ({ clock }) => {
   let nextId = 0n;
   /** @type {Array<{id: bigint, deadline: bigint, message: string, state: string, firedAt?: bigint, error?: string}>} */
   const items = [];
-  return Far('ReminderApplication', {
+  return makeExo('ReminderApplication', ReminderI, {
     help: () =>
       'arm(deadline, message) records a reminder; status() reports its durable listener state and firing count.',
     /**
@@ -19,13 +25,6 @@ export const make = ({ clock }) => {
      * @param {string} message
      */
     arm: (deadline, message) => {
-      if (
-        typeof deadline !== 'bigint' ||
-        deadline < 0n ||
-        deadline >= 2n ** 63n ||
-        typeof message !== 'string'
-      )
-        throw Error('Expected a signed 64-bit Unix deadline and message');
       nextId += 1n;
       /** @type {(typeof items)[number]} */
       const item = { id: nextId, deadline, message, state: 'waiting' };

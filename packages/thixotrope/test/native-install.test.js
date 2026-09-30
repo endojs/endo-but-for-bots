@@ -160,7 +160,7 @@ test.serial(
     // A corrected package is a different installation: the name is taken.
     await writeFile(
       join(directory, 'durable.js'),
-      `export const make = ({ Far }) => harden({
+      `export const make = () => harden({
         registration: Far('Registration', { ok: () => true }),
         lifecycle: Far('Lifecycle', { started: () => {} }),
       });`,

@@ -1,14 +1,28 @@
 // @ts-check
-/** @import { E as EType, Far as FarType } from '@endo/far' */
-const { E, Far } =
-  /** @type {typeof globalThis & {E: typeof EType, Far: typeof FarType}} */ (
-    globalThis
-  );
+/** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
+const { E, makeExo, M } = /** @type {GuestGlobals} */ (globalThis);
+
+const HandlerI = M.interface('CounterHttpHandler', {
+  handle: M.call(
+    M.splitRecord(
+      { method: M.string(), path: M.string() },
+      { body: M.opt(M.string()) },
+    ),
+  ).returns(M.splitRecord({ status: M.number(), body: M.string() })),
+});
+
+const ApplicationI = M.interface('HttpCounterApplication', {
+  help: M.call().returns(M.string()),
+  start: M.call(M.number()).returns(M.promise()),
+  read: M.call().returns(M.bigint()),
+  status: M.call().returns(M.promise()),
+  close: M.call().returns(M.promise()),
+});
 
 /** @param {{http: any}} powers */
 export const make = ({ http }) => {
   let count = 0n;
-  const handler = Far('CounterHttpHandler', {
+  const handler = makeExo('CounterHttpHandler', HandlerI, {
     /** @param {{method: string, path: string}} request */
     handle: ({ method, path }) => {
       if (method === 'POST' && path === '/incr') count += 1n;
@@ -18,7 +32,7 @@ export const make = ({ http }) => {
     },
   });
   let registration;
-  return Far('HttpCounterApplication', {
+  return makeExo('HttpCounterApplication', ApplicationI, {
     help: () =>
       'start(port) registers HTTP, status() inspects it, read() returns the count, and close() stops serving.',
     /** @param {number} port */

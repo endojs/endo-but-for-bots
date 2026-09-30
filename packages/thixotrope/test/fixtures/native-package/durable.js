@@ -1,8 +1,9 @@
 // @ts-check
+/** @import { GuestGlobals } from '../../../guest.js' */
+const { Far } = /** @type {GuestGlobals} */ (globalThis);
 const globals = /** @type {any} */ (globalThis);
 globals.nativeModuleInitializations = (globals.nativeModuleInitializations ?? 0) + 1;
-/** @param {{Far: any}} powers */
-export const make = ({Far}) => {
+export const make = () => {
   let starts = 0;
   return harden({
     registration: Far('Registration', {
