@@ -13,9 +13,10 @@ constitute production deployment or current-release acceptance.
 The main structural unification is implemented, but the refactor is not complete.
 The three native backends actually use common provisioning, lifecycle, grants,
 and execution-envelope code. Reimplementing those abstractions is not the next
-step. Simplicity, bounded context and remaining admission boundaries still need
-evidence or work. Current-release acceptance passes on generation 185 within
-the scopes recorded below; it does not settle those remaining design questions.
+step. Simplicity and bounded context still need evidence or work.
+Protocol admission conformance is covered; generation 185 acceptance passed and
+the Codex-only generation 186 image change passes renewed Luna acceptance.
+Neither gate settles the remaining design questions.
 
 This audit evaluates the retained implementation against the design's
 [motivation and decisions](../../designs/hosted-agent-sandbox-unification.md#motivation),
@@ -27,8 +28,10 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
 ## Current work, 2026-09-30
 
-Tokyo is on generation 185, application `59fe1a5bd`, host `c6f7d23`.
-All four backends pass seed/restart/recall on this release; Claude and Codex
+Tokyo is on generation 186, application `2b8df7d23`, host `c376983`.
+This activates the Codex native-context cleanup image; Luna lifecycle and
+daemon-restart recall pass, with native checkpoints on both completed turns.
+All four backends passed seed/restart/recall on generation 185 (`59fe1a5bd`); Claude and Codex
 retain native checkpoints on both completed turns with the rebuilt images.
 The stopped-incarnation error did not recur.
 This is ordinary restart evidence, not proof of abrupt process-loss recovery
@@ -72,12 +75,19 @@ Host evidence: `ops/explicit-journal-deployment-20260924.md`, generation 185.
 The unused Codex restore hash and production test-only selector wrapper are now
 removed in source (429 package tests pass, independent review approved).
 They do not change durable ownership or publication semantics.
-Tokyo still uses the earlier image; these deletions require a rebuilt Codex image
-and renewed acceptance before the new pin can be marked verified.
-Next: finish RA-04's missing admission-boundary tests and batch the image rebuild
-with renewed image acceptance.
-RA-01 simplification justification and RA-04's remaining conformance coverage stay
-open; RA-03 is implemented, and direct-Fae compaction remains on hold.
+The rebuilt Codex image is active and restoration-verified on generation 186.
+The cutover exposed a retirement gap: durable account-discovery capabilities
+revived the old broker despite removal of its pet names. Withdrawing that source
+before restart allowed setup to bind the new broker and republish both accounts.
+No credentials, renewal owners, account/reset journals or workspaces were removed.
+RA-04's protocol-conformance matrix is complete at `7d9a7b049` after independent
+review; its boundaries and deliberate backend differences are recorded below.
+Only Codex was rerun for generation 186; unchanged backends retain generation-185
+evidence. Test sessions are cleaned up, and the failed pre-retirement-fix creation
+manifest remains as evidence without replay.
+Next: RA-01's like-for-like scope analysis.
+RA-01's size target remains unproven; RA-03 is implemented, and direct-Fae
+compaction remains on hold.
 The older chronological entries and final sequence below are historical evidence,
 not the current work queue.
 
@@ -1294,6 +1304,25 @@ canceled prompt. Keep adapter-specific protocols; introduce a common conformance
 matrix covering cancellation before preparation, during restoration, before
 dispatch, and after dispatch, including failure/next-turn behavior.
 Only factor implementation after the identical responsibilities are established.
+
+Protocol-conformance completion assessment, 2026-09-30 at `7d9a7b049`:
+the required observable boundaries now have coverage on all three native adapters.
+The shared preparation/restoration harness and failed-successor helper are paired
+with protocol-specific tests rather than another runtime abstraction.
+
+| Obligation | Claude | OpenCode | Codex |
+|---|---|---|---|
+| Earliest public cancellation | Queued reader closes before its restoration; A unaffected, C completes | Queued reader omits its command; A unaffected, C completes | Immediate send/interrupt before reader return; no native turn, terminated successor refused |
+| Held preparation/restoration | Provision/restore gates, reader and explicit interrupt | Startup/import gates, accepted and refused import | Held thread/start and thread/inject_items; native helper cancellation |
+| Admission boundary | Canceled preparation cannot reach argv-bearing spawn | Held command writer rechecks before dispatch | Held ledger write exercises final beforeSend guard; zero turn/start |
+| Already admitted work | Late spawn handle and kill acknowledgement remain owned; successor completes | Interrupt is a terminal barrier; writer test completes successor | Reservation held until terminal confirmation; late completion cannot end successor; missing confirmation poisons |
+| Failed turn and successor | Supplied context restored; exactly one terminal per turn | Same native session retained; exactly one terminal per turn | Failed turn reverts then succeeds; unconfirmed interruption refuses successor |
+
+Evidence is in each backend's `test/*-client.test.js`; the immediately following
+entries describe the new cases and validation results.
+RA-04's protocol-conformance requirement is satisfied within this scope.
+This does not prove native quiescence, process-loss recovery, live provider-error
+injection or current-release deployment acceptance; those are separate contracts.
 
 Current-source recheck, 2026-09-30: shared preparation/restoration tests cancel
 after entering a held preparation gate; they do not prove cancellation before
