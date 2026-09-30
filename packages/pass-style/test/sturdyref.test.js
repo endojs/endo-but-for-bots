@@ -97,3 +97,19 @@ test('recognition does not enliven', async t => {
   t.is(await SturdyRef.enliven(ref), 'live');
   t.is(enlivened, 1);
 });
+
+test('a ref constructed with a foreign newTarget is not recognized', t => {
+  // The constructor brands whatever `this` it is given, so a ref can be made
+  // to inherit from a prototype its maker controls. Recognition requires the
+  // global's own prototype, so such a ref can never become a thenable later.
+  function NewTarget() {}
+  NewTarget.prototype = { poke: () => 'hi' };
+  const ref = Reflect.construct(SturdyRef, [{ enliven: () => 'x' }], NewTarget);
+  t.true(SturdyRef.isSturdyRef(ref));
+  t.throws(() => passStyleOf(ref));
+
+  class Subclass extends SturdyRef {}
+  const sub = Reflect.construct(Subclass, [{ enliven: () => 'x' }]);
+  t.true(SturdyRef.isSturdyRef(sub));
+  t.throws(() => passStyleOf(sub));
+});
