@@ -31,7 +31,7 @@ spellings.
 The powered start-compartment intrinsic is `%InitialURL%` rather than
 `%URL%`, matching how SES already names the powered and tamed `Date`
 constructors, `%InitialDate%` and `%SharedDate%` (see
-`packages/ses/src/permits.js`).
+[`../packages/ses/src/permits.js`](../packages/ses/src/permits.js)).
 The lockdown option is `urlBlobTaming: 'retain' | 'remove'` rather than
 `urlBlobMethods: 'keepOnInitialGlobal' | 'remove'`.
 Most sibling `*Taming` options take `'safe' | 'unsafe'` values, and the
@@ -55,8 +55,13 @@ the trade-off raised in [Open question 2](#open-questions).
 The Phase 3 downstream audit found nothing to change.
 A grep of this repository finds `URL.createObjectURL` and
 `URL.revokeObjectURL` only in the shim, its tests, its type
-declarations, and lockdown log text captured by a daemon test.
-The optional `new URL(` simplification sweep was not recorded as done.
+declarations, lockdown log text captured by a daemon test, and prose:
+the lockdown documentation (`docs/lockdown.md` and
+`packages/ses/docs/guide.md`), the changeset
+(`.changeset/hardened-url-shim.md`), this design, and the sibling
+[hardened text codecs shim](./hardened-text-codecs-shim.md) design.
+None of these is a call site that runs under SES.
+The optional `new URL(` simplification sweep was not done.
 
 The test plan's XS smoke test (item 9) has no URL-specific file;
 `packages/ses` runs only a bare `lockdown()` under XS, which exercises
@@ -192,10 +197,6 @@ A URL constructed in a shared compartment and passed back to the
 start compartment likewise satisfies `x instanceof URL` there
 (where `URL` is the start compartment's powered binding).
 
-*Resolved in the [Status](#status) section: the implementation shipped
-the shared prototype and pins `%URLPrototype%.constructor` to
-`%SharedURL%`.*
-
 This was an **open question**: shared identity at the prototype level
 is the simplest fix, but it means the two constructor functions are
 distinct values, and any code that compares `Foo.constructor === URL`
@@ -206,6 +207,10 @@ across the boundary; that pushes the burden onto cross-compartment
 helper libraries.
 Recommend the shared-prototype approach unless the maintainer prefers
 the strict separation.
+
+*Resolved in the [Status](#status) section: the implementation shipped
+the shared prototype and pins `%URLPrototype%.constructor` to
+`%SharedURL%`.*
 
 ### Permits table
 
