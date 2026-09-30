@@ -209,10 +209,27 @@ length is re-seated as broken rather than truncated. The whole-file mutations
 (`writeFileText`, `appendFile`, `mkdir`, `remove`, `rename`, `symlink`, `link`)
 run through the transcript as barriers too, and a host call made outside any
 delivery (promise jobs a heap suspended mid-pump carried) opens a crank of its
-own. Only the supervisor (envelope handle 0) may attach a transcript or suspend a
+own. Every other callback that reads host state (whole-file reads, directory
+listings, `stat`, `exists`, `readLink`, the environment, `realPath`, module
+sources, random bytes, generated keys) runs through the transcript as a read,
+so the log records the value the guest observed and a replay answers with it
+instead of reading the live world again. A worker's open hashers together keep
+a bounded number of fed bytes, so opening more hashers cannot grow native
+memory the crank meter does not see; a hasher past that bound is re-seated as
+broken. Only the supervisor (envelope handle 0) may attach a transcript or suspend a
 worker, since both name paths and a transcript's descriptors rebuild authority:
 whoever can write the transcript file chooses what a resumed worker reopens, so
-the file is as sensitive as the worker's own grants and data. Descriptors record
+the file is as sensitive as the worker's own grants and data. That includes
+ambient `root` directories, whose absolute paths a descriptor records and a
+resume reopens without consulting the live grants. It is also a durable,
+plaintext record of the worker's secrets: every generated private key, every
+random byte, and every byte fed to a hasher is in the log, and every heap
+snapshot holds the worker's secrets too. The transcript and its heap blobs are
+therefore created readable and writable by their owner alone (mode `0600`,
+whatever the umask), and opening an existing transcript restricts it the same
+way. Encrypting the log, or recording a commitment in place of key material,
+is not attempted here: replay needs the bytes themselves, and a key held
+elsewhere would move the secret rather than remove it. Descriptors record
 positions as of the latest committed crank, so attaching refuses a resumed heap
 that is not the transcript's published snapshot, and refuses while committed host
 calls lie past that snapshot's watermark, until a replay driver can bring the
