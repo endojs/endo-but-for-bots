@@ -353,7 +353,8 @@ test('constructing a SturdyRef from data checks each coordinate type', t => {
 
 test('the SturdyRef locator refuses a non-string object id', async t => {
   const { left } = makeOptsPair({}, { locateSturdyRef: () => Far('t', {}) });
-  const { promise: locator } = left.makeRemoteKit('l-0');
+  const { promise } = left.makeRemoteKit('l-0');
+  const locator = /** @type {any} */ (promise);
   await t.throwsAsync(() => E(locator).locate(1), {
     message: /object id must be a string/,
   });
