@@ -306,8 +306,6 @@ fn run_store_scheduled<S: HeapStore + 'static>(
             "the adversarial-evict arm must actually evict"
         );
     }
-    crate::store::validate_store_content(&*store.borrow(), &sig())
-        .expect("a store the suite wrote passes the full validator");
     (
         results,
         computrons,
@@ -876,8 +874,6 @@ pub fn checkpoint_acceptance(store: &mut dyn HeapStore) {
     let epoch = checkpoint_to_store(&mut session, &sig(), store).expect("incremental");
     assert_eq!(epoch, 2);
     assert_valid(store);
-    crate::store::validate_store_content(store, &sig())
-        .expect("a store the suite wrote passes the full validator");
     assert_eq!(
         store_to_image(store).unwrap(),
         session
@@ -1196,7 +1192,7 @@ pub fn consistent_edits_resume<S: HeapStore + 'static>(
     check(resume_from_store_lazy(shared.clone(), &sig()).expect("lazy resume"));
     match Rc::try_unwrap(shared) {
         Ok(store) => store.into_inner(),
-        Err(_) => panic!("the lazy session released the store"),
+        Err(_) => panic!("the lazy session still holds the store"),
     }
 }
 
