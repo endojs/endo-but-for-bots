@@ -58,7 +58,8 @@
  * @property {string} label what a key names, for messages
  * @property {(existing: Spec, wanted: Spec) => boolean} same
  * @property {(existing: Spec, wanted: Spec) => boolean} [replaces]
- * @property {(key: unknown, spec: Spec, state: 'bound' | 'inactive' | 'closed', error?: string) => unknown} describe
+ * @property {(key: unknown, spec: Spec | undefined, state: 'bound' | 'inactive' | 'closed', error?: string) => unknown} describe
+ *   the status record a handle reports; a closed registration has no spec
  */
 
 /**
