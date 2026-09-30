@@ -26,7 +26,7 @@ import { registerProvisionedGuest } from './code-mode-grants.js';
 export class EndoCredentialUnavailableError extends Error {
   /**
    * @param {string} remoteName
-   * @param {string | string[]} credentialPetName
+   * @param {string[]} credentialPetName
    */
   constructor(remoteName, credentialPetName) {
     super(
@@ -99,11 +99,7 @@ const resolveGitCredentials = async (host, persistence) => {
       let lookedUp;
       try {
         // eslint-disable-next-line no-await-in-loop
-        lookedUp = await E(host).lookup(
-          typeof remote.credential === 'string'
-            ? [remote.credential]
-            : remote.credential,
-        );
+        lookedUp = await E(host).lookup(remote.credential);
       } catch {
         throw new EndoCredentialUnavailableError(name, remote.credential);
       }
