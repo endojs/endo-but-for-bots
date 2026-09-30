@@ -320,7 +320,7 @@ test('execute js command', async t => {
   t.is(result.message, 'Result saved as "answer"');
   t.is(result.value, 'eval-result');
   t.deepEqual(ctx.calls[0].args, [
-    '@main',
+    ['@main'],
     '1 + 1',
     ['x'],
     [['my-value']],

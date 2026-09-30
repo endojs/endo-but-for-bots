@@ -2367,7 +2367,7 @@ testWorkerTermination(
     await E(host).evaluate(
       ['worker'],
       `
-      E(host).provideHost('retained-host').then(retained => {
+      E(host).provideHost(['retained-host']).then(retained => {
         globalThis.retained = retained;
         return 'ok';
       })
@@ -7578,7 +7578,7 @@ test('mount file writeText and json', async t => {
   t.deepEqual(jsonValue, { version: 1 });
 
   // writeText() method.
-  await E(configFile).writeText(['{"version": 2}']);
+  await E(configFile).writeText('{"version": 2}');
   const updated = await E(configFile).json();
   t.deepEqual(updated, { version: 2 });
 
@@ -7654,7 +7654,7 @@ test('mount snapshots capture immutable tree and file views', async t => {
 
   const snapshotBlob = await E(liveFile).snapshot();
 
-  await E(liveFile).writeText(['changed']);
+  await E(liveFile).writeText('changed');
   await E(mount).writeText(['nested', 'file.txt'], 'changed nested');
 
   t.is(await E(snapshotFile).text(), 'initial');

@@ -78,8 +78,8 @@ test('the read-only view forwards its reads to the backing hub', async t => {
   t.deepEqual(calls, [
     ['has', ['one']],
     ['list', []],
-    ['lookup', ['one']],
-    ['maybeLookup', ['two']],
+    ['lookup', [['one']]],
+    ['maybeLookup', [['two']]],
   ]);
 });
 
@@ -148,7 +148,7 @@ test('empty and multi-segment path arguments forward verbatim to the backing hub
   const { hub, calls } = makeStubHub();
   const view = makeReadOnlyDirectoryView(hub);
 
-  // The guard admits `''`, `[]`, a multi-segment array, and a zero-length rest
+  // The guard admits `['']`, `[]`, a multi-segment array, and a zero-length rest
   // for `has`/`list`. None are rejected at THIS boundary (they are value, not
   // type, confusion — `assertNamePath`/`assertName` reject them downstream at
   // the backing hub), so each must forward through unchanged.
@@ -159,7 +159,7 @@ test('empty and multi-segment path arguments forward verbatim to the backing hub
   await E(view).list();
 
   t.deepEqual(calls, [
-    ['lookup', ['']],
+    ['lookup', [['']]],
     ['lookup', [[]]],
     ['maybeLookup', [['a', 'b']]],
     ['has', []],

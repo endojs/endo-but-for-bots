@@ -142,7 +142,7 @@ test.serial(
     //    for the worker name selects the host's default worker
     //    (`@node` here); the host method's signature is
     //    `(workerName?, treeName, opts)`.
-    const exo = await E(host).makeFromTree(undefined, 'tree-view', {
+    const exo = await E(host).makeFromTree(undefined, ['tree-view'], {
       powersName: ['@none'],
       env: { HELLO: 'endo-fs-exec' },
     });
@@ -175,7 +175,7 @@ test.serial(
       resultName: ['widget-tree'],
     });
 
-    const exo = await E(host).makeFromTree(undefined, 'widget-tree', {
+    const exo = await E(host).makeFromTree(undefined, ['widget-tree'], {
       powersName: ['@none'],
       env: { WHO: 'widget' },
     });

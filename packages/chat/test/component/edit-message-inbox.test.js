@@ -393,8 +393,8 @@ test.serial(
     // makeEditPowers.reverseLocate returns ['alice'] for non-self locators.
     t.deepEqual(
       editCall.args[3],
-      ['alice'],
-      'kept binding is passed as a pet name, not a locator',
+      [['alice']],
+      'kept binding is passed as a pet-name path, not a locator',
     );
     const reverseCalls = calls.filter(c => c.method === 'reverseLocate');
     t.true(
