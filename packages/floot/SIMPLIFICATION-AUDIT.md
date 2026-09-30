@@ -130,9 +130,12 @@ shared shape; no hosted consumer needed distinct native capability metadata.
 Codex now calls the existing `catalog.offered(subscription)` too: automatic pools
 exclude pinned-only members, and an explicitly pinned session lists only its
 account's models. The native-model normalization module and export are deleted.
-The low-level native query and its supervisor/daemon proxies remain a follow-up
-deletion; transport tests currently use that query to trigger initialization, so
-their failure/cancellation coverage must be preserved when it goes.
+The low-level native query and its supervisor/daemon proxies are now deleted.
+Transport initialization tests use the existing checkpoint acknowledgement path;
+startup failure, cancellation, teardown and inherited-auth coverage remain.
+All 430 Codex tests, six supervisor tests and 16 session-owner tests pass.
+The three affected package typechecks and scoped lint pass; independent review
+approves the deletion and retained coverage.
 No credential owner, model admission rule or persisted plan changes.
 
 OpenCode's sole-caller storage parser-injection wrapper is also deleted.

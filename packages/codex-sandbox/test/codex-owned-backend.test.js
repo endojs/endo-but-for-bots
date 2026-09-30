@@ -98,9 +98,6 @@ test('Codex factory delegates checkpoint operations and retains failed native st
   const calls = [];
   let stopFails = true;
   const client = Far('Client', {
-    async models() {
-      throw Error('Native transport is not a model catalog');
-    },
     async acknowledge(checkpoint) {
       calls.push(['ack', checkpoint]);
     },

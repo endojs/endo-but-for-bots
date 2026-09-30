@@ -62,8 +62,8 @@ Only one turn may run at a time. Closing the reader interrupts that exact turn;
 a second concurrent `send()` is rejected.
 The hosted run's `models()` reads the same account catalog used for model
 admission, respecting its subscription pin and excluding pinned-only accounts
-from automatic selection. The low-level client's native `models()` query is not
-a second authority for hosted model selection.
+from automatic selection. Native clients and execution owners do not perform
+model discovery; their protocol covers execution and checkpoint acknowledgement.
 A successful `end` contains an opaque checkpoint. A durable consumer stores it
 with the committed conversation node and calls `acknowledge(checkpoint)`; if
 that call is lost, it supplies `acknowledgedCheckpoint` on the next `send()`.

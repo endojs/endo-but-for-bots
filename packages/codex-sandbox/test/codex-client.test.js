@@ -486,7 +486,6 @@ const makeQueue = () => {
  *   beforeTurnResponse?: any[],
  *   turnIdValue?: any,
  *   turnStatus?: any,
- *   modelListResult?: any,
  *   accountReadResult?: any,
  *   brokerEndpoint?: string,
  *   network?: any,
@@ -509,7 +508,6 @@ const makeFixture = ({
   beforeTurnResponse = [],
   turnIdValue,
   turnStatus = 'inProgress',
-  modelListResult,
   accountReadResult,
   brokerEndpoint,
   network,
@@ -672,27 +670,6 @@ const makeFixture = ({
             },
           });
         }
-        break;
-      case 'model/list':
-        push({
-          id: message.id,
-          result:
-            modelListResult === undefined
-              ? {
-                  data: [
-                    {
-                      id: 'gpt-test',
-                      displayName: 'GPT Test',
-                      description: 'Test model',
-                      isDefault: true,
-                      defaultReasoningEffort: 'high',
-                      supportedReasoningEfforts: [{ reasoningEffort: 'high' }],
-                    },
-                  ],
-                  nextCursor: null,
-                }
-              : modelListResult,
-        });
         break;
       default:
         throw Error(`unexpected request ${message.method}`);
@@ -1316,7 +1293,7 @@ test('supervisor retries real Codex client transport cleanup', async t => {
   t.timeout(5000);
   const fixture = makeFixture({ closeFailures: 1 });
   const owner = await supervise(fixture.client);
-  await owner.controller.models();
+  await owner.controller.acknowledge('checkpoint-test');
   await t.throwsAsync(owner.stop, { message: /cleanup pending/ });
   t.true(owner.events.includes('fence'));
   t.true(owner.events.includes('sandbox-close'));
@@ -1839,8 +1816,6 @@ test('an acknowledged persisted thread is superseded under the current sandbox p
   // projection. The replacement still receives the current sandbox policy.
   t.falsy(fixture.sent.find(message => message.method === 'thread/resume'));
   t.truthy(fixture.sent.find(message => message.method === 'thread/start'));
-  const models = await fixture.client.models();
-  t.is(models[0].id, 'gpt-test');
 });
 
 test('malformed method results poison the pinned protocol session', async t => {
@@ -1862,14 +1837,6 @@ test('malformed method results poison the pinned protocol session', async t => {
   const badStatusReader = await badTurnStatus.client.send('go');
   const badStatusEvents = await drain(badStatusReader);
   t.regex(badStatusEvents.at(-1).reason, /in-progress turn id/);
-
-  const badModels = makeFixture({ modelListResult: {} });
-  await t.throwsAsync(() => badModels.client.models(), {
-    message: /malformed model catalog/,
-  });
-  await t.throwsAsync(() => badModels.client.models(), {
-    message: 'Codex session terminated',
-  });
 });
 
 test('thread persistence failure prevents a turn from starting', async t => {
@@ -3109,13 +3076,13 @@ test('terminate closes the transport', async t => {
     terminated: false,
     cleanupFailures: [],
   });
-  await fixture.client.models();
+  await fixture.client.acknowledge('checkpoint-test');
   t.true((await fixture.client.status()).ready);
   await fixture.client.terminate();
   t.true(fixture.isClosed());
   t.deepEqual(await fixture.client.status(), {
     sessionId: 'session-1',
-    threadId: null,
+    threadId: 'thread-new',
     ready: false,
     active: false,
     pendingToolCalls: 0,
@@ -3151,10 +3118,10 @@ test('terminate surfaces transport teardown failure', async t => {
           queue.push({ id: message.id, result: INITIALIZE_RESULT });
         } else if (message.method === 'account/read') {
           queue.push({ id: message.id, result: ACCOUNT_RESULT });
-        } else if (message.method === 'model/list') {
+        } else if (message.method === 'thread/start') {
           queue.push({
             id: message.id,
-            result: { data: [], nextCursor: null },
+            result: { thread: { id: 'thread-cleanup', turns: [] } },
           });
         }
       },
@@ -3164,7 +3131,7 @@ test('terminate surfaces transport teardown failure', async t => {
       },
     }),
   });
-  await client.models();
+  await client.acknowledge('checkpoint-test');
   await t.throwsAsync(() => client.terminate(), { message: 'kill failed' });
 });
 
@@ -3187,7 +3154,9 @@ test('automatic protocol failure reports teardown failure', async t => {
       },
     }),
   });
-  await t.throwsAsync(() => client.models(), { message: /malformed response/ });
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
+    message: /malformed response/,
+  });
   for (let tries = 0; reported.length === 0 && tries < 20; tries += 1) {
     // eslint-disable-next-line no-await-in-loop
     await null;
@@ -3213,7 +3182,9 @@ test('a blocked write is bounded by the request deadline', async t => {
       },
     }),
   });
-  await t.throwsAsync(() => client.models(), { message: /timed out/ });
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
+    message: /timed out/,
+  });
   t.true(closed);
 });
 
@@ -3238,7 +3209,9 @@ test('a blocked initialized notification is bounded and closes the session', asy
       },
     }),
   });
-  await t.throwsAsync(() => client.models(), { message: /write timed out/ });
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
+    message: /write timed out/,
+  });
   t.true(closed);
 });
 
@@ -3258,7 +3231,9 @@ test('malformed matching responses poison the session', async t => {
       },
     }),
   });
-  await t.throwsAsync(() => client.models(), { message: /malformed response/ });
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
+    message: /malformed response/,
+  });
   t.true(closed);
 });
 
@@ -3279,10 +3254,10 @@ test('malformed initialize results poison the pinned protocol session', async t 
       close: async () => queue.close(),
     }),
   });
-  await t.throwsAsync(() => client.models(), {
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
     message: /malformed initialize result/,
   });
-  await t.throwsAsync(() => client.models(), {
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
     message: 'Codex session terminated',
   });
 });
@@ -3727,9 +3702,12 @@ test('JSON-RPC error metadata is preserved without unsafe replay', async t => {
     }),
   });
 
-  const error = await t.throwsAsync(() => client.models(), {
-    message: /code -32001.*Server overloaded/,
-  });
+  const error = await t.throwsAsync(
+    () => client.acknowledge('checkpoint-test'),
+    {
+      message: /code -32001.*Server overloaded/,
+    },
+  );
   t.truthy(error);
   t.is(sends, 1);
 });
@@ -3752,11 +3730,11 @@ test('terminate closes a transport that resolves after lazy startup', async t =>
       return deferred;
     },
   });
-  const modelsP = client.models();
-  modelsP.catch(() => undefined);
+  const acknowledging = client.acknowledge('checkpoint-test');
+  acknowledging.catch(() => undefined);
   await startEntered;
   await client.terminate();
-  await t.throwsAsync(modelsP, { message: /session terminated/ });
+  await t.throwsAsync(acknowledging, { message: /session terminated/ });
   /** @type {any} */ (resolveStart)({
     messages: queue.messages,
     send: async () => {},
@@ -3792,8 +3770,8 @@ test('startup-win termination race reports close failure', async t => {
       return deferred;
     },
   });
-  const modelsP = client.models();
-  modelsP.catch(() => undefined);
+  const acknowledging = client.acknowledge('checkpoint-test');
+  acknowledging.catch(() => undefined);
   await entered;
   // The client's start reactions are registered synchronously after start()
   // returns. Register termination afterward: startup wins Promise.race, then
@@ -3807,7 +3785,7 @@ test('startup-win termination race reports close failure', async t => {
       throw Error('startup race reap failed');
     },
   });
-  await t.throwsAsync(modelsP, { message: 'startup race reap failed' });
+  await t.throwsAsync(acknowledging, { message: 'startup race reap failed' });
   t.deepEqual(reported, ['startup race reap failed']);
   t.deepEqual((await client.status()).cleanupFailures, [
     'startup race reap failed',
@@ -3827,7 +3805,7 @@ test('startup timeout retains and closes a late transport', async t => {
     requestTimeoutMs: 5,
     start: async () => deferred,
   });
-  await t.throwsAsync(() => client.models(), {
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
     message: /transport startup timed out/,
   });
   resolveStart({
@@ -3862,7 +3840,7 @@ test('a late transport cleanup failure is operator-visible', async t => {
     },
     start: async () => deferred,
   });
-  await t.throwsAsync(() => client.models(), {
+  await t.throwsAsync(() => client.acknowledge('checkpoint-test'), {
     message: /transport startup timed out/,
   });
   resolveStart({
@@ -4074,7 +4052,7 @@ test('a thread resumed from a write-ahead marker with no turn is still unmateria
   t.deepEqual(events.at(-1), { type: 'end', checkpoint: 'turn-1' });
 });
 
-test('broker config admission precedes model discovery and rejects inherited bearer', async t => {
+test('broker config admission precedes thread startup and rejects inherited bearer', async t => {
   const fixture = makeFixture({
     brokerEndpoint: 'http://127.0.0.1:23456',
     configReadResult: {
@@ -4095,10 +4073,9 @@ test('broker config admission precedes model discovery and rejects inherited bea
       },
     },
   });
-  await t.throwsAsync(() => fixture.client.models(), {
+  await t.throwsAsync(() => fixture.client.acknowledge('checkpoint-test'), {
     message: /additional configuration/,
   });
-  t.false(fixture.sent.some(message => message.method === 'model/list'));
   t.false(fixture.sent.some(message => message.method === 'thread/start'));
   t.true(fixture.isClosed());
 });
@@ -4125,10 +4102,10 @@ test('broker config admission permits a credential-free provider', async t => {
     },
   });
   t.teardown(() => fixture.client.terminate());
-  await fixture.client.models();
+  await fixture.client.acknowledge('checkpoint-test');
   t.true(
     fixture.sent.findIndex(message => message.method === 'config/read') <
-      fixture.sent.findIndex(message => message.method === 'model/list'),
+      fixture.sent.findIndex(message => message.method === 'thread/start'),
   );
 });
 

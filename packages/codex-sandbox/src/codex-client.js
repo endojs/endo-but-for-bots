@@ -26,7 +26,6 @@ const CodexClientInterface = M.interface('CodexClient', {
   send: M.call(M.string())
     .optional(M.recordOf(M.string(), M.any()))
     .returns(M.promise()),
-  models: M.call().returns(M.promise()),
   interrupt: M.call().returns(M.promise()),
   acknowledge: M.call(M.string()).returns(M.promise()),
   terminate: M.call().returns(M.promise()),
@@ -2113,40 +2112,6 @@ export const makeCodexClient = ({
       await ensureThread({}, true);
       await acknowledgeCheckpoint(checkpoint);
     },
-    async models() {
-      await ensureReady();
-      const models = [];
-      let cursor = null;
-      for (let page = 0; page < 10; page += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        const response = await request('model/list', {
-          cursor,
-          limit: 100,
-          includeHidden: false,
-        });
-        if (
-          !Array.isArray(response?.data) ||
-          !(
-            response.nextCursor === null ||
-            response.nextCursor === undefined ||
-            typeof response.nextCursor === 'string'
-          )
-        ) {
-          const failure = Error(
-            'Codex app-server returned a malformed model catalog',
-          );
-          failSession(failure);
-          throw failure;
-        }
-        models.push(...response.data);
-        cursor = response?.nextCursor;
-        if (!cursor) break;
-        if (page === 9) {
-          throw Error('Codex model catalog exceeded 10 pages');
-        }
-      }
-      return harden(models);
-    },
     async interrupt() {
       const failure = await interruptActive('Codex turn interrupted');
       if (failure) throw failure;
@@ -2202,7 +2167,6 @@ export const makeCodexClient = ({
     help(method = '') {
       const methods = harden({
         send: 'send(prompt, options?) -> streamed provider-neutral events. options.transcript is the stack’s transcript records; a new thread is restored from them through thread/inject_items before the prompt runs, and a thread that cannot take them fails the turn rather than answering without them.',
-        models: 'models() -> app-server model catalog',
         interrupt: 'interrupt() -> interrupt the active turn',
         acknowledge:
           'acknowledge(checkpoint) -> confirm the durable Floot commit',

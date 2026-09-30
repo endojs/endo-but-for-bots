@@ -32,7 +32,7 @@ second hosted model-list authority in favor of the same account catalog used by
 admission, deletes its native-descriptor normalization API, removes OpenCode's
 redundant storage wrapper, and deletes unused MCP constants.
 The [simplification inventory](SIMPLIFICATION-AUDIT.md#account-model-authority-and-adapter-deletions-2026-09-30)
-records the ownership decisions, remaining native-query plumbing, and next concrete
+records the ownership decisions, native-query retirement, and next concrete
 deletion candidates. Existing formula identities and durable owners are unchanged;
 deployment is pending.
 Validation: 430 Codex tests and 53 focused storage/controller/MCP tests pass.
@@ -52,6 +52,16 @@ and retries the staged replacement. It does not claim an arbitrary lost
 acknowledgement leaves the old identity in place.
 All 57 shared/Claude/Codex/OpenCode setup tests pass, shared and Codex typechecks
 pass, and scoped lint reports zero errors. Independent review approves.
+Not deployed.
+
+Native model-query retirement: the Codex client, shared supervisor and daemon
+session owner no longer expose a second discovery path.
+Provider/account catalogs own model discovery; native clients own execution and
+checkpoint acknowledgement.
+All 430 Codex tests, six supervisor tests and 16 session-owner tests pass, retaining
+initialization, cancellation and teardown coverage through existing protocol calls.
+Affected package typechecks and scoped lint pass; independent review approves.
+No persistent schema, formula entrypoint or credential ownership changes.
 Not deployed.
 
 Current durability evidence includes a generation-186 retirement correction:
