@@ -22,7 +22,7 @@
 use crate::ffi::*;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
-use crate::host_ledger::{self, join, Base, Descriptor, Outcome};
+use crate::host_ledger::{self, join, Answer, Base, Descriptor, Outcome};
 use crate::powers::HostPowers;
 use crate::worker_io::{abort_if_ffi_panicked, arg_str, read_typed_array_bytes, set_result_string};
 use slot_machine_transcript::HostClass;
@@ -62,53 +62,6 @@ unsafe fn arg_bytes(the: *mut XsMachine, index: usize) -> &'static [u8] {
         len += 1;
     }
     std::slice::from_raw_parts(ptr, len)
-}
-
-/// Helper: set xsResult to a string from raw bytes. The bytes must not
-/// contain an interior NUL. Used when passing potentially non-UTF-8
-/// XS string bytes (CESU-8 surrogate encoding) back to JS intact.
-unsafe fn set_result_bytes(the: *mut XsMachine, bytes: &[u8]) {
-    // Build a null-terminated buffer without going through CString
-    // (which would reject interior NULs but also requires valid UTF-8
-    // nowhere — CString itself is fine; we just skip that assertion).
-    let mut buf = Vec::with_capacity(bytes.len() + 1);
-    buf.extend_from_slice(bytes);
-    buf.push(0);
-    fxString(
-        the,
-        &mut (*the).scratch,
-        buf.as_ptr() as *const std::os::raw::c_char,
-    );
-    *(*the).frame.add(1) = (*the).scratch;
-}
-
-/// Helper: set xsResult to a fresh ArrayBuffer holding the given bytes.
-///
-/// Allocates a chunk in XS heap (via `fxArrayBuffer`) and copies the
-/// bytes in.  Use this for binary file payloads — the string round-trip
-/// in `set_result_bytes` corrupts non-ASCII data because XS treats the
-/// bytes as CESU-8.
-unsafe fn set_result_array_buffer(the: *mut XsMachine, bytes: &[u8]) {
-    let len = bytes.len() as i32;
-    let data_ptr = if bytes.is_empty() {
-        std::ptr::null_mut()
-    } else {
-        bytes.as_ptr() as *mut std::os::raw::c_void
-    };
-    fxArrayBuffer(the, &mut (*the).scratch, data_ptr, len, len);
-    *(*the).frame.add(1) = (*the).scratch;
-}
-
-/// Helper: set xsResult to undefined.
-unsafe fn set_result_undefined(the: *mut XsMachine) {
-    fxUndefined(the, &mut (*the).scratch);
-    *(*the).frame.add(1) = (*the).scratch;
-}
-
-/// Helper: set xsResult to a boolean.
-unsafe fn set_result_bool(the: *mut XsMachine, v: bool) {
-    fxBoolean(the, &mut (*the).scratch, if v { 1 } else { 0 });
-    *(*the).frame.add(1) = (*the).scratch;
 }
 
 // ---------------------------------------------------------------------------
@@ -358,6 +311,41 @@ unsafe fn error_outcome(the: *mut XsMachine, message: String) -> Outcome {
     }
 }
 
+/// Run a whole-value read through the directory slot under the host-call
+/// ledger, so the transcript records what the guest observed. `read`
+/// receives the resolved directory, or `None` for the ambient `"root"`
+/// token.
+///
+/// # Safety
+/// `the` must be valid with the directory in slot 0.
+unsafe fn read_through(
+    the: *mut XsMachine,
+    callback: &str,
+    request: &impl serde::Serialize,
+    read: impl FnOnce(Option<Result<cap_std::fs::Dir, String>>) -> Answer,
+) {
+    let (target, token, directory) = directory_argument(the, 0);
+    let request = serde_json::to_vec(&(target, &token, request)).unwrap_or_default();
+    host_ledger::answer(the, callback, target, &request, || read(directory));
+}
+
+/// Read a whole file through a resolved directory, or ambiently for the
+/// `"root"` token.
+fn read_whole(
+    directory: Option<Result<cap_std::fs::Dir, String>>,
+    path: &str,
+) -> Result<Vec<u8>, String> {
+    match directory {
+        None => std::fs::read(root_to_abs(path)).map_err(io_error),
+        Some(directory) => {
+            let mut file = directory?.open(path).map_err(io_error)?;
+            let mut contents = Vec::new();
+            file.read_to_end(&mut contents).map_err(io_error)?;
+            Ok(contents)
+        }
+    }
+}
+
 /// The position-advanced descriptor of a file handle.
 fn advanced(handle: u32, by: u64) -> Option<Option<Descriptor>> {
     Some(match host_ledger::descriptor(handle)? {
@@ -564,28 +552,12 @@ pub unsafe extern "C" fn host_close_writer(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_read_file_text(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            match std::fs::read(root_to_abs(&path)) {
-                Ok(contents) => set_result_bytes(the, &contents),
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
+        read_through(the, "readFileText", &path, |directory| {
+            match read_whole(directory, &path) {
+                Ok(contents) => Answer::Text(contents),
+                Err(message) => Answer::Message(message),
             }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => match dir.open(path) {
-                Ok(mut file) => {
-                    let mut contents = Vec::new();
-                    match file.read_to_end(&mut contents) {
-                        Ok(_) => set_result_bytes(the, &contents),
-                        Err(e) => set_result_string(the, &format!("Error: {}", e)),
-                    }
-                }
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
-            },
-            Err(msg) => set_result_string(the, &msg),
-        }
+        });
     });
 }
 
@@ -602,28 +574,12 @@ pub unsafe extern "C" fn host_read_file_text(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_read_file_bytes(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            match std::fs::read(root_to_abs(&path)) {
-                Ok(contents) => set_result_array_buffer(the, &contents),
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
+        read_through(the, "readFile", &path, |directory| {
+            match read_whole(directory, &path) {
+                Ok(contents) => Answer::Buffer(contents),
+                Err(message) => Answer::Message(message),
             }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => match dir.open(path) {
-                Ok(mut file) => {
-                    let mut contents = Vec::new();
-                    match file.read_to_end(&mut contents) {
-                        Ok(_) => set_result_array_buffer(the, &contents),
-                        Err(e) => set_result_string(the, &format!("Error: {}", e)),
-                    }
-                }
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
-            },
-            Err(msg) => set_result_string(the, &msg),
-        }
+        });
     });
 }
 
@@ -635,49 +591,33 @@ pub unsafe extern "C" fn host_read_file_bytes(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_maybe_read_file_bytes(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        let read_result: Result<Option<Vec<u8>>, std::io::Error> =
-            if arg_dir_token(the, 0).as_deref() == Some("root") {
-                match std::fs::read(root_to_abs(&path)) {
-                    Ok(contents) => Ok(Some(contents)),
-                    Err(e)
-                        if e.kind() == std::io::ErrorKind::NotFound
-                            || e.kind() == std::io::ErrorKind::IsADirectory =>
-                    {
-                        Ok(None)
-                    }
-                    Err(e) => Err(e),
-                }
-            } else {
-                match resolve_dir(the, 0) {
-                    Ok(dir) => match dir.open(&path) {
-                        Ok(mut file) => {
-                            let mut contents = Vec::new();
-                            match file.read_to_end(&mut contents) {
-                                Ok(_) => Ok(Some(contents)),
-                                Err(e) => Err(e),
-                            }
-                        }
-                        Err(e)
-                            if e.kind() == std::io::ErrorKind::NotFound
-                                || e.kind() == std::io::ErrorKind::IsADirectory =>
-                        {
-                            Ok(None)
-                        }
-                        Err(e) => Err(e),
-                    },
-                    Err(msg) => {
-                        set_result_string(the, &msg);
-                        return;
-                    }
-                }
+        read_through(the, "maybeReadFile", &path, |directory| {
+            let absent = |e: &std::io::Error| {
+                e.kind() == std::io::ErrorKind::NotFound
+                    || e.kind() == std::io::ErrorKind::IsADirectory
             };
-
-        match read_result {
-            Ok(Some(contents)) => set_result_array_buffer(the, &contents),
-            Ok(None) => set_result_undefined(the),
-            Err(e) => set_result_string(the, &format!("Error: {}", e)),
-        }
+            let read_result: Result<Option<Vec<u8>>, std::io::Error> = match directory {
+                None => match std::fs::read(root_to_abs(&path)) {
+                    Ok(contents) => Ok(Some(contents)),
+                    Err(e) if absent(&e) => Ok(None),
+                    Err(e) => Err(e),
+                },
+                Some(Err(message)) => return Answer::Message(message),
+                Some(Ok(dir)) => match dir.open(&path) {
+                    Ok(mut file) => {
+                        let mut contents = Vec::new();
+                        file.read_to_end(&mut contents).map(|_| Some(contents))
+                    }
+                    Err(e) if absent(&e) => Ok(None),
+                    Err(e) => Err(e),
+                },
+            };
+            match read_result {
+                Ok(Some(contents)) => Answer::Buffer(contents),
+                Ok(None) => Answer::Nothing,
+                Err(e) => Answer::Message(io_error(e)),
+            }
+        });
     });
 }
 
@@ -762,56 +702,51 @@ pub unsafe extern "C" fn host_stat(the: *mut XsMachine) {
             )
         };
 
-        let result = if arg_dir_token(the, 0).as_deref() == Some("root") {
-            use std::os::unix::fs::MetadataExt;
-            std::fs::symlink_metadata(root_to_abs(&path)).map(|meta| {
-                let modified_ms = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                encode(
-                    kind_of(meta.is_dir(), meta.is_symlink()),
-                    meta.len(),
-                    modified_ms,
-                    meta.dev(),
-                    meta.ino(),
-                )
-            })
-        } else {
-            use cap_std::fs::MetadataExt;
-            let dir = match resolve_dir(the, 0) {
-                Ok(dir) => dir,
-                Err(msg) => {
-                    set_result_string(the, &msg);
-                    return;
+        read_through(the, "stat", &path, |directory| {
+            let result = match directory {
+                None => {
+                    use std::os::unix::fs::MetadataExt;
+                    std::fs::symlink_metadata(root_to_abs(&path)).map(|meta| {
+                        let modified_ms = meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        encode(
+                            kind_of(meta.is_dir(), meta.is_symlink()),
+                            meta.len(),
+                            modified_ms,
+                            meta.dev(),
+                            meta.ino(),
+                        )
+                    })
+                }
+                Some(Err(message)) => return Answer::Message(message),
+                Some(Ok(dir)) => {
+                    use cap_std::fs::MetadataExt;
+                    dir.symlink_metadata(&path).map(|meta| {
+                        let modified_ms = meta
+                            .modified()
+                            .ok()
+                            .and_then(|t| {
+                                t.duration_since(cap_std::time::SystemClock::UNIX_EPOCH)
+                                    .ok()
+                            })
+                            .map(|d| d.as_millis() as u64)
+                            .unwrap_or(0);
+                        encode(
+                            kind_of(meta.is_dir(), meta.is_symlink()),
+                            meta.len(),
+                            modified_ms,
+                            meta.dev(),
+                            meta.ino(),
+                        )
+                    })
                 }
             };
-            dir.symlink_metadata(path).map(|meta| {
-                let modified_ms = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| {
-                        t.duration_since(cap_std::time::SystemClock::UNIX_EPOCH)
-                            .ok()
-                    })
-                    .map(|d| d.as_millis() as u64)
-                    .unwrap_or(0);
-                encode(
-                    kind_of(meta.is_dir(), meta.is_symlink()),
-                    meta.len(),
-                    modified_ms,
-                    meta.dev(),
-                    meta.ino(),
-                )
-            })
-        };
-
-        match result {
-            Ok(json) => set_result_string(the, &json),
-            Err(e) => set_result_string(the, &format!("Error: {}", e)),
-        }
+            Answer::Message(result.unwrap_or_else(io_error))
+        });
     });
 }
 
@@ -832,47 +767,31 @@ pub unsafe extern "C" fn host_read_dir(the: *mut XsMachine) {
                     .join(",")
             )
         };
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            match std::fs::read_dir(root_to_abs(&path)) {
-                Ok(entries) => {
-                    let names: Vec<String> = entries
+        read_through(the, "readDir", &path, |directory| {
+            let listing: std::io::Result<Vec<String>> = match directory {
+                None => std::fs::read_dir(root_to_abs(&path)).map(|entries| {
+                    entries
                         .filter_map(|e| e.ok())
                         .map(|e| e.file_name().to_string_lossy().into_owned())
-                        .collect();
-                    set_result_string(the, &encode_json(names));
-                }
-                Err(e) => set_result_string(the, &format!("Error: {}", e)),
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                let sub = if path.is_empty() {
-                    dir.entries()
-                } else {
-                    match dir.open_dir(path) {
-                        Ok(sub) => sub.entries(),
-                        Err(e) => {
-                            set_result_string(the, &format!("Error: {}", e));
-                            return;
-                        }
-                    }
-                };
-                match sub {
-                    Ok(entries) => {
-                        let names: Vec<String> = entries
+                        .collect()
+                }),
+                Some(Err(message)) => return Answer::Message(message),
+                Some(Ok(dir)) => {
+                    let sub = if path.is_empty() {
+                        dir.entries()
+                    } else {
+                        dir.open_dir(&path).and_then(|sub| sub.entries())
+                    };
+                    sub.map(|entries| {
+                        entries
                             .filter_map(|e| e.ok())
                             .map(|e| e.file_name().to_string_lossy().into_owned())
-                            .collect();
-                        set_result_string(the, &encode_json(names));
-                    }
-                    Err(e) => set_result_string(the, &format!("Error: {}", e)),
+                            .collect()
+                    })
                 }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+            };
+            Answer::Message(listing.map(encode_json).unwrap_or_else(io_error))
+        });
     });
 }
 
@@ -954,18 +873,15 @@ pub unsafe extern "C" fn host_rename(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_exists(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            let exists = std::fs::symlink_metadata(root_to_abs(&path)).is_ok();
-            set_result_bool(the, exists);
-            return;
-        }
-
-        let exists = resolve_dir(the, 0)
-            .ok()
-            .and_then(|dir| dir.try_exists(path).ok())
-            .unwrap_or(false);
-        set_result_bool(the, exists);
+        read_through(the, "exists", &path, |directory| {
+            Answer::Flag(match directory {
+                None => std::fs::symlink_metadata(root_to_abs(&path)).is_ok(),
+                Some(directory) => directory
+                    .ok()
+                    .and_then(|dir| dir.try_exists(&path).ok())
+                    .unwrap_or(false),
+            })
+        });
     });
 }
 
@@ -973,23 +889,20 @@ pub unsafe extern "C" fn host_exists(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_is_dir(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            // Follow symlinks — a symlink pointing at a directory should
-            // report true, matching Node's `fs.statSync().isDirectory()`.
-            let is_dir = std::fs::metadata(root_to_abs(&path))
-                .map(|m| m.is_dir())
-                .unwrap_or(false);
-            set_result_bool(the, is_dir);
-            return;
-        }
-
-        let is_dir = resolve_dir(the, 0)
-            .ok()
-            .and_then(|dir| dir.metadata(path).ok())
-            .map(|m| m.is_dir())
-            .unwrap_or(false);
-        set_result_bool(the, is_dir);
+        read_through(the, "isDir", &path, |directory| {
+            Answer::Flag(match directory {
+                // Follow symlinks — a symlink pointing at a directory should
+                // report true, matching Node's `fs.statSync().isDirectory()`.
+                None => std::fs::metadata(root_to_abs(&path))
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false),
+                Some(directory) => directory
+                    .ok()
+                    .and_then(|dir| dir.metadata(&path).ok())
+                    .map(|m| m.is_dir())
+                    .unwrap_or(false),
+            })
+        });
     });
 }
 
@@ -999,20 +912,17 @@ pub unsafe extern "C" fn host_is_dir(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_read_link(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            if let Ok(target) = std::fs::read_link(root_to_abs(&path)) {
-                set_result_string(the, &target.to_string_lossy());
+        read_through(the, "readLink", &path, |directory| {
+            // If not a symlink or error, return undefined.
+            let target = match directory {
+                None => std::fs::read_link(root_to_abs(&path)).ok(),
+                Some(directory) => directory.ok().and_then(|dir| dir.read_link(&path).ok()),
+            };
+            match target {
+                Some(target) => Answer::Message(target.to_string_lossy().into_owned()),
+                None => Answer::Nothing,
             }
-            return;
-        }
-
-        if let Ok(dir) = resolve_dir(the, 0) {
-            if let Ok(target) = dir.read_link(path) {
-                set_result_string(the, &target.to_string_lossy());
-            }
-            // If not a symlink or error, return undefined (default).
-        }
+        });
     });
 }
 

@@ -218,7 +218,11 @@ pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
 
 /// Feed `data` to a hasher under the host-call ledger. Under a transcript
 /// the hasher keeps every fed byte, up to
-/// [`host_ledger::HASHER_DESCRIPTOR_LIMIT`], and is redescribed once when
+/// [`host_ledger::HASHER_DESCRIPTOR_LIMIT`] for the hasher and
+/// [`host_ledger::HASHERS_RETAINED_LIMIT`] across every open hasher, so a
+/// guest cannot grow native memory the crank meter does not see by opening
+/// more hashers. A hasher past either limit stops keeping its bytes and is
+/// re-seated as broken. It is redescribed once when
 /// the crank commits ([`take_redescriptions`]), so each call records only
 /// its own bytes.
 ///
@@ -229,12 +233,20 @@ unsafe fn feed(the: *mut XsMachine, callback: &str, handle: u32, data: &[u8]) {
     request.extend_from_slice(data);
     let result = host_ledger::call(callback, Some(handle), &request, || {
         HASHER_MAP.with(|m| {
-            if let Some(hasher) = m.borrow_mut().get_mut(&handle) {
+            let mut m = m.borrow_mut();
+            let retained: usize = m
+                .values()
+                .filter_map(|h| h.fed.as_ref().map(Vec::len))
+                .sum();
+            if let Some(hasher) = m.get_mut(&handle) {
                 hasher.sha256.update(data);
                 if let Some(fed) = &mut hasher.fed {
-                    fed.extend_from_slice(data);
-                    if fed.len() > host_ledger::HASHER_DESCRIPTOR_LIMIT {
+                    if fed.len() + data.len() > host_ledger::HASHER_DESCRIPTOR_LIMIT
+                        || retained + data.len() > host_ledger::HASHERS_RETAINED_LIMIT
+                    {
                         hasher.fed = None;
+                    } else {
+                        fed.extend_from_slice(data);
                     }
                     FED_THIS_CRANK.with(|f| f.borrow_mut().insert(handle));
                 }

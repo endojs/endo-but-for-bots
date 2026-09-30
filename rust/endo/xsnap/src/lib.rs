@@ -4743,6 +4743,77 @@ mod tests {
         assert_eq!(transcript.stats().releases, 3);
     }
 
+    /// Every read of nondeterministic state is recorded with the value the
+    /// guest saw, and replay answers the same call with that value rather
+    /// than reading again: random bytes, a generated key, file and
+    /// directory reads, the environment.
+    #[test]
+    fn replay_answers_recorded_reads_with_the_values_the_guest_saw() {
+        use slot_machine_transcript::HostReply;
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("a.txt"), "first").unwrap();
+        let mut powers = powers::HostPowers::new();
+        powers.add_dir(
+            "test",
+            cap_std::fs::Dir::open_ambient_dir(&data, cap_std::ambient_authority()).unwrap(),
+        );
+        let machine = new_machine_with_powers(&mut powers);
+        host_ledger::attach(
+            &root.path().join("worker.sqlite"),
+            "worker-1",
+            None,
+            &powers,
+            || {
+                machine
+                    .suspend(SNAPSHOT_SIGNATURE)
+                    .map(|data| data.snapshot)
+                    .map_err(|e| e.to_string())
+            },
+        )
+        .unwrap();
+        host_ledger::begin_delivery(b"reads").unwrap();
+        machine.eval(
+            "var hex = randomHex256(); \
+             var keys = ed25519Keygen(); \
+             var text = readFileText('test', 'a.txt'); \
+             var names = readDir('test', ''); \
+             var there = exists('test', 'a.txt'); \
+             var path = getEnv('PATH');",
+        );
+        host_ledger::end_delivery(true).unwrap();
+        // The world moves on after the crank; replay still answers with
+        // what the guest observed.
+        std::fs::write(data.join("b.txt"), "second").unwrap();
+        std::fs::write(data.join("a.txt"), "changed").unwrap();
+        let transcript = host_ledger::detach().unwrap();
+
+        let guest = |name: &str| match machine.eval(name) {
+            Some(JsValue::String(value)) => value.into_bytes(),
+            other => panic!("{name} is not a string: {other:?}"),
+        };
+        let directory =
+            |path: &str| serde_json::to_vec(&(None::<u32>, Some("test"), path)).unwrap();
+        let mut replay = transcript.host_replay().unwrap();
+        replay.begin_crank(*replay.cranks().last().unwrap());
+        let mut answer =
+            |callback: &str, request: &[u8]| match replay.call(callback, None, request).unwrap() {
+                HostReply::Reply { reply, .. } => reply,
+                other => panic!("{callback} was not answered: {other:?}"),
+            };
+        assert_eq!(answer("randomHex256", b"[]"), guest("hex"));
+        assert_eq!(answer("ed25519Keygen", b"[]"), guest("keys"));
+        assert_eq!(answer("readFileText", &directory("a.txt")), b"tfirst");
+        assert_eq!(answer("readDir", &directory("")), b"s[\"a.txt\"]");
+        assert_eq!(answer("exists", &directory("a.txt")), b"1");
+        assert_eq!(
+            answer("getEnv", b"PATH"),
+            [b"s".as_slice(), &guest("path")].concat()
+        );
+        replay.end_crank().unwrap();
+    }
+
     /// A delivery the transcript refuses to record never reaches the guest,
     /// and the refusal is surfaced so the worker loop stops.
     #[test]

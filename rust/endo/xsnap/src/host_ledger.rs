@@ -3,9 +3,12 @@
 //!
 //! Every callback in `powers/*::CALLBACKS` carries one of the transcript's
 //! five classifications ([`admitted_callbacks`]). Once a worker attaches its
-//! transcript ([`attach`]), the callbacks behind the file, directory, SQLite
-//! and hasher tables run through [`Transcript::host_call`]: the guest receives
-//! the transcript's logical handle id, and each handle carries a
+//! transcript ([`attach`]), every callback not classified pure runs through
+//! [`Transcript::host_call`], so the log records what each read of host
+//! state returned ([`answer`]: whole files, directory listings, `stat`, the
+//! environment, module sources; random bytes and generated keys). For the
+//! callbacks behind the file, directory, SQLite and hasher tables the guest
+//! receives the transcript's logical handle id, and each handle carries a
 //! [`Descriptor`] that tracks the committed position of its native resource.
 //! Attaching re-seats every open handle from its descriptor through
 //! [`Transcript::reseat_handles`]. A handle that cannot be rebuilt is absent
@@ -35,6 +38,10 @@ use crate::powers::{self, HostPowers};
 /// The most bytes an incremental hasher's descriptor records. A hasher fed
 /// more has no descriptor and is re-seated as broken.
 pub const HASHER_DESCRIPTOR_LIMIT: usize = 1 << 20;
+
+/// The most fed bytes every open hasher of a worker keeps between them. A
+/// hasher fed past it has no descriptor and is re-seated as broken.
+pub const HASHERS_RETAINED_LIMIT: usize = 16 << 20;
 
 /// Where a file or directory handle's authority comes from.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -128,8 +135,9 @@ struct Ledger {
     transcript: Transcript,
     callbacks: AdmittedCallbacks,
     heaps: Cas,
-    /// Why a crank failed to commit, once one has: the heap now runs ahead
-    /// of the log, so no later snapshot may be published against it.
+    /// Why a crank failed to commit or abort, once one has: the heap now
+    /// runs ahead of the log, so no later snapshot may be published against
+    /// it.
     lost_crank: Option<String>,
 }
 
@@ -455,11 +463,11 @@ pub(crate) fn end_delivery(commit: bool) -> Result<(), String> {
         } else {
             ledger.transcript.abort_crank()
         };
+        // A crank that failed to commit or to abort leaves the log out of
+        // step with the heap either way: refuse every later crank.
         result.map_err(|e| {
             let e = format!("host transcript: end crank: {e}");
-            if commit {
-                ledger.lost_crank.get_or_insert_with(|| e.clone());
-            }
+            ledger.lost_crank.get_or_insert_with(|| e.clone());
             e
         })
     })
@@ -578,6 +586,104 @@ pub(crate) fn call(
         });
     }
     Ok(opened)
+}
+
+/// What a whole-value read callback hands the guest. The transcript records
+/// its [`encode`](Answer::encode)d form as the call's reply, so a replay can
+/// answer the guest with the value it observed rather than re-reading the
+/// live file system, environment or module table.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Answer {
+    /// A string passed through as raw XS (CESU-8) bytes.
+    Text(Vec<u8>),
+    /// An `ArrayBuffer`.
+    Buffer(Vec<u8>),
+    /// A string, typically an `"Error: ..."` message.
+    Message(String),
+    Flag(bool),
+    Integer(i32),
+    Nothing,
+}
+
+impl Answer {
+    /// A tag byte, then the payload.
+    pub(crate) fn encode(&self) -> Vec<u8> {
+        let (tag, payload): (u8, &[u8]) = match self {
+            Answer::Text(bytes) => (b't', bytes),
+            Answer::Buffer(bytes) => (b'b', bytes),
+            Answer::Message(message) => (b's', message.as_bytes()),
+            Answer::Flag(false) => (b'0', b""),
+            Answer::Flag(true) => (b'1', b""),
+            Answer::Integer(value) => return format!("i{value}").into_bytes(),
+            Answer::Nothing => (b'u', b""),
+        };
+        let mut encoded = Vec::with_capacity(payload.len() + 1);
+        encoded.push(tag);
+        encoded.extend_from_slice(payload);
+        encoded
+    }
+
+    /// Set the guest's result.
+    ///
+    /// # Safety
+    /// `the` must be valid.
+    unsafe fn set(&self, the: *mut crate::ffi::XsMachine) {
+        use crate::ffi::*;
+        match self {
+            Answer::Text(bytes) => {
+                let mut terminated = Vec::with_capacity(bytes.len() + 1);
+                terminated.extend_from_slice(bytes);
+                terminated.push(0);
+                fxString(the, &mut (*the).scratch, terminated.as_ptr().cast());
+            }
+            Answer::Buffer(bytes) => {
+                let length = bytes.len() as i32;
+                let data = if bytes.is_empty() {
+                    std::ptr::null_mut()
+                } else {
+                    bytes.as_ptr() as *mut std::os::raw::c_void
+                };
+                fxArrayBuffer(the, &mut (*the).scratch, data, length, length);
+            }
+            Answer::Message(message) => {
+                crate::worker_io::set_result_string(the, message);
+                return;
+            }
+            Answer::Flag(value) => fxBoolean(the, &mut (*the).scratch, i32::from(*value)),
+            Answer::Integer(value) => fxInteger(the, &mut (*the).scratch, *value),
+            Answer::Nothing => fxUndefined(the, &mut (*the).scratch),
+        }
+        *(*the).frame.add(1) = (*the).scratch;
+    }
+}
+
+/// Run a whole-value read callback under the ledger and answer the guest.
+/// `read` performs the native read; it does not run when the transcript
+/// refuses the call, and the refusal becomes the guest's result instead.
+///
+/// Coerce every guest argument before calling (see [`call`]).
+///
+/// # Safety
+/// `the` must be valid.
+pub(crate) unsafe fn answer(
+    the: *mut crate::ffi::XsMachine,
+    callback: &str,
+    target: Option<u32>,
+    request: &[u8],
+    read: impl FnOnce() -> Answer,
+) {
+    let result = call(callback, target, request, || {
+        let answer = read();
+        let reply = answer.encode();
+        answer.set(the);
+        Outcome {
+            reply,
+            ..Outcome::default()
+        }
+    });
+    if let Err(message) = result {
+        crate::worker_io::set_result_string(the, &message);
+    }
 }
 
 fn closing(callback: &str) -> bool {
