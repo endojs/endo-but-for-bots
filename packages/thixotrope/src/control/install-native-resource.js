@@ -54,8 +54,9 @@ export const installNativeResource = async (
         adapters,
       },
     );
-    daemon.publish(kit.lifecycle, entry.allocationKey);
-    manager.notifyOnStart(entry.allocationKey);
+    // The lifecycle facet stays private to the manager and the host: the
+    // host records it by reference, under a publication only it knows.
+    manager.notifyOnStart(kit.lifecycle);
     await workspace.evaluate(
       '(nativeResources.finish(name, digest, registration), true)',
       { name, digest, registration: kit.registration },

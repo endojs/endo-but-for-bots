@@ -65,11 +65,13 @@ test.serial(
     t.not(managers[0].workerId, managers[1].workerId);
     for (const manager of managers) {
       t.not(manager.workerId, status.workspace);
-      t.truthy(manager.startNotify);
+      t.true(manager.startNotice);
+      t.false('startNotify' in manager);
+      t.false('allocationKey' in manager);
     }
-    t.falsy(
+    t.false(
       status.workers.find(worker => worker.workerId === status.workspace)
-        .startNotify,
+        .startNotice,
     );
     t.is(
       await host.client.call(

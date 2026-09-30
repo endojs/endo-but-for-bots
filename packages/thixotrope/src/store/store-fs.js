@@ -23,8 +23,9 @@ export { assertWorkerId, isSessionToken } from './store-validators.js';
  *   only in diagnostics, never as an identifier
  * @property {string} [allocationKey] host-generated key for retrying an
  *   interrupted allocation while this worker exists
- * @property {string} [startNotify] publication secret the host calls
- *   `started()` on at every daemon startup. The delivery is the wake — nothing
+ * @property {string} [startNotify] the daemon's own publication secret for
+ *   the object it calls `started()` on at every startup; minted by the
+ *   daemon and never handed out. The delivery is the wake — nothing
  *   else is needed, because waking a vat runs none of its code anyway, and the
  *   publication is already a retention root
  * @property {boolean} [ephemeral] this worker's heap is not a recovery
