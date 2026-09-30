@@ -9,22 +9,44 @@
 
 ## Status
 
-**Complete.** The implementation merged upstream in
+The design is complete. The implementation merged upstream in
 [endojs/endo#3332](https://github.com/endojs/endo/pull/3332) on
 2026-08-21 as merge commit `30147f5aa1750a98ce1d4511a6cf45068a392f65`.
-It added the `%InitialURL%` / `%SharedURL%` split, universal
-`URLSearchParams`, explicit sampling and hardening of
-`%URLSearchParamsIteratorPrototype%`, absent-host degradation, documentation,
-a changeset, and 22 focused tests across `url.test.js`,
-`url-blob-remove.test.js`, and `url-missing.test.js`.
+The terms below are defined in § [Design](#design); this section records
+only what shipped and where it departed from the proposal.
 
-The implementation preserved the design's security boundary while changing
-two internal spellings: the powered intrinsic is `%InitialURL%` rather than
-`%URL%`, and the lockdown option is `urlBlobTaming: 'retain' | 'remove'`
-rather than `urlBlobMethods: 'keepOnInitialGlobal' | 'remove'`. It also pins
-`%URLPrototype%.constructor` to `%SharedURL%`, closing the path by which a
-shared compartment could otherwise recover the powered constructor and its
-blob-registry methods.
+The implementation delivered:
+
+- the split between a powered `URL` on the start compartment and a tamed
+  `%SharedURL%` on shared compartments;
+- `URLSearchParams` as a universal intrinsic;
+- explicit sampling and hardening of `%URLSearchParamsIteratorPrototype%`;
+- graceful degradation on hosts that provide no `URL` constructor;
+- documentation and a changeset; and
+- 22 focused tests across `url.test.js`, `url-blob-remove.test.js`, and
+  `url-missing.test.js`.
+
+The implementation preserved the design's security boundary but changed two
+spellings.
+The powered start-compartment intrinsic is `%InitialURL%` rather than
+`%URL%`, matching the existing `%InitialDate%` / `%SharedDate%` pairs.
+The lockdown option is `urlBlobTaming: 'retain' | 'remove'` rather than
+`urlBlobMethods: 'keepOnInitialGlobal' | 'remove'`.
+Unlike its sibling `*Taming` options, which take `'safe' | 'unsafe'`
+values, `urlBlobTaming` names the action taken on the blob methods;
+future `*Taming` options should not treat it as precedent without
+deciding so deliberately.
+The rest of this document keeps the originally proposed names.
+
+The implementation also pins `%URLPrototype%.constructor` to `%SharedURL%`,
+the same way `%DatePrototype%.constructor` points at `%SharedDate%`.
+Without the pin, code in a shared compartment could reach the start
+compartment's powered constructor, and with it the blob-registry methods
+(`URL.createObjectURL` and `URL.revokeObjectURL`), through
+`new URL(...).constructor`.
+The cost falls on the start compartment: there,
+`new URL(...).constructor === URL` is `false`, a stricter resolution of
+the trade-off raised in Open question 2.
 
 ## What is the Problem Being Solved?
 
@@ -529,6 +551,9 @@ These designs are similar in spirit, not blocking dependencies.
    If a shorter or differently spelled name is preferred (for
    consistency with how SES names other hidden intrinsics), say so.
 
+   *Resolved:* the implementation shipped
+   `%URLSearchParamsIteratorPrototype%` as proposed (see § Status).
+
 2. **Cross-compartment `instanceof` for `%URL%` and `%SharedURL%`.**
    The default proposal makes the two intrinsics share a single
    `prototype` value so an instance crosses the boundary and still
@@ -539,6 +564,10 @@ These designs are similar in spirit, not blocking dependencies.
    burden onto cross-compartment helper libraries.
    Confirm the shared-prototype direction or call out the trade-off
    to revisit.
+
+   *Resolved:* the implementation shipped the shared prototype, so
+   `instanceof URL` holds on either side, and pins
+   `%URLPrototype%.constructor` to `%SharedURL%` (see § Status).
 
 ## Prompt
 
