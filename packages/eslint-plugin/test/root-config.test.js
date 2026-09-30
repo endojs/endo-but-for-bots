@@ -69,10 +69,14 @@ describe('root flat config', () => {
       ["import { readFile } from 'fs/promises';", 'no-restricted-imports'],
       ["export * from 'node:fs';", 'no-restricted-imports'],
       [
-        "export { makeNodePowers } from './platform/node-powers.js';",
+        "export { makeNodePowers } from '../platform/node/powers.js';",
         'no-restricted-imports',
       ],
-      ["import('./platform/node-powers.js');", 'no-restricted-syntax'],
+      [
+        "import { makeNodePowers } from '../../node-powers.js';",
+        'no-restricted-imports',
+      ],
+      ["import('../platform/node/powers.js');", 'no-restricted-syntax'],
       ["import('node:fs');", 'no-restricted-syntax'],
       ['process.cwd();', 'no-restricted-globals'],
       [
@@ -113,5 +117,30 @@ describe('root flat config', () => {
           ].includes(message.ruleId),
       ),
     );
+    // The XS worker entry may read its host bridge from globalThis and
+    // nothing else ambient.
+    const xsEntry = 'packages/thixotrope/src/core/worker-peer-xs.js';
+    const [bridge] = await eslint.lintText(
+      '// @ts-check\nconst send = globalThis.thixotropeSend;\nsend();\n',
+      { filePath: xsEntry },
+    );
+    assert.ok(
+      !bridge.messages.some(
+        message => message.ruleId === 'no-restricted-globals',
+      ),
+    );
+    for (const [source, ruleId] of [
+      ["import { readFile } from 'node:fs/promises';", 'no-restricted-imports'],
+      ['process.cwd();', 'no-restricted-globals'],
+    ]) {
+      // eslint-disable-next-line no-await-in-loop
+      const [result] = await eslint.lintText(`// @ts-check\n${source}\n`, {
+        filePath: xsEntry,
+      });
+      assert.ok(
+        result.messages.some(message => message.ruleId === ruleId),
+        source,
+      );
+    }
   });
 });

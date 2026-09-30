@@ -27,6 +27,26 @@ const jessieProcessor = {
   meta: { name: '@jessie.js/use-jessie' },
 };
 
+// Ambient host authority that Thixotrope core must receive as explicit powers.
+const thixotropeAmbientGlobals = [
+  'require',
+  'process',
+  'Buffer',
+  'crypto',
+  'fetch',
+  'console',
+  'globalThis',
+  'setTimeout',
+  'clearTimeout',
+  'setInterval',
+  'clearInterval',
+  'setImmediate',
+  'clearImmediate',
+  'queueMicrotask',
+  'performance',
+  'Date',
+];
+
 const importResolverSettingsFor = condition => ({
   'import/resolver': {
     exports: { conditions: [condition] },
@@ -72,7 +92,6 @@ export default defineConfig(
     ignores: [
       // The Node adapter layer: these modules exist to hold the built-ins.
       'packages/thixotrope/src/platform/node/**',
-      'packages/thixotrope/src/core/worker-peer-xs.js',
     ],
     rules: {
       'no-restricted-imports': [
@@ -84,7 +103,12 @@ export default defineConfig(
           })),
           patterns: [
             {
-              group: ['node:*', '**/node-powers.js', '**/platform/node/*'],
+              group: [
+                'node:*',
+                '**/node-powers.js',
+                '**/platform/node/*',
+                '**/platform/node/**',
+              ],
               message:
                 'Receive platform capabilities through explicit powers; core cannot acquire them.',
             },
@@ -118,24 +142,18 @@ export default defineConfig(
           message: 'Receive randomness through explicit powers.',
         },
       ],
+      'no-restricted-globals': ['error', ...thixotropeAmbientGlobals],
+    },
+  },
+  // The XS worker entry reaches its host bridge through `globalThis`, which
+  // is the one ambient authority it takes; every other restriction above
+  // still applies to it.
+  {
+    files: ['packages/thixotrope/src/core/worker-peer-xs.js'],
+    rules: {
       'no-restricted-globals': [
         'error',
-        'require',
-        'process',
-        'Buffer',
-        'crypto',
-        'fetch',
-        'console',
-        'globalThis',
-        'setTimeout',
-        'clearTimeout',
-        'setInterval',
-        'clearInterval',
-        'setImmediate',
-        'clearImmediate',
-        'queueMicrotask',
-        'performance',
-        'Date',
+        ...thixotropeAmbientGlobals.filter(name => name !== 'globalThis'),
       ],
     },
   },

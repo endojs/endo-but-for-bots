@@ -3,6 +3,7 @@
 /** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
+import { locationToLocationId } from '@endo/ocapn/client/util';
 
 /**
  * Version 2 transfers message responsibility independently of sockets.
@@ -269,7 +270,7 @@ export const makeDurableNetLayer = async (
     physicals.delete(physical);
     physical?.end();
     connections.delete(logical.connection);
-    if (logical.isOriginator) outgoing.delete(JSON.stringify(logical.location));
+    if (logical.isOriginator) outgoing.delete(locationToLocationId(logical.location));
     if (!wasDestroyed) handlers.handleConnectionClose(logical.connection);
     // An originator owns a retryable terminal notice until the peer confirms
     // its tombstone. An acceptor repeats retirement on subsequent greetings.
@@ -336,7 +337,7 @@ export const makeDurableNetLayer = async (
     sessions.set(token, logical);
     connections.set(logical.connection, logical);
     if (isOriginator && !logical.destroyed)
-      outgoing.set(JSON.stringify(location), logical);
+      outgoing.set(locationToLocationId(location), logical);
     return logical;
   };
 
@@ -359,7 +360,7 @@ export const makeDurableNetLayer = async (
       sessions.delete(token);
       connections.delete(logical.connection);
       if (logical.isOriginator)
-        outgoing.delete(JSON.stringify(logical.location));
+        outgoing.delete(locationToLocationId(logical.location));
       throw error;
     }
     return logical;
@@ -538,7 +539,7 @@ export const makeDurableNetLayer = async (
     /** @param {any} location */
     connect: location => {
       !stopped || Fail`Delivery transport stopped`;
-      const existing = outgoing.get(JSON.stringify(location));
+      const existing = outgoing.get(locationToLocationId(location));
       if (existing) return existing.connection;
       const token = makeToken();
       resumption?.onHello(token, location);

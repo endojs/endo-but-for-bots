@@ -5,10 +5,13 @@
  * idioms the CLI views share. `write` resolves when the text has been
  * flushed, so a caller can pace refreshes.
  *
+ * `lines` is the session's one queue of input lines: lines wait until
+ * read, and concurrent readers each receive distinct lines in order. It
+ * ends when input ends or the session closes.
+ *
  * @typedef {object} TerminalSession
  * @property {boolean} isTTY
  * @property {(text: string) => Promise<void>} write
- * @property {(text: string) => void} writeError
  * @property {() => void} clearScreen
  * @property {() => AsyncIterable<string>} lines
  * @property {(listener: () => void) => void} onClose

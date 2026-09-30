@@ -2,6 +2,8 @@
 /** @import { TerminalPowers } from '../terminal.js' */
 import harden from '@endo/harden';
 
+import { makeLineReader } from './line-reader.js';
+
 /**
  * Node's readline over this process's own stdin and stdout. Opening a
  * session takes ownership of them until it closes, including the SIGINT
@@ -14,44 +16,30 @@ import harden from '@endo/harden';
  */
 export const makeTerminalPowers = ({ readline, process }) => {
   const open = () => {
-    const { stdin, stdout, stderr } = process;
+    const { stdin, stdout } = process;
     const isTTY = Boolean(stdin.isTTY);
     const terminal = readline.createInterface({
       input: stdin,
       output: stdout,
       terminal: isTTY,
     });
+    // The reader ends by itself when input ends (a piped script ran out)
+    // or the session closes; lines already read stay available, and the
+    // consumer closes the session after draining them.
+    const lines = makeLineReader(terminal, stdin);
     let closed = false;
     const closeListeners = new Set();
-    /** @type {string[]} */
-    const pendingLines = [];
-    /** @type {(value?: unknown) => void} */
-    let wake = () => {};
-    let ended = false;
-    terminal.on('line', line => {
-      pendingLines.push(line);
-      wake();
-    });
     const close = () => {
       if (closed) return;
       closed = true;
-      ended = true;
+      // Closing the interface releases stdin (and restores its mode) without
+      // touching stdout, which the process may still print to afterwards.
       terminal.close();
       process.removeListener('SIGINT', close);
       process.removeListener('SIGTERM', close);
-      stdin.removeListener('SIGINT', close);
       for (const listener of closeListeners) listener();
-      wake();
-      stdin.destroy();
-      if (!stdout.isTTY) stdout.destroy();
     };
-    terminal.once('close', () => {
-      // Input ended (for example, a piped script ran out). Keep already
-      // queued lines available; the consumer closes the session after it
-      // drains them.
-      ended = true;
-      wake();
-    });
+    // Readline owns Ctrl-C on a raw terminal; the process sees it otherwise.
     terminal.once('SIGINT', close);
     process.once('SIGINT', close);
     process.once('SIGTERM', close);
@@ -70,26 +58,10 @@ export const makeTerminalPowers = ({ readline, process }) => {
             stdout.once('error', done);
           }
         }),
-      writeError: text => {
-        stderr.write(text);
-      },
       clearScreen: () => {
         if (stdout.isTTY) stdout.write('\x1b[2J\x1b[H');
       },
-      lines: async function* lines() {
-        for (;;) {
-          if (pendingLines.length > 0) {
-            yield /** @type {string} */ (pendingLines.shift());
-          } else if (ended) {
-            return;
-          } else {
-            // eslint-disable-next-line no-await-in-loop
-            await new Promise(resolve => {
-              wake = resolve;
-            });
-          }
-        }
-      },
+      lines: () => lines,
       onClose: listener => {
         closeListeners.add(listener);
       },

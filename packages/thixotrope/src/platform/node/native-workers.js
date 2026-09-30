@@ -1,32 +1,28 @@
 // @ts-check
+/** @import { NativeWorkerPowers } from '../native-workers.js' */
+/** @import { TimerPowers } from '../timers.js' */
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import harden from '@endo/harden';
 import { fork } from 'node:child_process';
-import { clearTimeout, setTimeout } from 'node:timers';
 
 /**
- * @typedef {object} NativeWorker
- * @property {(bytes: Uint8Array) => void} send
- * @property {() => Promise<void>} terminate
- * @property {Promise<void>} closed
+ * Native resource processes forked from this Node host. A child shares
+ * only this process's stderr; its stdout is discarded, so a native module
+ * that wants to be heard writes diagnostics to stderr, and nothing it
+ * prints can land in the daemon's own output.
  *
- * @typedef {object} NativeWorkerPowers
- * @property {(options: {id: string, moduleUrl: string, packageIdentity?: {directory: string, digest: string}, onFrame: (bytes: Uint8Array) => void, onExit: () => void}) => Promise<NativeWorker>} start
+ * @param {object} host
+ * @param {TimerPowers} host.timers
+ * @param {number} [host.startupTimeoutMs] how long a child may take to
+ *   report readiness before it is killed and `start` rejects
+ * @returns {NativeWorkerPowers}
  */
-
-/** @returns {NativeWorkerPowers} */
-export const makeNativeWorkerPowers = () =>
+export const makeNativeWorkerPowers = ({ timers, startupTimeoutMs = 30_000 }) =>
   harden({
     start: ({ id, moduleUrl, packageIdentity, onFrame, onExit }) =>
       new Promise((resolve, reject) => {
-        const child = fork(
-          new URL('./native-worker-entry.js', import.meta.url),
-          [id, moduleUrl, JSON.stringify(packageIdentity ?? null)],
-          {
-            stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-            execArgv: [],
-          },
-        );
+        /** @type {ReturnType<typeof fork>} */
+        let child;
         let exited = false;
         /** @type {unknown} */
         let failure;
@@ -38,7 +34,7 @@ export const makeNativeWorkerPowers = () =>
         const finish = () => {
           if (exited) return;
           exited = true;
-          clearTimeout(timeout);
+          timers.clearTimer(timeout);
           try {
             onExit();
           } catch (error) {
@@ -54,10 +50,26 @@ export const makeNativeWorkerPowers = () =>
           failure ??= error;
           child.kill('SIGKILL');
         };
-        const timeout = setTimeout(
+        // Armed before the fork: a delay the timer refuses must not leave a
+        // child running that nothing will ever kill.
+        const timeout = timers.setTimer(
           () => fail(Error('Native resource startup timed out')),
-          30_000,
+          startupTimeoutMs,
         );
+        try {
+          child = fork(
+            new URL('./native-worker-entry.js', import.meta.url),
+            [id, moduleUrl, JSON.stringify(packageIdentity ?? null)],
+            {
+              stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
+              execArgv: [],
+            },
+          );
+        } catch (error) {
+          timers.clearTimer(timeout);
+          reject(error);
+          return;
+        }
         child.once('exit', finish);
         child.once('error', error => {
           fail(error);
@@ -84,7 +96,7 @@ export const makeNativeWorkerPowers = () =>
             return;
           }
           if (data.ready) {
-            clearTimeout(timeout);
+            timers.clearTimer(timeout);
             resolve(
               harden({
                 closed,
