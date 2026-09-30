@@ -366,3 +366,36 @@ test('constructing an OCapN SturdyRef from data validates the data', async t => 
   t.is(client.getSturdyRefData(/** @type {any} */ (harden({}))), undefined);
   client.shutdown();
 });
+
+test('OCapN SturdyRef data checks peerId and hints, and round-trips hints', async t => {
+  const { client } = await makeTestClient({ debugLabel: 'A' });
+  t.throws(
+    () =>
+      client.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 1, objectId: 'x', designator: 'tcp' }),
+      ),
+    { message: /peerId must be a string/ },
+  );
+  t.throws(
+    () =>
+      client.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'p',
+          objectId: 'x',
+          designator: 'tcp',
+          hints: null,
+        }),
+      ),
+    { message: /hints must be a record/ },
+  );
+  const data = {
+    peerId: 'p',
+    objectId: 'x',
+    designator: 'tcp',
+    hints: { host: '127.0.0.1', port: '1234' },
+  };
+  const ref = client.makeSturdyRefFromData(data);
+  t.deepEqual(getSturdyRefDetails(ref)?.location.hints, data.hints);
+  t.deepEqual(client.getSturdyRefData(ref), data);
+  client.shutdown();
+});
