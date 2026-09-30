@@ -64,6 +64,10 @@ impl std::fmt::Display for CasError {
 
 impl std::error::Error for CasError {}
 
+/// Numbers this process's temporaries. `xsnap::Machine::suspend_to_cas`
+/// keeps its own counter under a `.snapshot.` prefix, so the transcript's
+/// temporaries take a distinct `.transcript-blob.` prefix: two writers
+/// sharing one directory never open the same temporary.
 static TEMPORARY_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// The SHA-256 of `bytes`, lower-case hex: a blob's CAS name.
@@ -113,7 +117,7 @@ impl ContentAddressedStore {
         let seq = TEMPORARY_SEQ.fetch_add(1, Ordering::Relaxed);
         let temporary = self
             .directory
-            .join(format!(".snapshot.{}.{seq}.tmp", std::process::id()));
+            .join(format!(".transcript-blob.{}.{seq}.tmp", std::process::id()));
         let result = self.write_blob_steps(bytes, &temporary, &hash);
         if result.is_err() && !self.fault.as_ref().is_some_and(FaultPlan::dead) {
             // A surviving process cleans up after itself; a dead one leaves
