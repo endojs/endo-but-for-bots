@@ -22,6 +22,21 @@ import { X, Fail, q } from '@endo/errors';
 /** @import {Passable, RemotableObject, SturdyRef} from '@endo/pass-style' */
 /** @import {Encoding, EncodingUnion} from './types.js' */
 
+/**
+ * Like `passStyleOf(val) === 'sturdyRef'`, but returns false rather than
+ * throwing for a value that is not passable, since capdata tolerates
+ * whatever `convertSlotToVal` returns for a 'slot'.
+ *
+ * @param {unknown} val
+ */
+const isSturdyRef = val => {
+  try {
+    return passStyleOf(val) === 'sturdyRef';
+  } catch {
+    return false;
+  }
+};
+
 const { ownKeys } = Reflect;
 const { isArray } = Array;
 const {
@@ -415,11 +430,18 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
           // a promise or a remotable, since that would break some
           // capdata clients. We are deprecating capdata, and these clients
           // will need to update before switching to smallcaps.
+          // It does reject a SturdyRef, which no capdata client expects in
+          // a 'slot'. The slot cache is keyed only by index, so without this
+          // check a SturdyRef decoded under a 'sturdyRef' tag could be
+          // reused under a 'slot' tag for the same index.
+          !isSturdyRef(decoded) ||
+            Fail`a sturdyRef cannot be decoded as a slot: ${decoded}`;
           return decoded;
         }
         case 'sturdyRef': {
           // Unlike a 'slot', a 'sturdyRef' names its kind, so the decoder
-          // can and does check the result.
+          // checks that the result is a SturdyRef. The 'slot' case above
+          // checks the converse.
           const decoded = decodeSturdyRefFromCapData(
             jsonEncoded,
             decodeFromCapData,

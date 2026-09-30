@@ -274,7 +274,11 @@ export const makeMarshal = (
         return extant;
       }
       // TODO SECURITY HAZARD: must enfoce that remotable vs promise
-      // is according to the encoded string.
+      // is according to the encoded string. The cache is keyed only by
+      // index and shared by remotables, promises, and SturdyRefs, so a
+      // cached value may come back under a different tag. Each caller must
+      // check the kind it expects; capdata's 'slot' checks only that the
+      // value is not a SturdyRef.
       const slot = slots[Number(Nat(index))];
       const val = convertSlotToVal(slot, iface);
       valMap.set(index, val);

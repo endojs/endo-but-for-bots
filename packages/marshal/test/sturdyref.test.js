@@ -122,6 +122,43 @@ test('a slot decoded as a remotable cannot be reused as a sturdyRef', t => {
   );
 });
 
+test('capdata cannot reuse a sturdyRef slot as a plain slot', t => {
+  const { ref } = makeRef('Mallory');
+  const { fromCapData } = makeMarshal(undefined, () => ref);
+  const body = JSON.stringify([
+    { '@qclass': 'sturdyRef', index: 0 },
+    { '@qclass': 'slot', index: 0, iface: 'Alleged: Mallory' },
+  ]);
+  t.throws(() => fromCapData({ body, slots: [0] }), {
+    message: /a sturdyRef cannot be decoded as a slot/,
+  });
+});
+
+test('capdata rejects a SturdyRef in a plain slot', t => {
+  const { ref } = makeRef('Trudy');
+  const { fromCapData } = makeMarshal(undefined, () => ref);
+  t.throws(
+    () =>
+      fromCapData({
+        body: '{"@qclass":"slot","index":0,"iface":"Alleged: Trudy"}',
+        slots: [0],
+      }),
+    { message: /a sturdyRef cannot be decoded as a slot/ },
+  );
+});
+
+test('capdata cannot reuse a plain slot as a sturdyRef', t => {
+  const { live } = makeRef('Walter');
+  const { fromCapData } = makeMarshal(undefined, () => live);
+  const body = JSON.stringify([
+    { '@qclass': 'slot', index: 0, iface: 'Alleged: Walter' },
+    { '@qclass': 'sturdyRef', index: 0 },
+  ]);
+  t.throws(() => fromCapData({ body, slots: [0] }), {
+    message: /must return a sturdyRef/,
+  });
+});
+
 test('the default converters carry a SturdyRef as its own slot', t => {
   // The default converters pass values through, so this only checks that
   // the smallcaps and capdata encoders accept a SturdyRef at all.
