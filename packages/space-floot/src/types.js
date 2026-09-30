@@ -23,6 +23,7 @@ export {};
  *   name?: string,
  *   args?: string,
  *   result?: string | null,
+ *   failed?: boolean,
  *   pending?: boolean,
  *   pendingId?: number | string,
  *   pendingState?: 'queued' | 'sending' | 'interrupted',

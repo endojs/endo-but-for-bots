@@ -3,6 +3,7 @@ import { Fail, b } from '@endo/errors';
 import {
   NATIVE_CONTEXT_LIMIT as LIMIT,
   isNativeAttachment,
+  isNativeToolResultParent,
   isUuid,
 } from '../oci/native-context-shape.mjs';
 
@@ -592,6 +593,7 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
     model: row.message?.model,
     content: row.message?.content,
     attachment: row.attachment,
+    sourceToolAssistantUUID: row.sourceToolAssistantUUID,
     isCompactSummary: row.isCompactSummary === true,
     isMeta: row.isMeta === true,
     isVisibleInTranscriptOnly: row.isVisibleInTranscriptOnly === true,
@@ -633,9 +635,32 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
   };
   const assertChain = (rows, parent, expectedFrames) => {
     let position = 0;
+    let assistantMessageId;
+    const ids = new Set([parent]);
+    const byId = new Map();
     for (const row of rows) {
-      requireValue(row.parentUuid === parent && ordinaryFlags(row));
+      requireValue(
+        isUuid(row.uuid) &&
+          !ids.has(row.uuid) &&
+          ordinaryFlags(row) &&
+          ((row.parentUuid === parent &&
+            row.sourceToolAssistantUUID === undefined) ||
+            isNativeToolResultParent(
+              row,
+              byId.get(row.parentUuid),
+              assistantMessageId,
+            )),
+      );
+      ids.add(row.uuid);
+      byId.set(row.uuid, row);
       parent = row.uuid;
+      if (row.type === 'assistant') assistantMessageId = row.message?.id;
+      else if (
+        row.type === 'user' &&
+        (!Array.isArray(row.message?.content) ||
+          !row.message.content.every(item => item.type === 'tool_result'))
+      )
+        assistantMessageId = undefined;
       if (!nativeAttachment(row)) {
         requireValue(matches(row, expectedFrames[position]));
         position += 1;
@@ -846,34 +871,7 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         admitted.message.content === prompt ||
           same(admitted.message.content, [{ type: 'text', text: prompt }]),
       );
-      let parent = admitted.uuid;
-      let position = 0;
-      const ids = new Set([parent]);
-      for (const row of active) {
-        requireValue(
-          isUuid(row.uuid) && !ids.has(row.uuid) && row.parentUuid === parent,
-        );
-        ids.add(row.uuid);
-        parent = row.uuid;
-        if (row.type === 'attachment') {
-          requireValue(nativeAttachment(row));
-        } else {
-          const frame = frames[position];
-          requireValue(
-            frame &&
-              row.uuid === frame.uuid &&
-              row.type === frame.role &&
-              row.message?.role === frame.role &&
-              (frame.role !== 'assistant' ||
-                (row.message.id === frame.messageId &&
-                  row.message.type === frame.messageType &&
-                  row.message.model === frame.model)) &&
-              same(row.message.content, frame.content),
-          );
-          position += 1;
-        }
-      }
-      requireValue(position === frames.length);
+      assertChain(active, admitted.uuid, frames);
     });
   return harden({ observe, assertOutcome, assertCaptured });
 };

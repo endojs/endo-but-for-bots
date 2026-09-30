@@ -7,6 +7,7 @@ import { Buffer } from 'node:buffer';
 import {
   NATIVE_CONTEXT_LIMIT as LIMIT,
   isNativeAttachment,
+  isNativeToolResultParent,
   isUuid,
 } from './native-context-shape.mjs';
 
@@ -320,6 +321,7 @@ const main = async () => {
     };
     const suffixParents = new Map();
     let frontier = boundary;
+    let assistantMessageId;
     let seenBoundary = ordinary;
     let retainedBytes = 0;
     const accept = text => {
@@ -348,6 +350,7 @@ const main = async () => {
           'Boundary metadata mismatch',
         );
         seenBoundary = true;
+        assistantMessageId = undefined;
         retainNative(text);
         return;
       }
@@ -388,7 +391,14 @@ const main = async () => {
           );
         } else {
           requireValue(
-            !selected.has(id) && parent === frontier,
+            !selected.has(id) &&
+              ((parent === frontier &&
+                row.sourceToolAssistantUUID === undefined) ||
+                isNativeToolResultParent(
+                  row,
+                  selected.get(parent)?.row,
+                  assistantMessageId,
+                )),
             'Divergent or missing suffix ancestry',
           );
           requireValue(
@@ -410,6 +420,7 @@ const main = async () => {
         role: row.message?.role,
         content: row.message?.content,
         attachment: row.attachment,
+        sourceToolAssistantUUID: row.sourceToolAssistantUUID,
         summary: row.isCompactSummary === true,
       });
       if (selected.has(id)) {
@@ -423,10 +434,18 @@ const main = async () => {
       retainedBytes += Buffer.byteLength(payload);
       requireValue(retainedBytes <= LIMIT, 'Context exceeds capture limit');
       selected.set(id, {
+        row,
         payload,
         records,
         summary: row.isCompactSummary === true,
       });
+      if (row.type === 'assistant') assistantMessageId = row.message?.id;
+      else if (
+        row.type === 'user' &&
+        (!Array.isArray(row.message?.content) ||
+          !row.message.content.every(block => block.type === 'tool_result'))
+      )
+        assistantMessageId = undefined;
       retainNative(text);
       if (!wanted.has(id)) tail.push(id);
     };

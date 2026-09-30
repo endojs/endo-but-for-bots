@@ -14,8 +14,10 @@ The main structural unification is implemented, but the refactor is not complete
 The three native backends actually use common provisioning, lifecycle, grants,
 and execution-envelope code. Reimplementing those abstractions is not the next
 step. Simplicity and bounded context still need evidence or work.
-Protocol admission conformance is covered; generation 189 passes fresh lifecycle
-and ordinary restart acceptance with unchanged native images and a byte-only listener.
+Protocol admission conformance is covered; generation 190 verifies the two
+October 1 correctness fixes and ordinary restart recall on all four backends.
+Its OpenCode full policy matrix stops on model command drift, as recorded below;
+generation 189 retains the preceding complete lifecycle-matrix evidence.
 Neither gate settles the remaining design questions.
 
 This audit evaluates the retained implementation against the design's
@@ -26,7 +28,55 @@ Older dated design/audit paragraphs are evidence of earlier states, not reliable
 descriptions of today's source. This summary takes precedence for current status;
 the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
-## Current work, 2026-09-30
+## Current work, 2026-10-01
+
+FA-14 is fixed in source and locally validated through the existing journal,
+evidence reconciliation, provider context, stream fold and history presentation.
+Native explicit status and actual host rejection retain the canonical optional
+`failed` flag; unknown outcomes stay unknown and no text heuristic is used.
+Event replay, snapshots, archives, late results and checkpoint classification
+enrichment are covered without another durable owner or replay policy.
+Both fixes are deployed on Tokyo generation 190: app `9b888d1cc`, host `15fd7b1`.
+The initial Claude tool-seed capture fix is independently reviewed as a separate
+slice; its rebuilt image captures a native checkpoint in the initial tool-heavy
+probe, and ordinary restart recall passes with native checkpoints on both turns.
+The pinned CLI parents parallel results to individual assistant tool UUIDs within
+one API message group, rather than a strictly linear physical-row frontier.
+Capture and host coverage share one exact owner/source/tool/message predicate;
+ordinary coverage reuses the existing chain validator.
+The full Claude suite passes 540 tests, with 209 independently rerun.
+Signed/opaque bytes, prefix receipts, observed-frame coverage and restore/recapture
+validation remain enforced; arbitrary or cross-message branches remain refused.
+Intentional host rejection and successful mediated execution retain explicit
+classification in turns, canonical transcript and history on all four backends,
+including after daemon restart. Claude/Codex retain explicit native exit-7 failure.
+OpenCode reports its shell tool as completed even for that nonzero exit; we retain
+its explicit tool status rather than inferring failure from result text.
+Claude and Codex also pass public/off policy changes, private-address rejection
+and observed native cancellation. OpenCode's public request succeeds but its
+auto-free model quotes the URL, so the exact-command verifier correctly refuses
+that policy gate; no failed inference is replayed or full-matrix pass claimed.
+
+The requested [source-bulk audit](SOURCE-BULK-AUDIT.md) measures 42,786 lines
+across the four backend/shared packages: 56.5% in hosted-agent.
+It identifies small unused surfaces, legacy compatibility, local repetition and
+larger scope decisions, distinguishing them from justified parallel mechanisms.
+The operator confirms Tokyo is the only consumer, so unused exported surfaces
+need no external-compatibility bridge.
+SB-01 through SB-08 are removed in reviewed slices: unused setup and pool APIs,
+old broker/source compatibility, redundant acquisition conveniences, an unused
+version export, and Codex's identity-only persistence fallback.
+Current ownership and complete persistence contracts remain; no replacement
+framework or durable owner is added.
+After type-validation reconciliation the metric is 42,610, down 176 lines, across
+the same 160 files. The audit records each slice and its validation.
+Full shared, Claude, Codex and OpenCode suites pass, along with shared/Claude/Codex
+type checks, ESLint and root docs (warnings remain).
+These source-only deletions are not deployed; generation 190 and its pins remain
+the live acceptance baseline.
+The smaller-combined-implementation target is still unproven.
+Next are SB-09 through SB-12 local repetitions and the separate scope decisions;
+the recommended sequence remains deletion before abstraction.
 
 Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
 and the rebuilt byte-only provider listener `cc639390…` on all three brokers.
@@ -275,8 +325,8 @@ new image pins stay `candidate` in the ledger until a recall passes.
 | Shared framing, admission and cancellation semantics | Shared turn channel and three protocol-specific state machines; RA-04's matrix covers preparation, restoration, dispatch, cancellation and failed successors | Bounded conformance complete. Retain actual protocol differences; extract further implementation only after identifying identical responsibilities. |
 | Bounded resident memory for long healthy work | `context-transcript.js` pages archived metadata but accumulates active/exception record arrays; without a checkpoint it selects all eligible nonpending history | Not complete. Per-value/per-turn bounds do not bound the whole context; direct Fae has no automatic compaction producer |
 | Runtime/provider/account/model are separate concepts | Explicit session identity and runtime configuration; hosted account authority; logical account bindings and exact reset identities | Session reports now select configured accounts by backend and subscription pin; automatic pools do not imply payer attribution or eligibility. Factory direct-provider reporting stays separate. |
-| Smaller common implementation; delete superseded paths | At `604ec1a8d`, the four backend/shared packages total 42,712 lines versus 25,463 at the design baseline. Vendors total 18,555 versus 21,165; hosted-agent totals 24,157 versus 4,298. Superseded paths are removed and current owners documented. | Simplicity target not demonstrated. Real consolidation and deletions do not prove the overall target; added scope still needs justification. |
-| One current set of guarantees and final conformance | Generation 189 runs app `604ec1a8d` with host `4a5ac8a`; all four backends pass lifecycle and ordinary restart acceptance with the new listener. | RA-04/RA-05 acceptance is complete for this deployed scope. RA-01 simplicity, RA-02 bounded context, FA-14 tool error classification and the initial Claude tool-seed capture omission remain. Historical status paragraphs below are not current completion claims. |
+| Smaller common implementation; delete superseded paths | At `9b888d1cc`, the four backend/shared packages total 42,786 lines versus 25,463 at the design baseline. Vendors total 18,629 versus 21,165; hosted-agent totals 24,157 versus 4,298. The source-bulk audit records remaining deletion/repetition candidates and scope decisions. | Simplicity target not demonstrated. Real consolidation and deletions do not prove the overall target; added scope still needs justification. |
+| One current set of guarantees and final conformance | Generation 190 runs app `9b888d1cc` with host `15fd7b1`; both October 1 fixes pass live probes, and all four pass ordinary restart recall. Claude/Codex pass the new policy/cancel gates; OpenCode's exact-command policy verifier refuses model command drift. | FA-14 and initial Claude tool-heavy capture are fixed under the recorded scopes. RA-01 simplicity and RA-02 bounded context remain; the complete OpenCode lifecycle matrix has generation-189 evidence, not a new generation-190 pass. Historical status paragraphs below are not current completion claims. |
 
 ## Priority findings
 
@@ -302,20 +352,23 @@ The identified unused hash and selector wrapper are removed; this review found
 no further concrete deletion in that inspected scope.
 This does not demonstrate the original implementation-size target:
 
-| Package | Design baseline `4e2644c` | `2b8df7d23` | Current `604ec1a8d` |
+| Package | Design baseline `4e2644c` | `2b8df7d23` | Current `9b888d1cc` |
 |---|---:|---:|---:|
 | hosted-agent | 4,298 | 24,227 | 24,157 |
-| claude-sandbox | 6,484 | 7,074 | 7,025 |
-| codex-sandbox | 7,901 | 6,945 | 6,870 |
+| claude-sandbox | 6,484 | 7,074 | 7,077 |
+| codex-sandbox | 7,901 | 6,945 | 6,892 |
 | opencode-sandbox | 6,780 | 4,763 | 4,660 |
-| Total | 25,463 | 43,009 | 42,712 |
+| Total | 25,463 | 43,009 | 42,786 |
 
 Method: enumerate committed paths with `git ls-tree -r --name-only REV`, include
 `.js`, `.mjs` and `.ts`, exclude `.d.ts`, test/tests/fixtures/test-types/test-fixtures
 directories and `.test.*`/`.test-d.*`, and count newlines in committed contents.
 These figures include comments and types, not generated files or uncommitted work.
-The current count reconciles the committed non-test source delta from `2b8df7d23`:
+The September 30 count reconciles the committed non-test source delta from `2b8df7d23`:
 141 added and 438 removed lines, a net reduction of 297 in these four packages.
+The two October 1 correctness fixes add 74 lines, for a current net reduction
+of 223 from `2b8df7d23`; the detailed measurement and candidate inventory are in
+[the source-bulk audit](SOURCE-BULK-AUDIT.md).
 RA-01 remains open for a like-for-like scope analysis of the growth or an explicit
 design decision; green tests and the absence of another deletion candidate do not
 waive the size requirement.
@@ -1514,15 +1567,15 @@ journaling and archived context across cold restart. They exercise the committed
 cleanup on the local daemon; they do not validate the pending account-binding
 draft or replace Tokyo acceptance.
 
-Current sequence (2026-09-30; the test counts above are historical evidence):
+Current sequence (2026-10-01; the test counts above are historical evidence):
 
 1. Continue RA-01 against current callers: delete unused/compatibility paths and
    justify remaining parallel mechanisms without creating another framework.
 2. Keep RA-02's bounded-context gap explicit; Fae compaction and evidence paging
    remain deferred by the operator, not silently completed.
-3. Address FA-14 in the existing shared outcome/journal/projection paths, retaining
-   explicit failure classification without text heuristics or another journal.
-4. Investigate the initial Claude tool-heavy seed's missing native checkpoint;
+3. Deploy and verify FA-14's reviewed shared outcome/journal/projection fix,
+   retaining explicit failure classification without another journal.
+4. Finish the initial Claude tool-heavy seed's native checkpoint fix;
    successful ordinary restart recall does not prove universal capture fidelity.
 5. Generation 189 deploys the reviewed source cleanups and passes the affected
    acceptance scopes. Preserve Secrets, renewal owners, host and workspaces on

@@ -125,6 +125,16 @@ const assertText = (value, limit = 1024, allowEmpty = false) => {
 };
 
 /**
+ * Explicit tool classification; absence is unknown, never inferred from text.
+ * @param {unknown} value
+ */
+const assertToolFailure = value => {
+  value === undefined ||
+    typeof value === 'boolean' ||
+    Fail`Invalid turn journal tool failure flag`;
+};
+
+/**
  * Opaque backend acknowledgement token, not model context or a capability.
  * The 8192-character limit is a journal storage profile, not a provider limit.
  * @param {unknown} value
@@ -140,6 +150,12 @@ const assertCheckpointState = record => {
     Fail`Invalid turn journal checkpoint record`;
   ['not-dispatched', 'possibly-dispatched'].includes(record.dispatchState) ||
     Fail`Invalid turn journal dispatch state`;
+  for (const call of [...record.tools, ...record.activity]) {
+    assertToolFailure(call.failed);
+    call.failed === undefined ||
+      call.settled === true ||
+      Fail`Tool failure flag requires a settled outcome`;
+  }
   if (record.dispatchState === 'not-dispatched') {
     (record.state !== 'completed' &&
       record.tools?.length === 0 &&
@@ -430,8 +446,10 @@ export const makeTurnJournal = powers => {
       if (typeof event.result === 'string')
         assertText(event.result, textLimit, true);
       if (event.resultRef !== undefined) assertContentRef(event.resultRef);
+      assertToolFailure(event.failed);
       return () => {
         tool.result = event.result;
+        if (event.failed !== undefined) tool.failed = event.failed;
         if (event.resultRef !== undefined) tool.resultRef = event.resultRef;
         tool.settled = true;
         tool.resultSequence = `${sequence}`;

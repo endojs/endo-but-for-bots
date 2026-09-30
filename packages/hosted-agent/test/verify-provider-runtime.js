@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
 
-import { makePodmanProviderListenerRuntime } from '../src/provider-listener-runtime.js';
+import { makePodmanProviderListenerRuntimeKit } from '../src/provider-listener-runtime.js';
 import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
 import { admitsModels } from './admits-models.js';
 
@@ -26,18 +26,20 @@ const run = args =>
   });
 const stateDirectory = await mkdtemp(join(tmpdir(), 'provider-live-'));
 const ownerId = `live-${process.pid}`;
-let runtime;
+let runtimeKit;
 let issuer;
+const grants = [];
 let failure;
 let observations;
 let requests = 0;
 try {
-  runtime = await makePodmanProviderListenerRuntime({
+  runtimeKit = makePodmanProviderListenerRuntimeKit({
     imageRef,
     ownerId,
     stateDirectory,
     host: { onStderr: chunk => process.stderr.write(chunk) },
   });
+  const runtime = await runtimeKit.open();
   issuer = makeProviderBrokerGrantIssuer({
     runtime,
     secret: Far('Controlled host secret', {
@@ -72,7 +74,9 @@ try {
     accountRef: 'controlled',
     providerOrigin: 'https://api.example.test',
   });
-  const first = await issuer(spec);
+  const firstKit = issuer.issueKit(spec);
+  grants.push(firstKit);
+  const first = await firstKit.value;
   const evidence = await E(first).sandboxEvidence();
   const attestation = await E(first).attestation();
   // A trusted diagnostic client enters the listener container; no host secret
@@ -98,7 +102,9 @@ try {
     `label=io.endo.provider.owner=${ownerId}`,
   ]);
   if (revoked.stdout.trim()) throw Error('Revoked listener remains');
-  const second = await issuer({ ...spec, sessionId: 'crash' });
+  const secondKit = issuer.issueKit({ ...spec, sessionId: 'crash' });
+  grants.push(secondKit);
+  const second = await secondKit.value;
   const secondEvidence = await E(second).sandboxEvidence();
   await run([
     'kill',
@@ -125,7 +131,11 @@ try {
   /** @type {unknown[]} */
   const failures = failure ? [failure] : [];
   // Independent ordered attempts: remove dependent leases before owner lock.
-  for (const clean of [() => issuer?.dispose(), () => runtime?.dispose()]) {
+  for (const clean of [
+    ...grants.map(kit => kit.revoke),
+    () => issuer?.dispose(),
+    () => runtimeKit?.close(),
+  ]) {
     try {
       // eslint-disable-next-line no-await-in-loop
       await clean();

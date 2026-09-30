@@ -18,8 +18,8 @@ import { makeAccountJournal, makeAccountOracleKit } from './account-oracle.js';
  *
  *   - `account-profile` — optional; a stored value carrying the operator's
  *     declared plan, quota, and price list. Data, not a capability.
- *   - `account-source`  — optional; a capability with `observe()`, and
- *     optionally `watch()` and `refresh()`, in the raw reading shape. For a
+ *   - `account-source`  — optional; a capability with `observe()`, `watch()`
+ *     and `refresh()`, in the raw reading shape. For a
  *     hosted adapter it is the broker's account source
  *     (`account-source-module.js`): what the broker's transport read from the
  *     rate-limit headers of the responses it served, pushed here as it
@@ -48,9 +48,8 @@ export const make = async (powers, context, { env } = {}) => {
   };
 
   /**
-   * The source bound now, or undefined. A name that does not resolve — a
-   * broker from before it had an account source, a source whose broker is
-   * gone — is "no source", not a failure: the oracle still answers from its
+   * The source bound now, or undefined. A name that does not resolve, such as
+   * a source whose broker is gone, is "no source", not a failure: the oracle still answers from its
    * profile and its journal.
    *
    * @returns {Promise<any>}
@@ -67,23 +66,6 @@ export const make = async (powers, context, { env } = {}) => {
     return undefined;
   };
 
-  /**
-   * Whether the source answers a method. A source from before `watch()` and
-   * `refresh()` has only `observe()`, and is asked for nothing more.
-   *
-   * @param {any} source
-   * @param {string} method
-   */
-  const offers = async (source, method) => {
-    try {
-      // eslint-disable-next-line no-underscore-dangle
-      const names = await E(source).__getMethodNames__();
-      return Array.isArray(names) && names.includes(method);
-    } catch (_error) {
-      return false;
-    }
-  };
-
   const kit = makeAccountOracleKit({
     providerId,
     provideDeclared,
@@ -93,14 +75,11 @@ export const make = async (powers, context, { env } = {}) => {
     },
     watchObserved: async () => {
       const source = await provideSource();
-      if (source === undefined || !(await offers(source, 'watch'))) {
-        return undefined;
-      }
-      return E(source).watch();
+      return source === undefined ? undefined : E(source).watch();
     },
     refreshObserved: async () => {
       const source = await provideSource();
-      if (source !== undefined && (await offers(source, 'refresh'))) {
+      if (source !== undefined) {
         await E(source).refresh();
       }
     },

@@ -33,9 +33,28 @@ test('“could not ask” is not “none”: the broker’s list is cached, boun
     throw Error('broker worker is restarting');
   });
   await t.throwsAsync(never(), { message: /restarting/ });
-  // A broker from before it could say is believed: it has none.
-  const old = makeSubscriptionLister(async () => {
-    throw Error('target has no method "subscriptions", has ["provideScope"]');
+});
+
+test('missing broker methods are unavailable, not an empty subscription list', async t => {
+  for (const message of [
+    'target has no method "subscriptions"',
+    'subscriptions is not a function',
+  ]) {
+    const list = makeSubscriptionLister(async () => {
+      throw Error(message);
+    });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(list(), { message });
+  }
+});
+
+test('a broker explicitly reporting no subscriptions is cached', async t => {
+  let asks = 0;
+  const list = makeSubscriptionLister(async () => {
+    asks += 1;
+    return [];
   });
-  t.deepEqual(await old(), []);
+  t.deepEqual(await list(), []);
+  t.deepEqual(await list(), []);
+  t.is(asks, 1);
 });

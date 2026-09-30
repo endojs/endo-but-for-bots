@@ -17,7 +17,6 @@ import {
   brokerServiceSpecifier,
   prepareNativeRuntimeEnv,
   readBrokerService,
-  resolvePinnedImageRef,
 } from '../src/hosted-runtime-setup.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
@@ -33,49 +32,6 @@ const makeTmp = async t => {
   t.teardown(() => rm(dir, { recursive: true, force: true }));
   return dir;
 };
-
-test('resolvePinnedImageRef pins tags and accepts already-pinned digests', async t => {
-  /** @type {string[][]} */
-  const inspected = [];
-  const exec = async (file, args) => {
-    inspected.push([file, ...args]);
-    return { stdout: `${digest}\n` };
-  };
-  t.deepEqual(
-    await resolvePinnedImageRef(`oci:localhost/claude@${digest}`, exec),
-    { imageRef: `localhost/claude@${digest}`, imageDigest: digest },
-  );
-  t.deepEqual(inspected, [], 'a pinned reference is never inspected');
-  t.deepEqual(
-    await resolvePinnedImageRef('oci:localhost/claude:latest', exec),
-    // The tag is resolved AWAY: `name:tag@digest` is a reference the native
-    // runtime refuses, so the pin drops the tag it was found under.
-    { imageRef: `localhost/claude@${digest}`, imageDigest: digest },
-  );
-  t.deepEqual(inspected, [
-    [
-      'podman',
-      'image',
-      'inspect',
-      '--format',
-      '{{.Digest}}',
-      'localhost/claude:latest',
-    ],
-  ]);
-  await t.throwsAsync(
-    resolvePinnedImageRef('oci:localhost/claude@sha256:abc', exec),
-    { message: /digest is invalid/ },
-  );
-  await t.throwsAsync(resolvePinnedImageRef('oci:-rm', exec), {
-    message: /Invalid Claude sandbox image/,
-  });
-  await t.throwsAsync(
-    resolvePinnedImageRef('oci:localhost/claude:latest', async () => ({
-      stdout: 'nope\n',
-    })),
-    { message: /Cannot resolve a digest/ },
-  );
-});
 
 test('the native runtime owns the runtime directory itself under a derived label', async t => {
   const tmp = await makeTmp(t);

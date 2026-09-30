@@ -84,6 +84,7 @@ export const projectTranscript = path => {
             kind: 'tool-result',
             id,
             content: content ?? '',
+            ...(message.failed === undefined ? {} : { failed: message.failed }),
           }),
         );
       }
@@ -156,6 +157,7 @@ export const transcriptToProviderMessages = records => {
       messages.push({ role: 'assistant', content: record.summary });
     } else if (record.kind === 'tool-call') {
       const id = `floot-history-${index}`;
+      const result = resultOf.get(record);
       messages.push({
         role: 'assistant',
         content: '',
@@ -170,7 +172,8 @@ export const transcriptToProviderMessages = records => {
       messages.push({
         role: 'tool',
         tool_call_id: id,
-        content: resultOf.get(record)?.content ?? UNKNOWN_TOOL_OUTCOME,
+        content: result?.content ?? UNKNOWN_TOOL_OUTCOME,
+        ...(result?.failed === undefined ? {} : { failed: result.failed }),
       });
     }
   }
@@ -272,6 +275,7 @@ export const recoverTurnTranscript = async (
       name: call.name,
       args: call.args,
       result: result?.content,
+      ...(result?.failed === undefined ? {} : { failed: result.failed }),
     })),
     activity: turn.activity,
     tools: turn.tools,
@@ -290,7 +294,14 @@ export const recoverTurnTranscript = async (
           record.kind === 'native-context' &&
           record.format === turn.nativeContextFormat,
       )) &&
-    rows.every(row => row.source === 'tree' && row.settled && !row.settledBy);
+    rows.every(
+      (row, index) =>
+        row.source === 'tree' &&
+        row.settled &&
+        !row.settledBy &&
+        // A native cut cannot hide an authoritative failure it did not report.
+        (row.failed !== true || pairs[index]?.result?.failed === true),
+    );
   selection.reportNativeSafety?.(nativeSafe);
   // Forensic reads must still expose a checkpoint published before a failure,
   // along with any recovered evidence. Model-context selection owns the
@@ -309,6 +320,7 @@ export const recoverTurnTranscript = async (
         row.source !== 'tree' ||
         !row.settled ||
         row.settledBy === 'host' ||
+        (row.failed === true && canonicalResult?.failed !== true) ||
         lateResult
       ) {
         // The Messages API alphabet, so a native store rebuilt from these
@@ -325,6 +337,7 @@ export const recoverTurnTranscript = async (
             kind: 'tool-result',
             id,
             content: row.result ?? UNKNOWN_TOOL_OUTCOME,
+            ...(row.failed === undefined ? {} : { failed: row.failed }),
           }),
         );
       }
@@ -377,6 +390,7 @@ export const recoverTurnTranscript = async (
           kind: 'tool-result',
           id,
           content: row.result,
+          ...(row.failed === undefined ? {} : { failed: row.failed }),
         }),
       );
   };
@@ -390,7 +404,8 @@ export const recoverTurnTranscript = async (
       ) {
         supplement(row);
       }
-      if (row.settledBy) {
+      const previous = pairs[position].result;
+      if (row.settledBy || previous?.failed !== row.failed) {
         // The rows the tree contributed come first, in the pairs' order, so
         // the settled result replaces the record its own pair holds (a
         // placeholder), or answers the call when the pair holds none; a
@@ -399,8 +414,8 @@ export const recoverTurnTranscript = async (
           kind: 'tool-result',
           id: row.id,
           content: row.result,
+          ...(row.failed === undefined ? {} : { failed: row.failed }),
         });
-        const previous = pairs[position].result;
         const index = previous ? records.indexOf(previous) : -1;
         const crossesBoundary =
           ordered &&
@@ -465,6 +480,7 @@ export const recoverTurnTranscript = async (
           kind: 'tool-result',
           id: row.id,
           content: row.result,
+          ...(row.failed === undefined ? {} : { failed: row.failed }),
         }),
         row.resultSequence,
       );

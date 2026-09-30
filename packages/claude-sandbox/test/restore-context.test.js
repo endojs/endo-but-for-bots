@@ -237,6 +237,59 @@ test('published receipt hashes exact Unicode UTF-8 bytes', async t => {
   );
 });
 
+test('parallel tool capture restores every signed byte and both result siblings', async t => {
+  t.timeout(10_000);
+  const f = await fixture(t);
+  const source = path.join(f.cwd, 'parallel-source');
+  const project = f.cwd.replaceAll('/', '-');
+  const data = JSON.parse(
+    await readFile(
+      new URL('./fixtures/parallel-tool-turn.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const rows = data.rows.map((row, index) => ({
+    ...row,
+    cwd: f.cwd,
+    sessionId: f.session,
+    isSidechain: false,
+    version: '2.1.233',
+    timestamp: `2026-10-01T00:00:${String(index).padStart(2, '0')}.000Z`,
+  }));
+  const original = `${rows.map(row => JSON.stringify(row)).join('\n')}\n`;
+  await mkdir(path.join(source, 'projects', project), { recursive: true });
+  await writeFile(
+    path.join(source, 'projects', project, `${f.session}.jsonl`),
+    original,
+  );
+  const notice = JSON.stringify({
+    type: 'endo_capture',
+    session_id: f.session,
+  });
+  const captured = await run(t, capture, [notice], source, f.cwd);
+  t.is(captured.code, 0, captured.stderr);
+  const output = JSON.parse(captured.stdout);
+  const checkpoint = {
+    kind: 'native-context',
+    format: output.nativeContext.format,
+    payload: output.nativeContext.transcript,
+    context: output.retainedTail,
+  };
+  const imported = await run(
+    t,
+    restore,
+    [],
+    f.destination,
+    f.cwd,
+    JSON.stringify(checkpoint),
+  );
+  t.is(imported.code, 0, imported.stderr);
+  t.is(await readFile(f.file, 'utf8'), original);
+  const recaptured = await run(t, capture, [notice], f.destination, f.cwd);
+  t.is(recaptured.code, 0, recaptured.stderr);
+  t.deepEqual(JSON.parse(recaptured.stdout), output);
+});
+
 test('native importer atomically replaces a leaf symlink without writing its target', async t => {
   t.timeout(10_000);
   const f = await fixture(t);

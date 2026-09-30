@@ -287,25 +287,24 @@ const makeFakeRuntime = () => {
     starts,
     stops: () => stops,
     disposes: () => disposes,
-    async start(input) {
-      starts.push(input);
-      return harden({
-        async observe() {
-          return harden({
-            endpoint: 'http://127.0.0.1:1234',
-            containerName: 'listener',
-            networkNamespaceId: 'net-1',
-            listenerImageDigest: digest,
-          });
-        },
-        async stop() {
-          stops += 1;
-        },
-        closed: new Promise(() => {}),
-      });
-    },
     startKit(input) {
-      const value = this.start(input);
+      const value = (async () => {
+        starts.push(input);
+        return harden({
+          async observe() {
+            return harden({
+              endpoint: 'http://127.0.0.1:1234',
+              containerName: 'listener',
+              networkNamespaceId: 'net-1',
+              listenerImageDigest: digest,
+            });
+          },
+          async stop() {
+            stops += 1;
+          },
+          closed: new Promise(() => {}),
+        });
+      })();
       return {
         value,
         stop: async () => {
@@ -432,13 +431,13 @@ test('leases attest the Anthropic account and broker-only credential injection',
   const runtime = makeFakeRuntime();
   const broker = await startBroker(t, runtime);
   t.is(broker.imageRef, `localhost/claude-sandbox@${digest}`);
-  const lease = await broker.issuer({
+  const lease = await broker.issuer.issueKit({
     sessionId: 'session-1',
     providerOrigin: ANTHROPIC_ORIGIN,
     accountRef: CLAUDE_BROKER_ACCOUNT,
     model: models[0],
     networkPolicy: 'off',
-  });
+  }).value;
   t.deepEqual(runtime.starts[0].limits.allowedPaths, [ANTHROPIC_MESSAGES_PATH]);
   t.is(runtime.starts[0].limits.clientAuthorization, 'strip');
   const attestation = await E(lease).attestation();
@@ -491,7 +490,7 @@ test('denies leases for other origins, accounts, models, or an unprovisioned net
   for (const [name, spec, message] of refused) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
-      broker.issuer(/** @type {any} */ ({ ...base, ...spec })),
+      broker.issuer.issueKit(/** @type {any} */ ({ ...base, ...spec })).value,
       { message },
       name,
     );

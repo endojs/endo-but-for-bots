@@ -243,6 +243,102 @@ test('ordinary completed context preserves native thinking without inventing com
   );
 });
 
+// Live 2026-10-01, pinned 2.1.233: two tools in one assistant API message
+// write each result under its own tool-use UUID, not the latest file row.
+// The native loader recovers these siblings by the assistant message ID.
+test('initial parallel native and Endo tools preserve their exact context bytes', async t => {
+  const fixture = JSON.parse(
+    await readFile(
+      new URL('./fixtures/parallel-tool-turn.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const rows = fixture.rows.map(row => ({
+    ...row,
+    sessionId: fixture.sessionId,
+  }));
+  const result = JSON.parse(
+    (
+      await run(t, rows, {
+        type: 'endo_capture',
+        session_id: fixture.sessionId,
+        coverage_before_uuid: null,
+      })
+    ).stdout,
+  );
+  t.is(
+    result.nativeContext.transcript,
+    `${rows.map(row => JSON.stringify(row)).join('\n')}\n`,
+  );
+  t.is(result.nativeContext.leafUuid, rows.at(-1).uuid);
+  t.deepEqual(
+    result.retainedTail.filter(row => row.kind.startsWith('tool-')),
+    [
+      {
+        kind: 'tool-call',
+        id: 'native-shell',
+        name: 'Bash',
+        args: '{"command":"printf cats"}',
+      },
+      {
+        kind: 'tool-call',
+        id: 'endo-policy',
+        name: 'mcp__endo__getSandboxNetworkPolicy',
+        args: '{}',
+      },
+      { kind: 'tool-result', id: 'native-shell', content: 'cats' },
+      { kind: 'tool-result', id: 'endo-policy', content: 'off' },
+    ],
+  );
+});
+
+for (const scenario of [
+  'wrong-source',
+  'wrong-tool-parent',
+  'missing-source',
+  'future-parent',
+  'cross-message',
+  'repeated-tool',
+  'extra-dialogue',
+]) {
+  test(`parallel native capture refuses ${scenario} without partial bytes`, async t => {
+    const fixture = JSON.parse(
+      await readFile(
+        new URL('./fixtures/parallel-tool-turn.json', import.meta.url),
+        'utf8',
+      ),
+    );
+    const rows = fixture.rows.map(row => ({
+      ...row,
+      sessionId: fixture.sessionId,
+    }));
+    const first = rows[5];
+    if (scenario === 'wrong-source')
+      first.sourceToolAssistantUUID = rows[4].uuid;
+    else if (scenario === 'wrong-tool-parent') {
+      first.parentUuid = rows[4].uuid;
+      first.sourceToolAssistantUUID = rows[4].uuid;
+    } else if (scenario === 'missing-source')
+      delete first.sourceToolAssistantUUID;
+    else if (scenario === 'future-parent') {
+      first.parentUuid = rows[8].uuid;
+      first.sourceToolAssistantUUID = rows[8].uuid;
+    } else if (scenario === 'cross-message')
+      rows[4].message.id = 'other-message';
+    else if (scenario === 'repeated-tool')
+      rows[6].message.content[0].tool_use_id = 'native-shell';
+    else
+      first.message.content.push({ type: 'text', text: 'unstated dialogue' });
+    const error = await t.throwsAsync(
+      run(t, rows, {
+        type: 'endo_capture',
+        session_id: fixture.sessionId,
+      }),
+    );
+    t.is(outputOf(error).stdout, '');
+  });
+}
+
 test('generic completed capture discovers the latest native boundary', async t => {
   const explicit = await run(t, records());
   const discovered = await run(t, records(), {

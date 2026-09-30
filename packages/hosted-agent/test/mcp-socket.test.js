@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
 
-import { listenMcpSocket, makeMcpSocketListener } from '../src/mcp-socket.js';
+import { makeMcpSocketListener } from '../src/mcp-socket.js';
 
 /** @import { ExecutionContext } from 'ava' */
 /** @import { Interface } from 'node:readline' */
@@ -22,12 +22,13 @@ const setup = async (t, handleMessage, maxFrameLength = 64) => {
   const directory = await mkdtemp(join(tmpdir(), 'mcp-wire-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
   const socketPath = join(directory, 'mcp.sock');
-  const listener = await listenMcpSocket({
+  const listener = makeMcpSocketListener({
     socketPath,
     bridge: { handleMessage },
     maxFrameLength,
   });
   t.teardown(() => listener.close());
+  await listener.start();
   const socket = connect(socketPath);
   t.teardown(() => socket.destroy());
   await once(socket, 'connect');

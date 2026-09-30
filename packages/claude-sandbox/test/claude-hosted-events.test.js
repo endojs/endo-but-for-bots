@@ -9,6 +9,11 @@ import {
   translateClaudeTurn,
 } from '../src/claude-hosted-events.js';
 
+/** @import { ERef } from '@endo/eventual-send' */
+/** @import { PassableReader } from '@endo/exo-stream' */
+/** @import { HostedTurnEvent } from '../src/claude-hosted-events.js' */
+
+/** @param {ERef<PassableReader<HostedTurnEvent>>} reader */
 const drain = async reader => {
   const events = [];
   for await (const value of iterateReader(reader)) {
@@ -16,6 +21,28 @@ const drain = async reader => {
   }
   return events;
 };
+
+test('native tool error flags are mapped without classifying literal error text', t => {
+  for (const isError of [true, false, undefined]) {
+    const translator = makeClaudeHostedTranslator();
+    const events = translator.handle({
+      type: 'user',
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool',
+            content: 'Error: literal',
+            ...(isError === undefined ? {} : { is_error: isError }),
+          },
+        ],
+      },
+    });
+    const result = events.find(event => event.type === 'tool-result');
+    t.is(result?.ok, isError === undefined ? undefined : !isError);
+    t.is(result?.result, 'Error: literal');
+  }
+});
 
 test('completed-turn capture follows native result and precedes terminal delivery', async t => {
   const raw = makeBufferedReader();
@@ -47,7 +74,7 @@ test('malformed capture fails translation without publishing a checkpoint', asyn
   raw.push({ type: 'end' });
   const events = await drain(translateClaudeTurn(raw.reader));
   t.false(events.some(event => event.type === 'native-context'));
-  t.is(events.at(-1).type, 'abort');
+  t.is(events.at(-1)?.type, 'abort');
 });
 
 test('translated delivery backpressures bursts and drains in order', async t => {
@@ -70,7 +97,7 @@ test('translated delivery backpressures bursts and drains in order', async t => 
       .join(''),
     Array.from({ length: 3000 }, (_, i) => `${i},`).join(''),
   );
-  t.is(events.at(-1).type, 'end');
+  t.is(events.at(-1)?.type, 'end');
 });
 
 test('closing a backpressured translated reader closes its raw producer', async t => {

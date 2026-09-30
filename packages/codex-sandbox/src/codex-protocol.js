@@ -156,6 +156,7 @@ harden(renderToolResult);
  * version-specific schema.
  *
  * @param {any} item
+ * @returns {Readonly<{ id: string, name: string, args: unknown, result: unknown, status?: unknown, ok?: boolean }> | undefined}
  */
 export const toolFromItem = item => {
   if (!item || typeof item !== 'object') return undefined;
@@ -170,6 +171,11 @@ export const toolFromItem = item => {
         }),
         result: item.aggregatedOutput ?? '',
         status: item.status,
+        ...(typeof item.exitCode === 'number'
+          ? { ok: item.exitCode === 0 }
+          : ['failed', 'declined'].includes(item.status)
+            ? { ok: false }
+            : {}),
       });
     case 'fileChange':
       return harden({
@@ -178,6 +184,11 @@ export const toolFromItem = item => {
         args: harden({ changes: item.changes || [] }),
         result: item.status || '',
         status: item.status,
+        ...(item.status === 'completed'
+          ? { ok: true }
+          : ['failed', 'declined'].includes(item.status)
+            ? { ok: false }
+            : {}),
       });
     case 'mcpToolCall':
       return harden({
@@ -186,6 +197,11 @@ export const toolFromItem = item => {
         args: item.arguments ?? {},
         result: item.error ?? item.result ?? '',
         status: item.status,
+        ...(item.error != null || item.status === 'failed'
+          ? { ok: false }
+          : typeof item.result?.isError === 'boolean'
+            ? { ok: !item.result.isError }
+            : {}),
       });
     case 'dynamicToolCall':
       return harden({
@@ -196,6 +212,11 @@ export const toolFromItem = item => {
         args: item.arguments ?? {},
         result: item.contentItems ?? '',
         status: item.status,
+        ...(typeof item.success === 'boolean'
+          ? { ok: item.success }
+          : item.status === 'failed'
+            ? { ok: false }
+            : {}),
       });
     case 'webSearch':
       return harden({

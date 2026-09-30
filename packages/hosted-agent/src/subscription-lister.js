@@ -5,9 +5,8 @@
  * What a broker says a session may be pinned to, asked at most every half
  * minute and for at most five seconds.
  *
- * "Could not ask" is not "none". A broker that answers, or that is from
- * before it could (it has no such method), is believed. A broker that could
- * not be reached leaves the last answer standing, and with no answer yet the
+ * "Could not ask" is not "none". A broker that answers is believed. A broker
+ * that could not be reached leaves the last answer standing, and with no answer yet the
  * failure is the caller's to handle: a descriptor then says nothing about
  * subscriptions, and a pinned session is refused for that reason and not as
  * an unknown subscription.
@@ -53,12 +52,6 @@ export const makeSubscriptionLister = (
       knownAt = now();
       return known;
     } catch (error) {
-      const message = error instanceof Error ? error.message : '';
-      if (/has no method|is not a function/i.test(message)) {
-        known = harden([]);
-        knownAt = now();
-        return known;
-      }
       if (known !== undefined) return known;
       throw error;
     } finally {

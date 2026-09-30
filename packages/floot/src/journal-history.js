@@ -56,6 +56,7 @@ export const projectJournalTurnHistory = async (
       name: call.name,
       args: call.args,
       result: result?.content,
+      ...(result?.failed === undefined ? {} : { failed: result.failed }),
     })),
     activity: turn.activity,
     tools: turn.tools,
@@ -75,6 +76,7 @@ export const projectJournalTurnHistory = async (
     ...(row.source !== 'host' ? { id: row.id } : {}),
     name: row.name,
     args: row.args,
+    ...(row.failed === undefined ? {} : { failed: row.failed }),
     result:
       row.source === 'host' && turn.activity?.length
         ? `[Durable Endo execution evidence; may correspond to a backend observation above, not an additional execution.]\n${row.result ?? UNKNOWN_TOOL_OUTCOME}`

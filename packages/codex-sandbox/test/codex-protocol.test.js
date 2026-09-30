@@ -17,6 +17,48 @@ const chunks = parts => ({
   },
 });
 
+test('native tool outcome fields remain distinct from terminality and result text', t => {
+  const command = {
+    type: 'commandExecution',
+    id: 'c',
+    status: 'completed',
+    aggregatedOutput: 'Error: literal',
+  };
+  t.false(toolFromItem({ ...command, exitCode: 2 })?.ok);
+  t.true(toolFromItem({ ...command, exitCode: 0 })?.ok);
+  t.is(toolFromItem(command)?.ok, undefined);
+  t.false(toolFromItem({ ...command, status: 'declined' })?.ok);
+  for (const success of [true, false]) {
+    t.is(
+      toolFromItem({
+        type: 'dynamicToolCall',
+        id: 'd',
+        status: 'completed',
+        success,
+      })?.ok,
+      success,
+    );
+    t.is(
+      toolFromItem({
+        type: 'mcpToolCall',
+        id: 'm',
+        status: 'completed',
+        result: { isError: !success },
+      })?.ok,
+      success,
+    );
+  }
+  t.false(
+    toolFromItem({
+      type: 'mcpToolCall',
+      id: 'm',
+      status: 'completed',
+      error: { message: 'refused' },
+    })?.ok,
+  );
+  t.false(toolFromItem({ type: 'fileChange', id: 'f', status: 'failed' })?.ok);
+});
+
 test('JSONL parser handles split, joined, and unterminated records', async t => {
   const values = [];
   for await (const value of parseJsonLines(

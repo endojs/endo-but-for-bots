@@ -2100,6 +2100,66 @@ test.serial(
   },
 );
 
+test.serial(
+  'explicit tool failure is shown live and after history restoration',
+  async t => {
+    const { parent, turns, send, setHistoryReader, remount } = await setup(t);
+    await send('run a tool');
+    await waitFor(() => turns.length === 1);
+    turns[0].channel.push(
+      harden({ type: 'tool_call', id: 'a', name: 'exec', args: '{}' }),
+    );
+    turns[0].channel.push(
+      harden({ type: 'tool_result', id: 'a', result: 'refused', failed: true }),
+    );
+    const openActions = async () => {
+      await waitFor(() => parent.querySelector('.floot-actions-head'));
+      parent
+        .querySelector('.floot-actions-head')
+        ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+      await waitFor(() => parent.querySelector('.floot-action-head'));
+      t.true(
+        must(
+          parent.querySelector('.floot-action-head'),
+          'action head',
+        ).textContent.includes('failed'),
+      );
+      t.false(
+        parent
+          .querySelector('.floot-action-head')
+          ?.textContent.includes('running'),
+      );
+      parent
+        .querySelector('.floot-action-head')
+        ?.dispatchEvent(new testWindow.Event('click', { bubbles: true }));
+      await waitFor(() => parent.querySelector('.floot-action-body'));
+      t.true(
+        parent
+          .querySelector('.floot-action-body')
+          ?.textContent.includes('refused'),
+      );
+    };
+    await openActions();
+    setHistoryReader(() =>
+      harden([
+        { role: 'user', content: 'run a tool' },
+        {
+          role: 'tool',
+          id: 'a',
+          name: 'exec',
+          args: '{}',
+          result: 'refused',
+          failed: true,
+        },
+      ]),
+    );
+    turns[0].channel.push(harden({ type: 'end' }));
+    await waitFor(() => !parent.querySelector('[aria-label="Stop"]'));
+    await remount();
+    await openActions();
+  },
+);
+
 test.serial("a turn's tool calls collapse into one group", async t => {
   const { parent, turns, send } = await setup(t);
   await send('run some tools');

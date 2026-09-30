@@ -76,18 +76,23 @@ test('an oracle bound to a broker’s account source answers from it, pushed', a
   t.is(limits.windows[0].usedPercent, 55);
 });
 
-test('a source with only observe() is read and never asked for more', async t => {
-  const calls = [];
-  const source = Far('legacy source', {
-    observe: async () => {
-      calls.push('observe');
+test('an explicit refresh uses the current source and observes its active reading', async t => {
+  let reads = 0;
+  const account = makeAccountReadingSource({
+    activeRead: async () => {
+      reads += 1;
       return reading(12);
     },
   });
-  const oracle = await make(makeNamespace({ 'account-source': source }).powers);
-  t.is((await E(oracle).getRateLimits()).windows[0].usedPercent, 12);
+  t.teardown(() => account.close());
+  const oracle = await make(
+    makeNamespace({ 'account-source': account.source }).powers,
+  );
+  t.is((await E(oracle).getRateLimits()).source, 'unavailable');
+  t.is(reads, 0);
   await E(oracle).refresh();
-  t.deepEqual([...new Set(calls)], ['observe']);
+  t.is(reads, 1);
+  t.is((await E(oracle).getRateLimits()).windows[0].usedPercent, 12);
 });
 
 test('with nothing bound the oracle says so, and does not throw', async t => {
@@ -100,14 +105,13 @@ test('with nothing bound the oracle says so, and does not throw', async t => {
 });
 
 test('a source that does not resolve is no source, not a failure', async t => {
-  // What a source formula minted over a broker from before it had an account
-  // source looks like from here: the name is there and the lookup rejects.
+  // An unavailable source: the name is there and the lookup rejects.
   const names = new Map([['account-source', 'broken']]);
   const powers = Far('powers', {
     has: async name => names.has(name),
     list: async () => [...names.keys()],
     lookup: async () => {
-      throw Error('target has no method "accountSource"');
+      throw Error('source worker is unavailable');
     },
     storeValue: async () => {},
     remove: async () => {},

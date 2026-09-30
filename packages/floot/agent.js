@@ -648,6 +648,7 @@ export const makeStreamingAgent = async (
           args: tool.args,
           result: tool.result,
           settled: tool.settled === true,
+          ...(tool.failed === undefined ? {} : { failed: tool.failed }),
         })),
       })),
     );
@@ -697,6 +698,7 @@ export const makeStreamingAgent = async (
     await turnJournal.append(turnId, {
       type: 'tool-result',
       callId,
+      failed: 'error' in outcome,
       result:
         'error' in outcome
           ? `Error: ${outcome.error instanceof Error ? outcome.error.message : String(outcome.error)}`
@@ -1169,6 +1171,7 @@ export const makeStreamingAgent = async (
             id: call.id,
             name: `${name}`,
             result: `${resultText}`,
+            failed: 'error' in outcome,
           });
           console.error(
             `[floot] tool ${name} -> ${`${resultText}`.length} chars`,
@@ -1177,6 +1180,7 @@ export const makeStreamingAgent = async (
             role: 'tool',
             tool_call_id: call.id,
             content: `${resultText}`,
+            failed: 'error' in outcome,
           };
         };
         const results = await Promise.all(normalizedCalls.map(runOne));
@@ -1185,6 +1189,7 @@ export const makeStreamingAgent = async (
             kind: 'tool-result',
             id: result.tool_call_id,
             content: result.content,
+            failed: result.failed,
           });
         }
         if (signal?.aborted) throw Error('Floot turn aborted');

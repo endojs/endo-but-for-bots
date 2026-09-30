@@ -646,8 +646,6 @@ export const makePodmanProviderListenerRuntimeKit = ({
     }
   };
   const runtime = harden({
-    /** @param {Parameters<typeof startKit>[0]} configuration */
-    start: configuration => startKit(configuration).value,
     startKit,
     retryCleanup: () => serialize(retryCleanup),
     dispose: close,
@@ -663,27 +661,3 @@ export const makePodmanProviderListenerRuntimeKit = ({
   return harden({ open: openRuntime, close, configure });
 };
 harden(makePodmanProviderListenerRuntimeKit);
-
-/**
- * Transitional convenience constructor. A failed startup whose rollback also
- * fails does not return a cleanup handle. Native owners must retain the inert
- * kit before open() to retain failed cleanup for explicit retry.
- * @param {Parameters<typeof makePodmanProviderListenerRuntimeKit>[0]} options
- */
-export const makePodmanProviderListenerRuntime = async options => {
-  const kit = makePodmanProviderListenerRuntimeKit(options);
-  try {
-    return await kit.open();
-  } catch (error) {
-    try {
-      await kit.close();
-    } catch (cleanupError) {
-      throw AggregateError(
-        [error, cleanupError],
-        'Provider runtime startup and cleanup failed',
-      );
-    }
-    throw error;
-  }
-};
-harden(makePodmanProviderListenerRuntime);

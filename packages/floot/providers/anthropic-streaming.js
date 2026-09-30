@@ -27,6 +27,7 @@ import { projectUsage, tokenCount } from '@endo/hosted-agent/token-usage.js';
  * @property {string} content
  * @property {Array<{ id?: string, function: { name: string, arguments: string|object }}>} [tool_calls]
  * @property {string} [tool_call_id]
+ * @property {boolean} [failed]
  */
 
 /**
@@ -90,6 +91,7 @@ const toAnthropicMessages = messages => {
             type: 'tool_result',
             tool_use_id: toolUseId,
             content: msg.content,
+            ...(msg.failed === undefined ? {} : { is_error: msg.failed }),
           },
         ],
       });
