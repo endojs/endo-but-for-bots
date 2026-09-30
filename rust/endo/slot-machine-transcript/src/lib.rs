@@ -944,7 +944,8 @@ impl Transcript {
             let superseded = {
                 let mut statement =
                     tx.prepare("SELECT hash FROM snapshot WHERE epoch < ?1 ORDER BY epoch")?;
-                let rows = statement.query_map([snapshot.epoch as i64], |r| r.get::<_, String>(0))?;
+                let rows =
+                    statement.query_map([snapshot.epoch as i64], |r| r.get::<_, String>(0))?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
             tx.execute(
