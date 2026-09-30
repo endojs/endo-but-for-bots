@@ -625,8 +625,8 @@ export const makeDirectoryMaker = ({
     };
 
     /** @type {EndoDirectory['readText']} */
-    const readText = async petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const readText = async petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       if (namePath.length < 2) {
         const blob = await lookup(namePath);
         return E(/** @type {any} */ (blob)).text();
@@ -636,8 +636,8 @@ export const makeDirectoryMaker = ({
     };
 
     /** @type {EndoDirectory['maybeReadText']} */
-    const maybeReadText = async petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const maybeReadText = async petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       if (namePath.length < 2) {
         const blob = await maybeLookup(namePath);
         if (blob === undefined || blob === null) {
@@ -650,10 +650,10 @@ export const makeDirectoryMaker = ({
     };
 
     /** @type {EndoDirectory['writeText']} */
-    const writeText = async (petNameOrPath, content) => {
+    const writeText = async (petNamePath, content) => {
       // Coerce for branching only; the store funnels through this
       // directory's own storeIdentifier, which enforces a pet-name leaf.
-      const namePath = namePathFrom(petNameOrPath);
+      const namePath = namePathFrom(petNamePath);
       if (namePath.length < 2) {
         const bytes = encodeUtf8(content);
         const readerRef = bytesReaderFromIterator([bytes]);

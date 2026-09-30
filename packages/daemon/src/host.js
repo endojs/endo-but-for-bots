@@ -58,10 +58,10 @@ const assertPowersName = name => {
  * multi-segment path is validated as a name path by {@link namePathFrom},
  * letting a caller reference powers that live inside a directory rather
  * than at the agent's top level.
- * @param {string[]} nameOrPath
+ * @param {string[]} namePathArgument
  */
-const assertPowersNamePath = nameOrPath => {
-  const namePath = namePathFrom(nameOrPath);
+const assertPowersNamePath = namePathArgument => {
+  const namePath = namePathFrom(namePathArgument);
   if (namePath.length === 1) {
     assertPowersName(namePath[0]);
   }
@@ -1447,8 +1447,8 @@ export const makeHostMaker = ({
         (resultName !== undefined ? `eval:${resultName}` : 'eval');
 
       /** @type {(FormulaIdentifier | NamePath)[]} */
-      const endowmentFormulaIdsOrPaths = petNamePaths.map(petNameOrPath => {
-        const petNamePath = namePathFrom(petNameOrPath);
+      const endowmentFormulaIdsOrPaths = petNamePaths.map(pathArgument => {
+        const petNamePath = namePathFrom(pathArgument);
         if (petNamePath.length === 1) {
           const id = petStore.identifyLocal(petNamePath[0]);
           if (id === undefined) {
@@ -1908,13 +1908,12 @@ export const makeHostMaker = ({
 
     /**
      * @template {'host' | 'guest' | 'agent'} T
-     * @param {NamePath} [nameOrPath] - The agent's potential pet name or
-     * directory path.
+     * @param {NamePath} [namePathArgument] - The agent's pet-name path.
      * @param {T} [type]
      */
-    const getNamedAgent = async (nameOrPath, type) => {
-      if (nameOrPath !== undefined) {
-        const namePath = namePathFrom(nameOrPath);
+    const getNamedAgent = async (namePathArgument, type) => {
+      if (namePathArgument !== undefined) {
+        const namePath = namePathFrom(namePathArgument);
         // A single segment resolves against the agent's own pet store; a
         // path resolves through the directory so an agent can be named
         // (and found again, idempotently) inside a subdirectory.
@@ -2234,11 +2233,11 @@ export const makeHostMaker = ({
     };
 
     /** @type {EndoHost['cancel']} */
-    const cancel = async (petNameOrPath, reason = new Error('Cancelled')) => {
-      const namePath = namePathFrom(petNameOrPath);
+    const cancel = async (petNamePath, reason = new Error('Cancelled')) => {
+      const namePath = namePathFrom(petNamePath);
       const id = await E(directory).identify(...namePath);
       if (id === undefined) {
-        throw new TypeError(`Unknown pet name: ${q(petNameOrPath)}`);
+        throw new TypeError(`Unknown pet name: ${q(petNamePath)}`);
       }
       return cancelValue(/** @type {FormulaIdentifier} */ (id), reason);
     };
@@ -2294,8 +2293,8 @@ export const makeHostMaker = ({
     };
 
     /** @type {EndoHost['adoptFromLocator']} */
-    const adoptFromLocator = async (locator, petNameOrPath) => {
-      const { namePath } = petNamePathFrom(petNameOrPath);
+    const adoptFromLocator = async (locator, petNamePath) => {
+      const { namePath } = petNamePathFrom(petNamePath);
       const { id, hints } = internalizeLocator(locator);
       if (hints.length > 0) {
         const { node: nodeNumber } = parseId(id);
@@ -2407,25 +2406,25 @@ export const makeHostMaker = ({
     };
 
     /** @type {EndoHost['lookup']} */
-    const lookup = petNameOrPath => {
-      const path = namePathFrom(petNameOrPath);
+    const lookup = petNamePath => {
+      const path = namePathFrom(petNamePath);
       if (path[0] === '@secrets' && secretManagerDirectory) {
         if (path.length === 1) return Promise.resolve(secretManagerDirectory);
         return E(secretManagerDirectory).lookup(path.slice(1));
       }
-      return directoryLookup(petNameOrPath);
+      return directoryLookup(petNamePath);
     };
 
     /** @type {EndoHost['maybeLookup']} */
-    const maybeLookup = petNameOrPath => {
-      const path = namePathFrom(petNameOrPath);
+    const maybeLookup = petNamePath => {
+      const path = namePathFrom(petNamePath);
       if (path[0] === '@secrets' && secretManagerDirectory) {
         if (path.length === 1) return Promise.resolve(secretManagerDirectory);
         return E(secretManagerDirectory)
           .lookup(path.slice(1))
           .catch(() => undefined);
       }
-      return directoryMaybeLookup(petNameOrPath);
+      return directoryMaybeLookup(petNamePath);
     };
 
     /** @type {EndoHost['list']} */
@@ -2439,8 +2438,8 @@ export const makeHostMaker = ({
       return directoryList(...petNamePath);
     };
 
-    const makeDirectory = async petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const makeDirectory = async petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       return makeDirectoryLocal(namePath);
     };
     const {
@@ -2499,8 +2498,8 @@ export const makeHostMaker = ({
       // Resolve each binding pet name to a formula identifier from the host's namespace
       const codeNames = slotKeys;
       const endowmentFormulaIdsOrPaths = codeNames.map(codeName => {
-        const petNameOrPath = bindings[codeName];
-        const petNamePath = namePathFrom(petNameOrPath);
+        const petNamePathArgument = bindings[codeName];
+        const petNamePath = namePathFrom(petNamePathArgument);
         if (petNamePath.length === 1) {
           const id = petStore.identifyLocal(petNamePath[0]);
           if (id === undefined) {

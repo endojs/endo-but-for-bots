@@ -2779,10 +2779,10 @@ const makeDaemonCore = async (
     let mailHub;
 
     /**
-     * @param {string[]} petNameOrPath
+     * @param {string[]} petNamePath
      */
-    const lookup = petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const lookup = petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
       if (tailNames.length === 0) {
         const id = identifyMessage(headName);
@@ -2797,8 +2797,8 @@ const makeDaemonCore = async (
       );
     };
 
-    const maybeLookup = petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const maybeLookup = petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
       const id = identifyMessage(headName);
       if (id === undefined) {
@@ -3194,10 +3194,10 @@ const makeDaemonCore = async (
     }
 
     /**
-     * @param {string[]} petNameOrPath
+     * @param {string[]} petNamePath
      */
-    const lookup = petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const lookup = petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
       if (tailNames.length === 0) {
         if (idByName.has(headName)) {
@@ -3237,15 +3237,15 @@ const makeDaemonCore = async (
       );
     };
 
-    const maybeLookup = petNameOrPath => {
-      const namePath = namePathFrom(petNameOrPath);
+    const maybeLookup = petNamePath => {
+      const namePath = namePathFrom(petNamePath);
       const [headName, ...tailNames] = namePath;
       if (tailNames.length === 0) {
         if (!idByName.has(headName) && !valueByName.has(headName)) {
           return undefined;
         }
       }
-      return lookup(petNameOrPath);
+      return lookup(petNamePath);
     };
 
     /**

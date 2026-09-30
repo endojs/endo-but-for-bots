@@ -246,7 +246,7 @@ export const makeGuestMaker = ({
      * @param {NamePath | undefined} workerName
      * @param {string} source
      * @param {Array<string>} codeNames
-     * @param {NamePath[]} petNamesOrPaths
+     * @param {NamePath[]} petNamePaths
      * @param {NamePath} [resultName]
      * @returns {Promise<unknown>}
      */
@@ -254,7 +254,7 @@ export const makeGuestMaker = ({
       workerName,
       source,
       codeNames,
-      petNamesOrPaths,
+      petNamePaths,
       resultName,
     ) => {
       if (!Array.isArray(codeNames)) {
@@ -265,7 +265,7 @@ export const makeGuestMaker = ({
           throw new Error(`Invalid endowment name: ${q(codeName)}`);
         }
       }
-      if (petNamesOrPaths.length !== codeNames.length) {
+      if (petNamePaths.length !== codeNames.length) {
         throw new Error('Evaluator requires one pet name for each code name');
       }
 
@@ -275,8 +275,8 @@ export const makeGuestMaker = ({
       const workerId = await prepareWorkerFormulation(workerName, tasks.push);
 
       /** @type {(FormulaIdentifier | NamePath)[]} */
-      const endowmentFormulaIdsOrPaths = petNamesOrPaths.map(petNameOrPath => {
-        const petNamePath = namePathFrom(petNameOrPath);
+      const endowmentFormulaIdsOrPaths = petNamePaths.map(pathArgument => {
+        const petNamePath = namePathFrom(pathArgument);
         if (petNamePath.length === 1) {
           const id = specialStore.identifyLocal(petNamePath[0]);
           if (id === undefined) {
@@ -326,8 +326,8 @@ export const makeGuestMaker = ({
       mailboxSubmit(messageNumber, values);
 
     /** @type {EndoGuest['sendValue']} */
-    const sendValue = (messageNumber, petNameOrPath) =>
-      mailboxSendValue(messageNumber, petNameOrPath);
+    const sendValue = (messageNumber, petNamePath) =>
+      mailboxSendValue(messageNumber, petNamePath);
 
     /** @type {EndoGuest['storeBlob']} */
     const storeBlob = async (readerRef, petName) => {
