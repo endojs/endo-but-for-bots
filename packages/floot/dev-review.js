@@ -257,7 +257,7 @@ export const provisionDevReview = async ({
     { powersName: [projectPowersName], resultName: [readerName] },
   );
   const reader = await E(host).lookup([readerName]);
-  await E(developer).storeValue(project, projectName);
+  await E(developer).storeValue(project, [projectName]);
   await E(host).makeUnconfined(
     ['@main'],
     new URL('./review-project.js', import.meta.url).href,
@@ -273,7 +273,7 @@ export const provisionDevReview = async ({
   const names = [];
   for (const [index, reviewer] of reviewers.entries()) {
     // eslint-disable-next-line no-await-in-loop
-    await E(reviewer).storeValue(reader, projectName);
+    await E(reviewer).storeValue(reader, [projectName]);
     const name = `reviewer-${index}`;
     names.push(name);
     // eslint-disable-next-line no-await-in-loop

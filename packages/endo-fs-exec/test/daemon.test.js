@@ -123,7 +123,7 @@ test.serial(
     await unpackFixtureTree(sourceDir, treeDir);
 
     // 2. Make an endo-fs Filesystem cap rooted at treeDir.
-    await E(host).makeUnconfined('@node', nodeFsModuleHref, {
+    await E(host).makeUnconfined(['@node'], nodeFsModuleHref, {
       powersName: ['@none'],
       env: { ENDO_FS_ROOT: treeDir },
       resultName: ['workspace-fs'],
@@ -131,7 +131,7 @@ test.serial(
 
     // 3. Adapt that Filesystem to make-from-tree's shape via the
     //    new tree-view module.
-    await E(host).makeUnconfined('@node', treeViewModuleHref, {
+    await E(host).makeUnconfined(['@node'], treeViewModuleHref, {
       powersName: ['workspace-fs'],
       resultName: ['tree-view'],
     });
@@ -163,13 +163,13 @@ test.serial(
     const rootDir = path.join(config.statePath, '..', 'tree-fixture-rooted');
     await unpackFixtureTree(sourceDir, path.join(rootDir, 'apps', 'widget'));
 
-    await E(host).makeUnconfined('@node', nodeFsModuleHref, {
+    await E(host).makeUnconfined(['@node'], nodeFsModuleHref, {
       powersName: ['@none'],
       env: { ENDO_FS_ROOT: rootDir },
       resultName: ['workspace-fs'],
     });
 
-    await E(host).makeUnconfined('@node', treeViewModuleHref, {
+    await E(host).makeUnconfined(['@node'], treeViewModuleHref, {
       powersName: ['workspace-fs'],
       env: { ENDO_FS_TREE_LOCATION: 'apps/widget' },
       resultName: ['widget-tree'],

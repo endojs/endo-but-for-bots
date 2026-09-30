@@ -1565,7 +1565,7 @@ export const makeHostMaker = ({
         options?.workerTrustedShims !== undefined &&
         options.workerTrustedShims.length > 0;
       const effectiveWorkerName =
-        workerName ?? (wantsFreshWorker ? undefined : '@node');
+        workerName ?? (wantsFreshWorker ? undefined : ['@node']);
       const {
         tasks,
         workerId,

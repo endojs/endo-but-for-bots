@@ -15,7 +15,7 @@
  *     '@endo/platform/fs/extended/src/in-memory-module.js',
  *     import.meta.url,
  *   ).href;
- *   const fs = await E(host).makeUnconfined('@main', moduleUrl, {
+ *   const fs = await E(host).makeUnconfined(['@main'], moduleUrl, {
  *     resultName: ['workspace-fs'],
  *   });
  *   // `fs` is now a endo-fs Filesystem cap, addressable as a

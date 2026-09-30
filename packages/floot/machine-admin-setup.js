@@ -293,7 +293,7 @@ export const grantDeployFactory = async (
       await E(agent).provideGuest([handleName], { agentName: [powersName] });
     }
   }
-  const powersRef = revived ? powersPath : powersName;
+  const powersRef = revived ? powersPath : [powersName];
   const connectionPowers = await E(agent).lookup(powersRef);
 
   // The service binding heals every boot; the workflow setup keeps the

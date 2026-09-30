@@ -877,7 +877,7 @@ export const makeStoreTool = host => {
       if (petName === undefined) {
         throw new Error('petName is required');
       }
-      await E(host).storeValue(value, petName);
+      await E(host).storeValue(value, petName.split('/'));
       return `Stored value under "${petName}"`;
     },
     help() {
@@ -1606,7 +1606,7 @@ export const makeReadChannelTool = powers => {
       if (!channelName) {
         throw new Error('channelName is required');
       }
-      const channel = await E(powers).lookup(channelName);
+      const channel = await E(powers).lookup([channelName]);
       const rawMessages = await E(channel).listMessages();
       const messages = /** @type {any[]} */ (rawMessages);
 

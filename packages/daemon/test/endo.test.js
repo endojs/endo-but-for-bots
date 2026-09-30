@@ -2407,7 +2407,7 @@ testWorkerTermination(
       ['worker-a'],
       `
       E(host)
-        .makeUnconfined('worker-a', ${counterLocationLiteral}, { powersName: ['powers'], resultName: ['caplet'] })
+        .makeUnconfined(['worker-a'], ${counterLocationLiteral}, { powersName: ['powers'], resultName: ['caplet'] })
         .then(caplet => {
           globalThis.caplet = caplet;
           return 'ok';
@@ -2472,7 +2472,7 @@ testNeedsNodeWorker(
       ['worker-a'],
       `
       E(host)
-        .makeUnconfined('worker-a', ${counterLocationLiteral}, { powersName: ['@none'], resultName: ['counter'] })
+        .makeUnconfined(['worker-a'], ${counterLocationLiteral}, { powersName: ['@none'], resultName: ['counter'] })
         .then(() => 'ok')
     `,
       ['host'],
@@ -2501,7 +2501,7 @@ testNeedsNodeWorker(
       ['worker-b'],
       `
       E(host)
-        .makeUnconfined('worker-b', ${retainerLocationLiteral}, { powersName: ['@none'], resultName: ['retainer'] })
+        .makeUnconfined(['worker-b'], ${retainerLocationLiteral}, { powersName: ['@none'], resultName: ['retainer'] })
         .then(() => 'ok')
     `,
       ['host'],
@@ -2527,7 +2527,7 @@ testNeedsNodeWorker(
       ['worker-a'],
       `
       E(host)
-        .makeUnconfined('worker-a', ${counterLocationLiteral}, { powersName: ['@none'], resultName: ['counter'] })
+        .makeUnconfined(['worker-a'], ${counterLocationLiteral}, { powersName: ['@none'], resultName: ['counter'] })
         .then(() => 'ok')
     `,
       ['host'],

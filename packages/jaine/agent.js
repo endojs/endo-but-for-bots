@@ -419,7 +419,7 @@ export const spawnWorkerLoop = async (
 
     for (const chName of channelNames) {
       try {
-        const ch = await E(powers).lookup(chName);
+        const ch = await E(powers).lookup([chName]);
         const member = await E(ch).join('jaine');
         const channelId = await E(powers).identify(chName);
 

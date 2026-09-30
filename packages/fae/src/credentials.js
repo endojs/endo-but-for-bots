@@ -127,7 +127,7 @@ export const resolveAuthToken = async ({
 }) => {
   await null;
   if (await E(powers).has(petName)) {
-    return readAuthToken(await E(powers).lookup(petName));
+    return readAuthToken(await E(powers).lookup([petName]));
   }
   const inline = config.authToken;
   if (typeof inline === 'string' && inline !== '') {

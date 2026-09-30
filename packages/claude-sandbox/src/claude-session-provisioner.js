@@ -208,7 +208,7 @@ export const makeClaudeSessionProvisioner = (
         const { clientPath } = namesFor(sessionId);
         await inFlight.get(sessionId)?.catch(() => {});
         if (!(await E(hostAgent).has(...clientPath))) return undefined;
-        return E(hostAgent).lookup(...clientPath);
+        return E(hostAgent).lookup(clientPath);
       },
       /**
        * Stop the session's live incarnation without deleting it: the daemon

@@ -251,7 +251,7 @@ export const makeContainerMountRegistrar = ({
         let sequence = 0n;
         if (journalNames.length > 0) {
           const latestName = /** @type {string} */ (journalNames.at(-1));
-          const snapshot = await E(powers).lookup(latestName);
+          const snapshot = await E(powers).lookup([latestName]);
           if (
             snapshot?.version !== 1 ||
             !Array.isArray(snapshot.records) ||

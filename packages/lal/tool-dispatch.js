@@ -186,7 +186,9 @@ export const makeExecuteTool = powers => {
         // eslint-disable-next-line no-shadow
         const { name: lookupName } = args;
         if (lookupName !== undefined) {
-          const capability = await E(powers).lookup(lookupName);
+          const capability = await E(powers).lookup(
+            Array.isArray(lookupName) ? lookupName : lookupName.split('/'),
+          );
           return E(capability).list();
         }
         return E(powers).list();

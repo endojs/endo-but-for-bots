@@ -51,7 +51,7 @@ export const make = async (powers, context) => {
 
   const started = (async () => {
     const hostPort = /** @type {string} */ (
-      await E(powers).lookup(LISTEN_ADDR_NAME)
+      await E(powers).lookup([LISTEN_ADDR_NAME])
     );
     const { hostname: host, port: portname } = new URL(
       `protocol://${hostPort}`,
@@ -65,7 +65,7 @@ export const make = async (powers, context) => {
 
     const assignedHostPort = `${host}:${assignedPort}`;
     if (assignedHostPort !== hostPort) {
-      await E(powers).storeValue(assignedHostPort, LISTEN_ADDR_NAME);
+      await E(powers).storeValue(assignedHostPort, [LISTEN_ADDR_NAME]);
     }
 
     console.log(`Endo daemon started local ${protocol} network device`);

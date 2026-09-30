@@ -37,8 +37,8 @@ export const main = async (agent, rootPath, name, mode) => {
   const env = { ENDO_FS_ROOT: rootPath };
   if (readOnly) env.ENDO_FS_READ_ONLY = '1';
 
-  await E(agent).makeUnconfined('@node', moduleSpecifier, {
-    resultName: name,
+  await E(agent).makeUnconfined(['@node'], moduleSpecifier, {
+    resultName: [name],
     env,
   });
 

@@ -4,7 +4,7 @@
 // Local NixOS host-administration caplet.
 //
 // This is an UNCONFINED module (it has Node.js APIs) that the daemon
-// instantiates via `agent.makeUnconfined('@main', <this>, { resultName:
+// instantiates via `agent.makeUnconfined(['@main'], <this>, { resultName:
 // 'controller-for-nixos-admin', env })`. It is the capability that lets a
 // trusted admin agent EDIT and APPLY the host's NixOS configuration without
 // SSH, and a suitable `performer` endowment for deployment workflows.

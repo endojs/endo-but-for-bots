@@ -2137,7 +2137,7 @@ export const resolveSharedWorkspaceHostPath = async (
 ) => {
   try {
     if (!(await E(sessionGuest).has(petName))) return undefined;
-    const workspace = await E(sessionGuest).lookup(petName);
+    const workspace = await E(sessionGuest).lookup([petName]);
     // eslint-disable-next-line no-underscore-dangle
     const methods = await E(workspace).__getMethodNames__();
     if (!methods.includes('worktree')) return undefined;
@@ -2214,7 +2214,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       const providerName =
         env?.FLOOT_CONTAINER_MOUNT_BRIDGE || 'container-mount-bridge';
       if (!(await E(powers).has(providerName))) return undefined;
-      const provider = await E(powers).lookup(providerName);
+      const provider = await E(powers).lookup([providerName]);
       try {
         // Introspect rather than duck-type: a failed CapTP call per method
         // is noise, and a provider without the pair cannot bridge anyway.
@@ -2251,7 +2251,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
         for (const name of [...new Set(configuredBackendNames)]) {
           // eslint-disable-next-line @jessie.js/safe-await-separator
           if (await E(powers).has(name)) {
-            const factory = await E(powers).lookup(name);
+            const factory = await E(powers).lookup([name]);
 
             const descriptor = assertHostedBackendDescriptor(
               await E(factory).describe(),
@@ -2290,7 +2290,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           accountOracleP = undefined;
           return undefined;
         }
-        return E(powers).lookup(accountOracleName);
+        return E(powers).lookup([accountOracleName]);
       })().catch(error => {
         accountOracleP = undefined;
         throw error;
@@ -2309,7 +2309,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const getAssetServer = async () => {
     try {
       if (await E(powers).has(assetServerName)) {
-        const assetServer = await E(powers).lookup(assetServerName);
+        const assetServer = await E(powers).lookup([assetServerName]);
         return assetServer;
       }
     } catch {
@@ -2355,7 +2355,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       getAssetServer,
       getWorkspace: async () => {
         if (await E(sessionGuest).has(workspaceObject.petName)) {
-          return E(sessionGuest).lookup(workspaceObject.petName);
+          return E(sessionGuest).lookup([workspaceObject.petName]);
         }
         return undefined;
       },
@@ -2707,7 +2707,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           .sort();
         if (journalNames.length > 0) {
           const latestName = journalNames.at(-1);
-          const stored = await E(powers).lookup(latestName);
+          const stored = await E(powers).lookup([latestName]);
           if (
             stored?.version !== 1 ||
             !Array.isArray(stored.sessions) ||

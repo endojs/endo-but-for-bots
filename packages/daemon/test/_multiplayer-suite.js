@@ -164,7 +164,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
     });
     const { host } = await makeHost(config, cancelled);
 
-    await E(host).storeValue(network.listenAddr, network.listenAddrName);
+    await E(host).storeValue(network.listenAddr, [network.listenAddrName]);
     const servicePath = path.join(dirname, network.modulePath);
     const serviceLocation = url.pathToFileURL(servicePath).href;
     const networkService = await E(host).makeUnconfined(
@@ -497,7 +497,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
     // network already did so, so reset the name to the ephemeral-port sentinel
     // before minting the guest's network, or it would try to bind the host
     // network's live port (EADDRINUSE).
-    await E(host).storeValue(network.listenAddr, network.listenAddrName);
+    await E(host).storeValue(network.listenAddr, [network.listenAddrName]);
     const servicePath = path.join(dirname, network.modulePath);
     const serviceLocation = url.pathToFileURL(servicePath).href;
     const guestNetwork = await E(host).makeUnconfined(

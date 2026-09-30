@@ -190,7 +190,7 @@ export const make = async (powers, context) => {
   let configuredHostPort;
   try {
     configuredHostPort = /** @type {string} */ (
-      await E(powers).lookup(LISTEN_ADDR_NAME)
+      await E(powers).lookup([LISTEN_ADDR_NAME])
     );
     const listenUrl = new URL(`tcp://${configuredHostPort}`);
     // `URL.hostname` returns an IPv6 literal *bracketed* (`[::1]`);
@@ -286,7 +286,7 @@ export const make = async (powers, context) => {
   // stored value parses through `new URL('tcp://...')` on restart.
   const resolvedHostPort = formatHostPort(host, boundPort);
   if (resolvedHostPort !== configuredHostPort) {
-    await E(powers).storeValue(resolvedHostPort, LISTEN_ADDR_NAME);
+    await E(powers).storeValue(resolvedHostPort, [LISTEN_ADDR_NAME]);
   }
 
   // The connection-hint address embeds both the daemon node id and

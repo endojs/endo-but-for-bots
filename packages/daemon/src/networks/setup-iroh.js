@@ -9,7 +9,7 @@ import { E } from '@endo/eventual-send';
 // The worker resolves this export from the active @endo/daemon package when it
 // revives the network service.
 const irohSpecifier = '@endo/daemon/iroh.js';
-const irohWorker = 'iroh-worker';
+const irohWorker = ['iroh-worker'];
 
 /**
  * Install the iroh network module into the daemon and register it under

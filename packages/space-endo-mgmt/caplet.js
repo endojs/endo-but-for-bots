@@ -4,7 +4,7 @@
 // Hosted-Endo management caplet.
 //
 // This is an UNCONFINED module (it has Node.js APIs) that the daemon
-// instantiates via `host.makeUnconfined('@main', <this>, { resultName:
+// instantiates via `host.makeUnconfined(['@main'], <this>, { resultName:
 // 'controller-for-endo-mgmt', env })`. It is the capability that lets a Chat
 // client update and restart the daemon on a self-hosted server WITHOUT SSH.
 //

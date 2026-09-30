@@ -24,14 +24,14 @@ test('iroh setup stores a stable package specifier', async t => {
   await main(powers);
 
   t.deepEqual(calls, [
-    ['provideWorker', 'iroh-worker'],
+    ['provideWorker', ['iroh-worker']],
     [
       'makeUnconfined',
-      'iroh-worker',
+      ['iroh-worker'],
       '@endo/daemon/iroh.js',
       {
-        powersName: '@agent',
-        resultName: 'network-service-iroh',
+        powersName: ['@agent'],
+        resultName: ['network-service-iroh'],
       },
     ],
     ['move', ['network-service-iroh'], ['@nets', 'iroh']],
