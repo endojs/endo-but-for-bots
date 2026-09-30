@@ -242,6 +242,24 @@ fn positive_integer(value: &Value, name: &str) -> Result<u64, String> {
         .ok_or_else(|| format!("{name} must be a positive u64 integer"))
 }
 
+/// A request names the source to evaluate and may override the crank budget.
+/// A malformed request is the client's mistake, not a VM halt: it is answered
+/// with an error reply and the heap session stays open for the next request.
+fn parse_request(request: &Value, crank_budget: u64) -> Result<(&str, u64), String> {
+    let source = request["source"].as_str().ok_or("source required")?;
+    let budget = if request["budget"].is_null() {
+        crank_budget
+    } else {
+        positive_integer(&request["budget"], "budget")?
+    };
+    Ok((source, budget))
+}
+
+fn reply(stdout: &mut impl Write, message: Value) -> Result<(), String> {
+    writeln!(stdout, "{message}").map_err(|e| e.to_string())?;
+    stdout.flush().map_err(|e| e.to_string())
+}
+
 struct WorkerLimits {
     crank_budget: u64,
     bootstrap_budget: u64,
@@ -327,35 +345,38 @@ fn run() -> Result<(), String> {
     writeln!(stdout, "{}", json!({"op":"ready"})).map_err(|e| e.to_string())?;
     stdout.flush().map_err(|e| e.to_string())?;
     for line in stdin.lock().lines() {
-        let request: Value =
-            serde_json::from_str(&line.map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+        let line = line.map_err(|e| e.to_string())?;
+        let request: Value = match serde_json::from_str(&line) {
+            Ok(request) => request,
+            Err(error) => {
+                reply(
+                    &mut stdout,
+                    json!({"op":"error", "message":error.to_string()}),
+                )?;
+                continue;
+            }
+        };
         if request["op"] == "close" {
             break;
         }
-        let source = request["source"].as_str().ok_or("source required")?;
-        let result = match eval(
-            &mut session,
-            source,
-            if request["budget"].is_null() {
-                limits.crank_budget
-            } else {
-                positive_integer(&request["budget"], "budget")?
-            },
-        ) {
+        let (source, budget) = match parse_request(&request, limits.crank_budget) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                reply(&mut stdout, json!({"op":"error", "message":error}))?;
+                continue;
+            }
+        };
+        let result = match eval(&mut session, source, budget) {
             Ok(result) => result,
             Err(error) => {
-                writeln!(stdout, "{}", json!({"op":"fatal", "message":error}))
-                    .map_err(|e| e.to_string())?;
-                stdout.flush().map_err(|e| e.to_string())?;
+                reply(&mut stdout, json!({"op":"fatal", "message":error}))?;
                 return Err(error);
             }
         };
         // No result or outbound frame escapes a crank that failed to commit.
         checkpoint_to_store(&mut session, &signature, &mut store)
             .map_err(|e| format!("checkpoint: {e:?}"))?;
-        writeln!(stdout, "{}", json!({"op":"result", "result":result}))
-            .map_err(|e| e.to_string())?;
-        stdout.flush().map_err(|e| e.to_string())?;
+        reply(&mut stdout, json!({"op":"result", "result":result}))?;
     }
     drop(session);
     store.close().map_err(|e| format!("close: {e:?}"))?;
@@ -474,6 +495,37 @@ mod tests {
         assert_eq!(limits.bootstrap_budget, u64::MAX);
         assert!(positive_integer(&json!(0), "budget").is_err());
         assert!(positive_integer(&json!("18446744073709551616"), "budget").is_err());
+    }
+
+    #[test]
+    fn malformed_requests_are_answered_rather_than_fatal() {
+        let crank_budget = 42;
+        assert_eq!(
+            parse_request(&json!({"op":"eval","source":"1"}), crank_budget).unwrap(),
+            ("1", crank_budget)
+        );
+        assert_eq!(
+            parse_request(
+                &json!({"op":"eval","source":"1","budget":"9007199254740993"}),
+                crank_budget
+            )
+            .unwrap(),
+            ("1", 9_007_199_254_740_993)
+        );
+        assert_eq!(
+            parse_request(&json!({"op":"eval"}), crank_budget).unwrap_err(),
+            "source required"
+        );
+        assert_eq!(
+            parse_request(&json!({"op":"eval","source":"1","budget":0}), crank_budget).unwrap_err(),
+            "budget must be a positive u64 integer"
+        );
+        let mut out = Vec::new();
+        let error = json!({"op":"error", "message":"budget must be a positive u64 integer"});
+        reply(&mut out, error.clone()).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.ends_with('\n') && !text.trim_end().contains('\n'));
+        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), error);
     }
 
     #[test]

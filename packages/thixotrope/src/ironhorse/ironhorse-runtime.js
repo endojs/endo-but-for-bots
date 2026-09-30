@@ -3,9 +3,18 @@
 /** @import { HashPowers } from '../platform/hashes.js' */
 /** @import { PathPowers } from '../platform/paths.js' */
 /** @import { ChildProcessPowers, ProcessPowers } from '../platform/processes.js' */
+import { q } from '@endo/errors';
 import harden from '@endo/harden';
 
-import { makeIronhorseLimits } from './ironhorse-limits.js';
+import { heapCeilingNames, makeIronhorseLimits } from './ironhorse-limits.js';
+
+/**
+ * @typedef {object} RuntimeIdentity
+ * @property {number} format
+ * @property {string} hostProtocol
+ * @property {string} worker
+ * @property {string[]} bootstrap
+ */
 
 /**
  * @param {HashPowers} hashes
@@ -13,6 +22,91 @@ import { makeIronhorseLimits } from './ironhorse-limits.js';
  */
 export const hashFile = async (hashes, path) => hashes.sha256File(path);
 harden(hashFile);
+
+const incompatible =
+  'Incompatible Ironhorse runtime: worker, bootstrap, or manifest format differs from runtime.json; use the original runtime or migrate to a fresh state directory';
+
+/**
+ * Refuse a persisted manifest this runtime cannot honor, comparing parsed
+ * fields so the key order of runtime.json is irrelevant. A format above the
+ * supported one or a field this runtime does not define means a newer runtime
+ * wrote the manifest; that is reported as such, not as corruption. Returns the
+ * persisted execution limits, validated, so the caller can tell whether the
+ * manifest needs rewriting.
+ * @param {any} saved parsed runtime.json
+ * @param {RuntimeIdentity} identity
+ * @param {Record<string, string | number>} executionLimits
+ * @returns {Record<string, string | number>}
+ */
+const checkSavedManifest = (saved, identity, executionLimits) => {
+  if (typeof saved !== 'object' || saved === null || Array.isArray(saved))
+    throw Error('Invalid Ironhorse runtime.json: expected a manifest object');
+  const {
+    format,
+    hostProtocol,
+    worker,
+    bootstrap,
+    limits: previous,
+    ...unknownFields
+  } = saved;
+  if (typeof format === 'number' && format > identity.format) {
+    throw Error(
+      `Ironhorse runtime.json is from a newer version: manifest format ${format} exceeds supported format ${identity.format}; use that runtime or migrate to a fresh state directory`,
+    );
+  }
+  if (format !== identity.format) throw Error(incompatible);
+  const [unknownField] = Object.keys(unknownFields);
+  if (unknownField !== undefined) {
+    throw Error(
+      `Ironhorse runtime.json is from a newer version: unrecognized manifest field ${q(unknownField)}; use that runtime or migrate to a fresh state directory`,
+    );
+  }
+  if (
+    hostProtocol !== identity.hostProtocol ||
+    worker !== identity.worker ||
+    !Array.isArray(bootstrap) ||
+    bootstrap.length !== identity.bootstrap.length ||
+    !bootstrap.every((digest, index) => digest === identity.bootstrap[index])
+  ) {
+    throw Error(incompatible);
+  }
+  if (typeof previous !== 'object' || previous === null)
+    throw Error('Missing Ironhorse execution limits in runtime.json');
+  const unknownLimit = Object.keys(previous).find(
+    name => !Object.hasOwn(executionLimits, name),
+  );
+  if (unknownLimit !== undefined) {
+    throw Error(
+      `Ironhorse runtime.json is from a newer version: unrecognized execution limit ${q(unknownLimit)}; use that runtime or migrate to a fresh state directory`,
+    );
+  }
+  let normalized;
+  try {
+    normalized = makeIronhorseLimits(previous);
+  } catch (error) {
+    throw Error(
+      `Invalid Ironhorse execution limits in runtime.json: ${/** @type {Error} */ (error).message}`,
+      { cause: error },
+    );
+  }
+  for (const name of Object.keys(executionLimits)) {
+    if (previous[name] !== normalized[name]) {
+      throw Error(
+        `Invalid Ironhorse execution limits in runtime.json: ${name} is missing or not in canonical form`,
+      );
+    }
+  }
+  // Only the heap ceilings are monotonic: a restored arena above a lower
+  // ceiling would refuse every later allocation. Refuse rather than clamp.
+  for (const name of heapCeilingNames) {
+    if (BigInt(executionLimits[name]) < BigInt(previous[name])) {
+      throw Error(
+        `Incompatible Ironhorse runtime: ${name} cannot decrease below persisted value ${previous[name]}; a restored heap may already exceed the lower ceiling`,
+      );
+    }
+  }
+  return previous;
+};
 
 /**
  * Hold a kernel lease and pin the exact executable/bootstrap used for replay.
@@ -109,15 +203,17 @@ export const acquireIronhorseRuntime = async (
     const digests = await Promise.all(
       [workerBinary, ...bootPaths].map(file => hashFile(hashes, file)),
     );
+    /** @type {RuntimeIdentity} */
     const identity = {
       format: 2,
       hostProtocol: 'sequenced-hub-outbox-v1',
       worker: digests[0],
       bootstrap: digests.slice(1),
     };
-    // Execution ceilings may only increase. They do not identify code or the
-    // snapshot format; retaining the profile allows the same heaps to reopen.
-    // The watchdog is operational and can change in either direction.
+    // Execution limits do not identify code or the snapshot format; keeping
+    // them out of the profile lets the same heaps reopen after a change. Only
+    // the heap ceilings are monotonic (see checkSavedManifest). The watchdog
+    // is operational and is not part of the persisted profile at all.
     const { requestTimeoutMs: _timeout, ...executionLimits } = limits;
     const manifest = { ...identity, limits: executionLimits };
     const profile = hashes.sha256Hex(
@@ -131,27 +227,10 @@ export const acquireIronhorseRuntime = async (
       if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
         throw error;
     }
-    if (saved) {
-      const { limits: previous, ...savedIdentity } = saved;
-      if (JSON.stringify(savedIdentity) !== JSON.stringify(identity)) {
-        throw Error(
-          'Incompatible Ironhorse runtime: worker, bootstrap, or manifest format differs from runtime.json; use the original runtime or migrate to a fresh state directory',
-        );
-      }
-      if (!previous)
-        throw Error('Missing Ironhorse execution limits in runtime.json');
-      const { requestTimeoutMs: _previousTimeout, ...normalized } =
-        makeIronhorseLimits(previous);
-      if (JSON.stringify(previous) !== JSON.stringify(normalized))
-        throw Error('Invalid Ironhorse execution limits in runtime.json');
-      for (const name of Object.keys(executionLimits)) {
-        if (BigInt(executionLimits[name]) < BigInt(previous[name])) {
-          throw Error(
-            `Incompatible Ironhorse runtime: ${name} cannot decrease below persisted value ${previous[name]}`,
-          );
-        }
-      }
-    }
+    const previous =
+      saved === undefined
+        ? undefined
+        : checkSavedManifest(saved, identity, executionLimits);
     if (!saved) {
       const entries = await files.listDirectory(statePath);
       const workers = await files
@@ -188,7 +267,13 @@ export const acquireIronhorseRuntime = async (
       if (result.status === 'rejected') throw result.reason;
       return result.value;
     });
-    if (JSON.stringify(saved) !== JSON.stringify(manifest)) {
+    // The identity already matched; rewrite only when a limit changed.
+    if (
+      !previous ||
+      Object.keys(executionLimits).some(
+        name => previous[name] !== executionLimits[name],
+      )
+    ) {
       await files.writeTextAtomic(
         manifestPath,
         `${JSON.stringify(manifest)}\n`,

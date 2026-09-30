@@ -131,8 +131,9 @@ failed execution step or repeatedly replay it into service.
 
 The host pins the worker executable, bootstrap bytes, and protocol profile.
 Execution and heap limits are configurable daemon-wide defaults, reported by `thix status`.
-Runtime manifest version 2 allows increases across restart while rejecting decreases; the request
-watchdog timeout may change in either direction.
+Runtime manifest version 2 refuses a decrease of the slot or chunk ceiling across restart, since a
+restored heap may already exceed a lower ceiling; budgets and the request watchdog timeout may
+change in either direction, and a manifest from a newer version is reported as such.
 The crank meter resets for each evaluation; heap ceilings apply across the vat's lifetime, with
 collection between completed cranks.
 Per-vat overrides remain a follow-up, and raising limits does not clear a vat's failure metadata.
