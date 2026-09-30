@@ -214,7 +214,7 @@ the same compatible edit is no longer refused, and the store resumes as the mach
 describes.
 The probe also confirmed that inspection connections must be closed before the worker takes its
 exclusive SQLite lock.
-These checks demonstrate representation access and existing integrity gates.
+These checks demonstrate representation access and the integrity gates of the time.
 They do not demonstrate a successful code upgrade, safe resealing, preservation of SES invariants,
 or migration of a live Thixotrope session.
 The integer was deliberately distinctive; byte-pattern search is not a general binding locator.
@@ -277,8 +277,8 @@ The host must stop or fence the source at a valid execution boundary and produce
 self-contained staging copy.
 Do not edit a database still open in a worker, an immutable committed sleep image in place, or an
 abandoned live incarnation that the host would never select for recovery.
-The SQLite writer holds an exclusive lock and caches integrity metadata; runtime edits are not a
-supported synchronization mechanism.
+The SQLite writer holds an exclusive lock and trusts the state it last committed; runtime edits are
+not a supported synchronization mechanism.
 
 The host should bind a patch to the source snapshot digest, runtime profile, journal cut, and hub
 revision, and show a typed before/after diff and affected identities/continuations.
@@ -419,7 +419,7 @@ First measure on-demand decoding and a disposable patch database built once per 
 If measurements justify normalizing selected runtime state, function/code versions and continuations
 are useful candidates because explicit links help validate upgrades and shared-code effects.
 Any move from `small_state` BLOB sections to authoritative rows needs a versioned format migration,
-updated integrity coverage, and an unambiguous reader/writer contract.
+updated validator coverage, and an unambiguous reader/writer contract.
 Do not retain two authoritative encodings during a transition without a checked consistency rule.
 Physical normalization alone does not provide stable source-level names or make arbitrary code edits
 safe.

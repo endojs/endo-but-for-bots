@@ -10,8 +10,9 @@ thixotrope-ironhorse-worker heap.sqlite PROFILE_DIGEST ACTIVE_LEASE_PATH boot.js
 ```
 
 For a fresh file, the runner evaluates trusted boot files and commits before
-printing `{"op":"ready"}`. For an existing file, it validates and restores the
-heap, reinstalls the source compiler and meter, and prints the same ready record.
+printing `{"op":"ready"}`. For an existing file, it migrates the heap to the
+current store schema if needed, restores it, reinstalls the source compiler and
+meter, and prints the same ready record.
 The worker binary and bootstrap must match the stored image's engine profile.
 
 Stdin and stdout carry NDJSON. An eval request has `op: "eval"`, `source`, and an

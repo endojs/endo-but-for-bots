@@ -226,7 +226,11 @@ fn supervise_lock(state: &str) -> Result<(), String> {
 
 /// Open the worker's heap. A new heap starts a session on a fresh machine;
 /// an existing one is first upgraded in place to the current store schema,
-/// as the daemon's opener does, since resume refuses an older schema.
+/// as the daemon's opener does, since resume refuses an older schema. The
+/// thixotrope host never hands a rebuilt worker an older heap (its runtime
+/// profile covers the worker binary's hash, so the signature gate refuses
+/// such a heap here as it would at resume); the upgrade serves a worker run
+/// directly under an unchanged profile.
 fn open_heap(
     path: &str,
     signature: &Signature,
