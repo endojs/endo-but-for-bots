@@ -2,8 +2,8 @@
 '@endo/daemon': major
 '@endo/cli': patch
 '@endo/lal': patch
-'@endo/sandbox': minor
-'@endo/agentry': minor
+'@endo/sandbox': major
+'@endo/agentry': major
 '@endo/agent-tools': patch
 '@endo/platform': patch
 '@endo/chat': patch
@@ -23,6 +23,7 @@
 '@endo/space-file-explorer': patch
 '@endo/space-inventory-graph': patch
 '@endo/space-nixos-admin': patch
+'@endo/space-whylip': patch
 '@endo/spaces-util': patch
 '@endo/workflow': patch
 ---
