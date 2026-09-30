@@ -931,34 +931,34 @@ impl HostReplay {
                 return Err(ReplayStop::BrokenHandle(h));
             }
         }
-        let Some(rec) = queue.pop_front() else {
+        let Some(record) = queue.pop_front() else {
             return Err(ReplayStop::Mismatch {
                 crank,
                 detail: format!("unrecorded host call to {callback}"),
             });
         };
-        if rec.callback != callback || rec.handle != handle || rec.request != request {
+        if record.callback != callback || record.handle != handle || record.request != request {
             return Err(ReplayStop::Mismatch {
                 crank,
                 detail: format!(
                     "recorded {}({:?}) at seq {}, replayed {callback}({handle:?})",
-                    rec.callback, rec.handle, rec.seq
+                    record.callback, record.handle, record.seq
                 ),
             });
         }
-        if rec.class == "barrier" && !rec.cleared {
+        if record.class == "barrier" && !record.cleared {
             return Err(ReplayStop::Barrier {
                 crank,
-                seq: rec.seq,
-                callback: rec.callback,
+                seq: record.seq,
+                callback: record.callback,
             });
         }
-        if rec.class == "outbound" {
+        if record.class == "outbound" {
             return Ok(HostReply::Deferred);
         }
         Ok(HostReply::Reply {
-            reply: rec.reply.unwrap_or_default(),
-            opened: rec.opened,
+            reply: record.reply.unwrap_or_default(),
+            opened: record.opened,
         })
     }
 
