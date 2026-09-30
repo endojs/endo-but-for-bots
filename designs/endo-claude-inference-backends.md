@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-09-28 |
 | **Author** | kriscendobot (prompted) |
-| **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214), then reconciled with [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) per design-panel review, and split admission, delivery, classification, and prompt origin per panel round 3) |
+| **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214), then reconciled with [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) per design-panel review, split admission, delivery, classification, and prompt origin per panel round 3, then gated prompt origin and the root canary per panel round 4) |
 | **Status** | Draft, awaiting production evidence |
 | **Source** | Back-filled from the minion.town Claude CLI and Agent SDK experiments (kriscendobot/minion.town#105, kriscendobot/minion.town#106) and the production observations listed in § Evidence |
 
@@ -40,7 +40,8 @@ read facet and the replace-or-revoke facet of one credential record in the
 
 **Revision of 2026-09-29.** The maintainer's
 [review](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214)
-answered the four open questions. This revision records those answers:
+answered the four open questions (restated in § Resolved Questions). This
+revision records those answers:
 
 - The deployed root user runs on kriscendobot's subscription
   ([Decision 5](#design-decisions), on where credentials live and how they
@@ -48,10 +49,11 @@ answered the four open questions. This revision records those answers:
 - Multiple subscriptions are a hard requirement: the garden holds several, and
   guests must be able to bring their own subscription or API key. Credentials
   are stored in and delivered from the daemon secret manager
-  ([daemon-secret-manager](daemon-secret-manager.md)), and the OS slice is
-  required for multi-principal use, and for any guest-influenced prompt, for
-  the reason given in [Decision 9](#design-decisions) (on OS containment),
-  which is not Claude Code's on-disk credential store.
+  ([daemon-secret-manager](daemon-secret-manager.md)). The OS slice is
+  required for multi-principal use and for any guest-influenced prompt. The
+  reason is cross-principal containment, given in
+  [Decision 9](#design-decisions) (on OS containment); Claude Code's on-disk
+  credential store is not the reason.
 - The seam is a provider-neutral `@endo/inference`. "Claude" names only
   Anthropic's Claude Code and models in this document, never Codex or any other
   provider ([Decisions 1 and 2](#design-decisions), on package layout).
@@ -206,12 +208,12 @@ same binary with the same flags. They differ in two ways that matter:
 
 So "which works better in practice" has no production answer yet. The
 engineering answer is that **the choice does not constrain Endo**: Endo should
-own the boundary both satisfy and ship both backends behind it, and the first
+own the boundary that both backends satisfy and ship both of them behind it, and the first
 production canary decides the default.
 
 ## The Inference Seam (`@endo/inference`)
 
-Four prototypes (Claude CLI, Claude Agent SDK, OpenAI Responses, Codex
+Four prototypes (Claude CLI, Claude Agent SDK, OpenAI Responses, and Codex
 subscription) implemented one seam without changing its core. Two providers
 already sit behind it, so the seam belongs to no provider. It is the part of
 these experiments ready to solidify in Endo, as a small package,
@@ -240,19 +242,20 @@ these experiments ready to solidify in Endo, as a small package,
    and returns a backend that satisfies the same interface, acting only on the
    request and the classified result. There are two: the prompt-origin gate
    (Decision 9, on OS containment), which refuses a guest-influenced request
-   before it reaches an unsliced backend, and the usage recorder (Decision 8),
+   with `needs-containment` before it reaches an unsliced backend, and the usage recorder (Decision 8),
    which turns each result into one usage record and hands it to the
    deployment's usage sink. Admission is not an enricher; it belongs to the
    credential source (Decision 7).
 
 Each job has one owner. Admission policy (may this turn run?) is the broker's
-and reaches the plugin as a refused `acquire()`. Credential delivery (what
-bytes the process sees) is the `CredentialSource`'s. Outcome classification is
-the plugin's, through the classifier library. The durable usage record is the
-sink's.
+and reaches the plugin as a refused `acquire()` carrying an admission reason,
+not a finished `InferResult`. Credential delivery (what bytes the process sees)
+is the `CredentialSource`'s. Outcome classification is the plugin's alone: it
+maps an admission refusal to an `InferResult` tag, and a raw provider response
+through the classifier library. The durable usage record is the sink's.
 
 `describe()` reports the provider (`anthropic`, `openai`, and so on) and the
-backend kind (`claude-cli`, `claude-sdk`, `codex-app-server`) separately, so a
+backend kind (`claude-cli`, `claude-sdk`, or `codex-app-server`) separately, so a
 record never conflates the vendor with the harness.
 
 ```ts
@@ -263,7 +266,9 @@ interface InferenceBackend {
 
 interface InferRequest {
   prompt: string;
-  promptOrigin: 'root-authored' | 'guest-influenced'; // set by the caller; Decision 9
+  // Set by the caller (Decision 9). Statically required, yet the prompt-origin
+  // gate still fails closed at run time on a missing or unknown value.
+  promptOrigin: 'root-authored' | 'guest-influenced';
   guest: GuestToolProjection;
   limits: InferLimits;
   model?: string;
@@ -274,8 +279,14 @@ interface CredentialSource {
   // One acquire per turn. Refusal is admission; a grant is delivery.
   acquire(): Promise<
     | { type: 'granted'; env: Record<string, string>; release(): void }
-    | { type: 'refused'; result: InferResult } // rate-limited, usage-exhausted, or limit-exceeded: budget
+    | { type: 'refused'; admission: AdmissionRefusal }
   >;
+}
+
+interface AdmissionRefusal {
+  // Policy: why this turn may not run. The plugin maps it to an InferResult.
+  reason: 'rate-limited' | 'usage-exhausted' | 'budget';
+  retryAfterMs?: number;
 }
 
 interface GuestToolProjection {
@@ -297,6 +308,7 @@ type InferResult =
   | { type: 'rate-limited'; retryAfterMs?: number }
   | { type: 'limit-exceeded'; which: 'wall-clock' | 'output-bytes' | 'max-turns' | 'budget' }
   | { type: 'cancelled' }
+  | { type: 'needs-containment' }
   | { type: 'unavailable'; reason: string };
 ```
 
@@ -320,7 +332,15 @@ why:
   `unavailable`, never `needs-auth`, so a CLI upgrade that changes the error wire
   cannot trigger a false reauthentication storm.
 - `budget` joins `limit-exceeded` from the Codex API-key track (#115), where a
-  broker refuses a lease before any request.
+  broker refuses a lease before any request. The broker does not write that
+  tag: it refuses with an `AdmissionRefusal` whose reason is `budget`, and the
+  plugin maps `rate-limited`, `usage-exhausted`, and `budget` to the
+  same-named `InferResult` tags (the last as `limit-exceeded: budget`). The
+  plugin stays the only classifier.
+- `needs-containment` is a policy refusal, not a fault: the prompt-origin gate
+  (Decision 9) returns it for a guest-influenced or unlabeled request sent to
+  an unsliced backend. It is a separate tag because the factory routes on it
+  (to its sliced backend), and no caller branches on `unavailable.reason`.
 - Every "come back later" tag spells its timing the same way: an optional
   `retryAfterMs`, relative to classification time. `usage-exhausted` and
   `limit-exceeded: budget` carry it when the broker or provider knows the
@@ -342,8 +362,8 @@ over one already-resolved facet, and that closure is the only authority. The
 formula identifier rides along as an audit and telemetry join key that the host
 sets. It is never accepted from the prompt, never used to look anything up
 during a turn, and never forwarded to the provider. It is reachable from
-`infer`'s parameter (on `request.guest`) only so the usage recorder can write
-it; the plugin must not put it in the provider request. Re-resolving it per tool
+`infer`'s parameter (on `request.guest`) for one purpose, so that the usage
+recorder can write it; the plugin must not put it in the provider request. Re-resolving it per tool
 call (Track B option B) buys nothing capability-safe and costs a daemon round
 trip per call.
 
@@ -381,8 +401,8 @@ instance's credential source.
 | Projection -> backend | `buildMcpServer()` | None; the backend may not widen the catalog | None | Caller of `infer` | An `McpServer` and its pinned tool names |
 | Provider plugin -> provider process (for the Claude backends, the Claude Code binary) | CLI argv or SDK options; constructed env; pinned binary; limit enforcer and classifier libraries | Confinement recipe (Decision 3) | A per-turn scratch config dir and `HOME`, deleted after the turn | Plugin (spawns, limits, kills, classifies) | Prompt on stdin; the `env` a granted `acquire()` returned; nothing else |
 | Secret manager -> credential source | `SecretBlob` read facet held by the broker (or by the local credential source in the interim delivery) | None in the store; the store does not interpret bytes | The credential bytes, generation, and audit trail ([daemon-secret-manager](daemon-secret-manager.md)) | Holder of the `SecretAdmin` (replace, revoke) | Credential bytes, read fresh per lease, never persisted elsewhere |
-| Plugin -> credential source (broker, or local source in the interim) | `acquire()` / `release()` | Admission: one inference slot per credential, budget | Lease ledger | Broker (or #87's slot lease in the interim) | A grant (an `env`: lease token and loopback endpoint, or the interim credential) or a refusal already shaped as an `InferResult` |
-| Usage recorder -> usage sink | Enricher hands each result's record to the sink | None | Usage records | The sink: the broker's ledger in production, the evaluation harness's store in a comparison run | One usage record per turn |
+| Plugin -> credential source (broker, or local source in the interim) | `acquire()` / `release()` | Admission: one inference slot per credential, budget | Lease ledger | Broker (or #87's slot lease in the interim) | A grant (an `env`: lease token and loopback endpoint, or the interim credential) or an `AdmissionRefusal` (reason and optional retry time) |
+| Usage recorder -> usage sink | Enricher hands each result's record to the sink; the deployment configures each recorder, at construction, with its backend's credential record identifier | None | Usage records | The sink: the broker's ledger in production, the evaluation harness's store in a comparison run | One usage record per turn |
 | Factory -> backend | `infer(request)` | Which agent may infer, and how often; which credential's backend it holds | Retained-child ledger | Factory | An `InferRequest`; an `InferResult` back |
 
 The four ownership questions, per the repository's ownership-map convention
@@ -400,8 +420,11 @@ for designs that span several owners:
 - **Restart and replay:** no turn is replayed. A crashed turn surfaces as
   `unavailable`; the caller decides whether to issue a new `infer`. The broker
   expires an orphaned lease.
-- **Execution classification:** the plugin classifies a turn's outcome into
-  `InferResult`, calling the classifier library on the raw provider response. It returns an *inference* result, not a crank or agent-step
+- **Execution classification:** the plugin alone classifies a turn's outcome
+  into `InferResult`, mapping an admission refusal itself and calling the
+  classifier library on the raw provider response. The broker answers only the
+  admission question; the prompt-origin gate answers only the containment
+  question, with its own `needs-containment` tag. It returns an *inference* result, not a crank or agent-step
   result. Naming check: nothing in the backend is named for a factory or daemon
   lifecycle concept, and nothing in `@endo/inference` is named for a provider.
 
@@ -465,6 +488,10 @@ for designs that span several owners:
    the deployed root user uses kriscendobot's subscription credential, delivered
    under the `--bare` recipe. The earlier recommendation, to drop subscription
    use from confined inference and move minion.town to an API key, is withdrawn.
+   The evidence for this path is narrow: the one `--bare` run that
+   authenticated used a short-lived OAuth access token, and the long-lived
+   `setup-token` this decision stores has not yet run through `--bare` (gate 1
+   checks it before production use; Phase 3).
    The mechanism is the same for every credential kind, so a subscription and an
    API key differ only in the bytes stored and the header they travel in:
 
@@ -572,9 +599,10 @@ for designs that span several owners:
    Gap 2 found no per-principal serialization. #87 built the single
    inference-slot lease (atomic acquire, expiry as free, sweep). **Settled:**
    the plugin calls its `CredentialSource.acquire()` before spawning and
-   releases the grant on every terminal result; a refusal is `rate-limited`,
-   `usage-exhausted`, or `limit-exceeded: budget` before any process starts,
-   and the plugin returns it unchanged. The policy lives in the broker (or in
+   releases the grant on every terminal result. A refusal is an
+   `AdmissionRefusal` (`rate-limited`, `usage-exhausted`, or `budget`) delivered
+   before any process starts, and the plugin maps it to the matching
+   `InferResult` tag. The policy lives in the broker (or in
    #87's slot lease during the interim delivery), so it is written once, not
    once per provider; the plugin only calls `acquire()`. The slot is per
    credential, so several subscriptions run concurrently and one subscription
@@ -584,18 +612,30 @@ for designs that span several owners:
    turn but could not hand the grant's `env` inward, and splitting the two
    would give the lease two owners.
 
-8. **Telemetry is a usage record the broker persists, not a wider `InferResult`.**
-   Track B's Gap 4 wanted comparison data. `ok` carries an optional `usage`
-   (tokens, turns, duration). The comparison record (run id, provider, backend
-   kind, CLI version, credential record identifier, prompt origin, latency,
-   turns, bytes, failure tag, cost estimate, verified effect) is produced by the
-   usage-recorder enricher and written by exactly one usage sink per
-   deployment: the broker's ledger in production, or the evaluation harness's
-   store in a comparison run. Nothing else writes the record; the broker and
-   the harness never both hold the sink for one deployment. `@endo/inference`
-   defines the record's fields so every backend, of every provider, emits the
-   same thing. The credential
-   record identifier is the secret manager's `secretId`, never the bytes.
+8. **Telemetry is a usage record the deployment's one usage sink persists, not
+   a wider `InferResult`.** Track B's Gap 4 wanted comparison data. `ok` carries
+   an optional `usage` (tokens, turns, and duration). `@endo/inference` defines
+   the record's fields so every backend, of every provider, emits the same
+   thing, and each field has one producer:
+
+   - **The usage-recorder enricher**, from what it sees: provider, backend
+     kind, and CLI version (from the wrapped backend's `describe()`); prompt
+     origin and formula identifier (from the request); latency (timed around
+     `infer`); and turns, bytes, and failure tag (from the classified result).
+   - **The deployment, at construction.** The credential record identifier is
+     the secret manager's `secretId`, never the bytes. The recorder cannot see
+     inside the `CredentialSource`, so the deployment, which makes one backend
+     per credential (§ One backend instance per credential), passes that
+     backend's `secretId` to the recorder that wraps it. No runtime channel
+     from the credential source to the recorder exists.
+   - **The sink**, when it writes the record: the run id and the cost estimate.
+   - **The evaluation harness**, in a comparison run only: the verified effect,
+     from its independent reader, joined onto the record by run id.
+
+   Exactly one sink is configured per deployment: the broker's ledger in
+   production, or the evaluation harness's store in a comparison run. Nothing
+   else writes the record, and the broker and the harness never both hold the
+   sink for one deployment.
 
 9. **OS containment is required for multi-principal inference and for any
    guest-influenced prompt; Claude Code's credential store does not require
@@ -636,10 +676,10 @@ for designs that span several owners:
    [endo-claude](endo-claude.md) Design Decision 6 reads: the slice is
    "required, not merely recommended, for any guest-influenced prompt." That
    condition is about the prompt, not the credential, and this design keeps it
-   in full. A root-credentialed turn whose prompt carries text from a guest (an
-   inbox message the inbox-watch driver of kriscendobot/minion.town#120 turns
-   into a prompt, a request a guest delegated to the factory) is
-   guest-influenced, and the root's credential paying for it does not change
+   in full. A root-credentialed turn whose prompt carries text from a guest
+   (for example, an inbox message that the inbox-watch driver of
+   kriscendobot/minion.town#120 turns into a prompt, or a request that a guest
+   delegated to the factory) is guest-influenced, and the root's credential paying for it does not change
    that. **Settled:**
 
    - Any turn driven by a principal other than the deployment's root, any turn
@@ -661,10 +701,24 @@ for designs that span several owners:
      root operator wrote or a root-owned program generated from no guest
      input; anything that includes a guest's message, argument, or tool result
      is `guest-influenced`. An unsliced backend is always wrapped in the
-     prompt-origin gate enricher, which returns `unavailable` (reason
-     `guest-influenced prompt needs the slice`) for a `guest-influenced` or
-     missing origin, so the fail-closed default is the slice. The factory holds
-     a sliced backend for guest-influenced work; phase 6 is when one exists.
+     prompt-origin gate enricher, which returns `needs-containment` for a
+     `guest-influenced`, missing, or unknown origin, so the fail-closed default
+     is the slice. The factory routes a `needs-containment` result to a sliced
+     backend; phase 6 is when one exists.
+   - **The label is self-asserted, so it is a gated premise.** This design
+     holds elsewhere that a label is not authority (§ The facet is the
+     authority), yet here `promptOrigin` decides whether OS containment is
+     skipped. No structural mechanism, such as taint tracking, checks that a
+     `root-authored` request holds no guest-derived text; one mislabeled
+     request runs a guest's text with no slice and full host network reach.
+     Two things bound that premise. First, gate 8 exercises the real code
+     paths that set the label, end to end through the factory, not only the
+     gate that reads it. Second, until gate 8 passes on every call path that
+     can produce `root-authored`, the unsliced root backend serves only the
+     root operator's own direct prompts, and the factory labels anything it
+     assembles from a delegated request, message, argument, or tool result
+     `guest-influenced` without further analysis. § Known Gaps and TODOs
+     tracks the absence of a structural check.
    - Guest bring-your-own-credential, and any guest-influenced prompt, are
      therefore gated on the slice (phase 6), not merely on the secret store.
 
@@ -690,8 +744,10 @@ for designs that span several owners:
 
 Nothing below has run yet. Each gate moves a "documented" row in
 § Observed versus documented to "observed". Gates 1–4 block recommending either
-Claude backend as a production authority boundary; gates 6 and 7 block the
-broker's subscription mode and guest bring-your-own-credential.
+Claude backend as a production authority boundary, and gate 1's accounting check
+blocks the root user's subscription deployment (Phase 3); gates 6 and 7 block the
+broker's subscription mode and guest bring-your-own-credential; gate 8 blocks
+serving any factory-assembled prompt on an unsliced backend (Decision 9).
 
 1. **Live positive, real daemon guest.** With the production credential kind, one
    turn on each backend causes a write through an allowlisted live daemon guest,
@@ -706,8 +762,8 @@ broker's subscription mode and guest bring-your-own-credential.
    all planted, and none reaches the model or fires. A sibling guest's tool name
    and another principal's formula identifier, named in the prompt, are
    unreachable. A `guest-influenced` request, or one with no `promptOrigin`,
-   sent to an unsliced backend is refused by the prompt-origin gate before any
-   process starts.
+   sent to an unsliced backend is refused by the prompt-origin gate with
+   `needs-containment` before any process starts.
 3. **Pinned failure shapes.** One deliberately invalid credential, one exhausted
    budget or subscription window, one rate-limited response, and one turn that
    produces no response at all are captured per pinned CLI version and recorded
@@ -736,6 +792,13 @@ broker's subscription mode and guest bring-your-own-credential.
    own credential, a refused lease on one does not block the other, and, in the
    slice, neither turn's process can read the other's environment, config
    directory, or listener.
+8. **Prompt origin, end to end.** For every factory call path that can set
+   `root-authored`, a real guest-influenced input (an inbox message through the
+   inbox-watch driver, a guest's delegated request, a guest-supplied argument,
+   and a tool result carrying guest text) is threaded through the factory, and
+   the request is observed to arrive at `infer` labeled `guest-influenced` and
+   to be refused with `needs-containment` by the unsliced backend. Gate 2 tests
+   only the enforcement point; this gate tests the code that sets the label.
 
 ### Evidence probe
 
@@ -748,8 +811,8 @@ Claude backend running confined `--bare` turns with credentials from the secret
 store, at least two distinct credentials, deployed to minion.town or an
 equivalent live host, recording turn counts, timings, failures, CLI version, and
 which gates above pass. Its draft pull request carries the gap report and will
-be linked here once it exists. Pull request: *pending* (the probe job has not
-opened it as of this revision).
+be linked here once it exists. Pull request:
+[#1369](https://github.com/endojs/endo-but-for-bots/pull/1369) (draft).
 
 ## Dependencies
 
@@ -781,13 +844,18 @@ opened it as of this revision).
    `makeClaudeSdkBackend` (in-process projection), each made over one credential
    source. Port from #105/#106 rather than from #1015 where they differ. The
    Codex plugins port to the same seam in their own package.
-3. **Credentials on the secret store.** minion.town's credential store and
-   `setup-token` capture move onto `@secrets`; the root user's backend runs on
-   kriscendobot's subscription with the interim delivery, wrapped in the
-   prompt-origin gate so it serves root-authored prompts only.
-4. **Evidence.** The probe job's build and deployment, then gates 1–4 on a
-   canary, then gate 5, then pick the default Claude backend and update this
-   document's Status with the measured comparison.
+3. **Credentials on the secret store, and the root canary.** minion.town's
+   credential store and `setup-token` capture move onto `@secrets`. The root
+   user's backend first runs on kriscendobot's subscription with the interim
+   delivery only as a canary, wrapped in the prompt-origin gate so it serves
+   root-authored prompts only, and gate 1 runs on it, including the check of
+   whether the stored `setup-token`'s usage lands against the subscription's
+   limits or as per-token billing. The root backend serves production traffic
+   only after gate 1 passes; if usage lands as per-token billing, the
+   deployment stops and the maintainer decides before it proceeds.
+4. **Evidence.** The probe job's build and deployment, then gates 2–4 and
+   gate 8 on the canary, then gate 5, then pick the default Claude backend and
+   update this document's Status with the measured comparison.
 5. **Broker delivery.** Claude as an `@endo/hosted-agent` provider: a loopback
    listener injecting the credential per lease, API key first, then the
    subscription mode only once gate 6 passes and the `SUBSCRIPTION-AUTH.md`
@@ -844,6 +912,10 @@ opened it as of this revision).
       subscription is gated on this as well as on gate 6.
 - [ ] The `@endo/claude-sandbox` exception is due for review on 2026-12-08; this
       design supplies the retirement path, and the review should cite gate 6.
+- [ ] `InferRequest.promptOrigin` is self-asserted by the caller and has no
+      structural check (no taint tracking). Gate 8 tests the factory's call
+      paths that set it, but a new call path is unverified until gate 8 is
+      extended to it (Decision 9).
 - [ ] The secret manager's owning-principal column, needed before guests'
       credentials are partitioned from the operator's catalog.
 
