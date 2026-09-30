@@ -24,7 +24,39 @@ Older dated design/audit paragraphs are evidence of earlier states, not reliable
 descriptions of today's source. This summary takes precedence for current status;
 the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
-## Status validation, 2026-09-25
+## Current work, 2026-09-30
+
+Tokyo is on generation 183, pre-change application `984e8c78b`.
+Generation 182 passed the complete acceptance run, but that historical pass does
+not certify generation 183's rebuilt Claude and Codex images.
+Their restart recall failed, and both pins remain candidates.
+RA-05 is therefore open for the current release, despite its historical completion
+label in the table below.
+
+The next implementation keeps journal and inbox revival passive with respect to
+native runtime acquisition.
+An actual UI or mail turn acquires the hosted client; explicit create, resume,
+policy change and rebind still provision immediately and report their failures.
+History and usage reads must not create a native sandbox.
+The acquisition must retain cancellation and cleanup ownership, forward the last
+acknowledged checkpoint, and resolve the current backend binding without changing
+the incarnation's context contract.
+This is an incarnation-local timing change, not a new durable owner or storage
+format, and does not implement the process-loss research in #1323.
+Implementation and independent adversarial review are complete; not yet deployed.
+The Floot suite passes 732 tests; four real-daemon lifecycle/native-context tests
+pass, including cold restart and late native acquisition.
+Package lint reports no errors (278 warnings), and the root documentation gate
+passes. No current-release Tokyo restoration result is claimed.
+
+Next gates: deploy the change, repeat restart recall on all
+four backends, then update the image ledger only from the new results.
+RA-01 simplification justification and RA-04's remaining conformance coverage stay
+open; RA-03 is implemented, and direct-Fae compaction remains on hold.
+The older chronological entries and final sequence below are historical evidence,
+not the current work queue.
+
+## Status validation, 2026-09-25 (with subsequent deployment evidence)
 
 Revalidated against the plan at `4caded3fc` (deployed code `adf25f948`, Tokyo
 generation 180, host `688f5e3`), with the live acceptance recorded in

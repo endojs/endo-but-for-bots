@@ -26,9 +26,12 @@ const until = async predicate => {
  * error.
  *
  * @param {import('ava').ExecutionContext} t
- * @param {{ executionState?: string, lifecycle?: string }} [options]
+ * @param {{ executionState?: string, lifecycle?: string, dormant?: boolean }} [options]
  */
-const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
+const makeWorld = async (
+  t,
+  { executionState, lifecycle = 'ready', dormant = false } = {},
+) => {
   t.timeout(5000);
   const inboxes = [];
   const streams = [];
@@ -255,6 +258,9 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
   const session = await E(factory).getSession('one');
   await E(session).getTurns();
   if (!executionState) await until(() => inboxes.length > 0);
+  // Native-ownership tests opt into a runtime through an explicit operator
+  // operation. Revival and journal observation alone no longer acquire one.
+  if (!executionState && !dormant) await E(session).setNetworkPolicy('off');
   return {
     session,
     factory,
@@ -325,6 +331,22 @@ const makeWorld = async (t, { executionState, lifecycle = 'ready' } = {}) => {
     },
   };
 };
+
+test('ready session revival and observation stay dormant until a turn arrives', async t => {
+  const world = await makeWorld(t, { dormant: true });
+  await E(world.session).getHistory();
+  await E(world.session).getTurns();
+  await E(world.session).getUsage();
+  await E(world.session).getNetworkPolicy();
+  t.is(world.creates.length, 0);
+  t.is(world.sends.length, 0);
+  t.true(world.inboxes.length > 0, 'mail delivery remains available');
+  world.mail();
+  await until(() => world.dismissed.includes(1n));
+  t.is(world.creates.length, 1);
+  t.deepEqual(world.sends, [1]);
+  t.is(world.replies.length, 1);
+});
 
 test('emergency stop fences active turns, waits for cleanup, and requires explicit resume', async t => {
   const world = await makeWorld(t);
@@ -669,7 +691,7 @@ test('disposal retries termination after late acquisition and failed setup rollb
   await t.throwsAsync(E(world.factory).listSessions(), { message: /closed/ });
   release.resolve(undefined);
   await t.throwsAsync(resumed, {
-    message: /setup and hosted-backend rollback failed/,
+    message: /Hosted runtime acquisition and rollback failed/,
   });
   await t.throwsAsync(disposed, { message: /Floot factory disposal failed/ });
   t.true(world.events.filter(event => event === 'terminate:1').length >= 3);
@@ -698,7 +720,7 @@ test('admitted deletion retries classified setup cleanup but preserves journal o
   await t.throwsAsync(E(world.factory).listSessions(), { message: /closed/ });
   release.resolve(undefined);
   await t.throwsAsync(resumed, {
-    message: /setup and hosted-backend rollback failed/,
+    message: /Hosted runtime acquisition and rollback failed/,
   });
   const deletionError = await t.throwsAsync(deleted, {
     instanceOf: AggregateError,
@@ -756,7 +778,7 @@ test('emergency stop fences resume and reaps its late acquisition before complet
     message: /stopped or stopping/,
   });
   release();
-  await resumed;
+  await t.throwsAsync(resumed, { message: /shutting down/ });
   t.is((await stopped).state, 'stopped');
   t.is(world.creates.length, 1);
   t.is(world.sends.length, 0);
@@ -1185,6 +1207,10 @@ test('a rebind the backend refuses leaves no authorization behind for a later re
   // no request been built.
   const turn = await E(world.session).startTurn('hello');
   await E(turn).whenFinished();
+  t.truthy((await E(turn).getStatus()).error);
+  t.is(world.creates.length, 2, 'failed acquisition stays fenced');
+  await E(world.session).emergencyStop();
+  await E(world.session).resume();
   t.is(world.creates.length, 3);
   t.false('rebind' in world.creates[2]);
 });

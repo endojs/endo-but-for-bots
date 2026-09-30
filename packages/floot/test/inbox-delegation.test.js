@@ -18,6 +18,53 @@ const HOST = 'd'.repeat(64);
 /** @param {string} number */
 const locatorFor = number => `endo://${NODE}/${number}?type=handle`;
 
+test('first inbox message starts a dormant hosted backend', async t => {
+  t.timeout(5000);
+  const mailbox = makeLiveMailbox();
+  let acquisitions = 0;
+  let sends = 0;
+  const agent = await makeStreamingAgent(
+    mailbox.powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: () => {
+        acquisitions += 1;
+        return harden({
+          async send(text) {
+            sends += 1;
+            t.regex(text, /hello dormant agent/);
+            const channel = makeBufferedReader();
+            channel.push({ type: 'text-delta', text: 'Awake.' });
+            channel.push({ type: 'end' });
+            return channel.reader;
+          },
+        });
+      },
+    },
+    'test prompt',
+    { journalPowers: mailbox.powers },
+  );
+  t.teardown(async () => {
+    mailbox.close();
+    await agent.shutdown();
+  });
+  t.is(acquisitions, 0);
+  agent.startInbox();
+  mailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['hello dormant agent'],
+  });
+  t.true(
+    await until(() =>
+      mailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+  );
+  t.is(acquisitions, 1);
+  t.is(sends, 1);
+  t.is((await agent.getTurns())[0].state, 'completed');
+});
+
 /**
  * Guest powers with a *live* mailbox: the stream stays open, and every send is
  * echoed into it the way the daemon publishes a guest's own outbound mail to
