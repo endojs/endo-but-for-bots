@@ -54,11 +54,13 @@ first message.
      2), so anyone who has seen a genuine SYN can replay it.
      A replay never becomes a session, because it cannot produce the
      channel-bound `op:start-session` below.
-     To keep a replay from disturbing the peer it names, the responder
-     does no per-peer bookkeeping — displacing an unclaimed session,
-     counting the peer's in-flight handshakes — until `op:start-session`
-     verifies; before that, the only bound is a cap on concurrent
-     inbound handshakes per local (responder) identity.
+     Displacing the named peer's existing (unclaimed) session is deferred
+     until `op:start-session` verifies, so a replay cannot close it.
+     A replay can still occupy a crossed-hello settlement slot for the
+     peer until its handshake times out — that slot is needed so two
+     genuine simultaneous dials converge on one session — but the total
+     pre-`op:start-session` work is bounded by a cap on concurrent inbound
+     handshakes per local (responder) identity.
 
 2. **SYNACK (responder to initiator)**:
    - **Noise IK message 2**: responder ephemeral, encrypted payload
