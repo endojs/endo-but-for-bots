@@ -2,10 +2,21 @@
 import '@endo/init';
 import test from 'ava';
 // Test the standalone image helper without adding it to the runtime API.
-import {
-  makeCodexNativeContextSelector,
-  selectCodexNativeContext,
-} from '../oci/native-context.mjs'; // eslint-disable-line import/no-relative-packages
+import { makeCodexNativeContextSelector } from '../oci/native-context.mjs'; // eslint-disable-line import/no-relative-packages
+
+/**
+ * Feed whole-string fixtures through the production incremental selector.
+ * @param {string} jsonl
+ * @param {Parameters<typeof makeCodexNativeContextSelector>[0]} expected
+ */
+const selectCodexNativeContext = (jsonl, expected) => {
+  if (typeof jsonl !== 'string' || !jsonl.endsWith('\n')) {
+    throw Error('Invalid Codex native capture');
+  }
+  const selector = makeCodexNativeContextSelector(expected);
+  for (const line of jsonl.slice(0, -1).split('\n')) selector.accept(line);
+  return selector.finish();
+};
 
 const sessionId = '01a0d26e-d933-71c1-a255-d6f7c2e256f0';
 const first = '01a0d26e-d945-7253-afcf-857ec39f0136';

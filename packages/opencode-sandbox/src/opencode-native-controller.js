@@ -46,8 +46,9 @@ const OPENCODE_HOME = '/tmp/opencode-home';
  * cleanup remains available through terminate retries.
  *
  * The daemon calls terminate without activate when reconstructing a previously
- * started controller. Shared scopes can then be looked up, but lost local 9P/MCP
- * owners cannot be recreated as evidence of release. That path refuses completion.
+ * started controller. The shared supervisor looks up scopes and attempts recorded
+ * mount reclamation; it refuses completion if the required release checks fail.
+ * This does not recreate lost local owners or prove native process quiescence.
  * Fresh inert construction is cancelled by the daemon's construction kit instead.
  * The caller must pre-create and own the private mounterSocketDir and keep all
  * mount/socket paths under stable, disjoint ancestry outside guest writes.

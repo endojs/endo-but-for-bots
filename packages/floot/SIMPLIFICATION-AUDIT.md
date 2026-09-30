@@ -7,6 +7,118 @@ The target is one owner per responsibility, not the smallest possible line count
 Fae compaction remains on hold.
 Process-loss recovery remains the separate investigation tracked in PR #1323.
 
+## Native-context mechanism inventory, 2026-09-30
+
+Current-source follow-up at `59fe1a5bd`; this supplements the earlier inventory,
+which predates most native capture/restoration code.
+
+| Mechanism | Responsibility and decision |
+|---|---|
+| Claude `claude-context-coverage.js` | Transient comparison of observed stream, restored prefix and captured cut. Retain separately from parsing native files; it does not own durable conversation or certify host effects. |
+| Claude `oci/capture-compaction.mjs` | Selects ordinary/compacted native chains inside the sandbox and preserves supported opaque/signed records. Retain; exports data to the existing Floot journal. |
+| Claude `oci/restore-context.mjs` and `native-context-projection.mjs` | Reuse the capture validator and shared renderer to publish a disposable projection with preserved prefix bytes and permitted dialogue suffix. Retain; no additional durable owner. |
+| Claude `claude-transcript-writer.js` | Still used for initial portable history and the approved transcript-continuity fallback. Not dead code: unlike native import, this cannot preserve signed reasoning. |
+| Codex `oci/native-context.mjs` | Backend-specific rollout selection and rendering, including opaque compaction items and host-selected runtime metadata. Retain protocol-specific logic rather than merging unlike formats. |
+| Codex `oci/context-io.mjs` | Sandbox-local file reads, mutation checks and no-overwrite projection publication. Retain this filesystem boundary separately from pure selection. |
+| Codex `oci/context-command.mjs` and `src/native-context-transport.js` | Bounded one-shot exchange and owned helper cancellation/reaping. Retain separately from the long-lived app-server connection; neither owns conversation state. |
+| Floot `hosted-turn.js`, `turn-journal.js`, `context-transcript.js` | Journal the native envelope before completion/acknowledgement and select host-owned context. Keep this shared ownership boundary; native payloads cannot settle host effects. |
+
+Both adapters now define their native wire shape once in their own
+`oci/native-context-shape.mjs`.
+A coincidentally equal transport limit does not justify merging the different
+native formats or adding another framework.
+These retained layers explain responsibilities, not a claim that the overall
+refactor is smaller or that lifetime context is bounded.
+
+Follow-up deletions, 2026-09-30:
+
+- Removed Codex `restoreCodexContext`'s unused `sha256` receipt and computation:
+  `codex-client.js` reads only `sessionId` and `rolloutPath`.
+  Exact-byte tests, atomic publication and no-overwrite checks remain.
+  Do not confuse it with Claude's actively checked `prefixSha256` receipt.
+- Moved Codex's whole-string `selectCodexNativeContext` convenience into its only
+  test file; production keeps the incremental selector.
+  This is surface cleanup, not a substantive complexity reduction.
+
+All 429 Codex tests pass; independent review passes 57 focused tests.
+Package typechecking still reports unrelated fixture errors, with none in the
+changed files. Formatting passes.
+No durable state owner, journal format or publication semantics change.
+These image-source deletions are deployed in generation 186.
+The rebuilt Codex image passed its hosted matrix and restart recall; its pin is
+verified in the host ledger.
+Fae compaction and evidence-storage scaling remain deferred as directed.
+
+## Scope attribution against the design baseline, 2026-09-30
+
+At `5b6ce56db`, shared hosted-agent source grew from 4,298 to 24,227 lines.
+The following disjoint filename buckets reconcile its 19,929-line increase.
+They are accounting categories, not a claim that each increase was necessary.
+The counting exclusions and four-package totals are in RA-01 of the alignment doc.
+
+| Shared-package category | Baseline | Current | Change |
+|---|---:|---:|---:|
+| Provider/public network | 2,836 | 8,120 | +5,284 |
+| Accounts/catalogs/credentials/pools/reset | 891 | 5,974 | +5,083 |
+| Lifecycle/policy/storage | 0 | 3,440 | +3,440 |
+| Delegated runners/subscription sharing | 0 | 2,114 | +2,114 |
+| Setup/specifiers | 0 | 1,868 | +1,868 |
+| MCP | 0 | 728 | +728 |
+| Transcript/channel/usage | 0 | 871 | +871 |
+| Other | 571 | 1,112 | +541 |
+
+For reproduction, assign basenames by first matching prefix in this order:
+`delegated-runner|subscription-share|share-meter`;
+`account|reset-|subscription-(pool|lister|module|admin)|broker-subscription|pool-|managed-|memory-oauth|model-catalog|backend-catalog|anthropic-model|codex-model|openrouter-|rate-limit`;
+`hosted-setup|hosted-backend-setup|current-specifier`;
+`session-|execution-envelope|backend-factory-kit|recorded-cleanup|cleanup-scope|workspace-projection|hosted-agent-policy`;
+`mcp-`; `transcript-records|turn-channel|token-usage`; `provider-|public-`; other.
+These map to the table's categories, not its displayed row order.
+
+Actual caller comparison distinguishes relocation from additional contracts:
+
+- Public egress, egress listener and DNS listener total 1,009 lines now and at
+  baseline in Codex (435/341/233). Baseline `hosted-subscription.js` used them.
+  Moving them into hosted-agent did not add 1,009 lines to the combined system.
+- The two baseline MCP implementations total 1,189 lines; the current shared
+  modules total 728 plus adapter configuration wrappers. Current controllers
+  call the shared bridge/server. This is real consolidation, but 461 is not an
+  exact net saving because retained wrapper responsibilities must also count.
+- Baseline Claude/OpenCode provisioning modules total 1,577 lines, with further
+  mount/revoke/dispose plumbing inside clients. The current shared provisioner,
+  supervisor and envelope replace those live ownership paths. Their category
+  also includes explicit plans, recorded cleanup and common policy/storage;
+  subtracting only 1,577 would not be a like-for-like complexity comparison.
+- Codex's baseline volume/provider/registry files total 1,035 lines. Their removal
+  is concrete simplification, but shared native storage also serves Claude and
+  must not be attributed entirely to replacing Codex's old volumes.
+- The shared broker replaces composition in Codex's `hosted-subscription.js` and
+  OpenCode's broker, and the old 337-line shared lease issuer is gone. Its larger
+  replacement also handles durable configuration, pooling and delegation.
+- Delegated runners/shares add separately delegated session ownership, quotas
+  and nested sharing, with live setup/formula callers. Accounts now add pool
+  selection, exact identity publication, reset administration and provider model
+  discovery beyond baseline observation. Native capture/import adds opaque
+  continuation beyond baseline portable history. These explain scope growth;
+  they do not demonstrate minimal implementations or waive the size requirement.
+
+All three adapters call the shared factory, provisioner, supervisor, execution
+envelope and recorded-storage implementation. This inspection found no remaining
+parallel vendor lifecycle algorithm. Request-shape checks and persisted-plan
+authorization checks protect different boundaries; session-storage and native
+state-storage own different resources and are not interchangeable duplicates.
+RA-01's numerical target remains unproven; do not remove working safety or
+delegation contracts solely to force the total below the original baseline.
+
+The follow-up removes Codex's sole-caller `codex-session-storage.js` parser-injection
+wrapper, calling the same shared factory from its unchanged formula entrypoint.
+This is surface cleanup only: roots, state authority and plan parsing are unchanged.
+OpenCode's cleanup comment now describes conditional recorded reclamation instead
+of claiming reconstruction always refuses. No new recovery guarantee is added.
+Validation: 430 Codex tests, 30 OpenCode controller tests, scoped lint, formatting
+and the root documentation gate pass. This final wrapper/comment slice is not
+deployed; generation 186 contains the preceding native-context cleanup.
+
 ## Decisions on remaining parallel mechanisms
 
 | Mechanisms | Different responsibilities | Decision |

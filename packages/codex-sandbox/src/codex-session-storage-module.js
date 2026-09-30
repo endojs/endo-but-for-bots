@@ -1,6 +1,8 @@
 // @ts-check
 import { Fail } from '@endo/errors';
-import { makeCodexSessionStorage } from './codex-session-storage.js';
+import { makeSessionStorage } from '@endo/hosted-agent/session-storage.js';
+
+import { readCodexSessionPlan } from './codex-session-plan.js';
 
 /**
  * Durable owner invoked only after the daemon acknowledges native stop.
@@ -12,9 +14,10 @@ export const make = (stateStorage, _context, { env = {} } = {}) => {
   const workspaceDir = env.CODEX_WORKSPACE_BASE_DIR;
   const mcpDir = env.CODEX_PRIVATE_DIR;
   (workspaceDir && mcpDir) || Fail`Codex storage roots are required`;
-  return makeCodexSessionStorage({
+  return makeSessionStorage({
     stateStorage,
     roots: { workspaceDir, mcpDir },
+    readPlan: readCodexSessionPlan,
   });
 };
 harden(make);

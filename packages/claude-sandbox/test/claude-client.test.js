@@ -9,6 +9,8 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 // Internal test harness, deliberately not a runtime package export.
 // eslint-disable-next-line import/no-relative-packages
 import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
+// eslint-disable-next-line import/no-relative-packages
+import { exerciseFailedTurnSuccessor } from '../../hosted-agent/test/failed-turn-conformance.js';
 
 import {
   makeClaudeClient,
@@ -662,6 +664,69 @@ test('incomplete failed native result with zero exit does not certify context', 
   t.is(fake.spawned.length, 1);
 });
 
+test('a confirmed failed turn restores supplied context for its successful successor', async t => {
+  const first = nativeWire('first');
+  first.raw.at(-1).is_error = true;
+  first.raw.at(-1).subtype = 'error_max_turns';
+  const second = nativeWire('second');
+  const prefix = first.captured.nativeContext.transcript;
+  const receipt = harden({
+    payload: prefix,
+    sessionId: restoredUuid,
+    leafUuid: first.rows.at(-1).uuid,
+    prefixSha256: sha256(prefix),
+  });
+  second.rows[0].uuid = '00000000-0000-4000-8000-000000000020';
+  second.rows[0].parentUuid = receipt.leafUuid;
+  second.rows[1].uuid = '00000000-0000-4000-8000-000000000021';
+  second.rows[1].parentUuid = second.rows[0].uuid;
+  second.raw.find(event => event.type === 'assistant').uuid =
+    second.rows[1].uuid;
+  second.captured.nativeContext.transcript =
+    prefix + second.rows.map(row => `${JSON.stringify(row)}\n`).join('');
+  const fake = makeFakeSlice([
+    first.raw.map(jsonBytes),
+    [jsonBytes(first.captured)],
+    second.raw.map(jsonBytes),
+    [jsonBytes(second.captured)],
+  ]);
+  const restored = [];
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      restoreTranscript: async records => {
+        restored.push(records);
+        return receipt;
+      },
+      makeStderrIterable: () => bytesIterable([]),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  await exerciseFailedTurnSuccessor(t, {
+    fail: async () => {
+      const reader = await client.send('first');
+      const events = await drain(reader);
+      t.regex(events.at(-1).reason, /reported a failed turn/);
+      t.true(events.some(event => event.type === 'endo_native_context'));
+      return events;
+    },
+    succeed: async () => {
+      const reader = await client.send('second', {
+        transcript: continuedTranscript,
+      });
+      return drain(reader);
+    },
+    admitted: () =>
+      fake.spawned
+        .filter(proc => proc.argv[0] !== 'node')
+        .map(proc => proc.argv[2]),
+  });
+  t.deepEqual(restored, [continuedTranscript]);
+  const resumed = fake.spawned.filter(proc => proc.argv[0] !== 'node')[1];
+  t.true(resumed.argv.includes('--resume'));
+  t.true(resumed.argv.includes(restoredUuid));
+  t.false(resumed.argv.includes('--continue'));
+});
+
 for (const exitCode of [0, 1, 7]) {
   for (const helperFails of [false, true]) {
     test(`covered failure exit ${exitCode} ${helperFails ? 'retains original diagnostics when capture fails' : 'checkpoints then aborts'}`, async t => {
@@ -1127,6 +1192,151 @@ test('raw stream backpressures a burst larger than the delivery queue', async t 
   const events = await drain(reader);
   t.deepEqual(events.slice(0, rows.length), rows);
   t.is(events.at(-1).type, 'end');
+});
+
+test('closing a queued reader skips its restoration without interrupting the active turn', async t => {
+  t.timeout(5000);
+  let release;
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  let entered;
+  const active = new Promise(resolve => {
+    entered = resolve;
+  });
+  const fake = makeFakeSlice();
+  const restored = [];
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      restoreTranscript: async records => {
+        restored.push(records);
+        return restoredReceipt;
+      },
+      makeStdoutIterable: proc => {
+        if (proc === fake.spawned[0])
+          return harden({
+            async *[Symbol.asyncIterator]() {
+              entered();
+              await gate;
+              yield new Uint8Array();
+            },
+          });
+        return makeStdoutIterable(proc);
+      },
+    }),
+  );
+  t.teardown(async () => {
+    release();
+    await client.terminate();
+  });
+  const first = await client.send('first');
+  await active;
+  const cancelled = await client.send('must not execute', {
+    transcript: [
+      { kind: 'message', role: 'user', content: 'must not restore' },
+    ],
+  });
+  await iterateReader(cancelled).return();
+  t.is(fake.spawned.length, 1);
+  t.false(Boolean(procKilled.get(fake.spawned[0])));
+  t.deepEqual(restored, []);
+  release();
+  t.is((await drain(first)).at(-1).type, 'end');
+  const successor = await client.send('third', {
+    transcript: continuedTranscript,
+  });
+  t.is((await drain(successor)).at(-1).type, 'end');
+  t.deepEqual(
+    fake.spawned.map(proc => proc.argv[2]),
+    ['first', 'third'],
+  );
+  t.deepEqual(restored, [continuedTranscript]);
+  t.false(Boolean(procKilled.get(fake.spawned[0])));
+});
+
+test('interrupt owns a late spawn handle without replaying its admitted prompt', async t => {
+  t.timeout(5000);
+  let releaseSpawn;
+  const spawnGate = new Promise(resolve => {
+    releaseSpawn = resolve;
+  });
+  let entered;
+  const spawning = new Promise(resolve => {
+    entered = resolve;
+  });
+  let releaseKill;
+  const killGate = new Promise(resolve => {
+    releaseKill = resolve;
+  });
+  const admitted = [];
+  let kills = 0;
+  let lateReads = 0;
+  const lateProc = harden({
+    async kill() {
+      kills += 1;
+      await killGate;
+    },
+  });
+  const fake = makeFakeSlice();
+  const slice = harden({
+    async spawn(argv, options) {
+      await null;
+      admitted.push(argv[2]);
+      if (admitted.length === 1) {
+        entered();
+        await spawnGate;
+        return lateProc;
+      }
+      return fake.slice.spawn(argv, options);
+    },
+    dispose: () => fake.slice.dispose(),
+  });
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      slice,
+      makeStdoutIterable: proc => {
+        if (proc === lateProc) lateReads += 1;
+        return makeStdoutIterable(proc);
+      },
+    }),
+  );
+  t.teardown(async () => {
+    releaseSpawn();
+    releaseKill();
+    await client.terminate();
+  });
+  const first = await client.send('first');
+  await spawning;
+  t.deepEqual(
+    admitted,
+    ['first'],
+    'argv already dispatched before cancellation',
+  );
+  let settled = 0;
+  const interrupted = client.interrupt().then(() => {
+    settled += 1;
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  t.is(settled, 0);
+  t.is(kills, 0, 'no handle exists yet');
+  releaseSpawn();
+  await new Promise(resolve => setImmediate(resolve));
+  t.is(kills, 1);
+  t.is(settled, 0, 'the late handle kill acknowledgement is still owned');
+  t.is(lateReads, 0);
+  releaseKill();
+  await interrupted;
+  t.is(settled, 1);
+  t.deepEqual(await drain(first), [], 'a closed reader cannot report success');
+  const successor = await client.send('second', {
+    transcript: continuedTranscript,
+  });
+  const events = await drain(successor);
+  t.is(events.at(-1).type, 'end');
+  t.is(events.filter(event => ['end', 'abort'].includes(event.type)).length, 1);
+  t.deepEqual(admitted, ['first', 'second']);
+  t.is(kills, 1);
+  t.is(lateReads, 0);
 });
 
 test('interrupt releases a producer waiting behind a full raw queue', async t => {

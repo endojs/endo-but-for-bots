@@ -55,6 +55,199 @@ const makeFakePowers = () => {
   });
 };
 
+test('hosted agents stay dormant for records and acquire once for serialized turns', async t => {
+  t.timeout(5000);
+  const powers = makeFakePowers();
+  let acquisitions = 0;
+  const sent = [];
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: snapshot => {
+        acquisitions += 1;
+        t.true(snapshot.names.includes('list'));
+        return harden({
+          async send(text, options) {
+            sent.push(options);
+            const channel = makeBufferedReader();
+            channel.push({ type: 'text-delta', text: `Reply to ${text}` });
+            channel.push({ type: 'end', checkpoint: `checkpoint-${text}` });
+            return channel.reader;
+          },
+          async acknowledge(checkpoint) {
+            t.regex(checkpoint, /^checkpoint-(one|two)$/);
+          },
+        });
+      },
+    },
+    'test prompt',
+    { journalPowers: powers },
+  );
+  t.teardown(() => agent.shutdown());
+  await agent.getHistory();
+  await agent.getUsage();
+  await agent.getTranscript();
+  await agent.getActivity();
+  t.is(acquisitions, 0, 'reading durable records must not start a backend');
+  await Promise.all([
+    agent.converse('one', makeReplyChannel().writer),
+    agent.converse('two', makeReplyChannel().writer),
+  ]);
+  t.is(acquisitions, 1);
+  t.is(sent[0].acknowledgedCheckpoint, undefined);
+  t.is(sent[1].acknowledgedCheckpoint, 'checkpoint-one');
+  await agent.shutdown();
+
+  const revived = await makeStreamingAgent(
+    powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: () => {
+        acquisitions += 1;
+        return harden({
+          async send(_text, options) {
+            t.is(options.acknowledgedCheckpoint, 'checkpoint-two');
+            t.true(options.transcript.some(record => record.content === 'one'));
+            const channel = makeBufferedReader();
+            channel.push({ type: 'end' });
+            return channel.reader;
+          },
+        });
+      },
+    },
+    'test prompt',
+    { journalPowers: powers },
+  );
+  t.teardown(() => revived.shutdown());
+  t.is(acquisitions, 1, 'revival only opens durable records');
+  await revived.converse('three', makeReplyChannel().writer);
+  t.is(acquisitions, 2);
+});
+
+test('concurrent explicit preparation shares acquisition and cannot report ready after shutdown', async t => {
+  t.timeout(5000);
+  const powers = makeFakePowers();
+  const entered = makeSendSignal();
+  let release = () => {};
+  const ready = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  let acquisitions = 0;
+  const agent = await makeStreamingAgent(
+    powers,
+    undefined,
+    {
+      kind: 'hosted',
+      provideHostedClient: async () => {
+        acquisitions += 1;
+        entered.notify();
+        await ready;
+        return harden({
+          async send() {
+            throw Error('must not send');
+          },
+        });
+      },
+    },
+    'test prompt',
+    { journalPowers: powers },
+  );
+  t.teardown(async () => {
+    release();
+    await agent.shutdown();
+  });
+  const first = agent.prepareHostedClient();
+  const second = agent.prepareHostedClient();
+  const firstRefusal = t.throwsAsync(first, { message: /shutting down/ });
+  const secondRefusal = t.throwsAsync(second, { message: /shutting down/ });
+  await entered.waitFor(1);
+  let closed = false;
+  const closing = agent.shutdown().then(() => {
+    closed = true;
+  });
+  await null;
+  t.false(
+    closed,
+    'shutdown waits for explicit acquisition even without a turn',
+  );
+  release();
+  await Promise.all([firstRefusal, secondRefusal, closing]);
+  t.is(acquisitions, 1, 'concurrent catalog snapshots must not acquire twice');
+  await t.throwsAsync(agent.prepareHostedClient(), {
+    message: /shutting down/,
+  });
+  t.is(acquisitions, 1);
+  t.deepEqual(await agent.getTurns(), []);
+});
+
+for (const action of ['cancel', 'shutdown']) {
+  test(`${action} during hosted acquisition waits for ownership without sending`, async t => {
+    t.timeout(5000);
+    const powers = makeFakePowers();
+    const entered = makeSendSignal();
+    let release = () => {};
+    const ready = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    let sends = 0;
+    const constructing = makeStreamingAgent(
+      powers,
+      undefined,
+      {
+        kind: 'hosted',
+        provideHostedClient: async () => {
+          entered.notify();
+          await ready;
+          return harden({
+            async send() {
+              sends += 1;
+              const channel = makeBufferedReader();
+              channel.push({ type: 'end' });
+              return channel.reader;
+            },
+          });
+        },
+      },
+      'test prompt',
+      { journalPowers: powers },
+    );
+    // Release even when the pre-fix constructor hangs, so teardown owns the
+    // pending initialization rather than leaving work behind after a failure.
+    t.teardown(async () => {
+      release();
+      await (await constructing).shutdown();
+    });
+    const agent = await constructing;
+    const controller = new AbortController();
+    const turn = agent.converse(
+      'do not send',
+      makeReplyChannel().writer,
+      undefined,
+      controller.signal,
+    );
+    await entered.waitFor(1);
+    let closed = false;
+    if (action === 'cancel') controller.abort();
+    const closing = (action === 'shutdown' ? agent.shutdown() : turn).then(
+      () => {
+        closed = true;
+      },
+    );
+    await null;
+    t.false(closed, 'cancellation must retain ownership of initialization');
+    t.throws(() => agent.assertIdleForReplacement(), {
+      message: /session work is active/,
+    });
+    release();
+    await Promise.all([turn, closing]);
+    t.is(sends, 0);
+    t.is((await agent.getTurns())[0].state, 'cancelled');
+  });
+}
+
 test('a hosted backend persists completed turns and scopes reused tool IDs', async t => {
   t.timeout(5000);
   const sent = makeSendSignal();
@@ -597,7 +790,7 @@ test('failed provider tool loops revive their known tool effects', async t => {
 
 test('hosted provisioning receives the session delegation and account catalog', async t => {
   const powers = makeFakePowers();
-  /** @type {{ names: string[] } | undefined} */
+  /** @type {{ names: string[], execute: (name: string, args: object) => Promise<unknown> } | undefined} */
   let supplied;
   const agent = await makeStreamingAgent(
     powers,
@@ -637,6 +830,9 @@ test('hosted provisioning receives the session delegation and account catalog', 
   t.teardown(() => agent.shutdown());
   await agent.converse('check account', makeReplyChannel().writer);
   if (!supplied) throw Error('Hosted catalog was not supplied');
+  await t.throwsAsync(supplied.execute('accountStatus', harden({})), {
+    message: /outside an active Floot turn/,
+  });
   for (const name of [
     'spawnSubagent',
     'askSubagent',

@@ -3,7 +3,7 @@
 // Parent realpath checks catch static mistakes, not directory replacement races;
 // the existing sandbox mounts, not these checks, provide filesystem confinement.
 import { constants } from 'node:fs';
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { link, mkdir, open, realpath, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -171,7 +171,6 @@ export const restoreCodexContext = async ({ root, capture, target }) => {
   return Object.freeze({
     sessionId,
     rolloutPath: path.join(root, ...segments, filename),
-    sha256: createHash('sha256').update(transcript).digest('hex'),
   });
 };
 if (typeof harden === 'function') harden(restoreCodexContext);

@@ -269,13 +269,15 @@ export const makeClaudeContextCoverage = ({ sha256 }) => {
         }
         return;
       }
-      requireValue(initialized);
       if (event.type === 'rate_limit_event') {
         requireValue(isRateLimitEvent(event));
+        // Capacity can arrive before system/init. It does not initialize
+        // dialogue; size, session identity and terminal fences still apply.
         // Never advances frames, block state, terminal state or success. Even
         // rejected capacity is not a replacement for the producer's result.
         return;
       }
+      requireValue(initialized);
       if (boundary && frames.length === boundaryPosition) {
         requireValue(
           event.type === 'user' &&

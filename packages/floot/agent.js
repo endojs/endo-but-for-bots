@@ -514,6 +514,7 @@ const provisionPresetObjects = async (
  *   resolveTurn: (turnId: string, note: string) => Promise<void>,
  *   getUsage: () => Promise<import('@endo/hosted-agent/token-usage.js').TokenUsage & { turns: number, incompleteTurns: number }>,
  *   startInbox: () => void,
+ *   prepareHostedClient: (signal?: AbortSignal) => Promise<void>,
  *   shutdown: (allowBackendQuarantine?: boolean) => Promise<void>,
  * }>}
  */
@@ -573,6 +574,8 @@ export const makeStreamingAgent = async (
   };
   /** @type {any} */
   let hostedClient;
+  /** @type {Promise<any> | undefined} */
+  let hostedClientP;
 
   /**
    * The provider this turn runs on.
@@ -708,7 +711,7 @@ export const makeStreamingAgent = async (
         // Interruption closes admission immediately, even while the backend
         // and already-admitted operations are still unwinding. The captured
         // turnId remains the context for any operation admitted before abort.
-        if (!turnId || activeJournalSignal?.aborted) {
+        if (!hostedClient || !turnId || activeJournalSignal?.aborted) {
           throw Error('Endo tool call outside an active Floot turn');
         }
         const outcome = await journaledToolCall({
@@ -793,7 +796,32 @@ export const makeStreamingAgent = async (
     return newest?.token;
   };
 
+  /** @param {AbortSignal} [signal] */
+  const prepareHostedClient = async (signal = undefined) => {
+    if (stopped) throw Error('Floot session agent is shutting down');
+    // Inbox and journal reconstruction are passive. Acquire the native runtime
+    // only for a turn or an explicit create/resume/reconfiguration. Keep a rejected
+    // acquisition fenced until incarnation replacement, including uncertain
+    // setup/cleanup failures; a later prompt must not create an unowned retry.
+    if (provideHostedClient && !hostedClient) {
+      if (!hostedClientP) {
+        const snapshot = await toolRegistry.snapshot();
+        if (stopped) throw Error('Floot session agent is shutting down');
+        if (signal?.aborted) return;
+        hostedClientP ??= (async () => {
+          const client = await provideHostedClient(journalSnapshot(snapshot));
+          if (!client) throw Error('Hosted runtime did not provide a client');
+          return client;
+        })();
+      }
+      hostedClient = await hostedClientP;
+    }
+    if (stopped) throw Error('Floot session agent is shutting down');
+  };
+
   const runTurnBody = async (text, writer, meta, signal, turnId) => {
+    await prepareHostedClient(signal);
+    if (stopped || signal?.aborted) return;
     const acknowledgedCheckpoint = hostedClient
       ? await recoverBackendCheckpoint()
       : undefined;
@@ -1770,6 +1798,7 @@ export const makeStreamingAgent = async (
     // to its timeout even though the loop it guards has already left.
     stopInbox();
     const closing = [turnChain, inboxLoop];
+    if (hostedClientP) closing.push(hostedClientP.catch(() => {}));
     const settled = await withTimeout(
       Promise.allSettled(closing),
       'Floot session agent shutdown',
@@ -1935,15 +1964,6 @@ export const makeStreamingAgent = async (
     }
   };
 
-  if (provideHostedClient) {
-    // Provision from the same capability-gated catalog as the provider loop,
-    // after delegation and account tools have been installed.
-    hostedClient = await provideHostedClient(
-      journalSnapshot(await toolRegistry.snapshot()),
-    );
-    if (!hostedClient) throw Error('Hosted runtime did not provide a client');
-  }
-
   // A network policy decision and a rebind both replace the incarnation, and
   // neither may do so beneath live work.
   const assertIdleForReplacement = () => {
@@ -1954,6 +1974,7 @@ export const makeStreamingAgent = async (
   };
 
   return harden({
+    prepareHostedClient,
     converse,
     getHistory,
     getSettledHistory,
@@ -3579,7 +3600,7 @@ export const make = async (
       throw error;
     }
     touchSession(id, 'transcript');
-    await getAgent(id);
+    await (await getAgent(id)).prepareHostedClient();
     void submissions.get(id)?.pump();
     return executionState(id);
   };
@@ -3669,7 +3690,7 @@ export const make = async (
       void submissions.get(id)?.pump();
     }
     // Mail-only sessions must resume without depending on a UI history read.
-    if (!agents.has(id)) await getAgent(id);
+    await (await getAgent(id)).prepareHostedClient();
     return result;
   };
   const getAgent = (id, { observeOnly = false } = {}) => {
@@ -3883,6 +3904,25 @@ export const make = async (
             kind: 'hosted',
             provideHostedClient: async snapshot => {
               assertSessionAdmission(id);
+              // Setup may replace a backend binding after the inbox revived.
+              // Resolve at actual acquisition, but never change the context
+              // contract already used by this incarnation's journal.
+              const currentBackend = (await getHostedBackends()).get(
+                entry.backendId,
+              );
+              if (!currentBackend)
+                throw Error(
+                  `Hosted backend "${entry.backendId}" is unavailable`,
+                );
+              if (
+                currentBackend.descriptor.nativeContextFormat !==
+                  nativeContextFormat ||
+                currentBackend.descriptor.continuity !==
+                  backend.descriptor.continuity
+              )
+                throw Error(
+                  'Hosted backend context contract changed; reopen the session',
+                );
               const toolSet = makeEndoToolSet(
                 harden({
                   ...snapshot,
@@ -3905,7 +3945,7 @@ export const make = async (
               pendingRebinds.delete(id);
               const mountClient = makeHostedMountClient({
                 id,
-                backend,
+                backend: currentBackend,
                 spec: harden({
                   sessionId: id,
                   model: entry.modelId || '',
@@ -3935,14 +3975,37 @@ export const make = async (
               // a successor nothing tracks.
               const stale = hostedMountClients.get(id);
               if (stale) {
-                await stale.close().catch(() => undefined);
+                await stale.close();
               }
               hostedMountClients.set(id, mountClient);
               // Arm first: the replay hands the adapter this session's
               // persisted binds, which the first create then declares —
               // a restart costs no recreate.
-              await mountKit.arm({ clientKey: id, client: mountClient });
-              await mountClient.start();
+              try {
+                await mountKit.arm({ clientKey: id, client: mountClient });
+                await mountClient.start();
+              } catch (error) {
+                // Acquisition now belongs to a turn, not getAgent's constructor.
+                // Roll back only its native resources: shutting down the agent
+                // here would await this very turn and deadlock.
+                try {
+                  await mountClient.close();
+                  const admin = backendAdmins.get(id);
+                  if (admin) {
+                    await E(admin).terminate();
+                    if (backendAdmins.get(id) === admin)
+                      backendAdmins.delete(id);
+                  }
+                  if (hostedMountClients.get(id) === mountClient)
+                    hostedMountClients.delete(id);
+                } catch (cleanupError) {
+                  throw new AggregateError(
+                    [error, cleanupError],
+                    'Hosted runtime acquisition and rollback failed',
+                  );
+                }
+                throw error;
+              }
               return makeSendOnlyClient(mountClient.run);
             },
           };
@@ -4905,7 +4968,7 @@ export const make = async (
         // Record the operator's choice before any backend generation is built.
         await networkController(id).set(options.networkPolicy);
       }
-      await getAgent(id);
+      await (await getAgent(id)).prepareHostedClient();
       const index = /** @type {any[]} */ (registry).findIndex(
         session => session.id === id,
       );
@@ -5181,7 +5244,9 @@ export const make = async (
             // derivable from its stable session ID before provisioning anew.
             await cleanupSessionResources(s);
           }
-          return getAgent(s.id);
+          const agent = await getAgent(s.id);
+          if (s.lifecycle === 'creating') await agent.prepareHostedClient();
+          return agent;
         };
         ownership
           .track(

@@ -206,31 +206,12 @@ export const makeCodexNativeContextSelector = expected => {
 if (typeof harden === 'function') harden(makeCodexNativeContextSelector);
 
 /**
- * Whole-string convenience API; capture I/O uses the incremental selector.
- * @param {string} jsonl Complete native JSONL.
- * @param {{sessionId: string, turnId: string, cwd: string, cliVersion: string}} expected
- */
-export const selectCodexNativeContext = (jsonl, expected) => {
-  requireValue(typeof jsonl === 'string' && jsonl.endsWith('\n'));
-  const selector = makeCodexNativeContextSelector(expected);
-  let start = 0;
-  for (;;) {
-    const end = jsonl.indexOf('\n', start);
-    if (end < 0) break;
-    selector.accept(jsonl.slice(start, end));
-    start = end + 1;
-  }
-  return selector.finish();
-};
-if (typeof harden === 'function') harden(selectCodexNativeContext);
-
-/**
  * Render a context projection under a fresh host-selected identity. Native
  * baseline rows and base instruction text are context, not launch authority.
  * Never copy a guest's session metadata, dynamic tool catalog, or queued events.
  * No filesystem operations occur here. The caller binds model, policy and
  * provider configuration separately when resuming the projected thread.
- * @param {ReturnType<typeof selectCodexNativeContext>} capture
+ * @param {ReturnType<ReturnType<typeof makeCodexNativeContextSelector>['finish']>} capture
  * @param {{sessionId: string, cwd: string, modelProvider: string, timestamp: string,
  * dynamicTools: readonly {type?: string, name: string, description: string, inputSchema: object}[]}} target Host configuration, not transcript metadata.
  */

@@ -2798,6 +2798,9 @@ test('interrupt closes hosted tool admission before backend acknowledgement and 
       kind: 'hosted',
       provideHostedClient: async snapshot => {
         tools = snapshot;
+        await t.throwsAsync(() => snapshot.execute('effect', harden({})), {
+          message: /outside an active Floot turn/,
+        });
         return harden({
           async send() {
             sends += 1;
@@ -2836,11 +2839,6 @@ test('interrupt closes hosted tool admission before backend acknowledgement and 
       ]),
     },
   );
-  if (!tools) throw Error('Hosted tool snapshot was not provisioned');
-  const hostedTools = tools;
-  await t.throwsAsync(() => hostedTools.execute('effect', harden({})), {
-    message: /outside an active Floot turn/,
-  });
   turn = agent.converse(
     'First turn',
     makeReplyChannel().writer,
@@ -2848,6 +2846,8 @@ test('interrupt closes hosted tool admission before backend acknowledgement and 
     controller.signal,
   );
   await sent.promise;
+  if (!tools) throw Error('Hosted tool snapshot was not provisioned');
+  const hostedTools = tools;
   const admitted = hostedTools.execute('effect', harden({}));
   await effectStarted.promise;
   const firstTurnId = (await agent.getTurns())[0].turnId;

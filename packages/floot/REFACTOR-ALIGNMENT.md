@@ -13,8 +13,10 @@ constitute production deployment or current-release acceptance.
 The main structural unification is implemented, but the refactor is not complete.
 The three native backends actually use common provisioning, lifecycle, grants,
 and execution-envelope code. Reimplementing those abstractions is not the next
-step. Simplicity, bounded context, remaining ownership boundaries, and final
-current-release acceptance still need evidence or work.
+step. Simplicity and bounded context still need evidence or work.
+Protocol admission conformance is covered; generation 185 acceptance passed and
+the Codex-only generation 186 image change passes renewed Luna acceptance.
+Neither gate settles the remaining design questions.
 
 This audit evaluates the retained implementation against the design's
 [motivation and decisions](../../designs/hosted-agent-sandbox-unification.md#motivation),
@@ -24,7 +26,77 @@ Older dated design/audit paragraphs are evidence of earlier states, not reliable
 descriptions of today's source. This summary takes precedence for current status;
 the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
-## Status validation, 2026-09-25
+## Current work, 2026-09-30
+
+Tokyo is on generation 186, application `2b8df7d23`, host `c376983`.
+This activates the Codex native-context cleanup image; Luna lifecycle and
+daemon-restart recall pass, with native checkpoints on both completed turns.
+All four backends passed seed/restart/recall on generation 185 (`59fe1a5bd`); Claude and Codex
+retain native checkpoints on both completed turns with the rebuilt images.
+The stopped-incarnation error did not recur.
+This is ordinary restart evidence, not proof of abrupt process-loss recovery
+or the precise source of the earlier race.
+
+The implemented change keeps journal and inbox revival passive with respect to
+native runtime acquisition.
+An actual UI or mail turn acquires the hosted client; explicit create, resume,
+policy change and rebind still provision immediately and report their failures.
+History and usage reads must not create a native sandbox.
+The acquisition must retain cancellation and cleanup ownership, forward the last
+acknowledged checkpoint, and resolve the current backend binding without changing
+the incarnation's context contract.
+This is an incarnation-local timing change, not a new durable owner or storage
+format, and does not implement the process-loss research in #1323.
+Implementation, independent adversarial review and deployment are complete.
+The Floot suite passes 732 tests; four real-daemon lifecycle/native-context tests
+pass, including cold restart and late native acquisition.
+Package lint reports no errors (278 warnings), and the root documentation gate
+passes.
+
+Generation 184's separate Claude tool failure was initialization ordering:
+`phase=observe/rate_limit_event, check=5` identifies the initialization guard,
+not metadata-schema validation. Capacity arrived before `system/init`.
+`59fe1a5bd` permits a strictly validated capacity event before initialization,
+without allowing it to establish dialogue or completion. Session/size/terminal
+fences and the event schema are unchanged. New tests reproduced the exact
+diagnostic before the fix; 516 Claude tests and 119 focused coverage tests pass.
+
+Generation 185 passes the full hosted matrix on all three adapters: seed/tool use,
+public-internet/off policy changes, private-destination rejection, cancellation,
+inspection and deletion.
+Cancellation retains unresolved outcomes rather than claiming effects settled.
+Fae passes its auto-free tool/pending-cancel/inspect/delete control.
+All four pass fresh seed/restart/recall on this exact release, with Claude/Codex
+native checkpoints observed before and after restart. No failed prompt was replayed.
+RA-05's current-release acceptance gate is satisfied under these recorded scopes;
+this does not close the separate long-context or process-loss questions.
+Host evidence: `ops/explicit-journal-deployment-20260924.md`, generation 185.
+
+The unused Codex restore hash and production test-only selector wrapper are now
+removed in source (429 package tests pass, independent review approved).
+They do not change durable ownership or publication semantics.
+The rebuilt Codex image is active and restoration-verified on generation 186.
+The cutover exposed a retirement gap: durable account-discovery capabilities
+revived the old broker despite removal of its pet names. Withdrawing that source
+before restart allowed setup to bind the new broker and republish both accounts.
+No credentials, renewal owners, account/reset journals or workspaces were removed.
+RA-04's protocol-conformance matrix is complete at `7d9a7b049` after independent
+review; its boundaries and deliberate backend differences are recorded below.
+Only Codex was rerun for generation 186; unchanged backends retain generation-185
+evidence. Test sessions are cleaned up, and the failed pre-retirement-fix creation
+manifest remains as evidence without replay.
+The like-for-like review now records concrete relocation and added contracts in
+the simplification inventory; it does not waive RA-01's numerical target.
+It also reconfirmed two current daemon cleanup defects in the parent audit:
+failed collection callbacks lose retry ownership, and failed guest construction
+can leave an orphan identity key. Prioritize the bounded collection retry fix,
+keeping uncertain cancellation fenced and native process-loss recovery separate.
+RA-01's size target remains unproven; RA-03 is implemented, and direct-Fae
+compaction remains on hold.
+The older chronological entries and final sequence below are historical evidence,
+not the current work queue.
+
+## Status validation, 2026-09-25 (with subsequent deployment evidence)
 
 Revalidated against the plan at `4caded3fc` (deployed code `adf25f948`, Tokyo
 generation 180, host `688f5e3`), with the live acceptance recorded in
@@ -172,6 +244,28 @@ growth is unnecessary. They do refute treating code reduction as already proven.
 The next review should list current owners and remaining parallel mechanisms,
 identify removable code, and justify retained complexity by the stated goals.
 Do not add another broad framework to satisfy a line-count target.
+
+Current-source follow-up at `2b8df7d23` (2026-09-30): the retained native-context
+and lifecycle mechanisms now have documented live callers and distinct ownership.
+The identified unused hash and selector wrapper are removed; this review found
+no further concrete deletion in that inspected scope.
+This does not demonstrate the original implementation-size target:
+
+| Package | Design baseline `4e2644c` | `2b8df7d23` |
+|---|---:|---:|
+| hosted-agent | 4,298 | 24,227 |
+| claude-sandbox | 6,484 | 7,074 |
+| codex-sandbox | 7,901 | 6,945 |
+| opencode-sandbox | 6,780 | 4,763 |
+| Total | 25,463 | 43,009 |
+
+Method: enumerate committed paths with `git ls-tree -r --name-only REV`, include
+`.js`, `.mjs` and `.ts`, exclude `.d.ts`, test/tests/fixtures/test-types/test-fixtures
+directories and `.test.*`/`.test-d.*`, and count newlines in committed contents.
+These figures include comments and types, not generated files or uncommitted work.
+RA-01 remains open for a like-for-like scope analysis of the growth or an explicit
+design decision; green tests and the absence of another deletion candidate do not
+waive the size requirement.
 
 Current simplification pass (2026-09-24): the
 [mechanism inventory and decisions](SIMPLIFICATION-AUDIT.md) distinguish owners,
@@ -1215,6 +1309,68 @@ canceled prompt. Keep adapter-specific protocols; introduce a common conformance
 matrix covering cancellation before preparation, during restoration, before
 dispatch, and after dispatch, including failure/next-turn behavior.
 Only factor implementation after the identical responsibilities are established.
+
+Protocol-conformance completion assessment, 2026-09-30 at `7d9a7b049`:
+the required observable boundaries now have coverage on all three native adapters.
+The shared preparation/restoration harness and failed-successor helper are paired
+with protocol-specific tests rather than another runtime abstraction.
+
+| Obligation | Claude | OpenCode | Codex |
+|---|---|---|---|
+| Earliest public cancellation | Queued reader closes before its restoration; A unaffected, C completes | Queued reader omits its command; A unaffected, C completes | Immediate send/interrupt before reader return; no native turn, terminated successor refused |
+| Held preparation/restoration | Provision/restore gates, reader and explicit interrupt | Startup/import gates, accepted and refused import | Held thread/start and thread/inject_items; native helper cancellation |
+| Admission boundary | Canceled preparation cannot reach argv-bearing spawn | Held command writer rechecks before dispatch | Held ledger write exercises final beforeSend guard; zero turn/start |
+| Already admitted work | Late spawn handle and kill acknowledgement remain owned; successor completes | Interrupt is a terminal barrier; writer test completes successor | Reservation held until terminal confirmation; late completion cannot end successor; missing confirmation poisons |
+| Failed turn and successor | Supplied context restored; exactly one terminal per turn | Same native session retained; exactly one terminal per turn | Failed turn reverts then succeeds; unconfirmed interruption refuses successor |
+
+Evidence is in each backend's `test/*-client.test.js`; the immediately following
+entries describe the new cases and validation results.
+RA-04's protocol-conformance requirement is satisfied within this scope.
+This does not prove native quiescence, process-loss recovery, live provider-error
+injection or current-release deployment acceptance; those are separate contracts.
+
+Current-source recheck, 2026-09-30: shared preparation/restoration tests cancel
+after entering a held preparation gate; they do not prove cancellation before
+preparation begins. OpenCode separately tests its actual command-write boundary
+and successful queued successor. Codex's held ledger write does not isolate the
+last transport-send microtask. The held-ledger regression nevertheless exercises
+the final admission guard: after `ledger.begin()` there is no intervening
+prompt-admission guard before `sendMessage` invokes `beforeSend`,
+immediately followed by `transport.send`.
+It observes zero `turn/start` writes and successor refusal.
+The public fixture has no hook at that internal microtask; adding one solely for
+a timing-specific test is not justified. Retain this behavioral evidence rather
+than claiming exact microtask isolation or adding an arbitrary microtask count.
+Early cancellation now has public-boundary regressions rather than a promise of
+zero incidental setup. Claude and OpenCode hold active A, cancel queued B through
+B's reader, complete A and then complete C. Only A/C prompts are admitted; A is
+not interrupted. Claude also proves that B's otherwise-eligible context is never
+restored. OpenCode proves command omission, not import suppression (a live native
+conversation already skips later imports).
+Codex has no queued-turn API: immediate `send()` followed by `interrupt()` before
+awaiting the reader admits no `turn/start` and explicitly refuses a successor on
+the terminated incarnation. It does not promise zero transport/thread setup.
+Focused client suites pass: Claude 104, Codex 115, OpenCode 38; scoped lint has
+zero errors and 39 warnings. These test-only changes introduce no durable owner
+or runtime behavior and do not claim native quiescence.
+
+Claude's pending subprocess acquisition now has a separate regression: the prompt
+has already crossed the spawn boundary in argv, but its process handle is late.
+Interruption waits for that handle and its kill acknowledgement, never reads its
+output, and does not replay the prompt. The closed reader cannot report success;
+an explicit successor completes once with supplied context.
+This proves handle ownership, not native process quiescence or zero dispatch.
+The change is test-only; no durable owner or runtime behavior changes.
+
+A test-only follow-up now covers a confirmed failed inference followed by a
+successful successor in Claude and OpenCode, using a small common assertion helper.
+Both require exactly one terminal per turn, one admission per prompt and no replay.
+Claude restores explicitly supplied context with a coherent native prefix;
+OpenCode retains its native session and process. Codex's existing failure/revert/
+successful-successor test supplies the third adapter's evidence without duplication.
+Focused client suites pass: Claude 102, Codex 114, OpenCode 37.
+No runtime, durable owner or storage format changes; these are simulated protocol
+tests, not live provider-error injection or process-loss recovery.
 
 The shared cancellation test work reproduced a further Codex defect: interrupting
 a held `thread/inject_items` restoration marked the active turn interrupted but
