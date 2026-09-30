@@ -9,7 +9,7 @@
 ## What is the Problem Being Solved?
 
 Endo's hardened-JavaScript model rests on the premise that every
-intrinsic shared between fearlessly coöperating compartments is either
+intrinsic shared between fearlessly cooperating compartments is either
 a powerless data constructor or has been carefully tamed.
 The host's `URL` constructor and its companion `URLSearchParams` are
 broadly useful (parsing, normalization, query manipulation) and would
@@ -154,28 +154,28 @@ The permits entry models `%URL%`, `%SharedURL%`, and
 of permitted properties.
 Anything not listed is removed by SES's whitelisting pass.
 
-Below, columns mark which properties are kept (✓), removed (✗), or
-require special treatment (★).
+Below, columns mark which properties are kept (yes), removed (no), or
+require special treatment (special).
 
 #### `%URL%` (start compartment, bound to `globalThis.URL`)
 
 | Property | Disposition | Rationale |
 |---|---|---|
-| `prototype` | ✓ | Required for instances; the same identity as `%SharedURL%.prototype`. |
-| `parse` (static) | ✓ | Pure parsing returning a URL or `null`. |
-| `canParse` (static) | ✓ | Pure predicate. |
-| `createObjectURL` | ✓ | Ambient blob-registry authority; the start compartment may legitimately need it. |
-| `revokeObjectURL` | ✓ | Companion to `createObjectURL`. |
+| `prototype` | yes | Required for instances; the same identity as `%SharedURL%.prototype`. |
+| `parse` (static) | yes | Pure parsing returning a URL or `null`. |
+| `canParse` (static) | yes | Pure predicate. |
+| `createObjectURL` | yes | Ambient blob-registry authority; the start compartment may legitimately need it. |
+| `revokeObjectURL` | yes | Companion to `createObjectURL`. |
 
 #### `%SharedURL%` (every shared compartment, bound to `globalThis.URL`)
 
 | Property | Disposition | Rationale |
 |---|---|---|
-| `prototype` | ✓ | Required for instances; the same identity as `%URL%.prototype`. |
-| `parse` (static) | ✓ | Pure parsing returning a URL or `null`. |
-| `canParse` (static) | ✓ | Pure predicate. |
-| `createObjectURL` | ✗ | Ambient blob-registry authority; not safe to share. |
-| `revokeObjectURL` | ✗ | Companion to `createObjectURL`. |
+| `prototype` | yes | Required for instances; the same identity as `%URL%.prototype`. |
+| `parse` (static) | yes | Pure parsing returning a URL or `null`. |
+| `canParse` (static) | yes | Pure predicate. |
+| `createObjectURL` | no | Ambient blob-registry authority; not safe to share. |
+| `revokeObjectURL` | no | Companion to `createObjectURL`. |
 
 When the lockdown opt-in `urlBlobMethods: 'remove'` is set, the
 start compartment's `URL` uses the `%SharedURL%` permits row
@@ -191,9 +191,9 @@ All are pure and powerless after the constructors are tamed.
 
 | Property | Disposition | Rationale |
 |---|---|---|
-| `prototype` | ✓ | Required for instances. |
-| `prototype.append`, `delete`, `get`, `getAll`, `has`, `set`, `sort`, `toString`, `size` | ✓ | Pure operations on an own-data structure. |
-| `prototype.forEach`, `entries`, `keys`, `values`, `[Symbol.iterator]` | ★ | Pure, but each returns an instance of `%URLSearchParamsIteratorPrototype%`; see below. |
+| `prototype` | yes | Required for instances. |
+| `prototype.append`, `delete`, `get`, `getAll`, `has`, `set`, `sort`, `toString`, `size` | yes | Pure operations on an own-data structure. |
+| `prototype.forEach`, `entries`, `keys`, `values`, `[Symbol.iterator]` | special | Pure, but each returns an instance of `%URLSearchParamsIteratorPrototype%`; see below. |
 
 #### `%URLSearchParamsIteratorPrototype%` (the hidden one)
 
@@ -529,8 +529,7 @@ document.
 
 ## Source issue
 
-`endojs/endo` issue **#2635** "Hardened URL vetted shim" by kriskowal:
-https://github.com/endojs/endo/issues/2635
+[`endojs/endo#2635`](https://github.com/endojs/endo/issues/2635), "Hardened URL vetted shim," by kriskowal.
 
 The issue body proposes adding `URL`, `TextEncoder`, `TextDecoder`,
 and other common JavaScript platform features to the SES shared
@@ -564,7 +563,7 @@ compatibility considerations, brief comparison to the original
 @endo/url package proposal, and open questions.
 ```
 
-(Subsequently split per PR #84 review: the `%URL%` / `%SharedURL%`
+(Subsequently split per [endojs/endo-but-for-bots#84](https://github.com/endojs/endo-but-for-bots/pull/84) review: the `%URL%` / `%SharedURL%`
 bucket-split restructure landed here; `TextEncoder`/`TextDecoder`
 moved to
 [`hardened-text-codecs-shim.md`](./hardened-text-codecs-shim.md).)
