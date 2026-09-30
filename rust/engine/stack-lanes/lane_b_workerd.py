@@ -3,7 +3,8 @@
 
 STACK-DEPTH-REFACTOR.md §5, "CI lane B": workerd with `v8Flags` pinned to
 `--liftoff-only` and to `--no-liftoff`, at the default stack and at
-`--stack-size=866`, since workerd's V8 traps a different set than Node's.
+`--stack-size=836` (984 KiB less the tier-mix headroom, common.py), since
+workerd's V8 traps a different set than Node's.
 The wasm32-wasip1 probe is bundled into a Worker (workerd/worker.js, which
 shims the eight WASI imports the probe uses) and each case is one request to
 a fresh instance. Outputs must match the native reference byte for byte; a
@@ -32,7 +33,8 @@ import common  # noqa: E402
 
 HERE = common.LANES / "workerd"
 TIERS = {"liftoff": ["--liftoff-only"], "turbofan": ["--no-liftoff"], "default": []}
-STACKS = {"default": [], "866": ["--stack-size=866"]}
+REDUCED_STACK = str(common.lane_b_stack(common.WORKERD_STACK_KB))
+STACKS = {"default": [], REDUCED_STACK: [f"--stack-size={REDUCED_STACK}"]}
 SHADOW_MARGIN = 64 * 1024
 
 
@@ -219,7 +221,7 @@ def main():
     report = {"configs": {}}
     all_problems = []
     for tier in args.tier or ["liftoff", "turbofan"]:
-        for stack in args.stack or ["default", "866"]:
+        for stack in args.stack or ["default", REDUCED_STACK]:
             result, problems = run_config(tier, stack, selected, reference, wasm, args)
             report["configs"][config_name(tier, stack)] = result
             all_problems += problems

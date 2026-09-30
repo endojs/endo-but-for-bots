@@ -14,8 +14,8 @@ output line byte for byte against a native reference produced in the same run.
 | `probe/` | A standalone cargo root that runs one case (or a family at a depth, or standard input) and prints `halt=… result=… meter=…`, byte-identical on every host. `build_probe.py` builds it natively and for `wasm32-wasip1` with the `WASM-BLOCKERS.md` B1 workaround. |
 | `ceilings.py` | Re-derives every family's native ceiling by bisection and fails when `cases.rs` disagrees. |
 | `lane_a.py` | **Lane A**: native against Wasmtime at a fixed `max_wasm_stack`. |
-| `lane_b_node.py` | **Lane B**: native against Node's V8 with each tier pinned at 440 KiB, and eager tier-up per function at 500 KiB. Paints the shadow stack. |
-| `lane_b_workerd.py`, `workerd/` | **Lane B**: native against workerd with `v8Flags` pinned, at the default stack and at 866 KB. The probe is bundled into a Worker with a WASI shim; one instance per request. |
+| `lane_b_node.py` | **Lane B**: native against Node's V8 with each tier pinned at 425 KiB, and eager tier-up per function at 500 KiB. Paints the shadow stack. |
+| `lane_b_workerd.py`, `workerd/` | **Lane B**: native against workerd with `v8Flags` pinned, at the default stack and at 836 KiB. The probe is bundled into a Worker with a WASI shim; one instance per request. |
 | `lane_c.py`, `wasmbin.py` | **Lane C**: per-function frame sizes from five compilers, per-family bytes per level and per budget unit, one level of the deepest recursion per family (from a trap's stack trace under Node), the chains' frames summed against the measured slopes, and the worst per-function tier mix against lane B's headroom. |
 | `sweep.py`, `sweep-pins.json` | The grammar sweep: every folding or right-nested production bisected to its ceiling; a shape with no ceiling is classified by its compile-stack slope. Its pins are also tests in `ironhorse-compile/tests/recursion_bounds.rs`. |
 | `expected-traps/` | One list per host configuration of the cases allowed to trap there. |
@@ -59,8 +59,14 @@ A mismatch between a host's output and native is always a failure: it is the
 cross-host determinism check `WASM-BLOCKERS.md` B7 asks for.
 
 Lane A starts at 2,097,152 B and is lowered toward 524,288 B as phases land.
-Lane B's 440 KiB is the Chromium Worker's 500 KB less 12%; workerd's 866 KB is
-V8's 984 KiB less the same margin.
+Lane B's stacks sit under the real limits (the Chromium Worker's 500 KiB, which
+Node stands in for, and workerd's 984 KiB) by the headroom a per-function tier
+mix can need over either pure tier, `TIER_MIX_HEADROOM` in `common.py`: 17.6%
+today, so 425 KiB and 836 KiB.
+Lane C measures that excess for every recursion chain and prints `WIDEN
+MARGIN` when it passes the headroom; it is a print, since the lane is trend
+only, and the answer is to raise the constant and re-record lane B's lists.
+The headroom sits 0.1% over the measured excess, so any growth prints it.
 
 ## Painting
 
@@ -83,11 +89,16 @@ model bounds and lane B's headroom absorbs.
 Lane C is trend only: its frame tables, slopes and chains are the record, and
 the run fails only when a collector reads nothing.
 
-Three findings from building the lanes on this tree, two recorded in `cases.rs`: the report's `flat-fast` ceiling of 1,022 was a
+Three findings from building the lanes on this tree.
+Two are recorded in `cases.rs`: the report's `flat-fast` ceiling of 1,022 was a
 probe depth (the compact path halts at 2,015 like the generic one), and
 `instanceof` through bound functions halts at the budget with or without a
 `@@hasInstance` in the chain, so the report's U1 composition is a cross-host
 check of that halt rather than an accepted program.
+The third is in `common.py`: over every heavy family, the worst per-function
+tier mix exceeds the larger pure tier by up to 17.5% (`take` and `iter-map`;
+`array-from` 13.5%), past the 13.6% the report allowed from the chains it
+modelled, so lane B's headroom is 17.6% and its stacks 425 and 836 KiB.
 Lane C also shows that for the left-folded chain kinds (`&&`, `||`, `??`,
 comparison, computed member, `else if`) the deepest recursion at the ceiling
 is the post-parse `duplicate_proto_setter_line` walk, one frame per level,
