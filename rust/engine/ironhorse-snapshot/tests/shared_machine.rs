@@ -371,9 +371,7 @@ fn eager_lazy_checkpoint_and_rewind_keep_one_owner_graph_per_resume() {
             .unwrap();
         // No allocation or snapshot-driven pump changes the live handles' identity.
         let original = b.global_object_identity("log");
-        continuous
-            .checkpoint(&signature, &mut *store.borrow_mut())
-            .unwrap();
+        continuous.checkpoint(&signature, &*store).unwrap();
         assert_eq!(original, b.global_object_identity("log"));
         let mut restored = if lazy {
             resume_shared_from_store_lazy(store.clone(), &signature, empty_policy(&ids)).unwrap()
@@ -385,13 +383,9 @@ fn eager_lazy_checkpoint_and_rewind_keep_one_owner_graph_per_resume() {
         let out = restored.machine().run_promise_jobs();
         assert!(out.completed, "{:?}", out.halt);
         assert_eq!(eval(&rb, "log.join(',')"), "43");
-        restored
-            .checkpoint(&signature, &mut *store.borrow_mut())
-            .unwrap();
+        restored.checkpoint(&signature, &*store).unwrap();
         restored.full_collect(&*store.borrow()).unwrap();
-        restored
-            .checkpoint(&signature, &mut *store.borrow_mut())
-            .unwrap();
+        restored.checkpoint(&signature, &*store).unwrap();
         validate_store(&*store.borrow(), &signature).unwrap();
         let retained = rb.global_value("f").unwrap();
         eval(&rb, "log.push(100); 0");
@@ -1078,8 +1072,7 @@ fn host_captures_survive_eager_lazy_store_collection_checkpoint_and_rewind() {
         let mut live = begin_shared_store_session(m, &signature, &mut *store.borrow_mut(), 0)
             .ok()
             .unwrap();
-        live.checkpoint(&signature, &mut *store.borrow_mut())
-            .unwrap();
+        live.checkpoint(&signature, &*store).unwrap();
         let mut restored = if lazy {
             resume_shared_from_store_lazy(store.clone(), &signature, host_policy(&ids)).unwrap()
         } else {
@@ -1091,13 +1084,9 @@ fn host_captures_survive_eager_lazy_store_collection_checkpoint_and_rewind() {
         assert_eq!(expected.meter_raw, actual.meter_raw);
         assert!(actual.completed);
         assert_eq!(eval(&rb, "result + ':' + obj.value"), "43:42");
-        restored
-            .checkpoint(&signature, &mut *store.borrow_mut())
-            .unwrap();
+        restored.checkpoint(&signature, &*store).unwrap();
         restored.full_collect(&*store.borrow()).unwrap();
-        restored
-            .checkpoint(&signature, &mut *store.borrow_mut())
-            .unwrap();
+        restored.checkpoint(&signature, &*store).unwrap();
         let root = rb.global_value("host").unwrap();
         eval(&rb, "result = 90; 0");
         let rewound =
@@ -1221,13 +1210,9 @@ fn primitive_host_captures_are_relocated_by_collection_and_store_restore() {
     let mut session = begin_shared_store_session(m, &signature, &mut *store.borrow_mut(), 0)
         .ok()
         .unwrap();
-    session
-        .checkpoint(&signature, &mut *store.borrow_mut())
-        .unwrap();
+    session.checkpoint(&signature, &*store).unwrap();
     session.full_collect(&*store.borrow()).unwrap();
-    session
-        .checkpoint(&signature, &mut *store.borrow_mut())
-        .unwrap();
+    session.checkpoint(&signature, &*store).unwrap();
     let mut policy = empty_policy(&ids);
     policy.host_callables.insert(id, Rc::new(CaptureValue));
     let restored = resume_shared_from_store_lazy(store, &signature, policy).unwrap();
@@ -1315,4 +1300,64 @@ fn queued_native_promise_jobs_survive_a_shared_checkpoint() {
         assert!(outcome.completed, "{label}: drain {:?}", outcome.halt);
         assert_eq!(eval(&ra, drain), expected, "{label}: resumed result");
     }
+}
+
+/// A host compartment created but not yet used has its environment made at
+/// the next idle boundary, which for a checkpoint is its preparation. That
+/// can fault pages in (the new environment's global bindings read the
+/// intrinsics), so on a lazily resumed session it must run before the store
+/// is borrowed for the commit; the checkpoint then persists the new
+/// environment.
+#[test]
+fn a_checkpoint_prepares_a_pending_compartment_before_it_borrows_the_store() {
+    use ironhorse_snapshot::machine::{begin_shared_store_session, resume_shared_from_store_lazy};
+    use ironhorse_snapshot::store::{
+        slot_page_count, validate_store_content, HeapStore, MemoryStore, StoreError,
+    };
+    use std::{cell::RefCell, rc::Rc};
+    let signature = Signature::new("shared-store");
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    let m = Machine::new();
+    let a = m.new_compartment();
+    eval(&a, "var answer = 42; 0");
+    let ids = m
+        .with_persistence(|i| {
+            i.shared_environment_ids()
+                .into_iter()
+                .map(EnvironmentId)
+                .collect::<Vec<_>>()
+        })
+        .unwrap();
+    drop(
+        begin_shared_store_session(m, &signature, &mut *store.borrow_mut(), 0)
+            .ok()
+            .unwrap(),
+    );
+    let mut restored =
+        resume_shared_from_store_lazy(store.clone(), &signature, empty_policy(&ids)).unwrap();
+    let pages = slot_page_count(store.borrow().manifest().unwrap().slot_count);
+    let evicted = restored
+        .machine()
+        .with_persistence(|i| (0..pages).filter(|&p| i.slots().evict_page(p)).count())
+        .unwrap();
+    assert!(evicted > 0, "the preparation has pages to fault in");
+
+    let pending = restored.machine().new_compartment();
+    assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 2);
+    assert!(pending.snapshot_id().is_some());
+    assert_eq!(eval(&pending, "typeof Object"), "function");
+    validate_store_content(&*store.borrow(), &signature).unwrap();
+
+    // A store the caller holds borrowed is refused before anything is
+    // committed, and the session checkpoints once it is released.
+    let held = store.borrow();
+    assert_eq!(
+        restored.checkpoint(&signature, &*store),
+        Err(StoreError::MachineOperation(
+            "checkpoint: the store is already borrowed".to_string()
+        ))
+    );
+    assert_eq!(held.manifest().unwrap().epoch, 2);
+    drop(held);
+    assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 3);
 }

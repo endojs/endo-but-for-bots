@@ -1483,7 +1483,7 @@ pub mod engine {
                         host,
                     );
                 Ok(if outcome.completed && checkpoint_due {
-                    let r = session.checkpoint(&self.signature, &mut *self.store.borrow_mut());
+                    let r = session.checkpoint(&self.signature, &*self.store);
                     (outcome, Some(r), crank_start_raw)
                 } else {
                     (outcome, None, crank_start_raw)
@@ -1630,7 +1630,7 @@ pub mod engine {
                     .map_err(store_err)?;
                 session.set_collections(collections);
                 session
-                    .checkpoint(&self.signature, &mut *self.store.borrow_mut())
+                    .checkpoint(&self.signature, &*self.store)
                     .map_err(store_err)?;
                 Ok(stats.slots_reclaimed)
             }))
@@ -1727,7 +1727,7 @@ pub mod engine {
                 // store fault; it comes back as the store's error and
                 // rewinds like any failed flush.
                 ironhorse_snapshot::machine::catch_store_fault(|| {
-                    session.checkpoint(&self.signature, &mut *self.store.borrow_mut())
+                    session.checkpoint(&self.signature, &*self.store)
                 })
             };
             match r {

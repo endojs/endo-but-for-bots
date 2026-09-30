@@ -2912,14 +2912,30 @@ impl SharedStoreSession {
         self.tracking.collections = collections;
     }
 
+    /// Commit the machine's state since the last checkpoint, as
+    /// [`checkpoint_to_store`] does for a [`StoreSession`].
+    ///
+    /// The store is borrowed only once the machine is prepared for
+    /// persistence: preparation gives any host compartment still waiting for
+    /// one its environment, which can fault pages in, and a lazily resumed
+    /// session faults them from the store it resumed from, usually this one.
+    /// Preparation and commit run under one borrow of the machine, so no
+    /// evaluation lands between them. A store the caller already holds
+    /// borrowed is refused with [`StoreError::MachineOperation`], before
+    /// anything is committed.
     pub fn checkpoint(
         &mut self,
         signature: &Signature,
-        store: &mut dyn HeapStore,
+        store: &std::cell::RefCell<dyn HeapStore + '_>,
     ) -> Result<u64, StoreError> {
         self.machine
             .with_persistence(|interp| {
-                checkpoint_to_store_core(interp, &mut self.tracking, signature, store)
+                let mut store = store.try_borrow_mut().map_err(|_| {
+                    StoreError::MachineOperation(
+                        "checkpoint: the store is already borrowed".to_string(),
+                    )
+                })?;
+                checkpoint_to_store_core(interp, &mut self.tracking, signature, &mut *store)
             })
             .map_err(shared_access_error)?
     }
