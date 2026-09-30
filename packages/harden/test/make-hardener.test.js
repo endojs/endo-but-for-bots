@@ -109,6 +109,82 @@ test('harden typed arrays', t => {
   }
 });
 
+test('harden rejects TypedArrays backed by resizable ArrayBuffers', t => {
+  const resizableDescriptor = Object.getOwnPropertyDescriptor(
+    ArrayBuffer.prototype,
+    'resizable',
+  );
+  if (resizableDescriptor?.get === undefined) {
+    t.pass('Resizable ArrayBuffers are not available');
+    return;
+  }
+
+  const makeLengthTrackingView = buffer => new Uint8Array(buffer);
+  const makeFixedLengthView = buffer => new Uint8Array(buffer, 0, 1);
+  for (const makeView of [makeLengthTrackingView, makeFixedLengthView]) {
+    const nativeBuffer = new ArrayBuffer(1, { maxByteLength: 2 });
+    const nativeAccepted = Reflect.preventExtensions(makeView(nativeBuffer));
+    const buffer = new ArrayBuffer(1, { maxByteLength: 2 });
+    const array = makeView(buffer);
+    const h = makeHardener({ traversePrototypes: true });
+
+    t.throws(() => h(array), { instanceOf: TypeError });
+    if (nativeAccepted) {
+      t.true(
+        Object.isExtensible(array),
+        'the compatibility rejection occurs before the nonconforming native operation',
+      );
+    }
+  }
+});
+
+test('harden rejects length-tracking TypedArrays backed by growable SharedArrayBuffers', t => {
+  const growableDescriptor =
+    typeof SharedArrayBuffer === 'undefined'
+      ? undefined
+      : Object.getOwnPropertyDescriptor(
+          SharedArrayBuffer.prototype,
+          'growable',
+        );
+  if (growableDescriptor?.get === undefined) {
+    t.pass('Growable SharedArrayBuffers are not available');
+    return;
+  }
+
+  const nativeBuffer = new SharedArrayBuffer(1, { maxByteLength: 2 });
+  const nativeAccepted = Reflect.preventExtensions(
+    new Uint8Array(nativeBuffer),
+  );
+  const buffer = new SharedArrayBuffer(1, { maxByteLength: 2 });
+  const array = new Uint8Array(buffer);
+  const h = makeHardener({ traversePrototypes: true });
+
+  t.throws(() => h(array), { instanceOf: TypeError });
+  if (nativeAccepted) {
+    t.true(
+      Object.isExtensible(array),
+      'the compatibility rejection occurs before the nonconforming native operation',
+    );
+  } else {
+    const fixedLengthBuffer = new SharedArrayBuffer(1, { maxByteLength: 2 });
+    const fixedLengthArray = new Uint8Array(fixedLengthBuffer, 0, 1);
+    t.is(h(fixedLengthArray), fixedLengthArray);
+  }
+});
+
+test('harden accepts TypedArrays backed by fixed buffers', t => {
+  const arrays = [new Uint8Array(new ArrayBuffer(1))];
+  if (typeof SharedArrayBuffer !== 'undefined') {
+    arrays.push(new Uint8Array(new SharedArrayBuffer(1)));
+  }
+  const h = makeHardener({ traversePrototypes: true });
+
+  for (const array of arrays) {
+    t.is(h(array), array);
+    t.true(Object.isSealed(array));
+  }
+});
+
 test('harden typed arrays and their expandos', t => {
   const h = makeHardener({ traversePrototypes: true });
   const a = new Uint8Array(1);
