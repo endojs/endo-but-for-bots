@@ -146,12 +146,25 @@ for (const failMailbox of [false, true]) {
         (await powers.persistence.readFormula(handleNumber)).formula.type,
         'handle',
       );
+      t.is(handleDeletionAttempts, 1);
       armed = false;
       t.is(await E(host).identify('failed-guest'), undefined);
       const sibling = await E(host).makeDirectory('after-failure');
       t.deepEqual(await E(sibling).list(), []);
       await E(host).remove('after-failure');
-      t.is(handleDeletionAttempts, 1);
+      // The later drain retries failed work, but never replays acknowledged
+      // sibling cleanup. All acquired formulas are now absent.
+      t.is(handleDeletionAttempts, 2);
+      for (const number of [handleNumber, mailboxNumber, mailHubNumber]) {
+        t.is(
+          deleted.filter(deletedNumber => deletedNumber === number).length,
+          1,
+        );
+        // eslint-disable-next-line no-await-in-loop
+        await t.throwsAsync(powers.persistence.readFormula(number), {
+          message: /No formula exists for number/,
+        });
+      }
     },
   );
 }

@@ -270,9 +270,11 @@ test('cancelled text is journaled only after producer shutdown acknowledgement',
   const controller = new AbortController();
   let release = () => {};
   let entered = () => {};
+  /** @type {Promise<void>} */
   const barrier = new Promise(resolve => {
     release = resolve;
   });
+  /** @type {Promise<void>} */
   const stopped = new Promise(resolve => {
     entered = resolve;
   });
@@ -325,5 +327,7 @@ test('known host completion before delayed call observation never precedes its c
   });
   const { pairs } = pairToolCalls(await f.recover());
   t.is(pairs.length, 1);
-  t.is(pairs[0].result.content, 'done');
+  const { result } = pairs[0];
+  if (!result) throw Error('Expected the known host completion');
+  t.is(result.content, 'done');
 });

@@ -375,7 +375,13 @@ test('publishes of one session share a chain across tool instances', async t => 
   const asset = makeAssetServer();
   /** @type {any} */
   let recorded;
+  /** @type {Promise<unknown>} */
   let chain = Promise.resolve();
+  /**
+   * @template T
+   * @param {() => Promise<T>} thunk
+   * @returns {Promise<T>}
+   */
   const serialize = thunk => {
     const run = chain.then(thunk, thunk);
     chain = run.catch(() => {});
@@ -475,7 +481,8 @@ test('publication checks index shape, not whether a later file open succeeds', a
   const asset = makeAssetServer();
   let opens = 0;
   const index = Far('Unreadable index', {
-    open: async () => {
+    open: async options => {
+      t.deepEqual(options, { read: true });
       opens += 1;
       throw Error('EACCES: index cannot be opened');
     },

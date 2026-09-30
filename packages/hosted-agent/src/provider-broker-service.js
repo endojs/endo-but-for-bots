@@ -1404,9 +1404,15 @@ export const makeOwnedProviderBrokerService = ({
     console.error(`${label} broker cleanup pending`, error),
   log = (...args) => console.error(...args),
 }) => {
+  /** @typedef {{readBase64(): Promise<string>}} BrokerSecret */
+  /**
+   * The pool branch receives the operator's durable namespace rather than
+   * a single credential. Reads intentionally return unknown stored values.
+   * @typedef {{lookup(name: string): Promise<unknown>, has(name: string): Promise<boolean>, list(): Promise<string[]>, storeValue(value: unknown, name: string): Promise<unknown>}} BrokerPoolNamespace
+   */
   /**
    * @param {Config} config
-   * @param {{readBase64(): Promise<string>}} secret
+   * @param {BrokerSecret | BrokerPoolNamespace} secret
    * @param {Record<string,string>} env
    */
   const makeKit = (config, secret, env) => {
@@ -1489,7 +1495,7 @@ export const makeOwnedProviderBrokerService = ({
       // namespace of the operator's, holding `subscriptions` (the declared
       // set, a stored value an operator rewrites to add a member), each
       // member's secret under its `secretName`, and what the pool keeps.
-      const namespace = /** @type {any} */ (secret);
+      const namespace = /** @type {BrokerPoolNamespace} */ (secret);
       const state = makeAccountJournal({
         powers: namespace,
         prefix: 'pool-state-v2-',
@@ -1645,7 +1651,8 @@ export const makeOwnedProviderBrokerService = ({
       label,
       policy,
       accountRef,
-      secret,
+      // The persisted profile selects the single-secret branch here.
+      secret: /** @type {BrokerSecret} */ (secret),
       adaptRequest,
       ...(credential === undefined ? {} : { credential }),
       ...(makeModelRead === undefined

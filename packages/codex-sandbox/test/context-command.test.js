@@ -14,11 +14,18 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+/** @import {ExecutionContext} from 'ava' */
+
 const helper = fileURLToPath(
   new URL('../oci/context-command.mjs', import.meta.url),
 );
 const id = '01a0d26e-d933-71c1-a255-d6f7c2e256f0';
 const turnId = '01a0d26e-d945-7253-afcf-857ec39f0136';
+/**
+ * @param {ExecutionContext} t
+ * @param {unknown} input
+ * @param {(root: string) => Promise<unknown>} [setup]
+ */
 const run = async (t, input, setup = async _root => {}) => {
   const root = await realpath(
     await mkdtemp(path.join(tmpdir(), 'codex-context-command-')),

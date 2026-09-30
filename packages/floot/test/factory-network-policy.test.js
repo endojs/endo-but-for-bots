@@ -962,8 +962,15 @@ test('a view hears a network request the model raised, without asking', async t 
   const world = await makeWorld(t);
   const view = iterateReader(await E(world.session).watch());
   const snapshot = (await view.next()).value;
-  t.is(snapshot.type, 'snapshot');
-  t.is(snapshot.network.policy, 'off');
+  t.like(snapshot, { type: 'snapshot', network: { policy: 'off' } });
+  if (
+    !snapshot ||
+    typeof snapshot !== 'object' ||
+    !('network' in snapshot) ||
+    !snapshot.network ||
+    typeof snapshot.network !== 'object'
+  )
+    throw Error('Expected network snapshot');
   t.false('request' in snapshot.network);
   world.setMode('request');
   const turn = await E(world.session).startTurn('look it up');
@@ -977,7 +984,10 @@ test('a view hears a network request the model raised, without asking', async t 
 test('a view hears an emergency stop and the resume that follows', async t => {
   const world = await makeWorld(t);
   const view = iterateReader(await E(world.session).watch());
-  t.deepEqual((await view.next()).value.execution, {
+  const snapshot = (await view.next()).value;
+  if (!snapshot || typeof snapshot !== 'object' || !('execution' in snapshot))
+    throw Error('Expected execution snapshot');
+  t.deepEqual(snapshot.execution, {
     state: 'running',
     supported: true,
   });
@@ -993,10 +1003,18 @@ test('a view hears an emergency stop and the resume that follows', async t => {
 test('a mail turn reaches a view: running, then the transcript it leaves', async t => {
   const world = await makeWorld(t);
   const list = iterateReader(await E(world.factory).watchSessions());
-  t.is((await list.next()).value.sessions[0].activity, 'passive');
+  const listed = (await list.next()).value;
+  if (
+    !listed ||
+    typeof listed !== 'object' ||
+    !('sessions' in listed) ||
+    !Array.isArray(listed.sessions)
+  )
+    throw Error('Expected sessions snapshot');
+  t.is(listed.sessions[0].activity, 'passive');
   const view = iterateReader(await E(world.session).watch());
   const snapshot = (await view.next()).value;
-  t.is(snapshot.running, null);
+  t.like(snapshot, { running: null });
   world.mail();
   // No FlootTurn exists for a mail turn; `running` is how a view knows of it.
   const started = await nextOfType(view, 'running');

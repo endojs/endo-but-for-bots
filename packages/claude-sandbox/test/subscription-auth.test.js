@@ -232,6 +232,7 @@ test('model-specific exhaustion cannot block the whole subscription', t => {
     seven_day_opus: { utilization: 100 },
     seven_day_sonnet: { utilization: 100 },
   });
+  if (!reading.rateLimits) throw Error('Expected rate-limit reading');
   t.false(reading.rateLimits.limitReached);
   t.deepEqual(
     reading.rateLimits.windows.map(window => window.windowId),

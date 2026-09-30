@@ -168,12 +168,14 @@ test('transcript aggregate bound is retained across snapshot reconstruction', as
   t.is(transcriptIndex('65535', 65_536), 65_535);
 });
 
-for (const [where, after] of [
+/** @type {Array<[string, boolean]>} */
+const publicationFailures = [
   ['content', false],
   ['content', true],
   ['event', false],
   ['event', true],
-]) {
+];
+for (const [where, after] of publicationFailures) {
   test(`transcript fences uncertain ${where} publication (stored=${after})`, async t => {
     const { powers, values, fail } = fixture();
     const journal = makeTurnJournal(powers);

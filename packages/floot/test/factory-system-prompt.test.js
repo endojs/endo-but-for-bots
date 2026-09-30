@@ -120,10 +120,12 @@ const makeWorld = ({ promptEnvironment, fetch, lookupProvider } = {}) => {
     stop: () => undefined,
   });
   /** @type {Map<string, unknown>} */
-  const hostStore = new Map([
-    ['codex-backend', backend],
-    [AUTH_SECRET_PETNAME, authSecret('test-key')],
-  ]);
+  const hostStore = new Map(
+    /** @type {[string, unknown][]} */ ([
+      ['codex-backend', backend],
+      [AUTH_SECRET_PETNAME, authSecret('test-key')],
+    ]),
+  );
   const host = Far('PromptHost', {
     list: () => harden([...hostStore.keys()]),
     has: name => hostStore.has(name),

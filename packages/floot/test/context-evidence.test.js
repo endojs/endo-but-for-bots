@@ -47,6 +47,10 @@ const settled = {
 };
 
 test('certificate reconciles repeated IDs one-to-one and accounts for exact evidence frontier', async t => {
+  const tools = [
+    { ...settled, callId: 'host1', result: 'first' },
+    { ...settled, callId: 'host2', result: 'second', resultSequence: '7' },
+  ];
   const turn = record(
     [
       call('same'),
@@ -55,17 +59,14 @@ test('certificate reconciles repeated IDs one-to-one and accounts for exact evid
       result('same', 'second'),
     ],
     {
-      tools: [
-        { ...settled, callId: 'host1', result: 'first' },
-        { ...settled, callId: 'host2', result: 'second', resultSequence: '7' },
-      ],
+      tools,
     },
   );
   t.deepEqual(await certifyContextEvidence(turn, noRead), {
     kind: 'no-tool-exceptions',
     throughSequence: '7',
   });
-  turn.tools.push({ ...settled, callId: 'unmatched-third', result: 'third' });
+  tools.push({ ...settled, callId: 'unmatched-third', result: 'third' });
   t.is(await certifyContextEvidence(turn, noRead), undefined);
 });
 
@@ -144,8 +145,11 @@ test('malformed and inconsistent certificates fail structural validation', t => 
 });
 
 test('reader skips only archived certified evidence at or before boundary, never retained or late evidence', async t => {
-  const old = record([call('native')], { activity: [settled] });
-  old.contextEvidence = await certifyContextEvidence(old, noRead);
+  const original = record([call('native')], { activity: [settled] });
+  const old = {
+    ...original,
+    contextEvidence: await certifyContextEvidence(original, noRead),
+  };
   old.transcript[0].payloadRef = 'call';
   const boundary = record([checkpoint], { turnId: '4' });
   boundary.transcript[0].sequence = '5';

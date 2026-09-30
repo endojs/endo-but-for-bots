@@ -8,26 +8,29 @@ const oldId = '01a0d26e-d933-71c1-a255-d6f7c2e256f0';
 const newId = '392c7a52-630c-44ef-9e3c-8c6cfcb21faf';
 const turnId = '01a0d26e-d945-7253-afcf-857ec39f0136';
 const timestamp = '2026-09-24T08:01:15.081Z';
+/** @returns {`${string}\n`} */
 const row = (type, payload) =>
   `${JSON.stringify({ type, timestamp, payload })}\n`;
 const capture = () => ({
   sessionId: oldId,
   turnId,
   baseInstructions: 'Native base instructions 猫',
-  payload:
+  payload: /** @type {`${string}\n`} */ (
+    // Every row contributes its terminating newline, including the final row.
     row('compacted', {
       message: '',
       replacement_history: [
         { type: 'compaction', encrypted_content: 'opaque/bytes+==' },
       ],
     }) +
-    row('world_state', { full: true, state: { model: 'gpt-6-luna' } }) +
-    row('turn_context', { turn_id: turnId, cwd: '/workspace' }) +
-    row('response_item', {
-      type: 'message',
-      role: 'assistant',
-      content: [{ type: 'output_text', text: 'hello' }],
-    }),
+      row('world_state', { full: true, state: { model: 'gpt-6-luna' } }) +
+      row('turn_context', { turn_id: turnId, cwd: '/workspace' }) +
+      row('response_item', {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'hello' }],
+      })
+  ),
 });
 const target = () => ({
   sessionId: newId,
@@ -124,7 +127,11 @@ test('renderer refuses noncanonical cuts, unsupported items and torn payloads', 
     '',
   ])
     t.throws(() =>
-      renderCodexNativeContext({ ...selected, payload }, target()),
+      renderCodexNativeContext(
+        // Deliberately bypass the complete-line type to exercise wire rejection.
+        { ...selected, payload: /** @type {`${string}\n`} */ (payload) },
+        target(),
+      ),
     );
 });
 

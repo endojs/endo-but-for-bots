@@ -16,8 +16,9 @@ Priority current-state review (updated 2026-09-30):
 the intended end state, rather than reviewing historical commits. It is the
 current prioritization entry point: primary ownership and explicit account identity
 are consolidated, and the native protocol-conformance matrix is complete.
-All four backends passed generation-185 acceptance; the Codex-only generation-186
-image change passed Luna lifecycle and restart recall with native checkpoints.
+All four backends pass generation-187 acceptance on app `a4c97588a`, host `a5a4a7d`.
+The daemon cleanup changes use generation-186's unchanged image pins; fresh
+Claude/Codex restart recall retains native checkpoints on both completed turns.
 Simplicity is still unproven, and whole-context/unresolved-evidence memory bounds
 remain incomplete. Direct-Fae compaction, evidence paging, local-development
 storage policy and native process-loss recovery retain their explicit deferrals.
@@ -224,29 +225,95 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Current retained-code durability audit — required, in progress
 
-Current-source reconciliation (2026-09-30): two concrete orderly-failure cleanup
-defects remain, separate from the deferred native process-loss design:
+Current-source reconciliation (2026-09-30): collection retries and uninstantiated,
+unpublished construction-key cleanup are implemented for the same incarnation.
+Both are separate from the deferred native process-loss design:
 
-- `manager.js` shifts collection callbacks before executing them and discards
-  failures. `collection-disposal-barrier.test.js` still characterizes that clearing
-  deletion/reclamation faults does not reclaim retained storage. Next: preserve
-  retry ownership for idempotent storage cleanup only after cancellation has
-  positively completed. Rejected cancellation must stay fenced, not be retried
-  as if it had succeeded. Do not starve sibling work or retry forever in one drain.
-- `guest-construction-cleanup.test.js` still expects an orphan agent identity key
-  after failed construction, despite no surviving formulas for its node. A bounded
-  never-exposed construction-key retirement design is needed; unconditional key
-  deletion or general peer-identity retirement is not authorized by this finding.
+- `manager.js` now retains failed cleanup jobs, original metadata and unfinished
+  storage stages. Later graph drains retry idempotent storage cleanup only after
+  cancellation has positively completed. Rejected cancellation stays fenced and
+  is not retried. Nested/concurrent drains do not repeat in-flight retries;
+  persistent old failures do not reject unrelated graph work.
+  This is same-incarnation ownership, not durable restart recovery.
+- Failed guest construction now retires its newly allocated key only when no
+  guest was instantiated or publication attempted, construction pins were released,
+  and node-wide formula, graph, controller, in-flight-read, collection and retention
+  checks are clear. Exact stored ownership is rechecked before synchronous deletion.
+  Host keys, existing guests, provider Secrets and renewal credentials are excluded.
+  No general peer-identity retirement or startup orphan-key sweep is implemented.
 
 The earlier lost-acknowledgement unnamed-marshal reclamation gap is superseded:
 the current publication regression requires that unpublished formula to be absent.
 Module-local pool draining and oracle disposal are implemented; cross-worker
 exclusion and safe retirement epochs are not established by those fixes.
-Root docs now pass, while test-inclusive package type diagnostics still need a
-fresh scoped reconciliation. Those build limitations must not be reported as a
-green whole-repository typecheck.
+Fresh type reconciliation at `a4c97588a`: hosted-agent's configured source-only
+`lint:types` passes; Codex's test-inclusive gate reports 25 diagnostics in four
+test files. Explicit `tsc -p` runs for Floot and Claude report 82 diagnostics in
+17 test files and 81 in eight test files, respectively.
+Neither package defines `lint:types`; OpenCode has neither that script nor a
+package tsconfig. These runs emitted no production-file diagnostics, but are not
+a green test-inclusive or whole-repository gate.
+Current actionable drift includes Floot's implemented `assertIdleForReplacement`
+missing from the explicit agent return declaration, nine obsolete ignored
+`hostedContinuity` fixture options, and inadequately typed current protocol
+fixtures. The focused Floot hosted-agent suite passes 14 runtime tests; the
+declaration mismatch is not an absent runtime method.
+Next: reconcile these current interfaces and fixtures without adding legacy
+option support or weakening malformed-input coverage.
+Codex follow-up: all 25 diagnostics are corrected in four test fixtures.
+Captured-state narrowing, setup callback return types, newline-complete fixture
+payloads and async writer iterator signatures now match their current contracts.
+Malformed/torn payloads still cross an explicitly marked test boundary and are
+rejected by the unchanged runtime parser. Full Codex tests pass (430), package
+typechecking passes, and lint reports zero errors (74 warnings).
+Independent adversarial review passes; no runtime implementation changed.
+Floot follow-up: the agent return declaration now includes its two existing
+replacement methods, and nine ignored `hostedContinuity` fixture options are gone.
+The journal tests describe their shared contract rather than obsolete backend modes;
+reply-event assertions explicitly reject malformed events before reading their type.
+All 732 Floot tests pass; scoped lint has zero errors (54 warnings), formatting
+passes, and root documentation builds with zero errors (163 warnings).
+The explicit Floot typecheck drops from 82 to 72 diagnostics, all in other tests;
+this is partial reconciliation, not a green package type gate.
+No runtime implementation or durable state format changes.
+Claude follow-up: all 81 test diagnostics are corrected without suppressions.
+Typed mutation tables and explicit shape checks preserve malformed native-context
+coverage. Review rejected test casts around two genuine shared declaration gaps:
+the catalog filter is now declared optional, and broker powers declare their
+existing single-Secret or pool-namespace alternatives at the implementation boundary.
+Claude and hosted-agent typechecks pass. The full Claude suite passes 519 tests;
+22 affected tests pass again after the declaration corrections.
+Independent adversarial review approves; no runtime behavior or durable owner changes.
+The final documentation build passes with zero errors (165 warnings).
+Root `build:types` encounters generated-declaration input/output collisions
+(`TS5055`) and a `subscription-auth.js` missing-`now` declaration diagnostic
+(`TS2345`), so its chained `test:types` did not run.
+Package checks do not establish a green root type-build gate; generated-output
+reconciliation remains necessary before claiming that result.
+Type reconciliation follow-up: all remaining 72 Floot test diagnostics are fixed
+in 15 fixture files. Explicit result/event narrowing, typed case tables and
+captured-state records retain the existing assertions; malformed runtime options
+and mail receipts still reach their rejection tests through documented boundaries.
+The reply-fold corpus now supplies the three required zero-valued usage counters.
+Floot's full test-inclusive typecheck and 732 tests pass; package lint reports
+zero errors (279 warnings), and formatting passes. Independent review approves.
+
+Generated-output reconciliation confirms the earlier missing-`now` report was an
+artifact of a partial declaration build: a clean root `build:types` passes without
+changing the credential implementation. Ignored generated declarations, maps and
+build caches were moved to recoverable temporary archives, not deleted; tracked
+declarations, dependencies and runtime state were untouched.
+A subsequent incremental root build still encountered `TS5055`; another clean
+build passes. This proves the clean gate, not repeatable incremental builds.
+Clean declarations also exposed Claude's overly broad translator return type:
+it now declares the actual shared channel reader, with no runtime change.
+Claude's test-inclusive typecheck and 25 translator tests pass; scoped lint has
+zero errors (two warnings). No new durable owner or storage format is introduced.
+Final serial gates pass: root documentation has zero errors (180 warnings), and
+all 14 opted-in root type-contract tasks succeed against the clean declarations.
 RA-04 and the current cutover evidence are recorded above and in the alignment doc.
-No new cleanup implementation is claimed by this reconciliation.
+Both cleanup changes are deployed in generation 187 with fresh cross-backend
+lifecycle and ordinary restart-recall acceptance.
 
 Native-context journal follow-up (2026-09-24): a real daemon/worker reconstruction
 regression now exercises the production Floot agent and private immutable storage
@@ -568,7 +635,8 @@ file); formatting and root documentation generation pass (176 documentation
 warnings). This removes one unused construction path, not the remaining key
 retirement or failed collection retry defects.
 
-Collection retry ownership — reproduced, unresolved (2026-09-24):
+Collection retry ownership — historical reproduction (2026-09-24),
+same-incarnation fix implemented (2026-09-30):
 `drainCollectionCleanup` shifts each callback before running it.
 At reproduction, cancellation or formula/store deletion failures could resolve
 the callback while retaining a failed collection fence; reclamation could throw
@@ -579,11 +647,11 @@ scratch reclamation failure, creates and removes an unrelated directory to drain
 fresh graph work, and verifies the original cleanup attempt count does not change.
 The original formula or scratch bytes remain; lookup still refuses resurrection.
 All four barrier cases pass, characterizing an open defect rather than recovery.
-Replace the no-retry assertions with successful reclamation assertions when fixed.
+The September 30 fix replaces those assertions with successful reclamation checks.
 
-The next bounded implementation should separate acknowledged-stopped storage
-cleanup from failed cancellation, retain per-stage progress and original metadata,
-and exclude in-flight records from reentrant drains.
+The implementation separates acknowledged-stopped storage cleanup from failed
+cancellation, retains per-stage progress and original metadata, and excludes
+retries while another drain is active.
 Keeping a failed callback at the queue head or awaiting one shared drain promise
 can deadlock when an awaited cleanup callback reenters a graph operation.
 `context.cancel()` caches its disposal promise, including rejection: rerunning the
@@ -592,6 +660,22 @@ Automatic native disposal recovery is not authorized by this finding or solved b
 a queue change; it remains distinct from retrying storage after proven cancellation.
 Formula deletion preceding failed storage reclamation also means in-memory retry
 ownership alone would not prove restart recovery.
+
+Failed jobs retain remaining formula/store deletions, scratch directories and
+content hashes; successful stages are not replayed.
+Tree candidates are captured before removal, so deleting a root cannot hide a
+failed child removal on retry; surviving references are checked on each attempt.
+Worker disconnection must also succeed before reconstruction fences are cleared.
+New regressions cover lost deletion acknowledgements, nested and concurrent graph
+drains, persistent failures with unrelated work, and partial tree reclamation.
+All 75 barrier, content-store, directory, marshal-publication and guest-construction
+regressions pass; daemon typechecking passes.
+Changed-file lint has zero errors (71 warnings); root docs have zero errors
+(163 warnings). Independent adversarial review passes.
+The content-store test fixture now uses a short temporary Unix socket path so
+daemon-backed tests also run from nested worktrees.
+This change is deployed in generation 187; the live matrix verifies ordinary
+session lifecycle behavior, not injected storage-failure recovery.
 
 Storage failure reporting (2026-09-24): collection now propagates rejected
 formula and pet-store deletions to the initiating graph operation instead of
@@ -655,17 +739,17 @@ against the pre-fix implementation; the second was added afterward.
 This does not establish global quiescence across concurrent/reentrant drains,
 nor fix the failed callback's missing retry ownership.
 
-Agent identity-key retention — reproduced, unresolved (2026-09-24):
+Agent identity-key retention — historical reproduction (2026-09-24):
 all 40 failed guest/automatic-powers construction cases retain one new `agent_key`
 record despite having no persisted formulas left under its node. The four direct
-directory cases add no keys. The 44-case fixture now characterizes this explicitly
+directory cases added no keys. The 44-case fixture then characterized this explicitly
 using record counts and owner identities, without putting private key material
-in assertions. These are temporary characterization assertions of an open defect,
-not a requirement to preserve orphan keys; replace them with reclamation assertions
-when safe retirement is implemented. This concerns daemon agent identities, not
+in assertions. Those temporary assertions documented the defect, not a requirement
+to preserve orphan keys; the implementation below replaces them with reclamation
+assertions. This concerns daemon agent identities, not
 provider Secrets, subscription credentials or renewal ownership.
 
-Source review found no manager call to `deleteAgentKey`. Its SQLite implementation
+The initial review found no manager call to `deleteAgentKey`. Its SQLite implementation
 deletes only the key row, without retiring retention rows or live followers.
 The key is also operational metadata: `hasAgentKey` determines `isLocalId`, local
 graph dependencies and local-versus-remote evaluation; host/guest reincarnation
@@ -674,14 +758,43 @@ edges. Inbound/outbound peer-retention followers capture the agent identity once
 and continue updating retention state. A collected guest alone therefore does
 not prove that independently retained formulas or peer activity can lose the key.
 
-Next design/test boundary: distinguish a never-exposed failed construction from
-general agent retirement. The former needs exact node-wide formula absence,
+Design boundary refined on 2026-09-30: distinguish an uninstantiated, unpublished
+failed construction from general agent retirement.
+"Never exposed" is too strong: formula-change observers can see identifiers
+before a pet name is published. Actual handle creation calls `provide(guestId)`,
+so it necessarily enters the guest maker; diagnostic formula reads alone do not.
+The former needs exact node-wide formula absence,
 settled construction/collection cleanup and proof that identity authority was not
 published; the latter also needs active retention/connection retirement and
 surviving-formula checks. Do not add unconditional key deletion in a construction
-finally or infer these conditions from an absent guest formula. No runtime key
-deletion is implemented by this characterization; this is not a native recovery
-architecture commitment or completion of the finding.
+finally or infer these conditions from an absent guest formula.
+
+The bounded implementation tracks only fresh guest construction in memory,
+starting before the key write so a lost acknowledgement remains owned.
+Guest-maker entry permanently removes eligibility before any await; successful
+construction also drops tracking before deferred publication.
+After rollback releases its pins, cleanup checks exact key ownership and the whole
+node, including disk-only formulas, graph members, controllers, collection fences,
+in-flight reads and retention rows. Checks and deletion are synchronous.
+A deletion failure keeps the candidate for a later drain, with all checks repeated.
+An instantiated or published guest is not reclaimed through this path, even if
+its creation request eventually rejects.
+The 44 construction cases now require prior key identities to remain exactly
+unchanged; separate fault cases cover write acknowledgement loss, deletion retry,
+diagnostic instantiation, cancellation failure, surviving formulas, retention and
+partial publication. This is not a native recovery architecture commitment,
+historical-key migration or general identity garbage collector.
+All 99 construction, key-retirement, collection, graph, directory and publication
+regressions pass, including the real-daemon publication restart.
+The instantiated-guest guard proves no formulas remain while the retained guest
+can still list static names, demonstrating why formula absence is insufficient.
+Two older cleanup-drain assertions now require one successful retry and no replay
+of acknowledged sibling deletions; original failure assertions are preserved.
+Independent adversarial review passes. Root docs report zero errors (163 warnings).
+Daemon typechecking and formatting pass; changed-file lint has zero errors
+(66 warnings).
+Deployed in generation 187. Live acceptance verifies ordinary session lifecycle;
+the key-retirement fault cases above remain local injected-failure evidence.
 
 Publication validation follow-up (2026-09-24, local, not deployed):
 the five baseline type diagnostics above are corrected in the test fixtures.

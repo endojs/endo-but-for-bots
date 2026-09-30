@@ -269,6 +269,7 @@ export const makeHostedBackendFactory = ({
         ...(rebindable.length ? { rebindableBindings: [...rebindable] } : {}),
       });
     },
+    /** @param {string} [subscriptionId] */
     modelCatalog: subscriptionId => catalog.catalog(subscriptionId),
     async inspectBindings(spec) {
       const sessionId = assertSessionId(spec?.sessionId, label);
