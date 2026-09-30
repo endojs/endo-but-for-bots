@@ -230,6 +230,81 @@ test('a refusal outlives its reading, and an undated one backs off', t => {
   t.is(chosen.earliestBackMs, at('2026-09-20T17:00:00.000Z'));
 });
 
+test('a newer reading that shows the windows open supersedes a refusal mark', t => {
+  /** @type {any[]} */
+  const saved = [];
+  const marks = makeRefusalMarks({ onChange: next => saved.push(next) });
+  const weekOut = '2026-09-27T00:00:00.000Z';
+  // Refused at NOW, with a reset a week out: the provider's word then.
+  marks.refused('work', NOW, at(weekOut));
+  const later = at('2026-09-20T13:00:00.000Z');
+  const options = {
+    refusedUntil: marks.blockedUntil,
+    refusalSupersededBy: marks.supersededBy,
+    nowMs: later,
+  };
+  // A reading from before the refusal, even one whose windows are open,
+  // changes nothing: the refusal is the newer word.
+  const stale = limits([weekly(0.05, weekOut)], {
+    observedAt: '2026-09-20T11:59:00.000Z',
+  });
+  t.deepEqual(select({ work: stale }, options).order, ['home', 'spare']);
+  // Nor does a later reading that still shows the window full.
+  const full = limits([weekly(1, weekOut)], {
+    observedAt: '2026-09-20T12:30:00.000Z',
+  });
+  t.deepEqual(select({ work: full }, options).order, ['home', 'spare']);
+  t.is(marks.blockedUntil('work', later), at(weekOut));
+  t.is(saved.length, 1);
+  // A later reading with the window open outranks the refusal: the provider
+  // reset the account early. The mark is dropped and offered for keeping.
+  const open = limits([weekly(0.05, weekOut)], {
+    observedAt: '2026-09-20T12:30:00.000Z',
+  });
+  t.deepEqual(select({ work: open }, options).order, ['work', 'home', 'spare']);
+  t.is(marks.blockedUntil('work', later), null);
+  t.deepEqual(saved.at(-1), {});
+  // The refusal's own reading, taken the instant before the mark, never
+  // supersedes the mark it came with.
+  marks.refused('work', later, at(weekOut));
+  const own = limits([weekly(0.05, weekOut)], {
+    observedAt: new Date(later).toISOString(),
+  });
+  t.deepEqual(
+    select({ work: own }, { ...options, nowMs: later + 1000 }).order,
+    ['home', 'spare'],
+  );
+  // A mark kept by an earlier incarnation, from before marks recorded their
+  // time, yields to any later reading that shows the windows open.
+  const revived = makeRefusalMarks({
+    initial: { home: { untilMs: at('2026-10-01T00:00:00.000Z'), strikes: 1 } },
+  });
+  t.is(revived.blockedUntil('home', later), at('2026-10-01T00:00:00.000Z'));
+  t.deepEqual(
+    select(
+      { home: open },
+      {
+        refusedUntil: revived.blockedUntil,
+        refusalSupersededBy: revived.supersededBy,
+        nowMs: later,
+      },
+    ).order,
+    ['home', 'work', 'spare'],
+  );
+  t.is(revived.blockedUntil('home', later), null);
+  // A backoff mark for a member that could not be used at all is not about
+  // capacity: a reading, however new and open, does not lift it.
+  marks.refused('spare', later, null);
+  const fresh = limits([weekly(0.05, weekOut)], {
+    observedAt: new Date(later + 30_000).toISOString(),
+  });
+  t.deepEqual(
+    select({ spare: fresh }, { ...options, nowMs: later + 40_000 }).order,
+    ['home'],
+  );
+  t.is(marks.blockedUntil('spare', later + 40_000), later + 60_000);
+});
+
 test('a pool keeps a session where it was served while warm, and hands it over when refused', t => {
   let clock = NOW;
   /** @type {Record<string, any>} */
@@ -269,15 +344,31 @@ test('a pool keeps a session where it was served while warm, and hands it over w
   // Another session sees the same refusal.
   t.deepEqual(pool.forSession('s2').select(), ['work']);
   t.true(pool.standings().find(entry => entry.id === 'home').blocked);
+  const drained = kept.at(-1);
+  t.like(drained.refusals.home, { sinceMs: clock, dated: true });
 
-  // After a restart the drained account is not retried, and the session is
-  // still judged warm where it was.
+  // The provider says otherwise before the time it named: a reading taken
+  // after the refusal shows the window open again. The newer word wins, the
+  // mark goes and is not kept, and status agrees with selection.
+  clock += 60_000;
+  readings.home = limits([weekly(0.2, '2026-09-20T14:00:00.000Z')], {
+    observedAt: new Date(clock).toISOString(),
+  });
+  t.false(pool.standings().find(entry => entry.id === 'home').blocked);
+  t.deepEqual(kept.at(-1).refusals, {});
+  t.deepEqual(pool.forSession('s3').select(), ['home', 'work']);
+
+  // After a restart the drained account is not retried on a reading from
+  // before its refusal, and the session is still judged warm where it was.
+  const stale = limits([weekly(0.2, '2026-09-20T14:00:00.000Z')], {
+    observedAt: '2026-09-20T11:59:00.000Z',
+  });
   const revived = makeSubscriptionPool({
     members: () => members.slice(0, 2),
-    readingOf: () => undefined,
+    readingOf: id => (id === 'home' ? stale : undefined),
     cacheLifetimeMs: 300_000,
     now: () => clock,
-    initial: kept.at(-1),
+    initial: drained,
   });
   t.deepEqual(revived.forSession('s1').select(), ['work']);
   // Once its reset time has passed it is back in the running.

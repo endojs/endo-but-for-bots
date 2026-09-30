@@ -514,6 +514,8 @@ const makePooledBrokerServiceKit = ({
         member,
       );
     const account = makeAccountReadingSource({
+      // One clock with the pool: it orders a reading against a refusal mark.
+      now: () => new Date(now()).toISOString(),
       activeRead: () =>
         lifecycle.run(async () =>
           readingFromShareStatus(await E(subscription()).getStatus()),
@@ -669,6 +671,8 @@ const makePooledBrokerServiceKit = ({
       );
       const activeRead = activeReadOf?.({ member, secret, credential });
       const account = makeAccountReadingSource({
+        // One clock with the pool: it orders a reading against a refusal mark.
+        now: () => new Date(now()).toISOString(),
         ...(activeRead === undefined
           ? {}
           : { activeRead: () => lifecycle.run(activeRead) }),
@@ -1171,6 +1175,8 @@ export const makeProviderBrokerServiceKit = options => {
   // service, so an account oracle can hold it without the scopes' authority,
   // and it cannot reach the secret.
   const account = makeAccountReadingSource({
+    // One clock with the pool: it orders a reading against a refusal mark.
+    now: () => new Date(now()).toISOString(),
     ...(activeAccountRead === undefined
       ? {}
       : { activeRead: activeAccountRead }),
