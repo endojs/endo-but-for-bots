@@ -102,6 +102,55 @@ const capacityEvent = () => ({
   session_id: sessionId,
   rate_limit_info: { status: 'allowed', utilization: 0.2 },
 });
+test('capacity may arrive before init without initializing the dialogue', t => {
+  const coverage = makeCoverage();
+  t.notThrows(() => coverage.observe(capacityEvent()));
+  t.notThrows(() =>
+    coverage.observe({
+      type: 'system',
+      subtype: 'init',
+      session_id: sessionId,
+    }),
+  );
+  t.throws(() => coverage.assertOutcome('success'));
+});
+test('pre-init capacity does not authorize a terminal result', t => {
+  const coverage = makeCoverage();
+  coverage.observe(capacityEvent());
+  t.throws(
+    () =>
+      coverage.observe({
+        type: 'result',
+        subtype: 'success',
+        session_id: sessionId,
+        is_error: false,
+      }),
+    { message: /phase=observe\/result, check=5/ },
+  );
+});
+test('pre-init capacity preserves exact subsequent compaction coverage', async t => {
+  const f = await compactionFixture();
+  f.events.unshift({ ...capacityEvent(), session_id: f.sessionId });
+  t.notThrows(() => checkCompaction(f));
+});
+test('pre-init capacity rejects unknown payload fields', t => {
+  const coverage = makeCoverage();
+  t.throws(() =>
+    coverage.observe({ ...capacityEvent(), message: 'not inert capacity' }),
+  );
+});
+test('pre-init capacity binds the later initialization to the same session', t => {
+  const coverage = makeCoverage();
+  coverage.observe(capacityEvent());
+  t.throws(() =>
+    coverage.observe({ type: 'system', subtype: 'init', session_id: id(98) }),
+  );
+});
+test('capacity after terminal still refuses coverage', async t => {
+  const f = await compactionFixture();
+  f.events.push({ ...capacityEvent(), session_id: f.sessionId });
+  t.throws(() => checkCompaction(f));
+});
 test('capacity notification never establishes a terminal result', t => {
   const coverage = makeCoverage();
   coverage.observe({ type: 'system', subtype: 'init', session_id: sessionId });
@@ -180,9 +229,6 @@ for (const [name, change] of [
     t.throws(() => coverage.assertOutcome('success'));
   });
 }
-test('capacity event before initialization remains refused', t => {
-  t.throws(() => makeCoverage().observe(capacityEvent()));
-});
 test('actual partial-stream auto compaction certifies prompt, retained tool frames and summary', async t => {
   const f = await compactionFixture();
   t.notThrows(() => checkCompaction(f));
