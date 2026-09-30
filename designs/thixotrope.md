@@ -21,8 +21,9 @@ An inventory of named objects is a user convenience, not a prerequisite for pers
 mechanism that determines object lifetime.
 
 This document describes the main design and current implementation boundaries.
-[Package designs](../packages/thixotrope/designs/README.md) contain potential mechanisms and
-experiments; they are not additional guarantees of the current runtime.
+[Package designs](../packages/thixotrope/designs/README.md) hold the implementation notes behind
+contracts that are implemented, and potential mechanisms and experiments; only this document
+states guarantees of the current runtime.
 The [package README](../packages/thixotrope/README.md) provides commands and operational details.
 
 ## Architecture
@@ -113,6 +114,21 @@ Orthogonal persistence preserves the guest's heap relationships.
 It does not make an operating-system resource persistent, repair incompatible code, or guarantee
 that an external operation can safely be repeated.
 Those capabilities cross the host endpoint and have their own failure contracts.
+
+### The guest prelude
+
+Every vat has the same globals beside the language and the shared intrinsics: `E`, `Far`,
+`harden`, `makeExo`, `defineExoClass`, `defineExoClassKit`, `M`, `matches`, `mustMatch`,
+`passStyleOf`, `Fail`, `q`, `makeError`, `makePromiseKit` and `makeSerialQueue`.
+The prelude is one hardened record installed on the compartment of every worker peer on every
+engine, so source evaluated in a vat, a bundle installed into one, and a factory the supervisor
+ships into one by its source text all see one vocabulary, and guest code is held to the same
+conventions as host code: exos with interface guards, patterns for shapes, `Fail` for assertions.
+Bundled guest code reads the names it wants off `globalThis` in one destructure typed as
+`GuestGlobals` from `@endo/thixotrope/guest.js`; it bundles nothing the prelude provides.
+A factory shipped by source may import only what the prelude provides, under those names, and
+defines everything else inside itself, since a binding beside it at module level is present in the
+host and `undefined` in the vat; a test evaluates each such factory with only the prelude in scope.
 
 ## Sleep, restore, and message recovery
 
@@ -233,42 +249,73 @@ Bounded cleanup prevents a stalled guest cancellation from holding the superviso
 Removing a subscription makes its state eligible for ordinary collection; it does not prove physical
 heap reclamation has already happened.
 
-### Guest-owned HTTP listeners
+### Native resources
 
-HTTP is a directory-installed native resource with `durable.js` and `ephemeral.js` entry modules.
-`thix install-native STATE NAME DIRECTORY` selects the daemon's workspace by its state directory.
-The durable factory runs in a dedicated manager vat and returns a public facet and a lifecycle facet.
-Only the public facet enters the named inventory slot; applications receive it through grants.
-The workspace retains an installation record with code identity, manager reference, and completion
-status so interrupted installation can resume on explicit retry.
-Each manager receives its own startup notification through its privately published lifecycle facet.
-Its recovery, heap, and execution limits are independent of the workspace and other managers.
+A native resource is a directory with `durable.js` and `ephemeral.js`, installed by name into the
+workspace registry the way an application is: `thix install-native STATE NAME DIRECTORY`.
+The two modules are the two halves of one thing.
+The **manager**, the durable module's kit, runs in a dedicated vat whose heap persists.
+The **adapter**, the ephemeral module's root, runs in a Node process that owns the operating-system
+resource and is expected to die.
+The split is a persistence barrier before it is a division of labour: orthogonal persistence is
+indiscriminate, so a durable vat holding live sockets, buffers and request closures would persist
+what must not survive, and running all of that in a process makes "everything here dies"
+structurally true instead of a case-by-case judgement.
 
-The ephemeral module runs in a separate Node process, owning the HTTP server, sockets, request
-buffers, deadlines, and response handling.
-The primary daemon provides generic launch, routing, retirement, and shutdown.
-It does not import the HTTP implementation or hold desired listener state in a host JSON registry.
-The manager vat retains desired registrations and handlers as ordinary heap state.
-Directory contents and the durable bundle are pinned; source changes require a new installation.
-Dependencies outside the directory are not included in its digest.
+The manager holds policy and desired state; the adapter holds mechanism and no memory of who asked
+for what.
+Consumers hold references only to the manager's facet, never to the adapter, so the authority over
+the host resource is concentrated in a thing with no policy, and when an incarnation is retired the
+only holder of dangling references is the manager, which is the one thing equipped to re-establish.
+Retirement is generation identity: the hub tombstones a retired session's rows, so a stale reference
+breaks rather than reaching a successor.
+A manager holding a consumer's handler retains that consumer's vat, which is correct: a vat being
+served is reachable, and it is released by withdrawing the registration and dropping its handle,
+which still names the handler it was made with.
 
-Registration returns a status/close handle even when binding fails.
-Status retries binding and reports an inactive listener and error; close withdraws desired state.
-Stale handles cannot affect a later registration on the same port.
-Daemon restart restores desired listeners through a fresh adapter.
-After adapter death during operation, replacement happens on the next manager operation that
-provides the adapter; there is no autonomous restart monitor.
+`durable.js` exports a synchronous `make(powers)` that receives `{ adapters, makeKeeper,
+makeManager }`, with the guest prelude in scope, and returns `{ facet, lifecycle }`.
+`makeManager({ label, same, replaces, describe })` writes the manager's bookkeeping once: it keeps
+the desired registrations, holds one adapter incarnation through a keeper, reconciles each
+registration against it, hands out per-registration handles whose `status()` and `close()` act only
+on their own generation, withdraws desired state durably before telling the adapter, retires an
+incarnation whose unbinding is uncertain, and rebuilds the adapter at startup when anything is
+desired.
+`ephemeral.js` exports `make()` returning the adapter, built with `makeAdapter({ label, same,
+replaces, bind, unbind })` from `@endo/thixotrope/native-adapter.js`, which serializes operations,
+keeps the bindings, replaces or refuses a differing registration as the author decides, and restores
+a set of registrations one at a time, reporting each failure without giving up on the rest.
+The two speak one protocol: `bind(key, spec)`, `unbind(key)`, `restore([[key, spec], …])` and
+`keys()`, where `spec` is whatever passable record the author registers under a key.
+Sameness of a registration is the author's to state on both sides, since a record crosses the wire
+as a fresh copy each time; an adapter forgets a binding only once its release succeeds, so a failed
+release is retried by a later unbind and reaches the manager's retirement path.
+`src/native/contract.js` states the contract as types.
 
-Each adapter incarnation has one transient protocol session, shared by its requests.
-Request timeout, disconnect, or completion releases request-local state; process retirement breaks
-the incarnation's references and retires its session.
-An already accepted guest invocation may complete after the HTTP client disappears.
-A replacement adapter restores registrations, never pending HTTP requests.
+Only the facet enters the named inventory slot; applications receive it through grants.
+The lifecycle facet is published privately for the manager's own start notice, which the daemon
+delivers at every start after every vat is seated, to every manager in parallel and within one
+bound.
+A manager with anything desired rebuilds its adapter then; between starts, adapter death is
+repaired by the next operation that needs an adapter, and there is no autonomous restart monitor.
+Each adapter incarnation has one transient session, shared by its requests; retiring the process
+retires that session and breaks its references.
+Directory contents and the durable bundle are pinned by digest; source changes require a new
+installation, and dependencies outside the directory are not part of the digest.
+Removing an installation retires the manager vat first, which closes the processes it launched and
+withdraws its start notice, and only then forgets the name.
 
-The initial HTTP profile bounds bodies, concurrency, and duration, and copies only method, path,
-and text body into the guest.
-Exact Host checks and browser Origin/Fetch Metadata checks reject cross-origin browser access.
-These checks do not authenticate local processes; the guest HTTP interface is available to local clients.
+HTTP is the first native resource, `resources/http`.
+Its facet registers a handler on a port with an optional origin policy and returns the handle;
+registration succeeds even when binding fails, and `status()` retries the binding and reports an
+inactive listener with its error, so a caller can always withdraw desired state.
+The adapter owns the server, sockets, request buffers, deadlines and response handling, copies only
+method, path and text body into the guest, bounds bodies, concurrency and duration, and rejects
+cross-origin browser access by exact Host and Origin or Fetch Metadata checks.
+These checks do not authenticate local processes; the guest HTTP interface is available to local
+clients.
+A replacement adapter restores registrations, never pending requests, and an already accepted guest
+invocation may complete after the HTTP client is gone.
 
 ### Durable time promises
 

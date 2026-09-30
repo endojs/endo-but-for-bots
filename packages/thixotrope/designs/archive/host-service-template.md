@@ -1,11 +1,19 @@
 # What a host service has to write
 
+> **Archived.** This note counted what a host service had to write when the clock and HTTP were
+> host code.
+> Both have since moved out of the host: the clock into a vat the supervisor provides, and HTTP
+> into a native resource on the manager and adapter kits, which the root design's
+> [Native resources](../../../../designs/thixotrope.md#native-resources) section states.
+> The files it cites, `src/alarms/clock-service.js` and `src/http/http-services.js`, no longer
+> exist.
+
 Historical comparison: HTTP now follows
-[directory-installed native resources](native-resource-installation.md).
+[directory-installed native resources](../native-resource-installation.md).
 
 Status: a description of the current shape and an open question, not a selected
 abstraction.
-The [main design](../../../designs/thixotrope.md) describes host resources as
+The [main design](../../../../designs/thixotrope.md) describes host resources as
 capabilities with durable descriptions reconstructed through registered
 factories.
 This note records what registering one actually costs today.

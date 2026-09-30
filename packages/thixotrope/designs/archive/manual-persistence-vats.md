@@ -1,7 +1,12 @@
 # Manual persistence vats
 
+> **Archived.** This note argued for the manager and adapter model before it was built.
+> The root design's [Native resources](../../../../designs/thixotrope.md#native-resources)
+> section is normative, and the utilities this note asks for are `makeManager` and
+> `makeAdapter`; the HTTP files it cites under `src/http/` no longer exist.
+
 Historical exploration: the HTTP implementation described here has been replaced by
-[directory-installed native resources](native-resource-installation.md).
+[directory-installed native resources](../native-resource-installation.md).
 
 Status: exploratory design with a working mechanism probe, not an implemented
 contract or a decision to move the existing clock and HTTP services.
@@ -15,7 +20,7 @@ reconstruct the resource whenever an incarnation is lost.
 This document asks what such a vat needs from the host, why almost nothing it
 needs is specific to clocks or HTTP, and what utilities would make one routine
 to write.
-[Crossing persistence regimes](README.md#crossing-persistence-regimes) states
+[Crossing persistence regimes](../README.md#crossing-persistence-regimes) states
 the problem; this is a candidate answer to the second direction it names.
 
 ## Why the existing services are in the wrong place
