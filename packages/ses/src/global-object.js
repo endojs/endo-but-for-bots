@@ -5,6 +5,7 @@ import {
   defineProperty,
   entries,
   freeze,
+  getOwnPropertyDescriptor,
   hasOwn,
   unscopablesSymbol,
 } from './commons.js';
@@ -88,8 +89,18 @@ export const setGlobalObjectMutableProperties = (
 ) => {
   for (const [name, intrinsicName] of entries(universalPropertyNames)) {
     if (hasOwn(intrinsics, intrinsicName)) {
+      const value = intrinsics[intrinsicName];
+      const desc = getOwnPropertyDescriptor(globalObject, name);
+      if (desc !== undefined && !desc.configurable && desc.value === value) {
+        // A shim that installed a first-wins global before lockdown, such as
+        // `@endo/sturdyref` installing `SturdyRef`, may have locked the start
+        // compartment's binding to the very intrinsic we would install.
+        // Leave it; child compartments still receive the same value below.
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       defineProperty(globalObject, name, {
-        value: intrinsics[intrinsicName],
+        value,
         writable: true,
         enumerable: false,
         configurable: true,

@@ -137,6 +137,10 @@ export const universalPropertyNames = {
   harden: 'harden',
 
   HandledPromise: 'HandledPromise', // TODO: Until Promise.delegate (see below).
+
+  // Shimmed by `@endo/sturdyref`. Present only if the shim installed it before
+  // `lockdown`; see the `SturdyRef` permit below.
+  SturdyRef: 'SturdyRef',
 };
 
 /**
@@ -1740,6 +1744,25 @@ export const permitted = {
     getSendOnly: fn,
     prototype: '%PromisePrototype%',
     resolve: fn,
+  },
+
+  // The SturdyRef global variable shimmed by `@endo/sturdyref`. Like
+  // `HandledPromise`, it is admitted as a shared intrinsic only when the shim
+  // installed it before `lockdown` (at `repairIntrinsics` time), in which case
+  // every child compartment receives the same constructor. The global confers
+  // no authority: construction wraps a handler the caller already holds,
+  // `isSturdyRef` is a brand check, and `enliven` only runs the hook of a ref
+  // the caller already holds.
+  SturdyRef: {
+    '[[Proto]]': '%FunctionPrototype%',
+    enliven: fn,
+    isSturdyRef: fn,
+    prototype: '%SturdyRefPrototype%',
+  },
+
+  '%SturdyRefPrototype%': {
+    constructor: 'SturdyRef',
+    '@@toStringTag': 'string',
   },
 
   // https://github.com/tc39/proposal-source-phase-imports?tab=readme-ov-file#js-module-source
