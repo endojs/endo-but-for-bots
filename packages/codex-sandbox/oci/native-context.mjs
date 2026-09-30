@@ -1,10 +1,10 @@
 // @ts-check
 // Data selection only: no filesystem access, runtime authority, or effect evidence.
+import {
+  NATIVE_CONTEXT_LIMIT as LIMIT,
+  isUuid as uuid,
+} from './native-context-shape.mjs';
 
-const LIMIT = 16 * 1024 * 1024;
-const uuid = value =>
-  typeof value === 'string' &&
-  /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 const record = value =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
 const requireValue = condition => {

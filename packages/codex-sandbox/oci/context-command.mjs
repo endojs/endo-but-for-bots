@@ -2,10 +2,8 @@
 // One-shot SANDBOX ONLY transport. Never execute this against a host CLI home.
 import process from 'node:process';
 import { captureCodexContext, restoreCodexContext } from './context-io.mjs';
+import { NATIVE_CONTEXT_LIMIT as LIMIT } from './native-context-shape.mjs';
 
-// This is a serialized-wire bound, including JSON escaping and envelope bytes.
-// It does not promise transport of every native payload of this same raw size.
-const LIMIT = 16 * 1024 * 1024;
 let stage = 'input';
 try {
   const decoder = new TextDecoder('utf-8', { fatal: true });
