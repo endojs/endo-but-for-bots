@@ -1,6 +1,7 @@
 // @ts-nocheck
 import test from '@endo/ses-ava/prepare-endo.js';
 import fc from 'fast-check';
+import { q } from '@endo/errors';
 
 import {
   isValidName,
@@ -299,10 +300,9 @@ test('namePathFrom refuses every string, whatever its content', t => {
       const error = t.throws(() => namePathFrom(s), { instanceOf: TypeError });
       t.regex(error.message, /\["directory","name"\]$/);
       // The one-segment suggestion appears exactly when it would be valid.
-      t.is(
-        error.message.includes(`for example ${JSON.stringify([s])} or `),
-        isName(s),
-      );
+      // Quote it as the implementation does: `q` does not match
+      // `JSON.stringify` for every string (for example one starting with `[`).
+      t.is(error.message.includes(`for example ${q([s])} or `), isName(s));
     }),
   );
 });
