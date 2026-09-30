@@ -6,3 +6,4 @@ export {
   makeConflictRebaseScenario,
 } from './scenario.js';
 export { assertGitConflictRebaseOutcome } from './outcome.js';
+export { provisionConflictRebaseRepo } from './provision.js';
