@@ -477,7 +477,7 @@ test.serial(
                     petNamePaths: [['secrets', name]],
                   })),
               });
-            return E(f.host).lookup(...parts);
+            return E(f.host).lookup(parts.flat());
           },
           locate: async (...parts) => {
             const value = f.bindings.get(key(...parts));

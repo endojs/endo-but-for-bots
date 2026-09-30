@@ -66,7 +66,7 @@ const makeFakeOwner = () => {
   const records = new Map();
   /** @type {any[][]} */
   const log = [];
-  /** @type {{ createError: Error | undefined }} */
+  /** @type {{ createError: Error | undefined, catalogDown: boolean }} */
   const knobs = { createError: undefined, catalogDown: false };
   const facet = harden({
     async send() {
@@ -385,7 +385,7 @@ test('make() configures the owner on the records path over verified service iden
   t.deepEqual(f.ownerRequests, [
     { recordsPath: SESSION_RECORDS_PATH, specifier: controllerSpecifier },
   ]);
-  t.is((await E(factory).describe()).id, 'claude');
+  t.like(await E(factory).describe(), { id: 'claude' });
   // Roots that differ from the recorded storage owner's are refused.
   await t.throwsAsync(
     make(f.host, undefined, {

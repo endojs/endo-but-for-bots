@@ -78,13 +78,15 @@ test('owned Claude pool injects refreshed access token, never login JSON', async
       return generation;
     },
   });
-  const entries = new Map([
-    [
-      'subscriptions',
-      harden({ members: [{ id: 'second', accountRef: 'claude-second' }] }),
-    ],
-    ['second', secret],
-  ]);
+  const entries = new Map(
+    /** @type {[string, unknown][]} */ ([
+      [
+        'subscriptions',
+        harden({ members: [{ id: 'second', accountRef: 'claude-second' }] }),
+      ],
+      ['second', secret],
+    ]),
+  );
   const used = [];
   let exchanges = 0;
   let kit;
@@ -118,13 +120,14 @@ test('owned Claude pool injects refreshed access token, never login JSON', async
       return kit;
     },
   });
+  const namespace = Far('renewable pool namespace', {
+    lookup: async name => entries.get(name),
+    has: async name => entries.has(name),
+    list: async () => [...entries.keys()],
+    storeValue: async (value, name) => entries.set(name, value),
+  });
   const service = await make(
-    Far('renewable pool namespace', {
-      lookup: async name => entries.get(name),
-      has: async name => entries.has(name),
-      list: async () => [...entries.keys()],
-      storeValue: async (value, name) => entries.set(name, value),
-    }),
+    namespace,
     Far('context', { whenCancelled: () => new Promise(() => {}) }),
     {
       env: {
@@ -172,27 +175,29 @@ test('Claude pool hands recognized exhaustion to a second secret but never moves
   const runtime = makeFakeRuntime();
   const used = [];
   /** @type {Map<string, any>} */
-  const entries = new Map([
-    [
-      'subscriptions',
-      harden({
-        members: [
-          { id: 'first', accountRef: 'claude-first' },
-          { id: 'second', accountRef: 'claude-second' },
-        ],
-      }),
-    ],
-    ...['first', 'second'].map(id => [
-      id,
-      Far(`${id} secret`, {
-        readBase64: async () => btoa(`sk-ant-oat-${id}`),
-        readBase64WithGeneration: async () => ({
-          base64: btoa(`sk-ant-oat-${id}`),
-          generation: 1n,
+  const entries = new Map(
+    /** @type {[string, unknown][]} */ ([
+      [
+        'subscriptions',
+        harden({
+          members: [
+            { id: 'first', accountRef: 'claude-first' },
+            { id: 'second', accountRef: 'claude-second' },
+          ],
         }),
-      }),
+      ],
+      ...['first', 'second'].map(id => [
+        id,
+        Far(`${id} secret`, {
+          readBase64: async () => btoa(`sk-ant-oat-${id}`),
+          readBase64WithGeneration: async () => ({
+            base64: btoa(`sk-ant-oat-${id}`),
+            generation: 1n,
+          }),
+        }),
+      ]),
     ]),
-  ]);
+  );
   let kit;
   const catalogReads = [];
   const make = makeOwnedClaudeBrokerService({

@@ -172,7 +172,8 @@ test('validated capacity notifications interleave without changing exact compact
   f.events = events;
   t.notThrows(() => checkCompaction(f));
 });
-for (const [name, change] of [
+/** @type {[string, (event: Record<string, unknown>) => void][]} */
+const invalidCapacityEvents = [
   [
     'extra dialogue',
     event => {
@@ -182,19 +183,25 @@ for (const [name, change] of [
   [
     'extra nested payload',
     event => {
-      event.rate_limit_info.message = 'hidden';
+      if (!event.rate_limit_info || typeof event.rate_limit_info !== 'object')
+        throw Error('Expected fixture rate limits');
+      Object.assign(event.rate_limit_info, { message: 'hidden' });
     },
   ],
   [
     'invalid status',
     event => {
-      event.rate_limit_info.status = 'done';
+      if (!event.rate_limit_info || typeof event.rate_limit_info !== 'object')
+        throw Error('Expected fixture rate limits');
+      Object.assign(event.rate_limit_info, { status: 'done' });
     },
   ],
   [
     'invalid numeric',
     event => {
-      event.rate_limit_info.utilization = '0.2';
+      if (!event.rate_limit_info || typeof event.rate_limit_info !== 'object')
+        throw Error('Expected fixture rate limits');
+      Object.assign(event.rate_limit_info, { utilization: '0.2' });
     },
   ],
   [
@@ -215,7 +222,8 @@ for (const [name, change] of [
       event.session_id = id(98);
     },
   ],
-]) {
+];
+for (const [name, change] of invalidCapacityEvents) {
   test(`capacity event refuses ${name}`, t => {
     const coverage = makeCoverage();
     coverage.observe({
@@ -424,6 +432,7 @@ test('actual pinned max-turns failure proves the captured current-turn cut', asy
 const fixture = () => {
   const coverage = makeCoverage();
   const events = [];
+  /** @type {{type: string, sessionId: string, uuid: string, parentUuid: string | null, message: {role: string, content: unknown, [key: string]: unknown}, [key: string]: unknown}[]} */
   const rows = [
     {
       type: 'user',
@@ -473,7 +482,7 @@ const fixture = () => {
       type: 'assistant',
       sessionId,
       uuid,
-      parentUuid: rows.at(-1).uuid,
+      parentUuid: rows[rows.length - 1].uuid,
       message: {
         id: 'm',
         type: 'message',
@@ -503,6 +512,7 @@ const fixture = () => {
       finished = true;
     }
   };
+  /** @param {{ sessionId: string, beforeUuid: string | null, beforePayload?: string, prefixSha256: string | undefined, prompt: string }} [cut] */
   const assert = (
     cut = {
       sessionId,
@@ -513,7 +523,15 @@ const fixture = () => {
     },
   ) => {
     finish();
-    return coverage.assertCaptured(jsonl(), { ...cut, outcome: 'success' });
+    // Negative fixtures intentionally pass absent receipt fields to the real
+    // validator; retain those runtime inputs at this test-only boundary.
+    return coverage.assertCaptured(
+      jsonl(),
+      /** @type {Parameters<typeof coverage.assertCaptured>[1]} */ ({
+        ...cut,
+        outcome: 'success',
+      }),
+    );
   };
   return {
     coverage,
@@ -677,7 +695,7 @@ const listingCase = attachments => {
     text: 'ok',
   });
   f.stop();
-  let parentUuid = f.rows.at(-1).uuid;
+  let parentUuid = f.rows[f.rows.length - 1].uuid;
   for (const [index, attachment] of attachments.entries()) {
     const uuid = id(20 + index);
     f.rows.push(

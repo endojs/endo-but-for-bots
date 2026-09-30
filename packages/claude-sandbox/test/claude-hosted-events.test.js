@@ -478,7 +478,7 @@ test('structured error remains visible when raw producer closes without terminal
     errors: ['Provider refused model'],
     usage: {},
   });
-  t.is((await iterator.next()).value.type, 'usage');
+  t.like((await iterator.next()).value, { type: 'usage' });
   close();
   const remaining = [];
   for await (const event of iterator) remaining.push(event);

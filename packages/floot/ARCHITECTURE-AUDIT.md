@@ -276,6 +276,20 @@ passes, and root documentation builds with zero errors (163 warnings).
 The explicit Floot typecheck drops from 82 to 72 diagnostics, all in other tests;
 this is partial reconciliation, not a green package type gate.
 No runtime implementation or durable state format changes.
+Claude follow-up: all 81 test diagnostics are corrected without suppressions.
+Typed mutation tables and explicit shape checks preserve malformed native-context
+coverage. Review rejected test casts around two genuine shared declaration gaps:
+the catalog filter is now declared optional, and broker powers declare their
+existing single-Secret or pool-namespace alternatives at the implementation boundary.
+Claude and hosted-agent typechecks pass. The full Claude suite passes 519 tests;
+22 affected tests pass again after the declaration corrections.
+Independent adversarial review approves; no runtime behavior or durable owner changes.
+The final documentation build passes with zero errors (165 warnings).
+Root `build:types` encounters generated-declaration input/output collisions
+(`TS5055`) and a `subscription-auth.js` missing-`now` declaration diagnostic
+(`TS2345`), so its chained `test:types` did not run.
+Package checks do not establish a green root type-build gate; generated-output
+reconciliation remains necessary before claiming that result.
 RA-04 and the current cutover evidence are recorded above and in the alignment doc.
 Both cleanup changes are deployed in generation 187 with fresh cross-backend
 lifecycle and ordinary restart-recall acceptance.

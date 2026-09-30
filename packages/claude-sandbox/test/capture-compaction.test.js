@@ -45,6 +45,7 @@ const contextRow = (n, type, content) => ({
   type,
   message: { role: type, content },
 });
+/** @returns {Record<string, unknown>[]} Native input includes deliberately malformed rows. */
 const records = () => [
   contextRow(9, 'user', 'superseded'),
   contextRow(4, 'assistant', [
@@ -91,6 +92,12 @@ const records = () => [
   },
   contextRow(7, 'assistant', 'completed tail'),
 ];
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {unknown[]} entries
+ * @param {Record<string, unknown>} [event]
+ * @param {string} [suffix]
+ */
 const run = async (t, entries, event = boundary, suffix = '\n') => {
   const dir = await realpath(
     await mkdtemp(path.join(os.tmpdir(), 'claude-capture-')),
@@ -115,6 +122,38 @@ const run = async (t, entries, event = boundary, suffix = '\n') => {
     env: { ...process.env, CLAUDE_CONFIG_DIR: path.join(dir, 'config') },
     timeout: 5000,
   });
+};
+
+/** @param {Error} error */
+const outputOf = error => {
+  if (
+    !('stdout' in error) ||
+    typeof error.stdout !== 'string' ||
+    !('stderr' in error) ||
+    typeof error.stderr !== 'string'
+  )
+    throw Error('Expected captured subprocess output');
+  return { stdout: error.stdout, stderr: error.stderr };
+};
+
+/**
+ * @param {Record<string, unknown>[]} rows
+ * @param {number} index
+ */
+const messageAt = (rows, index) => {
+  const message = rows[index].message;
+  if (!message || typeof message !== 'object' || !('content' in message))
+    throw Error('Expected fixture message');
+  return message;
+};
+/**
+ * @param {Record<string, unknown>[]} rows
+ * @param {number} index
+ */
+const blocksAt = (rows, index) => {
+  const { content } = messageAt(rows, index);
+  if (!Array.isArray(content)) throw Error('Expected fixture blocks');
+  return content;
 };
 
 test('compaction coverage retains only current preboundary context', async t => {
@@ -411,7 +450,7 @@ for (const [label, attachment] of [
     const error = await t.throwsAsync(
       run(t, [root, row], { type: 'endo_capture', session_id: session }),
     );
-    t.regex(String(error?.stderr), /Unsupported context attachment/);
+    t.regex(outputOf(error).stderr, /Unsupported context attachment/);
   });
 }
 
@@ -446,7 +485,8 @@ test('identical payload with rewritten metadata is deduplicated', async t => {
   t.is(JSON.parse(stdout).retainedTail.length, 3);
 });
 
-for (const [name, mutate] of [
+/** @type {[string, (rows: Record<string, unknown>[]) => unknown[]][]} */
+const invalidCaptures = [
   ['missing retained record', rows => rows.filter(row => row.uuid !== id(4))],
   [
     'conflicting duplicate',
@@ -522,11 +562,15 @@ for (const [name, mutate] of [
     ],
   ],
   ['repeated boundary', rows => [...rows, rows[3]]],
-]) {
+];
+for (const [name, mutate] of invalidCaptures) {
   test(`capture refuses ${name} without partial output`, async t => {
     const error = await t.throwsAsync(run(t, mutate(records())));
-    t.is(error.stdout, '');
-    t.regex(error.stderr, /^Claude compaction capture failed: [A-Za-z ]+\n$/);
+    t.is(outputOf(error).stdout, '');
+    t.regex(
+      outputOf(error).stderr,
+      /^Claude compaction capture failed: [A-Za-z ]+\n$/,
+    );
   });
 }
 
@@ -542,19 +586,19 @@ test('identical suffix metadata rewrite retains one record and the current front
 
 test('capture rejects torn final line', async t => {
   const error = await t.throwsAsync(run(t, records(), boundary, ''));
-  t.is(error.stdout, '');
+  t.is(outputOf(error).stdout, '');
 });
 
 test('capture rejects path-like session identifier', async t => {
   const error = await t.throwsAsync(
     run(t, records(), { ...boundary, session_id: '../secret' }),
   );
-  t.is(error.stdout, '');
+  t.is(outputOf(error).stdout, '');
 });
 
 test('capture rejects a corrupt JSONL record even before boundary', async t => {
   const error = await t.throwsAsync(run(t, [null, ...records()]));
-  t.is(error.stdout, '');
+  t.is(outputOf(error).stdout, '');
 });
 
 test('capture rejects oversized frames with no partial checkpoint', async t => {
@@ -565,7 +609,7 @@ test('capture rejects oversized frames with no partial checkpoint', async t => {
       contextRow(8, 'assistant', 'x'.repeat(16 * 1024 * 1024)),
     ]),
   );
-  t.is(error.stdout, '');
+  t.is(outputOf(error).stdout, '');
 });
 
 test('pinned automatic compaction retains tool pair across native metadata rewrites', async t => {
@@ -614,8 +658,8 @@ test('native context preserves signed and redacted thinking with original block 
     type: 'redacted_thinking',
     data: 'synthetic-redacted-bytes',
   };
-  rows[1].message.content.unshift(signed);
-  rows[6].message.content = [
+  blocksAt(rows, 1).unshift(signed);
+  messageAt(rows, 6).content = [
     redacted,
     { type: 'text', text: 'completed tail' },
   ];
@@ -626,7 +670,7 @@ test('native context preserves signed and redacted thinking with original block 
     .split('\n')
     .map(JSON.parse);
   t.deepEqual(native, rows.slice(1));
-  t.deepEqual(native[0].message.content, [signed, rows[1].message.content[1]]);
+  t.deepEqual(native[0].message.content, [signed, blocksAt(rows, 1)[1]]);
   t.deepEqual(native.at(-1).message.content, [
     redacted,
     { type: 'text', text: 'completed tail' },
@@ -639,7 +683,7 @@ test('native context preserves signed and redacted thinking with original block 
 
 test('different thinking signatures cannot collapse to the same portable projection', async t => {
   const rows = records();
-  rows[1].message.content.unshift({
+  blocksAt(rows, 1).unshift({
     type: 'thinking',
     thinking: 'same text',
     signature: 'first',
@@ -648,7 +692,7 @@ test('different thinking signatures cannot collapse to the same portable project
   duplicate.message.content[0].signature = 'different';
   rows.splice(3, 0, duplicate);
   const error = await t.throwsAsync(run(t, rows));
-  t.is(error.stdout, '');
+  t.is(outputOf(error).stdout, '');
 });
 
 for (const field of ['id', 'type', 'model']) {
@@ -658,18 +702,18 @@ for (const field of ['id', 'type', 'model']) {
     duplicate.message[field] = 'different';
     rows.splice(3, 0, duplicate);
     const error = await t.throwsAsync(run(t, rows));
-    t.is(error.stdout, '');
+    t.is(outputOf(error).stdout, '');
   });
 }
 
 test('combined native and portable checkpoint size is bounded before output', async t => {
   t.timeout(10_000);
   const rows = records();
-  rows[6].message.content = 'x'.repeat(9 * 1024 * 1024);
+  messageAt(rows, 6).content = 'x'.repeat(9 * 1024 * 1024);
   const error = await t.throwsAsync(run(t, rows));
-  t.is(error.stdout, '');
+  t.is(outputOf(error).stdout, '');
   t.is(
-    error.stderr,
+    outputOf(error).stderr,
     'Claude compaction capture failed: Capture output exceeds limit\n',
   );
 });
@@ -681,9 +725,9 @@ test('capture reports only its static local validation reason', async t => {
       session_id: 'SECRET_PRODUCER_ID',
     }),
   );
-  t.is(error.stdout, '');
+  t.is(outputOf(error).stdout, '');
   t.is(
-    error.stderr,
+    outputOf(error).stderr,
     'Claude compaction capture failed: Invalid capture identity\n',
   );
 });
@@ -697,9 +741,9 @@ test('native parse errors cannot expose transcript fragments or masquerade as di
       '\n{"SECRET_TRANSCRIPT": "Invalid capture identity"\n',
     ),
   );
-  t.is(error.stdout, '');
+  t.is(outputOf(error).stdout, '');
   t.is(
-    error.stderr,
+    outputOf(error).stderr,
     'Claude compaction capture failed: Unclassified capture failure\n',
   );
 });
