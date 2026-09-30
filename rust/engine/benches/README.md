@@ -65,6 +65,48 @@ The existing nightly full-test262 workflow runs both instruments in an independe
 job, and uploads their logs and JSON even when a gate fails.
 Ordinary PR CI does not run timing assertions.
 
+## Native stack height (Phase 0a)
+
+The native lane of `STACK-DEPTH-REFACTOR.md` §5 Phase 0a: how much host stack each
+recursion family and compiler pin uses today, so that the refactors the report proposes can
+be measured against a baseline instead of estimated.
+
+```sh
+python3 rust/engine/benches/stack_height.py --check --output stack-height-report.json
+```
+
+The instrument is `ironhorse-vm/tests/stack_height.rs`.
+Each case runs on a fresh thread of `NATIVE_STACK_BYTES`; before each stage under measurement
+(compiling the source; running it on a fresh machine) the unused stack below the caller's
+frame is painted with a sentinel, and afterwards the lowest dirtied byte gives the stage's
+high-water mark in bytes.
+One run per case, byte-exact, no bisection and no engine instrumentation.
+The cases are the `native_recursion_budget` scenarios at their halting and accepted sizes
+(the report's 25 family cases) plus the accepted compiler pins of
+`ironhorse-compile/tests/recursion_bounds.rs`, and a few in-place walks as controls.
+Each case reports a `.compile` mark and, unless it is a compiler pin, a `.run` mark with its
+outcome (`completed`, `ReentryLimit`, ...).
+
+Frame sizes are a property of the build, so the marks are deterministic for one compiler,
+target and profile and move when any of those does.
+`stack-height-baseline.json` records that provenance with the marks, and the check refuses a
+mismatch unless `--ignore-provenance` is passed.
+A case fails when it grows past the baseline by more than the baseline's `slack` (2%) or when
+its outcome changes; an outcome change is an acceptance change, which the report says needs a
+versioned release.
+A case well under the baseline is reported as a note: lower the baseline explicitly, never as
+part of a check.
+
+```sh
+python3 rust/engine/benches/stack_height.py --write-baseline
+```
+
+That is the ratchet: each refactor that lands lowers the marks it claims to lower, and the
+baseline follows.
+The marks are native; they show whether a refactor shrinks frames, and they do not predict
+which cases trap on Wasmtime or V8, whose frames differ (report §1.2-§1.4).
+The wasm lanes of Phase 0 stay separate work.
+
 ## XS microbenchmark comparison
 
 The separate XS microbenchmark comparison is runnable with:
