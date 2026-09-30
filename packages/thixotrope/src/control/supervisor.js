@@ -40,6 +40,7 @@ import { randomHex128 } from '../random-id.js';
 import { describeNativePackage } from '../native/describe-package.js';
 
 import { makeApplicationRegistry } from './application-registry.js';
+import { evaluateSource } from './evaluate-source.js';
 import {
   installNativeResource,
   removeNativeResource,
@@ -411,8 +412,20 @@ export const serveThixotrope = async (
     let mailboxAddressBook;
     const getMailbox = () => {
       if (mailboxAddressBook) return mailboxAddressBook;
-      const opening = workspace.evaluate(
-        `(globalThis.mailAddressBook ??= (async () => {
+      // Some twenty-five kilobytes of guest source, more than one message
+      // can carry: transferred in bounded messages, on a stage of its own so
+      // no future transfer into the workspace can collide with it. A vat
+      // that already holds the address book is asked first, so a supervisor
+      // restart costs one message rather than the whole transfer again.
+      const introductions = daemon.makeResource('mail-introductions');
+      const opening = workspace
+        .evaluate('globalThis.mailAddressBook')
+        .then(existing =>
+          existing !== undefined
+            ? existing
+            : evaluateSource(
+                workspace,
+                `(({ introductions }) => (globalThis.mailAddressBook ??= (async () => {
           globalThis.mailbox ??= E(vats).createWorker('mailbox')
             .then(worker => E(worker).getEvaluator())
             .then(evaluator => E(evaluator).evaluate(${JSON.stringify(`(${makeMailbox.toString()})((${makeObservableMap.toString()}))`)}));
@@ -425,9 +438,11 @@ export const serveThixotrope = async (
           );
           if (!inventory.has('mail')) inventory.set('mail', mail);
           return mail;
-        })())`,
-        { introductions: daemon.makeResource('mail-introductions') },
-      );
+        })()))`,
+                { introductions },
+                { stage: 'thixotrope.mailSource' },
+              ),
+        );
       // Supervisor restart is a lifetime boundary for view subscriptions on
       // the mailbox, as it is for the inventory's.
       mailboxAddressBook = opening.then(async book => {
