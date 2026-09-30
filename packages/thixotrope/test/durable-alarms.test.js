@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { E } from '@endo/eventual-send';
+import { PENDING_ANSWER_ABORTED_MESSAGE } from '@endo/ocapn';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
@@ -25,6 +26,7 @@ import { makeNodePowers } from '../src/platform/node/powers.js';
 import { parkWorkers } from './_park-workers.js';
 
 const nodePowers = makeNodePowers();
+const restartMessage = PENDING_ANSWER_ABORTED_MESSAGE;
 
 const macrotask = () => new Promise(resolve => setTimeout(resolve, 0));
 /** @param {() => Promise<boolean>} predicate */
@@ -59,6 +61,8 @@ const makeHost = async (statePath, now, options = {}) => {
         ),
       makeResource: (name, description) =>
         daemonRef.makeResource(name, description),
+      retireResource: (name, description) =>
+        daemonRef.retireResource(name, description),
       now,
     },
   );
@@ -66,6 +70,9 @@ const makeHost = async (statePath, now, options = {}) => {
     store: makeFsStore(nodePowers, statePath),
     engine: makePeerSnapshottingReplayEngine(nodePowers),
     codec: syrupCodec,
+    onRetireWorker: workerId => {
+      alarms.retireWorker(workerId);
+    },
     resources: { alarm: alarms.resource, alarms: alarms.clockResource },
     makeNetlayer: ({ handlers, logger }) =>
       makeTcpNetLayer({ handlers, logger }),
@@ -99,7 +106,7 @@ test.serial(
       const waiter = await worker.evaluate(
         `
       (() => {
-        const clock = (${makeGuestClock.toString()})(alarms);
+        const clock = (${makeGuestClock.toString()})(alarms, { restartMessage });
         let got = null;
         return Far('Waiter', {
           arm: async deadline => {
@@ -111,11 +118,10 @@ test.serial(
             return true;
           },
           getGot: () => got,
-          pending: () => E(clock).pending(),
         });
       })()
       `,
-        { alarms: facet },
+        { alarms: facet, restartMessage },
       );
 
       t.true(await E(waiter).arm(5000n));
@@ -170,7 +176,7 @@ test.serial('a due alarm wakes a sleeping vat', async t => {
   const waiter = await worker.evaluate(
     `
     (() => {
-      const clock = (${makeGuestClock.toString()})(alarms);
+      const clock = (${makeGuestClock.toString()})(alarms, { restartMessage });
       let got = null;
       return Far('Waiter', {
         arm: async deadline => {
@@ -182,7 +188,7 @@ test.serial('a due alarm wakes a sleeping vat', async t => {
       });
     })()
     `,
-    { alarms: facet },
+    { alarms: facet, restartMessage },
   );
   await E(waiter).arm(5000n);
   daemon.publish(waiter, 'waiter-cap');
@@ -222,7 +228,7 @@ test.serial(
       const waiter = await worker.evaluate(
         `
       (() => {
-        const clock = (${makeGuestClock.toString()})(alarms);
+        const clock = (${makeGuestClock.toString()})(alarms, { restartMessage });
         let got = null;
         return Far('Waiter', {
           arm: async deadline => {
@@ -234,7 +240,7 @@ test.serial(
         });
       })()
       `,
-        { alarms: facet },
+        { alarms: facet, restartMessage },
       );
       await E(waiter).arm(5000n);
       daemon.publish(waiter, 'waiter-cap');
@@ -280,7 +286,7 @@ test.serial(
     const waiter = await worker.evaluate(
       `
     (() => {
-      const clock = (${makeGuestClock.toString()})(alarms);
+      const clock = (${makeGuestClock.toString()})(alarms, { restartMessage });
       let got = null;
       let armedCanceller;
       return Far('Waiter', {
@@ -298,7 +304,7 @@ test.serial(
       });
     })()
     `,
-      { alarms: facet },
+      { alarms: facet, restartMessage },
     );
 
     await E(waiter).arm(5000n);
@@ -360,8 +366,8 @@ for (const cancelled of [false, true]) {
         workerId: owner.workerId,
       });
       const clock = await owner.evaluate(
-        `(${makeGuestClock.toString()})(alarms)`,
-        { alarms: facet },
+        `(${makeGuestClock.toString()})(alarms, { restartMessage })`,
+        { alarms: facet, restartMessage },
       );
       const other = await first.daemon.createWorker({
         debugLabel: 'clock-observer',
@@ -412,3 +418,119 @@ for (const cancelled of [false, true]) {
     },
   );
 }
+
+test.serial(
+  'release forgets the promise resource, so a reused id is fresh',
+  async t => {
+    t.timeout(20_000);
+    const statePath = await mkdtemp(join(tmpdir(), 'thix-alarm-reuse-'));
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
+    const now = 1000n;
+    const host = await makeHost(statePath, () => now);
+    t.teardown(() => host.alarms.shutdown());
+    t.teardown(() => host.daemon.shutdown());
+    const owner = await host.daemon.createWorker({ debugLabel: 'reuser' });
+    /** @type {any} */
+    const facet = host.daemon.makeResource('alarms', {
+      workerId: owner.workerId,
+    });
+    const first = facet.arm('same', 5000n);
+    t.true(facet.cancel('same'));
+    await t.throwsAsync(first.settlement, { message: 'Alarm cancelled' });
+    t.is(host.alarms.status().materialised, 1n);
+    facet.release('same');
+    t.is(host.alarms.status().materialised, 0n, 'release drops the kit');
+    t.is(host.alarms.status().retained, 0n);
+    // The same caller-chosen id names a new alarm now, not the cancelled one.
+    const second = facet.arm('same', 6000n);
+    t.not(second.settlement, first.settlement);
+    const outcome = await Promise.race([
+      Promise.resolve(second.settlement).then(
+        () => 'settled',
+        () => 'broken',
+      ),
+      macrotask().then(() => 'pending'),
+    ]);
+    t.is(outcome, 'pending');
+    t.is(host.alarms.status().armed, 1n);
+  },
+);
+
+test.serial('retiring a vat drops the rows and promises it armed', async t => {
+  t.timeout(20_000);
+  const statePath = await mkdtemp(join(tmpdir(), 'thix-alarm-retire-'));
+  t.teardown(() => rm(statePath, { recursive: true, force: true }));
+  const now = 1000n;
+  const host = await makeHost(statePath, () => now);
+  t.teardown(() => host.alarms.shutdown());
+  t.teardown(() => host.daemon.shutdown());
+  const doomed = await host.daemon.createWorker({ debugLabel: 'doomed' });
+  const survivor = await host.daemon.createWorker({ debugLabel: 'survivor' });
+  /** @type {any} */
+  const doomedFacet = host.daemon.makeResource('alarms', {
+    workerId: doomed.workerId,
+  });
+  /** @type {any} */
+  const survivorFacet = host.daemon.makeResource('alarms', {
+    workerId: survivor.workerId,
+  });
+  doomedFacet.arm('a', 5000n);
+  doomedFacet.arm('b', 6000n);
+  survivorFacet.arm('c', 7000n);
+  t.is(host.alarms.status().retained, 3n);
+  await doomed.retire();
+  t.is(host.alarms.status().retained, 1n, "only the survivor's row is left");
+  t.is(host.alarms.status().materialised, 1n);
+  t.deepEqual(
+    JSON.parse(
+      await nodePowers.files.readText(join(statePath, 'alarms.json')),
+    ).alarms.map((/** @type {any} */ row) => row.alarmId),
+    ['c'],
+  );
+});
+
+test.serial(
+  'retiring a vat that is still listening on an alarm does not prevent the next boot',
+  async t => {
+    t.timeout(20_000);
+    const statePath = await mkdtemp(join(tmpdir(), 'thix-alarm-retire-boot-'));
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
+    const now = 1000n;
+    const first = await makeHost(statePath, () => now);
+    t.teardown(() => first.daemon.crash());
+    const owner = await first.daemon.createWorker({ debugLabel: 'listener' });
+    const facet = first.daemon.makeResource('alarms', {
+      workerId: owner.workerId,
+    });
+    // The guest listens on the host promise, so the endpoint records both the
+    // promise export and the obligation to settle the guest's resolver.
+    const waiter = await owner.evaluate(
+      `(() => {
+        const clock = (${makeGuestClock.toString()})(alarms, { restartMessage });
+        let got = null;
+        return Far('Waiter', {
+          arm: async deadline => {
+            const { settlement } = await E(clock).arm(deadline);
+            Promise.resolve(settlement).then(at => { got = String(at); }, () => { got = 'broken'; });
+            return true;
+          },
+          got: () => got,
+        });
+      })()`,
+      { alarms: facet, restartMessage },
+    );
+    t.true(await E(waiter).arm(5000n));
+    t.is(first.alarms.status().armed, 1n);
+    await owner.retire();
+    t.is(first.alarms.status().retained, 0n, "the retired vat's row is gone");
+    first.alarms.shutdown();
+    await first.daemon.shutdown();
+    // Both the promise export and the obligation naming it were dropped when
+    // the retired session released them; the next boot has nothing to re-link.
+    const second = await makeHost(statePath, () => now);
+    t.teardown(() => second.alarms.shutdown());
+    t.teardown(() => second.daemon.shutdown());
+    t.is(second.alarms.status().retained, 0n);
+    t.deepEqual(second.daemon.listWorkerIds(), []);
+  },
+);

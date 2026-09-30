@@ -87,6 +87,9 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {(workerId: string) => ThixotropeWorkerFacade} getWorker
  * @property {() => Array<string>} listWorkerIds
  * @property {(name: string, description?: unknown) => object} makeResource
+ * @property {(name: string, description?: unknown) => boolean} retireResource
+ *   forget a resource instance and null its recorded exports, so a restart
+ *   seats tombstones for it rather than re-running its factory
  * @property {(value: object, secret?: string) => string} publish
  * @property {(secret: string) => void} unpublish
  * @property {(location: any, secret: string) => Promise<any>} importReference fetch a remote publication through the durable hub session
@@ -128,6 +131,10 @@ const START_NOTICE_MS = 10_000;
  * @param {number} [options.idleSleepMs] park a worker after this long
  *   with no deliveries (see the durable worker transport's idle-sleep
  *   policy); omitted means workers sleep only on request
+ * @param {(workerId: string) => void | Promise<void>} [options.onRetireWorker]
+ *   called once a worker has been retired and its store and session deleted,
+ *   so a host service holding state keyed by that worker (alarm rows, say)
+ *   can drop it; a failure is reported and does not undo the retirement
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
@@ -141,6 +148,7 @@ const buildDaemon = async (
     resources = {},
     nativeWorkers,
     idleSleepMs = undefined,
+    onRetireWorker = undefined,
     verbose = false,
   },
 ) => {
@@ -954,6 +962,16 @@ const buildDaemon = async (
     // table entry along with its rows.
     hub.forgetSession(workerId);
     store.deleteWorker(workerId);
+    // Only now is the worker gone for good; host state keyed by it can be
+    // released. A failure here is reported, not allowed to leave the worker
+    // half-retired: the store and session are already deleted.
+    if (onRetireWorker !== undefined) {
+      try {
+        await onRetireWorker(workerId);
+      } catch (error) {
+        log.error('retire hook failed:', error);
+      }
+    }
   };
 
   /**
@@ -1309,6 +1327,8 @@ const buildDaemon = async (
     listWorkerIds: () => [...workers.keys()].sort(),
     makeResource: (name, description = null) =>
       records.provideResource(name, description),
+    retireResource: (name, description = null) =>
+      records.retireResource(name, description),
     // Persist a swissnum locator for this held capability. Remote bootstrap
     // fetch(secret) obtains it; withdrawing the locator leaves existing refs valid.
     publish: (value, secret = randomHex128()) => {

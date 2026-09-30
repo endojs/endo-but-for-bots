@@ -17,8 +17,13 @@ import harden from '@endo/harden';
  * vat where only E, Far and harden are in scope.
  *
  * @param {any} alarms a DurableAlarms facet
+ * @param {object} options
+ * @param {string} options.restartMessage the message a host answer carries
+ *   when it was broken by a host restart (`PENDING_ANSWER_ABORTED_MESSAGE`
+ *   from `@endo/ocapn`); only the message crosses the wire, and only this
+ *   one failure is worth retrying at once
  */
-export const makeGuestClock = alarms => {
+export const makeGuestClock = (alarms, { restartMessage }) => {
   let nextId = 0n;
   /** @type {Set<string>} */
   const releases = new Set();
@@ -38,12 +43,9 @@ export const makeGuestClock = alarms => {
           releases.delete(id);
           return;
         } catch (error) {
-          if (
-            /** @type {Error} */ (error).message !==
-            'session resumed after restart; pending answer aborted'
-          ) {
-            // Storage or other persistent failures retry on the next clock
-            // use, rather than spinning. Only restart aborts retry immediately.
+          if (/** @type {Error} */ (error).message !== restartMessage) {
+            // Storage or other persistent failures retry on the next arm,
+            // rather than spinning. Only restart aborts retry immediately.
             return;
           }
         }
@@ -53,7 +55,16 @@ export const makeGuestClock = alarms => {
     return job;
   };
 
-  const retryReleases = () => Promise.all([...releases].map(release));
+  // Only arming pays for outstanding cleanup: it is the one operation that
+  // needs a row, and a release that failed for a persistent reason should not
+  // be re-issued by every reading of the clock. A vat that never arms again
+  // therefore keeps its unreleased rows until it is retired; they count
+  // against the shared limit, which is acceptable because a persistent
+  // storage failure on the host affects every vat's rows alike.
+  const retryReleases = () =>
+    releases.size === 0
+      ? Promise.resolve([])
+      : Promise.all([...releases].map(release));
   /** @param {string} id */
   const queueRelease = id => {
     releases.add(id);
@@ -136,18 +147,12 @@ export const makeGuestClock = alarms => {
       return harden({
         settlement,
         canceller: Far('AlarmCanceller', {
-          cancel: async () => {
-            await retryReleases();
-            return E(alarms).cancel(id);
-          },
+          cancel: () => E(alarms).cancel(id),
         }),
       });
     },
 
-    now: async () => {
-      await retryReleases();
-      return E(alarms).now();
-    },
+    now: () => E(alarms).now(),
   });
 };
 harden(makeGuestClock);
