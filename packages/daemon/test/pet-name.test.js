@@ -203,6 +203,12 @@ test('namePathFrom rejects a bare string with a retry hint', t => {
   });
 });
 
+test('namePathFrom rejects values that are neither string nor array', t => {
+  for (const value of [undefined, null, 42, {}]) {
+    t.throws(() => namePathFrom(value), { message: /Invalid/ });
+  }
+});
+
 test('namePathFrom passes through array', t => {
   const result = namePathFrom(['a', 'b']);
   t.deepEqual(result, ['a', 'b']);

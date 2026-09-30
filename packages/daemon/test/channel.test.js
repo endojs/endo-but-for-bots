@@ -3267,6 +3267,14 @@ test.serial(
       E(/** @type {any} */ (channel)).post(['Hi ', ''], ['x'], ['counter']),
       { message: /a string is not a pet-name path.*\["counter"\]/ },
     );
+
+    // A joined member's handle carries its own copy of the check.
+    const [bobInvite] = await E(channel).createInvitation('Bob');
+    const bobMember = await E(bobInvite).join('Bob');
+    await t.throwsAsync(
+      E(/** @type {any} */ (bobMember)).post(['Hi ', ''], ['x'], ['counter']),
+      { message: /a string is not a pet-name path.*\["counter"\]/ },
+    );
     t.is((await E(channel).listMessages()).length, 0);
   },
 );
