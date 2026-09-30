@@ -531,6 +531,7 @@ LLM-agent stack).*
 | [captp-error-identification](captp-error-identification.md) | 2026-07-02 | 2026-07-02 | Proposed |
 | [daemon-engo-supervisor](daemon-engo-supervisor.md) | 2026-02-25 | 2026-02-25 | Not Started |
 | [daemon-locator-reference](daemon-locator-reference.md) | 2026-03-18 | 2026-05-10 | Reference |
+| [capability-url-locators](capability-url-locators.md) | 2026-09-28 | 2026-09-30 | Proposed |
 | [endo-fs-seam-review-followups](endo-fs-seam-review-followups.md) | 2026-06-18 | 2026-06-18 | **Complete** |
 | [http-confine](http-confine.md) | 2026-07-08 | 2026-07-08 | Proposed |
 | [inter-package-plain-re-exports](inter-package-plain-re-exports.md) | 2026-06-27 | 2026-06-27 | Not Started |
