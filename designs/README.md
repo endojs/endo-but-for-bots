@@ -484,6 +484,7 @@ LLM-agent stack).*
 | [lal-reply-chain-transcripts](lal-reply-chain-transcripts.md) | 2026-02-26 | 2026-03-05 | **Complete** |
 | [lal-transcript-memory-management](lal-transcript-memory-management.md) | 2026-03-05 | 2026-03-05 | In Progress |
 | [ocapn-iroh-netlayer](ocapn-iroh-netlayer.md) | 2026-07-13 | 2026-07-13 | **Complete** |
+| [ocapn-cloudflare-netlayer](ocapn-cloudflare-netlayer.md) | 2026-09-30 | — | Proposed |
 | [slots-ocapn-op-lanes](slots-ocapn-op-lanes.md) | 2026-09-16 | - | In Progress |
 | [ocapn-network-transport-separation](ocapn-network-transport-separation.md) | 2026-02-14 | 2026-02-24 | In Progress |
 | [ocapn-noise-cryptographic-review](ocapn-noise-cryptographic-review.md) | 2026-02-14 | 2026-02-24 | Deprecated (superseded by [ocapn-noise-network](ocapn-noise-network.md)) |
