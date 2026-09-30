@@ -3,11 +3,17 @@ import { E } from '@endo/eventual-send';
 import { withEndoAgent } from '../context.js';
 import { parseMessage } from '../message-parse.js';
 import { parseBigint } from '../number-parse.js';
+import { parsePetNamePath } from '../pet-name.js';
 
 export const reply = async ({ messageNumberText, message, agentNames }) => {
   const { strings, edgeNames, petNames } = parseMessage(message);
   const messageNumber = parseBigint(messageNumberText);
   await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
-    await E(agent).reply(messageNumber, strings, edgeNames, petNames);
+    await E(agent).reply(
+      messageNumber,
+      strings,
+      edgeNames,
+      petNames.map(parsePetNamePath),
+    );
   });
 };

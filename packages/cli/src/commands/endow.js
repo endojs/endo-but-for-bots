@@ -2,6 +2,7 @@ import os from 'os';
 import { E } from '@endo/eventual-send';
 import { withEndoAgent } from '../context.js';
 import { parseBigint } from '../number-parse.js';
+import { parseOptionalPetNamePath } from '../pet-name.js';
 
 /**
  * Parse --bind arguments into a bindings record.
@@ -39,7 +40,7 @@ export const endowCommand = async ({
     await E(agent).endow(
       parseBigint(messageNumberText),
       bindings,
-      workerName,
-      resultName,
+      parseOptionalPetNamePath(workerName),
+      parseOptionalPetNamePath(resultName),
     );
   });
