@@ -543,10 +543,25 @@ pub fn resume_from_cas(
 /// session can tell whether a commit advanced the machine's own backing.
 /// Under the store-seam design's trust model a store has one writer (the
 /// SQLite backend's exclusive lock, the file store's single-writer rule),
-/// so a fault reads its row without re-checking the store's epoch or commit
-/// token; a session whose store moved is refused by the checkpoint's
-/// pairing.
+/// so a bound session's fault reads its row without re-checking the store's
+/// epoch or commit token; a session whose store moved is refused by the
+/// checkpoint's pairing.
+///
+/// An unbound machine ([`StoreSession::into_machine`]) has no checkpoint
+/// left to refuse it, and still faults from this store until it is rebound
+/// or dropped: its faults check the pairing instead ([`Self::unbound`]).
 struct LazyPin {
+    /// The (epoch, token) of the store state the machine's backing
+    /// describes: the one the session resumed from, advanced by each
+    /// checkpoint that lands in the pinned store.
+    backed: (u64, CommitToken),
+    /// Shared with the page source. [`StoreSession::into_machine`] sets it
+    /// to [`Self::backed`], after which every fault first checks that the
+    /// store still holds that state, so another session's commit to the
+    /// same store refuses the unbound machine's next fault rather than
+    /// mixing the two epochs' rows into a heap that a later rebind or
+    /// snapshot would persist.
+    unbound: std::rc::Rc<std::cell::Cell<Option<(u64, CommitToken)>>>,
     /// Address of the pinned store's data (the `S` inside the
     /// `Rc<RefCell<S>>` the page source reads through). The session
     /// advances the machine's backing after a commit only when the
@@ -745,7 +760,16 @@ impl StoreSession {
 
     /// Unbind, discarding the store baseline. The returned machine's
     /// dirty bits are meaningless as an incremental baseline.
+    ///
+    /// A lazily resumed machine still faults from the session's store; from
+    /// here on each fault first checks that the store holds the state the
+    /// machine's backing describes, and unwinds with a [`StoreFault`]
+    /// carrying [`StoreError::EpochMismatch`] or
+    /// [`StoreError::BaselineMismatch`] once it does not.
     pub fn into_machine(self) -> Interp {
+        if let Some(pin) = &self.tracking.pin {
+            pin.unbound.set(Some(pin.backed));
+        }
         self.interp
     }
 }
@@ -848,10 +872,10 @@ fn begin_store_core(
         Err(MachineSnapshotError::Io(e)) => return Err(StoreError::Io(e.to_string())),
     };
     // A machine unbound from an earlier session may still carry that
-    // session's lazy backing. The image above faulted every page in, so
-    // stop relying on the backing now: nothing is evicted and nothing
-    // faults from the old store again, which the page source's epoch
-    // pin used to fence.
+    // session's lazy backing. The image above faulted every page in, each
+    // fault checking that the old store still held the state the backing
+    // describes ([`LazyPin::unbound`]), so stop relying on the backing
+    // now: nothing is evicted and nothing faults from the old store again.
     interp.abandon_backing();
     let mut tokens: Box<dyn CommitTokenSource> = Box::new(RandomTokens);
     let batch = crate::store::image_to_batch_with_cadence(
@@ -1089,6 +1113,9 @@ fn checkpoint_to_store_core(
     tracking.epoch = epoch;
     tracking.token = batch.manifest.token;
     if landed_in_backing {
+        if let Some(pin) = tracking.pin.as_mut() {
+            pin.backed = (epoch, batch.manifest.token);
+        }
         // The arenas' lazy backing advances to the committed geometry:
         // rows appended past the attach-time range are now store-backed
         // (evictable, re-faultable), and the tail row's expected fault
@@ -1207,6 +1234,9 @@ pub fn resume_from_store(
 /// the [`ironhorse_vm::PageSource`] contract describes.
 struct StorePageSource<S: HeapStore> {
     store: std::rc::Rc<std::cell::RefCell<S>>,
+    /// [`LazyPin::unbound`]: the state an unbound machine's faults check
+    /// the store against.
+    unbound: std::rc::Rc<std::cell::Cell<Option<(u64, CommitToken)>>>,
 }
 
 /// Unwind out of a fault with the store's own error; see [`StoreFault`].
@@ -1219,12 +1249,32 @@ impl<S: HeapStore> StorePageSource<S> {
     /// mutably for a commit (a checkpoint that walks a page it never
     /// faulted) is an engine defect; it is reported as a store fault
     /// rather than as an anonymous borrow panic.
+    ///
+    /// For an unbound machine the store must still hold the state the
+    /// backing describes. The check and the read that follows share one
+    /// borrow, so no commit through this handle lands between them.
     fn store(&self) -> std::cell::Ref<'_, S> {
-        self.store.try_borrow().unwrap_or_else(|_| {
+        let store = self.store.try_borrow().unwrap_or_else(|_| {
             raise_store_fault(StoreError::EngineInvariant(
                 "lazy fault while the store is borrowed for a commit".to_string(),
             ))
-        })
+        });
+        if let Some((epoch, token)) = self.unbound.get() {
+            let stored = store.manifest().unwrap_or_else(|e| raise_store_fault(e));
+            if stored.epoch != epoch {
+                raise_store_fault(StoreError::EpochMismatch {
+                    expected: epoch,
+                    found: stored.epoch,
+                });
+            }
+            if stored.token != token {
+                raise_store_fault(StoreError::BaselineMismatch {
+                    expected: token.to_hex(),
+                    found: stored.token.to_hex(),
+                });
+            }
+        }
+        store
     }
 }
 
@@ -1279,13 +1329,16 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         manifest.chunk_len as usize,
     )
     .map_err(StoreError::Snapshot)?;
+    let unbound = std::rc::Rc::new(std::cell::Cell::new(None));
     let pin = LazyPin {
+        backed: (manifest.epoch, manifest.token),
+        unbound: unbound.clone(),
         // `RefCell::as_ptr` addresses the `S` itself — the same address
         // a later `&mut *store.borrow_mut()` coerced to
         // `&mut dyn HeapStore` carries into [`checkpoint_to_store`].
         store_addr: store.as_ptr().cast::<()>().cast_const(),
     };
-    let source = std::rc::Rc::new(StorePageSource { store });
+    let source = std::rc::Rc::new(StorePageSource { store, unbound });
     let (interp, backing_authority) = catch_store_fault(|| {
         let (slots, chunks, backing_authority) = ironhorse_vm::BackingCommitAuthority::lazy_arenas(
             manifest.slot_count,

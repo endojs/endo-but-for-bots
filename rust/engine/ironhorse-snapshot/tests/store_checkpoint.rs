@@ -642,8 +642,8 @@ fn evict_after_a_twin_store_checkpoint_keeps_the_modified_body() {
 /// relying on the old one: `begin_store_session` faults every page in and
 /// abandons the lazy backing, so no page or extent is evicted (a re-fault
 /// would read the old store) and whatever happens to the old store later
-/// cannot reach the machine. The page source's epoch pin used to fence
-/// this case.
+/// cannot reach the machine. Until then the old store must not move; see
+/// `an_unbound_lazy_machine_refuses_a_fault_from_a_store_that_moved`.
 ///
 /// Bite check: without the `abandon_backing` call in `begin_store_core`
 /// the clean faulted-in pages evict.
@@ -757,6 +757,93 @@ fn rebinding_a_machine_whose_old_store_fails_a_read_unwinds_with_that_stores_err
     match store_fault_of(payload) {
         Ok(StoreError::Io(_)) => {}
         Ok(other) => panic!("expected the old store's I/O error, got {other:?}"),
+        Err(_) => panic!("expected a store fault"),
+    }
+    assert_eq!(
+        new.manifest(),
+        Err(StoreError::Empty),
+        "nothing was committed"
+    );
+}
+
+/// An unbound lazy machine still faults from its old store until it is
+/// rebound or dropped, and no checkpoint is left to refuse it if that store
+/// moves: a rebind or a snapshot would persist a heap mixing the backing's
+/// rows with another commit's. Its faults check the pairing instead. A
+/// machine whose own session last committed into that store rebinds
+/// cleanly; one whose store another session has since committed to
+/// unwinds out of the rebind with the old store's epoch mismatch, and
+/// nothing is committed.
+#[test]
+fn an_unbound_lazy_machine_refuses_a_fault_from_a_store_that_moved() {
+    use ironhorse_snapshot::machine::store_fault_of;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let compile = |source: &str| {
+        let (code, names) = ironhorse_compile::compile_atoms(source).unwrap();
+        (code, ironhorse_vm::parse_symbols(&names))
+    };
+    let crank = |session: &mut StoreSession, source: &str| {
+        let (code, names) = compile(source);
+        let code = session.machine_mut().relink_crank(&code, &names).unwrap();
+        let outcome = session.machine_mut().run(&code);
+        assert!(outcome.completed, "{:?}", outcome.halt);
+    };
+    let evict_all = |session: &StoreSession, store: &MemoryStore| {
+        let manifest = store.manifest().unwrap();
+        let mut evicted = 0;
+        for page in 0..slot_page_count(manifest.slot_count) {
+            evicted += session.machine().slots().evict_page(page) as u32;
+        }
+        assert!(
+            evicted > 0,
+            "the rebind has pages to read from the old store"
+        );
+    };
+    let (build, names) =
+        compile("var backed = []; for (var i = 0; i < 2048; i++) backed.push({v: i});");
+    let mut m = Interp::new();
+    m.link_intrinsics(&names);
+    assert!(m.run(&build).completed);
+    let old = Rc::new(RefCell::new(MemoryStore::new()));
+    drop(begin(m, &mut *old.borrow_mut()));
+
+    // The session's own checkpoint advances what its backing describes.
+    let mut lazy = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
+    crank(&mut lazy, "backed[0].v = -1;");
+    assert_eq!(
+        checkpoint_to_store(&mut lazy, &sig(), &mut *old.borrow_mut()).unwrap(),
+        2
+    );
+    evict_all(&lazy, &old.borrow());
+    let mut new = MemoryStore::new();
+    drop(begin(lazy.into_machine(), &mut new));
+
+    // Another session's commit moves the store under an unbound machine.
+    let lazy = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
+    evict_all(&lazy, &old.borrow());
+    let machine = lazy.into_machine();
+    let mut other = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
+    crank(&mut other, "backed[2047].v = -1;");
+    assert_eq!(
+        checkpoint_to_store(&mut other, &sig(), &mut *old.borrow_mut()).unwrap(),
+        3
+    );
+    drop(other);
+    let mut new = MemoryStore::new();
+    let payload = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        begin_store_session(machine, &sig(), &mut new)
+            .map(drop)
+            .map_err(|(_, error)| error)
+    }))
+    .expect_err("the fault from the moved store unwinds out of the rebind");
+    match store_fault_of(payload) {
+        Ok(StoreError::EpochMismatch {
+            expected: 2,
+            found: 3,
+        }) => {}
+        Ok(other) => panic!("expected the old store's epoch mismatch, got {other:?}"),
         Err(_) => panic!("expected a store fault"),
     }
     assert_eq!(
