@@ -183,7 +183,9 @@ neither package ever touches a token; first concrete instance of the
 M7 OAuth-integration pattern and a template for Gmail / Calendar
 siblings),
 [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) (added
-2026-06-23; design 2 of 2 in a competing pair addressing the
+2026-06-23; its SturdyRef representation is superseded by the layering stack
+starting at [sturdyref-shim-contract](sturdyref-shim-contract.md), while its
+retention design remains input to the daemon layer; design 2 of 2 in a competing pair addressing the
 maintainer's directive on PR #500 to land SturdyRefs in
 `@endo/pass-style` and thread them through the daemon's
 pet-name-path surface; this design rejects worker-local SturdyRef
@@ -394,6 +396,7 @@ LLM-agent stack).*
 | [retention-path-notation](retention-path-notation.md) | 2026-05-10 | 2026-05-19 | Reference |
 | [runtime-container-fs-mount](runtime-container-fs-mount.md) | 2026-08-10 | 2026-09-08 | **Complete** |
 | [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) | 2026-06-23 | 2026-06-26 | In Progress (redirected to on-demand OCapN enlivenment) |
+| [sturdyref-shim-contract](sturdyref-shim-contract.md) | 2026-09-30 | 2026-09-30 | Proposed (layer 1 of the SturdyRef layering stack) |
 | [daemon-rename-to-manager](daemon-rename-to-manager.md) | 2026-05-04 | 2026-05-05 | In Progress |
 | [daemon-guest-eval-simplification](daemon-guest-eval-simplification.md) | 2026-03-21 | 2026-05-04 | **Implemented** |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | 2026-03-02 | 2026-03-02 | In Progress |
