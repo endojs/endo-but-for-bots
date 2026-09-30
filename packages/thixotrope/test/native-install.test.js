@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { serveThixotrope } from '../src/control/supervisor.js';
 import { connectLocalControl } from '../src/control/local-control.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
-import { describeNativePackage } from '../src/native/describe-package.js';
+import { describeNativeResource } from '../src/native/describe-resource.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const powers = makeNodePowers();
@@ -38,7 +38,7 @@ test.serial(
     };
     let host = await start();
     const directory = fileURLToPath(
-      new URL('./fixtures/native-package/', import.meta.url),
+      new URL('./fixtures/native-resource/', import.meta.url),
     );
     const first = await host.client.call('installNative', 'one', directory);
     t.deepEqual(
@@ -161,7 +161,7 @@ test.serial(
     await writeFile(
       join(directory, 'durable.js'),
       `export const make = () => harden({
-        registration: Far('Registration', { ok: () => true }),
+        facet: Far('Registration', { ok: () => true }),
         lifecycle: Far('Lifecycle', { started: () => {} }),
       });`,
     );
@@ -220,7 +220,7 @@ test.serial('shutdown waits for an accepted native installation', async t => {
   const installing = client.call(
     'installNative',
     'resource',
-    fileURLToPath(new URL('./fixtures/native-package/', import.meta.url)),
+    fileURLToPath(new URL('./fixtures/native-resource/', import.meta.url)),
   );
   const observed = installing.catch(error => {
     t.regex(error.message, /Session disconnected/);
@@ -236,33 +236,39 @@ test.serial('shutdown waits for an accepted native installation', async t => {
   t.true(released);
 });
 
-test.serial('native package descriptions require both entry files', async t => {
-  const path = await mkdtemp('/tmp/thix-native-package-');
-  t.teardown(() => rm(path, { recursive: true, force: true }));
-  await writeFile(join(path, 'durable.js'), 'export const make = () => ({});');
-  await t.throwsAsync(() => describeNativePackage(powers, path), {
-    code: 'ENOENT',
-  });
-});
+test.serial(
+  'native resource descriptions require both entry files',
+  async t => {
+    const path = await mkdtemp('/tmp/thix-native-resource-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    await writeFile(
+      join(path, 'durable.js'),
+      'export const make = () => ({});',
+    );
+    await t.throwsAsync(() => describeNativeResource(powers, path), {
+      code: 'ENOENT',
+    });
+  },
+);
 
 test.serial(
-  'native package descriptions refuse links and node_modules',
+  'native resource descriptions refuse links and node_modules',
   async t => {
-    const path = await mkdtemp('/tmp/thix-native-package-');
+    const path = await mkdtemp('/tmp/thix-native-resource-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
     const source = 'export const make = () => ({});';
     await writeFile(join(path, 'durable.js'), source);
     await writeFile(join(path, 'ephemeral.js'), source);
-    const { digest } = await describeNativePackage(powers, path);
+    const { digest } = await describeNativeResource(powers, path);
     t.regex(digest, /^[0-9a-f]{64}$/);
     await symlink(join(path, 'durable.js'), join(path, 'alias.js'));
-    await t.throwsAsync(() => describeNativePackage(powers, path), {
+    await t.throwsAsync(() => describeNativeResource(powers, path), {
       message: /files or directories/,
     });
     await rm(join(path, 'alias.js'));
-    t.is((await describeNativePackage(powers, path)).digest, digest);
+    t.is((await describeNativeResource(powers, path)).digest, digest);
     await mkdir(join(path, 'node_modules'));
-    await t.throwsAsync(() => describeNativePackage(powers, path), {
+    await t.throwsAsync(() => describeNativeResource(powers, path), {
       message: /node_modules/,
     });
   },
@@ -305,7 +311,7 @@ test.serial('collection waits for native installation to finish', async t => {
   const installing = installer.call(
     'installNative',
     'resource',
-    fileURLToPath(new URL('./fixtures/native-package/', import.meta.url)),
+    fileURLToPath(new URL('./fixtures/native-resource/', import.meta.url)),
   );
   await started.promise;
   const collecting = collector.call('collect');

@@ -36,9 +36,9 @@ import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeInFlight } from '../in-flight.js';
 import { settleWithin, withExpiry } from '../platform/timers.js';
+import { describeNativeResource } from '../native/describe-resource.js';
 import { randomHex128 } from '../random-id.js';
 import { makeSerialQueue } from '../serial-queue.js';
-import { describeNativePackage } from '../native/describe-package.js';
 
 import { evaluateSource } from './evaluate-source.js';
 import {
@@ -88,7 +88,7 @@ const WORKSPACE_VERSION = 8;
 const MAX_SOCKET_PATH_BYTES = 103;
 // A stuck installation cannot block `stop`: installations are resumable, so
 // shutdown waits this long for an accepted one and then proceeds. This bounds
-// the host-side phases (describing and bundling the package, booting the
+// the host-side phases (describing and bundling the directory, booting the
 // manager); a delivery stalled inside the workspace vat is bounded by the
 // engine's request timeout, as every other delivery is.
 const INSTALL_DRAIN_MS = 10_000;
@@ -615,18 +615,18 @@ export const serveThixotrope = async (
           assertWorkspace();
           if (typeof directory !== 'string')
             throw Error('Expected a native resource directory');
-          const description = await describeNativePackage(
+          const description = await describeNativeResource(
             { files, paths, hashes },
             paths.resolve(directory),
           );
           const { bundle, digest: bundleDigest } =
             await platform.bundler.bundle(description.durablePath);
-          const checked = await describeNativePackage(
+          const checked = await describeNativeResource(
             { files, paths, hashes },
             description.directory,
           );
           if (checked.digest !== description.digest)
-            throw Error('Native package changed during installation');
+            throw Error('Native resource changed during installation');
           const digest = hashes.sha256Hex(
             new TextEncoder().encode(
               JSON.stringify([
@@ -644,7 +644,7 @@ export const serveThixotrope = async (
             makeAdapters: workerId =>
               daemon.makeResource('native-adapter', {
                 moduleUrl: description.moduleUrl,
-                packageIdentity: {
+                resourceIdentity: {
                   directory: description.directory,
                   digest: description.digest,
                 },

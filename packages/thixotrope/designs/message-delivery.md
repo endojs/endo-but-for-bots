@@ -65,7 +65,7 @@ or terminally refused.
 An acceptance receipt identifies the handoff; it is not an application result.
 Retain the outbox entry on temporary unavailability or ambiguous failure.
 Only release it on acceptance, or transfer it to a durable terminal-disposition path.
-If adapters become asynchronous, serialize completion per destination and match receipts by identity.
+If transports become asynchronous, serialize completion per destination and match receipts by identity.
 Do not hold an open hub storage transaction across network or worker I/O.
 
 Preserve existing worker output sequence and hub delivery identifiers where their scope suffices.

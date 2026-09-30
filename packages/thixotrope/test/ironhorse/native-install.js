@@ -26,7 +26,7 @@ test.serial(
       `export const make = () => {
     let starts = 0;
     return harden({
-      registration: Far('Registration', {
+      facet: Far('Registration', {
         starts: () => starts,
         exhaust: () => { let n = 0; while (n < 1000000000) n += 1; return n; },
       }),

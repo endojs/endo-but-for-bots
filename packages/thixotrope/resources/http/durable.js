@@ -75,7 +75,7 @@ export const make = ({ makeManager }) => {
         ...(error === undefined ? {} : { error }),
       }),
   });
-  const registration = Far('HttpRegistration', {
+  const facet = Far('Http', {
     help: () =>
       'register(port, handler, policy?) serves handler.handle({method,path,body}) and returns status()/close().',
     /**
@@ -94,6 +94,6 @@ export const make = ({ makeManager }) => {
       );
     },
   });
-  return harden({ registration, lifecycle: manager.lifecycle });
+  return harden({ facet, lifecycle: manager.lifecycle });
 };
 harden(make);

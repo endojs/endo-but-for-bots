@@ -228,7 +228,7 @@ Persisting a JavaScript reference does not preserve the underlying OS resource.
 
 Direction matters:
 
-- An ephemeral client can call a durable object and disappear while the durable object remains.
+- A transient client can call a durable object and disappear while the durable object remains.
   The inventory TUI exercises this case, including the reverse callback edge created by its
   subscription and release of that callback when the UI closes.
 - A durable object can initiate and manage an ephemeral resource, such as a child process or listening

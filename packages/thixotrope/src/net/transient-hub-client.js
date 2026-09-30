@@ -15,7 +15,7 @@ import { derivePipeResumption } from './pipe-network.js';
  * @param {RandomPowers} random
  * @param {{codec: any, hub: any, sessionKey: string}} options
  */
-export const makeEphemeralHubClient = async (
+export const makeTransientHubClient = async (
   random,
   { codec, hub, sessionKey },
 ) => {
@@ -74,7 +74,7 @@ export const makeEphemeralHubClient = async (
       if (!wasClosed)
         handlers.handleConnectionClose(
           connection,
-          Error('Ephemeral client closed'),
+          Error('Transient client closed'),
         );
     } finally {
       try {
@@ -102,7 +102,7 @@ export const makeEphemeralHubClient = async (
        * @returns {Promise<any>}
        */
       lookup: async secret => {
-        if (closed) throw Error('Ephemeral client closed');
+        if (closed) throw Error('Transient client closed');
         const bytes =
           typeof secret === 'string'
             ? encodeSwissnum(secret)
@@ -116,4 +116,4 @@ export const makeEphemeralHubClient = async (
     throw error;
   }
 };
-harden(makeEphemeralHubClient);
+harden(makeTransientHubClient);

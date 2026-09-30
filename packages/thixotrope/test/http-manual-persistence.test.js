@@ -68,10 +68,10 @@ test('HTTP registration keeps private lifecycle separate and closes only its own
   const handler = Far('Handler', {
     handle: () => harden({ status: 200, body: 'ok' }),
   });
-  const first = await E(kit.registration).register(18_080, handler);
+  const first = await E(kit.facet).register(18_080, handler);
   t.is((await E(first).status()).status, 'listening');
   t.true(await E(first).close());
-  const second = await E(kit.registration).register(18_080, handler);
+  const second = await E(kit.facet).register(18_080, handler);
   t.false(await E(first).close());
   t.true(bound.has(18_080));
   t.is((await E(second).status()).status, 'listening');
@@ -82,7 +82,7 @@ test('HTTP registration keeps private lifecycle separate and closes only its own
 test('HTTP startup reconciliation and registration share one ordered desired set', async t => {
   const { kit, bound } = fixture();
   const handler = Far('Handler', {});
-  const registration = await E(kit.registration).register(18_080, handler);
+  const registration = await E(kit.facet).register(18_080, handler);
   await Promise.all([
     E(kit.lifecycle).started(),
     E(registration).close(),
@@ -96,8 +96,8 @@ test('HTTP startup reconciliation and registration share one ordered desired set
 test('an interrupted close retires the adapter before another registration is served', async t => {
   const { kit, bound } = fixture(true);
   const handler = Far('Handler', {});
-  const first = await E(kit.registration).register(18_080, handler);
-  const second = await E(kit.registration).register(18_081, handler);
+  const first = await E(kit.facet).register(18_080, handler);
+  const second = await E(kit.facet).register(18_081, handler);
   // The withdrawal is durable before the adapter is told; an unbind that
   // fails retires the whole incarnation, so the port is released with its
   // process and the close reports success.
@@ -147,23 +147,23 @@ test('invalid HTTP policy does not consume a registration', async t => {
   const { kit } = fixture();
   const handler = Far('Handler', {});
   await t.throwsAsync(
-    () => E(kit.registration).register(18_080, handler, { origins: 7 }),
+    () => E(kit.facet).register(18_080, handler, { origins: 7 }),
     { message: /origins must be an array/ },
   );
-  const registration = await E(kit.registration).register(18_080, handler);
+  const registration = await E(kit.facet).register(18_080, handler);
   t.is((await E(registration).status()).status, 'listening');
 });
 
 test('a failed initial bind still returns a handle that can cancel or retry', async t => {
   const { kit, bound, allowBind } = fixture(false, true);
   const handler = Far('Handler', {});
-  const cancelled = await E(kit.registration).register(18_080, handler);
+  const cancelled = await E(kit.facet).register(18_080, handler);
   t.like(await E(cancelled).status(), {
     status: 'inactive',
     error: 'Port unavailable',
   });
   t.true(await E(cancelled).close());
-  const retried = await E(kit.registration).register(18_081, handler);
+  const retried = await E(kit.facet).register(18_081, handler);
   allowBind();
   await E(kit.lifecycle).started();
   t.false(bound.has(18_080));
