@@ -21,7 +21,7 @@
   received messages). Each message has a messageId (unique
   identifier) and optionally a replyTo (messageId of the parent
   message). Use these to understand conversation threading.
-- `adopt(messageNumber, edgeName, petName)` — Adopt a value
+- `adopt(messageNumber, edgeName, petNamePath)` — Adopt a value
   from a message
 - `dismiss(messageNumber)` — Remove a message from inbox
 - `request(recipientName, description, responseName?)` — Request
