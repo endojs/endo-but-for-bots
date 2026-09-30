@@ -862,6 +862,19 @@ test('directory lookup refuses a bare-string pet name', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
   await t.throwsAsync(() => E(directory).lookup('create'), {
-    message: /a string is not a pet-name path/,
+    message: /PATH_MUST_BE_ARRAY/,
   });
+});
+
+test('directory lookup refusals do not reflect the path', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  const delimited = await t.throwsAsync(() =>
+    E(directory).lookup(`use/${canary}`),
+  );
+  t.false(delimited.message.includes(canary));
+  const malformed = await t.throwsAsync(() =>
+    E(directory).lookup(['use', `${canary}/x`]),
+  );
+  t.false(malformed.message.includes(canary));
 });
