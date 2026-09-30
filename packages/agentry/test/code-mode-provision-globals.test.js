@@ -289,7 +289,8 @@ test('retained grants reject a guest without trusted provisioning provenance', a
   const workspace = Far('Workspace', {});
   const git = Far('Git', {});
   const guest = Far('Guest', {
-    lookup: async name => (name === 'workspace' ? workspace : git),
+    lookup: async path =>
+      [path].flat().join('/') === 'workspace' ? workspace : git,
   });
   const persistence = makePersistence({
     mounts: {
@@ -326,7 +327,8 @@ test('trusted provisioning provenance derives grants from the rebound guest', as
   const workspace = Far('Workspace', {});
   const git = Far('Git', {});
   const guest = Far('Guest', {
-    lookup: async name => (name === 'workspace' ? workspace : git),
+    lookup: async path =>
+      [path].flat().join('/') === 'workspace' ? workspace : git,
   });
   const persistence = makePersistence({
     mounts: {

@@ -617,7 +617,8 @@ test('lookup-backed workspace and git powers resolve before posture validation',
   const { workspace, git } = await makeRealGit(t);
   const looked = [];
   const lookupPowers = Far('Powers', {
-    async lookup(petName) {
+    async lookup(petNamePath) {
+      const petName = [petNamePath].flat().join('/');
       looked.push(petName);
       if (petName === 'workspace') return workspace;
       if (petName === 'git') return git;
@@ -660,7 +661,8 @@ test('resolveCodeModePowers leaves inline capabilities and named powers alone', 
   const { workspace, git } = await makeRealGit(t);
   const looked = [];
   const lookupPowers = Far('Powers', {
-    async lookup(petName) {
+    async lookup(petNamePath) {
+      const petName = [petNamePath].flat().join('/');
       looked.push(petName);
       return Far('Cap', {});
     },
