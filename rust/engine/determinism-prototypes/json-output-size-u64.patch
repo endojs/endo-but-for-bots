@@ -1,0 +1,56 @@
+--- a/ironhorse-vm/src/interp/natives/json.rs
++++ b/ironhorse-vm/src/interp/natives/json.rs
+@@ -83,7 +83,7 @@
+                 .ok_or(Step::Host(Halt::HeapExhausted))?;
+             i += 1;
+         }
+-        self.json_reserve_output(state, size)?;
++        self.json_reserve_output(state, size as u64)?;
+         let mut out = Self::reserved_vec(size)?;
+         out.push(b'"' as u16);
+         let mut index = 0;
+@@ -120,11 +120,11 @@
+     fn json_reserve_output(
+         &mut self,
+         state: &mut JsonStringifyState,
+-        additional: usize,
++        additional: u64,
+     ) -> Result<(), Step> {
+         let total = state
+             .output_units
+-            .checked_add(additional as u64)
++            .checked_add(additional)
+             .ok_or(Step::Host(Halt::HeapExhausted))?;
+         self.reserve_units_growth(state.output_units, total)?;
+         state.output_units = total;
+@@ -137,7 +137,7 @@
+         text: &str,
+     ) -> Result<Vec<u16>, Step> {
+         let size = text.encode_utf16().count();
+-        self.json_reserve_output(state, size)?;
++        self.json_reserve_output(state, size as u64)?;
+         let mut out = Self::reserved_vec(size)?;
+         out.extend(text.encode_utf16());
+         Ok(out)
+@@ -160,8 +160,11 @@
+         } else {
+             2 + 2 * count + count * indent.len() as u64 + stepback.len() as u64
+         };
+-        let extra = usize::try_from(extra).map_err(|_| Step::Host(Halt::HeapExhausted))?;
++        // Admit against the result limit while still in u64: an oversized
++        // container is the same catchable RangeError on every target.
+         self.json_reserve_output(state, extra)?;
++        // `reserve_units_growth` bounded the whole result by 0x7fff_ffff units.
++        let extra = usize::try_from(extra).map_err(|_| Step::Host(Halt::HeapExhausted))?;
+         let length = partial
+             .iter()
+             .try_fold(extra, |length, part| length.checked_add(part.len()))
+@@ -715,7 +718,7 @@
+             if let Some(value) = self.json_stringify_property(code, inst, name, state, cost)? {
+                 let mut member = self.json_escape_string(&name.units, state)?;
+                 let punctuation = if state.gap.is_empty() { 1 } else { 2 };
+-                self.json_reserve_output(state, punctuation)?;
++                self.json_reserve_output(state, punctuation as u64)?;
+                 let additional = punctuation + value.len();
+                 self.admit_scratch::<u16>(member.len() + additional)?;
+                 member
