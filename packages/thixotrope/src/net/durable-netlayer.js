@@ -270,7 +270,8 @@ export const makeDurableNetLayer = async (
     physicals.delete(physical);
     physical?.end();
     connections.delete(logical.connection);
-    if (logical.isOriginator) outgoing.delete(locationToLocationId(logical.location));
+    if (logical.isOriginator)
+      outgoing.delete(locationToLocationId(logical.location));
     if (!wasDestroyed) handlers.handleConnectionClose(logical.connection);
     // An originator owns a retryable terminal notice until the peer confirms
     // its tombstone. An acceptor repeats retirement on subsequent greetings.
