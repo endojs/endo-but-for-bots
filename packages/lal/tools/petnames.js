@@ -74,7 +74,7 @@ export const petnamesToolDefs = harden([
       'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), edgeName, petName.',
     params: M.splitRecord({
       messageNumber: MessageNumberShape,
-      edgeName: NamePathArgumentShape,
+      edgeName: M.string(),
       petName: NamePathArgumentShape,
     }),
   },

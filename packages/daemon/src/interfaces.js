@@ -276,7 +276,7 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Adopt a reference from an incoming message
   adopt: M.call(
     MessageNumberShape,
-    NamePathArgumentShape,
+    EdgeNameShape,
     NamePathArgumentShape,
   ).returns(M.promise()),
   // Remove a message from inbox
@@ -377,7 +377,7 @@ export const HostInterface = M.interface('EndoHost', {
   reject: M.call(MessageNumberShape).optional(M.string()).returns(M.promise()),
   adopt: M.call(
     MessageNumberShape,
-    NamePathArgumentShape,
+    EdgeNameShape,
     NamePathArgumentShape,
   ).returns(M.promise()),
   dismiss: M.call(MessageNumberShape).returns(M.promise()),
