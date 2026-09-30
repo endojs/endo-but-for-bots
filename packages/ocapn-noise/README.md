@@ -127,6 +127,11 @@ The `np` locator's `designator` is the hex-encoded raw Ed25519 public
 key (64 chars).
 An initiator learns the peer's identity up front from the locator
 itself: no extra hint, no out-of-band step.
+`provideSession` requires the designator to be canonical lowercase hex
+(`/^[0-9a-f]{64}$/`) and rejects a weak (small-order or torsion-carrying)
+key: a weak responder static zeroes the `es`/`ss` Diffie-Hellman results,
+which would forfeit identity hiding and let a party holding no keys
+complete the handshake.
 
 Transport plugins:
 

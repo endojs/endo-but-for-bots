@@ -436,3 +436,50 @@ test('SYN claiming a key with a small-order component is rejected', async t => {
     },
   );
 });
+
+test('initiatorWriteSyn rejects a small-order intended responder key', async t => {
+  // 32 zero bytes is the order-4 Ed25519 point. `derive_remote_static_pubkey`
+  // must refuse it: a weak responder static makes the `es`/`ss` DH
+  // results all zeros, destroying identity hiding and letting a party
+  // with no keys complete the handshake.
+  const { initiatorWriteSyn } = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator();
+  const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  t.throws(() => initiatorWriteSyn(new Uint8Array(32), prefixedSyn), {
+    message: /not a valid, strong ed25519 verifying key/,
+  });
+});
+
+test('initiatorWriteSyn rejects a torsion-carrying intended responder key', async t => {
+  // A + T for a torsion point T is not small-order, so only the
+  // `is_torsion_free` check catches it. Build one from a real key.
+  const strong = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator().signingKeys;
+  const torsionKey = addOrderTwoPoint(strong.publicKey);
+  const { initiatorWriteSyn } = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator();
+  const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  t.throws(() => initiatorWriteSyn(torsionKey, prefixedSyn), {
+    message: /not a valid, strong ed25519 verifying key/,
+  });
+});
+
+test('initiatorWriteSyn accepts a strong intended responder key', async t => {
+  // Control: a normally-generated key still dials.
+  const responder = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asResponder().signingKeys;
+  const { initiatorWriteSyn } = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator();
+  const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  t.notThrows(() => initiatorWriteSyn(responder.publicKey, prefixedSyn));
+});
