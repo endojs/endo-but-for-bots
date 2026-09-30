@@ -18,13 +18,32 @@ use rand::rngs::OsRng;
 use sha2::{Digest, Sha256};
 use slot_machine_transcript::HostClass;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 // Handle tables belong to the dedicated worker thread. A caught callback panic
 // cannot expose a torn mutation to a sibling worker, and thread exit drops all
 // remaining native resources. `host_ledger::call` allocates the ids.
 thread_local! {
-    static HASHER_MAP: RefCell<HashMap<u32, Sha256>> = RefCell::new(HashMap::new());
+    static HASHER_MAP: RefCell<HashMap<u32, Hasher>> = RefCell::new(HashMap::new());
+    /// Hashers fed during the open crank, redescribed once at its commit.
+    static FED_THIS_CRANK: RefCell<BTreeSet<u32>> = const { RefCell::new(BTreeSet::new()) };
+}
+
+/// An incremental hasher and, under a transcript, every byte fed to it up
+/// to [`host_ledger::HASHER_DESCRIPTOR_LIMIT`] (`None` past the limit).
+struct Hasher {
+    sha256: Sha256,
+    fed: Option<Vec<u8>>,
+}
+
+impl Hasher {
+    fn new(fed: Option<Vec<u8>>) -> Hasher {
+        let mut sha256 = Sha256::new();
+        if let Some(fed) = &fed {
+            sha256.update(fed);
+        }
+        Hasher { sha256, fed }
+    }
 }
 
 /// `sha256(data) -> string`
@@ -156,7 +175,8 @@ pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
         });
         match result {
             Ok(Some(handle)) => {
-                HASHER_MAP.with(|m| m.borrow_mut().insert(handle, Sha256::new()));
+                let fed = host_ledger::attached().then(Vec::new);
+                HASHER_MAP.with(|m| m.borrow_mut().insert(handle, Hasher::new(fed)));
                 fxInteger(the, &mut (*the).scratch, handle as i32);
                 *(*the).frame.add(1) = (*the).scratch;
             }
@@ -167,39 +187,50 @@ pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
 }
 
 /// Feed `data` to a hasher under the host-call ledger. Under a transcript
-/// the descriptor records every fed byte, up to
-/// [`host_ledger::HASHER_DESCRIPTOR_LIMIT`].
+/// the hasher keeps every fed byte, up to
+/// [`host_ledger::HASHER_DESCRIPTOR_LIMIT`], and is redescribed once when
+/// the crank commits ([`take_redescriptions`]), so each call records only
+/// its own bytes.
 ///
 /// # Safety
 /// `the` must be valid.
 unsafe fn feed(the: *mut XsMachine, callback: &str, handle: u32, data: &[u8]) {
     let mut request = handle.to_be_bytes().to_vec();
     request.extend_from_slice(data);
-    let describe = host_ledger::attached();
     let result = host_ledger::call(callback, Some(handle), &request, || {
-        let fed = HASHER_MAP.with(|m| match m.borrow_mut().get_mut(&handle) {
-            Some(hasher) => {
-                hasher.update(data);
-                true
+        HASHER_MAP.with(|m| {
+            if let Some(hasher) = m.borrow_mut().get_mut(&handle) {
+                hasher.sha256.update(data);
+                if let Some(fed) = &mut hasher.fed {
+                    fed.extend_from_slice(data);
+                    if fed.len() > host_ledger::HASHER_DESCRIPTOR_LIMIT {
+                        hasher.fed = None;
+                    }
+                    FED_THIS_CRANK.with(|f| f.borrow_mut().insert(handle));
+                }
             }
-            None => false,
         });
-        let redescribes = (fed && describe).then(|| {
-            host_ledger::descriptor(handle)
-                .and_then(|d| d.hasher_fed())
-                .and_then(|mut all| {
-                    all.extend_from_slice(data);
-                    Descriptor::hasher(&all)
-                })
-        });
-        Outcome {
-            redescribes,
-            ..Outcome::default()
-        }
+        Outcome::default()
     });
     if let Err(msg) = result {
         set_result_string(the, &msg);
     }
+}
+
+/// The descriptor of every hasher still open and fed since the last call,
+/// for the transcript to record as of the crank's commit. A hasher fed past
+/// the limit has none and is re-seated as broken.
+pub(crate) fn take_redescriptions() -> Vec<(u32, Option<Descriptor>)> {
+    let fed = FED_THIS_CRANK.with(|f| std::mem::take(&mut *f.borrow_mut()));
+    HASHER_MAP.with(|m| {
+        let m = m.borrow();
+        fed.into_iter()
+            .filter_map(|handle| {
+                let hasher = m.get(&handle)?;
+                Some((handle, hasher.fed.as_deref().and_then(Descriptor::hasher)))
+            })
+            .collect()
+    })
 }
 
 /// `sha256Update(handle, data) -> undefined`
@@ -243,7 +274,7 @@ pub unsafe extern "C" fn host_sha256_finish(the: *mut XsMachine) {
         let request = handle.to_string().into_bytes();
         let result = host_ledger::call("sha256Finish", Some(handle), &request, || {
             let text = match HASHER_MAP.with(|m| m.borrow_mut().remove(&handle)) {
-                Some(hasher) => hex::encode(hasher.finalize()),
+                Some(hasher) => hex::encode(hasher.sha256.finalize()),
                 None => "Error: invalid hasher handle".to_string(),
             };
             set_result_string(the, &text);
@@ -267,9 +298,7 @@ pub(crate) fn has_open_handles() -> bool {
 /// Rebuild a hasher from its descriptor by re-feeding its recorded bytes.
 pub(crate) fn reseat(handle: u32, descriptor: &Descriptor) -> Result<(), String> {
     let fed = descriptor.hasher_fed().ok_or("not a hasher descriptor")?;
-    let mut hasher = Sha256::new();
-    hasher.update(&fed);
-    HASHER_MAP.with(|m| m.borrow_mut().insert(handle, hasher));
+    HASHER_MAP.with(|m| m.borrow_mut().insert(handle, Hasher::new(Some(fed))));
     Ok(())
 }
 
@@ -327,15 +356,15 @@ mod tests {
             crate::worker_io::guard_ffi(|| {
                 HASHER_MAP.with(|hashers| {
                     let mut hashers = hashers.borrow_mut();
-                    hashers.insert(42, Sha256::new());
+                    hashers.insert(42, Hasher::new(None));
                     std::thread::spawn(|| {
                         HASHER_MAP.with(|hashers| {
                             assert!(!hashers.borrow().contains_key(&42));
                             let mut hashers = hashers.borrow_mut();
-                            hashers.insert(42, Sha256::new());
-                            hashers.get_mut(&42).unwrap().update(b"sibling");
+                            hashers.insert(42, Hasher::new(None));
+                            hashers.get_mut(&42).unwrap().sha256.update(b"sibling");
                             assert_eq!(
-                                hashers.remove(&42).unwrap().finalize(),
+                                hashers.remove(&42).unwrap().sha256.finalize(),
                                 Sha256::digest(b"sibling")
                             );
                         });

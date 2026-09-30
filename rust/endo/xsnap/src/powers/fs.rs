@@ -20,6 +20,8 @@
 //!   link(dirOrToken, srcPath, dstPath) -> undefined
 
 use crate::ffi::*;
+use base64::engine::general_purpose::STANDARD as BASE64;
+use base64::Engine;
 use crate::host_ledger::{self, join, Base, Descriptor, Outcome};
 use crate::powers::HostPowers;
 use crate::worker_io::{abort_if_ffi_panicked, arg_str, read_typed_array_bytes, set_result_string};
@@ -278,6 +280,72 @@ unsafe fn open_file(the: *mut XsMachine, callback: &str, writer: bool) {
         }
         (Err(msg), _) => set_result_string(the, &msg),
         _ => {}
+    }
+}
+
+/// The directory slot as the ledger records it: an open directory handle,
+/// or a token.
+///
+/// # Safety
+/// `the` must be valid, `slot_index` must be in range.
+unsafe fn dir_slot(the: *mut XsMachine, slot_index: usize) -> (Option<u32>, Option<String>) {
+    match arg_dir_token(the, slot_index) {
+        Some(token) => (None, Some(token)),
+        None => {
+            let handle = fxToInteger(the, (*the).frame.sub(1 + slot_index)) as u32;
+            abort_if_ffi_panicked();
+            (Some(handle), None)
+        }
+    }
+}
+
+/// The directory slot of a mutation, with its resolved directory. `None`
+/// in place of the directory means the ambient `"root"` token.
+///
+/// # Safety
+/// `the` must be valid, `slot_index` must be in range.
+#[allow(clippy::type_complexity)]
+unsafe fn dir_arg(
+    the: *mut XsMachine,
+    slot_index: usize,
+) -> (
+    Option<u32>,
+    Option<String>,
+    Option<Result<cap_std::fs::Dir, String>>,
+) {
+    let (target, token) = dir_slot(the, slot_index);
+    let dir = (token.as_deref() != Some("root")).then(|| resolve_dir(the, slot_index));
+    (target, token, dir)
+}
+
+fn io_error(e: std::io::Error) -> String {
+    format!("Error: {}", e)
+}
+
+/// Run a filesystem mutation under the host-call ledger, targeting the
+/// directory handle it resolves through, if any. Under a
+/// transcript its request is durable before `effect` runs, so a mutation
+/// that escapes an aborted crank stops recovery. `effect` returns the
+/// guest's error string on failure.
+///
+/// Coerce every guest argument before calling (see [`host_ledger::call`]).
+///
+/// # Safety
+/// `the` must be valid.
+unsafe fn mutate(
+    the: *mut XsMachine,
+    callback: &str,
+    target: Option<u32>,
+    request: &impl serde::Serialize,
+    effect: impl FnOnce() -> Result<(), String>,
+) {
+    let request = serde_json::to_vec(request).unwrap_or_default();
+    let result = host_ledger::call(callback, target, &request, || match effect() {
+        Ok(()) => Outcome::default(),
+        Err(message) => error_outcome(the, message),
+    });
+    if let Err(message) = result {
+        set_result_string(the, &message);
     }
 }
 
@@ -616,25 +684,14 @@ pub unsafe extern "C" fn host_maybe_read_file_bytes(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
+        let (target, token, dir) = dir_arg(the, 0);
         // Read the file contents as raw bytes (may be non-UTF-8 CESU-8).
         let data = arg_bytes(the, 2);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            let abs = root_to_abs(&path);
-            if let Err(e) = std::fs::write(&abs, data) {
-                set_result_string(the, &format!("Error: {}", e));
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                if let Err(e) = dir.write(path, data) {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+        let request = (target, &token, &path, BASE64.encode(data));
+        mutate(the, "writeFileText", target, &request, || match dir {
+            None => std::fs::write(root_to_abs(&path), data).map_err(io_error),
+            Some(dir) => dir?.write(&path, data).map_err(io_error),
+        });
     });
 }
 
@@ -645,37 +702,27 @@ pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_append_file(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
+        let (target, token, dir) = dir_arg(the, 0);
         // Read the contents as raw bytes (may be non-UTF-8 CESU-8), matching
         // host_write_file_text.
         let data = arg_bytes(the, 2);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            let abs = root_to_abs(&path);
-            let result = std::fs::OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(&abs)
-                .and_then(|mut file| file.write_all(data));
-            if let Err(e) = result {
-                set_result_string(the, &format!("Error: {}", e));
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                let result = dir
+        let request = (target, &token, &path, BASE64.encode(data));
+        mutate(the, "appendFile", target, &request, || {
+            match dir {
+                None => std::fs::OpenOptions::new()
+                    .append(true)
+                    .create(true)
+                    .open(root_to_abs(&path))
+                    .and_then(|mut file| file.write_all(data)),
+                Some(dir) => dir?
                     .open_with(
-                        path,
+                        &path,
                         cap_std::fs::OpenOptions::new().append(true).create(true),
                     )
-                    .and_then(|mut file| file.write_all(data));
-                if let Err(e) = result {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
+                    .and_then(|mut file| file.write_all(data)),
             }
-            Err(msg) => set_result_string(the, &msg),
-        }
+            .map_err(io_error)
+        });
     });
 }
 
@@ -832,22 +879,11 @@ pub unsafe extern "C" fn host_read_dir(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_mkdir(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            if let Err(e) = std::fs::create_dir_all(root_to_abs(&path)) {
-                set_result_string(the, &format!("Error: {}", e));
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                if let Err(e) = dir.create_dir_all(path) {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+        let (target, token, dir) = dir_arg(the, 0);
+        mutate(the, "mkdir", target, &(target, &token, &path), || match dir {
+            None => std::fs::create_dir_all(root_to_abs(&path)).map_err(io_error),
+            Some(dir) => dir?.create_dir_all(&path).map_err(io_error),
+        });
     });
 }
 
@@ -858,27 +894,18 @@ pub unsafe extern "C" fn host_mkdir(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_remove(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            let abs = root_to_abs(&path);
-            let result = match std::fs::symlink_metadata(&abs) {
-                Ok(meta) if meta.is_dir() => std::fs::remove_dir(&abs),
-                _ => std::fs::remove_file(&abs),
-            };
-            if let Err(e) = result {
-                set_result_string(the, &format!("Error: {}", e));
-            }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                if let Err(e) = dir.remove_file(path) {
-                    set_result_string(the, &format!("Error: {}", e));
+        let (target, token, dir) = dir_arg(the, 0);
+        mutate(the, "remove", target, &(target, &token, &path), || match dir {
+            None => {
+                let abs = root_to_abs(&path);
+                match std::fs::symlink_metadata(&abs) {
+                    Ok(meta) if meta.is_dir() => std::fs::remove_dir(&abs),
+                    _ => std::fs::remove_file(&abs),
                 }
+                .map_err(io_error)
             }
-            Err(msg) => set_result_string(the, &msg),
-        }
+            Some(dir) => dir?.remove_file(&path).map_err(io_error),
+        });
     });
 }
 
@@ -890,22 +917,14 @@ pub unsafe extern "C" fn host_rename(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let from = arg_str(the, 1);
         let to = arg_str(the, 2);
-
-        if arg_dir_token(the, 0).as_deref() == Some("root") {
-            if let Err(e) = std::fs::rename(root_to_abs(&from), root_to_abs(&to)) {
-                set_result_string(the, &format!("Error: {}", e));
+        let (target, token, dir) = dir_arg(the, 0);
+        mutate(the, "rename", target, &(target, &token, &from, &to), || match dir {
+            None => std::fs::rename(root_to_abs(&from), root_to_abs(&to)).map_err(io_error),
+            Some(dir) => {
+                let dir = dir?;
+                dir.rename(&from, &dir, &to).map_err(io_error)
             }
-            return;
-        }
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                if let Err(e) = dir.rename(from, &dir, to) {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+        });
     });
 }
 
@@ -1043,24 +1062,24 @@ pub unsafe extern "C" fn host_close_dir(the: *mut XsMachine) {
 /// Returns undefined on success, or an "Error: ..." string on failure.
 pub unsafe extern "C" fn host_symlink(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let target = arg_str(the, 1);
+        let target_path = arg_str(the, 1);
         let link_name = arg_str(the, 2);
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                #[cfg(unix)]
-                let result = dir.symlink(target, link_name);
-                #[cfg(not(unix))]
-                let result = Err(std::io::Error::new(
+        let (target, token) = dir_slot(the, 0);
+        let dir = resolve_dir(the, 0);
+        mutate(the, "symlink", target, &(target, &token, &target_path, &link_name), || {
+            let dir = dir?;
+            #[cfg(unix)]
+            let result = dir.symlink(&target_path, &link_name);
+            #[cfg(not(unix))]
+            let result = {
+                let _ = dir;
+                Err(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
                     "symlinks not supported on this platform",
-                ));
-                if let Err(e) = result {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+                ))
+            };
+            result.map_err(io_error)
+        });
     });
 }
 
@@ -1073,15 +1092,12 @@ pub unsafe extern "C" fn host_link(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let src_path = arg_str(the, 1);
         let dst_path = arg_str(the, 2);
-
-        match resolve_dir(the, 0) {
-            Ok(dir) => {
-                if let Err(e) = dir.hard_link(src_path, &dir, dst_path) {
-                    set_result_string(the, &format!("Error: {}", e));
-                }
-            }
-            Err(msg) => set_result_string(the, &msg),
-        }
+        let (target, token) = dir_slot(the, 0);
+        let dir = resolve_dir(the, 0);
+        mutate(the, "link", target, &(target, &token, &src_path, &dst_path), || {
+            let dir = dir?;
+            dir.hard_link(&src_path, &dir, &dst_path).map_err(io_error)
+        });
     });
 }
 
@@ -1091,8 +1107,8 @@ pub(crate) fn has_open_handles() -> bool {
 }
 
 /// Rebuild a file or directory handle from its descriptor under the same
-/// logical id. A writer reopens without truncating and drops any bytes past
-/// its committed position.
+/// logical id. A writer reopens without truncating, and only when the file's
+/// length is still its committed position.
 pub(crate) fn reseat(
     handle: u32,
     descriptor: &Descriptor,
@@ -1142,7 +1158,16 @@ pub(crate) fn reseat(
             let mut file = base_dir(base)?
                 .open_with(path, &options)
                 .map_err(|e| e.to_string())?;
-            file.set_len(*position).map_err(|e| e.to_string())?;
+            // Rebuilding a handle never changes the file: bytes past the
+            // committed position (an escaped write, a later append) or a
+            // shortfall (writes lost with the page cache) re-seat the
+            // writer as broken, before the recovery gate is consulted.
+            let length = file.metadata().map_err(|e| e.to_string())?.len();
+            if length != *position {
+                return Err(format!(
+                    "{path} is {length} bytes, not the {position} its writer committed"
+                ));
+            }
             std::io::Seek::seek(&mut file, std::io::SeekFrom::Start(*position))
                 .map_err(|e| e.to_string())?;
             FILE_MAP.with(|m| {

@@ -201,9 +201,15 @@ transcript (the `host-transcript` control envelope) routes these tables through
 `Transcript::host_call`, so each handle is a logical id with a reconstruction
 descriptor that tracks its committed position, and suspension with open handles
 is allowed. Attaching on resume re-seats every open handle before any delivery
-can use it; a handle with no descriptor (an in-memory database, a hasher fed
-more than its recording limit) is re-seated as broken and every use is refused
-(§ Host functions are messages too). A worker with no attached transcript still
+can use it; a handle with no descriptor (an in-memory, temporary, or URI-named
+database, a hasher fed more than its recording limit) is re-seated as broken and
+every use is refused (§ Host functions are messages too). Re-seating never
+changes outside state: a writer whose file is no longer exactly its committed
+length is re-seated as broken rather than truncated. The whole-file mutations
+(`writeFileText`, `appendFile`, `mkdir`, `remove`, `rename`, `symlink`, `link`)
+run through the transcript as barriers too, and a host call made outside any
+delivery (promise jobs a heap suspended mid-pump carried) opens a crank of its
+own. A worker with no attached transcript still
 answers a suspend request with open native handles with `suspend-error` and keeps
 running, because nothing durable could rebuild them.
 

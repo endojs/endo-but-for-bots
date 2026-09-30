@@ -32,8 +32,8 @@
 //! 4. [`Transcript::abort_crank`] discards pending rows. No outbound effect of
 //!    an aborted crank is ever written, so none can be released.
 //!
-//! **Backend discipline: XS/CAS watermark ordering** (§ Backend selection and
-//! snapshot ordering (Q3)). A heap snapshot is a content-addressed blob
+//! **Backend discipline: XS/CAS watermark ordering** (§ Slot Machine
+//! per-worker write-ahead transcript). A heap snapshot is a content-addressed blob
 //! written outside any transaction, so it cannot join a SQLite commit.
 //! [`Transcript::publish_snapshot`] therefore orders the steps: the
 //! transcript's cranks are already committed; the blob is written, synced,

@@ -1,7 +1,7 @@
 //! Content-addressed snapshot blobs with power-loss-durable publication.
 //!
-//! The XS/CAS backend (designs/ironhorse-panic.md § Backend selection and
-//! snapshot ordering (Q3)) keeps each worker heap snapshot as an immutable,
+//! The XS/CAS backend (designs/ironhorse-panic.md § Slot Machine per-worker
+//! write-ahead transcript) keeps each worker heap snapshot as an immutable,
 //! SHA-256-named blob. Writing one durably takes four ordered steps, each a
 //! counted [`crate::FaultPlan`] operation:
 //!

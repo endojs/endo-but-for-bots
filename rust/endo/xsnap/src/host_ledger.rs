@@ -307,6 +307,11 @@ fn reseat(record: &HandleRecord, powers: &HostPowers) -> Result<Descriptor, Stri
     Ok(descriptor)
 }
 
+/// The inbound record of a crank opened by a host call made outside any
+/// delivery: promise jobs a resumed heap carried across a suspend taken
+/// mid-pump run before the next delivery begins.
+const PENDING_JOBS: &[u8] = b"pending-promise-jobs";
+
 /// Open a delivery's crank if a transcript is attached and none is open.
 pub(crate) fn begin_delivery(inbound: &[u8]) {
     LEDGER.with(|l| {
@@ -326,8 +331,23 @@ pub(crate) fn end_delivery(commit: bool) {
     LEDGER.with(|l| {
         if let Some(ledger) = l.borrow_mut().as_mut() {
             if ledger.transcript.active_crank().is_some() {
+                let redescriptions = powers::crypto::take_redescriptions();
                 let result = if commit {
-                    ledger.transcript.commit_crank().map(drop)
+                    redescriptions
+                        .into_iter()
+                        .try_for_each(|(handle, descriptor)| {
+                            ledger.transcript.redescribe(
+                                u64::from(handle),
+                                descriptor.as_ref().map(Descriptor::encode),
+                            )
+                        })
+                        .and_then(|()| ledger.transcript.commit_crank().map(drop))
+                        // A crank whose descriptors cannot be staged must
+                        // not commit without them.
+                        .or_else(|e| match ledger.transcript.active_crank() {
+                            Some(_) => ledger.transcript.abort_crank().and(Err(e)),
+                            None => Err(e),
+                        })
                 } else {
                     ledger.transcript.abort_crank()
                 };
@@ -354,6 +374,9 @@ fn refusal(e: HostCallError) -> String {
 /// caller reports to the guest. Closing (or finishing) a handle that was
 /// re-seated as broken records its loss instead of invoking the adapter.
 ///
+/// A call made outside any delivery opens a crank of its own ([`PENDING_JOBS`]),
+/// which the worker loop commits or aborts at the crank's end like any other.
+///
 /// Coerce every guest argument before calling: `invoke` runs while the
 /// ledger is borrowed and must not re-enter guest code.
 pub(crate) fn call(
@@ -362,6 +385,7 @@ pub(crate) fn call(
     request: &[u8],
     invoke: impl FnOnce() -> Outcome,
 ) -> Result<Option<u32>, String> {
+    begin_delivery(PENDING_JOBS);
     let mut invoke = Some(invoke);
     let mut done: Option<Outcome> = None;
     let routed = LEDGER.with(|l| {

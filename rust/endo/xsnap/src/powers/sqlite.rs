@@ -329,10 +329,19 @@ unsafe fn with_statement(
     }
 }
 
+/// Whether reopening `path` reaches the same database. An in-memory
+/// (`":memory:"`) or temporary (`""`) database is private to its
+/// connection, and a `file:` URI may name one (`file::memory:`,
+/// `?mode=memory`) or carry parameters a reopen would not honor, so none of
+/// these is reopenable.
+fn reopenable(path: &str) -> bool {
+    !(path.is_empty() || path == ":memory:" || path.starts_with("file:"))
+}
+
 /// `sqliteOpen(path) -> number | "Error: ..."`
 ///
-/// An in-memory database has no reconstruction descriptor: its handle is
-/// re-seated as broken.
+/// A database that is not [`reopenable`] has no reconstruction descriptor:
+/// its handle is re-seated as broken.
 pub unsafe extern "C" fn host_sqlite_open(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 0);
@@ -345,7 +354,7 @@ pub unsafe extern "C" fn host_sqlite_open(the: *mut XsMachine) {
                 Ok(conn) => {
                     opened = Some(conn);
                     let descriptor =
-                        (path != ":memory:").then(|| Descriptor::Database { path: path.clone() });
+                        reopenable(&path).then(|| Descriptor::Database { path: path.clone() });
                     Outcome {
                         opens: Some(descriptor),
                         ..Outcome::default()
@@ -614,6 +623,15 @@ pub unsafe fn register(machine: &crate::Machine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_and_uri_databases_are_not_reopenable() {
+        for path in ["", ":memory:", "file::memory:", "file:x?mode=memory", "file:data.db"] {
+            assert!(!reopenable(path), "{path:?}");
+        }
+        assert!(reopenable("data.db"));
+        assert!(reopenable("/var/lib/endo/data.db"));
+    }
 
     #[test]
     fn worker_panic_isolates_database_handles_and_releases_transaction_locks() {

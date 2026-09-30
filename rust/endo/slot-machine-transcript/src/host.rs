@@ -313,6 +313,10 @@ pub(crate) enum Staged {
     Loss {
         handle: HandleId,
     },
+    Redescribe {
+        handle: HandleId,
+        descriptor: Option<Vec<u8>>,
+    },
 }
 
 /// A committed outbound effect awaiting release to its provider.
@@ -441,6 +445,12 @@ pub(crate) fn commit_staged(
                 tx.execute(
                     "UPDATE host_handle SET open = 0, broken = 0 WHERE handle_id = ?1",
                     [*handle as i64],
+                )?;
+            }
+            Staged::Redescribe { handle, descriptor } => {
+                tx.execute(
+                    "UPDATE host_handle SET descriptor = ?1 WHERE handle_id = ?2",
+                    params![descriptor, *handle as i64],
                 )?;
             }
         }
@@ -716,6 +726,30 @@ impl Transcript {
             ));
         };
         active.host.push(Staged::Loss { handle });
+        Ok(())
+    }
+
+    /// Within the active crank, replace an open handle's descriptor as of
+    /// commit. A handle whose state accumulates over many calls in one crank
+    /// (an incremental hasher) describes itself once here instead of on
+    /// every call, so the staged descriptors stay linear in its state.
+    pub fn redescribe(
+        &mut self,
+        handle: HandleId,
+        descriptor: Option<Vec<u8>>,
+    ) -> Result<(), TranscriptError> {
+        self.check_healthy()?;
+        if self.live_handle_state(handle)? != HandleState::Open {
+            return Err(TranscriptError::Protocol(format!(
+                "handle {handle} is not open"
+            )));
+        }
+        let Some(active) = &mut self.active else {
+            return Err(TranscriptError::Protocol(
+                "a handle is redescribed within a crank".into(),
+            ));
+        };
+        active.host.push(Staged::Redescribe { handle, descriptor });
         Ok(())
     }
 

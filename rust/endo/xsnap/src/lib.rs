@@ -782,12 +782,9 @@ impl Machine {
         std::fs::rename(&tmp_path, &final_path).map_err(SnapshotError::Io)?;
         // The rename is durable only once its directory is synced; a
         // published snapshot must survive power loss
-        // (designs/ironhorse-panic.md § Backend selection and snapshot
-        // ordering (Q3)).
-        #[cfg(unix)]
-        std::fs::File::open(cas_dir)
-            .and_then(|dir| dir.sync_all())
-            .map_err(SnapshotError::Io)?;
+        // (designs/ironhorse-panic.md § Slot Machine per-worker write-ahead
+        // transcript).
+        slot_machine_transcript::sync_dir(cas_dir).map_err(SnapshotError::Io)?;
         Ok(hash)
     }
 
@@ -4745,7 +4742,9 @@ mod tests {
                         .unwrap()
                         .contains("BrokenHandles"));
 
-                    host_ledger::begin_delivery(b"d2");
+                    // No delivery opens a crank here: host calls made first, as
+                    // promise jobs a heap suspended mid-pump would make, open
+                    // one of their own.
                     let eval = |code: &str| machine.eval(code);
                     // Each re-seated handle resumes from its committed position.
                     assert_eq!(
@@ -4796,48 +4795,86 @@ mod tests {
         });
     }
 
-    /// A barrier (a file write) in a delivery that never committed
-    /// keeps recovery stopped for the next incarnation.
+    /// A barrier (a file write through a handle, or a whole-file mutation)
+    /// in a delivery that never committed keeps recovery stopped for the
+    /// next incarnation.
     #[test]
     fn host_transcript_barrier_in_an_aborted_delivery_stops_recovery() {
-        let root = tempfile::tempdir().unwrap();
-        let transcript = root.path().join("worker.sqlite");
-        let incarnation = |abort: bool| {
-            let root = root.path().to_owned();
-            let transcript = transcript.clone();
-            std::thread::spawn(move || {
-                setup();
-                let mut powers = powers::HostPowers::new();
-                powers.add_dir(
-                    "test",
-                    cap_std::fs::Dir::open_ambient_dir(&root, cap_std::ambient_authority())
-                        .unwrap(),
-                );
-                let machine = Machine::new(&DEFAULT_CREATION, "barrier").unwrap();
-                let powers = Box::into_raw(Box::new(powers));
-                machine.register_powers(powers);
-                let heap = || Ok(machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot);
-                let attachment =
-                    host_ledger::attach(&transcript, "barrier", unsafe { &*powers }, heap).unwrap();
-                if abort {
-                    host_ledger::begin_delivery(b"d1");
-                    machine.eval(
-                        "var w = openWriter('test', 'escaped'); write(w, new Uint8Array([1]))",
+        for escape in [
+            "var w = openWriter('test', 'escaped'); write(w, new Uint8Array([1]))",
+            "writeFileText('test', 'escaped', 'x')",
+            "mkdir('test', 'escaped')",
+        ] {
+            let root = tempfile::tempdir().unwrap();
+            let transcript = root.path().join("worker.sqlite");
+            let incarnation = |abort: bool| {
+                let root = root.path().to_owned();
+                let transcript = transcript.clone();
+                std::thread::spawn(move || {
+                    setup();
+                    let mut powers = powers::HostPowers::new();
+                    powers.add_dir(
+                        "test",
+                        cap_std::fs::Dir::open_ambient_dir(&root, cap_std::ambient_authority())
+                            .unwrap(),
                     );
-                    host_ledger::end_delivery(false);
-                }
-                host_ledger::detach();
-                attachment
-            })
-            .join()
-            .unwrap()
+                    let machine = Machine::new(&DEFAULT_CREATION, "barrier").unwrap();
+                    let powers = Box::into_raw(Box::new(powers));
+                    machine.register_powers(powers);
+                    let heap = || Ok(machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot);
+                    let attachment =
+                        host_ledger::attach(&transcript, "barrier", unsafe { &*powers }, heap)
+                            .unwrap();
+                    if abort {
+                        host_ledger::begin_delivery(b"d1");
+                        machine.eval(escape);
+                        host_ledger::end_delivery(false);
+                    }
+                    host_ledger::detach();
+                    attachment
+                })
+                .join()
+                .unwrap()
+            };
+            assert_eq!(incarnation(true).stopped, None, "{escape}");
+            assert!(root.path().join("escaped").exists(), "{escape}");
+            assert!(
+                matches!(
+                    incarnation(false).stopped,
+                    Some(slot_machine_transcript::RecoveryStop::EscapedBarrier { .. })
+                ),
+                "{escape}"
+            );
+        }
+    }
+
+    /// Re-seating a writer never changes its file: a file whose length is
+    /// not the writer's committed position re-seats the writer as broken.
+    #[test]
+    fn writer_reseat_refuses_a_file_of_another_length() {
+        let root = tempfile::tempdir().unwrap();
+        let mut powers = powers::HostPowers::new();
+        powers.add_dir(
+            "test",
+            cap_std::fs::Dir::open_ambient_dir(root.path(), cap_std::ambient_authority()).unwrap(),
+        );
+        let writer = |position| host_ledger::Descriptor::Writer {
+            base: host_ledger::Base::Token("test".into()),
+            path: "out.bin".into(),
+            position,
         };
-        assert_eq!(incarnation(true).stopped, None);
-        assert!(root.path().join("escaped").exists());
-        assert!(matches!(
-            incarnation(false).stopped,
-            Some(slot_machine_transcript::RecoveryStop::EscapedBarrier { .. })
-        ));
+        std::fs::write(root.path().join("out.bin"), [1, 2, 3, 4, 5]).unwrap();
+        std::thread::spawn(move || {
+            assert!(powers::fs::reseat(1, &writer(3), &powers).is_err());
+            assert!(powers::fs::reseat(2, &writer(8), &powers).is_err());
+            assert!(powers::fs::reseat(3, &writer(5), &powers).is_ok());
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            std::fs::read(root.path().join("out.bin")).unwrap(),
+            vec![1, 2, 3, 4, 5]
+        );
     }
 
     /// Mock transport that captures sent frames.
