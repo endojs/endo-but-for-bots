@@ -10,7 +10,14 @@
 //                  directory still works)
 //   credential     the acquired credential
 //
-// The credential never enters an environment variable, argv, or the MCP
+// A Claude subscription OAuth access token (`sk-ant-oat…`) is the exception:
+// `claude` presents an `apiKeyHelper` value as an API key, and a live turn on
+// 2.1.280 got `401 authentication_failed` retries until the wall clock. The
+// same token is honored as `ANTHROPIC_AUTH_TOKEN`, so for it the settings
+// file's sole key is `env` carrying that variable, and no credential file is
+// written.
+//
+// The credential never enters the spawn environment, argv, or the MCP
 // config: `claude` obtains it by running the helper. It still lives inside the
 // confinement boundary as a file `claude` can reach (the DD7 residual that
 // README.md § Known gaps names); a harness-side egress proxy is the named
@@ -30,6 +37,9 @@ import { makeError, X, q } from '@endo/errors';
 import { renderApiKeyHelperSettings } from './credentials-pool.js';
 
 /** @import { SpawnFiles } from './claude.types.js' */
+
+/** The prefix of a Claude subscription OAuth access token. */
+export const OAUTH_TOKEN_PREFIX = 'sk-ant-oat';
 
 /**
  * @param {object} options
@@ -76,16 +86,21 @@ export const makeSpawnFilesPreparer = ({
       if (typeof credential !== 'string' || /[\r\n]/.test(credential)) {
         throw makeError(X`credential must be a single-line string`);
       }
-      await fs.writeFile(credentialPath, credential, { mode: 0o600 });
       // `claude` runs the helper through a shell; the path was checked to be
       // free of quote, backslash, and newline above.
       const apiKeyHelperCommand = `/bin/cat -- '${credentialPath}'`;
+      /** @type {object} */
+      let settings;
+      if (credential.startsWith(OAUTH_TOKEN_PREFIX)) {
+        settings = { env: { ANTHROPIC_AUTH_TOKEN: credential } };
+      } else {
+        await fs.writeFile(credentialPath, credential, { mode: 0o600 });
+        settings = renderApiKeyHelperSettings(apiKeyHelperCommand);
+      }
       await fs.writeFile(mcpConfigPath, mcpConfigJson, { mode: 0o600 });
-      await fs.writeFile(
-        settingsPath,
-        JSON.stringify(renderApiKeyHelperSettings(apiKeyHelperCommand)),
-        { mode: 0o600 },
-      );
+      await fs.writeFile(settingsPath, JSON.stringify(settings), {
+        mode: 0o600,
+      });
       return harden({
         mcpConfigPath,
         settingsPath,

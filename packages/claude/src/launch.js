@@ -19,6 +19,7 @@ import {
   nonzeroExit,
   parseError,
   limitExceeded,
+  authFailed,
   cancelled as cancelledResult,
 } from './results.js';
 
@@ -86,6 +87,34 @@ export const resultFromStream = (parsed, code, now = Date.now) => {
 };
 harden(resultFromStream);
 
+/** API statuses that mean the credential itself was rejected. */
+const AUTH_STATUSES = harden([401, 403]);
+
+/**
+ * The status of a stream-json `api_retry` event for a rejected credential, or
+ * `undefined` for any other line.
+ *
+ * @param {string} line
+ * @returns {number | undefined}
+ */
+export const authRetryStatus = line => {
+  if (!line.includes('"api_retry"')) return undefined;
+  try {
+    const event = JSON.parse(line);
+    if (
+      event?.type === 'system' &&
+      event.subtype === 'api_retry' &&
+      AUTH_STATUSES.includes(event.error_status)
+    ) {
+      return event.error_status;
+    }
+  } catch {
+    // Not a whole JSON line; the terminal parse reports malformed streams.
+  }
+  return undefined;
+};
+harden(authRetryStatus);
+
 /**
  * @param {object} options
  * @param {(command: string, args: readonly string[], options: SpawnOptions) => ChildProcess} options.spawn
@@ -97,6 +126,10 @@ harden(resultFromStream);
  *   its process group.
  * @param {(chunk: Buffer) => void} [options.onStderr] - the child's stderr,
  *   for harness diagnostics; never part of the result.
+ * @param {number} [options.authRetryLimit] - stop the child with
+ *   `auth-failed` after this many `401`/`403` API retries. A rejected
+ *   credential otherwise makes `claude` retry for minutes and the turn ends
+ *   as `limit-exceeded: wall-clock` (endo-but-for-bots#1369 gap 11).
  */
 export const makeLaunch = ({
   spawn,
@@ -104,6 +137,7 @@ export const makeLaunch = ({
   cwd,
   now = Date.now,
   onStderr,
+  authRetryLimit = 2,
   kill = child => {
     try {
       // `detached` puts the child in its own group: take the MCP relay with it.
@@ -142,6 +176,8 @@ export const makeLaunch = ({
       /** @type {Buffer[]} */
       const chunks = [];
       let bytes = 0;
+      let pending = '';
+      let authRetries = 0;
       child.stdout?.on('data', chunk => {
         bytes += chunk.length;
         if (bytes > limits.outputByteCap) {
@@ -149,6 +185,15 @@ export const makeLaunch = ({
           return;
         }
         chunks.push(chunk);
+        const lines = `${pending}${chunk.toString('utf-8')}`.split('\n');
+        pending = lines.pop() ?? '';
+        for (const line of lines) {
+          const status = authRetryStatus(line);
+          if (status !== undefined) {
+            authRetries += 1;
+            if (authRetries >= authRetryLimit) stop(authFailed(status));
+          }
+        }
       });
       // stderr is always drained, so a chatty child cannot block on a full
       // pipe; its content is not part of the result.

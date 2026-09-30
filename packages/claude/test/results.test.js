@@ -124,8 +124,9 @@ test('parse-error coerces detail to a passable string', t => {
   t.is(parseError(/** @type {any} */ (undefined)).detail, 'undefined');
 });
 
-test('the taxonomy enumerates all nine cases', t => {
+test('the taxonomy enumerates all ten cases', t => {
   t.deepEqual([...INFER_RESULT_TYPES].sort(), [
+    'auth-failed',
     'bridge-down',
     'cancelled',
     'facet-threw',

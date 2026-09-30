@@ -81,7 +81,8 @@ switch (result.type) {
   case 'ok': /* result.text, result.usage */ break;
   case 'pool-exhausted': /* transient — retry after result.retryAfterMs */ break;
   case 'limit-exceeded': /* result.which: wall-clock | output-bytes | max-turns */ break;
-  // ...rate-limited, bridge-down, facet-threw, nonzero-exit, parse-error, cancelled
+  // ...rate-limited, bridge-down, facet-threw, nonzero-exit, parse-error,
+  // auth-failed, cancelled
 }
 ```
 
@@ -167,10 +168,6 @@ This increment is honest about what it does **not** yet do:
   `--mcp-config` path. The spawn files are `0600` files in a `0700` directory,
   removed on every exit path, until a live check shows that the pinned CLI reads
   `--settings` only once.
-- **Fail-fast on authentication retries.** A rejected credential makes
-  `claude` retry `401`s for minutes (endojs/endo-but-for-bots#1369 gap 11). The
-  launch seam only sees the terminal `result`, so such a turn ends as
-  `limit-exceeded: wall-clock`.
 - **A live negative-and-positive confinement test** against a real `claude -p`:
   no built-in runs, no `/skill-name` resolves, no other MCP server is reachable,
   an unanchored `mcp__*` grants nothing — *and* the guest's tools do invoke, an
@@ -178,11 +175,15 @@ This increment is honest about what it does **not** yet do:
   effect, and the pooled `apiKeyHelper` is the consumed credential. The DI unit
   tests cannot catch a wrong-flag gap; this is version-specific and re-run on any
   CLI bump.
-- **The credential path under `--bare`**: whether a Max/Pro *subscription* can be
-  presented through an `apiKeyHelper` at all (the load-bearing DD5 residual). The
-  `@endo/claude-sandbox` `subscription` credential kind this build adds is the
-  minting side; whether the value materialises as an `apiKeyHelper`-consumable
-  secret is unverified.
+- **The credential path under `--bare`** (the DD5 residual), answered by a
+  live turn on Claude Code 2.1.280: a subscription OAuth access token
+  (`sk-ant-oat…`) is **not** accepted through an `apiKeyHelper` (`claude`
+  presents it as an API key and gets `401`). The spawn files therefore present
+  such a token as `ANTHROPIC_AUTH_TOKEN` in the `--settings` file's `env` key,
+  never in the spawn environment. `claude` still holds it in memory, the same
+  DD7 residual as the helper path. A rejected credential stops the child after
+  two `401`/`403` API retries with `auth-failed`, rather than retrying until
+  the wall clock (endojs/endo-but-for-bots#1369 gap 11).
 - **The DD7 credential-attenuation residual**: the pooled credential lives
   *inside* the confinement boundary, and `0600` is the wrong adversary's defense.
   A harness-side egress proxy or per-guest credentials is the named resolution.
