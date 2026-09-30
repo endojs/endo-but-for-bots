@@ -58,17 +58,26 @@ export const makeWorkerSessionRecords = ({
   const resourceInstances = new Map();
   /** @type {Map<string, any>} workerId -> ResumedSession controls */
   const resumedByWorkerId = new Map();
-  // Local unreachability is the wrong test here. An unrooted host promise,
-  // such as a resource method returning `new Promise(() => {})`, leaves no
-  // reaction holding the guest's resolver, so the weak import table collects
-  // it. That collection is not a local event: the FinalizationRegistry fires
-  // `slotCollected`, which sends op:gc-exports, and the guest retires the
-  // very position `pendingResolvers` recorded. Nothing in this heap holds
-  // the resolver, but the guest awaiting that answer lives in a heap that
-  // outlives this process, so local reachability does not bound the
-  // obligation. Pin the import until settlement and a restart can still
-  // reject the abandoned answer. This retains the route, never the promise
-  // or its computation. test/resource-answer-gc.test.js fails without it.
+  // Pins for the resolvers of *answers* owed by this process. An unrooted
+  // host promise, such as a resource method returning `new Promise(() => {})`,
+  // leaves no reaction holding the guest's resolver, so the weak import table
+  // would collect it; that collection is not a local event: the
+  // FinalizationRegistry fires `slotCollected`, which sends op:gc-exports, and
+  // the guest retires the very position `pendingResolvers` recorded. The
+  // guest awaiting that answer lives in a heap that outlives this process, so
+  // local reachability does not bound the obligation. Pinning the import
+  // until settlement lets a restart still reject the abandoned answer; it
+  // retains the route, never the promise or its computation.
+  //
+  // Promise targets need no pin: their resolver is held by the reaction on
+  // the exported promise, and the export table is strong. Nor does anything
+  // restored after a restart: answer targets are rejected there, and promise
+  // targets re-link to a local export. So the map only ever holds the answers
+  // this process itself took on, and empties as they settle. A pin for an
+  // answer that never settles lives as long as the process: the endpoint
+  // cannot tell which guest a resolver position belongs to, so retiring a
+  // worker does not release its pins. test/resource-answer-gc.test.js fails
+  // without the map.
   /** @type {Map<string, object>} */
   const pendingResolverReferences = new Map();
   /** True while re-seating exports, whose re-fired hooks are echoes. */
@@ -76,10 +85,17 @@ export const makeWorkerSessionRecords = ({
 
   /**
    * @param {string} name
+   * @param {unknown} description
+   */
+  const resourceKey = (name, description) =>
+    `${name}|${JSON.stringify(description)}`;
+
+  /**
+   * @param {string} name
    * @param {unknown} [description]
    */
   const provideResource = (name, description = null) => {
-    const key = `${name}|${JSON.stringify(description)}`;
+    const key = resourceKey(name, description);
     let instance = resourceInstances.get(key);
     if (instance === undefined) {
       const makeResource = resources[name];
@@ -140,6 +156,53 @@ export const makeWorkerSessionRecords = ({
           ...record,
           exports: { ...record.exports, [slot]: description },
         });
+      } catch (error) {
+        reportError(error);
+      }
+    },
+    /**
+     * The peer released every reference to an export: nothing will ever ask
+     * for that position again, so its description need not be re-seated.
+     *
+     * @param {object} connection
+     * @param {string} slot
+     */
+    onExportReleased: (connection, slot) => {
+      const workerId = workerIdForConnection.get(connection);
+      if (workerId === undefined || restoring) {
+        return;
+      }
+      try {
+        const workerStore = store.provideWorkerStore(workerId);
+        const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
+        let changed = false;
+        const exports = { ...record.exports };
+        if (slot in exports) {
+          delete exports[slot];
+          changed = true;
+        }
+        // A released promise export can still be named by a resolver
+        // obligation (the peer had listened on it, then let it go, or the
+        // peer's session was retired with the listen outstanding). Nothing
+        // can be delivered to that resolver now, and a restart that tried to
+        // re-link it would find no export at the position. The two records
+        // go together.
+        const pendingResolvers = { ...record.pendingResolvers };
+        if (slot.startsWith('p+')) {
+          const position = slot.slice(2);
+          for (const [resolverSlot, target] of Object.entries(
+            pendingResolvers,
+          )) {
+            const found = /** @type {any} */ (target);
+            if (found.kind === 'promise' && found.position === position) {
+              delete pendingResolvers[resolverSlot];
+              changed = true;
+            }
+          }
+        }
+        if (changed) {
+          workerStore.setTablesRecord({ ...record, exports, pendingResolvers });
+        }
       } catch (error) {
         reportError(error);
       }
@@ -211,6 +274,55 @@ export const makeWorkerSessionRecords = ({
     sessionHooks,
     provideResource,
     /**
+     * Forget a resource: drop its per-process instance so the next
+     * `provideResource` for the same description makes a fresh one, and null
+     * its recorded exports so a restart seats tombstones at those positions
+     * rather than re-running the factory for a description whose meaning has
+     * ended. A live export the peer still holds is untouched; the peer's
+     * reference keeps working until the peer releases it.
+     *
+     * This is the retirement half of the resource contract: without it a
+     * settled-by-description promise (an alarm, say) would be re-created on
+     * every restart for as long as the state directory lived.
+     *
+     * Each call is one read-modify-write of the endpoint's tables record,
+     * the same cost as recording an export.
+     *
+     * @param {string} name
+     * @param {unknown} [description]
+     * @returns {boolean} whether an instance or a record was forgotten
+     */
+    retireResource: (name, description = null) => {
+      const key = resourceKey(name, description);
+      const instance = resourceInstances.get(key);
+      let retired = resourceInstances.delete(key);
+      if (instance !== undefined) resourceOrigins.delete(instance);
+      const wanted = JSON.stringify(description);
+      for (const workerId of resumedByWorkerId.keys()) {
+        const workerStore = store.provideWorkerStore(workerId);
+        const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
+        /** @type {Record<string, unknown>} */
+        const exports = { ...record.exports };
+        let changed = false;
+        for (const [slot, recorded] of Object.entries(exports)) {
+          const found = /** @type {any} */ (recorded);
+          if (
+            found?.kind === 'resource' &&
+            found.name === name &&
+            JSON.stringify(found.description ?? null) === wanted
+          ) {
+            exports[slot] = null;
+            changed = true;
+          }
+        }
+        if (changed) {
+          workerStore.setTablesRecord({ ...record, exports });
+          retired = true;
+        }
+      }
+      return retired;
+    },
+    /**
      * Bind a connection to its session's record id so the hooks can
      * attribute session traffic. Call before restoring the session.
      *
@@ -262,15 +374,52 @@ export const makeWorkerSessionRecords = ({
             resumed.restoreExport(position, provideCapability(description));
           }
         }
-        for (const [resolverSlot, target] of Object.entries(
-          record.pendingResolvers ?? {},
-        )) {
-          resumed.restorePendingResolver({
-            resolverPosition: BigInt(resolverSlot.slice(2)),
-            target: {
-              kind: target.kind,
-              position: BigInt(target.position),
-            },
+        /** @type {Record<string, any>} */
+        const pendingResolvers = { ...record.pendingResolvers };
+        let changed = false;
+        for (const [resolverSlot, target] of Object.entries(pendingResolvers)) {
+          if (
+            target.kind === 'promise' &&
+            !(`p+${target.position}` in (record.exports ?? {}))
+          ) {
+            // The export this obligation would re-link to is gone (released
+            // by the peer before the record caught up); there is nothing to
+            // deliver and nothing to attach. Drop it rather than refuse to
+            // start.
+            delete pendingResolvers[resolverSlot];
+            changed = true;
+          } else {
+            resumed.restorePendingResolver({
+              resolverPosition: BigInt(resolverSlot.slice(2)),
+              target: {
+                kind: target.kind,
+                position: BigInt(target.position),
+              },
+            });
+          }
+          if (target.kind === 'answer') {
+            // The break is a send-only on a later turn, so this process may
+            // crash after writing the record and before the hub persists the
+            // frame. Keep the record for one more boot, which re-breaks the
+            // position (harmless on a settled guest promise), and drop it
+            // only once a previous boot has already broken it. Losing the
+            // break takes two crashes in that window, not one, and no record
+            // outlives its second boot.
+            if (target.brokenAtEpoch === undefined) {
+              pendingResolvers[resolverSlot] = {
+                ...target,
+                brokenAtEpoch: answerEpoch,
+              };
+            } else {
+              delete pendingResolvers[resolverSlot];
+            }
+            changed = true;
+          }
+        }
+        if (changed) {
+          workerStore.setTablesRecord({
+            ...workerStore.getTablesRecord(),
+            pendingResolvers,
           });
         }
       } finally {

@@ -23,7 +23,13 @@ Host updates write the replacement ledger before installing the new in-memory st
 Release always persists, including when the ID is absent in memory: an earlier file replacement
 may have succeeded before its directory sync failed.
 Repeated release remains harmless when the original release succeeded but its answer was lost.
-This protocol is local to alarms and does not add a general transaction or resource-retirement API.
+Release also retires the alarm's promise resource at the host endpoint: the per-process instance is
+forgotten and its recorded export is nulled, so a restart seats a tombstone there instead of
+re-creating a promise nobody can release, and a reused alarm id names a fresh promise.
+Retiring a vat drops every row it armed and the resources behind them, so an abandoned vat cannot
+hold rows against the shared limit.
+An export the guest has released is dropped from the endpoint's records as the release arrives.
+Retirement is part of the general host-resource contract, not an alarm-specific mechanism.
 
 Workspace metadata version 3 introduced clocks with this acknowledgement protocol.
 The current version 4 also requires dedicated native manager vats.

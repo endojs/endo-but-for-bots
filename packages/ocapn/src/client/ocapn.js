@@ -37,6 +37,16 @@ import { makeReferenceKit } from './ref-kit.js';
 import { makeGrantDetails } from './grant-tracker.js';
 
 /**
+ * The message a durable-session embedder's peer sees when a host answer it was
+ * awaiting is broken because the process that owed it died. Only the message
+ * crosses the wire (`desc:error` carries one field), so a peer that wants to
+ * retry exactly that case has to compare against this text; export it once so
+ * no one respells it.
+ */
+export const PENDING_ANSWER_ABORTED_MESSAGE =
+  'session resumed after restart; pending answer aborted';
+
+/**
  * @typedef {any} LocalResolver
  * @typedef {any} RemoteResolver
  * @typedef {(questionSlot: Slot, ownerLabel?: string) => LocalResolver} MakeLocalResolver
@@ -713,12 +723,14 @@ const makeBootstrapObject = (
  * @param {boolean} [debugMode] - **EXPERIMENTAL**: If true, exposes `_debug` object with internal APIs for testing. Default: false.
  * @param {{
  *   onExport?: (slot: Slot, value: object) => void,
+ *   onExportReleased?: (slot: Slot) => void,
  *   onImport?: (slot: Slot, value: object) => void,
  *   onPendingResolver?: (resolverSlot: Slot, target: { kind: 'promise' | 'answer', position: bigint }) => void,
  *   onResolverSettled?: (resolverSlot: Slot) => void,
  * }} [sessionHooks]
  *   optional per-session observation hooks for durable-session
- *   embedders: export- and import-slot assignment, resolver
+ *   embedders: export- and import-slot assignment, an export the peer has
+ *   fully released (its record can be dropped), resolver
  *   obligations taken on (with the durable name of their target), and
  *   resolver obligations settled (record can be dropped)
  * @returns {Ocapn}
@@ -1053,6 +1065,19 @@ export const makeOcapn = (
         if (slot !== undefined) {
           // eslint-disable-next-line no-use-before-define
           ocapnTable.dropSlot(slot, Number(wireDelta));
+          // A durable-session embedder records exports so a restart can
+          // re-seat them; one the peer no longer holds needs no record.
+          if (
+            sessionHooks !== undefined &&
+            sessionHooks.onExportReleased !== undefined &&
+            ocapnTable.getSlotForValue(value) === undefined
+          ) {
+            try {
+              sessionHooks.onExportReleased(slot);
+            } catch (err) {
+              logger.error(`sessionHooks.onExportReleased failed`, err);
+            }
+          }
         }
       }
     },
@@ -1419,9 +1444,7 @@ export const makeOcapn = (
         // The computation that owed this answer died with the
         // previous process: reject rather than hang or re-execute.
         E.sendOnly(resolver).break(
-          harden(
-            Error('session resumed after restart; pending answer aborted'),
-          ),
+          harden(Error(PENDING_ANSWER_ABORTED_MESSAGE)),
         );
       }
     },
