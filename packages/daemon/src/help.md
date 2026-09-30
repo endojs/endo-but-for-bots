@@ -359,9 +359,15 @@ Store a passable value (number, string, array, record, etc.) with a name.
 Create or retrieve a confined guest agent.
 - provideGuest() creates an anonymous guest
 - provideGuest("my-guest") creates/retrieves a named guest
-Options: { introducedNames: { hostName: guestName }, authority?: { mount, git, gitRemote } }
+Options: { agentName?, authority?: { mount, git, gitRemote }, endowments?: { "@main": ["host", "path"], guestName: ["host", "path"] } }
 Each singular authority category is an object whose keys become guest binding
-names. Missing introduced host names are ignored.
+names. Every guest is endowed through the single `endowments` map from
+guest-side names to the providing host's pet name paths (arrays of path
+components, never a bare string). A key beginning with `@` is a special,
+indelible endowment (such as replacing the default `@main` worker) that may only
+be supplied when the guest is created; any other key is an ordinary, mutable
+introduction whose missing host source is ignored. For a retained guest (created
+with authority) the whole map is part of the immutable retained policy.
 
 ## provideHost(petName?, options?) -> Promise<EndoHost>
 
@@ -701,23 +707,23 @@ blobs, so generic code can read a content hash off any blob or tree.
 
 Check if an entry exists at the given path.
 names: string[] - Path segments.
-Example: has("index.html") → true
-Example: has("assets", "style.css") → true
+Example: has("index.html") -> true
+Example: has("assets", "style.css") -> true
 
 ## list(...names) -> Promise<string[]>
 
 List entry names at the given path (or root).
 names: string[] - Path segments (optional, defaults to root).
-Example: list() → ["index.html", "app.js", "assets"]
-Example: list("assets") → ["style.css", "logo.png"]
+Example: list() -> ["index.html", "app.js", "assets"]
+Example: list("assets") -> ["style.css", "logo.png"]
 
 ## lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>
 
 Get the value at a name or path.
 nameOrPath: string | string[] - Name or path segments.
 Returns EndoReadable for files, ReadableTree for subdirectories.
-Example: lookup("index.html") → EndoReadable
-Example: lookup(["assets", "style.css"]) → EndoReadable
+Example: lookup("index.html") -> EndoReadable
+Example: lookup(["assets", "style.css"]) -> EndoReadable
 
 # EndoMount - Live mutable access to a filesystem directory.
 

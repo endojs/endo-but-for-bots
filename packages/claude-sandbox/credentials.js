@@ -78,7 +78,7 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
     !(await E(agent).has(dirName, 'handle'))
   ) {
     await E(agent).provideGuest(guestTmp, {
-      introducedNames: harden({ '@agent': 'host-agent' }),
+      endowments: harden({ 'host-agent': ['@agent'] }),
       agentName: agentTmp,
     });
   }

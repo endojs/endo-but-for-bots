@@ -21,9 +21,10 @@ import {
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import {
   assertPetName,
+  assertNamePath,
   assertPetNamePath,
-  isName,
   isPetName,
+  isSpecialName,
   namePathFrom,
   petNamePathFrom,
 } from './pet-name.js';
@@ -78,18 +79,30 @@ const assertPowersNameOrPath = nameOrPath => {
 };
 
 /**
- * Normalizes host or guest options, providing default values.
- * @param {MakeGuestOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, authority?: import('./provision/types.js').EndoGuestAuthority }}
+ * Special names the daemon itself binds in every guest; an endowment may not
+ * replace them.
  */
-const normalizeHostOrGuestOptions = opts => {
+const daemonReservedSpecialNames = harden([
+  '@agent',
+  '@self',
+  '@host',
+  '@mail',
+  '@nets',
+  '@planes',
+]);
+
+/**
+ * Normalizes host options, providing default values.
+ * @param {MakeHostOptions | undefined} opts
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath }}
+ */
+const normalizeHostOptions = opts => {
   const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
   return {
     introducedNames: /** @type {Record<Name, PetName>} */ (
       opts?.introducedNames ?? Object.create(null)
     ),
     ...(agentName !== undefined && { agentName }),
-    ...(opts?.authority !== undefined && { authority: opts.authority }),
   };
 };
 
@@ -1893,7 +1906,7 @@ export const makeHostMaker = ({
       if (petName !== undefined) {
         petNamePathFrom(petName);
       }
-      const normalizedOpts = normalizeHostOrGuestOptions(opts);
+      const normalizedOpts = normalizeHostOptions(opts);
       const { value } = await makeChildHost(
         /** @type {NameOrPath | undefined} */ (petName),
         normalizedOpts,
@@ -1902,20 +1915,38 @@ export const makeHostMaker = ({
     };
 
     /**
+     * The `endowments` here are already resolved behind the daemon boundary:
+     * guest-side names to formula identifiers, partitioned by the `@` prefix
+     * on the key. Special (`@`) endowments are indelible and only take effect
+     * when the guest formula is created; ordinary endowments are written into
+     * the guest's pet store.
+     *
      * @param {NameOrPath} [handleName]
-     * @param {MakeGuestOptions} [opts]
+     * @param {{ agentName?: NameOrPath, endowments?: Record<Name, FormulaIdentifier> }} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoGuest>}>}
      */
     const makeGuest = async (
       handleName,
-      { introducedNames = Object.create(null), agentName = undefined } = {},
+      { endowments = Object.create(null), agentName = undefined } = {},
     ) => {
+      /** @type {Record<string, FormulaIdentifier>} */
+      const specialEndowments = {};
+      /** @type {Array<[PetName, FormulaIdentifier]>} */
+      const ordinaryEndowments = [];
+      for (const [guestName, id] of Object.entries(endowments)) {
+        if (isSpecialName(guestName)) {
+          specialEndowments[guestName] = id;
+        } else {
+          ordinaryEndowments.push([/** @type {PetName} */ (guestName), id]);
+        }
+      }
       // An explicit agent name is the stable capability identity; the handle
       // name remains a separate lifecycle artifact.
       let guest = await getNamedAgent(
         /** @type {NameOrPath | undefined} */ (agentName ?? handleName),
         'guest',
       );
+      const created = guest === undefined;
       if (guest === undefined) {
         const guestLabel = agentName
           ? `guest:${agentName}`
@@ -1932,6 +1963,7 @@ export const makeHostMaker = ({
               /** @type {NameOrPath | undefined} */ (agentName),
             ),
             guestLabel,
+            harden(specialEndowments),
           );
         guest = { value: Promise.resolve(value), id };
       } else if (handleName !== undefined) {
@@ -1956,15 +1988,93 @@ export const makeHostMaker = ({
         }
       }
 
-      await introduceNamesToAgent(
-        guest.id,
-        /** @type {Record<import('./types.js').Name, import('./types.js').PetName>} */ (
-          introducedNames
-        ),
-      );
+      if (ordinaryEndowments.length !== 0) {
+        // An existing guest found by its handle name (rather than an agent
+        // name) resolves to its handle; endow the agent the handle stands for.
+        const guestValue =
+          created || agentName !== undefined
+            ? await guest.value
+            : await provide(await getAgentIdForHandleId(guest.id), 'guest');
+        await Promise.all(
+          ordinaryEndowments.map(([guestName, id]) =>
+            E(guestValue).storeIdentifier(guestName, id),
+          ),
+        );
+      }
 
       /** @type {{ id: FormulaIdentifier, value: Promise<EndoGuest> }} */
       return guest;
+    };
+
+    /**
+     * Validate a unified `endowments` map: guest-side names (keys) to the
+     * providing host's pet name paths (values). The key's `@` prefix
+     * partitions special (indelible) from ordinary (mutable) endowments.
+     *
+     * @param {Record<string, unknown>} endowments
+     * @param {Set<string>} [authorityBindings]
+     */
+    const assertEndowments = (endowments, authorityBindings = new Set()) => {
+      for (const [guestName, hostPath] of Object.entries(endowments)) {
+        if (!Array.isArray(hostPath)) {
+          throw makeError(
+            X`endowments must map guest names to host pet name paths, got ${q(hostPath)} for ${q(guestName)}`,
+          );
+        }
+        try {
+          assertNamePath(hostPath);
+        } catch {
+          throw makeError(
+            X`endowments must map guest names to host pet name paths, got ${q(hostPath)} for ${q(guestName)}`,
+          );
+        }
+        if (isSpecialName(guestName)) {
+          if (daemonReservedSpecialNames.includes(guestName)) {
+            throw makeError(
+              X`endowments must not map a daemon-reserved special name ${q(guestName)}`,
+            );
+          }
+        } else if (isPetName(guestName)) {
+          if (authorityBindings.has(guestName)) {
+            throw makeError(
+              X`Endowed name ${q(guestName)} conflicts with provisioned authority`,
+            );
+          }
+        } else {
+          throw makeError(
+            X`endowments must map guest names to host pet name paths`,
+          );
+        }
+      }
+    };
+
+    /**
+     * Resolve an unretained guest's endowments to formula identifiers behind
+     * the daemon boundary. A missing ordinary source is skipped (it can be
+     * repaired by binding the host name and calling again); a missing special
+     * source is fatal because a special name is indelible.
+     *
+     * @param {Record<Name, NamePath>} endowments
+     * @returns {Promise<Record<Name, FormulaIdentifier>>}
+     */
+    const resolveEndowments = async endowments => {
+      /** @type {Record<Name, FormulaIdentifier>} */
+      const resolved = {};
+      for (const [guestName, hostPath] of Object.entries(endowments)) {
+        // eslint-disable-next-line no-await-in-loop
+        const id = await identify(...hostPath);
+        if (id !== undefined) {
+          resolved[/** @type {Name} */ (guestName)] =
+            /** @type {FormulaIdentifier} */ (id);
+        } else if (isSpecialName(guestName)) {
+          throw makeError(
+            X`ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE: No host name ${q(hostPath)} for special name ${q(guestName)}`,
+            Error,
+            { code: 'ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE' },
+          );
+        }
+      }
+      return harden(resolved);
     };
 
     /** @type {EndoHost['provideGuest']} */
@@ -1973,9 +2083,13 @@ export const makeHostMaker = ({
       if (petName !== undefined) {
         petNamePathFrom(petName);
       }
-      const normalizedOpts = normalizeHostOrGuestOptions(opts);
+      const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
+      const authority = opts?.authority;
+      const endowments = /** @type {Record<Name, NamePath>} */ (
+        opts?.endowments ?? Object.create(null)
+      );
       if (petName === undefined) {
-        if (normalizedOpts.authority !== undefined) {
+        if (authority !== undefined) {
           throw makeError(
             X`provideGuest requires a host pet name when authority is supplied`,
           );
@@ -1984,12 +2098,10 @@ export const makeHostMaker = ({
         const { namePath } = petNamePathFrom(petName);
         const retainedAuthority = await hasGuestAuthority(namePath);
         if (
-          (normalizedOpts.authority !== undefined || retainedAuthority) &&
-          normalizedOpts.agentName !== undefined
+          (authority !== undefined || retainedAuthority) &&
+          agentName !== undefined
         ) {
-          const { namePath: agentNamePath } = petNamePathFrom(
-            normalizedOpts.agentName,
-          );
+          const { namePath: agentNamePath } = petNamePathFrom(agentName);
           if (
             agentNamePath.length !== namePath.length ||
             agentNamePath.some((name, index) => name !== namePath[index])
@@ -1999,47 +2111,34 @@ export const makeHostMaker = ({
             );
           }
         }
-        if (normalizedOpts.authority !== undefined || retainedAuthority) {
+        if (authority !== undefined || retainedAuthority) {
           const authorityBindings =
-            normalizedOpts.authority !== undefined
+            authority !== undefined
               ? new Set([
-                  ...Object.keys(normalizedOpts.authority.mount ?? {}),
-                  ...Object.keys(normalizedOpts.authority.git ?? {}),
-                  ...Object.keys(normalizedOpts.authority.gitRemote ?? {}),
+                  ...Object.keys(authority.mount ?? {}),
+                  ...Object.keys(authority.git ?? {}),
+                  ...Object.keys(authority.gitRemote ?? {}),
                 ])
               : // Reconnecting without a new `authority` argument still binds
                 // the previously granted authority, so the collision guard
                 // must consult what was actually retained.
                 await retainedAuthorityBindings(namePath);
-          for (const [hostName, guestName] of Object.entries(
-            normalizedOpts.introducedNames,
-          )) {
-            if (!isName(hostName) || !isPetName(guestName)) {
-              throw makeError(
-                X`introducedNames must map host names to guest pet names`,
-              );
-            }
-            if (authorityBindings.has(guestName)) {
-              throw makeError(
-                X`Introduced name ${q(guestName)} conflicts with provisioned authority`,
-              );
-            }
-          }
+          assertEndowments(endowments, authorityBindings);
           return provideGuestAuthority(
             namePath,
-            normalizedOpts.authority,
-            opts?.introducedNames,
-            async () => {
+            authority,
+            opts?.endowments,
+            async endowedSpecialNames => {
               const { value } = await makeGuest(
                 /** @type {NameOrPath} */ (
                   harden(['provisioned-guests', ...namePath, 'guest-handle'])
                 ),
                 harden({
-                  ...normalizedOpts,
-                  introducedNames: {},
-                  agentName:
-                    normalizedOpts.agentName ??
-                    /** @type {NameOrPath} */ (petName),
+                  // The provisioner binds the ordinary endowments itself so
+                  // it can re-resolve them on every reconnect; only the
+                  // resolved special endowments reach the guest formula.
+                  endowments: endowedSpecialNames,
+                  agentName: agentName ?? /** @type {NameOrPath} */ (petName),
                 }),
               );
               return value;
@@ -2047,9 +2146,24 @@ export const makeHostMaker = ({
           );
         }
       }
+      assertEndowments(endowments);
+      if (
+        Object.keys(endowments).some(isSpecialName) &&
+        (await getNamedAgent(
+          agentName ?? /** @type {NameOrPath | undefined} */ (petName),
+          'guest',
+        )) !== undefined
+      ) {
+        throw makeError(
+          X`Special endowments are indelible and cannot be added to an existing guest`,
+        );
+      }
       const { value } = await makeGuest(
         /** @type {NameOrPath | undefined} */ (petName),
-        normalizedOpts,
+        harden({
+          ...(agentName !== undefined && { agentName }),
+          endowments: await resolveEndowments(endowments),
+        }),
       );
       return value;
     };

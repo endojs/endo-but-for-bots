@@ -81,7 +81,7 @@ test('adapter stores policy projection in host state, not caller persistence', a
       name: request.persistence.guestName,
       options: {
         authority: request.authority,
-        introducedNames: { 'calendar-service': 'calendar' },
+        endowments: { calendar: ['calendar-service'] },
       },
     },
   ]);
@@ -134,8 +134,8 @@ test('missing introduced sources are ignored and projected when later present', 
   );
 
   t.deepEqual(projection.globals, []);
-  t.deepEqual(fixture.provideCalls[0].options.introducedNames, {
-    missing: 'optionalTool',
+  t.deepEqual(fixture.provideCalls[0].options.endowments, {
+    optionalTool: ['missing'],
   });
 
   presentNames.push('optionalTool');

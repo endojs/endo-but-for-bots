@@ -374,7 +374,7 @@ export const spawnWorkerLoop = async (
 
   /**
    * Initialize: move any introduced tool entries into the tools/ subdirectory.
-   * Tools introduced via provideGuest's introducedNames appear at the top level.
+   * Tools introduced via provideGuest's endowments appear at the top level.
    * We detect them by checking for the FaeTool interface (schema, execute, help).
    *
    * @returns {Promise<void>}

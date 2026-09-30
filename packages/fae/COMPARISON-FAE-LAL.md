@@ -278,7 +278,7 @@ Provider selection logic is identical in both:
 
 ```javascript
 // setup.js
-E(agent).provideGuest('fae', { introducedNames: {}, agentName: 'profile-for-fae' });
+E(agent).provideGuest('fae', { endowments: {}, agentName: 'profile-for-fae' });
 E(agent).makeUnconfined('MAIN', 'agent.js', { powersName: 'profile-for-fae', ... });
 ```
 
@@ -292,7 +292,7 @@ Multiple setup scripts:
 
 ```javascript
 // setup.js
-E(agent).provideGuest('lal', { introducedNames: {}, agentName: 'profile-for-lal' });
+E(agent).provideGuest('lal', { endowments: {}, agentName: 'profile-for-lal' });
 E(guest).storeValue(config, 'lal-config');   // Persist config for re-incarnation
 E(agent).makeUnconfined('MAIN', 'agent.js', { powersName: 'profile-for-lal', ... });
 ```

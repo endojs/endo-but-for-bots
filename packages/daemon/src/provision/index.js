@@ -2,7 +2,7 @@
 /// <reference types="ses"/>
 
 /** @import { EndoGuestAuthority, EndoGuestAuthorityPolicy, HostProvisionPowers, NormalizedGitProvision, NormalizedGitRemoteProvision, NormalizedMountProvision, ResolvedCredential } from './types.js' */
-/** @import { EndoGuest, NameOrPath } from '../types.js' */
+/** @import { EndoGuest, FormulaIdentifier, NameOrPath } from '../types.js' */
 /** @typedef {{ audience: () => string }} GitCredential */
 /** @typedef {{ inspect: () => Promise<{ available: boolean, revoked: boolean }> }} GitCredentialController */
 
@@ -427,17 +427,47 @@ export const makeGuestAuthorityProvider = powers => {
     return resolved;
   };
 
-  /** @param {Record<string, string>} introducedNames */
-  const resolveIntroductions = async introducedNames => {
+  /** @param {string} guestName */
+  const isSpecialGuestName = guestName => guestName.startsWith('@');
+
+  /**
+   * Partition a unified endowment map (guest-side name to providing-host pet
+   * name) by its guest-side keys: names beginning with `@` are special and
+   * indelible, all others are ordinary and mutable.
+   * @param {Record<string, string[]>} endowments
+   */
+  const partitionEndowments = endowments => {
+    /** @type {Record<string, string[]>} */
+    const ordinary = {};
+    /** @type {Record<string, string[]>} */
+    const special = {};
+    for (const [guestName, hostPath] of Object.entries(endowments)) {
+      if (isSpecialGuestName(guestName)) {
+        special[guestName] = hostPath;
+      } else {
+        ordinary[guestName] = hostPath;
+      }
+    }
+    return { ordinary, special };
+  };
+
+  /**
+   * Resolve the ordinary (mutable) endowments to the formula identifiers
+   * currently bound behind the daemon boundary. A missing source is tolerated
+   * (the introduction is simply skipped) so it can be repaired by binding the
+   * host pet name and reconnecting.
+   * @param {Record<string, string[]>} ordinaryEndowments guest name to host pet name path
+   */
+  const resolveIntroductions = async ordinaryEndowments => {
     await null;
     return harden(
       Object.fromEntries(
         await allInOrder(
-          Object.keys(introducedNames)
-            .sort(compareStrings)
-            .map(async hostName => [
-              hostName,
-              (await identify(hostName)) ?? null,
+          Object.entries(ordinaryEndowments)
+            .sort(([left], [right]) => compareStrings(left, right))
+            .map(async ([guestName, hostPath]) => [
+              guestName,
+              (await identify(...hostPath)) ?? null,
             ]),
         ),
       ),
@@ -445,12 +475,36 @@ export const makeGuestAuthorityProvider = powers => {
   };
 
   /**
+   * Resolve special endowments once. Unlike ordinary introductions, a missing
+   * source is fatal because an indelible name cannot be repaired later.
+   * @param {Record<string, string[]>} specialEndowments guest special name to host pet name path
+   */
+  const resolveSpecialEndowments = async specialEndowments => {
+    const entries = await allInOrder(
+      Object.entries(specialEndowments)
+        .sort(([left], [right]) => compareStrings(left, right))
+        .map(async ([specialName, hostPath]) => {
+          const identifier = await identify(...hostPath);
+          if (identifier === undefined) {
+            throw makeError(
+              X`ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE: No host name ${q(hostPath)} for special name ${q(specialName)}`,
+              Error,
+              { code: 'ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE' },
+            );
+          }
+          return [specialName, identifier];
+        }),
+    );
+    return harden(Object.fromEntries(entries));
+  };
+
+  /**
    * @param {string[]} guestPath
    * @param {EndoGuestAuthority | undefined} authority
-   * @param {Record<string, string> | undefined} introducedNames
-   * @param {() => Promise<EndoGuest>} makeGuest
+   * @param {Record<string, string[]> | undefined} endowments guest-side name to host pet name path
+   * @param {(specialNames: Record<string, FormulaIdentifier>) => Promise<EndoGuest>} makeGuest
    */
-  const run = async (guestPath, authority, introducedNames, makeGuest) => {
+  const run = async (guestPath, authority, endowments, makeGuest) => {
     await null;
     const controllerPath = harden(['provisioned-guests', ...guestPath]);
     const policyPath = harden([...controllerPath, 'authority']);
@@ -458,11 +512,27 @@ export const makeGuestAuthorityProvider = powers => {
     let policy;
     /** @type {Map<string, ResolvedCredential>} */
     let credentials;
-    /** @type {Record<string, string>} */
-    let retainedIntroductions;
+    /**
+     * The unified endowment map (guest name to host pet name) as retained;
+     * its ordinary entries are re-resolved by name on every reconnect.
+     * @type {Record<string, string[]>}
+     */
+    let retainedEndowments;
+    /** @type {Record<string, FormulaIdentifier>} */
+    let retainedSpecialNames;
+    const sortedEndowments =
+      endowments === undefined
+        ? undefined
+        : harden(
+            Object.fromEntries(
+              Object.entries(endowments).sort(([left], [right]) =>
+                compareStrings(left, right),
+              ),
+            ),
+          );
     if (await hasNamePath(policyPath)) {
       const retained =
-        /** @type {{ policy: EndoGuestAuthorityPolicy, credentialIds: Record<string, string>, introducedNames: Record<string, string> }} */ (
+        /** @type {{ policy: EndoGuestAuthorityPolicy, credentialIds: Record<string, string>, endowments: Record<string, string[]>, specialNames?: Record<string, FormulaIdentifier> }} */ (
           await lookup(policyPath)
         );
       if (authority === undefined) {
@@ -477,15 +547,12 @@ export const makeGuestAuthorityProvider = powers => {
           [...credentials].map(([name, value]) => [name, value.identifier]),
         ),
       );
-      retainedIntroductions =
-        introducedNames === undefined
-          ? retained.introducedNames
-          : harden(
-              Object.fromEntries(
-                Object.entries(introducedNames).sort(([left], [right]) =>
-                  compareStrings(left, right),
-                ),
-              ),
+      retainedEndowments = sortedEndowments ?? retained.endowments;
+      retainedSpecialNames =
+        sortedEndowments === undefined
+          ? (retained.specialNames ?? harden({}))
+          : await resolveSpecialEndowments(
+              partitionEndowments(sortedEndowments).special,
             );
       if (
         !keyEQ(
@@ -493,7 +560,8 @@ export const makeGuestAuthorityProvider = powers => {
           harden({
             policy,
             credentialIds,
-            introducedNames: retainedIntroductions,
+            endowments: retainedEndowments,
+            specialNames: retainedSpecialNames,
           }),
         )
       ) {
@@ -519,12 +587,9 @@ export const makeGuestAuthorityProvider = powers => {
           [...credentials].map(([name, value]) => [name, value.identifier]),
         ),
       );
-      retainedIntroductions = harden(
-        Object.fromEntries(
-          Object.entries(introducedNames ?? {}).sort(([left], [right]) =>
-            compareStrings(left, right),
-          ),
-        ),
+      retainedEndowments = sortedEndowments ?? harden({});
+      retainedSpecialNames = await resolveSpecialEndowments(
+        partitionEndowments(retainedEndowments).special,
       );
       for (let length = 1; length <= controllerPath.length; length += 1) {
         // Directory ancestors must be created in order.
@@ -537,12 +602,15 @@ export const makeGuestAuthorityProvider = powers => {
         harden({
           policy,
           credentialIds,
-          introducedNames: retainedIntroductions,
+          endowments: retainedEndowments,
+          specialNames: retainedSpecialNames,
         }),
         policyPath,
       );
     }
-    const introductionIds = await resolveIntroductions(retainedIntroductions);
+    const introductionIds = await resolveIntroductions(
+      partitionEndowments(retainedEndowments).ordinary,
+    );
 
     const mountsPath = harden([...controllerPath, 'mount']);
     const gitsPath = harden([...controllerPath, 'git']);
@@ -625,9 +693,8 @@ export const makeGuestAuthorityProvider = powers => {
       remotes.set(binding, remoteCap);
     }
 
-    const guest = await makeGuest();
-    for (const [hostName, guestName] of Object.entries(retainedIntroductions)) {
-      const id = introductionIds[hostName];
+    const guest = await makeGuest(retainedSpecialNames);
+    for (const [guestName, id] of Object.entries(introductionIds)) {
       if (id !== null) {
         // Reapply provideGuest's established introduction behavior using the
         // source currently bound in the host namespace.
@@ -659,13 +726,13 @@ export const makeGuestAuthorityProvider = powers => {
   const provideGuestAuthority = (
     guestPath,
     authority,
-    introducedNames,
+    endowments,
     makeGuest,
   ) => {
     const key = guestPath.join('/');
     const tail = tailByGuestPath.get(key) ?? Promise.resolve();
     const result = tail.then(() =>
-      run(guestPath, authority, introducedNames, makeGuest),
+      run(guestPath, authority, endowments, makeGuest),
     );
     tailByGuestPath.set(
       key,

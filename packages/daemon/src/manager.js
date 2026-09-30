@@ -741,6 +741,13 @@ const makeDaemonCore = async (
           ['worker', formula.worker],
           ['networks', formula.networks],
           ['planes', formula.planes],
+          ...Object.entries(formula.specialNames ?? {}).map(
+            ([name, id]) =>
+              /** @type {[string, FormulaIdentifier]} */ ([
+                `special:${name}`,
+                id,
+              ]),
+          ),
         ];
       case 'marshal':
         return (formula.slots ?? []).map((s, i) => [`slot${i}`, s]);
@@ -3634,6 +3641,7 @@ const makeDaemonCore = async (
         workerId,
         networksDirectoryId,
         planesDirectoryId,
+        formula.specialNames,
         context,
       );
       const handle = /** @type {any} */ (agent).handle();
@@ -5491,6 +5499,7 @@ const makeDaemonCore = async (
     hostAgentId,
     hostHandleId,
     workerLabel,
+    introducedSpecialNames = Object.create(null),
   ) => {
     // Pin each dependency formula to protect it from collection until the
     // parent guest formula links them via formulaDeps.
@@ -5581,6 +5590,7 @@ const makeDaemonCore = async (
       mailboxStoreId,
       mailHubId,
       workerId,
+      specialNames: harden({ ...introducedSpecialNames }),
       networksDirectoryId,
       planesDirectoryId,
       pinned,
@@ -5599,6 +5609,9 @@ const makeDaemonCore = async (
       mailboxStore: identifiers.mailboxStoreId,
       mailHub: identifiers.mailHubId,
       worker: identifiers.workerId,
+      ...(Object.keys(identifiers.specialNames).length === 0
+        ? {}
+        : { specialNames: identifiers.specialNames }),
       networks: identifiers.networksDirectoryId,
       planes: identifiers.planesDirectoryId,
     };
@@ -5618,12 +5631,14 @@ const makeDaemonCore = async (
     hostHandleId,
     deferredTasks,
     workerLabel,
+    introducedSpecialNames = Object.create(null),
   ) => {
     return withFormulaGraphLock(async () => {
       const identifiers = await formulateGuestDependencies(
         hostAgentId,
         hostHandleId,
         workerLabel,
+        introducedSpecialNames,
       );
 
       await deferredTasks.execute({

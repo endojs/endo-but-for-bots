@@ -402,7 +402,7 @@ Fae is provisioned as a guest caplet inside the Endo daemon:
 ### Without tools (`setup.js`)
 
 ```
-E(agent).provideGuest('fae', { introducedNames: {}, agentName: 'profile-for-fae' })
+E(agent).provideGuest('fae', { endowments: {}, agentName: 'profile-for-fae' })
     │
     └─ E(agent).makeUnconfined('MAIN', 'agent.js', {
          powersName: 'profile-for-fae',
@@ -413,7 +413,7 @@ E(agent).provideGuest('fae', { introducedNames: {}, agentName: 'profile-for-fae'
 
 ### With tools (`setup-with-tools.js`)
 
-Same as above but `introducedNames` includes references to pre-created tool
+Same as above but `endowments` includes references to pre-created tool
 caplets. On startup, `initializeIntroducedTools()` detects them and moves
 them into the `tools/` subdirectory.
 

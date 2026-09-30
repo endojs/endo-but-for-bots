@@ -204,7 +204,7 @@ export const main = async agent => {
   const hasGuest = await E(agent).has(guestName);
   if (!hasGuest) {
     await E(agent).provideGuest(guestName, {
-      introducedNames: harden({ '@agent': 'host-agent' }),
+      endowments: harden({ 'host-agent': ['@agent'] }),
       agentName,
     });
   }
