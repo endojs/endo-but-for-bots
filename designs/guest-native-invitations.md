@@ -3,9 +3,9 @@
 | | |
 |---|---|
 | **Created** | 2026-09-02 |
-| **Updated** | 2026-09-04 |
+| **Updated** | 2026-09-30 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | In Progress |
 
 ## What is the Problem Being Solved?
 
@@ -18,7 +18,7 @@ can register daemon peers and formulate new agents.
 An **`EndoGuest`** is a subordinate agent that a host (or, after this design,
 another guest) onboards, with a deliberately attenuated surface.
 
-Today only an `EndoHost` can extend or redeem an invitation.
+When this design was proposed (2026-09-02), only an `EndoHost` could extend or redeem an invitation; see *Implementation status* for what has landed since.
 `invite` and `accept` are defined in `packages/daemon/src/host.js` and guarded by
 `HostInterface` in `packages/daemon/src/interfaces.js`.
 `EndoGuest` (`packages/daemon/src/guest.js`, `GuestInterface`) exposes neither.
@@ -49,6 +49,60 @@ They track the daemon tool-renaming effort in
 [daemon-locator-terminology](daemon-locator-terminology.md); this design fixes
 the semantics and the parameter *roles*, not the final spelling.
 
+## Implementation status (reconciled 2026-09-30)
+
+Most of this design has landed on `llm` since it was first proposed.
+This section records what shipped, where the shipped code differs from the
+design, and what work remains.
+The rest of this document is the target design, updated to match the review
+decisions recorded in the Open Questions section.
+
+**Landed.**
+
+- [#1306](https://github.com/endojs/endo-but-for-bots/pull/1306): callers choose
+  `pins`, `networks`, and names for new agents.
+  A guest can have its own `@pins` directory, and each mailbox delivery
+  reincarnates the values pinned there, which wakes a bot when its guest receives
+  a message ([daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md)).
+- [#1305](https://github.com/endojs/endo-but-for-bots/pull/1305): `EndoGuest.invite`.
+  The invitation formula names its inviting `EndoAgent`, which may be a host or a
+  guest.
+  The persisted fields are now spelled `invitingAgent`/`invitingHandle`, and the
+  legacy `hostAgent`/`hostHandle` spellings are still read.
+- [#1310](https://github.com/endojs/endo-but-for-bots/pull/1310):
+  `EndoGuest.accept(invitationLocator, correspondentName)` and a single
+  daemon-core `acceptInvitation` helper that both facets call.
+  `EndoHost.accept` now uses the same helper, so **neither facet mints a
+  replacement guest** and the `@pins/guest-*` pin is gone.
+  That settles the host-convergence question for the acceptor side.
+  Peer and agent-key registration is additive only: it may add a route but never
+  redirects one.
+  Same-daemon accepts skip both registration writes.
+  The CLI and the `help` text use `correspondentName`.
+
+**Where the landed code differs from this design.**
+
+| Topic | This design | Landed on `llm` | Resolution |
+|---|---|---|---|
+| Consume-once serialization | A synchronous pet-store compare-and-set (`storeLocatorIfMatches`) | An in-memory per-invitation `SerialJobs` queue around a check of the captured-path slot, followed by `storeLocator` | Consume-once holds within one process. Durability across a restart moves to the formula-store state machine (section 7). |
+| Outcome surface | A returned `{ status }` record | Thrown errors; `accept` resolves `undefined` | Still to do. The returned record is what lets a cross-CapTP caller tell the outcomes apart. |
+| Acceptor ordering | Consume on the inviter, then bind locally | Speculative local bind and peer route first, then consume on the inviter, with rollback if that fails and an outcome-unknown error on a timeout | The landed order is kept. The formula-store state machine turns outcome-unknown into a resumable state (section 7). |
+| Revocation | Re-`invite` overwrite only; `remove`/`rename` reject | An explicit `Invitation.cancel()` verb | `cancel()` is kept. `remove` becomes revocation through prompt collection, and `rename` is not revocation (section 5). |
+| Host-minted pin | Kept for hosts, recorded per invitation | Removed on both facets | Removed. Per-agent pins replace it (Open Question 2). |
+
+**In flight.**
+
+- [#1277](https://github.com/endojs/endo-but-for-bots/pull/1277) (design,
+  draft): retention labels and a lifecycle for a guest's hidden `hostPins`,
+  including a path-derived invitation pin key.
+  That design assumes a per-invitation pin, which this design removes.
+  #1277 therefore has to be reconciled with Open Question 2 before it lands.
+- [#399](https://github.com/endojs/endo-but-for-bots/pull/399)
+  ([familiar-deep-link-invitations](familiar-deep-link-invitations.md)):
+  `endo://` deep links routed to `accept`.
+  This is the entry point that provisions a guest for a newcomer (section 2,
+  *Onboarding a newcomer*).
+
 ## Design
 
 ### 1. Surface
@@ -62,7 +116,7 @@ is defined once:
 guest.invite(correspondentName: string | string[]): Promise<Invitation>
 guest.accept(invitationLocator: string, correspondentName: string | string[]):
   Promise<{ status: 'joined' | 'already-joined' | 'already-consumed'
-                  | 'peer-conflict' | 'name-in-use' }>
+                  | 'peer-conflict' | 'name-in-use' | 'revoked' }>
 ```
 
 - On `invite`, `correspondentName` is the pet name the **inviting** guest chooses for its
@@ -115,23 +169,23 @@ The two are therefore complementary, not exclusive: the named consumer's eventin
 A consumer that accepts polling as the cost may use `locate` alone.
 A guest cannot introspect a formula's kind (`getFormulaForId` is host-only, `packages/daemon/src/host.js:2204-2214`), so `locate`'s `type` is the guest-facet answer the named consumer (minion.town's onboarding UI) uses to answer "has my invitee joined?"
 
-The reliable **revocation** verb is overwrite: re-`invite` under the same
-`correspondentName`, whose deferred task cancels the prior pending invitation (section 5).
-`remove` and `rename` do *not* revoke, and this increment must not let them *look*
-like they do: with formula collection off (the shipped default, section 5) `remove`
-would delete only the pet-store row while the persisted `invitation` formula stays
-reincarnatable via `provideController`, and `rename` would merely *move* the binding
-(`packages/daemon/src/pet-store.js:182-207`) so the invitation stays live under the
-new name while redemption still binds at the path captured at mint (`makeInvitation`
-fixes `guestName` at mint, `packages/daemon/src/manager.js:6653-6659`).
-So that neither verb ships as a silent false revocation affordance, this increment
-makes `remove` and `rename` **reject** when the entry they touch resolves to a
-pending `invitation` formula, telling the caller to re-`invite` (revoke) or `accept`
-(redeem) first.
-The invitation's identity is therefore its **formula id**, not the mutable pet name.
-Section 5 states what each verb does; turning `remove`/`rename` into genuine
-revocation verbs (cancel plus a recorded `revoked` disposition) rather than merely
-refusing is the residual scoped in the Open Questions section.
+**Revocation.**
+An invitation's identity is its **formula id**, not the pet name that holds it.
+Three verbs revoke a pending invitation:
+
+- `E(invitation).cancel()` (landed in #1310) revokes exactly that invitation.
+- Re-`invite` under the same `correspondentName` overwrites the entry, and the
+  deferred task cancels the prior pending invitation.
+- `remove` of the last reference makes the invitation formula unreachable.
+  An unreachable formula is collected promptly, and collecting a formula whose
+  value is incarnated cancels that value promptly, so the invitation can no longer
+  be redeemed (section 5).
+
+`rename` is **not** revocation.
+A rename keeps the formula reachable, so the invitation stays pending under its
+new name, and redemption binds the correspondent at the name that holds the
+invitation when it is redeemed, not at the path captured when it was minted
+(section 5).
 
 **Failure surface.**
 Sections 5 and 7 ask callers to distinguish outcomes, so the outcome must be
@@ -175,6 +229,8 @@ Returned (the caller branches on `result.status`):
 - `already-consumed` (invitation **consumed** earlier by a *different* agent): the
   committed entry is bound to a different handle id ("this invite link was already
   used");
+- `revoked` (invitation **not redeemable**): the formula-store state records the
+  invitation as cancelled, overwritten by a re-`invite`, or removed (section 7);
 - `peer-conflict` (invitation **not consumed**): the insert-only peer registration
   refused because the locator names an already-known node with differing addresses,
   or would rebind a differing agent key (section 3), and the refusal happens before
@@ -203,18 +259,17 @@ second store: the committed binding (a positive, GC-independent fact) is what ma
 back. The `status` tag constants are exported the way `Registry*ErrorName` are
 (`packages/daemon/src/registry.js`) so callers branch on a constant, not a literal.
 
-This taxonomy covers the states the design's *shipped* verbs reach; the deferred
-`overwritten` and `revoked` outcomes (a later re-`invite`, and genuine
-`remove`/`rename` revocation, Open Question 5) would each require recording an
-explicit tagged terminal value for an entry that never reached redemption, which
-that question scopes.
+The formula-store state machine (section 7) records `revoked` as a terminal
+state, so an `accept` of a cancelled, overwritten, or removed invitation can be
+reported as a `revoked` status rather than being indistinguishable from an
+unknown formula.
 Both facets route `accept` through the single daemon-core `acceptInvitation` helper
 (section 9), so **the helper returns this record (and raises the two exceptional
 rejects) for both facets**: the contract does not fork by facet, because
 `accept` is declared once on the shared `EndoAgent` base (section 9).
-This replaces today's bare host-facet errors (`packages/daemon/src/host.js:2045`);
-the residual host-convergence work (whether the host path also drops the minted
-guest) is Open Question 1, but the outcome contract converges regardless.
+This replaces the thrown errors that #1310 landed for both facets (see
+*Implementation status*); the host path already shares the helper and no longer
+mints a guest (Open Question 1).
 
 ### 2. Reciprocal handle exchange, no replacement guest
 
@@ -312,6 +367,25 @@ existing mailbox substrate (`packages/daemon/src/mail.js`).
 
 `storeLocator`/`storeIdentifier` are directory methods already shared by both
 `HostInterface` and `GuestInterface`, so step 4 needs no new guest authority.
+
+**Any agent may accept any agent's invitation.**
+Whether the inviter is a host or a guest does not limit who may accept.
+A host may accept a guest's invitation, a guest may accept a host's, and agents
+on different daemons may accept each other's.
+The accepting agent always accepts as itself, as in steps 3 to 5.
+
+**Onboarding a newcomer.**
+A person who opens an invitation link without an agent has nothing to accept
+with.
+The service that receives the link (minion.town, or the Familiar deep-link
+handler in [familiar-deep-link-invitations](familiar-deep-link-invitations.md))
+automatically provisions a guest for that person through its host's
+`provideGuest`, and that new guest then accepts the invitation as itself.
+The daemon needs no new invitation surface for this.
+Provisioning is an ordinary `provideGuest`, followed by the `accept` of this
+section.
+How a service limits that provisioning is out of scope for this design; a
+coupon-based way to do it is tracked as follow-up work (Open Question 6).
 
 **Where a guest's connection hints come from.**
 Reachability is a property of an agent's networks directory, not of the guest
@@ -489,6 +563,16 @@ separate handle locator's `handleNode` (step 3) carries the acceptor's agent nod
 
 ### 5. Cancellation and consume-once
 
+> **Reconciliation note (2026-09-30).** #1310 landed consume-once as an in-memory
+> per-invitation `SerialJobs` queue around a check of the invitation's slot,
+> not as the pet-store compare-and-set below.
+> Because invitations must survive a restart, the commit point is now the
+> formula-store state transition of section 7.
+> The analysis below still applies to that transition: the compare and the set
+> must share one synchronous body, the commit must not be enqueued on
+> `formulaGraphJobs`, and the edge of the overwritten invitation must be
+> released.
+
 An invitation is consumed exactly once, and the **durable** consume-once record is
 the pet-store binding, not an in-memory signal, and not the eventual collection of
 a formula.
@@ -611,11 +695,28 @@ Two paths reach that pet-store overwrite, redemption (consumption) and revocatio
   task cancels the prior pending invitation so it can no longer mutate the entry.
   This is the **only** reliable revocation verb.
 
-`remove` and `rename` do **not** retire a pending invitation.
-With collection off (the shipped default above), `remove` deletes only the pet-store row while the persisted `invitation` formula remains and `provideController` reincarnates it.
-`rename` *moves* the binding via `renamePetStoreEntry` (`packages/daemon/src/pet-store.js:182-207`) so the invitation stays live under the new name; worse, `makeInvitation` captured `guestName` as a path at mint (`packages/daemon/src/manager.js:6653-6659`) and redemption binds at that captured path, so a renamed-then-redeemed invitation writes a second binding at the vacated old name while still pending under the new one.
-The invitation's identity is the **formula id**, not the mutable pet name.
-Making `remove`/`rename` genuinely revoke (by cancelling the controller and recording a `revoked` disposition, section 1) is scoped work the builder must add, tracked in Open Question 5.
+`remove` and `rename` follow the collection rule (review decision, Open
+Question 5):
+
+- **`remove`**: when the inviting agent's directory drops its last reference to a
+  pending invitation, the formula is unreachable and must be collected promptly,
+  and collecting it must promptly cancel an incarnated invitation.
+  A later `accept` of its locator then fails because the formula no longer exists.
+  The inviter-side check reads the formula-store state (section 7), so even before
+  collection finishes, an invitation whose last reference is gone is not
+  redeemable.
+- **`rename`**: the formula is still reachable, so the invitation stays pending.
+  The inviter-side accept must bind the correspondent at the invitation's
+  **current** name, found by reverse lookup of the invitation id in the inviting
+  agent's directory, instead of the path `makeInvitation` captured at mint
+  (`guestNamePath` in `packages/daemon/src/manager.js`).
+  Binding at the captured path would leave a second binding at the vacated name
+  while the invitation was still pending under the new one.
+
+This depends on prompt collection.
+Collection is off by default today (`ENDO_GC`), so until it is on, `remove`
+retires an invitation only through the formula-store check above, and
+`E(invitation).cancel()` is the explicit revocation verb.
 
 This design closes the redemption half of the current `makeInvitation.accept` TODO
 ("ensure that this is sufficient to cancel the previous incarnation ... such that
@@ -676,8 +777,23 @@ pet store, and to run controller cancellation afterward, unqueued.
   peer/known-peers entries; guest incarnation (`packages/daemon/src/manager.js` `guest:` maker,
   which recovers `agentNodeNumber` from `persistencePowers.listAgentKeys()`)
   re-hydrates both guests and their directories.
-  No `@pins` guest is minted (for the guest inviter path), so there is no pinned
-  intermediate to revive.
+  No `@pins` guest is minted on either facet (landed in #1310), so there is no
+  pinned intermediate to revive.
+- **Durable invitation state machine** (review decision, Open Question 4):
+  invitations must survive a restart, so the invitation's state is recorded in the
+  **formula store**, not in an in-memory queue or only as a pet-store slot.
+  On the inviter, the invitation moves from `pending` to `accepted` (with the
+  acceptor's handle id) or to `revoked`.
+  The consume check and the transition run in one synchronous formula-store
+  transaction, so a reincarnated stale invitation cannot be redeemed.
+  On the acceptor, an `accepting` record (the invitation locator and the chosen
+  `correspondentName`) is written before the speculative bind and becomes `joined`
+  when the inviter confirms.
+  After a restart, the daemon re-drives each `accepting` record.
+  This replaces the landed outcome-unknown error, which asks the caller to check
+  by hand, with a state the daemon resumes itself.
+  The per-invitation `SerialJobs` queue that landed in #1310 still serializes
+  calls within one process, but it is no longer what makes consume-once hold.
 - **Mid-accept crash**: `accept` performs a remote call (`E(invitation).accept`,
   which runs the inviter-side commit) and then a local bind; the two are not one
   transaction across daemons. There is exactly **one** commit point, the
@@ -754,14 +870,16 @@ migrate the assertion to the new binding while preserving its GC/retention inten
   asserted with the `type !== 'invitation'` check rather than `type === 'handle'`
   (which would miss the cross-daemon case), and from a subscription attached *after*
   the transition to prove it does not depend on observing the change live.
-- `remove` / `rename` on a **pending** entry: assert this increment's shipped
-  behavior, that both **reject** when the entry resolves to a pending `invitation`
-  formula (section 1), so neither ships as a silent false revocation affordance. The
-  test also documents *why* they reject by pinning the underlying facts (with
-  `gcEnabled: false`, a removed invitation's persisted formula would otherwise be
-  reincarnatable, and a renamed pending invitation would stay live under the new
-  name). Turning these into genuine-revocation verbs (cancel plus a `revoked`
-  disposition) is deferred (Open Question 5); the reject is the shipped guard.
+- `remove` / `rename` on a **pending** entry: with collection on, `remove` of the
+  last reference collects the invitation and cancels its incarnation, and a later
+  `accept` of its locator fails; with collection off, the formula-store state
+  still refuses it.
+  After `rename`, the invitation stays redeemable and the correspondent is bound at
+  the **new** name, with no binding written at the old one.
+- Durability: restart the inviter with a pending invitation and redeem it
+  afterwards; restart an acceptor in the `accepting` state and assert the daemon
+  re-drives it to `joined`; restart after `accepted` and assert a stale
+  incarnation cannot be redeemed.
 - Attenuation: a guest cannot register an arbitrary peer through any public
   method; and the section-3 overwrite refusal, where redeeming a locator that
   names an already-known node with differing addresses is rejected rather than
@@ -805,7 +923,7 @@ gates.
   that replace the per-facet declarations (renaming `EndoHost.invite`'s `guestName`
   to `correspondentName`, section 1). Declare the agent-facet `accept` as returning
   the discriminated `{ status: 'joined' | 'already-joined' | 'already-consumed' |
-  'peer-conflict' | 'name-in-use' }` record (section 1), not `void`, and export the
+  'peer-conflict' | 'name-in-use' | 'revoked' }` record (section 1), not `void`, and export the
   `status` tag constants (the way `Registry*ErrorName` are exported) so callers
   branch on a constant. Correct the stale `Invitation.accept` return type
   (`{ syncedStoreNumber }` no longer matches its actual return, which becomes the
@@ -847,12 +965,12 @@ gates.
   own directory tree, and **not** through `nameHubMethodGuards` (it is not a public
   agent method). This is the single load-bearing new primitive the consume-once
   commit rests on (sections 5 and 6).
-- `remove` / `rename` guard: make both **reject** when the entry they touch resolves
-  to a pending `invitation` formula (sections 1 and 5), so neither ships as a silent
-  false revocation affordance. The check is local to the resolving hub (the same
-  `identifyLocal` the CAS reads); it refuses with a message directing the caller to
-  re-`invite` (revoke) or `accept` (redeem). Genuine `revoked`-disposition revocation
-  is deferred (Open Question 5); the reject is what this increment ships.
+- `remove` / `rename`: no reject guard.
+  `remove` revokes through prompt collection and the formula-store state, and
+  `rename` moves the pending entry, so the inviter-side accept binds at the
+  invitation's current name (section 5).
+- Formula store: record the invitation state machine (section 7), including the
+  acceptor-side `accepting` record and the re-drive on restart.
 - `packages/daemon/src/guest.js` (`makeGuestMaker` / `makeGuest`): add the `invite`
   and `accept` method bodies. `accept` is one call into the injected
   `acceptInvitation` helper. `invite` uses the injected `formulateInvitation` and
@@ -869,17 +987,11 @@ gates.
   instantiation): drop the `EndoHost` cast in `locate`/`accept`; compute peer info
   and register peers via the insert-only daemon-core capability, ordering the
   inviter-side peer registration **behind the winning compare-and-set** (section 3),
-  so a spent locator drives no registration; for a **guest** inviter, bind the
-  acceptor's own remote handle under the inviter's `correspondentName` instead of
-  `formulateGuest` + `@pins` pin, and after the winning CAS replay the store-controller
+  so a spent locator drives no registration; bind the acceptor's own remote handle
+  under the inviter's `correspondentName` for both facets, and after the winning CAS replay the store-controller
   edge-release bookkeeping for the overwritten `invitation` id (section 5).
-  The bind-vs-mint policy rides the **persisted invitation formula** as a field
-  recorded at mint time, not a runtime test on the inviter's kind, so an invitation
-  pending across a later convergence rollout keeps the meaning it was minted with
-  and convergence changes only what *new* invitations record.
-  A **host**-minted invitation retains the current mint until the retention
-  question below (what the `@pins/guest-*` mint protected) is resolved; whether the
-  host path also converges onto the no-mint model is Open Question 1.
+  Both facets bind the acceptor's handle.
+  Neither mints a guest, as landed in #1310.
   Inject the `acceptInvitation` helper and `formulateInvitation` into
   `makeGuestMaker`; the insert-only `registerPeer` is passed as a parameter into
   `acceptInvitation` and the `Invitation.accept` path (section 3), not injected for
@@ -919,45 +1031,80 @@ gates.
 
 ## Open Questions
 
-1. Should the host invitation path converge onto the same reciprocal-own-handle
-   model (no minted guest), or keep minting a per-relationship guest for hosts while
-   only guests use the no-mint path?
-   This design ships the guest path as no-mint and leaves the host path minting for
-   now (the bind-vs-mint policy rides the persisted invitation formula, section 9).
-   Convergence is cleaner and would remove the branch, but it changes host `accept`
-   semantics and the retained host tests, and it is gated on Open Question 2.
-2. What was the `@pins/guest-<leaf>` local guest minted by the current
-   `host.accept` / `makeInvitation.accept` actually protecting?
-   The `_hostNameFromGuest` "previously used by synced pet stores" comment suggests
-   it is a vestige of a retired synced-pet-store flow.
-   Before deleting the mint, the builder must confirm it carries no live retention or
-   GC guarantee that needs preserving another way, so the `_multiplayer-suite.js`
-   retention assertions do not silently weaken.
-3. What is the exact idempotent recovery ordering for a mid-`accept` crash (section
-   7): which side's bind is the commit point, and in what order the two binds
-   re-drive?
-   The narrower "already consumed by me vs by someone else" discrimination is
-   *settled* (section 1: the re-driven `accept` compares the committed bound handle
-   id to its own); what remains open is the cross-daemon ordering of the inviter-side
-   commit and the acceptor-side local bind.
-4. Does the pet-store compare-and-set plus best-effort controller cancellation
-   (section 5) revoke prior incarnations of the invitation across a restart, or can a
-   stale incarnation still be redeemed?
-   This is the unresolved half of the current `makeInvitation.accept` TODO; the
-   builder must verify with a restart test.
-5. How should `remove` and `rename` on a **pending** invitation be made to genuinely
-   *revoke* it? This increment ships the safe half: both verbs **reject** on a pending
-   entry (sections 1, 5, 9) so neither is a silent false revocation affordance. What
-   remains open is the genuine-revoke mechanism, having those verbs cancel the
-   invitation controller and record a `revoked` disposition (section 1) rather than
-   merely refuse, whose exact shape, and whether it belongs in this increment, is
-   open.
-6. Should peer registration triggered by a guest `accept` be rate-limited or bounded
-   per guest? Ordering the inviter-side registration **behind the winning CAS**
-   (section 3) closes the spent-locator vector, so a leaked, already-consumed locator
-   drives no growth. What remains is the additive growth a guest can still cause via
-   *distinct* valid invitations it holds or mints (`formulateInvitation`).
-   Likely out of scope for the first increment; name a follow-up if deferred.
+The first six questions below were answered in kriskowal's review of this PR
+([review 5360612317](https://github.com/endojs/endo-but-for-bots/pull/1116#pullrequestreview-5360612317)),
+checked against what has landed since.
+Each entry keeps the original question and records the decision.
+
+1. **Host convergence: resolved.**
+   Any agent can accept an invitation from any other agent, whether the inviter
+   is a host or a guest.
+   A newcomer who opens an invitation link gets a guest provisioned automatically,
+   so that they have an agent to accept with (section 2, *Onboarding a newcomer*).
+   #1310 already routes `EndoHost.accept` through the shared `acceptInvitation`
+   helper without minting a guest, so both facets use the reciprocal
+   own-handle model.
+2. **The minted `@pins/guest-*` guest: resolved, remove it.**
+   It was most likely added to make a test pass across a restart.
+   Per-agent pins (#1306, [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md))
+   now wake a bot whenever its agent receives a message, and that replaces the
+   pin.
+   #1310 has already removed the mint on both facets.
+   No per-invitation pin should come back in any other form.
+   The `hostPins` invitation-pin lifecycle proposed in #1277 is therefore at odds
+   with this decision, and the two need to be reconciled before #1277 lands.
+   The `_multiplayer-suite.js` retention assertions stay green without the pin,
+   because a pending invitation is retained by its pet-store entry and a completed
+   one by the reciprocal bindings.
+3. **Mid-accept ordering and crossed invitations: tie-break by formula id.**
+   The review compared this to crossed hellos in CapTP, where a tie is broken by
+   comparing identifiers.
+   A crash is handled by the durable state machine (section 7).
+   The inviter-side state transition is the only commit point, and the acceptor's
+   `accepting` record is re-driven after a restart until the inviter reports
+   `accepted` (for this acceptor, which gives `already-joined`) or a terminal
+   refusal.
+   The crossed case is two agents that each redeem the other's invitation at
+   the same time, which would otherwise leave two relationships.
+   Both daemons compare the two invitation formula ids, and the invitation with
+   the lower id wins.
+   The losing invitation resolves as `already-joined` against the winning
+   relationship and is cancelled, so both sides settle on one pair of bindings
+   without further coordination.
+4. **Durability across a restart: resolved, the state machine is persisted.**
+   Invitations must survive a restart, so the state machine is recorded in the
+   formula store (section 7).
+   This replaces the in-memory serialization of #1310 as the thing that makes
+   consume-once hold, and turns its outcome-unknown error into a state that is
+   resumed automatically.
+5. **`remove` / `rename` of a pending invitation: resolved by collection.**
+   An unreachable formula is collected promptly, and a collected formula's
+   incarnated value is cancelled promptly, so `remove` of the last reference
+   revokes the invitation.
+   A rename does not make a formula unreachable, so `rename` keeps the invitation
+   pending under its new name, and redemption binds there (section 5).
+   This design does not need a reject guard.
+   This depends on collection being on promptly by default.
+   Until it is, the formula-store state gives the same refusal, and
+   `E(invitation).cancel()` is the explicit revocation verb.
+6. **Rate limiting: out of scope, follow-up posted.**
+   This design does not address rate limiting.
+   Follow-up job `design-minion-town-guest-coupons` designs guest-account
+   **coupons**.
+   An invitation can carry the formula id of a capability to create a
+   minion.town guest, and an accepter with no agent of their own can redeem it.
+   The root account holds a growable pool of coupons that expire back to the
+   pool, and can air-drop coupon books to guests, so minion.town's operators can
+   limit growth to the scale they are ready for.
+   An accepter who uses another federated instance, a Familiar, or their own pet
+   daemon never uses the coupon.
+7. **Still open: the outcome surface.**
+   #1310 landed thrown errors, while section 1 asks for a returned `{ status }`
+   record because a thrown tag does not survive CapTP.
+   This design keeps the returned record as remaining work, with `revoked` added
+   as a status (section 1).
+   It is listed separately in case the maintainer would rather keep the thrown
+   errors.
 
 ## Prompt
 
