@@ -84,9 +84,20 @@ pub unsafe extern "C" fn host_sha256_bytes(the: *mut XsMachine) {
 /// as a 64-character hex string.
 pub unsafe extern "C" fn host_random_hex256(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let mut buf = [0u8; 32];
-        rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
-        set_result_string(the, &hex::encode(buf));
+        // A read of nondeterministic state: the transcript records the value.
+        let result = host_ledger::call("randomHex256", None, b"[]", || {
+            let mut buf = [0u8; 32];
+            rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
+            let hex = hex::encode(buf);
+            set_result_string(the, &hex);
+            Outcome {
+                reply: hex.into_bytes(),
+                ..Outcome::default()
+            }
+        });
+        if let Err(msg) = result {
+            set_result_string(the, &msg);
+        }
     });
 }
 
@@ -103,9 +114,19 @@ pub unsafe extern "C" fn host_random_fill(the: *mut XsMachine) {
         if byte_length == 0 {
             return;
         }
-        let mut buf = vec![0u8; byte_length];
-        rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
-        crate::worker_io::write_typed_array_bytes(the, slot, &buf);
+        let request = format!("[{byte_length}]").into_bytes();
+        let result = host_ledger::call("randomFillBytes", None, &request, || {
+            let mut buf = vec![0u8; byte_length];
+            rand::RngCore::fill_bytes(&mut OsRng, &mut buf);
+            crate::worker_io::write_typed_array_bytes(the, slot, &buf);
+            Outcome {
+                reply: buf,
+                ..Outcome::default()
+            }
+        });
+        if let Err(msg) = result {
+            set_result_string(the, &msg);
+        }
     });
 }
 
@@ -115,15 +136,24 @@ pub unsafe extern "C" fn host_random_fill(the: *mut XsMachine) {
 /// `{"publicKey":"<hex>","privateKey":"<hex>"}`
 pub unsafe extern "C" fn host_ed25519_keygen(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let signing_key = SigningKey::generate(&mut OsRng);
-        let verifying_key = signing_key.verifying_key();
+        let result = host_ledger::call("ed25519Keygen", None, b"[]", || {
+            let signing_key = SigningKey::generate(&mut OsRng);
+            let verifying_key = signing_key.verifying_key();
 
-        let json = format!(
-            "{{\"publicKey\":\"{}\",\"privateKey\":\"{}\"}}",
-            hex::encode(verifying_key.as_bytes()),
-            hex::encode(signing_key.as_bytes()),
-        );
-        set_result_string(the, &json);
+            let json = format!(
+                "{{\"publicKey\":\"{}\",\"privateKey\":\"{}\"}}",
+                hex::encode(verifying_key.as_bytes()),
+                hex::encode(signing_key.as_bytes()),
+            );
+            set_result_string(the, &json);
+            Outcome {
+                reply: json.into_bytes(),
+                ..Outcome::default()
+            }
+        });
+        if let Err(msg) = result {
+            set_result_string(the, &msg);
+        }
     });
 }
 
