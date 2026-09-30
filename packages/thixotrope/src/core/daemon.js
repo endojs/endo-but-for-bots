@@ -969,7 +969,9 @@ const buildDaemon = async (
       try {
         await onRetireWorker(workerId);
       } catch (error) {
-        log.error('retire hook failed:', error);
+        // Not opt-in: host state keyed by a worker that no longer exists is
+        // a leak the operator should hear about.
+        logging.sub('thixotrope', 'daemon').error('retire hook failed:', error);
       }
     }
   };

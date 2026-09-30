@@ -133,6 +133,30 @@ test('restore re-seats exports and drops answer obligations after breaking them'
   t.is(tables().answerEpoch, 2);
 });
 
+test('a retired promise export re-seats as a broken promise', async t => {
+  const { store, records, restored } = makeFixture();
+  store.provideWorkerStore(ENDPOINT_ID).setTablesRecord({
+    exports: { 'p+4': null, 'o+5': null },
+    pendingResolvers: { 'o-1': { kind: 'promise', position: '4' } },
+  });
+  records.restoreWorker(ENDPOINT_ID);
+  const exports = restored.filter(([kind]) => kind === 'export');
+  t.is(exports.length, 2);
+  t.true(exports[0][2] instanceof Promise, 'a promise position gets a promise');
+  await t.throwsAsync(exports[0][2], {
+    message: 'Promise export was retired before it settled',
+  });
+  t.false(
+    exports[1][2] instanceof Promise,
+    'an object position gets an object',
+  );
+  t.is(
+    restored.filter(([kind]) => kind === 'resolver').length,
+    1,
+    'the listener is re-linked to the broken promise, not dropped',
+  );
+});
+
 test('a promise obligation whose export was released is dropped, not restored', t => {
   const { store, records, restored, tables } = makeFixture();
   store.provideWorkerStore(ENDPOINT_ID).setTablesRecord({
