@@ -239,7 +239,13 @@ curl http://127.0.0.1:8080/read
 
 A trusted native-resource directory supplies `durable.js` and `ephemeral.js`.
 Each installation runs its durable module in a dedicated manager vat with its own heap and limits.
-The ephemeral module runs in a separate Node process with native platform APIs.
+Its `make({ E, Far, adapters, makeKeeper, makeManager })` returns `{ registration, lifecycle }`;
+`makeManager` writes the manager's bookkeeping once, so the module supplies only what identifies a
+registration and how to describe its status.
+The ephemeral module runs in a separate Node process with native platform APIs; its `make()`
+builds the adapter with `makeAdapter` from `@endo/thixotrope/native-adapter.js`, supplying the
+identity rules and the two verbs that acquire and release the resource.
+The two halves speak one protocol, so `resources/http` is HTTP and little else on each side.
 The workspace retains installation bookkeeping and the public registration reference.
 Each manager receives its own daemon startup notification, independently of workspace execution.
 The primary daemon only loads directory metadata and bundles the durable module, launches and

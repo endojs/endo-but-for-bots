@@ -7,14 +7,31 @@ import harden from '@endo/harden';
  * factory attempt so retrying an interrupted installation never executes it twice.
  * @param {() => any} load module evaluation is deferred until the first attempt
  * @param {any} makeKeeper
+ * @param {any} makeManagerKit the manager kit factory, bound here to this
+ *   installation's launcher and keeper
  * @param {any} adapters
  */
-export const makeNativeManager = (load, makeKeeper, adapters) => {
+export const makeNativeManager = (
+  load,
+  makeKeeper,
+  makeManagerKit,
+  adapters,
+) => {
   try {
     const namespace = load();
     if (typeof namespace.make !== 'function')
       throw Error('Native durable module must export make(powers)');
-    const kit = namespace.make(harden({ E, Far, makeKeeper, adapters }));
+    const kit = namespace.make(
+      harden({
+        E,
+        Far,
+        makeKeeper,
+        adapters,
+        /** @param {any} options */
+        makeManager: options =>
+          makeManagerKit({ adapters, makeKeeper }, options),
+      }),
+    );
     if (
       !kit ||
       kit.registration?.[Symbol.for('passStyle')] !== 'remotable' ||

@@ -4,6 +4,7 @@ import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
 
 import { makeAdapterKeeper } from '../src/adapter-keeper.js';
+import { makeManager } from '../src/native/manager-kit.js';
 import { make as makeHttp } from '../resources/http/durable.js';
 
 // A deterministic adapter double isolates manager ordering from real sockets;
@@ -12,23 +13,23 @@ const fixture = (failClose = false, failBind = false) => {
   const bound = new Map();
   let binds = 0;
   const adapter = Far('Adapter', {
-    bind: (port, handler) => {
+    bind: (key, spec) => {
       if (failBind) throw Error('Port unavailable');
-      bound.set(port, handler);
+      bound.set(key, spec);
       binds += 1;
     },
-    unbind: port => {
+    unbind: key => {
       if (failClose) {
         failClose = false;
         throw Error('Close interrupted');
       }
-      return bound.delete(port);
+      return bound.delete(key);
     },
     restore: entries => {
       if (failBind) return;
-      for (const [port, handler] of entries) bound.set(port, handler);
+      for (const [key, spec] of entries) bound.set(key, spec);
     },
-    ports: () => harden([...bound.keys()]),
+    keys: () => harden([...bound.keys()]),
   });
   const adapters = Far('Launcher', {
     create: () =>
@@ -37,7 +38,14 @@ const fixture = (failClose = false, failBind = false) => {
         retire: () => bound.clear(),
       }),
   });
-  const kit = makeHttp({ E, Far, makeKeeper: makeAdapterKeeper, adapters });
+  const kit = makeHttp({
+    E,
+    Far,
+    makeKeeper: makeAdapterKeeper,
+    adapters,
+    makeManager: options =>
+      makeManager({ adapters, makeKeeper: makeAdapterKeeper }, options),
+  });
   return {
     kit,
     bound,
@@ -115,15 +123,16 @@ test.serial(
     const handler = Far('Handler', {
       handle: () => harden({ status: 200, body: 'ok' }),
     });
+    const spec = harden({ handler, policy: { origins: [] } });
     const results = await E(adapter).restore(
       harden([
-        [blocked, handler, {}],
-        [available, handler, {}],
+        [blocked, spec],
+        [available, spec],
       ]),
     );
-    t.is(results[0].port, blocked);
+    t.is(results[0].key, blocked);
     t.regex(results[0].error, /EADDRINUSE/);
-    t.deepEqual(await E(adapter).ports(), [available]);
+    t.deepEqual(await E(adapter).keys(), [available]);
   },
 );
 
