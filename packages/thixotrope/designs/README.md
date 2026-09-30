@@ -1,16 +1,16 @@
 # Potential Thixotrope designs
 
-The [main design](../../../designs/thixotrope.md) describes the architecture and current runtime.
-This directory includes focused implementation notes alongside potential designs and experiments.
-[Native resource installation](native-resource-installation.md), [alarm settlement](alarm-settlement.md),
-and [Ironhorse limits](ironhorse-limits.md) describe the current implemented contracts.
-Other proposals below remain exploratory.
+The [main design](../../../designs/thixotrope.md) describes the architecture and current runtime,
+and is the normative document; its vocabulary section defines the terms used here.
+This directory holds the implementation notes behind contracts that are implemented,
+[native resource installation](native-resource-installation.md),
+[alarm settlement](alarm-settlement.md), [Ironhorse limits](ironhorse-limits.md) and
+[layered message delivery](message-delivery.md), together with proposals that remain exploratory.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
-[What a host service has to write](host-service-template.md) records what registering a host
-resource costs today and asks whether the repeated parts are worth factoring.
-[Manual persistence vats](manual-persistence-vats.md) explores moving those services into user-space
-vats that reconstruct their own OS resources, and the restorable host promise that lets one wait.
+Two notes that argued for the manager and adapter model before it was built are kept under
+[archive](archive/): [what a host service had to write](archive/host-service-template.md) and
+[manual persistence vats](archive/manual-persistence-vats.md).
 
 This document records the current hypotheses, requirements, and open questions.
 It is not a claim that the implementation satisfies them.
@@ -235,7 +235,7 @@ Direction matters:
   web server.
   Directory-installed native resources now exercise this direction: a dedicated manager vat retains
   desired state, and a separate disposable process owns the platform resources.
-  The workspace retains installation bookkeeping and the registration capability in its inventory.
+  The workspace retains installation bookkeeping and the resource's facet in its inventory.
 
 The adapter keeper serializes creation and replacement and restores the manager's desired state.
 An incarnation's references break permanently when its process exits.
@@ -245,7 +245,7 @@ Recreating a listener does not recreate its accepted sockets, and restarting a p
 establish whether a previous request produced an external effect.
 
 Current tests cover normal close, process death, daemon restart, and failure during creation.
-Future resource packages must specify their own operation outcomes and restoration policy.
+Future native resources must specify their own operation outcomes and restoration policy.
 Generation identity must prevent an old operation from silently targeting a replacement resource
 when its meaning would change.
 
