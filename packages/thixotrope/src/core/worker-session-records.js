@@ -69,12 +69,13 @@ export const makeWorkerSessionRecords = ({
   // until settlement lets a restart still reject the abandoned answer; it
   // retains the route, never the promise or its computation.
   //
-  // Promise targets need no pin: their resolver is held by the reaction on
-  // the exported promise, and the export table is strong. Nor does anything
-  // restored after a restart: answer targets are rejected there, and promise
-  // targets re-link to a local export. So the map only ever holds the answers
-  // this process itself took on, and empties as they settle. A pin for an
-  // answer that never settles lives as long as the process: the endpoint
+  // The hook pins every obligation this process takes on, promise targets
+  // included, though those would be retained anyway: their resolver is held
+  // by the reaction on the exported promise, and the export table is strong.
+  // Nothing restored after a restart is pinned: answer targets are rejected
+  // there, and promise targets re-link to a local export. A pin lives until
+  // its obligation settles, so one for an answer that never settles, or for
+  // a peer retired mid-listen, lives as long as the process: the endpoint
   // cannot tell which guest a resolver position belongs to, so retiring a
   // worker does not release its pins. test/resource-answer-gc.test.js fails
   // without the map.
@@ -82,6 +83,16 @@ export const makeWorkerSessionRecords = ({
   const pendingResolverReferences = new Map();
   /** True while re-seating exports, whose re-fired hooks are echoes. */
   let restoring = false;
+
+  /** The promise seated where a retired promise export used to be. */
+  const unrestorablePromise = () => {
+    const promise = Promise.reject(
+      harden(Error('Promise export was retired before it settled')),
+    );
+    // Only a peer still listening should learn of it.
+    void promise.catch(() => {});
+    return promise;
+  };
 
   /**
    * @param {string} name
@@ -368,11 +379,18 @@ export const makeWorkerSessionRecords = ({
           record.exports ?? {},
         )) {
           const position = BigInt(slot.slice(2));
-          if (description === null) {
-            resumed.restoreExport(position, Far('UnrestorableExport', {}));
-          } else {
-            resumed.restoreExport(position, provideCapability(description));
+          let value =
+            description === null
+              ? Far('UnrestorableExport', {})
+              : provideCapability(description);
+          // A promise position must re-seat as a promise: an object there
+          // would be found by the same position lookup and *fulfil* any
+          // listener the peer still has on it. A retired or otherwise
+          // unrestorable promise breaks that listener instead.
+          if (slot.startsWith('p+') && !(value instanceof Promise)) {
+            value = unrestorablePromise();
           }
+          resumed.restoreExport(position, value);
         }
         /** @type {Record<string, any>} */
         const pendingResolvers = { ...record.pendingResolvers };
