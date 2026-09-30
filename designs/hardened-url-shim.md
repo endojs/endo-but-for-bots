@@ -12,7 +12,7 @@
 The design is complete. The implementation merged upstream in
 [endojs/endo#3332](https://github.com/endojs/endo/pull/3332) on
 2026-08-21 as merge commit `30147f5aa1750a98ce1d4511a6cf45068a392f65`.
-The terms below are defined in § [Design](#design); this section records
+The terms below are defined in the [Design](#design) section; this section records
 only what shipped and where it departed from the proposal.
 
 The implementation delivered:
@@ -29,24 +29,38 @@ The implementation delivered:
 The implementation preserved the design's security boundary but changed two
 spellings.
 The powered start-compartment intrinsic is `%InitialURL%` rather than
-`%URL%`, matching the existing `%InitialDate%` / `%SharedDate%` pairs.
+`%URL%`, matching how SES already names the powered and tamed `Date`
+constructors, `%InitialDate%` and `%SharedDate%` (see
+`packages/ses/src/permits.js`).
 The lockdown option is `urlBlobTaming: 'retain' | 'remove'` rather than
 `urlBlobMethods: 'keepOnInitialGlobal' | 'remove'`.
-Unlike its sibling `*Taming` options, which take `'safe' | 'unsafe'`
-values, `urlBlobTaming` names the action taken on the blob methods;
-future `*Taming` options should not treat it as precedent without
-deciding so deliberately.
+Most sibling `*Taming` options take `'safe' | 'unsafe'` values, and the
+exceptions (`overrideTaming: 'moderate' | 'min' | 'severe'` and
+`evalTaming: 'safe-eval' | 'unsafe-eval' | 'no-eval'`) still name a
+safety or strictness level.
+`urlBlobTaming` is the first to name the action taken on an artifact,
+the blob methods.
 The rest of this document keeps the originally proposed names.
 
 The implementation also pins `%URLPrototype%.constructor` to `%SharedURL%`,
 the same way `%DatePrototype%.constructor` points at `%SharedDate%`.
-Without the pin, code in a shared compartment could reach the start
-compartment's powered constructor, and with it the blob-registry methods
-(`URL.createObjectURL` and `URL.revokeObjectURL`), through
-`new URL(...).constructor`.
+Without the pin, code in a shared compartment could use
+`new URL(...).constructor` to reach the start compartment's powered
+constructor, which carries the blob-registry methods
+`URL.createObjectURL` and `URL.revokeObjectURL`.
 The cost falls on the start compartment: there,
 `new URL(...).constructor === URL` is `false`, a stricter resolution of
-the trade-off raised in Open question 2.
+the trade-off raised in [Open question 2](#open-questions).
+
+The Phase 3 downstream audit found nothing to change.
+A grep of this repository finds `URL.createObjectURL` and
+`URL.revokeObjectURL` only in the shim, its tests, its type
+declarations, and lockdown log text captured by a daemon test.
+The optional `new URL(` simplification sweep was not recorded as done.
+
+The test plan's XS smoke test (item 9) has no URL-specific file;
+`packages/ses` runs only a bare `lockdown()` under XS, which exercises
+the no-`URL` degradation path without the item's assertions.
 
 ## What is the Problem Being Solved?
 
@@ -178,7 +192,11 @@ A URL constructed in a shared compartment and passed back to the
 start compartment likewise satisfies `x instanceof URL` there
 (where `URL` is the start compartment's powered binding).
 
-This is an **open question**: shared identity at the prototype level
+*Resolved in the [Status](#status) section: the implementation shipped
+the shared prototype and pins `%URLPrototype%.constructor` to
+`%SharedURL%`.*
+
+This was an **open question**: shared identity at the prototype level
 is the simplest fix, but it means the two constructor functions are
 distinct values, and any code that compares `Foo.constructor === URL`
 will get a different answer depending on where the value originated.
@@ -552,7 +570,7 @@ These designs are similar in spirit, not blocking dependencies.
    consistency with how SES names other hidden intrinsics), say so.
 
    *Resolved:* the implementation shipped
-   `%URLSearchParamsIteratorPrototype%` as proposed (see § Status).
+   `%URLSearchParamsIteratorPrototype%` as proposed (see [Status](#status)).
 
 2. **Cross-compartment `instanceof` for `%URL%` and `%SharedURL%`.**
    The default proposal makes the two intrinsics share a single
@@ -567,7 +585,7 @@ These designs are similar in spirit, not blocking dependencies.
 
    *Resolved:* the implementation shipped the shared prototype, so
    `instanceof URL` holds on either side, and pins
-   `%URLPrototype%.constructor` to `%SharedURL%` (see § Status).
+   `%URLPrototype%.constructor` to `%SharedURL%` (see [Status](#status)).
 
 ## Prompt
 
