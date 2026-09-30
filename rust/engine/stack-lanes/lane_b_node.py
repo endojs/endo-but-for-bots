@@ -4,8 +4,8 @@
 STACK-DEPTH-REFACTOR.md §5, "CI lane B". The wasm32-wasip1 probe runs under
 node:wasi (node/run.cjs) in three configurations:
 
-  440-liftoff   --stack-size=440 --liftoff-only        (500 KiB less 12%)
-  440-turbofan  --stack-size=440 --no-liftoff
+  425-liftoff   --stack-size=425 --liftoff-only        (500 KiB less the tier-mix
+  425-turbofan  --stack-size=425 --no-liftoff           headroom, common.py)
   500-eager     --stack-size=500 --wasm-tiering-budget=2000000000
                 --wasm-eager-tier-up-function=<index>, once per function whose
                 TurboFan frame exceeds its Liftoff frame (lane C's list)
@@ -25,11 +25,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_probe  # noqa: E402
 import common  # noqa: E402
 
+PINNED_STACK = common.lane_b_stack(common.CHROMIUM_WORKER_STACK_KB)
 CONFIGS = {
-    "440-liftoff": ("--stack-size=440", "--liftoff-only"),
-    "440-turbofan": ("--stack-size=440", "--no-liftoff"),
-    "500-eager": ("--stack-size=500", "--wasm-tiering-budget=2000000000"),
+    f"{PINNED_STACK}-liftoff": (f"--stack-size={PINNED_STACK}", "--liftoff-only"),
+    f"{PINNED_STACK}-turbofan": (f"--stack-size={PINNED_STACK}", "--no-liftoff"),
+    "500-eager": (f"--stack-size={common.CHROMIUM_WORKER_STACK_KB}", "--wasm-tiering-budget=2000000000"),
 }
+PINNED_CONFIGS = [f"{PINNED_STACK}-liftoff", f"{PINNED_STACK}-turbofan"]
 SHADOW_MARGIN = 64 * 1024
 
 
@@ -90,7 +92,7 @@ def run_config(config, flags, selected, native, wasm, args, function=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", action="append", choices=sorted(CONFIGS),
-                        help="run only these configurations (default: 440-liftoff and 440-turbofan)")
+                        help=f"run only these configurations (default: {' and '.join(PINNED_CONFIGS)})")
     parser.add_argument("--eager-function", action="append", type=int,
                         help="function index for 500-eager (repeatable; from lane C)")
     parser.add_argument("--paint", action="store_true", help="record shadow-stack high-water marks")
@@ -104,7 +106,7 @@ def main():
     parser.add_argument("--no-build", action="store_true")
     args = parser.parse_args()
 
-    configs = args.config or ["440-liftoff", "440-turbofan"]
+    configs = args.config or PINNED_CONFIGS
     if "500-eager" in configs and not args.eager_function:
         parser.error("500-eager needs --eager-function <index> (from lane C's frame report)")
     if args.no_build:

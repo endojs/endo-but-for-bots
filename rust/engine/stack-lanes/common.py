@@ -14,6 +14,23 @@ ROOT = Path(__file__).resolve().parents[1]
 LANES = ROOT / "stack-lanes"
 NODE_RUNNER = LANES / "node/run.cjs"
 
+# Lane B runs under the hosts' real limits by the headroom a per-function
+# tier mix can need over either pure tier, so that a case that passes with a
+# tier pinned still fits the limit under any mix (STACK-DEPTH-REFACTOR.md
+# §1.7). The report's 13.6% covered the chains it modelled; lane C's model
+# over every heavy family found `take` and `iter-map` at 17.5%, so the
+# headroom is 17.6% and lane B's stacks follow from it. Widen it again when
+# lane C reports a larger excess.
+TIER_MIX_HEADROOM = 0.176
+CHROMIUM_WORKER_STACK_KB = 500  # a dedicated Worker's limit, which Node's --stack-size stands in for
+WORKERD_STACK_KB = 984  # workerd's V8 limit, which it does not expose a knob for
+
+
+def lane_b_stack(limit_kb):
+    """The largest --stack-size in KiB that leaves the headroom under a limit."""
+    return int(limit_kb / (1 + TIER_MIX_HEADROOM))
+
+
 class Outcome:
     """One probe invocation on one host."""
 

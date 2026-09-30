@@ -2,8 +2,8 @@
   "config": {
     "shadow_stack": 4194304,
     "v8_flags": [
-      "--stack-size=440",
-      "--liftoff-only"
+      "--stack-size=425",
+      "--no-liftoff"
     ]
   },
   "expected_traps": [
@@ -36,6 +36,7 @@
     "parse-call-chain-2044",
     "parse-cmpchain-2045",
     "parse-computed-2045",
+    "parse-cond-chain-1011",
     "parse-elseif-chain-2044",
     "parse-functions-512",
     "parse-ifelse-block-2041",
@@ -50,7 +51,9 @@
     "proxy-delete-10k",
     "proxy-get-10k",
     "proxy-get-2016",
+    "proxy-get-index-10k",
     "proxy-has-10k",
+    "proxy-keys-10k",
     "proxy-proto-cycle",
     "proxy-set-10k",
     "render-arr-2047",
