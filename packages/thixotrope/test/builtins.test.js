@@ -1,0 +1,104 @@
+// @ts-check
+import harden from '@endo/harden';
+import test from '@endo/ses-ava/test.js';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { setTimeout } from 'node:timers/promises';
+import { join } from 'node:path';
+
+import { serveThixotrope } from '../src/control/supervisor.js';
+import { connectLocalControl } from '../src/control/local-control.js';
+import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeNodePowers } from '../src/platform/node/powers.js';
+
+const powers = makeNodePowers();
+
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {string} path
+ */
+const start = async (t, path) => {
+  const supervisor = await serveThixotrope(powers, path, {
+    engine: harden({
+      ...makePeerJournalReplayEngine(powers),
+      acquireStore: async () => async () => {},
+    }),
+  });
+  t.teardown(() => supervisor.close());
+  const client = await connectLocalControl(powers, join(path, 'control.sock'));
+  t.teardown(() => client.close());
+  return {
+    client,
+    stop: async () => {
+      client.close();
+      await supervisor.close();
+    },
+  };
+};
+
+test.serial(
+  'the workspace provides a clock and a mailbox as installations in their own vats',
+  async t => {
+    t.timeout(60_000);
+    const path = await mkdtemp('/tmp/thix-builtins-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    let host = await start(t, path);
+    t.teardown(() => host.stop());
+    const listed = await host.client.call('installations');
+    t.like(
+      listed.find(entry => entry.name === 'clock'),
+      { kind: 'application', digest: 'builtin:clock', status: 'ready' },
+    );
+    t.like(
+      listed.find(entry => entry.name === 'mailbox'),
+      { kind: 'application', digest: 'builtin:mailbox', status: 'ready' },
+    );
+    t.regex(
+      await host.client.call('evaluate', "E(inventory.get('clock')).now()"),
+      /^[0-9]+n$/,
+    );
+    t.is(
+      await host.client.call(
+        'evaluate',
+        "E(inventory.get('mailbox')).inbox().then(messages => messages.length)",
+      ),
+      '0',
+    );
+    const vatOf = async name => {
+      const status = await host.client.call('status');
+      return status.workers.find(worker => worker.debugLabel === `app:${name}`)
+        ?.workerId;
+    };
+    const clockVat = await vatOf('clock');
+    t.truthy(clockVat);
+    t.not(clockVat, (await host.client.call('status')).workspace);
+    // An alarm armed through the clock is a row under the clock vat's id.
+    await host.client.call(
+      'evaluate',
+      "globalThis.never = E(inventory.get('clock')).when(2n ** 50n); never.catch(() => {}); undefined",
+    );
+    // Arming is asynchronous to the evaluation that requested it.
+    let armed = false;
+    for (let attempt = 0; attempt < 100 && !armed; attempt += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const status = await host.client.call('alarmStatus');
+      armed = status.pending === 1;
+      // eslint-disable-next-line no-await-in-loop
+      if (!armed) await setTimeout(25);
+    }
+    t.true(armed);
+    // Removing the clock retires its vat and drops its rows; the next start
+    // provides a fresh one.
+    t.true(await host.client.call('remove', 'clock'));
+    t.like(await host.client.call('alarmStatus'), { pending: 0, retained: 0 });
+    t.is(await host.client.call('evaluate', "inventory.has('clock')"), 'false');
+    const mailboxVat = await vatOf('mailbox');
+    t.truthy(mailboxVat);
+    await host.stop();
+    host = await start(t, path);
+    t.is(await host.client.call('evaluate', "inventory.has('clock')"), 'true');
+    const replacement = await vatOf('clock');
+    t.truthy(replacement);
+    t.not(replacement, clockVat);
+    t.is(await vatOf('mailbox'), mailboxVat, 'the mailbox is kept');
+  },
+);

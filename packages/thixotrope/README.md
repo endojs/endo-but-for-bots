@@ -283,10 +283,9 @@ See [native resource installation](designs/native-resource-installation.md) for 
 
 ## Durable alarms and reminders
 
-Grant the public clock to an application:
+The workspace provides a clock under `clock`; grant it to an application like any inventory entry:
 
 ```sh
-thix clock-grant ./private-state clock
 thix install ./private-state reminders ./examples/reminder.js clock=clock
 thix alarms ./private-state
 thix attach ./private-state
@@ -303,7 +302,16 @@ E(inventory.get('reminders')).status();
 
 Applications receive `now()`, `when(deadline)`, and `arm(deadline)`.
 The last returns `{settlement, canceller}`, with `E(canceller).cancel()` cancelling that alarm.
-The clock lives in the workspace and gives applications guest-owned promises.
+The clock is an installation the supervisor provides at every start, in a vat of its own, and it
+gives applications guest-owned promises; `thix installations` lists it, and removing it is undone by
+the next start.
+A start learns what the workspace holds of them in the delivery that creates its registry, and
+the first start creates their vats.
+A capability granted from a removed clock is a dead reference like any other; an application that
+held it is reinstalled to receive the new one.
+A name the user holds is theirs: the supervisor logs that it could not provide the installation and
+serves without it, and a provided installation whose factory failed stays listed as failed until it
+is removed and the next start provides it again.
 The reminder example attaches its listener in another guest vat; both survive restart.
 If a deadline passes while the supervisor is down, restart delivers the overdue alarm to the
 original promise and listener.
@@ -325,13 +333,14 @@ The host checks wall-clock time before firing, so this is not a precise timer.
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 7 is required.
+Workspace metadata version 8 is required.
 It includes dedicated native manager vats (version 4), the alarm acknowledgement protocol
 (version 3), the mail address book that introduces contacts through the `mail-introductions`
 resource with observable inbox and outbox maps (version 5), adapter launchers described by the
 manager vat that owns them, so that removing or collecting a manager closes its processes
-(version 6), and one installation registry for applications and native resources whose values live
-in the inventory (version 7).
+(version 6), one installation registry for applications and native resources whose values live
+in the inventory (version 7), and the clock and mailbox provided as installations in vats of their
+own (version 8).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 See [alarm settlement](designs/alarm-settlement.md) for recovery and cleanup details.
@@ -393,7 +402,10 @@ the state directory argument against the current working directory when it start
 Unix socket paths are limited by `sun_path`, 103 bytes here, so a deeply nested state directory
 cannot serve peers; choose a short absolute path.
 
-The mailbox is a separate persistent guest vat, created on first use.
+The mailbox is an installation the supervisor provides at every start, in a vat of its own, under
+`mailbox`; the address book is created over it on first use, and it and every contact look the
+mailbox up at each use, so a mailbox provided afresh after a removal is the one they speak to, with
+the removed mailbox's messages gone.
 The workspace inventory holds the `contacts` map and the `mail` address book, so an application
 can be granted mail the same way as any other inventory entry.
 The address book reaches the host authority an introduction needs — publishing, withdrawing and

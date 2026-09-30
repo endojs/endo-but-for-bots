@@ -100,7 +100,6 @@ test.serial(
     const path = await mkdtemp('/tmp/thix-alarm-crash-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
     const first = await start(t, path, 1000n);
-    await first.client.call('clockGrant', 'clock');
     const { bundle } = await nodePowers.bundler.bundle(
       fileURLToPath(new URL('../../examples/reminder.js', import.meta.url)),
     );

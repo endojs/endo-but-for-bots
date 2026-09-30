@@ -15,7 +15,7 @@
  *   before releasing the store.
  * - **Workspace.** A single durable guest vat holds the user's inventory and
  *   the bindings an attached terminal evaluates against. Host services are
- *   provided lazily and granted into that vat by explicit inventory key,
+ *   provided at every start and granted into that vat by explicit inventory key,
  *   never ambiently.
  * - **Administration.** Each control-socket connection gets its own
  *   `ThixotropeLocalAdmin` facet over an OCapN session. Connection lifetime
@@ -79,8 +79,9 @@ import {
 // and its inbox and outbox are observable; 6: a manager's adapter launcher
 // is described by the manager, so retiring the manager closes its processes;
 // 7: one `installations` registry for applications and native resources,
-// whose values live in the inventory under their names.
-const WORKSPACE_VERSION = 7;
+// whose values live in the inventory under their names; 8: the clock and the
+// mailbox are installations the supervisor provides, each in its own vat.
+const WORKSPACE_VERSION = 8;
 
 // sun_path on the strictest supported platform: 104 bytes including the NUL.
 const MAX_SOCKET_PATH_BYTES = 103;
@@ -403,8 +404,66 @@ export const serveThixotrope = async (
         `(globalThis.inventory ??= (${makeObservableMap.toString()})())`,
       );
       await E(inventory).disconnectEphemeral();
-      installations = await workspace.evaluate(
-        `(globalThis.installations ??= (${makeInstallations.toString()})(inventory))`,
+      // One delivery both creates the registry and reports what it holds
+      // of the installations provided below: every delivery into the
+      // workspace costs a crank under Ironhorse, and a start pays this one.
+      /** @type {Record<string, {workerId?: string, complete: boolean} | undefined>} */
+      let provided;
+      [installations, provided] = await workspace.evaluate(
+        `[(globalThis.installations ??= (${makeInstallations.toString()})(inventory)), { clock: installations.lookup('clock'), mailbox: installations.lookup('mailbox') }]`,
+      );
+      /**
+       * An installation the supervisor provides rather than the user: the
+       * same path as any application, so it has a vat, a budget and a
+       * failure lifetime of its own, is listed with the rest, and can be
+       * removed, in which case the next start provides it again. Its digest
+       * is a constant: what it ships changes only with the workspace version.
+       * A name the user has taken is theirs; the supervisor says so and goes
+       * on without. Nothing here reads the inventory global, which the user
+       * may have replaced.
+       *
+       * The installer is used only for one that is missing, unfinished, or
+       * whose vat is gone (a removal interrupted after retiring it), which
+       * the installer forgets and replaces; a healthy one costs a start
+       * nothing beyond the registry's own report.
+       * @param {string} name
+       * @param {string} source an expression yielding `{ make }`, which may
+       *   close over `endowments`
+       * @param {(workerId: string) => Record<string, unknown>} [makeEndowments]
+       */
+      const provide = async (name, source, makeEndowments) => {
+        const held = provided[name];
+        if (
+          held?.complete &&
+          held.workerId !== undefined &&
+          daemon.listWorkerIds().includes(held.workerId)
+        )
+          return;
+        try {
+          const { result } = await installApplication(daemon, workspace, {
+            name,
+            digest: `builtin:${name}`,
+            allocationKey: randomId(),
+            bundle: source,
+            grants: [],
+            makeEndowments,
+          });
+          await result;
+        } catch (error) {
+          log.error(`${name} not provided:`, error);
+        }
+      };
+      // The clock lives in its own vat, holding its own promises and cleanup
+      // acknowledgements; the host keeps deadlines and unacknowledged
+      // outcomes under that vat's id, and drops them if it is retired.
+      await provide(
+        'clock',
+        `({ make: () => (${makeGuestClock.toString()})(endowments.alarms, { restartMessage: ${JSON.stringify(PENDING_ANSWER_ABORTED_MESSAGE)} }) })`,
+        workerId => ({ alarms: daemon.makeResource('alarms', { workerId }) }),
+      );
+      await provide(
+        'mailbox',
+        `({ make: () => (${makeMailbox.toString()})((${makeObservableMap.toString()})) })`,
       );
     }
     // Only the lock owner may reclaim the socket left by a dead supervisor.
@@ -415,10 +474,10 @@ export const serveThixotrope = async (
     let mailboxAddressBook;
     const getMailbox = () => {
       if (mailboxAddressBook) return mailboxAddressBook;
-      // Some twenty-five kilobytes of guest source, more than one message
-      // can carry: transferred in bounded messages, on a stage of its own so
-      // no future transfer into the workspace can collide with it. A vat
-      // that already holds the address book is asked first, so a supervisor
+      // Some fifteen kilobytes of guest source, more than one message can
+      // carry: transferred in bounded messages, on a stage of its own so no
+      // future transfer into the workspace can collide with it. A vat that
+      // already holds the address book is asked first, so a supervisor
       // restart costs one message rather than the whole transfer again.
       const introductions = daemon.makeResource('mail-introductions');
       const opening = workspace
@@ -428,29 +487,38 @@ export const serveThixotrope = async (
             ? existing
             : evaluateSource(
                 workspace,
-                `(({ introductions }) => (globalThis.mailAddressBook ??= (async () => {
-          globalThis.mailbox ??= E(vats).createWorker('mailbox')
-            .then(worker => E(worker).getEvaluator())
-            .then(evaluator => E(evaluator).evaluate(${JSON.stringify(`(${makeMailbox.toString()})((${makeObservableMap.toString()}))`)}));
-          const mailbox = await globalThis.mailbox;
-          if (!inventory.has('contacts')) {
-            inventory.set('contacts', (${makeObservableMap.toString()})());
-          }
-          const mail = (${makeMailAddressBook.toString()})(
-            mailbox, inventory.get('contacts'), (${makeMailContact.toString()}), introductions
-          );
-          if (!inventory.has('mail')) inventory.set('mail', mail);
-          return mail;
-        })()))`,
+                `(({ introductions }) => {
+          // The book and its contacts look the mailbox up at each use, so
+          // one provided afresh after a removal is the one they speak to,
+          // and its absence is reported at every use, not memoised.
+          const provideMailbox = () => {
+            const mailbox = inventory.get('mailbox');
+            if (mailbox === undefined)
+              throw Error('The workspace has no mailbox; restart the supervisor to provide one');
+            return mailbox;
+          };
+          provideMailbox();
+          return (globalThis.mailAddressBook ??= (async () => {
+            if (!inventory.has('contacts')) {
+              inventory.set('contacts', (${makeObservableMap.toString()})());
+            }
+            const mail = (${makeMailAddressBook.toString()})(
+              provideMailbox, inventory.get('contacts'), (${makeMailContact.toString()}), introductions
+            );
+            if (!inventory.has('mail')) inventory.set('mail', mail);
+            return mail;
+          })());
+        })`,
                 { introductions },
                 { stage: 'thixotrope.mailSource' },
               ),
         );
       // Supervisor restart is a lifetime boundary for view subscriptions on
-      // the mailbox, as it is for the inventory's.
+      // the mailbox, as it is for the inventory's; the mailbox vat is woken
+      // for it on the first mail command of a lifetime, not at every start.
       mailboxAddressBook = opening.then(async book => {
         await workspace.evaluate(
-          'E(mailbox).disconnectEphemeral().then(() => true)',
+          "E(inventory.get('mailbox')).disconnectEphemeral().then(() => true)",
         );
         return book;
       });
@@ -462,33 +530,6 @@ export const serveThixotrope = async (
       });
       return wrapped;
     };
-    /**
-     * The clock lives in the workspace vat, holding its own promises and
-     * cleanup acknowledgements. The host keeps deadlines and unacknowledged outcomes.
-     *
-     * One clock shared through the inventory, as before: a consumer that wants
-     * its own can be granted the alarm facet directly, but the grant users know
-     * is a clock.
-     *
-     * @type {Promise<any> | undefined}
-     */
-    let workspaceClock;
-    const getClock = () => {
-      if (workspaceClock) return workspaceClock;
-      const opening = workspace.evaluate(
-        `(globalThis.clock ??= (${makeGuestClock.toString()})(alarms, { restartMessage }))`,
-        {
-          alarms: daemon.makeResource('alarms', { workerId: config.workerId }),
-          restartMessage: PENDING_ANSWER_ABORTED_MESSAGE,
-        },
-      );
-      workspaceClock = opening;
-      void opening.catch(() => {
-        if (workspaceClock === opening) workspaceClock = undefined;
-      });
-      return opening;
-    };
-
     // Installations, removals and collection take turns: an allocation has
     // no guest root until its facade reaches the registry, and a removal
     // must not race the installation it removes.
@@ -509,7 +550,7 @@ export const serveThixotrope = async (
     };
     const adminMethods = {
       help: () =>
-        'Local supervisor: evaluate(source), status(), stop(), install(name, bundle, grants), installNative(name, directory), installations(), remove(name), clockGrant(key), alarmStatus(), reachability(), collect(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id); each connection also has watchInventory(listener).',
+        'Local supervisor: evaluate(source), status(), stop(), install(name, bundle, grants), installNative(name, directory), installations(), remove(name), alarmStatus(), reachability(), collect(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id); each connection also has watchInventory(listener).',
       evaluate: async source => {
         if (requested) throw Error('Supervisor is stopping');
         if (typeof source !== 'string')
@@ -634,17 +675,6 @@ export const serveThixotrope = async (
             throw Error('Expected an inventory name');
           return removeInstallation(daemon, workspace, name);
         }),
-      clockGrant: async key => {
-        if (requested) throw Error('Supervisor is stopping');
-        if (typeof key !== 'string' || !key.length || key.length > 128)
-          throw Error('Invalid inventory key');
-        const clock = await getClock();
-        await workspace.evaluate('(inventory.set(key, clock), true)', {
-          key,
-          clock,
-        });
-        return true;
-      },
       alarmStatus: () => {
         const status = alarms.status();
         // Plain numbers: the CLI prints this record as JSON, and each count
@@ -678,10 +708,10 @@ export const serveThixotrope = async (
       takeMessage: async (id, key) => {
         if (typeof key !== 'string' || !key.length)
           throw Error('Expected inventory key');
-        await getMailbox();
+        const book = await getMailbox();
         return workspace.evaluate(
-          'E(mailbox).take(id).then(value => { inventory.set(key, value); return true; })',
-          { id, key },
+          'E(book).take(id).then(value => { inventory.set(key, value); return true; })',
+          { id, key, book },
         );
       },
       discardMessage: id => E(getMailbox()).discard(id),
