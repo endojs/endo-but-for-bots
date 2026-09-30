@@ -204,6 +204,9 @@
       "path": "packages/netstring/tsconfig.composite.json"
     },
     {
+      "path": "packages/npm-registry-server/tsconfig.composite.json"
+    },
+    {
       "path": "packages/ocapn/tsconfig.composite.json"
     },
     {

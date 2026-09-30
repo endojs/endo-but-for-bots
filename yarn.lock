@@ -2882,6 +2882,27 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"@endo/npm-registry-server@workspace:packages/npm-registry-server":
+  version: 0.0.0-use.local
+  resolution: "@endo/npm-registry-server@workspace:packages/npm-registry-server"
+  dependencies:
+    "@endo/errors": "workspace:^"
+    "@endo/init": "workspace:^"
+    "@endo/ses-ava": "workspace:^"
+    "@endo/tar": "workspace:^"
+    "@fast-check/ava": "catalog:dev"
+    "@types/node": "catalog:dev"
+    ava: "catalog:dev"
+    better-sqlite3: "npm:^12.0.0"
+    c8: "catalog:dev"
+    eslint: "catalog:dev"
+    typescript: "catalog:dev"
+  bin:
+    npm-registry-admin: ./bin/npm-registry-admin.js
+    npm-registry-server: ./bin/npm-registry-server.js
+  languageName: unknown
+  linkType: soft
+
 "@endo/ocapn-iroh@workspace:packages/ocapn-iroh":
   version: 0.0.0-use.local
   resolution: "@endo/ocapn-iroh@workspace:packages/ocapn-iroh"
