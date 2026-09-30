@@ -285,7 +285,7 @@ test.serial(
     const resolveCall = calls.find(c => c.method === 'resolve');
     t.truthy(resolveCall, 'resolve was called');
     t.is(resolveCall.args[0], 7n);
-    t.is(resolveCall.args[1], 'my-grant');
+    t.deepEqual(resolveCall.args[1], ['my-grant']);
   },
 );
 
