@@ -12,7 +12,8 @@ PR #1333 (stage 1 of the #1332 federation plan) added `endo adopt-locator
 <name> [--file] [--as]`: adopt the value an `endo://` locator names, reading
 the bearer locator from stdin so it stays out of shell history and `ps`. Its
 daemon half (the stricter `EndoHost.adoptFromLocator`, the well-known-first
-endpoint locator, and `isLocalNode`) is sound and stays. The CLI shape is
+endpoint locator, and the `isLocalNode` helper) stays unchanged (§ Daemon
+Surfaces). The CLI shape is
 wrong, for two reasons the maintainer has directed this design to fix:
 
 1. **`adopt-locator` is not a verb of its own.** Storing a value under a pet
@@ -66,7 +67,7 @@ This document specifies the CLI fold-in (§ CLI), the daemon surface
 unification (§ Daemon Surfaces), the https fragment grammar (§ The Capability
 Fragment Grammar), the classifier/serializer API (§ API), the Chat
 application ramifications (§ Chat), worked examples (§ Worked Examples), and
-security guidance (§ Security). Open forks the maintainer must decide are
+security guidance (§ Security). Open questions the maintainer must decide are
 collected in [§ Open Questions](#open-questions).
 
 Prior art this builds on:
@@ -135,7 +136,8 @@ envelope link is refused there with a distinct error.
   knows keeps its recorded route when that route still provides the value,
   and gets it back when the locator's hints fail.
 - **Redacted errors.** No error echoes the locator or the formula number.
-- A **local** locator (the sentinel or this daemon's own node) commits the
+- A **local** locator (one naming the all-zero `LOCAL_NODE` sentinel node
+  identifier, or this daemon's own node) commits the
   identity directly without dialing, as before.
 
 `adopt-locator` is removed, not deprecated: it has only ever existed on the
@@ -286,7 +288,7 @@ No other key is permitted in a locator-family fragment (strict-parse, as
 because Chat's `space-channel` share links already carry it in the wild. It
 is **display metadata, not part of the locator**: it carries no authority,
 is excluded from locator identity (§ Encoding and Canonical Form), and is
-returned *beside* the locator rather than inside it (§ API). Because UIs
+returned *alongside* the locator rather than inside it (§ API). Because UIs
 display it straight from a possibly hostile link, its grammar is as strict
 as the authority-bearing fields: a value outside `[a-z0-9-]{1,32}` makes the
 whole URL invalid, so no oversized, control-character, or markup-bearing
@@ -346,7 +348,7 @@ https://<base>#v=1&node=<node>&formula=<formula>&type=<type>[&hint=<hint>]*[&fro
 Today's `parseLocator` rejects `view`, and it keeps doing so: it remains the
 strict `endo://`-only parser for `storeLocator` and other existing callers.
 The new classifier accepts `view` in both forms (Chat's share links already
-append it to `endo://` URLs) and returns it beside the locator. Whether
+append it to `endo://` URLs) and returns it alongside the locator. Whether
 `view` is worth carrying at all is [§ Open Questions](#open-questions)
 item 6.
 
@@ -444,7 +446,12 @@ The existing `packages/daemon/src/locator.js` keeps its exports
 (`parseLocator`, `formatLocator`, `formatLocatorWithHints`,
 `internalizeLocator`, ...) with their current strict `endo://`-only,
 throw-on-invalid contracts, re-implemented over the shared internals so
-there is exactly one grammar. `EndoHost.adoptFromLocator` classifies its
+there is exactly one grammar. `parseLocator` is stated as a projection of
+that grammar: classify, require `kind: 'locator'` with the `endo:` scheme,
+and reject `view`. A `view`-bearing string that `formatEndoLocator(locator,
+{ view })` emits is therefore a share link for `adoptFromLocator`'s
+classifier path, never `storeLocator` input; the formatter's JSDoc says so.
+`EndoHost.adoptFromLocator` classifies its
 input with `classifyCapabilityUrl` first and proceeds only on `'locator'`;
 `EndoDirectory.storeLocator` keeps calling `parseLocator`. Every error path
 continues to redact.
@@ -541,7 +548,7 @@ https://minion.town/#v=1&node=aa...aa&formula=bb...bb&type=guest&hint=ocapn%2Bno
 ```
 
 Repeated `hint` keys, order preserved; a consumer whose networks support
-neither still fails with the existing "No mutually supported route" shape.
+none of them still fails with the existing "No mutually supported route" shape.
 
 ### 3. A minion.town Share Link
 
