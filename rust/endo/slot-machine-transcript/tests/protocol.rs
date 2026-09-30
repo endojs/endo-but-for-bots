@@ -1,6 +1,6 @@
 //! The transcript's crank protocol, storage-fault disposition, durability
 //! bound, and release idempotency (designs/ironhorse-panic.md § Slot Machine
-//! per-worker write-ahead transcript, Q6, Q7, § Verification).
+//! per-worker write-ahead transcript, § Open Questions, § Verification).
 
 mod common;
 
@@ -356,7 +356,7 @@ fn a_corrupt_or_missing_published_snapshot_is_a_fault_not_a_fallback() {
     sup.crank(b"one", &mut wire).unwrap();
     let s = sup.publish().unwrap();
     drop(sup);
-    let blob = files.cas_dir().join(&s.hash);
+    let blob = files.cas_directory().join(&s.hash);
     std::fs::write(&blob, b"vat-state:999").unwrap();
     let err = Supervisor::start(&files, None, &mut wire)
         .err()
@@ -414,13 +414,13 @@ fn a_blob_write_fault_poisons_before_anything_is_published() {
     drop(Supervisor::start(&files, None, &mut wire).unwrap());
     let plan = FaultPlan::counting();
     let (mut t, _) = Transcript::open(files.transcript(), TranscriptConfig::new("w")).unwrap();
-    let cas = Cas::open(files.cas_dir())
+    let cas = Cas::open(files.cas_directory())
         .unwrap()
         .with_fault_plan(plan.clone());
     let before = t.latest_snapshot().unwrap();
     // Aim at the directory sync, the step xsnap's suspend_to_cas omitted.
     let plan2 = FaultPlan::fail_at(4, FaultMode::FailOnce);
-    let cas2 = Cas::open(files.cas_dir())
+    let cas2 = Cas::open(files.cas_directory())
         .unwrap()
         .with_fault_plan(plan2.clone());
     let Err(TranscriptError::Fault(fault)) = t.publish_snapshot(&cas2, &snapshot_bytes(1), meta())

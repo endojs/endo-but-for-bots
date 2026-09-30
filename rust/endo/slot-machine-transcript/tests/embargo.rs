@@ -61,7 +61,7 @@ fn open(
     peer: &Rc<RefCell<Peer>>,
     crash_after: Option<usize>,
 ) -> (Embargo<Link>, Cas) {
-    let cas = Cas::open(files.cas_dir()).expect("cas dir");
+    let cas = Cas::open(files.cas_directory()).expect("cas directory");
     let (mut transcript, _recovery) =
         Transcript::open(files.transcript(), TranscriptConfig::new(&files.worker))
             .expect("open transcript");

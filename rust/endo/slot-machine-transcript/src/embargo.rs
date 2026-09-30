@@ -40,8 +40,8 @@ use crate::{CrankId, ReleasableFrame, Seq, Transcript, TranscriptError};
 pub enum CrankVerdict {
     /// The delivery ran to quiescence. A delivery whose result was an
     /// ordinary rejection (a CapTP error reply) also ends here: the
-    /// rejection is itself a committed outbound frame (§ Uncaught throws
-    /// versus rejected deliveries (Q5)).
+    /// rejection is itself a committed outbound frame (§ Open Questions,
+    /// uncaught throw versus rejected delivery).
     Quiesced,
     /// A throw escaped every handler of the delivery. Discard and
     /// terminate; not placed on the restore-and-replay path.

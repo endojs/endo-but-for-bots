@@ -44,7 +44,7 @@
 //! full replay suffix. A published snapshot never covers an uncommitted
 //! crank, and the suffix after it survives until a newer one is published.
 //!
-//! **Durability** (§ Single-vat durability cost (Q7)): WAL with
+//! **Durability** (§ Open Questions, single-vat fsync cost): WAL with
 //! `synchronous=FULL`, never `NORMAL`, because effects are released after
 //! COMMIT and `NORMAL` may forget a recent commit on power loss. Per crank the
 //! transcript pays one admission transaction and one release transaction;
@@ -52,7 +52,7 @@
 //! paying their own. Outbound events per crank are bounded by
 //! [`TranscriptLimits`] and refused, not truncated, past the bound.
 //!
-//! **Storage failures** (§ Transcript storage failures (Q6)) surface as a
+//! **Storage failures** (§ Open Questions, SQLite I/O failure) surface as a
 //! supervisor-owned [`TranscriptFault`], never as an engine panic. A fault
 //! poisons the transcript: it refuses admission, commit, and snapshot
 //! publication until the supervisor drops it and reopens, and reopening
@@ -118,7 +118,7 @@ pub enum Operation {
 }
 
 /// A transcript storage failure, owned by the supervisor rather than the
-/// engine: it is not a `PanicKind` (§ Transcript storage failures (Q6)).
+/// engine: it is not a `PanicKind` (§ Open Questions, SQLite I/O failure).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TranscriptFault {
     /// The worker whose transcript failed.
@@ -190,9 +190,9 @@ impl std::fmt::Display for TranscriptError {
 
 impl std::error::Error for TranscriptError {}
 
-/// Per-crank admission bounds (§ Single-vat durability cost (Q7): "bound
-/// admitted event bytes ... and apply backpressure before exceeding those
-/// limits").
+/// Per-crank admission bounds: admitted event bytes are bounded, and
+/// admission applies backpressure before exceeding the bound (§ Open
+/// Questions, single-vat fsync cost).
 #[derive(Clone, Copy, Debug)]
 pub struct TranscriptLimits {
     /// Most outbound events one crank may stage.

@@ -87,24 +87,24 @@ impl Wire {
 
 /// A worker's files.
 pub struct WorkerFiles {
-    pub dir: PathBuf,
+    pub directory: PathBuf,
     pub worker: String,
 }
 
 impl WorkerFiles {
     pub fn new(root: &Path, worker: &str) -> WorkerFiles {
         WorkerFiles {
-            dir: root.join(worker),
+            directory: root.join(worker),
             worker: worker.to_string(),
         }
     }
 
     pub fn transcript(&self) -> PathBuf {
-        slot_machine_transcript::transcript_path(&self.dir, &self.worker)
+        slot_machine_transcript::transcript_path(&self.directory, &self.worker)
     }
 
-    pub fn cas_dir(&self) -> PathBuf {
-        self.dir.join("snapshots")
+    pub fn cas_directory(&self) -> PathBuf {
+        self.directory.join("snapshots")
     }
 }
 
@@ -129,7 +129,7 @@ impl Supervisor {
         wire: &mut Wire,
     ) -> Result<Supervisor, TranscriptError> {
         let mut config = TranscriptConfig::new(&files.worker);
-        let mut cas = Cas::open(files.cas_dir()).expect("cas dir");
+        let mut cas = Cas::open(files.cas_directory()).expect("cas directory");
         if let Some(plan) = &plan {
             config = config.with_fault_plan(plan.clone());
             cas = cas.with_fault_plan(plan.clone());
