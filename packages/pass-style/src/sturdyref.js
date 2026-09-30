@@ -4,8 +4,20 @@ import harden from '@endo/harden';
  * @import {SturdyRefObject} from './types.js';
  */
 
-const { apply, getPrototypeOf, ownKeys } = Reflect;
-const { isFrozen } = Object;
+const { apply, getOwnPropertyDescriptor, getPrototypeOf, ownKeys } = Reflect;
+const { isFrozen, prototype: objectPrototype } = Object;
+const { toStringTag } = Symbol;
+
+/**
+ * @param {object} object
+ * @param {PropertyKey} key
+ * @param {unknown} expected
+ * @returns {boolean}
+ */
+const hasOwnDataValue = (object, key, expected) => {
+  const desc = getOwnPropertyDescriptor(object, key);
+  return desc !== undefined && 'value' in desc && desc.value === expected;
+};
 
 /**
  * A SturdyRef is passable, analogous to a presence: it has object identity
@@ -31,7 +43,10 @@ const { isFrozen } = Object;
  * therefore be trusted. To bound what such an impostor can do, the brand
  * check is only ever asked about a candidate that is shaped like a SturdyRef:
  * frozen, with no own properties, and inheriting directly from the captured
- * `SturdyRef.prototype`. `passStyleOf` also asks only after every other pass
+ * `SturdyRef.prototype`. That prototype must itself be shaped like the
+ * shim's: inheriting directly from `Object.prototype`, with only its
+ * `constructor` and its `Symbol.toStringTag` of `'SturdyRef'`, both data
+ * properties, so an impostor cannot give its refs inherited behavior. `passStyleOf` also asks only after every other pass
  * style has declined the candidate. So an impostor never sees an object of any
  * other pass style, and can only make passable empty objects that inherit from
  * its own prototype, which would otherwise be rejected. A brand check that
@@ -56,7 +71,11 @@ const provideBrandCheck = () => {
       !isFrozen(isSturdyRef) ||
       typeof prototype !== 'object' ||
       prototype === null ||
-      !isFrozen(prototype)
+      !isFrozen(prototype) ||
+      getPrototypeOf(prototype) !== objectPrototype ||
+      ownKeys(prototype).length !== 2 ||
+      !hasOwnDataValue(prototype, 'constructor', SturdyRef) ||
+      !hasOwnDataValue(prototype, toStringTag, 'SturdyRef')
     ) {
       return undefined;
     }
