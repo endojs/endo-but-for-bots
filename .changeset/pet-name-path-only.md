@@ -1,7 +1,7 @@
 ---
 '@endo/daemon': major
 '@endo/cli': patch
-'@endo/lal': patch
+'@endo/lal': minor
 '@endo/sandbox': major
 '@endo/agentry': major
 '@endo/agent-tools': patch
@@ -43,7 +43,7 @@ The `endo` CLI already parses slash-delimited command-line names into arrays; th
 `@endo/sandbox`'s `SandboxPowers.provideScratchMount` now takes a pet-name path (`string[]`) instead of a pet name, and `@endo/agentry`'s `NormalizedGitRemoteSpec.credential` is now always a pet-name path (`string[]`).
 `@endo/agentry`'s provisioning and `@endo/platform`'s extended-filesystem modules pass pet-name paths to the daemon, so they require this daemon.
 `@endo/agent-tools`' code-mode daemon helpers accept a pet-name path from the model; a string is passed as a single pet name and is never split, so a delimited string reaches the daemon as an invalid name.
-`@endo/lal` renames the `petNameOrPath` tool-call argument to `petNamePath`, and it now expects an array of path components; an agent that still sends `petNameOrPath` must switch to the new key.
+`@endo/lal` renames the `petNameOrPath` tool-call argument to `petNamePath`, and it now expects an array of path components; an agent that still sends `petNameOrPath` must switch to the new key. The `evaluate` tool's `workerName` is likewise a pet-name path.
 The remaining packages adapt their calls to the daemon to pass pet-name paths.
 
 Invitation records minted before this change, whose stored `guestName` is a bare string, still revive: the daemon reads such a record as a one-segment path.
