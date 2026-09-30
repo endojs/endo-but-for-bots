@@ -28,8 +28,16 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
 ## Current work, 2026-09-30
 
-Tokyo is on generation 186, application `2b8df7d23`, host `c376983`.
-This activates the Codex native-context cleanup image; Luna lifecycle and
+Tokyo is on generation 187, application `a4c97588a`, host `a5a4a7d`.
+All image pins are unchanged from generation 186.
+Fresh lifecycle acceptance passes on Claude, Codex Luna and OpenCode auto-free;
+Fae auto-free passes tool use and pending-turn cancellation.
+All four pass ordinary daemon-restart recall; Claude and Codex have native
+checkpoints on both completed turns. No failed inference was replayed.
+All disposable lifecycle and restoration sessions are deleted; three unrelated
+sessions remain. The host cleanup helper was updated to recognize native-context
+records while retaining exact identity, two-turn and no-extra-evidence checks.
+The generation-186 cutover activated the Codex native-context cleanup image; Luna lifecycle and
 daemon-restart recall pass, with native checkpoints on both completed turns.
 All four backends passed seed/restart/recall on generation 185 (`59fe1a5bd`); Claude and Codex
 retain native checkpoints on both completed turns with the rebuilt images.
@@ -89,11 +97,16 @@ The like-for-like review now records concrete relocation and added contracts in
 the simplification inventory; it does not waive RA-01's numerical target.
 The collection retry fix now retains unfinished storage cleanup for later graph
 drains in the same daemon, while keeping failed cancellation fenced.
-It is not yet deployed and does not address native process-loss recovery.
+It is deployed in generation 187 and does not address native process-loss recovery.
 Failed guest construction now has bounded key retirement for newly allocated,
 uninstantiated and unpublished identities after fully checked rollback.
 Instantiated/published identities, surviving state and uncertain cleanup retain
-their keys. This is also not yet deployed; it is not general identity collection.
+their keys. This is also deployed in generation 187; it is not general identity collection.
+Fresh scoped type checks at `a4c97588a` identify current fixture/declaration drift:
+Codex reports 25 diagnostics, Floot 82 and Claude 81, all in test files.
+Hosted-agent's source-only gate passes; OpenCode has no package typecheck config.
+The parent audit records these scopes and next interface corrections.
+Do not substitute a green runtime suite or docs build for test-inclusive typing.
 RA-01's size target remains unproven; RA-03 is implemented, and direct-Fae
 compaction remains on hold.
 The older chronological entries and final sequence below are historical evidence,

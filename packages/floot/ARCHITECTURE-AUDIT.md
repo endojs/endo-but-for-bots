@@ -16,8 +16,9 @@ Priority current-state review (updated 2026-09-30):
 the intended end state, rather than reviewing historical commits. It is the
 current prioritization entry point: primary ownership and explicit account identity
 are consolidated, and the native protocol-conformance matrix is complete.
-All four backends passed generation-185 acceptance; the Codex-only generation-186
-image change passed Luna lifecycle and restart recall with native checkpoints.
+All four backends pass generation-187 acceptance on app `a4c97588a`, host `a5a4a7d`.
+The daemon cleanup changes use generation-186's unchanged image pins; fresh
+Claude/Codex restart recall retains native checkpoints on both completed turns.
 Simplicity is still unproven, and whole-context/unresolved-evidence memory bounds
 remain incomplete. Direct-Fae compaction, evidence paging, local-development
 storage policy and native process-loss recovery retain their explicit deferrals.
@@ -245,11 +246,23 @@ The earlier lost-acknowledgement unnamed-marshal reclamation gap is superseded:
 the current publication regression requires that unpublished formula to be absent.
 Module-local pool draining and oracle disposal are implemented; cross-worker
 exclusion and safe retirement epochs are not established by those fixes.
-Root docs now pass, while test-inclusive package type diagnostics still need a
-fresh scoped reconciliation. Those build limitations must not be reported as a
-green whole-repository typecheck.
+Fresh type reconciliation at `a4c97588a`: hosted-agent's configured source-only
+`lint:types` passes; Codex's test-inclusive gate reports 25 diagnostics in four
+test files. Explicit `tsc -p` runs for Floot and Claude report 82 diagnostics in
+17 test files and 81 in eight test files, respectively.
+Neither package defines `lint:types`; OpenCode has neither that script nor a
+package tsconfig. These runs emitted no production-file diagnostics, but are not
+a green test-inclusive or whole-repository gate.
+Current actionable drift includes Floot's implemented `assertIdleForReplacement`
+missing from the explicit agent return declaration, nine obsolete ignored
+`hostedContinuity` fixture options, and inadequately typed current protocol
+fixtures. The focused Floot hosted-agent suite passes 14 runtime tests; the
+declaration mismatch is not an absent runtime method.
+Next: reconcile these current interfaces and fixtures without adding legacy
+option support or weakening malformed-input coverage.
 RA-04 and the current cutover evidence are recorded above and in the alignment doc.
-Neither cleanup change has yet been deployed.
+Both cleanup changes are deployed in generation 187 with fresh cross-backend
+lifecycle and ordinary restart-recall acceptance.
 
 Native-context journal follow-up (2026-09-24): a real daemon/worker reconstruction
 regression now exercises the production Floot agent and private immutable storage
@@ -610,7 +623,8 @@ Changed-file lint has zero errors (71 warnings); root docs have zero errors
 (163 warnings). Independent adversarial review passes.
 The content-store test fixture now uses a short temporary Unix socket path so
 daemon-backed tests also run from nested worktrees.
-This change is not yet deployed.
+This change is deployed in generation 187; the live matrix verifies ordinary
+session lifecycle behavior, not injected storage-failure recovery.
 
 Storage failure reporting (2026-09-24): collection now propagates rejected
 formula and pet-store deletions to the initiating graph operation instead of
@@ -728,7 +742,8 @@ of acknowledged sibling deletions; original failure assertions are preserved.
 Independent adversarial review passes. Root docs report zero errors (163 warnings).
 Daemon typechecking and formatting pass; changed-file lint has zero errors
 (66 warnings).
-Not yet deployed.
+Deployed in generation 187. Live acceptance verifies ordinary session lifecycle;
+the key-retirement fault cases above remain local injected-failure evidence.
 
 Publication validation follow-up (2026-09-24, local, not deployed):
 the five baseline type diagnostics above are corrected in the test fixtures.
