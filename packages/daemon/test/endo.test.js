@@ -3099,6 +3099,53 @@ test('invite nests the invitation at a directory path', async t => {
   t.false(await E(host).has('bob'));
 });
 
+test('an invitation whose stored guestName is a bare string still revives', async t => {
+  const { cancelled, config } = await prepareConfig(t);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    await E(host).invite(['bob']);
+  }
+
+  await stop(config);
+
+  // Rewrite the stored invitation the way the daemon wrote it before pet-name
+  // paths became array-only: `guestName` as a bare string.
+  {
+    const db = openTestDb(config.statePath);
+    const invitations = db
+      .listFormulas()
+      .map(({ number }) => ({ number, ...db.readFormula(number) }))
+      .filter(({ formula }) => formula.type === 'invitation');
+    t.is(invitations.length, 1, 'the invitation is stored');
+    for (const { number, node, formula } of invitations) {
+      t.deepEqual(/** @type {{ guestName?: unknown }} */ (formula).guestName, [
+        'bob',
+      ]);
+      db.writeFormula(number, node, harden({ ...formula, guestName: 'bob' }));
+    }
+    db.close();
+  }
+
+  await restart(config);
+
+  {
+    const { host } = await makeHost(config, cancelled);
+    const invitation = await E(host).lookup(['bob']);
+    t.truthy(await E(invitation).locate());
+  }
+});
+
+test('text I/O reaches a nested daemon directory', async t => {
+  const { host } = await prepareHost(t);
+  await E(host).makeDirectory(['d']);
+
+  await E(host).writeText(['d', 'f.txt'], 'x');
+  t.is(await E(host).readText(['d', 'f.txt']), 'x');
+  t.is(await E(host).maybeReadText(['d', 'f.txt']), 'x');
+  t.is(await E(host).maybeReadText(['d', 'missing.txt']), undefined);
+});
+
 testNeedsNodeWorker(
   'evaluate and makeUnconfined accept a worker at a directory path',
   async t => {
