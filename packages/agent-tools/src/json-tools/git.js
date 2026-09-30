@@ -523,9 +523,11 @@ const positionalArgGuards = (method, gitInterface) => {
  * @param {Partial<Record<keyof GitToolDispatch, { description: string, parameters: object }>>} schemas
  * @param {InterfaceGuard} gitInterface The facet interface `methods` was
  *   projected from, used to derive each positional argument guard.
+ * @param {import('../types.js').ToolResultPolicy | undefined} resultPolicy
+ *   Model-result presentation policy forwarded to every record.
  * @returns {ToolRecord[]}
  */
-const makeGitTools = (gitCap, methods, schemas, gitInterface) => {
+const makeGitTools = (gitCap, methods, schemas, gitInterface, resultPolicy) => {
   const records = methods.map(method => {
     const schema = /** @type {{ description: string, parameters: object }} */ (
       schemas[method]
@@ -542,6 +544,7 @@ const makeGitTools = (gitCap, methods, schemas, gitInterface) => {
       name: method,
       description: schema.description,
       parameters: schema.parameters,
+      resultPolicy,
       argGuards,
       execute: async argsRecord => {
         // Marshal named args back to positional order by declared name.
@@ -576,27 +579,30 @@ const makeGitTools = (gitCap, methods, schemas, gitInterface) => {
  *
  * @overload
  * @param {ERef<GitToolReaderCapability>} gitCap
- * @param {{ facet: 'reader' }} options
+ * @param {{ facet: 'reader', resultPolicy?: import('../types.js').ToolResultPolicy }} options
  * @returns {ToolRecord[]}
  */
 /**
  * @overload
  * @param {ERef<GitToolWriterCapability>} gitCap
- * @param {{ facet?: 'writer' }} [options]
+ * @param {{ facet?: 'writer', resultPolicy?: import('../types.js').ToolResultPolicy }} [options]
  * @returns {ToolRecord[]}
  */
 /**
  * @overload
  * @param {ERef<GitToolRewriterCapability>} gitCap
- * @param {{ facet: 'rewriter' }} options
+ * @param {{ facet: 'rewriter', resultPolicy?: import('../types.js').ToolResultPolicy }} options
  * @returns {ToolRecord[]}
  */
 /**
  * @param {ERef<GitToolReaderCapability | GitToolWriterCapability | GitToolRewriterCapability>} gitCap
- * @param {{ facet?: GitToolFacet }} [options]
+ * @param {{ facet?: GitToolFacet, resultPolicy?: import('../types.js').ToolResultPolicy }} [options]
  * @returns {ToolRecord[]}
  */
-export const makeGitTool = (gitCap, { facet = 'writer' } = {}) => {
+export const makeGitTool = (
+  gitCap,
+  { facet = 'writer', resultPolicy } = {},
+) => {
   const methods = gitToolMethodsByFacet[facet];
   if (methods === undefined) {
     throw new Error(`makeGitTool: unknown facet ${JSON.stringify(facet)}`);
@@ -606,6 +612,7 @@ export const makeGitTool = (gitCap, { facet = 'writer' } = {}) => {
     methods,
     gitToolSchemasByFacet[facet],
     gitToolInterfaceByFacet[facet],
+    resultPolicy,
   );
 };
 harden(makeGitTool);
@@ -619,13 +626,15 @@ harden(makeGitTool);
  *   order, while sharing their canonical rewriter schemas and guards.
  *
  * @param {ERef<GitHistoryToolCapability>} gitCap
+ * @param {{ resultPolicy?: import('../types.js').ToolResultPolicy }} [options]
  * @returns {ToolRecord[]}
  */
-export const makeGitHistoryTool = gitCap =>
+export const makeGitHistoryTool = (gitCap, { resultPolicy } = {}) =>
   makeGitTools(
     gitCap,
     gitHistoryToolMethods,
     gitToolSchemas,
     /** @type {InterfaceGuard} */ (GitRewriterInterface),
+    resultPolicy,
   );
 harden(makeGitHistoryTool);
