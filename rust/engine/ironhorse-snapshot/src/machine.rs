@@ -954,6 +954,10 @@ fn begin_store_core(
 /// [`StoreError::BaselineMismatch`], rather than absorbing a dirty set
 /// computed against some other baseline (the missed-page corruption
 /// this seam must make unrepresentable).
+///
+/// `store` is borrowed for the whole call, and building the batch can
+/// fault pages in: a lazily resumed session committing into the store it
+/// resumed from checkpoints with [`checkpoint_to_store_cell`] instead.
 pub fn checkpoint_to_store(
     session: &mut StoreSession,
     signature: &Signature,
@@ -979,9 +983,10 @@ fn checkpoint_to_store_core(
 /// heap: the regexp table reads each regexp's `lastIndex`), and a lazy
 /// session's faults read that same store, which [`checkpoint_to_store`]'s
 /// caller holds exclusively for the whole call. This borrows it shared while
-/// it builds and exclusively only for the commit. A store the caller already
-/// holds borrowed is refused with [`StoreError::MachineOperation`] before
-/// anything is built.
+/// it builds and exclusively only for the commit. A failed row read while it
+/// builds unwinds as a [`StoreFault`], as any lazy fault does. A store the
+/// caller already holds borrowed is refused with
+/// [`StoreError::MachineOperation`] before anything is built.
 pub fn checkpoint_to_store_cell(
     session: &mut StoreSession,
     signature: &Signature,
@@ -1440,8 +1445,8 @@ pub fn resume_from_store_lazy<S: HeapStore + 'static>(
         backed: (manifest.epoch, manifest.token),
         unbound: unbound.clone(),
         // `RefCell::as_ptr` addresses the `S` itself — the same address
-        // a later `&mut *store.borrow_mut()` coerced to
-        // `&mut dyn HeapStore` carries into [`checkpoint_to_store`].
+        // a later commit through the cell (the store's `borrow_mut()`,
+        // coerced to `&mut dyn HeapStore`) carries into the checkpoint.
         store_addr: store.as_ptr().cast::<()>().cast_const(),
     };
     let source = std::rc::Rc::new(StorePageSource { store, unbound });

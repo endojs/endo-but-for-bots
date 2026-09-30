@@ -1151,17 +1151,32 @@ fn a_lazy_checkpoint_builds_its_batch_before_it_borrows_the_store() {
         .count();
     assert!(evicted > 0, "the batch has pages to fault in");
 
+    // A store the caller holds, exclusively or not, is refused before the
+    // batch is built: nothing faults in.
+    let resident = lazy.machine().slots().resident_page_count();
+    let refused = Err(StoreError::MachineOperation(
+        "checkpoint: the store is already borrowed".to_string(),
+    ));
     let held = store.borrow_mut();
     assert_eq!(
         checkpoint_to_store_cell(&mut lazy, &sig(), &*store),
-        Err(StoreError::MachineOperation(
-            "checkpoint: the store is already borrowed".to_string()
-        ))
+        refused
     );
     drop(held);
+    let held = store.borrow();
+    assert_eq!(
+        checkpoint_to_store_cell(&mut lazy, &sig(), &*store),
+        refused
+    );
+    drop(held);
+    assert_eq!(lazy.machine().slots().resident_page_count(), resident);
     assert_eq!(
         checkpoint_to_store_cell(&mut lazy, &sig(), &*store).unwrap(),
         2
+    );
+    assert!(
+        lazy.machine().slots().resident_page_count() > resident,
+        "building the batch faulted pages in"
     );
     let mut resumed = resume_from_store(&*store.borrow(), &sig()).unwrap();
     assert_eq!(
