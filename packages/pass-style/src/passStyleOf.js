@@ -22,6 +22,7 @@ import {
   isErrorLike,
 } from './error.js';
 import { RemotableHelper } from './remotable.js';
+import { isSturdyRefObject } from './sturdyref.js';
 
 import { assertPassableSymbol } from './symbol.js';
 import { assertSafePromise } from './safe-promise.js';
@@ -177,6 +178,11 @@ const makePassStyleOf = passStyleHelpers => {
           }
           typeof inner.then !== 'function' ||
             Fail`Cannot pass non-promise thenables`;
+          // A SturdyRef carries no PASS_STYLE and no own properties. Only the
+          // realm's brand check can tell it apart from an unpassable object.
+          if (isSturdyRefObject(inner)) {
+            return 'sturdyRef';
+          }
           const passStyleTag = inner[PASS_STYLE];
           if (passStyleTag !== undefined) {
             assert.typeof(passStyleTag, 'string');
