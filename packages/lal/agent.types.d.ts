@@ -28,7 +28,7 @@ export type ToolCallArgs = {
   strings?: string[];
   edgeNames?: Name[];
   petNames?: NamePath[];
-  workerName?: string;
+  workerName?: NamePath;
   source?: string;
   codeNames?: string[];
   resultName?: NamePath;

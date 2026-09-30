@@ -18,16 +18,20 @@ export const codeToolDefs = harden([
   {
     name: 'evaluate',
     summary:
-      'Evaluate JavaScript code directly. Arguments: workerName (string|undefined), ' +
-      'source (string), codeNames (string[]), edgeNames (string[]), resultName.',
+      'Evaluate JavaScript code directly. Arguments: ' +
+      'workerName (string[] path components, or undefined), source (string), ' +
+      'codeNames (string[]), edgeNames (string[]), ' +
+      'resultName (string[], path components).',
     // workerName + codeNames + edgeNames are optional in the dispatcher
     // (codeNames/edgeNames default to [] and workerName accepts the
     // "#undefined" SmallCaps sentinel). Allow either undefined or the
-    // expected primitive shape.
+    // expected shape. workerName, like resultName, is a pet-name path; the
+    // argument shape admits a bare string only so the daemon can refuse it
+    // with a retry-as-array error.
     params: M.splitRecord(
       { source: M.string(), resultName: NamePathArgumentShape },
       {
-        workerName: M.or(M.string(), M.undefined()),
+        workerName: M.or(NamePathArgumentShape, M.undefined()),
         codeNames: M.arrayOf(M.string()),
         edgeNames: M.arrayOf(M.string()),
       },

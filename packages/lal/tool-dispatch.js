@@ -476,7 +476,9 @@ export const makeExecuteTool = powers => {
         // so it passes through as-is; treat it as the literal undefined
         // sentinel the LLM may emit when it lacks a workerName.
         const workerName =
-          rawWorkerName === 'undefined' ? undefined : rawWorkerName;
+          /** @type {unknown} */ (rawWorkerName) === 'undefined'
+            ? undefined
+            : rawWorkerName;
         return E(powers).evaluate(
           workerName,
           source,
