@@ -8100,6 +8100,50 @@ testNeedsNodeWorker(
   },
 );
 
+testNeedsNodeWorker(
+  'makeUnconfinedFromTree keeps scratch names of differently segmented result paths apart',
+  async t => {
+    const { host, config } = await prepareHost(t);
+
+    const sourceDirectory = path.join(
+      config.statePath,
+      '..',
+      'unconfined-scratch-collision-src',
+    );
+    fs.mkdirSync(sourceDirectory, { recursive: true });
+    fs.writeFileSync(
+      path.join(sourceDirectory, 'index.js'),
+      `import { Far } from '@endo/pass-style';
+    export const make = () => Far('ScratchCollision', {});
+    `,
+    );
+    await E(host).provideMount(sourceDirectory, ['collision-tree'], {
+      readOnly: true,
+    });
+    await E(host).makeDirectory(['team-a']);
+    await E(host).makeDirectory(['team']);
+
+    // Joining the segments with '-' would name both scratch mounts
+    // `scratch-team-a-bob`, so the second would overwrite the first.
+    await E(host).makeUnconfinedFromTree(undefined, ['collision-tree'], {
+      powersName: ['@none'],
+      resultName: ['team-a', 'bob'],
+    });
+    await E(host).makeUnconfinedFromTree(undefined, ['collision-tree'], {
+      powersName: ['@none'],
+      resultName: ['team', 'a-bob'],
+    });
+
+    const firstScratchId = await E(host).identify('scratch-team-a%2Fbob');
+    const secondScratchId = await E(host).identify('scratch-team%2Fa-bob');
+    t.truthy(firstScratchId);
+    t.truthy(secondScratchId);
+    t.not(firstScratchId, secondScratchId);
+    t.true(await E(host).has('team-a', 'bob'));
+    t.true(await E(host).has('team', 'a-bob'));
+  },
+);
+
 test('makeUnconfinedFromTree refuses a bare-string powers name before staging', async t => {
   const { host, config } = await prepareHost(t);
 

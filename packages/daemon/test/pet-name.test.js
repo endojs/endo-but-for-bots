@@ -16,6 +16,7 @@ import {
   assertNamePath,
   assertPetNamePath,
   namePathFrom,
+  namePathLabel,
   petNamePathFrom,
 } from '../src/pet-name.js';
 
@@ -364,6 +365,35 @@ test('petNamePathFrom refuses a special-name leaf and every string', t => {
   fc.assert(
     fc.property(anyStringArb, s => {
       t.throws(() => petNamePathFrom(s), { instanceOf: TypeError });
+    }),
+  );
+});
+
+test('namePathLabel keeps paths that differ only in segmentation apart', t => {
+  t.is(namePathLabel(['bob']), 'bob');
+  t.is(namePathLabel(['team-a', 'bob']), 'team-a%2Fbob');
+  t.is(namePathLabel(['team', 'a-bob']), 'team%2Fa-bob');
+  t.not(namePathLabel(['team-a', 'bob']), namePathLabel(['team', 'a-bob']));
+  t.not(namePathLabel(['a%2Fb']), namePathLabel(['a', 'b']));
+});
+
+test('namePathLabel is injective and yields a valid name', t => {
+  fc.assert(
+    fc.property(
+      fc.array(nameArb, { minLength: 1, maxLength: 4 }),
+      fc.array(nameArb, { minLength: 1, maxLength: 4 }),
+      (left, right) => {
+        const same =
+          left.length === right.length &&
+          left.every((segment, index) => segment === right[index]);
+        t.is(namePathLabel(left) === namePathLabel(right), same);
+      },
+    ),
+  );
+  fc.assert(
+    fc.property(fc.array(nameArb, { minLength: 1, maxLength: 4 }), path => {
+      const label = namePathLabel(path);
+      t.true(label.length > 255 || isValidName(label));
     }),
   );
 });

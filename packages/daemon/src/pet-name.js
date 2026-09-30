@@ -182,3 +182,16 @@ export const namePathFrom = namePath => {
  */
 export const petNamePathFrom = namePath =>
   assertPetNamePath(namePathFrom(namePath));
+
+/**
+ * Encodes a name path as a single string, for deriving one pet name from a
+ * whole path. Each segment is percent-encoded and the segments are joined
+ * with `%2F`, so distinct paths always yield distinct labels:
+ * `['team-a', 'bob']` is `team-a%2Fbob` and `['team', 'a-bob']` is
+ * `team%2Fa-bob`. A one-segment path of ordinary characters is unchanged.
+ *
+ * @param {NamePath} namePath
+ * @returns {string}
+ */
+export const namePathLabel = namePath =>
+  namePath.map(segment => encodeURIComponent(segment)).join('%2F');

@@ -26,6 +26,7 @@ import {
   assertPetName,
   assertPetNamePath,
   namePathFrom,
+  namePathLabel,
   petNamePathFrom,
 } from './pet-name.js';
 import { parseId } from './formula-identifier.js';
@@ -1789,7 +1790,7 @@ export const makeHostMaker = ({
       const entry = options?.entry ?? 'index.js';
       const resultLabel =
         options?.resultName !== undefined
-          ? namePathFrom(options.resultName).join('-')
+          ? namePathLabel(namePathFrom(options.resultName))
           : `tree-unconfined-${await (async () => {
               // eslint-disable-next-line no-bitwise
               const r = Math.floor(Math.random() * 0xff_ffff);
