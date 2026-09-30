@@ -1564,11 +1564,11 @@ export function useFileExplorer(powers, profilePath = []) {
       );
       const composed = /** @type {Cap} */ (
         await E(host).evaluate(
-          '@node',
+          ['@node'],
           'E(layer).asFilesystem()',
           ['layer'],
-          [layerName],
-          composedName,
+          [layerName.split('/')],
+          [composedName],
         )
       );
       const layerSource = addSource({

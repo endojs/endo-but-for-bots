@@ -1419,7 +1419,7 @@ export const makeAdoptTool = host => {
       if (messageNumber === undefined || !edgeName || !petName) {
         throw new Error('messageNumber, edgeName, and petName are required');
       }
-      await E(host).adopt(BigInt(messageNumber), edgeName, petName);
+      await E(host).adopt(BigInt(messageNumber), edgeName, [petName]);
       return `Adopted "${edgeName}" from message #${messageNumber} as "${petName}".`;
     },
     help() {

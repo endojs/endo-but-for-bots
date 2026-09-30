@@ -1221,10 +1221,10 @@ const bodyComponent = (
             if (!petName) return false;
             try {
               await E(
-                /** @type {{ adopt: (n: bigint, edge: string, pet: string) => Promise<void> }} */ (
+                /** @type {{ adopt: (n: bigint, edge: string, pet: string[]) => Promise<void> }} */ (
                   resolvedPowers
                 ),
-              ).adopt(number, name, petName);
+              ).adopt(number, name, [petName]);
               window.alert(
                 `Adopted \u201C${name}\u201D as \u201C${petName}\u201D`,
               );
@@ -1245,10 +1245,10 @@ const bodyComponent = (
             try {
               // Adopt the channel reference
               await E(
-                /** @type {{ adopt: (n: bigint, edge: string, pet: string) => Promise<void> }} */ (
+                /** @type {{ adopt: (n: bigint, edge: string, pet: string[]) => Promise<void> }} */ (
                   resolvedPowers
                 ),
-              ).adopt(number, name, localName);
+              ).adopt(number, name, [localName]);
 
               // Look up and join the channel
               const channelRef = await E(

@@ -628,7 +628,7 @@ const handleMention = async (
   // Pre-adopt the channel reference before anything else
   const chRefName = `ch-${messageNumber}`;
   try {
-    await E(powers).adopt(msgNum, mentionInfo.edge, chRefName);
+    await E(powers).adopt(msgNum, mentionInfo.edge, [chRefName]);
     console.log(`[jaine] Pre-adopted channel as ${chRefName}`);
   } catch (adoptErr) {
     console.error(
