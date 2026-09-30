@@ -27,6 +27,48 @@ as a dynamic worker) hit both limits. It also opened a confinement hole: the
 supposedly confined worker received general `fetch` egress through
 `globalOutbound` (review comment r4140235148 on that PR).
 
+The #78 design also routed the worker's outbound requests through a *web-key
+relay*: an HTTP proxy in the supervising Worker that forwarded a request only
+if its URL was on an allowlist of permitted web-keys. That relay and its
+URL allowlist were the confinement boundary, and the `globalOutbound` hole
+bypassed them.
+
+#### Cloudflare vocabulary
+
+The rest of this document uses these platform terms:
+
+- **Worker, isolate.** A Worker is a script that Cloudflare runs in a V8
+  isolate. An isolate's memory is discarded when the platform evicts it; only
+  explicit storage survives.
+- **Durable Object (DO).** A class whose instances each have a stable id, run
+  single-threaded in one isolate at a time, and own private durable storage
+  (`ctx.storage`, key-value and SQLite). Code holding a DO *namespace* binding
+  (`env.NS`) gets a *stub* for an instance with `env.NS.get(id)` and calls its
+  methods remotely. An idle DO is *evicted* (its memory discarded) or, if it
+  holds only hibernatable WebSockets, *hibernated* (evicted with the sockets
+  kept open).
+- **Service binding, `WorkerEntrypoint`.** A service binding is an `env`
+  entry, configured at deploy time, through which one Worker calls methods on
+  another Worker's `WorkerEntrypoint` class. Only code that holds the binding
+  can make the call.
+- **`RpcTarget`, stub.** Passing an instance of a class that extends
+  `RpcTarget` over Workers RPC passes it by reference: the receiver gets a
+  *stub* whose method calls go back to the original object. All other
+  arguments are copied with the structured-clone algorithm.
+- **Dynamic Worker, Worker Loader, `globalOutbound`.** A supervising Worker
+  can load code at run time through a Worker Loader binding
+  (`loader.get(id, () => ({ code, env, globalOutbound }))`). The loaded code
+  sees only the `env` the supervisor passes. `globalOutbound` decides where
+  its `fetch()` and `connect()` go; `null` makes them throw.
+- **Facet, DO facet.** This document calls a dynamically loaded Worker a
+  *facet* of its supervisor. A *DO facet* (`ctx.facets.get(...)`) is a facet
+  that is itself a Durable Object class hosted inside the supervisor DO. It
+  gets its own SQLite database, which the supervisor's data does not share. A
+  plain (non-DO) facet has no storage of its own.
+- **Cap'n Web.** Cloudflare's JSON-based object-capability RPC protocol for
+  browsers and other runtimes. It uses the same `RpcTarget`/stub model as
+  Workers RPC, over HTTP batches or a WebSocket.
+
 This design treats Cloudflare's RPC and Cap'n Web only as **message carriers
 between OCapN peers**. OCapN carries the object references, supplies peer
 identity through its handshake, and supplies persistence through sturdyrefs.
@@ -55,10 +97,18 @@ flowchart LR
     browser["browser / other account"] -- "Cap'n Web session: same mailbox RpcTarget" --> netA
 ```
 
-A **Durable Object is an OCapN vat**: it runs single-threaded, has durable
-`ctx.storage`, and has a stable id. Live references are scoped to a session,
-and a session is scoped to the in-memory isolate. Anything that must outlive
-eviction is a sturdyref whose swissnum is a row in the DO's storage.
+**The vat is whatever runs the OCapN client and holds the designator key.**
+In the unconfined deployment above, that is a Durable Object: it runs
+single-threaded, has durable `ctx.storage`, and has a stable id. In the
+confined deployment (*Confinement*), the vat is a **DO facet** inside a
+supervisor DO, with its own SQLite database; the supervisor is never a vat.
+It holds no designator key, runs no OCapN client, and only routes frames.
+Either way, one vat has exactly one designator key and one storage, and "the
+vat's storage" below means the storage of that DO or DO facet.
+
+Live references are scoped to a session, and a session is scoped to the
+in-memory isolate. Anything that must outlive eviction is a sturdyref whose
+swissnum is a row in the vat's storage.
 
 ## Description of the Design
 
@@ -81,6 +131,7 @@ harden({
   designator: '<64 lowercase hex: Ed25519 public key>',
   hints: {
     'cf-do': '<script>/<class>/<id-hex or name>', // binding-reachable
+    'cf-facet': '<facet id>', // only when the vat is a facet of that DO
     'capnweb': 'wss://example.workers.dev/ocapn', // internet-reachable
   },
 });
@@ -95,6 +146,14 @@ for a browser or cross-account peer. The DO generates its key pair on first
 activation and keeps the private key in `ctx.storage`. The platform operator
 can read that key, but the operator already runs the vat's code, so this adds
 no new trust.
+
+The hints separate *where a vat is reached from* and *which vat it is*. The
+`cf-do` hint (or the `capnweb` URL) names the front door that accepts `open`:
+a DO, or a supervisor DO hosting several facets. When that front door is a
+supervisor, the `cf-facet` hint names the facet it should route the session
+to. Neither hint is trusted: the designator handshake below checks that the
+vat that answers holds the designator's key, so a wrong or forged hint can
+only cause a failed handshake, not a session with the wrong vat.
 
 The sturdyref URI is the existing `ocapn://<designator>.cf/s/<swissnum>`
 serialization from `locationToLocationId` and `sturdyrefs.js`, with the hints
@@ -174,16 +233,25 @@ sequenceDiagram
   `<init:peer-auth nonce_I nonce_R designator_I designator_R>`. The record label
   keeps the signature from being usable as an oracle for any other signed term.
 - Each side signs the transcript with its **designator** key and checks the
-  peer's signature against `hex → key` of the peer's advertised designator. A
+  peer's signature against `hex -> key` of the peer's advertised designator. A
   mismatch aborts, just as `.np` rejects an advertised designator that differs
   from the Noise identity.
 - The location signature is bound to `binding = SHA-256(transcript)`
   (`cryptography.signLocation`'s `binding` argument, which `.np` uses for the
   Noise handshake hash). The resulting `NetworkSession.remoteLocationSignature`
   therefore cannot be replayed into another session.
+- Signing and verification use `@endo/ocapn`'s existing Ed25519 code
+  (`cryptography.js`, pure JavaScript over `@noble/curves`), so the scheme
+  does not depend on the platform's crypto. workerd's WebCrypto also supports
+  Ed25519 `sign`/`verify` (verification item 9), which a later optimization
+  may use.
 - `sessionId` is `makeSessionId` over the two designator keys, as today.
-- Crossed hellos between the same two designators resolve by the existing
-  `compareSessionKeysForCrossedHellos` rule (ebfb#806).
+- Crossed hellos between the same two designators resolve by the comparison
+  rule that `compareSessionKeysForCrossedHellos` (`client/handshake.js`,
+  ebfb#806) implements: compare the two ids with `compareImmutableArrayBuffers`
+  and keep the session the higher id initiated. That function takes
+  `op:start-session` connection arguments, so the `cf` network reimplements
+  the rule over its own hellos rather than calling it.
 
 Grant matching then works without any help from the platform. Three-party
 handoffs (`desc:handoff-give` / `desc:handoff-receive`) are signed by
@@ -243,7 +311,7 @@ flowchart TB
     sup["Supervisor Worker/DO<br/>(owns bindings, keys, policy)"]
     facet["Dynamic Worker facet<br/>globalOutbound: null<br/>env: { OCAPN: port }"]
     sup -- "loader.get(id, () => ({ code, env: { OCAPN: port }, globalOutbound: null }))" --> facet
-    facet -- "port.open(location)" --> sup
+    facet -- "port.dial(location, ...)" --> sup
     sup -- "binding / capnweb carrier" --> net((other vats))
 ```
 
@@ -254,13 +322,17 @@ flowchart TB
   ```js
   interface OcapnPort {
     // Dial a peer; the supervisor applies its dial policy and runs the carrier.
-    open(location, hello, facetMailbox): Promise<{ reply, peerMailbox }>;
+    dial(location, hello, initiatorMailbox):
+      Promise<{ reply, responderMailbox }>;
   }
   ```
 
   The facet's `cf` network is `makeCloudflareNetwork({ port: env.OCAPN })`.
   Inbound sessions reach the facet through the supervisor, which calls the
-  facet entrypoint's `open` with the same signature as a front door.
+  facet entrypoint's `open` with the same signature as a front door, choosing
+  the facet by the `cf-facet` hint. `dial` differs from `open` only by the
+  leading `location`: `open` accepts a session already routed to its vat, and
+  `dial` asks the supervisor to route one outward.
 - The facet runs the vat: the OCapN client, its app objects, and its
   designator key. The supervisor is a **frame router**. It carries opaque
   frames between the facet's mailboxes and the carriers, and it never
@@ -269,20 +341,23 @@ flowchart TB
 - The supervisor holds the carrier bindings (DO namespaces, service bindings,
   the Cap'n Web endpoint) and the **dial policy** (which designators or hints a
   facet may open). Policy is the supervisor's business, so revoking a facet's
-  network reach means refusing `open`.
-- Storage: if the facet is a DO facet (`ctx.facets.get`) it uses its own
-  SQLite database, isolated from the supervisor, which holds its key and its
-  sturdyref tables. Otherwise the supervisor gives it an
-  attenuated storage `RpcTarget` scoped to the facet id, and it can impose a
-  quota there (see *Open questions*).
+  network reach means refusing `dial`.
+- Storage: a DO facet (`ctx.facets.get`) uses its own SQLite database,
+  isolated from the supervisor, which holds its key and its sturdyref tables.
+  A facet that must mint sturdyrefs is therefore a DO facet. A plain facet
+  could instead be given an attenuated storage `RpcTarget` scoped to its
+  facet id, with a quota (see *Open Questions*).
 
-This removes the web-key relay allowlist from #78 entirely: there is no HTTP
-relay left to allowlist.
+This removes the web-key relay and its URL allowlist from #78: there is no
+HTTP relay left, so the HTTP proxying and URL parsing it needed are gone. The
+authorization question does not disappear. The dial policy still decides
+which peers a facet may reach, but it is keyed on designators and hints, and
+everything a facet obtains after that is an OCapN capability.
 
 ### Sturdyrefs in DO storage
 
 `makeOcapn({ locator })` already accepts a caller-owned
-`{ get(secret) → object | Promise<object> }` (`client/index.js`,
+`{ get(secret) -> object | Promise<object> }` (`client/index.js`,
 `makeSturdyRefTracker` in `client/sturdyrefs.js`), and bootstrap
 `fetch(swissnum)` calls it. The Cloudflare vat supplies a storage-backed
 locator. Liveslots is not needed.
@@ -302,17 +377,21 @@ CREATE TABLE object (
 
 - **Mint.** `mintSturdyRef(objectId)` inserts a row with a fresh random
   swissnum and returns `makeSturdyRef(selfLocation, swissnumBytes)`. The
-  button serializes that as the `ocapn://…/s/…` URI.
+  button serializes that as the `ocapn://.../s/...` URI.
 - **Enliven.** `locator.get(secret)` looks up the row and calls the kind's
   maker, e.g. `makeCounter(objectId)`. That returns an exo whose methods read
   and write the `object` row inside the DO's single-threaded turn, so each
   method is its own storage transaction. An in-memory `Map<objectId, exo>`
-  keeps identity stable within one isolate lifetime.
+  keeps the *object's* identity stable within one isolate lifetime.
 - **Revoke.** Delete the `sturdyref` row. New enlivenments then fail. A live
   reference handed out earlier stays usable until its session ends, unless the
   kind's maker returns a revocable forwarder that re-checks the row on every
   call. The counter demo uses the forwarder, so revocation takes effect
-  immediately.
+  immediately. Forwarders are cached per **swissnum** (the grant), not per
+  object: an object with two swissnums has two forwarders over one exo, and
+  revoking one swissnum cuts off only the holders of that grant. The
+  consequence is that two grants of one object enliven to two distinct
+  references; identity is stable per grant.
 - **Enliven elsewhere.** `enlivenSturdyRef` in another vat dials the
   designator through the hints (the `cf-do` hint if it holds the binding,
   otherwise `capnweb`), completes the handshake above, and calls bootstrap
@@ -333,7 +412,7 @@ capnweb carriers.
 #### Generalizing the codec and session envelope
 
 `OcapnReader`/`OcapnWriter` (`packages/ocapn/src/codec-interface.d.ts`) are a
-cursor API (`enterRecord`, `readInteger`, `peekTypeHint`, …) and never mention
+cursor API (`enterRecord`, `readInteger`, `peekTypeHint`, ...) and never mention
 bytes. Only the envelope does: `MakeReader(bytes)`, `getBytes()`,
 `diagnose(bytes)`, and `NetworkSession.reader/writer: Uint8Array`. The change:
 
@@ -342,6 +421,7 @@ export interface OcapnCodec<M = Uint8Array> {
   makeReader(message: M, options?): OcapnReader;
   makeWriter(options?): OcapnWriter<M>;   // getMessage(): M
   diagnose(message: M): string;
+  diagnoseRemainder(message: M, reader: OcapnReader): string;
   atEnd(reader: OcapnReader, message: M): boolean; // replaces index < length
 }
 // OcapnWriter keeps getBytes() on byte codecs as an alias of getMessage().
@@ -351,6 +431,13 @@ export interface OcapnCodec<M = Uint8Array> {
 - `dispatchMessageData` in `client/ocapn.js` and the handshake reader in
   `client/handshake.js` loop `while (reader.index < data.length)`. They switch
   to `codec.atEnd`. For the tree codec one frame is exactly one message.
+- The `catch` blocks after those loops (`client/ocapn.js` and
+  `client/handshake.js`) call `codec.diagnose(data.slice(start))` to show the
+  undecoded remainder. That is byte-shaped: a tree message need not support
+  `slice`, and has no "remainder". The call becomes
+  `codec.diagnoseRemainder(message, reader)`, which a byte codec implements as
+  today's slice-and-diagnose and the tree codec implements as `diagnose` of
+  the whole frame.
 - `writeOcapnMessage` (`codecs/operations.js`) returns `M`.
 - The op and descriptor codecs above the reader and writer do not change.
 - `makeOcapn` gains **`signingCodec`**, a canonical *byte* codec used for
@@ -364,7 +451,7 @@ export interface OcapnCodec<M = Uint8Array> {
 |---|---|---|
 | null, undefined, boolean, string | same JS value | |
 | integer | `bigint` (always) | a JS `number` is never an integer, so the two can't be confused |
-| float64 | `number`; -0 is written `['ocapn-negzero']` | Workers RPC keeps NaN, ±Infinity, and -0. Cap'n Web keeps NaN and ±Infinity (via its `nan`/`inf` tags) but flattens -0 to 0, so the shared convention always escapes -0. The reader also accepts a bare -0 |
+| float64 | `number`; -0 is written `['ocapn-negzero']` | Workers RPC keeps NaN, +/-Infinity, and -0. Cap'n Web keeps NaN and +/-Infinity (via its `nan`/`inf` tags) but flattens -0 to 0, so the shared convention always escapes -0. The reader also accepts a bare -0 |
 | bytestring | `Uint8Array` | the reader hands out a frozen copy (`@endo/immutable-arraybuffer`) |
 | list | `[[...items]]` | a literal list is wrapped, the way Cap'n Web wraps literal arrays |
 | record | `['ocapn-rec', label, ...fields]` | label: a JS string means a **selector**; a `Uint8Array` means a bytestring; `['ocapn-str', s]` means a string label |
@@ -427,7 +514,7 @@ takes a position instead of combining them:
 - **Untrusted relays or a need for end-to-end encryption:** use the ws-bytes
   carrier with the `.np` network and bytes. A vat that needs both worlds runs
   two `makeOcapn` instances, one per codec family, until the codec becomes a
-  per-network choice (see *Open questions*).
+  per-network choice (see *Open Questions*).
 
 ## Verification of platform claims
 
@@ -436,7 +523,7 @@ results, checked on 2026-09-30:
 
 | # | Claim | Result | Source |
 |---|---|---|---|
-| 1 | Workers RPC carries structured-clone values | **Confirmed, with extensions.** It covers "nearly all" structured-cloneable types, and functions, `RpcTarget` subclasses, streams, and `Request`/`Response` become stubs or pass by reference. The page does not list bigint, typed arrays, NaN, ±Infinity, or -0 one by one; they come from the structured-clone algorithm, which preserves all of them. The tree codec depends on exactly these and on nothing else. | [workers/runtime-apis/rpc](https://developers.cloudflare.com/workers/runtime-apis/rpc/) |
+| 1 | Workers RPC carries structured-clone values | **Confirmed, with extensions.** It covers "nearly all" structured-cloneable types, and functions, `RpcTarget` subclasses, streams, and `Request`/`Response` become stubs or pass by reference. The page does not list bigint, typed arrays, NaN, +/-Infinity, or -0 one by one; they come from the structured-clone algorithm, which preserves all of them. The tree codec depends on exactly these and on nothing else. | [workers/runtime-apis/rpc](https://developers.cloudflare.com/workers/runtime-apis/rpc/) |
 | 2 | Platform RPC gives the callee no caller identity | **Confirmed.** `ctx.props` exists, but the *binding configurer* sets it (a service binding, or `getEntrypoint(name, { props })` on a Worker Loader). It is configuration, not an assertion by the caller. `ctx.access` does not propagate across RPC hops. A supervisor may use `props` to tell a facet its own facet id, but peer identity still has to come from the in-band handshake. | [runtime-apis/context](https://developers.cloudflare.com/workers/runtime-apis/context/), [bindings/worker-loader](https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/) |
 | 3 | Ordering and at-most-once across DO RPC | **Partially.** Calls on one DO stub are E-ordered, and input gates serialize handling around storage. Errors marked `.retryable` are left to the *caller* to retry "if idempotent", and `.overloaded` errors should not be retried. The runtime does not guarantee at-most-once for a caller that retries. Hence: `seq` checking stays as defense in depth, and the network never retries (*Ordering and reliability*). | [DO state API](https://developers.cloudflare.com/durable-objects/api/state/), [DO error handling](https://developers.cloudflare.com/durable-objects/best-practices/error-handling/) |
 | 4 | Dynamic Worker `globalOutbound: null` | **Confirmed.** `null` makes `fetch()` and `connect()` throw. `env` may hold serializable values and service bindings, including `ctx.exports` loopback bindings (for the supervisor's `OcapnPort`). DO facets (`ctx.facets.get(...)`) each get their **own SQLite database**, which the dynamic code uses without seeing the supervisor's data. | [worker-loader.mdx](https://github.com/cloudflare/cloudflare-docs/blob/production/src/content/docs/workers/runtime-apis/bindings/worker-loader.mdx), [DO facets](https://developers.cloudflare.com/dynamic-workers/usage/durable-object-facets/) |
@@ -444,18 +531,20 @@ results, checked on 2026-09-30:
 | 6 | Cap'n Web pipelining; ordering; resume after hibernation | **Partially.** Pipelining and `RpcTarget` stubs are core features. A WebSocket session is one ordered transport, but no explicit ordering guarantee is documented (the `seq` check covers this). **There is no resumption:** after a disconnect "every stub from that session is permanently broken". This agrees with *Session lifetime*. | [guides/sessions.mdx](https://github.com/cloudflare/capnweb/blob/main/packages/docs/src/content/docs/guides/sessions.mdx), [transports/websocket.mdx](https://github.com/cloudflare/capnweb/blob/main/packages/docs/src/content/docs/transports/websocket.mdx) |
 | 7 | Hibernatable WebSocket behavior | **Confirmed.** `ctx.acceptWebSocket`, the `webSocketMessage` handler after wake, and `serializeAttachment` (at most **16,384 bytes**, enough for an epoch and session tag) all behave as described. In-memory state resets while the socket stays open. | [DO WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/) |
 | 8 | DO storage | **Confirmed.** Async KV, synchronous `ctx.storage.kv`, and SQL (`ctx.storage.sql.exec`) are available. The limit is 10 GB per SQLite-backed object, and a key plus its value may not exceed 2 MB. There is no per-facet quota below that, so quotas remain a supervisor concern. | [DO limits](https://developers.cloudflare.com/durable-objects/platform/limits/) |
+| 9 | Ed25519 signing inside a Worker or DO | **Confirmed.** workerd's WebCrypto lists `Ed25519` (the Secure Curves API) with `sign()`/`verify()`, `generateKey()`, `importKey()`, and `exportKey()`, plus a legacy `NODE-ED25519`. The design does not depend on it: `@endo/ocapn` signs with pure-JavaScript `@noble/curves`, which needs only the `crypto.getRandomValues` Workers provide. Phase 3's workerd harness exercises the handshake either way. | [runtime-apis/web-crypto](https://developers.cloudflare.com/workers/runtime-apis/web-crypto/) |
 
 ## Ownership map
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit | Value crossing |
 |---|---|---|---|---|---|
-| OCapN core ↔ `cf` network | network: handshake, seq, reorder, mailbox calls | core: which location to open; network: `maxInFlight`/`maxReorder` | none | network aborts the session; core rejects answers | `NetworkSession<OcapnTree>` (one message per frame) |
-| codec ↔ carrier | tree codec: validation, escape rule | none | none | none | `OcapnTree` (plain data) |
-| facet ↔ supervisor | supervisor: carriers, frame routing | supervisor: dial policy, storage quota | facet: key and tables (DO facet); supervisor: attenuated store otherwise | supervisor: load, unload, refuse `open` | `OcapnPort` / `OcapnMailbox` stubs plus frames |
-| vat ↔ `ctx.storage` | locator, kind makers | app: which objects get sturdyrefs | DO storage: key, `sturdyref`, `object` | DO single-threaded turn = transaction; revoke = delete row | swissnum → object id |
+| OCapN core <-> `cf` network | network: handshake, seq, reorder, mailbox calls | core: which location to open; network: `maxInFlight`/`maxReorder` | none | network aborts the session; core rejects answers | `NetworkSession<OcapnTree>` (one message per frame) |
+| codec <-> carrier | tree codec: validation, escape rule | none | none | none | `OcapnTree` (plain data) |
+| facet <-> supervisor | supervisor: carriers, frame routing | supervisor: dial policy, storage quota | facet: key and tables (DO facet); supervisor: attenuated store otherwise | supervisor: load, unload, refuse `dial` | `OcapnPort` / `OcapnMailbox` stubs plus frames |
+| vat <-> vat storage | locator, kind makers | app: which objects get sturdyrefs | the vat's DO or DO-facet storage: key, `sturdyref`, `object` | DO single-threaded turn = transaction; revoke = delete row | swissnum -> object id |
 
-1. **Persistent state:** the vat DO (or the supervisor-granted store). OCapN
-   core and the network own none.
+1. **Persistent state:** the vat, meaning the one DO or DO facet that holds
+   the designator key (or, for a plain facet, the supervisor-granted store).
+   The supervisor, OCapN core, and the network own none.
 2. **Commit/discard:** the vat's storage transaction per turn. A session
    abort discards only in-memory state.
 3. **Restart/replay:** nothing is replayed. After eviction, peers
@@ -497,15 +586,15 @@ carrier stub.
 ## Test Plan
 
 - **Tree codec unit tests** (`packages/ocapn/test/tree/`): round-trip every
-  row of the tree table, including NaN, ±Infinity, -0, an empty list `[[]]`, a
+  row of the tree table, including NaN, +/-Infinity, -0, an empty list `[[]]`, a
   list whose first element is a tag-looking string, nested records,
   string-labeled and bytestring-labeled records, and non-string dictionary
   keys. Negative cases: `[]`, an unknown tag, `Map`, `Date`, a function, an
   object with a prototype, an accessor property. Each must be rejected without
   calling a getter.
 - **Cross-codec equivalence property:** for the existing Syrup test vectors
-  and `python-test-suite` fixtures, check `syrup → value → tree →
-  structuredClone → value → syrup` is byte-identical, and repeat through Cap'n
+  and `python-test-suite` fixtures, check `syrup -> value -> tree ->
+  structuredClone -> value -> syrup` is byte-identical, and repeat through Cap'n
   Web's serialize/deserialize.
 - **Existing client suites over the tree network:** parameterize
   `client.test.js`, `handoffs.test.js`, `sturdyref.test.js`,
@@ -523,9 +612,19 @@ carrier stub.
   binding carrier; a Node peer reaches a DO over capnweb; a sturdyref minted in
   DO A is enlivened from DO B, A is forcibly reset (the harness's DO-abort
   facility), and the sturdyref enlivens again with its state intact;
-  revocation takes effect immediately through the forwarder; a facet loaded
+  revocation takes effect immediately through the forwarder, and revoking one
+  of an object's two swissnums leaves the other working; a facet loaded
   with `globalOutbound: null` fails `fetch` and still reaches peers through
   `OCAPN`.
+- **Confinement probes** (workerd harness): from inside a facet, `fetch` and
+  `connect` throw; enumerating `env` and `globalThis` finds `OCAPN` and no
+  other binding, DO namespace, or `ctx.exports` entry; `OCAPN` exposes only
+  `dial`, and calling it with a location the dial policy refuses is rejected;
+  a facet cannot reach another facet's `OcapnPort`, mailboxes, or storage
+  (two facets under one supervisor, each trying to `dial` the other outside
+  policy and to address the other's `cf-facet` id); and a frame a facet sends
+  containing a stub, `RpcTarget`, or function is rejected by the supervisor's
+  peer before the stub is ever invoked.
 
 ## Design Decisions
 
@@ -548,8 +647,13 @@ carrier stub.
 - [ ] Confirm `@endo/ocapn` (and `harden`) loads and runs in workerd; whether
   to lock down there is part of phase 3.
 - [ ] Per-facet storage quota, to be filed with the supervisor work.
+- [ ] Revocation is per kind, not a network guarantee. Deleting a
+  `sturdyref` row stops new enlivenments, but a live reference obtained
+  earlier keeps working until its session ends unless the kind's maker
+  returns a revocable forwarder. Anyone relying on "revoke" as a security
+  control must use a kind that does.
 
-## Open questions
+## Open Questions
 
 1. Should the codec become a **per-network** choice (so one `makeOcapn` can
    host a tree network and the byte `.np` network together), or is one
@@ -562,7 +666,7 @@ carrier stub.
    facets that mint sturdyrefs be required to be DO facets?
 4. Is the **dictionary fast path** (a plain object for string keys) worth its
    second representation, or should every dictionary use
-   `['ocapn-dict', …]` for a single canonical tree shape?
+   `['ocapn-dict', ...]` for a single canonical tree shape?
 5. Should a vat be able to opt into an **alarm keep-alive** so live
    references survive idle periods, or should sturdyrefs remain the only
    persistence story?
@@ -570,10 +674,10 @@ carrier stub.
 ## Prompt
 
 > Sketch the feasibility of using cloudflare RPC (and capn web) as an ocapn
-> netlayer. […] I'm inclined to punt and not try to use cloudflare's object
+> netlayer. [...] I'm inclined to punt and not try to use cloudflare's object
 > references at all for persistent references. I'm interested to just use it
 > as an ocapn data transfer and use ocapn marshalling to carry object
-> references. Sturdyrefs should work too, right? […] Presuming an initial
+> references. Sturdyrefs should work too, right? [...] Presuming an initial
 > feasibility sketch is straightforward, write up a detailed design as an
 > endo-but-for-bots design.
 >
