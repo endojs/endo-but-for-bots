@@ -119,7 +119,10 @@ export const compareNumerics = (left, right) => {
 harden(compareNumerics);
 
 /**
- * @typedef {Record<PassStyle, { index: number, cover: RankCover }>} PassStyleRanksRecord
+ * A SturdyRef has no encoding yet, so it has no rank either.
+ *
+ * @typedef {Exclude<PassStyle, 'sturdyRef'>} RankedPassStyle
+ * @typedef {Record<RankedPassStyle, { index: number, cover: RankCover }>} PassStyleRanksRecord
  * @typedef {PassStyleRanksRecord & { '*': { cover: RankCover } }} StaticRanksRecord
  */
 
@@ -152,6 +155,17 @@ setPrototypeOf(passStyleRanks, null);
 harden(passStyleRanks);
 
 /**
+ * @param {PassStyle} passStyle
+ */
+const getPassStyleRank = passStyle => {
+  const rank = passStyleRanks[/** @type {RankedPassStyle} */ (passStyle)];
+  if (rank === undefined) {
+    throw Fail`A ${q(passStyle)} cannot be rank-ordered`;
+  }
+  return rank;
+};
+
+/**
  * Associate with each passStyle a RankCover that may be an overestimate,
  * and whose results therefore need to be filtered down. For example, because
  * there is not a smallest or biggest bigint, bound it by `NaN` (the last place
@@ -164,7 +178,7 @@ harden(passStyleRanks);
  * @deprecated Coverage depends upon format; use {@link provideStaticRanks}
  *   instead.
  */
-export const getPassStyleCover = passStyle => passStyleRanks[passStyle].cover;
+export const getPassStyleCover = passStyle => getPassStyleRank(passStyle).cover;
 harden(getPassStyleCover);
 
 // Use singleton null as a sentinel for detecting an encodePassable output
@@ -226,8 +240,8 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
     const rightStyle = passStyleOf(right);
     if (leftStyle !== rightStyle) {
       return compareNumerics(
-        passStyleRanks[leftStyle].index,
-        passStyleRanks[rightStyle].index,
+        getPassStyleRank(leftStyle).index,
+        getPassStyleRank(rightStyle).index,
       );
     }
 
