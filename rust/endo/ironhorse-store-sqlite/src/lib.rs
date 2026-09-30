@@ -651,10 +651,11 @@ impl HeapStore for SqliteHeapStore {
     /// One IMMEDIATE transaction: the durable manifest must still be
     /// `from`, and then `to` and the small state (in `to`'s layout) replace
     /// it, and the row-leaf hashes the schemas before 36 kept are dropped
-    /// with their table. The edge marker stays valid: no ladder step
-    /// changes the epoch or writes `page_edges`. A step that rewrote the
-    /// summaries would have to rebuild `edge_pairs` in this transaction,
-    /// or the next commit would mark a stale index current.
+    /// with their table. The edge marker stays valid, since no ladder step
+    /// changes the epoch or writes `page_edges`; a `to` at another epoch
+    /// drops it, so the next open rebuilds the index. A step that rewrote
+    /// the summaries would have to rebuild `edge_pairs` in this
+    /// transaction, or the next commit would mark a stale index current.
     fn replace_for_migration(
         &mut self,
         from: &StoreManifest,
@@ -1516,6 +1517,47 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    /// The edge-index marker attests the index at the stored epoch: a
+    /// migration write that keeps the epoch keeps it, and one whose manifest
+    /// names another epoch drops it, so the next open rebuilds the index
+    /// rather than trusting one no commit maintained for that epoch.
+    #[test]
+    fn a_migration_write_that_moves_the_epoch_drops_the_edge_marker() {
+        use ironhorse_snapshot::store::StoreManifest;
+        let mut machine = Interp::new();
+        assert!(machine.run(&PROG_A).completed);
+        let image = machine.snapshot_image(&sig()).unwrap();
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        store
+            .commit(&image_to_batch(&image, 1, CommitToken::ZERO))
+            .unwrap();
+        let marker = |store: &SqliteHeapStore| {
+            store
+                .conn
+                .query_row(
+                    "SELECT value FROM meta WHERE key = ?1",
+                    params![META_EDGE_PAIRS_EPOCH],
+                    |r| r.get::<_, Vec<u8>>(0),
+                )
+                .optional()
+                .unwrap()
+        };
+        let current = store.manifest().unwrap();
+        let small = store.read_small_state().unwrap();
+        store
+            .replace_for_migration(&current, &current, &small)
+            .unwrap();
+        assert_eq!(marker(&store), Some(1u64.to_be_bytes().to_vec()));
+        let moved = StoreManifest {
+            epoch: current.epoch + 1,
+            ..current.clone()
+        };
+        store
+            .replace_for_migration(&current, &moved, &small)
+            .unwrap();
+        assert_eq!(marker(&store), None);
     }
 
     #[test]
