@@ -1,0 +1,423 @@
+{
+  "provenance": {
+    "target": "x86_64-unknown-linux-gnu",
+    "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
+    "profile": "release",
+    "commit": "7ff30afbce95f60d21ff3ae385bd9a17ed0850db"
+  },
+  "slack": 0.02,
+  "cases": {
+    "floor.run": {
+      "bytes": 8519,
+      "outcome": "completed"
+    },
+    "proxy-get-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-get-10k.run": {
+      "bytes": 496583,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-get-2016.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-get-2016.run": {
+      "bytes": 492743,
+      "outcome": "completed"
+    },
+    "proxy-get-256.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-get-256.run": {
+      "bytes": 70343,
+      "outcome": "completed"
+    },
+    "proxy-get-index-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-get-index-10k.run": {
+      "bytes": 755991,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-set-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-set-10k.run": {
+      "bytes": 853559,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-has-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-has-10k.run": {
+      "bytes": 1275999,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-delete-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-delete-10k.run": {
+      "bytes": 788359,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-keys-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-keys-10k.run": {
+      "bytes": 1241719,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-getownproperty-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-getownproperty-10k.run": {
+      "bytes": 693703,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-define-10k.compile": {
+      "bytes": 11135,
+      "outcome": "compiled"
+    },
+    "proxy-define-10k.run": {
+      "bytes": 2016063,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-getprototypeof-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-getprototypeof-10k.run": {
+      "bytes": 790151,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-setprototypeof-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-setprototypeof-10k.run": {
+      "bytes": 919375,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-isextensible-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-isextensible-10k.run": {
+      "bytes": 725895,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-preventextensions-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-preventextensions-10k.run": {
+      "bytes": 693655,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-call-10k.compile": {
+      "bytes": 10175,
+      "outcome": "compiled"
+    },
+    "proxy-call-10k.run": {
+      "bytes": 1827791,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-construct-10k.compile": {
+      "bytes": 9887,
+      "outcome": "compiled"
+    },
+    "proxy-construct-10k.run": {
+      "bytes": 1503151,
+      "outcome": "ReentryLimit"
+    },
+    "proxy-proto-cycle.compile": {
+      "bytes": 9583,
+      "outcome": "compiled"
+    },
+    "proxy-proto-cycle.run": {
+      "bytes": 1065135,
+      "outcome": "ReentryLimit"
+    },
+    "join-self.compile": {
+      "bytes": 8871,
+      "outcome": "compiled"
+    },
+    "join-self.run": {
+      "bytes": 1211343,
+      "outcome": "ReentryLimit"
+    },
+    "string-self.compile": {
+      "bytes": 8871,
+      "outcome": "compiled"
+    },
+    "string-self.run": {
+      "bytes": 1207135,
+      "outcome": "ReentryLimit"
+    },
+    "render-nested-256.compile": {
+      "bytes": 10223,
+      "outcome": "compiled"
+    },
+    "render-nested-256.run": {
+      "bytes": 101127,
+      "outcome": "completed"
+    },
+    "render-self.compile": {
+      "bytes": 8871,
+      "outcome": "compiled"
+    },
+    "render-self.run": {
+      "bytes": 789255,
+      "outcome": "ReentryLimit"
+    },
+    "json-parse-arr-10k.compile": {
+      "bytes": 10447,
+      "outcome": "compiled"
+    },
+    "json-parse-arr-10k.run": {
+      "bytes": 1112919,
+      "outcome": "ReentryLimit"
+    },
+    "json-parse-obj-10k.compile": {
+      "bytes": 10447,
+      "outcome": "compiled"
+    },
+    "json-parse-obj-10k.run": {
+      "bytes": 2210087,
+      "outcome": "ReentryLimit"
+    },
+    "json-parse-arr-256.compile": {
+      "bytes": 10447,
+      "outcome": "compiled"
+    },
+    "json-parse-arr-256.run": {
+      "bytes": 155479,
+      "outcome": "completed"
+    },
+    "json-reviver-10k.compile": {
+      "bytes": 13903,
+      "outcome": "compiled"
+    },
+    "json-reviver-10k.run": {
+      "bytes": 1274639,
+      "outcome": "ReentryLimit"
+    },
+    "json-reviver-200.compile": {
+      "bytes": 13903,
+      "outcome": "compiled"
+    },
+    "json-reviver-200.run": {
+      "bytes": 148999,
+      "outcome": "completed"
+    },
+    "json-stringify-10k.compile": {
+      "bytes": 10223,
+      "outcome": "compiled"
+    },
+    "json-stringify-10k.run": {
+      "bytes": 2209183,
+      "outcome": "ReentryLimit"
+    },
+    "json-stringify-256.compile": {
+      "bytes": 10223,
+      "outcome": "compiled"
+    },
+    "json-stringify-256.run": {
+      "bytes": 296023,
+      "outcome": "completed"
+    },
+    "flat-self.compile": {
+      "bytes": 8871,
+      "outcome": "compiled"
+    },
+    "flat-self.run": {
+      "bytes": 823007,
+      "outcome": "ReentryLimit"
+    },
+    "flat-256.compile": {
+      "bytes": 10223,
+      "outcome": "compiled"
+    },
+    "flat-256.run": {
+      "bytes": 85119,
+      "outcome": "completed"
+    },
+    "foreach-63.compile": {
+      "bytes": 14559,
+      "outcome": "compiled"
+    },
+    "foreach-63.run": {
+      "bytes": 886991,
+      "outcome": "completed"
+    },
+    "foreach-64.compile": {
+      "bytes": 14559,
+      "outcome": "compiled"
+    },
+    "foreach-64.run": {
+      "bytes": 896303,
+      "outcome": "ReentryLimit"
+    },
+    "foreach-10k.compile": {
+      "bytes": 14559,
+      "outcome": "compiled"
+    },
+    "foreach-10k.run": {
+      "bytes": 896303,
+      "outcome": "ReentryLimit"
+    },
+    "async-64.compile": {
+      "bytes": 11135,
+      "outcome": "compiled"
+    },
+    "async-64.run": {
+      "bytes": 358399,
+      "outcome": "completed"
+    },
+    "async-10k.compile": {
+      "bytes": 11135,
+      "outcome": "compiled"
+    },
+    "async-10k.run": {
+      "bytes": 692143,
+      "outcome": "ReentryLimit"
+    },
+    "iter-setter.compile": {
+      "bytes": 8871,
+      "outcome": "compiled"
+    },
+    "iter-setter.run": {
+      "bytes": 199015,
+      "outcome": "ReentryLimit"
+    },
+    "regexp-deep.compile": {
+      "bytes": 13071,
+      "outcome": "compiled"
+    },
+    "regexp-deep.run": {
+      "bytes": 236087,
+      "outcome": "completed"
+    },
+    "proto-chain-ordinary-20k.compile": {
+      "bytes": 9503,
+      "outcome": "compiled"
+    },
+    "proto-chain-ordinary-20k.run": {
+      "bytes": 15879,
+      "outcome": "completed"
+    },
+    "proto-chain-arrays-20k.compile": {
+      "bytes": 10223,
+      "outcome": "compiled"
+    },
+    "proto-chain-arrays-20k.run": {
+      "bytes": 15751,
+      "outcome": "completed"
+    },
+    "bind-call-10k.compile": {
+      "bytes": 9999,
+      "outcome": "compiled"
+    },
+    "bind-call-10k.run": {
+      "bytes": 16487,
+      "outcome": "completed"
+    },
+    "async-gen-drain-40k.compile": {
+      "bytes": 8871,
+      "outcome": "compiled"
+    },
+    "async-gen-drain-40k.run": {
+      "bytes": 22111,
+      "outcome": "completed"
+    },
+    "eval-deep.compile": {
+      "bytes": 12543,
+      "outcome": "compiled"
+    },
+    "eval-deep.run": {
+      "bytes": 259759,
+      "outcome": "completed"
+    },
+    "parse-parens-91.compile": {
+      "bytes": 245583,
+      "outcome": "compiled"
+    },
+    "parse-array-91.compile": {
+      "bytes": 235391,
+      "outcome": "compiled"
+    },
+    "parse-object-90.compile": {
+      "bytes": 235503,
+      "outcome": "compiled"
+    },
+    "parse-call-args-91.compile": {
+      "bytes": 172783,
+      "outcome": "compiled"
+    },
+    "parse-arrow-91.compile": {
+      "bytes": 254319,
+      "outcome": "compiled"
+    },
+    "parse-template-91.compile": {
+      "bytes": 299455,
+      "outcome": "compiled"
+    },
+    "parse-blocks-512.compile": {
+      "bytes": 676295,
+      "outcome": "compiled"
+    },
+    "parse-functions-512.compile": {
+      "bytes": 857695,
+      "outcome": "compiled"
+    },
+    "parse-if-505.compile": {
+      "bytes": 304687,
+      "outcome": "compiled"
+    },
+    "parse-new-505.compile": {
+      "bytes": 410799,
+      "outcome": "compiled"
+    },
+    "parse-binding-510.compile": {
+      "bytes": 357231,
+      "outcome": "compiled"
+    },
+    "parse-cond-chain-1011.compile": {
+      "bytes": 604335,
+      "outcome": "compiled"
+    },
+    "parse-assign-chain-1011.compile": {
+      "bytes": 604335,
+      "outcome": "compiled"
+    },
+    "parse-binary-chain-2045.compile": {
+      "bytes": 1216367,
+      "outcome": "compiled"
+    },
+    "parse-member-chain-2045.compile": {
+      "bytes": 1216463,
+      "outcome": "compiled"
+    },
+    "parse-call-chain-2044.compile": {
+      "bytes": 1019647,
+      "outcome": "compiled"
+    },
+    "parse-elseif-chain-2044.compile": {
+      "bytes": 1216463,
+      "outcome": "compiled"
+    },
+    "parse-tagged-chain-2043.compile": {
+      "bytes": 1215871,
+      "outcome": "compiled"
+    }
+  }
+}
