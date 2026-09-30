@@ -29,8 +29,9 @@ PR #130 and issue #137) works around the gaps from outside:
 - It runs an `ExecStartPre` reaper that kills whatever process still holds
   `:8920` before each start (#137).
 
-This note surveys the lifecycle surfaces as they exist on `llm` and proposes
-changes, ranked, that would let a supervisor delete those workarounds.
+This design surveys the lifecycle surfaces as they exist in the current
+daemon and proposes changes, ranked, that would let a supervisor delete those
+workarounds.
 
 ## Survey of the Current Lifecycle Surfaces
 
@@ -135,6 +136,19 @@ and pid file without checking liveness.
 always exits 0. `endo ping` exits non-zero when it cannot connect, and it is
 the only liveness check that talks to the daemon.
 
+### Who writes `endo.pid` today
+
+`endo.pid` has two writers on the Go path. `engo` writes its own pid there
+(`go/engo/daemon/pidfile.go` `WritePID`). `manager-go.js` `updateRecordedPid()`
+then overwrites it on purpose with the Node daemon's pid, so that `stop`
+signals the process that owns the socket and relies on `engo` noticing the
+child's exit. On the Node path the only writer is `manager-node.js`
+`updateRecordedPid()`. Meanwhile the socket `.lock` marker records the pid
+of whichever process called `servePath`, which is the Node daemon on both
+paths. So on the Go path the lock marker and `endo.pid` can name the same
+process, while the process at the root of the daemon's tree, `engo`, is
+recorded nowhere once `manager-go.js` has run.
+
 `cli/bin/endo.cjs` discards the value `main()` returns. It sets
 `exitCode = 1` only when `main` throws. As a result, the codes `main`
 computes for `CommanderError` and for terminal errors never reach the shell.
@@ -145,7 +159,7 @@ The exit-code contract in section 6 must start by propagating that return value.
 Issue #137 states its own diagnosis: systemd's cgroup teardown during a
 stop or restart of the supervised unit can leave a worker reparented to
 PID 1, still holding `:8920`. PR #130 describes a different incident: an
-auto-starting health probe racing a supervised start. This note does not
+auto-starting health probe racing a supervised start. This design does not
 merge them. It keeps two candidate mechanisms and says which proposal
 addresses each.
 
@@ -170,11 +184,12 @@ Ranked by how much supervisor-visible damage each prevents per line of code.
 
 ### 1. `start` is a no-op when a healthy daemon owns the socket
 
-Before `clean()`, probe the socket (`probeSocket` already exists in
-`manager-node-powers.js`). If it is `live`, print `endo daemon already
-running (pid N)` and exit 0 without touching anything. If the lock marker names a
-live pid that is not serving yet, wait for the same bounded window
-`socket-lock.js` already uses, and probe again. Change `clean()` so it
+Before `clean()`, ask the classifier defined in section 2 (claim marker
+first, then `probeSocket`, which already exists in `manager-node-powers.js`).
+If it is `live`, print `Endo daemon already running (pid N)` and exit 0
+without touching anything. If it is `booting`, a live claimant that is not
+serving yet, wait for the same bounded window `socket-lock.js` already uses,
+and probe again. Change `clean()` so it
 removes the socket, marker, and pid file only when their owner is dead,
 which is the same predicate the lock already applies. Add `--force` for
 today's behavior.
@@ -212,7 +227,39 @@ the Node path, and the `engo` supervisor (not the `manager-go.js` it runs)
 on the Go path. The marker's on-disk format (location, pid, start time) is
 the contract, specified once in this design, so a Node daemon and an `engo`
 daemon started against the same state directory see and honor each other's
-claims. Section 1's pre-spawn probe lives in `daemon/index.js` `start()`,
+claims.
+
+**One owner record.** The section 2 claim marker, `<ephemeral>/endo.lock`,
+is the single durable record of which process owns this daemon instance. It
+is written once, by the claimant, and names the root of the process tree:
+`manager-node.js` on the Node path and `engo` on the Go path. Its content is
+two decimal lines, `<pid>\n<start-time>\n`, where `<start-time>` is field 22
+(`starttime`, clock ticks since boot) of `/proc/<pid>/stat` on Linux, parsed
+from after the last `)` so that a `comm` containing spaces or parentheses
+cannot shift the fields, and the `ps -o lstart=` string elsewhere. Every
+other record is derived from it or retired:
+
+- `endo.pid` is written by the same claimant, in the same step, with the
+  same pid. `manager-go.js` stops overwriting it; `stop` signals the root,
+  and `engo` already handles SIGTERM by stopping its children
+  (`go/engo/daemon/engo.go` `Serve`). Once every reader goes through the
+  claim marker, `endo.pid` can be retired; until then it is a copy, never a
+  second source.
+- The socket `.lock` marker stays, but only as the guard on the socket
+  pathname, so that two daemons configured with different state directories
+  and the same socket path do not both bind it. It no longer answers "which
+  daemon owns this state"; nothing reads its pid for that purpose.
+- Deciding whether the daemon is running has one owner too: a single
+  classifier that reads the claim marker first and probes the socket second,
+  returning `absent`, `booting` (claim held by a live owner, socket not yet
+  serving), `live`, or `stale` (claim names a dead owner). `start`, `stop`,
+  `status`, `ping`, and the client's auto-start all use it, so they cannot
+  disagree about a daemon that is still booting. Because identity is the
+  state directory, section 1 answers "already running" (exit 0) for a second
+  `start` against the same state directory even when it names a different
+  socket path.
+
+Section 1's pre-spawn probe lives in `daemon/index.js` `start()`,
 before the `ENDO_BIN` branch, so both paths share it as code rather than
 reimplementing it. The claim in section 2 has to exist in both languages;
 Phase 1 includes a cross-implementation test for it.
@@ -245,6 +292,13 @@ child. Better still, have it run `manager-node.js` in-process, so the
 supervised pid *is* the daemon, as the minion.town unit's comment already
 assumes.
 
+The Go path needs the same property. `engo` stops its children when it
+receives SIGTERM or SIGINT, but if `engo` itself is SIGKILLed its Node
+daemon and workers are reparented and survive. `engo` should therefore start
+its children with a parent-death signal (`SysProcAttr.Pdeathsig` on Linux) or
+pass them the same orphan-watch setting, and the section 4 tests run against
+both paths.
+
 *Fixes:* workers that survive a SIGKILLed manager and need `endo stop` to
 reap them. It also makes `run-daemon` correct under `KillMode=mixed`, under
 non-systemd supervisors, and under container init processes.
@@ -254,8 +308,9 @@ non-systemd supervisors, and under container init processes.
 Keep today's ordering (CapTP `terminate`, then pid, then workers, then clean), and add
 the following:
 
-- also find the daemon through the lock marker's pid when `endo.pid` is
-  missing (section 2 makes that the same pid);
+- find the daemon through the section 2 claim marker, the one owner
+  record, and fall back to `endo.pid` only while that file still exists as
+  its copy;
 - exit 0 both when it stopped something and when nothing was running, and
   print which case applied (`stopped pid N`, `not running`), because
   "nothing to stop" is success for a supervisor;
@@ -270,15 +325,22 @@ Document the codes and test them. Proposed values, borrowing from
 
 | Code | Meaning | Commands |
 |---|---|---|
-| 0 | Desired state reached (already running counts for `start`; already stopped counts for `stop`) | `start`, `stop`, `restart`, `ping`, `status` |
-| 3 | Daemon not running (LSB `status` convention) | `status`, `ping`, any client command under `ENDO_NO_AUTOSTART` |
-| 69 (`EX_UNAVAILABLE`) | Another live daemon owns this state directory; startup declined | `run-daemon`, `start --foreground` |
+| 0 | Action commands: desired state reached (already running counts for `start`; already stopped counts for `stop`) | `start`, `stop`, `restart` |
+| 0 | Query commands: the daemon is running | `ping`, `status` |
+| 3 | Daemon not running (LSB, Linux Standard Base, `status` convention) | `status`, `ping`, any client command under `ENDO_NO_AUTOSTART` |
+| 69 (`EX_UNAVAILABLE`) | Another live daemon owns this state directory; startup declined | `run-daemon` |
 | 70 (`EX_SOFTWARE`) | A recorded daemon or worker process survived SIGKILL | `stop`, `restart`, `purge` |
 | 75 (`EX_TEMPFAIL`) | Started but not ready within the timeout | `start` |
 | 1 | Any other failure | all |
 
 `endo status` should derive `running` from a socket probe, not from the pid
 file alone, and exit 3 when the daemon is not running.
+
+A plain `endo start` spawns a detached child and returns, so it cannot see
+the child lose the section 2 claim. Because section 1 runs the same
+classifier before spawning, the only way to lose that race is two starts in
+the same instant; the loser's child exits 69 and the winner's daemon serves.
+A supervisor that needs the claim result itself should run `run-daemon`.
 
 ### 7. (Lower priority) Readiness for `Type=notify`
 
@@ -291,7 +353,7 @@ shelling out to `systemd-notify`. It is not needed once sections 1 through 3 lan
 
 ## What minion.town Could Delete
 
-| Workaround | Removable after |
+| Workaround | Removable After |
 |---|---|
 | `[ -S endo.sock ] &&` guard before `endo list` probes (PR #130) | Now, by probing with `endo ping`; or section 3 |
 | `stop_endo_daemon` running `endo stop` after `systemctl stop` (PR #130) | Section 4, plus section 5 for the exit-code check |
@@ -311,7 +373,8 @@ shelling out to `systemd-notify`. It is not needed once sections 1 through 3 lan
 1. **Start safety:** sections 1 and 2, with tests for `start` twice, `start` while
    booting, a second `run-daemon` against the same state directory, and a
    Node daemon and an `engo` daemon contending for the same state directory
-   in both orders.
+   in both orders, and `stop` against a daemon that holds the claim but is
+   not yet serving.
 2. **Client and probe:** section 3 and the exit-code contract in section 6, with the
    `status`/`ping` changes.
 3. **Shutdown completeness:** sections 4 and 5, with tests that SIGKILL the manager and
