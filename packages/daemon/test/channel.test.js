@@ -1830,8 +1830,8 @@ test.serial(
     await E(joinerPowers).storeIdentifier(['general'], channelFormulaId);
 
     // === Simulate what bodyComponent does when navigating to the joiner space ===
-    // resolvePowers: E(rootPowers).lookup([joinerAgentName]) → joinerPowers
-    // then: E(joinerPowers).lookup(['general']) → the shared channel ref
+    // resolvePowers: E(rootPowers).lookup([joinerAgentName]) -> joinerPowers
+    // then: E(joinerPowers).lookup(['general']) -> the shared channel ref
     const joinerChannelRef = await E(joinerPowers).lookup(['general']);
 
     // Check if we're admin or joiner by comparing proposed names

@@ -3112,19 +3112,23 @@ test('an invitation whose stored guestName is a bare string still revives', asyn
   // Rewrite the stored invitation the way the daemon wrote it before pet-name
   // paths became array-only: `guestName` as a bare string.
   {
-    const db = openTestDb(config.statePath);
-    const invitations = db
+    const database = openTestDb(config.statePath);
+    const invitations = database
       .listFormulas()
-      .map(({ number }) => ({ number, ...db.readFormula(number) }))
+      .map(({ number }) => ({ number, ...database.readFormula(number) }))
       .filter(({ formula }) => formula.type === 'invitation');
     t.is(invitations.length, 1, 'the invitation is stored');
     for (const { number, node, formula } of invitations) {
       t.deepEqual(/** @type {{ guestName?: unknown }} */ (formula).guestName, [
         'bob',
       ]);
-      db.writeFormula(number, node, harden({ ...formula, guestName: 'bob' }));
+      database.writeFormula(
+        number,
+        node,
+        harden({ ...formula, guestName: 'bob' }),
+      );
     }
-    db.close();
+    database.close();
   }
 
   await restart(config);
