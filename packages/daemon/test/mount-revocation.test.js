@@ -293,7 +293,9 @@ test('revocation: propagates to a file handle opened before revoke', async t => 
     filePowers,
   });
   await E(mount).writeText(['file.txt'], 'contents');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['file.txt']));
+  const file = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['file.txt'])
+  );
   t.is(await E(file).text(), 'contents');
 
   E(control).revoke();
@@ -314,7 +316,9 @@ test('revocation: a range of a mount file view revokes with it', async t => {
     filePowers,
   });
   await E(mount).writeText(['file.txt'], 'hello world');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['file.txt']));
+  const file = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['file.txt'])
+  );
   // Attenuate to a byte range *before* revoking; the derived view reads through
   // the same live file, so it must revoke together with its origin.
   const range = await E(file).byteRange(0n, 5n);

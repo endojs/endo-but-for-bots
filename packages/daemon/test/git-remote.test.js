@@ -1058,9 +1058,9 @@ test.serial(
     const remoteUrl = pathToFileURL(remoteRoot).href;
     const { host } = await provisionHostContext(t);
 
-    const destMount = await E(host).provideScratchMount(
-      ['clone-identity-destination'],
-    );
+    const destMount = await E(host).provideScratchMount([
+      'clone-identity-destination',
+    ]);
     const { git, remote } = await E(host).provideGitClone({
       destMount,
       endpoint: { url: remoteUrl, allowLocalFileTransport: true },

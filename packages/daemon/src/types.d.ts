@@ -1275,10 +1275,7 @@ export interface Mail {
     guestHandleId: string;
   };
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
-  sendValue(
-    messageNumber: bigint,
-    petNameOrPath: string[],
-  ): Promise<void>;
+  sendValue(messageNumber: bigint, petNameOrPath: string[]): Promise<void>;
   /**
    * Deliver a value message to the local inbox only, bypassing the remote
    * recipient.  Used by endow() so the eval result appears in the host's
@@ -1727,10 +1724,7 @@ export interface EndoGuest extends EndoAgent {
     readerRef: ERef<PassableBytesReader>,
     petName?: string[],
   ): Promise<unknown>;
-  storeValue<T extends Passable>(
-    value: T,
-    petName: string[],
-  ): Promise<void>;
+  storeValue<T extends Passable>(value: T, petName: string[]): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
   /**
@@ -1757,10 +1751,7 @@ export interface EndoGuest extends EndoAgent {
    * redirecting an existing route), with the agent-key write deferred until the
    * invitation is proven.
    */
-  accept(
-    invitationLocator: string,
-    correspondentName: string[],
-  ): Promise<void>;
+  accept(invitationLocator: string, correspondentName: string[]): Promise<void>;
 }
 
 export type SecretState = 'active' | 'revoked';
@@ -1874,10 +1865,7 @@ export interface EndoHost extends EndoAgent {
     readerRef: ERef<PassableBytesReader>,
     petName: string[],
   ): Promise<FarRef<EndoReadable>>;
-  storeValue<T extends Passable>(
-    value: T,
-    petName: string[],
-  ): Promise<void>;
+  storeValue<T extends Passable>(value: T, petName: string[]): Promise<void>;
   storeTree(remoteTree: unknown, petName: string[]): Promise<unknown>;
   provideMount(
     path: string,
@@ -2053,14 +2041,8 @@ export interface EndoHost extends EndoAgent {
    * attenuated guest or narrower powers object instead.
    */
   provideHostPath(cap: unknown): Promise<string>;
-  provideGuest(
-    petName?: string[],
-    opts?: MakeAgentOptions,
-  ): Promise<EndoGuest>;
-  provideHost(
-    petName?: string[],
-    opts?: MakeAgentOptions,
-  ): Promise<EndoHost>;
+  provideGuest(petName?: string[], opts?: MakeAgentOptions): Promise<EndoGuest>;
+  provideHost(petName?: string[], opts?: MakeAgentOptions): Promise<EndoHost>;
   makeDirectory(petNamePath: string[]): Promise<EndoDirectory>;
   provideWorker(petNamePath: string[]): Promise<EndoWorker>;
   evaluate(
@@ -2091,10 +2073,7 @@ export interface EndoHost extends EndoAgent {
    * scratch lives as long as its pet name; cancelling the pet name
    * removes it.
    */
-  stageTree(
-    treeName: string[],
-    scratchPetName: string[],
-  ): Promise<unknown>;
+  stageTree(treeName: string[], scratchPetName: string[]): Promise<unknown>;
   /**
    * Stage a readable tree (ReadableTree or Mount) into an internal
    * scratch directory under the Endo state tree and invoke the Node
@@ -2114,10 +2093,7 @@ export interface EndoHost extends EndoAgent {
   addPeerInfo(peerInfo: PeerInfo): Promise<void>;
   listKnownPeers(): Promise<PeerInfo[]>;
   followPeerChanges(): AsyncGenerator<PetStoreNameChange, undefined, undefined>;
-  makeChannel(
-    petName: string[],
-    proposedName: string,
-  ): Promise<EndoChannel>;
+  makeChannel(petName: string[], proposedName: string): Promise<EndoChannel>;
   makeTimer(
     petName: string[],
     intervalMs: number,
@@ -2126,15 +2102,9 @@ export interface EndoHost extends EndoAgent {
   /** Locate a formula with connection hints. */
   locateWithHints(...petNamePath: string[]): Promise<string | undefined>;
   /** Adopt a value from a locator that includes connection hints. */
-  adoptFromLocator(
-    locator: string,
-    petNameOrPath: string[],
-  ): Promise<void>;
+  adoptFromLocator(locator: string, petNameOrPath: string[]): Promise<void>;
   invite(correspondentName: string[]): Promise<Invitation>;
-  accept(
-    invitationLocator: string,
-    correspondentName: string[],
-  ): Promise<void>;
+  accept(invitationLocator: string, correspondentName: string[]): Promise<void>;
   endow(
     messageNumber: bigint,
     bindings: Record<string, string[]>,

@@ -199,7 +199,9 @@ test.serial(
     );
     t.is(await E(reconnected.powers).identify('git'), guestGitId);
     t.is(await E(reconnected.powers).identify('calendar'), originalCalendarId);
-    const reconnectedCalendar = await E(reconnected.powers).lookup(['calendar']);
+    const reconnectedCalendar = await E(reconnected.powers).lookup([
+      'calendar',
+    ]);
     t.is(await E(reconnectedCalendar).lookup(['value']), 'original');
     t.is(await E(reconnected.powers).lookup(['answer']), 42);
 

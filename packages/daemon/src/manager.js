@@ -2379,9 +2379,9 @@ const makeDaemonCore = async (
    * @returns {Promise<Uint8Array>}
    */
   const packTreeIntoArchiveBytes = async treeP => {
-    const mapBlob = await E(/** @type {any} */ (treeP)).lookup(
-      ['compartment-map.json'],
-    );
+    const mapBlob = await E(/** @type {any} */ (treeP)).lookup([
+      'compartment-map.json',
+    ]);
     const mapText = await E(/** @type {any} */ (mapBlob)).text();
     let compartmentMap;
     try {

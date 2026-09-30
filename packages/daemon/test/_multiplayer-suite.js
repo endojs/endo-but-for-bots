@@ -1004,7 +1004,13 @@ export const runMultiplayerSuite = ({ test, network }) => {
     await stop(configB);
 
     // A can still communicate with C while B is partitioned.
-    await E(hostA).evaluate(['@main'], '"after-partition"', [], [], ['new-val']);
+    await E(hostA).evaluate(
+      ['@main'],
+      '"after-partition"',
+      [],
+      [],
+      ['new-val'],
+    );
     await E(hostA).send(['carol'], ['Still here'], ['new-val'], [['new-val']]);
 
     const carolMsgs2 = await E(hostC).listMessages();

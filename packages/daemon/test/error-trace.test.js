@@ -244,10 +244,14 @@ test.serial(
     await E(host).provideWorker(['wA']);
     await E(host).provideWorker(['wB']);
     await t
-      .throwsAsync(E(host).evaluate(['wA'], 'throw new Error("from-A")', [], []))
+      .throwsAsync(
+        E(host).evaluate(['wA'], 'throw new Error("from-A")', [], []),
+      )
       .catch(() => {});
     await t
-      .throwsAsync(E(host).evaluate(['wB'], 'throw new Error("from-B")', [], []))
+      .throwsAsync(
+        E(host).evaluate(['wB'], 'throw new Error("from-B")', [], []),
+      )
       .catch(() => {});
     const traces = await E(E(host).diagnostics()).traces();
     const recent = await E(traces).recent({ limit: 16 });

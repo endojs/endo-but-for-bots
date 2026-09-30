@@ -242,10 +242,9 @@ test.serial(
       );
 
       // --- Host B: adopt channel from locator ---
-      await E(hostB).adoptFromLocator(
-        /** @type {string} */ (locator),
-        ['remote-channel'],
-      );
+      await E(hostB).adoptFromLocator(/** @type {string} */ (locator), [
+        'remote-channel',
+      ]);
 
       // --- Host B: look up the remote channel and join ---
       const remoteChannel = await E(hostB).lookup(['remote-channel']);
@@ -370,10 +369,9 @@ test.serial(
 
       // Host B adopts and joins
       const locator = await E(hostA).locateWithHints('chat-room');
-      await E(hostB).adoptFromLocator(
-        /** @type {string} */ (locator),
-        ['remote-chat'],
-      );
+      await E(hostB).adoptFromLocator(/** @type {string} */ (locator), [
+        'remote-chat',
+      ]);
       const remoteChannel = await E(hostB).lookup(['remote-chat']);
       const bobMember = await E(remoteChannel).join('Bob');
 
@@ -444,10 +442,9 @@ test.serial(
 
       // Host B uses adoptFromLocator — this should register peer info
       // and allow B to reach A's node
-      await E(hostB).adoptFromLocator(
-        /** @type {string} */ (locator),
-        ['remote-val'],
-      );
+      await E(hostB).adoptFromLocator(/** @type {string} */ (locator), [
+        'remote-val',
+      ]);
 
       // Host B should now be able to look up the remote value
       const value = await E(hostB).lookup(['remote-val']);

@@ -8,7 +8,10 @@
  */
 
 import { M } from '@endo/patterns';
-import { NamePathShape, NamePathArgumentShape } from '@endo/daemon/type-guards.js';
+import {
+  NamePathShape,
+  NamePathArgumentShape,
+} from '@endo/daemon/type-guards.js';
 
 /** @import { LalToolDef } from './index.js' */
 

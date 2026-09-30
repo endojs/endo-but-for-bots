@@ -41,7 +41,10 @@ test('evaluate returns the compartment result', async t => {
 
 test('evaluate exposes $id and $cancelled', async t => {
   const { facet } = makeFacet();
-  t.is(await E(facet).evaluate(['$id'], [], [], 'id-2', neverSettles()), 'id-2');
+  t.is(
+    await E(facet).evaluate(['$id'], [], [], 'id-2', neverSettles()),
+    'id-2',
+  );
   t.is(
     await E(facet).evaluate(
       ['typeof $cancelled.then'],
@@ -57,7 +60,13 @@ test('evaluate exposes $id and $cancelled', async t => {
 test('evaluate exposes the standard endowments', async t => {
   const { facet } = makeFacet();
   t.is(
-    await E(facet).evaluate(['typeof M.string'], [], [], 'id-3', neverSettles()),
+    await E(facet).evaluate(
+      ['typeof M.string'],
+      [],
+      [],
+      'id-3',
+      neverSettles(),
+    ),
     'function',
   );
   t.is(

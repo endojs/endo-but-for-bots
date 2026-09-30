@@ -1,9 +1,4 @@
-import type {
-  Name,
-  EndoGuest,
-  NamePath,
-  StampedMessage,
-} from '@endo/daemon';
+import type { Name, EndoGuest, NamePath, StampedMessage } from '@endo/daemon';
 
 export type { NamePath };
 

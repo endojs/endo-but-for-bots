@@ -299,7 +299,9 @@ test('EndoMountFile.textRange attenuates to a line-interval view (LF, terminal-L
   t.is(await E(await E(lf).textRange(1, 1)).text(), '', 'empty interval');
 
   await E(mount).writeText(['term.txt'], 'a\nb\n');
-  const term = /** @type {EndoMountFile} */ (await E(mount).lookup(['term.txt']));
+  const term = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['term.txt'])
+  );
   t.is(
     await E(await E(term).textRange(2, 3)).text(),
     '',
@@ -307,7 +309,9 @@ test('EndoMountFile.textRange attenuates to a line-interval view (LF, terminal-L
   );
 
   await E(mount).writeText(['crlf.txt'], 'x\r\ny\r\n');
-  const crlf = /** @type {EndoMountFile} */ (await E(mount).lookup(['crlf.txt']));
+  const crlf = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['crlf.txt'])
+  );
   t.is(
     await E(await E(crlf).textRange(0, 1)).text(),
     'x\r',
@@ -735,7 +739,9 @@ test('EndoMountFile.append extends the file content', async t => {
   const rootPath = makeTemporaryRoot(t);
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['log.txt'], 'one\n');
-  const file = /** @type {EndoMountFile} */ (await E(mount).lookup(['log.txt']));
+  const file = /** @type {EndoMountFile} */ (
+    await E(mount).lookup(['log.txt'])
+  );
   await E(file).append('two\n');
   t.is(fs.readFileSync(path.join(rootPath, 'log.txt'), 'utf8'), 'one\ntwo\n');
 });
@@ -1134,7 +1140,9 @@ test('readOnly() narrows to a ReadableTree view that recursively narrows file lo
   const mount = makeMount({ rootPath, readOnly: false, filePowers });
   await E(mount).writeText(['a.txt'], 'hi');
   const view = await E(mount).readOnly();
-  const file = /** @type {ReadableBlobView} */ (await E(view).lookup(['a.txt']));
+  const file = /** @type {ReadableBlobView} */ (
+    await E(view).lookup(['a.txt'])
+  );
   // eslint-disable-next-line no-underscore-dangle
   const methods = await E(/** @type {any} */ (file)).__getMethodNames__();
   // The view-of-a-file is a ReadableBlob, not an EndoMountFile.

@@ -1816,7 +1816,9 @@ test.serial(
     const joinerDisplayName = 'BobJoiner';
 
     // Step 1: Create new persona for the joiner
-    await E(host).provideHost([joinerSpaceName], { agentName: joinerAgentName });
+    await E(host).provideHost([joinerSpaceName], {
+      agentName: joinerAgentName,
+    });
     const joinerPowers = await E(host).lookup([joinerAgentName]);
 
     // Step 2: Get the channel's formula ID (what the locator encodes)

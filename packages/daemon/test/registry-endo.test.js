@@ -77,16 +77,19 @@ const prepare = async t => {
   return { host, cancelled };
 };
 
-test.serial('E(host).lookup(["@registry"]) resolves an EndoRegistry', async t => {
-  const { host } = await prepare(t);
-  const registry = await E(host).lookup(['@registry']);
-  t.truthy(registry, '@registry is populated on the host');
-  const help = await E(registry).help();
-  t.true(
-    typeof help === 'string' && help.includes('EndoRegistry'),
-    'the registry reports its help',
-  );
-});
+test.serial(
+  'E(host).lookup(["@registry"]) resolves an EndoRegistry',
+  async t => {
+    const { host } = await prepare(t);
+    const registry = await E(host).lookup(['@registry']);
+    t.truthy(registry, '@registry is populated on the host');
+    const help = await E(registry).help();
+    t.true(
+      typeof help === 'string' && help.includes('EndoRegistry'),
+      'the registry reports its help',
+    );
+  },
+);
 
 test.serial(
   '@registry lookup(name, version) is undefined before any fetch',

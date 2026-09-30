@@ -216,10 +216,9 @@ test('reclaims many distinct content hashes across sequential collections', asyn
   for (let i = 0; i < count; i += 1) {
     const bytes = new TextEncoder().encode(`distinct-${i}`);
     // eslint-disable-next-line no-await-in-loop
-    const blob = await E(host).storeBlob(
-      bytesReaderFromIterator([bytes]),
-      [`batch-${i}`],
-    );
+    const blob = await E(host).storeBlob(bytesReaderFromIterator([bytes]), [
+      `batch-${i}`,
+    ]);
     // eslint-disable-next-line no-await-in-loop
     const sha = await E(blob).sha256();
     shas.push(sha);
@@ -283,10 +282,9 @@ test('retains a shared hash when one of many collected formulas references it', 
     distractorShas.push(await E(blob).sha256());
   }
   // The dedupe-against-survivor blob.
-  const twin = await E(host).storeBlob(
-    bytesReaderFromIterator([sharedBytes]),
-    ['doomed-twin'],
-  );
+  const twin = await E(host).storeBlob(bytesReaderFromIterator([sharedBytes]), [
+    'doomed-twin',
+  ]);
   t.is(await E(twin).sha256(), sharedSha);
 
   // Drop every doomed name.  The shared hash should survive

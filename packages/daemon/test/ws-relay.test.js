@@ -260,7 +260,13 @@ test.serial(
       await E(hostA).addPeerInfo(await E(hostB).getPeerInfo());
 
       // Create a value on B
-      await E(hostB).evaluate(['@main'], '"hello from B"', [], [], ['greeting']);
+      await E(hostB).evaluate(
+        ['@main'],
+        '"hello from B"',
+        [],
+        [],
+        ['greeting'],
+      );
       const greetingLocator = await E(hostB).locate('greeting');
 
       // Write the locator into A's namespace (out-of-band introduction)

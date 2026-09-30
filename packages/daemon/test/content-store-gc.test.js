@@ -163,14 +163,12 @@ test('content-store blob survives when a sibling formula still references the sa
 
   const bytes = new TextEncoder().encode('shared-content');
 
-  const blobA = await E(host).storeBlob(
-    bytesReaderFromIterator([bytes]),
-    ['twin-a'],
-  );
-  const blobB = await E(host).storeBlob(
-    bytesReaderFromIterator([bytes]),
-    ['twin-b'],
-  );
+  const blobA = await E(host).storeBlob(bytesReaderFromIterator([bytes]), [
+    'twin-a',
+  ]);
+  const blobB = await E(host).storeBlob(bytesReaderFromIterator([bytes]), [
+    'twin-b',
+  ]);
 
   const shaA = await E(blobA).sha256();
   const shaB = await E(blobB).sha256();

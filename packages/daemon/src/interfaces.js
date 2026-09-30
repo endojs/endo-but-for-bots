@@ -268,13 +268,17 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Subscribe to messages (returns iterator ref)
   followMessages: M.call().returns(M.promise()),
   // Respond to a request with a formula identifier
-  resolve: M.call(MessageNumberShape, NamePathArgumentShape).returns(M.promise()),
+  resolve: M.call(MessageNumberShape, NamePathArgumentShape).returns(
+    M.promise(),
+  ),
   // Decline a request
   reject: M.call(MessageNumberShape).optional(M.string()).returns(M.promise()),
   // Adopt a reference from an incoming message
-  adopt: M.call(MessageNumberShape, NamePathArgumentShape, NamePathArgumentShape).returns(
-    M.promise(),
-  ),
+  adopt: M.call(
+    MessageNumberShape,
+    NamePathArgumentShape,
+    NamePathArgumentShape,
+  ).returns(M.promise()),
   // Remove a message from inbox
   dismiss: M.call(MessageNumberShape).returns(M.promise()),
   // Remove all messages from inbox
@@ -367,11 +371,15 @@ export const HostInterface = M.interface('EndoHost', {
   handle: M.call().returns(M.remotable()),
   listMessages: M.call().returns(M.promise()),
   followMessages: M.call().returns(M.promise()),
-  resolve: M.call(MessageNumberShape, NamePathArgumentShape).returns(M.promise()),
-  reject: M.call(MessageNumberShape).optional(M.string()).returns(M.promise()),
-  adopt: M.call(MessageNumberShape, NamePathArgumentShape, NamePathArgumentShape).returns(
+  resolve: M.call(MessageNumberShape, NamePathArgumentShape).returns(
     M.promise(),
   ),
+  reject: M.call(MessageNumberShape).optional(M.string()).returns(M.promise()),
+  adopt: M.call(
+    MessageNumberShape,
+    NamePathArgumentShape,
+    NamePathArgumentShape,
+  ).returns(M.promise()),
   dismiss: M.call(MessageNumberShape).returns(M.promise()),
   dismissAll: M.call().returns(M.promise()),
   request: M.call(NamePathArgumentShape, M.string())
@@ -514,17 +522,25 @@ export const HostInterface = M.interface('EndoHost', {
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
   // Make a caplet from a source-only ZIP archive
-  makeArchive: M.call(M.or(NamePathArgumentShape, M.undefined()), NamePathArgumentShape)
+  makeArchive: M.call(
+    M.or(NamePathArgumentShape, M.undefined()),
+    NamePathArgumentShape,
+  )
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
   // Make a caplet from a ReadableTree or Mount laid out as a
   // compartment-mapper archive (compartment-map.json at root plus
   // modules at their referenced paths).
-  makeFromTree: M.call(M.or(NamePathArgumentShape, M.undefined()), NamePathArgumentShape)
+  makeFromTree: M.call(
+    M.or(NamePathArgumentShape, M.undefined()),
+    NamePathArgumentShape,
+  )
     .optional(MakeCapletOptionsShape)
     .returns(M.promise()),
   // Materialise a readable tree into a new scratch mount.
-  stageTree: M.call(NamePathArgumentShape, NamePathArgumentShape).returns(M.promise()),
+  stageTree: M.call(NamePathArgumentShape, NamePathArgumentShape).returns(
+    M.promise(),
+  ),
   // Stage a readable tree and run its entry module as an unconfined
   // Node caplet.
   makeUnconfinedFromTree: M.call(
@@ -540,7 +556,9 @@ export const HostInterface = M.interface('EndoHost', {
     .optional(M.string())
     .returns(M.promise()),
   // Cancel a value
-  cancel: M.call(NamePathArgumentShape).optional(M.error()).returns(M.promise()),
+  cancel: M.call(NamePathArgumentShape)
+    .optional(M.error())
+    .returns(M.promise()),
   // Get the greeter
   greeter: M.call().returns(M.promise()),
   // Get the gateway
@@ -558,7 +576,9 @@ export const HostInterface = M.interface('EndoHost', {
   // Locate a formula with connection hints.
   locateWithHints: M.call().rest(NamePathShape).returns(M.promise()),
   // Adopt a value from a locator with connection hints
-  adoptFromLocator: M.call(LocatorShape, NamePathArgumentShape).returns(M.promise()),
+  adoptFromLocator: M.call(LocatorShape, NamePathArgumentShape).returns(
+    M.promise(),
+  ),
   // Create an invitation
   invite: M.call(NamePathArgumentShape).returns(M.promise()),
   // Accept an invitation
