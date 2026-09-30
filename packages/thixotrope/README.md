@@ -509,13 +509,18 @@ The engine API also accepts bigint budgets; numeric inputs must fit unsigned 32 
 Status reports computron budgets as decimal strings to preserve precision.
 Heap ceilings are arena limits, not per-crank allowances or total process memory limits.
 
-Execution and heap limits may increase on restart while preserving the workspace.
-Decreases are rejected before workers start; repeat raised settings on subsequent starts so omitted
-settings do not revert to lower defaults.
-The watchdog timeout may change in either direction.
+Limits may change on restart while preserving the workspace, with one exception:
+the slot and chunk ceilings may only increase, because a restored heap that already exceeds a
+lower ceiling could never allocate again.
+A ceiling decrease is refused before workers start, never clamped; repeat raised ceilings on
+subsequent starts so an omitted setting does not revert to a lower default.
+The crank budget, bootstrap budget, and watchdog timeout may change in either direction.
+Lower a budget after a clean shutdown: crash recovery replays journaled cranks under the current
+budget, and a crank recorded under a higher one can exceed it and quarantine that vat.
 Raising limits does not automatically retry an already failed vat.
-Older runtime manifests require migration or a fresh directory; the increase policy applies to
-version-2 manifests.
+Older runtime manifests require migration or a fresh directory, and a `runtime.json` written by a
+newer version is reported as such rather than as corrupt; this policy applies to version-2
+manifests.
 See [the limits design](designs/ironhorse-limits.md) for compatibility details.
 
 This remains an experimental, local, single-supervisor MVP.

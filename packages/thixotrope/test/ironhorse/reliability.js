@@ -204,7 +204,7 @@ test.serial(
       join(boot, 'worker-peer.js'),
     );
     await t.throwsAsync(
-      () => launch(t, state, { ...env, THIXOTROPE_CRANK_BUDGET: '9999999' }),
+      () => launch(t, state, { ...env, THIXOTROPE_SLOT_CEILING: '999999' }),
       { message: /Incompatible Ironhorse runtime/ },
     );
     const recovered = await launch(t, state, env);
