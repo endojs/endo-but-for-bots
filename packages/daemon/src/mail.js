@@ -1140,9 +1140,9 @@ export const makeMailboxMaker = ({
     };
 
     /** @type {Mail['adopt']} */
-    const adopt = async (messageNumber, edgeName, petNamePathArgument) => {
+    const adopt = async (messageNumber, edgeName, petNamePath) => {
       assertName(edgeName);
-      const { namePath: petNamePath } = petNamePathFrom(petNamePathArgument);
+      const { namePath } = petNamePathFrom(petNamePath);
       const normalizedMessageNumber = mustParseBigint(messageNumber, 'message');
       const message = messages.get(normalizedMessageNumber);
       if (message === undefined) {
@@ -1156,7 +1156,7 @@ export const makeMailboxMaker = ({
         }
         const id = /** @type {FormulaIdentifier} */ (message.valueId);
         context.thisDiesIfThatDies(id);
-        await E(directory).storeIdentifier(petNamePath, id);
+        await E(directory).storeIdentifier(namePath, id);
         return;
       }
       if (message.type !== 'package') {
@@ -1179,7 +1179,7 @@ export const makeMailboxMaker = ({
         );
       }
       context.thisDiesIfThatDies(id);
-      await E(directory).storeIdentifier(petNamePath, id);
+      await E(directory).storeIdentifier(namePath, id);
     };
 
     /** @type {Mail['request']} */

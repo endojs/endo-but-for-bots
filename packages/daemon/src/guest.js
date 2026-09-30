@@ -275,17 +275,17 @@ export const makeGuestMaker = ({
       const workerId = await prepareWorkerFormulation(workerName, tasks.push);
 
       /** @type {(FormulaIdentifier | NamePath)[]} */
-      const endowmentFormulaIdsOrPaths = petNamePaths.map(pathArgument => {
-        const petNamePath = namePathFrom(pathArgument);
-        if (petNamePath.length === 1) {
-          const id = specialStore.identifyLocal(petNamePath[0]);
+      const endowmentFormulaIdsOrPaths = petNamePaths.map(petNamePath => {
+        const namePath = namePathFrom(petNamePath);
+        if (namePath.length === 1) {
+          const id = specialStore.identifyLocal(namePath[0]);
           if (id === undefined) {
-            throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
+            throw new Error(`Unknown pet name ${q(namePath[0])}`);
           }
           return /** @type {FormulaIdentifier} */ (id);
         }
 
-        return petNamePath;
+        return namePath;
       });
 
       if (resultName !== undefined) {

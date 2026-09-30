@@ -58,10 +58,10 @@ const assertPowersName = name => {
  * multi-segment path is validated as a name path by {@link namePathFrom},
  * letting a caller reference powers that live inside a directory rather
  * than at the agent's top level.
- * @param {string[]} namePathArgument
+ * @param {string[]} petNamePath
  */
-const assertPowersNamePath = namePathArgument => {
-  const namePath = namePathFrom(namePathArgument);
+const assertPowersNamePath = petNamePath => {
+  const namePath = namePathFrom(petNamePath);
   if (namePath.length === 1) {
     assertPowersName(namePath[0]);
   }
@@ -1447,17 +1447,17 @@ export const makeHostMaker = ({
         (resultName !== undefined ? `eval:${resultName}` : 'eval');
 
       /** @type {(FormulaIdentifier | NamePath)[]} */
-      const endowmentFormulaIdsOrPaths = petNamePaths.map(pathArgument => {
-        const petNamePath = namePathFrom(pathArgument);
-        if (petNamePath.length === 1) {
-          const id = petStore.identifyLocal(petNamePath[0]);
+      const endowmentFormulaIdsOrPaths = petNamePaths.map(petNamePath => {
+        const namePath = namePathFrom(petNamePath);
+        if (namePath.length === 1) {
+          const id = petStore.identifyLocal(namePath[0]);
           if (id === undefined) {
-            throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
+            throw new Error(`Unknown pet name ${q(namePath[0])}`);
           }
           return /** @type {FormulaIdentifier} */ (id);
         }
 
-        return petNamePath;
+        return namePath;
       });
 
       if (resultName !== undefined) {
@@ -1908,12 +1908,12 @@ export const makeHostMaker = ({
 
     /**
      * @template {'host' | 'guest' | 'agent'} T
-     * @param {NamePath} [namePathArgument] - The agent's pet-name path.
+     * @param {NamePath} [petNamePath] - The agent's pet-name path.
      * @param {T} [type]
      */
-    const getNamedAgent = async (namePathArgument, type) => {
-      if (namePathArgument !== undefined) {
-        const namePath = namePathFrom(namePathArgument);
+    const getNamedAgent = async (petNamePath, type) => {
+      if (petNamePath !== undefined) {
+        const namePath = namePathFrom(petNamePath);
         // A single segment resolves against the agent's own pet store; a
         // path resolves through the directory so an agent can be named
         // (and found again, idempotently) inside a subdirectory.
@@ -2233,7 +2233,7 @@ export const makeHostMaker = ({
     };
 
     /** @type {EndoHost['cancel']} */
-    const cancel = async (petNamePath, reason = new Error('Cancelled')) => {
+    const cancel = async (petNamePath, reason = new Error('Canceled')) => {
       const namePath = namePathFrom(petNamePath);
       const id = await E(directory).identify(...namePath);
       if (id === undefined) {
@@ -2498,16 +2498,16 @@ export const makeHostMaker = ({
       // Resolve each binding pet name to a formula identifier from the host's namespace
       const codeNames = slotKeys;
       const endowmentFormulaIdsOrPaths = codeNames.map(codeName => {
-        const petNamePathArgument = bindings[codeName];
-        const petNamePath = namePathFrom(petNamePathArgument);
-        if (petNamePath.length === 1) {
-          const id = petStore.identifyLocal(petNamePath[0]);
+        const petNamePath = bindings[codeName];
+        const namePath = namePathFrom(petNamePath);
+        if (namePath.length === 1) {
+          const id = petStore.identifyLocal(namePath[0]);
           if (id === undefined) {
-            throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
+            throw new Error(`Unknown pet name ${q(namePath[0])}`);
           }
           return /** @type {FormulaIdentifier} */ (id);
         }
-        return petNamePath;
+        return namePath;
       });
 
       /** @type {DeferredTasks<EvalDeferredTaskParams>} */

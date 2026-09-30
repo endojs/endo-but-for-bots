@@ -8103,13 +8103,13 @@ testNeedsNodeWorker(
 test('makeUnconfinedFromTree refuses a bare-string powers name before staging', async t => {
   const { host, config } = await prepareHost(t);
 
-  const srcDir = path.join(config.statePath, '..', 'unconfined-refuse-src');
-  fs.mkdirSync(srcDir, { recursive: true });
+  const sourceDirectory = path.join(config.statePath, '..', 'unconfined-refuse-src');
+  fs.mkdirSync(sourceDirectory, { recursive: true });
   fs.writeFileSync(
-    path.join(srcDir, 'index.js'),
+    path.join(sourceDirectory, 'index.js'),
     'export const make = () => 1;',
   );
-  await E(host).provideMount(srcDir, ['refuse-tree'], { readOnly: true });
+  await E(host).provideMount(sourceDirectory, ['refuse-tree'], { readOnly: true });
 
   await t.throwsAsync(
     E(host).makeUnconfinedFromTree(undefined, ['refuse-tree'], {
@@ -8124,17 +8124,17 @@ test('makeUnconfinedFromTree refuses a bare-string powers name before staging', 
 test('makeUnconfinedFromTree refuses a bare-string worker name before staging', async t => {
   const { host, config } = await prepareHost(t);
 
-  const srcDir = path.join(
+  const sourceDirectory = path.join(
     config.statePath,
     '..',
     'unconfined-refuse-worker-src',
   );
-  fs.mkdirSync(srcDir, { recursive: true });
+  fs.mkdirSync(sourceDirectory, { recursive: true });
   fs.writeFileSync(
-    path.join(srcDir, 'index.js'),
+    path.join(sourceDirectory, 'index.js'),
     'export const make = () => 1;',
   );
-  await E(host).provideMount(srcDir, ['refuse-worker-tree'], {
+  await E(host).provideMount(sourceDirectory, ['refuse-worker-tree'], {
     readOnly: true,
   });
 

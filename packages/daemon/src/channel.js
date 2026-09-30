@@ -747,10 +747,10 @@ export const makeChannelMaker = ({
           resolvedIds,
           replyType,
         ) => {
+          checkAccess();
           // The guard admits strings only so this can refuse them with a
           // retry hint; channels identify values by `resolvedIds`.
           petNamePaths.forEach(namePathFrom);
-          checkAccess();
           const now = Date.now();
           checkPostRate(now);
           const ids = /** @type {FormulaIdentifier[]} */ (resolvedIds || []);
