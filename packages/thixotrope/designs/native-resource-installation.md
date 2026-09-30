@@ -44,8 +44,25 @@ silently combine an old durable module with newly edited native code.
 The operator command is `thix install-native state-directory inventory-name resource-directory`.
 A state directory selects the daemon's existing single workspace; this change does not introduce
 another user naming or pet-name-path model.
-The durable factory is synchronous and receives `{E, Far, makeKeeper, adapters}`.
+The durable factory is synchronous and receives `{E, Far, adapters, makeKeeper, makeManager}`.
 It returns `{registration, lifecycle}`, both remotables.
+`makeManager` is the manager kit, bound to the installation's launcher and keeper: it keeps the
+desired registrations, holds one adapter incarnation, reconciles each registration against it,
+hands out per-registration handles that report status and close only their own generation,
+withdraws a registration durably before telling the adapter, retires an incarnation whose
+unbinding is uncertain, and rebuilds the adapter at startup when anything is desired.
+The ephemeral module builds its root with `makeAdapter` from `@endo/thixotrope/native-adapter.js`,
+which serializes operations, keeps the bindings, and restores a set of registrations one at a
+time, reporting each failure without giving up on the rest.
+The two speak one protocol, `bind(key, spec)`, `unbind(key)`, `restore(entries)` and `keys()`, where
+`spec` is whatever passable record the author registers under a key; the author supplies the
+identity rules for a registration, the status record a handle reports, and the two verbs that
+acquire and release the resource.
+Sameness is the author's to state on both sides, not an identity default: a record crosses the
+wire as a fresh copy each time, and the manager binds a registration again at every status.
+The adapter forgets a binding only once its release succeeds, so a release that fails is retried
+by a later unbind and its failure reaches the manager, which retires the incarnation.
+`src/native/contract.js` states the contract as types.
 Only the registration facet is installed in inventory; applications get it through existing grants.
 Reinstalling the same identity returns the same registration without replacing later inventory edits.
 Each installed lifecycle receives its own daemon startup notification.
