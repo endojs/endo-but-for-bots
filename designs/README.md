@@ -477,7 +477,7 @@ LLM-agent stack).*
 | [formula-inspector](formula-inspector.md) | 2026-02-14 | 2026-06-13 | In Progress |
 | [gateway-bearer-token-auth](gateway-bearer-token-auth.md) | 2026-03-02 | 2026-03-06 | **Implemented** |
 | [hardened-text-codecs-shim](hardened-text-codecs-shim.md) | 2026-05-04 | 2026-05-04 | Not Started |
-| [hardened-url-shim](hardened-url-shim.md) | 2026-05-04 | 2026-09-27 | **Complete** ([endojs/endo#3332](https://github.com/endojs/endo/pull/3332)) |
+| [hardened-url-shim](hardened-url-shim.md) | 2026-05-04 | 2026-09-30 | **Complete** ([endojs/endo#3332](https://github.com/endojs/endo/pull/3332)) |
 | [inventory-cancel-and-liveness](inventory-cancel-and-liveness.md) | 2026-02-14 | 2026-03-13 | Not Started |
 | [inventory-drag-and-drop](inventory-drag-and-drop.md) | 2026-02-14 | 2026-02-24 | Not Started |
 | [inventory-grouping-by-type](inventory-grouping-by-type.md) | 2026-02-14 | 2026-06-28 | In Progress |
