@@ -110,7 +110,11 @@ test('a registration is reconciled, described, and closed by its own handle only
   t.deepEqual(manager.keys(), ['one']);
   t.true(await E(first).close());
   t.false(bound.has('one'));
-  t.deepEqual(await E(first).status(), { key: 'one', spec, state: 'closed' });
+  t.deepEqual(
+    await E(first).status(),
+    { key: 'one', spec: undefined, state: 'closed' },
+    'a closed handle no longer names what it was made with',
+  );
   const second = await manager.register('one', spec);
   t.not(second, first);
   t.false(

@@ -270,8 +270,8 @@ only holder of dangling references is the manager, which is the one thing equipp
 Retirement is generation identity: the hub tombstones a retired session's rows, so a stale reference
 breaks rather than reaching a successor.
 A manager holding a consumer's handler retains that consumer's vat, which is correct: a vat being
-served is reachable, and it is released by withdrawing the registration and dropping its handle,
-which still names the handler it was made with.
+served is reachable, and withdrawing the registration releases it: a closed handle no longer
+names the handler it was made with.
 
 `durable.js` exports a synchronous `make(powers)` that receives `{ adapters, makeKeeper,
 makeManager }`, with the guest prelude in scope, and returns `{ facet, lifecycle }`.

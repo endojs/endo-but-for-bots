@@ -37,8 +37,9 @@ import { makeSerialQueue } from '../serial-queue.js';
  *   whether a differing registration may take the place of the existing one
  *   under the same key, in which case the adapter is told to rebind; never by
  *   default, so the key is refused as already registered
- * @param {(key: unknown, spec: Spec, state: 'bound' | 'inactive' | 'closed', error?: string) => unknown} options.describe
- *   the status record a handle reports
+ * @param {(key: unknown, spec: Spec | undefined, state: 'bound' | 'inactive' | 'closed', error?: string) => unknown} options.describe
+ *   the status record a handle reports; a closed registration has no spec,
+ *   since its handle no longer names what it was made with
  */
 export const makeManager = (
   { adapters, makeKeeper },
@@ -51,8 +52,9 @@ export const makeManager = (
   /**
    * Desired state, one mutable record per key. The handle a caller holds is
    * bound to its record, so a later registration under the same key cannot
-   * be closed through a handle from an earlier one.
-   * @type {Map<unknown, {spec: Spec, handle: any}>}
+   * be closed through a handle from an earlier one. A desired record always
+   * has its spec; a closed one has dropped it.
+   * @type {Map<unknown, {spec: Spec | undefined, handle: any}>}
    */
   const desired = new Map();
   const enqueue = makeSerialQueue();
@@ -77,17 +79,17 @@ export const makeManager = (
    * A failed bind retains the desired state but must not withhold the close
    * handle; status retries reconciliation and reports the current outcome.
    * @param {unknown} key
-   * @param {{spec: Spec}} entry
+   * @param {{spec: Spec | undefined}} entry a desired record, so its spec
+   *   is present
    */
   const reconcile = async (key, entry) => {
+    const spec = /** @type {Spec} */ (entry.spec);
     try {
       const adapter = await keeper.provide();
-      await E(adapter).bind(key, entry.spec);
-      return harden(describe(key, entry.spec, 'bound'));
+      await E(adapter).bind(key, spec);
+      return harden(describe(key, spec, 'bound'));
     } catch (error) {
-      return harden(
-        describe(key, entry.spec, 'inactive', describeError(error)),
-      );
+      return harden(describe(key, spec, 'inactive', describeError(error)));
     }
   };
   return harden({
@@ -104,7 +106,7 @@ export const makeManager = (
         harden(spec);
         let entry = desired.get(key);
         if (entry === undefined) {
-          /** @type {{spec: Spec, handle: any}} */
+          /** @type {{spec: Spec | undefined, handle: any}} */
           const created = { spec, handle: undefined };
           created.handle = Far('RegistrationHandle', {
             status: () =>
@@ -117,8 +119,13 @@ export const makeManager = (
               enqueue(async () => {
                 if (desired.get(key) !== created) return false;
                 // Withdrawing desired state is the durable part and is done
-                // first; a future incarnation restores without this key.
+                // first; a future incarnation restores without this key. The
+                // spec goes with it: a closed handle a consumer keeps must
+                // not keep naming the consumer's own objects, or the manager
+                // would retain that consumer's vat for as long as the handle
+                // lives.
                 desired.delete(key);
+                created.spec = undefined;
                 // Only a live adapter has anything to unbind. Building one
                 // just to tell it about a key it never bound would restore
                 // every other registration as a side effect.
@@ -141,11 +148,15 @@ export const makeManager = (
           });
           entry = created;
           desired.set(key, entry);
-        } else if (!same(entry.spec, spec)) {
-          if (!replaces(entry.spec, spec))
-            throw Error(`${label} is already registered`);
-          // The desired state changes and the adapter is told to rebind.
-          entry.spec = spec;
+        } else {
+          // A desired record has its spec.
+          const existing = /** @type {Spec} */ (entry.spec);
+          if (!same(existing, spec)) {
+            if (!replaces(existing, spec))
+              throw Error(`${label} is already registered`);
+            // The desired state changes and the adapter is told to rebind.
+            entry.spec = spec;
+          }
         }
         await reconcile(key, entry);
         return entry.handle;
