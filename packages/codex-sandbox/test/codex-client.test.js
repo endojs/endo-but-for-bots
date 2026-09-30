@@ -1056,6 +1056,7 @@ test('restored nonempty baseline retains exact prior checkpoint lineage after re
 for (const restoredBase of [null, 'rollout-1']) {
   test(`fresh native restoration retains journal lineage across setup crash (${restoredBase})`, async t => {
     t.timeout(5000);
+    /** @type {{ threadId: string, recovery?: { baseTurnId: string | null, previousCheckpoint?: string } } | undefined} */
     let persisted;
     const restoredTurnIds = restoredBase === null ? [] : [restoredBase];
     const options = {
@@ -1088,6 +1089,7 @@ for (const restoredBase of [null, 'rollout-1']) {
       },
     });
     t.false(first.sent.some(message => message.method === 'turn/start'));
+    if (!persisted) throw Error('Expected persisted recovery state');
     const second = makeFixture({
       threadId: persisted.threadId,
       existingTurnIds: restoredTurnIds,

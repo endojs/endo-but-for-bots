@@ -6,9 +6,9 @@ import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iter
 import { makeNativeContextTransport } from '../src/native-context-transport.js';
 
 const gate = () => {
-  let release;
+  let release = () => {};
   const promise = new Promise(resolve => {
-    release = resolve;
+    release = () => resolve(undefined);
   });
   return { promise, release };
 };
@@ -25,15 +25,17 @@ const fixture = (options = {}) => {
     async stdin() {
       await options.stdinGate;
       if (options.stdinFailure) throw Error('SENSITIVE native input');
-      return bytesWriterFromIterator({
-        async next(bytes) {
+      /** @type {AsyncIterator<unknown, undefined, Uint8Array>} */
+      const sink = {
+        async next(...[bytes]) {
           writes.push(new TextDecoder().decode(bytes));
           return { done: false, value: undefined };
         },
         async return() {
           return { done: true, value: undefined };
         },
-      });
+      };
+      return bytesWriterFromIterator(sink);
     },
     async stdout() {
       await options.outputGate;

@@ -260,6 +260,13 @@ fixtures. The focused Floot hosted-agent suite passes 14 runtime tests; the
 declaration mismatch is not an absent runtime method.
 Next: reconcile these current interfaces and fixtures without adding legacy
 option support or weakening malformed-input coverage.
+Codex follow-up: all 25 diagnostics are corrected in four test fixtures.
+Captured-state narrowing, setup callback return types, newline-complete fixture
+payloads and async writer iterator signatures now match their current contracts.
+Malformed/torn payloads still cross an explicitly marked test boundary and are
+rejected by the unchanged runtime parser. Full Codex tests pass (430), package
+typechecking passes, and lint reports zero errors (74 warnings).
+Independent adversarial review passes; no runtime implementation changed.
 RA-04 and the current cutover evidence are recorded above and in the alignment doc.
 Both cleanup changes are deployed in generation 187 with fresh cross-backend
 lifecycle and ordinary restart-recall acceptance.
