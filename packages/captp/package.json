@@ -62,7 +62,8 @@
     "@endo/marshal": "workspace:^",
     "@endo/nat": "workspace:^",
     "@endo/pass-style": "workspace:^",
-    "@endo/promise-kit": "workspace:^"
+    "@endo/promise-kit": "workspace:^",
+    "@endo/sturdyref": "workspace:^"
   },
   "bugs": {
     "url": "https://github.com/endojs/endo/issues"

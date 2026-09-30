@@ -25,6 +25,9 @@
     },
     {
       "path": "../promise-kit/tsconfig.composite.json"
+    },
+    {
+      "path": "../sturdyref/tsconfig.composite.json"
     }
   ]
 }
