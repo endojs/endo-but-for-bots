@@ -193,7 +193,9 @@ export const makeDefaultCapTPImportExportTables = ({
       // the peer's export, never exposed, and enlivening sends that
       // export `enliven()`: the peer enlivens its own SturdyRef and
       // returns the live result. It fails once the connection is gone.
-      const enlivener = settler.resolveWithPresence();
+      const enlivener = /** @type {{ enliven: () => unknown }} */ (
+        settler.resolveWithPresence()
+      );
       val = makeSturdyRef(
         harden({
           enliven: () => E(enlivener).enliven(),
