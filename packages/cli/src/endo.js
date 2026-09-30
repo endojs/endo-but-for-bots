@@ -880,11 +880,16 @@ export const main = async rawArgs => {
     .command('start')
     .description('start the endo daemon as a background service')
     .option('--dry-run', 'log what would be don, rather than doing it')
+    .option(
+      '--force',
+      'clean and start even if a daemon appears to be running',
+    )
     .action(async options => {
-      const { dryRun } = options;
+      const { dryRun, force } = options;
       const { start } = await import('@endo/daemon');
       await start(undefined, {
         dryRun,
+        force,
       });
     });
 
@@ -928,9 +933,11 @@ export const main = async rawArgs => {
   program
     .command('clean')
     .description('erases ephemeral state')
-    .action(async _cmd => {
+    .option('--force', 'erase it even if a daemon appears to be running')
+    .action(async options => {
+      const { force } = options;
       const { clean } = await import('@endo/daemon');
-      await clean();
+      await clean(undefined, { force });
     });
 
   program

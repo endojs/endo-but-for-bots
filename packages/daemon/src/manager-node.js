@@ -26,6 +26,12 @@ import {
 import { startWsGateway } from './ws-gateway.js';
 import { runExtraSetups } from './extra-setups.js';
 import { installShutdownSignals } from './shutdown-signals.js';
+import {
+  claimStateLock,
+  releaseStateLockSync,
+  stateLockDeclinedExitCode,
+  stateLockPath,
+} from './socket-lock.js';
 
 const fsp = { access: fs.promises.access };
 /** @import { Config } from './types.js' */
@@ -80,18 +86,50 @@ const reportErrorToParent = message => {
   }
 };
 
+// Written as soon as the state lock is ours, so that `endo stop` can find a
+// daemon that is still booting. The lock, not this file, keeps a second
+// daemon out, so there is no previous owner here to kill.
 const updateRecordedPid = async () => {
   const pidPath = filePowers.joinPath(ephemeralStatePath, 'endo.pid');
-
-  await filePowers
-    .readFileText(pidPath)
-    .then(pidText => {
-      const oldPid = Number(pidText);
-      kill(oldPid);
-    })
-    .catch(() => {});
-
   await filePowers.writeFileText(pidPath, `${pid}\n`);
+};
+
+/**
+ * Claim this daemon's ephemeral state directory, or exit without touching
+ * it. The claim precedes everything that assumes sole ownership: opening the
+ * database, killing the workers recorded under the directory, and recording
+ * our pid.
+ */
+const claimStateDirectory = async () => {
+  // Windows cannot create the symlink the marker is made of without
+  // privileges, as with the socket lock.
+  if (process.platform === 'win32') {
+    await updateRecordedPid();
+    return;
+  }
+  await fs.promises.mkdir(ephemeralStatePath, { recursive: true });
+  const lockPath = stateLockPath(ephemeralStatePath);
+  const claim = await claimStateLock(lockPath);
+  if (!claim.claimed) {
+    const message = `another Endo daemon (pid ${claim.owner}) owns ${ephemeralStatePath}`;
+    console.error(message);
+    // Let the report reach a `start()` waiting on it before exiting.
+    await new Promise(resolve => {
+      if (!process.send) {
+        resolve(undefined);
+        return;
+      }
+      process.send(
+        { type: 'error', message, code: 'EX_UNAVAILABLE' },
+        undefined,
+        undefined,
+        () => resolve(undefined),
+      );
+    });
+    process.exit(stateLockDeclinedExitCode);
+  }
+  process.once('exit', () => releaseStateLockSync(lockPath));
+  await updateRecordedPid();
 };
 
 const killStaleWorkers = async () => {
@@ -127,6 +165,7 @@ const killStaleWorkers = async () => {
 const main = async () => {
   const daemonLabel = `daemon on PID ${pid}`;
   console.log(`Endo daemon starting on PID ${pid}`);
+  await claimStateDirectory();
   cancelled.catch(err => {
     console.log(`Endo daemon stopping on PID ${pid} (caught: ${err})`);
   });
@@ -255,9 +294,6 @@ const main = async () => {
   }
 
   const servicesStopped = Promise.all(services.map(({ stopped }) => stopped));
-
-  // Record self as official daemon process
-  await updateRecordedPid();
 
   // Wait for services to end normally
   await servicesStopped;
