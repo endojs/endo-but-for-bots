@@ -775,7 +775,8 @@ fn rebinding_a_machine_whose_old_store_fails_a_read_unwinds_with_that_stores_err
 /// resume of the store reads. One whose store another session has since
 /// committed to, or that now holds a fork at the same epoch, unwinds out
 /// of the rebind with the old store's epoch or token mismatch, and nothing
-/// is committed.
+/// is committed; so does one taken out of its session without
+/// `into_machine`.
 #[test]
 fn an_unbound_lazy_machine_refuses_a_fault_from_a_store_that_moved() {
     use ironhorse_snapshot::machine::store_fault_of;
@@ -879,6 +880,27 @@ fn an_unbound_lazy_machine_refuses_a_fault_from_a_store_that_moved() {
         StoreError::EpochMismatch {
             expected: 3,
             found: 4
+        }
+    );
+
+    // A machine taken out of its session some other way is checked from
+    // the session's drop on.
+    let mut lazy = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
+    evict_all(&lazy, &old);
+    let machine = std::mem::replace(lazy.machine_mut(), built());
+    drop(lazy);
+    let mut other = resume_from_store_lazy(old.clone(), &sig()).expect("lazy resume");
+    crank(&mut other, "backed[2046].v = -1;");
+    assert_eq!(
+        checkpoint_to_store(&mut other, &sig(), &mut *old.borrow_mut()).unwrap(),
+        5
+    );
+    drop(other);
+    assert_eq!(
+        refuses(machine),
+        StoreError::EpochMismatch {
+            expected: 4,
+            found: 5
         }
     );
 
@@ -1019,6 +1041,14 @@ fn a_lazy_fault_refuses_a_row_of_the_wrong_length() {
     drop(begin(m, &mut *store.borrow_mut()));
     let lazy = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
     let manifest = store.borrow().manifest().unwrap();
+    // Fault everything in first, so what is evicted does not depend on
+    // what the restore happened to touch.
+    for page in 0..slot_page_count(manifest.slot_count) {
+        lazy.machine().slots().touch_page(page);
+    }
+    for ext in 0..chunk_extent_count(manifest.chunk_len) {
+        lazy.machine().chunks().touch_extent(ext);
+    }
     let page = (0..slot_page_count(manifest.slot_count))
         .find(|&page| lazy.machine().slots().evict_page(page))
         .expect("a clean page to evict");
@@ -1217,8 +1247,8 @@ fn a_failed_commit_keeps_the_free_list_mark_for_the_retry() {
     let mut session = begin(m, &mut store);
 
     let (code, names) = compile(
-        "var made = []; for (var i = 0; i < 5000; i++) made.push({v: i}); \
-         for (var i = 0; i < 5000; i += 2) made[i] = null;",
+        "var made = []; for (var i = 0; i < 8000; i++) made.push({v: i}); \
+         for (var i = 0; i < 8000; i += 2) made[i] = null;",
     );
     let code = session.machine_mut().relink_crank(&code, &names).unwrap();
     assert!(session.machine_mut().run(&code).completed);

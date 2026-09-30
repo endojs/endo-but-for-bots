@@ -555,19 +555,20 @@ struct LazyPin {
     /// describes: the one the session resumed from, advanced by each
     /// checkpoint that lands in the pinned store.
     backed: (u64, CommitToken),
-    /// Shared with the page source. [`StoreSession::into_machine`] sets it
-    /// to the states the machine can fault from, [`Self::backed`] and the
-    /// session's own last commit, after which every fault first checks
-    /// that the store holds one of them, so another session's commit to
-    /// the same store refuses the unbound machine's next fault rather than
-    /// mixing the two commits' rows into a heap that a later rebind or
-    /// snapshot would persist.
+    /// Shared with the page source. The session's tracking sets it as it
+    /// is dropped (so at [`StoreSession::into_machine`]) to the states the
+    /// machine can fault from, [`Self::backed`] and the session's own last
+    /// commit, after which every fault first checks that the store holds
+    /// one of them, so another session's commit to the same store refuses
+    /// the unbound machine's next fault rather than mixing the two commits'
+    /// rows into a heap that a later rebind or snapshot would persist.
     ///
     /// The session's own commit counts because a commit that reached the
     /// pinned store through a forwarding wrapper leaves [`Self::backed`]
     /// behind; its token is random, so a store holds it only by holding
-    /// that commit, and a page the commit did not write reads as the
-    /// backing describes it (the pages it wrote stay resident).
+    /// that commit, and a page none of the session's commits since
+    /// [`Self::backed`] wrote reads as the backing describes it (the pages
+    /// they wrote stay resident).
     unbound: std::rc::Rc<std::cell::Cell<Option<UnboundPairing>>>,
     /// Address of the pinned store's data (the `S` inside the
     /// `Rc<RefCell<S>>` the page source reads through). The session
@@ -651,6 +652,18 @@ pub fn catch_store_fault<T>(f: impl FnOnce() -> Result<T, StoreError>) -> Result
 pub struct StoreSession {
     interp: Interp,
     tracking: StoreTracking,
+}
+
+/// A lazy session's machine can outlive its tracking (through
+/// [`StoreSession::into_machine`], or taken out of the session any other
+/// way): arm the unbound machine's pairing check as the tracking goes.
+impl Drop for StoreTracking {
+    fn drop(&mut self) {
+        if let Some(pin) = &self.pin {
+            pin.unbound
+                .set(Some([pin.backed, (self.epoch, self.token)]));
+        }
+    }
 }
 
 struct StoreTracking {
@@ -774,16 +787,12 @@ impl StoreSession {
     ///
     /// A lazily resumed machine still faults from the session's store; from
     /// here on each fault first checks that the store holds the state the
-    /// machine's backing describes, and unwinds with a [`StoreFault`]
-    /// carrying [`StoreError::EpochMismatch`] or
-    /// [`StoreError::BaselineMismatch`] once it does not.
+    /// machine's backing describes or the session's own last commit, and
+    /// unwinds with a [`StoreFault`] carrying [`StoreError::EpochMismatch`]
+    /// or [`StoreError::BaselineMismatch`] once it holds neither. The
+    /// session's tracking arms that check as it goes, so a machine taken out
+    /// of a session some other way is checked from the session's drop on.
     pub fn into_machine(self) -> Interp {
-        if let Some(pin) = &self.tracking.pin {
-            pin.unbound.set(Some([
-                pin.backed,
-                (self.tracking.epoch, self.tracking.token),
-            ]));
-        }
         self.interp
     }
 }
@@ -888,8 +897,9 @@ fn begin_store_core(
     // A machine unbound from an earlier session may still carry that
     // session's lazy backing. The image above faulted every page in, each
     // fault checking that the old store still held the state the backing
-    // describes ([`LazyPin::unbound`]), so stop relying on the backing
-    // now: nothing is evicted and nothing faults from the old store again.
+    // describes or the old session's own last commit ([`LazyPin::unbound`]),
+    // so stop relying on the backing now: nothing is evicted and nothing
+    // faults from the old store again.
     interp.abandon_backing();
     let mut tokens: Box<dyn CommitTokenSource> = Box::new(RandomTokens);
     let batch = crate::store::image_to_batch_with_cadence(
@@ -1267,8 +1277,9 @@ impl<S: HeapStore> StorePageSource<S> {
     /// rather than as an anonymous borrow panic.
     ///
     /// For an unbound machine the store must still hold the state the
-    /// backing describes. The check and the read that follows share one
-    /// borrow, so no commit through this handle lands between them.
+    /// backing describes or the session's own last commit. The check and
+    /// the read that follows share one borrow, so no commit through this
+    /// handle lands between them.
     fn store(&self) -> std::cell::Ref<'_, S> {
         let store = self.store.try_borrow().unwrap_or_else(|_| {
             raise_store_fault(StoreError::EngineInvariant(
