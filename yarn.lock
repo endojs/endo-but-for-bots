@@ -3019,6 +3019,7 @@ __metadata:
     "@endo/is-well-formed-string": "workspace:^"
     "@endo/promise-kit": "workspace:^"
     "@endo/ses-ava": "workspace:^"
+    "@endo/sturdyref": "workspace:^"
     "@fast-check/ava": "catalog:dev"
     ava: "catalog:dev"
     babel-eslint: "npm:^10.1.0"
@@ -3523,7 +3524,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@endo/sturdyref@workspace:packages/sturdyref":
+"@endo/sturdyref@workspace:^, @endo/sturdyref@workspace:packages/sturdyref":
   version: 0.0.0-use.local
   resolution: "@endo/sturdyref@workspace:packages/sturdyref"
   dependencies:
