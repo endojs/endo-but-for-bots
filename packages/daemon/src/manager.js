@@ -4561,7 +4561,7 @@ const makeDaemonCore = async (
         // Records minted before pet-name paths became array-only may hold
         // `guestName` as a bare string; revive them as a one-segment path
         // rather than refusing stored daemon data.
-        /** @type {import('./types.js').NamePath} */ (
+        /** @type {NamePath} */ (
           typeof guestName === 'string' ? [guestName] : guestName
         ),
       ),
@@ -7485,7 +7485,7 @@ const makeDaemonCore = async (
    *   `EndoHost` (`EndoHost.invite`, source-compatible) or an `EndoGuest`.
    * @param {FormulaIdentifier} invitingHandleId - the inviting agent's handle,
    *   which the locator's `from` names, so an acceptor binds that agent.
-   * @param {import('./types.js').NamePath} guestName
+   * @param {NamePath} guestName
    */
   const makeInvitation = async (
     id,
