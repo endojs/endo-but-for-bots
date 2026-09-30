@@ -90,8 +90,10 @@ the simplification inventory; it does not waive RA-01's numerical target.
 The collection retry fix now retains unfinished storage cleanup for later graph
 drains in the same daemon, while keeping failed cancellation fenced.
 It is not yet deployed and does not address native process-loss recovery.
-Failed guest construction can still leave an orphan identity key; its bounded
-never-exposed-key retirement design remains the next cleanup finding to address.
+Failed guest construction now has bounded key retirement for newly allocated,
+uninstantiated and unpublished identities after fully checked rollback.
+Instantiated/published identities, surviving state and uncertain cleanup retain
+their keys. This is also not yet deployed; it is not general identity collection.
 RA-01's size target remains unproven; RA-03 is implemented, and direct-Fae
 compaction remains on hold.
 The older chronological entries and final sequence below are historical evidence,

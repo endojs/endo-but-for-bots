@@ -187,18 +187,20 @@ for (const automatic of [false, true, 'directory']) {
           t.is(await E(host).identify('failed-guest'), undefined);
           t.is(await E(host).identify('failed-powers'), undefined);
           t.is(await E(host).identify('failed-directory'), undefined);
-          // Characterize the still-open key-retirement boundary without
-          // exposing key material in assertions. Formula rollback is not key GC.
+          // These failures precede guest instantiation and publication. Once
+          // rollback completes, their construction keys have no remaining owner.
+          // Compare identifiers only; never expose private key material.
           const newAgentIds = powers.persistence
             .listAgentKeys()
             .map(entry => entry.agentId)
             .filter(id => !priorAgentIds.has(id));
-          t.is(newAgentIds.length, automatic === 'directory' ? 0 : 1);
-          const remainingFormulaIds = await powers.persistence.listFormulas();
-          for (const id of newAgentIds) {
-            const { node } = parseId(id);
-            t.false(remainingFormulaIds.some(formula => formula.node === node));
-          }
+          t.deepEqual(newAgentIds, []);
+          t.deepEqual(
+            new Set(
+              powers.persistence.listAgentKeys().map(entry => entry.agentId),
+            ),
+            priorAgentIds,
+          );
           for (const number of acquired) {
             // eslint-disable-next-line no-await-in-loop
             await t.throwsAsync(powers.persistence.readFormula(number), {

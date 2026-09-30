@@ -224,8 +224,8 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Current retained-code durability audit — required, in progress
 
-Current-source reconciliation (2026-09-30): the collection fix is implemented
-for same-incarnation retry; construction-key cleanup remains open.
+Current-source reconciliation (2026-09-30): collection retries and uninstantiated,
+unpublished construction-key cleanup are implemented for the same incarnation.
 Both are separate from the deferred native process-loss design:
 
 - `manager.js` now retains failed cleanup jobs, original metadata and unfinished
@@ -234,10 +234,12 @@ Both are separate from the deferred native process-loss design:
   is not retried. Nested/concurrent drains do not repeat in-flight retries;
   persistent old failures do not reject unrelated graph work.
   This is same-incarnation ownership, not durable restart recovery.
-- `guest-construction-cleanup.test.js` still expects an orphan agent identity key
-  after failed construction, despite no surviving formulas for its node. A bounded
-  never-exposed construction-key retirement design is needed; unconditional key
-  deletion or general peer-identity retirement is not authorized by this finding.
+- Failed guest construction now retires its newly allocated key only when no
+  guest was instantiated or publication attempted, construction pins were released,
+  and node-wide formula, graph, controller, in-flight-read, collection and retention
+  checks are clear. Exact stored ownership is rechecked before synchronous deletion.
+  Host keys, existing guests, provider Secrets and renewal credentials are excluded.
+  No general peer-identity retirement or startup orphan-key sweep is implemented.
 
 The earlier lost-acknowledgement unnamed-marshal reclamation gap is superseded:
 the current publication regression requires that unpublished formula to be absent.
@@ -247,7 +249,7 @@ Root docs now pass, while test-inclusive package type diagnostics still need a
 fresh scoped reconciliation. Those build limitations must not be reported as a
 green whole-repository typecheck.
 RA-04 and the current cutover evidence are recorded above and in the alignment doc.
-No new cleanup implementation is claimed by this reconciliation.
+Neither cleanup change has yet been deployed.
 
 Native-context journal follow-up (2026-09-24): a real daemon/worker reconstruction
 regression now exercises the production Floot agent and private immutable storage
@@ -672,17 +674,17 @@ against the pre-fix implementation; the second was added afterward.
 This does not establish global quiescence across concurrent/reentrant drains,
 nor fix the failed callback's missing retry ownership.
 
-Agent identity-key retention — reproduced, unresolved (2026-09-24):
+Agent identity-key retention — historical reproduction (2026-09-24):
 all 40 failed guest/automatic-powers construction cases retain one new `agent_key`
 record despite having no persisted formulas left under its node. The four direct
-directory cases add no keys. The 44-case fixture now characterizes this explicitly
+directory cases added no keys. The 44-case fixture then characterized this explicitly
 using record counts and owner identities, without putting private key material
-in assertions. These are temporary characterization assertions of an open defect,
-not a requirement to preserve orphan keys; replace them with reclamation assertions
-when safe retirement is implemented. This concerns daemon agent identities, not
+in assertions. Those temporary assertions documented the defect, not a requirement
+to preserve orphan keys; the implementation below replaces them with reclamation
+assertions. This concerns daemon agent identities, not
 provider Secrets, subscription credentials or renewal ownership.
 
-Source review found no manager call to `deleteAgentKey`. Its SQLite implementation
+The initial review found no manager call to `deleteAgentKey`. Its SQLite implementation
 deletes only the key row, without retiring retention rows or live followers.
 The key is also operational metadata: `hasAgentKey` determines `isLocalId`, local
 graph dependencies and local-versus-remote evaluation; host/guest reincarnation
@@ -691,14 +693,42 @@ edges. Inbound/outbound peer-retention followers capture the agent identity once
 and continue updating retention state. A collected guest alone therefore does
 not prove that independently retained formulas or peer activity can lose the key.
 
-Next design/test boundary: distinguish a never-exposed failed construction from
-general agent retirement. The former needs exact node-wide formula absence,
+Design boundary refined on 2026-09-30: distinguish an uninstantiated, unpublished
+failed construction from general agent retirement.
+"Never exposed" is too strong: formula-change observers can see identifiers
+before a pet name is published. Actual handle creation calls `provide(guestId)`,
+so it necessarily enters the guest maker; diagnostic formula reads alone do not.
+The former needs exact node-wide formula absence,
 settled construction/collection cleanup and proof that identity authority was not
 published; the latter also needs active retention/connection retirement and
 surviving-formula checks. Do not add unconditional key deletion in a construction
-finally or infer these conditions from an absent guest formula. No runtime key
-deletion is implemented by this characterization; this is not a native recovery
-architecture commitment or completion of the finding.
+finally or infer these conditions from an absent guest formula.
+
+The bounded implementation tracks only fresh guest construction in memory,
+starting before the key write so a lost acknowledgement remains owned.
+Guest-maker entry permanently removes eligibility before any await; successful
+construction also drops tracking before deferred publication.
+After rollback releases its pins, cleanup checks exact key ownership and the whole
+node, including disk-only formulas, graph members, controllers, collection fences,
+in-flight reads and retention rows. Checks and deletion are synchronous.
+A deletion failure keeps the candidate for a later drain, with all checks repeated.
+An instantiated or published guest is not reclaimed through this path, even if
+its creation request eventually rejects.
+The 44 construction cases now require prior key identities to remain exactly
+unchanged; separate fault cases cover write acknowledgement loss, deletion retry,
+diagnostic instantiation, cancellation failure, surviving formulas, retention and
+partial publication. This is not a native recovery architecture commitment,
+historical-key migration or general identity garbage collector.
+All 99 construction, key-retirement, collection, graph, directory and publication
+regressions pass, including the real-daemon publication restart.
+The instantiated-guest guard proves no formulas remain while the retained guest
+can still list static names, demonstrating why formula absence is insufficient.
+Two older cleanup-drain assertions now require one successful retry and no replay
+of acknowledged sibling deletions; original failure assertions are preserved.
+Independent adversarial review passes. Root docs report zero errors (163 warnings).
+Daemon typechecking and formatting pass; changed-file lint has zero errors
+(66 warnings).
+Not yet deployed.
 
 Publication validation follow-up (2026-09-24, local, not deployed):
 the five baseline type diagnostics above are corrected in the test fixtures.
