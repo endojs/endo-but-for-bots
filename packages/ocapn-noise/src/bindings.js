@@ -390,6 +390,10 @@ export const makeOcapnSessionCryptography = ({
       throw new Error(
         "OCapN Noise Protocol responder cannot read initiator's SYN message",
       );
+    } else if (readCode === 5) {
+      throw new Error(
+        'OCapN Noise Protocol initiator verifying key does not match its Noise static key',
+      );
     }
 
     // Negotiate against the initiator's freshly-decrypted offer set.

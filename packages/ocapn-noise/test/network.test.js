@@ -5,7 +5,12 @@ import { makeQueue } from '@endo/stream';
 import harden from '@endo/harden';
 
 import { cborCodec } from '@endo/ocapn/cbor';
+import { getRandomValues, wasmModule } from '@endo/ocapn-noise/platform';
 import { makeOcapnNoiseNetwork } from '../index.js';
+import {
+  makeOcapnSessionCryptography,
+  PREFIXED_SYN_LENGTH,
+} from '../src/bindings.js';
 import { makeMockTransportPair } from '../src/transports/mock.js';
 import { makeMockMeshFabric } from './_fabric.js';
 
@@ -298,6 +303,50 @@ test('active session is preserved when a second inbound handshake arrives', asyn
   netA.shutdown();
   netB.shutdown();
   fabric.shutdown();
+});
+
+test('impostor SYN claiming a peer identity cannot displace that peer session', async t => {
+  t.timeout(10_000);
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, { codec: cborCodec });
+  const netV = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
+  const { keyId: keyV, publicKey: publicKeyV } = addFreshKey(netV);
+  await netA.addTransport(fabric.transportFor('A'));
+  await netV.addTransport(fabric.transportFor('V'));
+  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
+
+  // The victim V dials A.  A leaves the inbound session unclaimed,
+  // which is the state in which a fresh SYN from V displaces it.
+  const sessionV = await netV.provideSession(locA);
+  const pendingRead = sessionV.reader.next(undefined);
+
+  // The attacker completes a Noise handshake with its own keypair but
+  // claims V's verifying key in the SYN payload.
+  const attackerKeys = netA.generateSigningKeys();
+  const impostor = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+    signingKeys: {
+      privateKey: attackerKeys.privateKey,
+      publicKey: publicKeyV,
+    },
+  }).asInitiator();
+  const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  impostor.initiatorWriteSyn(publicKeyA, prefixedSyn);
+  const attackerStream = await fabric.transportFor('M').connect({ to: 'A' });
+  await attackerStream.writer.next(prefixedSyn);
+  const reply = await attackerStream.reader.next(undefined);
+  t.true(reply.done, 'A drops the impostor without answering its SYN');
+
+  // V's session with A is undisturbed.
+  const sessionA = await netA.waitForInboundSession(keyV);
+  await sessionA.writer.next(new TextEncoder().encode('still-here'));
+  const received = await pendingRead;
+  t.false(received.done, 'victim session is still live');
+  if (!received.done) {
+    t.is(new TextDecoder().decode(received.value), 'still-here');
+  }
 });
 
 test('provideSession rejects after handshake timeout', async t => {

@@ -273,6 +273,9 @@ fn initiator_write_syn() -> i32 {
 ///       (SYN intended for a different responder; relays should reroute)
 ///   4 = Noise read_message failed (auth tag mismatch / replay /
 ///       prologue mismatch / wrong responder static)
+///   5 = the initiator's claimed Ed25519 verifying key is invalid,
+///       small-order, or does not correspond to the static X25519 key
+///       it used in the handshake (impersonation attempt)
 #[unsafe(no_mangle)]
 fn responder_read_syn() -> i32 {
     #[allow(static_mut_refs)]
@@ -317,6 +320,29 @@ fn responder_read_syn() -> i32 {
             .is_err()
         {
             return 4;
+        }
+
+        // The SYN payload's verifying key is only a claim.  Noise
+        // authenticated the initiator's static X25519 key (`rs`), so the
+        // claimed Ed25519 key must map onto exactly that static, or an
+        // initiator holding any keypair could present itself as any
+        // identity.  Small-order keys are refused outright: a
+        // small-order static contributes nothing to `ss`.
+        let mut claimed = [0u8; VERIFYING_KEY_LENGTH];
+        claimed.copy_from_slice(&BUFFER[INITIATOR_VERIFYING_KEY_OFFSET..][..VERIFYING_KEY_LENGTH]);
+        let claimed_matches_static = match VerifyingKey::from_bytes(&claimed) {
+            Err(_) => false,
+            Ok(vk) => {
+                !vk.is_weak()
+                    && match hs.get_rs() {
+                        None => false,
+                        Some(rs) => rs.as_slice() == vk.to_montgomery().as_bytes(),
+                    }
+            }
+        };
+        if !claimed_matches_static {
+            HS = None;
+            return 5;
         }
 
         buffer_callback(BUFFER.as_ptr());
