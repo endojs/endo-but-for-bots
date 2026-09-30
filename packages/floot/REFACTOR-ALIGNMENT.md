@@ -87,10 +87,11 @@ evidence. Test sessions are cleaned up, and the failed pre-retirement-fix creati
 manifest remains as evidence without replay.
 The like-for-like review now records concrete relocation and added contracts in
 the simplification inventory; it does not waive RA-01's numerical target.
-It also reconfirmed two current daemon cleanup defects in the parent audit:
-failed collection callbacks lose retry ownership, and failed guest construction
-can leave an orphan identity key. Prioritize the bounded collection retry fix,
-keeping uncertain cancellation fenced and native process-loss recovery separate.
+The collection retry fix now retains unfinished storage cleanup for later graph
+drains in the same daemon, while keeping failed cancellation fenced.
+It is not yet deployed and does not address native process-loss recovery.
+Failed guest construction can still leave an orphan identity key; its bounded
+never-exposed-key retirement design remains the next cleanup finding to address.
 RA-01's size target remains unproven; RA-03 is implemented, and direct-Fae
 compaction remains on hold.
 The older chronological entries and final sequence below are historical evidence,

@@ -22,6 +22,9 @@ import { formatId, parseId } from '../src/formula-identifier.js';
 for (const mode of [
   'success',
   'delete-failure',
+  'delete-lost-ack',
+  'reentrant-retry',
+  'concurrent-retry',
   'store-failure',
   'combined-failure',
   'cancel-failure',
@@ -31,6 +34,9 @@ for (const mode of [
 ]) {
   const failDeletion =
     mode === 'delete-failure' ||
+    mode === 'delete-lost-ack' ||
+    mode === 'reentrant-retry' ||
+    mode === 'concurrent-retry' ||
     mode === 'combined-failure' ||
     mode === 'delete-and-reclaim-failure';
   const failReclamation =
@@ -45,9 +51,12 @@ for (const mode of [
     const release = makePromiseKit();
     const readEntered = makePromiseKit();
     const releaseRead = makePromiseKit();
+    const retryEntered = makePromiseKit();
+    const releaseRetry = makePromiseKit();
     t.teardown(() => {
       release.resolve(undefined);
       releaseRead.resolve(undefined);
+      releaseRetry.resolve(undefined);
       cancelled.reject(Error('Test finished'));
     });
     /** @type {string | undefined} */
@@ -59,6 +68,11 @@ for (const mode of [
     let deletionAttempts = 0;
     let reclamationAttempts = 0;
     let storeFailureObserved = false;
+    /** @type {string | undefined} */
+    let failedStoreNumber;
+    let cancellationAttempts = 0;
+    /** @type {any} */
+    let host;
     const deletionFailure = Error('Injected formula deletion failure');
     const reclamationFailure = Error('Injected reclamation failure');
     const files = makeFilePowers({ fs, path });
@@ -108,7 +122,10 @@ for (const mode of [
         petStore: harden({
           ...powers.petStore,
           deletePetStore: async (number, type) => {
-            if (heldNumber && failStore && injectFailure) {
+            if (heldNumber && failStore && failedStoreNumber === undefined) {
+              failedStoreNumber = number;
+            }
+            if (number === failedStoreNumber && injectFailure) {
               storeFailureObserved = true;
               throw Error('Injected pet-store deletion failure');
             }
@@ -122,6 +139,7 @@ for (const mode of [
               workerDaemonFacet: Far('UnusedWorker', { terminate: () => {} }),
               workerTerminated: workerCancelled.catch(async () => {
                 if (mode === 'cancel-failure' && _id === heldNumber) {
+                  cancellationAttempts += 1;
                   entered.resolve(undefined);
                   await release.promise;
                   throw Error('Injected worker disposal failure');
@@ -146,7 +164,22 @@ for (const mode of [
               deletionAttempts += 1;
               entered.resolve(undefined);
               await release.promise;
-              if (failDeletion && injectFailure) throw deletionFailure;
+              if (failDeletion && injectFailure) {
+                if (mode === 'delete-lost-ack') {
+                  await powers.persistence.deleteFormula(number);
+                }
+                throw deletionFailure;
+              }
+              if (mode === 'reentrant-retry') {
+                // Nested graph operations drain cleanup too. They must skip
+                // this in-flight retry instead of deadlocking or repeating it.
+                await E(host).makeDirectory('nested-retry');
+                await E(host).remove('nested-retry');
+              }
+              if (mode === 'concurrent-retry') {
+                retryEntered.resolve(undefined);
+                await releaseRetry.promise;
+              }
             }
             return powers.persistence.deleteFormula(number);
           },
@@ -159,7 +192,7 @@ for (const mode of [
       { gcEnabled: true },
     );
     t.teardown(() => daemon.cancelGracePeriod(Error('Test finished')));
-    const host = await E(daemon.endoBootstrap).host();
+    host = await E(daemon.endoBootstrap).host();
     if (failReclamation) {
       retainedMount = await E(host).provideScratchMount('victim');
       await E(retainedMount).writeText('proof.txt', 'live mount');
@@ -257,6 +290,7 @@ for (const mode of [
       t.deepEqual(await E(sibling).list(), []);
       await E(host).remove('after-cancel-failure');
       t.is(deletionAttempts, 0);
+      t.is(cancellationAttempts, 1);
     }
     if (mode === 'held-read') {
       // Complete the read only after collection/deletion finishes. A stale
@@ -282,34 +316,49 @@ for (const mode of [
         'live mount',
       );
     }
-    if (failDeletion || failReclamation) {
-      // Characterize the open retry-ownership defect, not desired behavior:
-      // clearing the external failure and draining subsequent graph changes
-      // does not retry the cleanup removed from pendingCollectionCleanup.
-      // Replace these assertions with reclamation checks when retry ownership
-      // is implemented; retaining a reconstruction fence is not cleanup.
-      injectFailure = false;
-      const attempts = { deletionAttempts, reclamationAttempts };
-      const sibling = await E(host).makeDirectory('after-failure');
-      t.deepEqual(await E(sibling).list(), []);
-      await E(host).remove('after-failure');
-      t.deepEqual({ deletionAttempts, reclamationAttempts }, attempts);
+    if (failDeletion || failStore || failReclamation) {
+      // A persistent old failure must not poison unrelated graph operations.
+      const unrelated = await E(host).makeDirectory('while-failing');
+      t.deepEqual(await E(unrelated).list(), []);
+      await E(host).remove('while-failing');
       await t.throwsAsync(E(host).lookupById(id), {
         message: /disposal|collect/i,
       });
-      if (failDeletion) {
-        const stored = await powers.persistence.readFormula(parseId(id).number);
-        t.is(
-          stored.formula.type,
-          failReclamation ? 'scratch-mount' : 'directory',
-        );
-      } else {
-        t.is(
-          await fs.promises.readFile(
+      // Clearing the fault lets a later drain reclaim the retained work.
+      injectFailure = false;
+      const attempts = { deletionAttempts, reclamationAttempts };
+      const siblingP = E(host).makeDirectory('after-failure');
+      if (mode === 'concurrent-retry') {
+        await retryEntered.promise;
+        const concurrent = await E(host).makeDirectory('during-retry');
+        t.deepEqual(await E(concurrent).list(), []);
+        await E(host).remove('during-retry');
+        await t.throwsAsync(E(host).lookupById(id), {
+          message: /disposal|collect/i,
+        });
+        t.is(deletionAttempts, attempts.deletionAttempts + 1);
+        releaseRetry.resolve(undefined);
+      }
+      const sibling = await siblingP;
+      t.deepEqual(await E(sibling).list(), []);
+      await E(host).remove('after-failure');
+      t.is(
+        deletionAttempts,
+        attempts.deletionAttempts + (failDeletion ? 1 : 0),
+      );
+      t.is(
+        reclamationAttempts,
+        attempts.reclamationAttempts + (failReclamation ? 1 : 0),
+      );
+      await t.throwsAsync(powers.persistence.readFormula(parseId(id).number));
+      await t.throwsAsync(E(host).lookupById(id));
+      if (failReclamation) {
+        await t.throwsAsync(
+          fs.promises.readFile(
             path.join(temporary, 'state', 'mounts', heldNumber, 'proof.txt'),
             'utf8',
           ),
-          'live mount',
+          { code: 'ENOENT' },
         );
       }
     }

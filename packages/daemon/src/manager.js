@@ -575,9 +575,17 @@ const makeDaemonCore = async (
    * Async cleanup work scheduled by onCollect. Drained by
    * withFormulaGraphLock after each graph mutation completes.
    *
-   * @type {Array<() => Promise<void>>}
+   * @typedef {{ run: () => Promise<void>, retryable: boolean }} CollectionCleanupJob
+   * @type {CollectionCleanupJob[]}
    */
   const pendingCollectionCleanup = [];
+  /**
+   * Failed jobs retain metadata even when cancellation forbids retry.
+   * This ownership lasts only for this daemon incarnation, not across restart.
+   * @type {Set<CollectionCleanupJob>}
+   */
+  const failedCollectionCleanup = new Set();
+  let collectionDrainDepth = 0;
 
   /** @type {Map<FormulaIdentifier, { state: 'pending' | 'failed' }>} */
   const collections = new Map();
@@ -1005,95 +1013,125 @@ const makeDaemonCore = async (
     const collectedFormulaTypes = new Map(
       [...collectedFormulas.entries()].map(([id, f]) => [id, f.type]),
     );
-    pendingCollectionCleanup.push(async () => {
-      let cleanupSucceeded = false;
-      try {
-        // Stop admitted work before deleting any storage beneath it. If a
-        // controller cannot prove disposal, retain both its storage and fence.
-        const cancelReason = new Error(
-          'became unreachable by any pet name path and was collected',
-        );
-        const cancellations = await Promise.allSettled(
-          controllersToCancel.map(async ({ controller }) => {
-            await null;
-            await controller.context.cancel(cancelReason, '!');
-          }),
-        );
-        const cancellationFailures = cancellations
-          .filter(result => result.status === 'rejected')
-          .map(result => result.reason);
-        if (cancellationFailures.length > 0) {
-          throw new AggregateError(
-            cancellationFailures,
-            'Collected controller cancellation failed',
-          );
-        }
+    const remainingFormulas = new Set(collectedIds);
+    const remainingStores = new Map(
+      [...collectedFormulas].filter(([, formula]) =>
+        ['pet-store', 'mailbox-store', 'known-peers-store'].includes(
+          formula.type,
+        ),
+      ),
+    );
+    const reclamation = {
+      /** @type {Set<string> | undefined} */
+      candidateHashes: undefined,
+      scratchMountNumbers: new Set(
+        [...collectedFormulas]
+          .filter(([, formula]) => formula.type === 'scratch-mount')
+          .map(([id]) => parseId(id).number),
+      ),
+    };
+    let cancellationAttempted = false;
+    let disconnected = false;
+    /** @type {CollectionCleanupJob} */
+    const job = {
+      retryable: false,
+      run: async () => {
+        const failures = [];
+        try {
+          // Stop admitted work before deleting any storage beneath it. If a
+          // controller cannot prove disposal, retain both its storage and fence.
+          if (!cancellationAttempted) {
+            cancellationAttempted = true;
+            const cancelReason = new Error(
+              'became unreachable by any pet name path and was collected',
+            );
+            const cancellations = await Promise.allSettled(
+              controllersToCancel.map(async ({ controller }) => {
+                await null;
+                await controller.context.cancel(cancelReason, '!');
+              }),
+            );
+            const cancellationFailures = cancellations
+              .filter(result => result.status === 'rejected')
+              .map(result => result.reason);
+            if (cancellationFailures.length > 0) {
+              throw new AggregateError(
+                cancellationFailures,
+                'Collected controller cancellation failed',
+              );
+            }
+            job.retryable = true;
+          }
 
-        // Delete from durable storage.
-        const formulaDeletions = await Promise.allSettled(
-          collectedIds.map(id =>
-            persistencePowers.deleteFormula(parseId(id).number),
-          ),
-        );
-        const storeDeletions = await Promise.allSettled(
-          [...collectedFormulas.entries()].map(async ([id, formula]) => {
-            if (
-              formula.type === 'pet-store' ||
-              formula.type === 'mailbox-store' ||
-              formula.type === 'known-peers-store'
-            ) {
+          // Delete from durable storage.
+          const formulaDeletions = await Promise.allSettled(
+            [...remainingFormulas].map(async id => {
+              await persistencePowers.deleteFormula(parseId(id).number);
+              remainingFormulas.delete(id);
+            }),
+          );
+          const storeDeletions = await Promise.allSettled(
+            [...remainingStores].map(async ([id, formula]) => {
               await petStorePowers.deletePetStore(
                 parseId(id).number,
                 formula.type,
               );
-            }
-          }),
-        );
+              remainingStores.delete(id);
+            }),
+          );
 
-        // Reclaim daemon-local storage owned by collected formulas.
-        // Content-store blobs use sweep-time reference counting because
-        // multiple readable-blob and readable-tree formulas can dedupe
-        // on the same sha256.  Scratch-mount directories have a 1:1
-        // relationship with their formula and need no reference count.
-        const storageFailures = [...formulaDeletions, ...storeDeletions]
-          .filter(result => result.status === 'rejected')
-          .map(result => result.reason);
-        try {
-          // eslint-disable-next-line no-use-before-define
-          await reclaimCollectedStorage(collectedFormulas);
+          // Reclaim daemon-local storage owned by collected formulas.
+          // Content-store blobs use sweep-time reference counting because
+          // multiple readable-blob and readable-tree formulas can dedupe
+          // on the same sha256.  Scratch-mount directories have a 1:1
+          // relationship with their formula and need no reference count.
+          const storageFailures = [...formulaDeletions, ...storeDeletions]
+            .filter(result => result.status === 'rejected')
+            .map(result => result.reason);
+          try {
+            // eslint-disable-next-line no-use-before-define
+            await reclaimCollectedStorage(collectedFormulas, reclamation);
+          } catch (error) {
+            storageFailures.push(error);
+          }
+          if (storageFailures.length === 1) throw storageFailures[0];
+          if (storageFailures.length > 1) {
+            throw new AggregateError(
+              storageFailures,
+              'Collected storage cleanup failed',
+            );
+          }
         } catch (error) {
-          storageFailures.push(error);
-        }
-        if (storageFailures.length === 1) throw storageFailures[0];
-        if (storageFailures.length > 1) {
-          throw new AggregateError(
-            storageFailures,
-            'Collected storage cleanup failed',
-          );
-        }
-        cleanupSucceeded = true;
-      } finally {
-        // Even failed storage reclamation must not leave worker routes live.
-        try {
-          // eslint-disable-next-line no-use-before-define
-          residenceTracker.disconnectRetainersHolding(
-            collectedIds,
-            collectedFormulaTypes,
-          );
-        } catch (error) {
-          cleanupSucceeded = false;
-          console.error('Collected worker disconnection failed', error);
+          failures.push(error);
         } finally {
-          for (const [id, record] of collectionRecords) {
-            if (cleanupSucceeded) {
-              if (collections.get(id) === record) collections.delete(id);
-            } else {
-              record.state = 'failed';
+          // Even failed storage reclamation must not leave worker routes live.
+          try {
+            if (!disconnected) {
+              // eslint-disable-next-line no-use-before-define
+              residenceTracker.disconnectRetainersHolding(
+                collectedIds,
+                collectedFormulaTypes,
+              );
+              disconnected = true;
+            }
+          } catch (error) {
+            failures.push(error);
+          } finally {
+            for (const [id, record] of collectionRecords) {
+              if (failures.length === 0) {
+                if (collections.get(id) === record) collections.delete(id);
+              } else {
+                record.state = 'failed';
+              }
             }
           }
         }
-      }
-    });
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1)
+          throw new AggregateError(failures, 'Collected cleanup failed');
+      },
+    };
+    pendingCollectionCleanup.push(job);
   };
 
   /**
@@ -1189,17 +1227,25 @@ const makeDaemonCore = async (
    * for every collected `scratch-mount` formula.
    *
    * @param {Map<FormulaIdentifier, Formula>} collectedFormulasByid
+   * @param {{ candidateHashes: Set<string> | undefined, scratchMountNumbers: Set<FormulaNumber> }} reclamation
    * @returns {Promise<void>}
    */
-  const reclaimCollectedStorage = async collectedFormulasByid => {
+  const reclaimCollectedStorage = async (
+    collectedFormulasByid,
+    reclamation,
+  ) => {
     /** @type {unknown[]} */
     const failures = [];
-    /** @type {Set<string>} */
-    const candidateHashes = new Set();
-    for (const formula of collectedFormulasByid.values()) {
-      // eslint-disable-next-line no-await-in-loop
-      await collectFormulaHashes(formula, candidateHashes);
+    if (reclamation.candidateHashes === undefined) {
+      /** @type {Set<string>} */
+      const candidates = new Set();
+      for (const formula of collectedFormulasByid.values()) {
+        // eslint-disable-next-line no-await-in-loop
+        await collectFormulaHashes(formula, candidates);
+      }
+      reclamation.candidateHashes = candidates;
     }
+    const { candidateHashes } = reclamation;
     if (candidateHashes.size > 0) {
       // Subtract hashes still referenced by any surviving formula.
       // formulaForId at this point reflects the post-Phase-1 state
@@ -1218,7 +1264,10 @@ const makeDaemonCore = async (
         candidateHashes.delete(hash);
       }
       const removals = await Promise.allSettled(
-        [...candidateHashes].map(hash => contentStore.remove(hash)),
+        [...candidateHashes].map(async hash => {
+          await contentStore.remove(hash);
+          candidateHashes.delete(hash);
+        }),
       );
       for (const result of removals) {
         if (result.status === 'rejected') failures.push(result.reason);
@@ -1227,20 +1276,16 @@ const makeDaemonCore = async (
 
     // Scratch-mount backing dirs are 1:1 with their formula; no
     // reference count needed.
-    const scratchMountNumbers = [];
-    for (const [id, formula] of collectedFormulasByid) {
-      if (formula.type === 'scratch-mount') {
-        scratchMountNumbers.push(parseId(id).number);
-      }
-    }
+    const { scratchMountNumbers } = reclamation;
     const removals = await Promise.allSettled(
-      scratchMountNumbers.map(formulaNumber => {
+      [...scratchMountNumbers].map(async formulaNumber => {
         const mountPath = filePowers.joinPath(
           persistencePowers.statePath,
           'mounts',
           /** @type {string} */ (formulaNumber),
         );
-        return filePowers.removeDirectory(mountPath);
+        await filePowers.removeDirectory(mountPath);
+        scratchMountNumbers.delete(formulaNumber);
       }),
     );
     for (const result of removals) {
@@ -1275,18 +1320,38 @@ const makeDaemonCore = async (
    */
   const drainCollectionCleanup = async () => {
     const failures = [];
-    while (pendingCollectionCleanup.length > 0) {
-      const cleanup = /** @type {() => Promise<void>} */ (
-        pendingCollectionCleanup.shift()
-      );
-      try {
-        await cleanup();
-      } catch (error) {
-        failures.push(error);
+    // A nested/concurrent drain must not await its caller's cleanup or retry
+    // the same failure indefinitely. Fresh siblings still drain independently.
+    const retries =
+      collectionDrainDepth === 0
+        ? [...failedCollectionCleanup].filter(job => job.retryable)
+        : [];
+    collectionDrainDepth += 1;
+    try {
+      for (const job of retries) {
+        try {
+          await job.run();
+          failedCollectionCleanup.delete(job);
+        } catch (error) {
+          console.error('Collected storage cleanup retry failed', error);
+        }
       }
+      while (pendingCollectionCleanup.length > 0) {
+        const job = /** @type {CollectionCleanupJob} */ (
+          pendingCollectionCleanup.shift()
+        );
+        try {
+          await job.run();
+        } catch (error) {
+          failedCollectionCleanup.add(job);
+          failures.push(error);
+        }
+      }
+    } finally {
+      collectionDrainDepth -= 1;
     }
     // Failure of one owner must not strand already-queued sibling cleanup.
-    // This drains admitted work, not retries: failed owners remain fenced.
+    // Older retry errors are retained above, not charged to unrelated work.
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) {
       throw new AggregateError(failures, 'Collection cleanup failures');

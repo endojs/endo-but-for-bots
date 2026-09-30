@@ -224,15 +224,16 @@ remain on the main working branch. No runtime changes accompany this scope decis
 
 ### Current retained-code durability audit — required, in progress
 
-Current-source reconciliation (2026-09-30): two concrete orderly-failure cleanup
-defects remain, separate from the deferred native process-loss design:
+Current-source reconciliation (2026-09-30): the collection fix is implemented
+for same-incarnation retry; construction-key cleanup remains open.
+Both are separate from the deferred native process-loss design:
 
-- `manager.js` shifts collection callbacks before executing them and discards
-  failures. `collection-disposal-barrier.test.js` still characterizes that clearing
-  deletion/reclamation faults does not reclaim retained storage. Next: preserve
-  retry ownership for idempotent storage cleanup only after cancellation has
-  positively completed. Rejected cancellation must stay fenced, not be retried
-  as if it had succeeded. Do not starve sibling work or retry forever in one drain.
+- `manager.js` now retains failed cleanup jobs, original metadata and unfinished
+  storage stages. Later graph drains retry idempotent storage cleanup only after
+  cancellation has positively completed. Rejected cancellation stays fenced and
+  is not retried. Nested/concurrent drains do not repeat in-flight retries;
+  persistent old failures do not reject unrelated graph work.
+  This is same-incarnation ownership, not durable restart recovery.
 - `guest-construction-cleanup.test.js` still expects an orphan agent identity key
   after failed construction, despite no surviving formulas for its node. A bounded
   never-exposed construction-key retirement design is needed; unconditional key
@@ -568,7 +569,8 @@ file); formatting and root documentation generation pass (176 documentation
 warnings). This removes one unused construction path, not the remaining key
 retirement or failed collection retry defects.
 
-Collection retry ownership — reproduced, unresolved (2026-09-24):
+Collection retry ownership — historical reproduction (2026-09-24),
+same-incarnation fix implemented (2026-09-30):
 `drainCollectionCleanup` shifts each callback before running it.
 At reproduction, cancellation or formula/store deletion failures could resolve
 the callback while retaining a failed collection fence; reclamation could throw
@@ -579,11 +581,11 @@ scratch reclamation failure, creates and removes an unrelated directory to drain
 fresh graph work, and verifies the original cleanup attempt count does not change.
 The original formula or scratch bytes remain; lookup still refuses resurrection.
 All four barrier cases pass, characterizing an open defect rather than recovery.
-Replace the no-retry assertions with successful reclamation assertions when fixed.
+The September 30 fix replaces those assertions with successful reclamation checks.
 
-The next bounded implementation should separate acknowledged-stopped storage
-cleanup from failed cancellation, retain per-stage progress and original metadata,
-and exclude in-flight records from reentrant drains.
+The implementation separates acknowledged-stopped storage cleanup from failed
+cancellation, retains per-stage progress and original metadata, and excludes
+retries while another drain is active.
 Keeping a failed callback at the queue head or awaiting one shared drain promise
 can deadlock when an awaited cleanup callback reenters a graph operation.
 `context.cancel()` caches its disposal promise, including rejection: rerunning the
@@ -592,6 +594,21 @@ Automatic native disposal recovery is not authorized by this finding or solved b
 a queue change; it remains distinct from retrying storage after proven cancellation.
 Formula deletion preceding failed storage reclamation also means in-memory retry
 ownership alone would not prove restart recovery.
+
+Failed jobs retain remaining formula/store deletions, scratch directories and
+content hashes; successful stages are not replayed.
+Tree candidates are captured before removal, so deleting a root cannot hide a
+failed child removal on retry; surviving references are checked on each attempt.
+Worker disconnection must also succeed before reconstruction fences are cleared.
+New regressions cover lost deletion acknowledgements, nested and concurrent graph
+drains, persistent failures with unrelated work, and partial tree reclamation.
+All 75 barrier, content-store, directory, marshal-publication and guest-construction
+regressions pass; daemon typechecking passes.
+Changed-file lint has zero errors (71 warnings); root docs have zero errors
+(163 warnings). Independent adversarial review passes.
+The content-store test fixture now uses a short temporary Unix socket path so
+daemon-backed tests also run from nested worktrees.
+This change is not yet deployed.
 
 Storage failure reporting (2026-09-24): collection now propagates rejected
 formula and pet-store deletions to the initiating graph operation instead of
