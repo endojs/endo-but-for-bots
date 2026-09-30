@@ -17,11 +17,12 @@ An example-based summary of the Smallcaps encoding of the OCapN [Abstract Syntax
 | tagged           | Tagged        | `makeTagged(t,p)`     | `{"#tag":<t>,"payload":<p>}` |
 | remotable        | Target        | `Far('foo', {})`      | `"$0.foo"`           |
 | promise          | Promise       | `Promise.resolve()`   | `"&1"`               |
+| sturdyRef        | SturdyRef     | `new SturdyRef(h)`    | `"'2"`               |
 | error            | Error         | `TypeError(msg)`      | `{"#error":<msg>,"name":"TypeError"}` |
 
 * The `-0` encoding is defined as above, but not yet implemented in JS.
 * In JS, passable symbols are in transition from JavaScript symbols to their own representation
-* The number after `"$"` or `"&"` (for remotable/Target or promise/Promise) is an index into a separate slots array.
+* The number after `"$"`, `"&"`, or `"'"` (for remotable/Target, promise/Promise, or sturdyRef/SturdyRef) is an index into a separate slots array.
 * ***Special strings*** begin with any of the `!"#$%&'()*+,-` characters.
 * `<expr>` is nested encoding of `expr`.
 * To be passable, arrays, records, and errors must also be hardened.
