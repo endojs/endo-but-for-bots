@@ -1849,10 +1849,10 @@ export const createAddSpaceModal = ({
         let personaPowers = powers;
         for (const segment of selectedPath) {
           personaPowers = await E(
-            /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+            /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
               personaPowers
             ),
-          ).lookup(segment);
+          ).lookup([segment]);
         }
 
         // Create channel inside persona's store
@@ -1937,10 +1937,10 @@ export const createAddSpaceModal = ({
 
       // 2. Get the persona's powers
       const personaPowers = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+        /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
           powers
         ),
-      ).lookup(newAgentName);
+      ).lookup([newAgentName]);
 
       // 3. Create channel inside persona's store
       await E(
@@ -2061,10 +2061,10 @@ export const createAddSpaceModal = ({
 
         // 2. Get persona's powers
         const personaPowers = await E(
-          /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+          /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
             powers
           ),
-        ).lookup(personaAgentName);
+        ).lookup([personaAgentName]);
 
         // 3. Write the channel locator into the persona's pet store.
         //    Pass the original endo:// locator so the system can drop
@@ -2146,10 +2146,10 @@ export const createAddSpaceModal = ({
         let personaPowers = powers;
         for (const segment of space.profilePath) {
           personaPowers = await E(
-            /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+            /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
               personaPowers
             ),
-          ).lookup(segment);
+          ).lookup([segment]);
         }
 
         // Write the channel locator into the persona's pet store.
@@ -2212,10 +2212,10 @@ export const createAddSpaceModal = ({
 
       // Look up the fae-factory and create an agent with the whylip prompt.
       const faeFactory = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+        /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
           powers
         ),
-      ).lookup(factoryPetName);
+      ).lookup([factoryPetName]);
 
       const agentProfileName = /** @type {string} */ (
         await E(

@@ -21,13 +21,19 @@ import {
 const REV = 'f83f0430cfeb5968563f60f171d58f88d087c1b4';
 const PREVIOUS = '59aba752de8ebbbcb485015e9159dcb6d16856e6';
 
-const toPath = nameOrPath =>
-  typeof nameOrPath === 'string' ? [nameOrPath] : [...nameOrPath];
+// Like the daemon's `namePathFrom`, refuse a bare string: a pet-name path
+// argument must be an array of path components.
+const toPath = namePath => {
+  if (!Array.isArray(namePath)) {
+    throw TypeError(`Invalid pet-name path ${JSON.stringify(namePath)}`);
+  }
+  return [...namePath];
+};
 
 // The daemon's `has`, `locate`, and `remove` are varargs of segments, while
-// `lookup` (like `EndoHost.lookup`'s `M.call(NameOrPathShape)` guard) takes
-// exactly one name-or-path — spreading a path into it throws, which is the
-// regression this fake exists to catch.
+// `lookup` (like `EndoHost.lookup`'s `M.call(NamePathArgumentShape)` guard)
+// takes exactly one pet-name path — spreading a path into it throws, which is
+// the regression this fake exists to catch.
 const varargsPath = args =>
   args.length === 1 && Array.isArray(args[0]) ? [...args[0]] : [...args];
 const singlePath = args => {

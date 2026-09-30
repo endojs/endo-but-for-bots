@@ -492,7 +492,7 @@ export const flootComponent = (
   /** @type {any} */
   let factory = rootPowers;
   for (const name of profilePath) {
-    factory = E(/** @type {any} */ (factory)).lookup(name);
+    factory = E(/** @type {any} */ (factory)).lookup([name]);
   }
 
   // Optionally resolve a speech-to-text object for mic input, the same way.
@@ -502,7 +502,7 @@ export const flootComponent = (
   if (hasMic) {
     audioServer = rootPowers;
     for (const name of /** @type {string[]} */ (audioPath)) {
-      audioServer = E(/** @type {any} */ (audioServer)).lookup(name);
+      audioServer = E(/** @type {any} */ (audioServer)).lookup([name]);
     }
   }
 
@@ -513,7 +513,7 @@ export const flootComponent = (
   if (hasTts) {
     ttsServer = rootPowers;
     for (const name of /** @type {string[]} */ (ttsPath)) {
-      ttsServer = E(/** @type {any} */ (ttsServer)).lookup(name);
+      ttsServer = E(/** @type {any} */ (ttsServer)).lookup([name]);
     }
   }
   // Spoken replies on by default when a TTS object is wired; toggled by the

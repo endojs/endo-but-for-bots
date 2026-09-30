@@ -36,14 +36,14 @@ export const petnamesToolDefs = harden([
       'List contents of your directory or any capability you have a pet name for. ' +
       'With no arguments, lists pet names in your root directory. ' +
       'With a name, looks up that capability and calls list() on it. ' +
-      'Optional argument: name (string or string[]).',
+      'Optional argument: name (string[], path components).',
     params: M.splitRecord({}, { name: NamePathArgumentShape }),
   },
   {
     name: 'lookup',
     summary:
       'Resolve a pet name or path to its value. Returns the value stored under that name. ' +
-      'Argument: petNameOrPath (string or string[]).',
+      'Argument: petNameOrPath (string[], path components).',
     params: M.splitRecord({ petNameOrPath: NamePathArgumentShape }),
   },
   {

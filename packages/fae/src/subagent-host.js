@@ -189,7 +189,7 @@ export const provisionFaeAgent = async ({
       await E(spawnerGuest).storeLocator(['host-agent'], hostAgentLocator);
       if (authSecretLocator !== undefined) {
         await E(spawnerGuest).storeLocator(
-          AUTH_SECRET_PETNAME,
+          [AUTH_SECRET_PETNAME],
           authSecretLocator,
         );
       }
@@ -226,7 +226,10 @@ export const provisionFaeAgent = async ({
       await E(driverGuest).storeLocator(['subagent-spawner'], spawnerLocator);
     }
     if (authSecretLocator !== undefined) {
-      await E(driverGuest).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
+      await E(driverGuest).storeLocator(
+        [AUTH_SECRET_PETNAME],
+        authSecretLocator,
+      );
     }
 
     await E(hostAgent).makeUnconfined(['@main'], driverSpecifier, {

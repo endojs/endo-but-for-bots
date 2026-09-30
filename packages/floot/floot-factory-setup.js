@@ -127,7 +127,7 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
       // A run that died between the oracle's launch and the moves below
       // left its powers guest top-level; find it wherever it is.
       const oraclePowers = await E(agent).lookup(
-        (await E(agent).has(...powersPath)) ? powersPath : powersName,
+        (await E(agent).has(...powersPath)) ? powersPath : [powersName],
       );
       await E(oraclePowers).storeLocator(
         ['account-profile'],
@@ -361,7 +361,7 @@ export const main = async agent => {
   const providerLocator = await E(agent).locate(dir, 'llm-provider');
   await E(factoryHost).storeLocator(['llm-provider'], providerLocator);
   if (authSecretLocator) {
-    await E(factoryHost).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
+    await E(factoryHost).storeLocator([AUTH_SECRET_PETNAME], authSecretLocator);
   } else if (await E(factoryHost).has(AUTH_SECRET_PETNAME)) {
     // Do not leave a stale blob reachable beside a fallback plaintext token:
     // the factory prefers the capability, so a stale one would win silently.
@@ -389,7 +389,7 @@ export const main = async agent => {
     await E(agent).remove(...pinPath);
   }
   await E(agent).makeUnconfined(['@main'], flootFactorySpecifier, {
-    powersName: revived ? controllerProfilePath : agentName,
+    powersName: revived ? controllerProfilePath : [agentName],
     resultName: controllerPath,
     env: factoryEnv,
   });

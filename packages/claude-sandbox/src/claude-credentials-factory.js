@@ -399,7 +399,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
               CREDENTIALS_MODULE_SPECIFIER,
               {
                 powersName: ['@none'],
-                resultName: name,
+                resultName: [name],
                 env: harden({
                   CREDENTIALS_FILE: credentialsFile,
                   CREDENTIALS_KIND: kind,

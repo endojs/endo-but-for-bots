@@ -29,7 +29,7 @@ export const peersComponent = (
   /** @type {unknown} */
   let resolvedPowers = rootPowers;
   for (const name of profilePath) {
-    resolvedPowers = E(/** @type {any} */ (resolvedPowers)).lookup(name);
+    resolvedPowers = E(/** @type {any} */ (resolvedPowers)).lookup([name]);
   }
 
   // Dedicated mount child so teardown removes exactly what we added.

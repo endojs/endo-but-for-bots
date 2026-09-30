@@ -43,7 +43,7 @@ export const workflowComponent = (
   /** @type {unknown} */
   let resolvedPowers = rootPowers;
   for (const name of profilePath) {
-    resolvedPowers = E(/** @type {any} */ (resolvedPowers)).lookup(name);
+    resolvedPowers = E(/** @type {any} */ (resolvedPowers)).lookup([name]);
   }
   // `lookup` takes a single name-or-path argument (its guard rejects
   // extra positionals), so a multi-segment path must be passed as one

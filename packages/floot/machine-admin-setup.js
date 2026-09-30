@@ -125,7 +125,7 @@ const grantLocator = async (
       return false;
     }
     const locator = await E(agent).locate(sourceName);
-    await E(factoryHost).storeLocator(grantName, locator);
+    await E(factoryHost).storeLocator([grantName], locator);
     console.error(`Floot: granted ${grantName} to the factory host.`);
     return true;
   } catch (err) {
@@ -339,7 +339,7 @@ export const grantDeployFactory = async (
   }
 
   await E(factoryHost).storeLocator(
-    grantName,
+    [grantName],
     await E(agent).locate(...connectionPath),
   );
   return harden({ chartKey, fid: factoryIds[factoryIds.length - 1] });

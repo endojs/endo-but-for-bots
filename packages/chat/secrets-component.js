@@ -503,7 +503,7 @@ export const secretsComponent = (
   $parent.replaceChildren();
   let powers = rootPowers;
   for (const name of profilePath) {
-    powers = E(/** @type {any} */ (powers)).lookup(name);
+    powers = E(/** @type {any} */ (powers)).lookup([name]);
   }
   const $mount = $parent.ownerDocument.createElement('div');
   $mount.id = 'secrets-root';

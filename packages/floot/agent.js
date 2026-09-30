@@ -2179,7 +2179,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
   const getProviderConfig = () => {
     if (!providerConfigP) {
       providerConfigP = E(powers)
-        .lookup('llm-provider')
+        .lookup(['llm-provider'])
         .catch(error => {
           providerConfigP = undefined;
           throw error;

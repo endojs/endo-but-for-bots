@@ -644,17 +644,17 @@ const bodyComponent = (
 
               // Create channel under current persona
               await E(
-                /** @type {{ makeChannel: (petName: string, proposedName: string) => Promise<unknown> }} */ (
+                /** @type {{ makeChannel: (petNamePath: string[], proposedName: string) => Promise<unknown> }} */ (
                   resolvedPowers
                 ),
-              ).makeChannel(channelName, forkDisplayName);
+              ).makeChannel([channelName], forkDisplayName);
 
               // Look up the new channel to post heritage
               const newChannelRef = await E(
-                /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+                /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
                   resolvedPowers
                 ),
-              ).lookup(channelName);
+              ).lookup([channelName]);
 
               // Re-post heritage messages in order
               for (let i = 0; i < heritageChain.length; i += 1) {
@@ -936,16 +936,16 @@ const bodyComponent = (
               await null; // safe-await-separator
 
               await E(
-                /** @type {{ makeChannel: (petName: string, proposedName: string) => Promise<unknown> }} */ (
+                /** @type {{ makeChannel: (petNamePath: string[], proposedName: string) => Promise<unknown> }} */ (
                   resolvedPowers
                 ),
-              ).makeChannel(channelName, forkDisplayName);
+              ).makeChannel([channelName], forkDisplayName);
 
               const newChannelRef = await E(
-                /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+                /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
                   resolvedPowers
                 ),
-              ).lookup(channelName);
+              ).lookup([channelName]);
 
               for (let i = 0; i < heritageChain.length; i += 1) {
                 const msg = heritageChain[i];
@@ -1086,11 +1086,11 @@ const bodyComponent = (
           const channelName = `note-${Date.now()}`;
           const displayName = activeSpaceInfo.proposedName || 'Untitled';
           E(
-            /** @type {{ makeChannel: (petName: string, proposedName: string) => Promise<unknown> }} */ (
+            /** @type {{ makeChannel: (petNamePath: string[], proposedName: string) => Promise<unknown> }} */ (
               resolvedPowers
             ),
           )
-            .makeChannel(channelName, displayName)
+            .makeChannel([channelName], displayName)
             .then(() => switchChannel(channelName))
             .catch(window.reportError);
         });

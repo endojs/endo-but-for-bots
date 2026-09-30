@@ -78,7 +78,7 @@ const resolvePersonaPowers = async (rootPowers, profilePath) => {
   /** @type {unknown} */
   let powers = rootPowers;
   for (const name of profilePath) {
-    powers = E(/** @type {any} */ (powers)).lookup(name);
+    powers = E(/** @type {any} */ (powers)).lookup([name]);
   }
   return powers;
 };

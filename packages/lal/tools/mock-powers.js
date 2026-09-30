@@ -34,6 +34,21 @@ const sameMessageNumber = (left, right) =>
 const messageNumberKey = value => String(normalizeMessageNumber(value));
 
 /**
+ * Mirror the daemon's `namePathFrom`: a bare string is not a pet-name path.
+ *
+ * @param {unknown} petNamePath
+ * @returns {string[]}
+ */
+const mockNamePath = petNamePath => {
+  if (!Array.isArray(petNamePath)) {
+    throw TypeError(
+      `Invalid pet-name path ${JSON.stringify(petNamePath)}: try again with an array of path components`,
+    );
+  }
+  return petNamePath;
+};
+
+/**
  * Create mock guest powers for the Lal or Fae agent.
  *
  * Pass `attachments` to make `lookupById` resolve to real refs and let
@@ -152,9 +167,7 @@ export function makeMockPowers(options = {}) {
     },
 
     lookup(petNameOrPath) {
-      const path = Array.isArray(petNameOrPath)
-        ? petNameOrPath
-        : [petNameOrPath];
+      const path = mockNamePath(petNameOrPath);
       const key = path.join('/');
       const v = directory.get(key);
       if (v === undefined) {
@@ -220,9 +233,7 @@ export function makeMockPowers(options = {}) {
     },
 
     adopt(messageNumber, edgeName, petNameOrPath) {
-      const path = Array.isArray(petNameOrPath)
-        ? petNameOrPath
-        : [petNameOrPath];
+      const path = mockNamePath(petNameOrPath);
       const key = path.join('/');
       // If we have a real ref for this edge, install it; otherwise
       // fall back to a placeholder so tests that don't care about the
