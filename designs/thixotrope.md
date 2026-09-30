@@ -374,7 +374,10 @@ Worker sessions connect the hub to persistent guest heaps.
 An ephemeral client is a short-lived, reifying host client with its own hub session.
 Its implementation uses the `transient:` session prefix to mark that the client cannot be restored.
 “Ephemeral client” describes the API owner; “transient session” describes its hub representation.
-Inventory views use ephemeral clients.
+Nothing in the supervisor opens one today.
+Administration goes through the endpoint's durable session, and the inventory view holds a
+control-socket connection whose subscription the supervisor releases.
+The mechanism remains for embedders.
 Native adapter processes instead have one transient hub session per incarnation; HTTP shares that
 session across requests, and alarm settlement uses restorable host promises.
 Closing a client retires its session and releases its references and answer routes.

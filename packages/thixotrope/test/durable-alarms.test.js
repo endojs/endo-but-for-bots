@@ -545,3 +545,18 @@ test.serial(
     t.deepEqual(second.daemon.listWorkerIds(), []);
   },
 );
+
+test('a ledger from another version is refused with its remedy', t => {
+  t.throws(
+    () =>
+      makeDurableAlarms(
+        { timers: nodePowers.timers },
+        {
+          storage: { read: () => '{"version":1,"alarms":[]}', write: () => {} },
+          makeResource: () => harden({}),
+          retireResource: () => true,
+        },
+      ),
+    { message: /reads ledger version 2; migrate/ },
+  );
+});

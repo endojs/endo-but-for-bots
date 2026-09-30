@@ -715,9 +715,11 @@ outlives its socket, its worker process, and the daemon itself.
 
 A **transient client** is a disposable host-side OCapN session, opened by
 `daemon.openEphemeralClient()` and implemented in `src/net/ephemeral-hub-client.js`.
-The host uses one to make administrative calls into the workspace.
-Calls it delivers are durable once accepted, but its own pending answers and imported
-references end with the client.
+The supervisor does not use one: its administrative calls go through the endpoint's own
+durable session to the workspace vat.
+The mechanism remains for embedders that want a request whose answers and imports die with
+the request; calls it delivers are durable once accepted, but its own pending answers and
+imported references end with the client.
 Session keys are never reused, including across restarts, so a reference from a dead
 transient client can never designate anything again.
 Daemon shutdown drains client creation and closes the outstanding clients before
