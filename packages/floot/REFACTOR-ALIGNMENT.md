@@ -247,7 +247,7 @@ turn is held by the queue-held-after-restart rule. That race is the
 dormant-after-restart change decided on September 25 and not yet built; the
 new image pins stay `candidate` in the ledger until a recall passes.
 
-## Requirements and current evidence
+## Requirements and current evidence (reconciled 2026-09-30)
 
 | Intended end state | Current evidence | Verdict |
 |---|---|---|
@@ -255,12 +255,12 @@ new image pins stay `candidate` in the ledger until a recall passes.
 | Guest is one authority domain; credentials remain outside it; inference and egress are separate grants | Shared provider issuer/service and execution envelope retain these boundaries; native configuration carries placeholders and scoped listener endpoints | Source alignment, not a fresh kernel-containment or credential-isolation acceptance result |
 | Session-scoped revocable inference, no mandatory request/TTL lease, no ordinary per-turn sandbox replacement | Shared grant issuer and supervisor own session resources; Claude may spawn a native subprocess per turn inside the retained sandbox | Aligned in structure; provider access-token refresh is not a forbidden session lease; current long-run acceptance remains to be established |
 | Vendor adapters own genuine protocol differences | Claude JSONL/process protocol, Codex app-server/checkpoints, OpenCode fork/import/SSE remain distinct | Appropriate differences, not a reason to force all clients into an identical implementation |
-| One host-owned conversation/effect authority; native stores are projections | Floot journal feeds context/history; native restoration translates host-selected records; tree-based Floot state is refused rather than silently migrated | Aligned ownership direction. Codex's separate native audit/checkpoint evidence has a different claimed purpose and still needs a scoped retention justification |
-| Shared framing, admission and cancellation semantics | Shared turn channel exists, but three client admission state machines remain; recent Claude/OpenCode pre-admission cancellation defects needed parallel fixes | Partial: common behavioral conformance is warranted before deciding whether more implementation sharing is useful |
+| One host-owned conversation/effect authority; native stores are projections | Floot journal feeds context/history; native restoration translates host-selected records; admission and possible dispatch are distinct durable states | Aligned ownership. The simplification inventory justifies native diagnostics separately from effect authority; Codex's redundant hash-chain/anchor machinery is removed. Process-loss guarantees remain deferred to #1323. |
+| Shared framing, admission and cancellation semantics | Shared turn channel and three protocol-specific state machines; RA-04's matrix covers preparation, restoration, dispatch, cancellation and failed successors | Bounded conformance complete. Retain actual protocol differences; extract further implementation only after identifying identical responsibilities. |
 | Bounded resident memory for long healthy work | `context-transcript.js` pages archived metadata but accumulates active/exception record arrays; without a checkpoint it selects all eligible nonpending history | Not complete. Per-value/per-turn bounds do not bound the whole context; direct Fae has no automatic compaction producer |
 | Runtime/provider/account/model are separate concepts | Explicit session identity and runtime configuration; hosted account authority; logical account bindings and exact reset identities | Session reports now select configured accounts by backend and subscription pin; automatic pools do not imply payer attribution or eligibility. Factory direct-provider reporting stays separate. |
 | Smaller common implementation; delete superseded paths | Vendor packages shrank and shared implementation grew substantially by the audit snapshot; since then the vendor packages grew back (16,718 to 19,028 lines) with native-context work while shared code stayed flat; generic sandbox `nativeProfile` path has been retired with operator approval | Simplicity target not demonstrated. Removing this obsolete mode is progress, not proof of the overall target |
-| One current set of guarantees and final conformance | Design contains overlapping historical status blocks; the host pin matches the deployed code (`adf25f948`, generation 180) | Not complete. Codex acceptance, RA-02 and RA-04 remain; see the 2026-09-25 validation above |
+| One current set of guarantees and final conformance | Generation 188 runs app `5adeb4aa9` with host `934204f`; all four backends pass lifecycle and ordinary restart acceptance. Later source cleanups `c3089ee18`, `c1f7a7d35` and `207308d72` are pushed but not deployed. | RA-04/RA-05 acceptance is complete for the deployed scope, not the latest source. RA-01 simplicity, RA-02 bounded context and the initial Claude tool-seed capture omission remain. Historical status paragraphs below are not current completion claims. |
 
 ## Priority findings
 
@@ -1496,10 +1496,15 @@ journaling and archived context across cold restart. They exercise the committed
 cleanup on the local daemon; they do not validate the pending account-binding
 draft or replace Tokyo acceptance.
 
-1. Reconcile this current-state verdict with the open FA findings; use this map,
-   not historical commit counts, to choose work.
-2. Resolve RA-01's retained-mechanism decisions and RA-02's actual completion gap;
-   implement RA-03/RA-04 as bounded contract/conformance work.
-3. Finish the already-started acceptance-runner safety correction, then perform
-   RA-05's paired deployment and acceptance, honoring preservation gates.
-4. Update this document and the main audit with evidence as each item is addressed.
+Current sequence (2026-09-30; the test counts above are historical evidence):
+
+1. Continue RA-01 against current callers: delete unused/compatibility paths and
+   justify remaining parallel mechanisms without creating another framework.
+2. Keep RA-02's bounded-context gap explicit; Fae compaction and evidence paging
+   remain deferred by the operator, not silently completed.
+3. Investigate the initial Claude tool-heavy seed's missing native checkpoint;
+   successful ordinary restart recall does not prove universal capture fidelity.
+4. Deploy the reviewed source cleanups and repeat the affected acceptance scopes.
+   Preserve Secrets, renewal owners, host and workspaces; RA-03's dedicated live
+   account-identity matrix is not implied by ordinary inference acceptance.
+5. Maintain this current-state map and the main audit as evidence changes.

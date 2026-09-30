@@ -241,6 +241,35 @@ Package lint has zero errors; formatting and the root documentation gate pass.
 Independent adversarial review approves; no stored schema, Secret ownership or
 rotation/cache behavior changes. Not deployed.
 
+Next compatibility retirement candidate: the public text-stream endpoint and
+HTTP fallback in `hosted-agent/src/provider-broker.js` and `provider-http.js`.
+HTTP currently introspects for `requestByteStream`, otherwise calls the old
+`requestStream`, and carries two reader/close protocols.
+The broker explicitly retains that public method for older pinned listeners.
+The shared subscription interface and metered shares already expose only buffered
+`request` and `requestByteStream`, so text fallback is not the current contract.
+Retirement must preserve byte-stream usage settlement, disconnect cancellation,
+size limits and response screening, with coordinated listener-image validation.
+Do not delete the internal fetch transport's text reader: it is still the upstream
+stream implementation, not the obsolete public protocol.
+Do not classify buffered `request` as dead: it is advertised by subscriptions and
+metered shares and dynamically forwarded by the grant issuer and broker.
+This is a callable capability API even when native HTTP listeners do not use it.
+Source/test inventory identifies the bounded implementation:
+
+- Delete the broker's public text method and its `perform` `bytesOk` flag;
+  that flag's pool filter exists only for the retired text path.
+- Delete HTTP feature negotiation, text-reader cancellation and text-chunk
+  branches, keeping byte-reader limits, screening and disconnect checks.
+- Retarget legacy HTTP and broker fixtures to byte readers without deleting their
+  behavioral assertions; retain internal transport `requestStream` fixtures.
+- Rebuild the provider-listener image (`worker-entry` imports `provider-http`),
+  update the three host listener pins, and retire/replace affected broker bindings
+  before claiming deployed acceptance. Current source does not establish what
+  an older pinned image supports.
+
+No transport deletion or listener-image compatibility proof is claimed yet.
+
 | Mechanisms | Different responsibilities | Decision |
 |---|---|---|
 | Floot lifecycle registry; daemon session record | The registry stores application identity, captured configuration and references. The daemon record stores the execution plan, dependency identities and incarnation lifecycle. | Retain. Neither is a second conversation store; runtime removal and conversation deletion are different operations. |
