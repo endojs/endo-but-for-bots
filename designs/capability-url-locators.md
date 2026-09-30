@@ -8,6 +8,27 @@
 
 ## What is the Problem Being Solved?
 
+A few Endo terms this document uses throughout:
+
+- A **pet name** is a local, per-agent name for a value (like a filename
+  in the agent's own directory), not a global or DNS-like name. `endo
+  store` writes one.
+- A **locator** is a string that names a value on some Endo daemon (node),
+  today always an `endo://` URL: the node's public key, the formula number
+  of the value, the formula's type, and connection hints that say how to
+  reach the node.
+- A **bearer** string grants what it names to whoever holds it, so it must
+  be handled like a password: anyone who reads a locator can adopt the
+  value.
+- **`EndoHost`** is the daemon object a host agent (the user) is given; it
+  can create guests, dial peers, and adopt remote values. **`EndoDirectory`**
+  is the narrower pet-name store every agent (host or guest) has; it only
+  records and looks up names. A method that must dial a peer lives on
+  `EndoHost`; a method that only records a name lives on `EndoDirectory`.
+- The **well-known-first endpoint locator** and **`isLocalNode`** are #1333's
+  helpers for producing a locator a remote peer can dial and for
+  recognizing a locator that names this daemon itself.
+
 PR #1333 (stage 1 of the #1332 federation plan) added `endo adopt-locator
 <name> [--file] [--as]`: adopt the value an `endo://` locator names, reading
 the bearer locator from stdin so it stays out of shell history and `ps`. Its
@@ -25,7 +46,7 @@ for two reasons the maintainer has directed this design to fix:
 2. **An `endo://` string is not something you can hand to a person.** End
    users pass links around in chat messages, email, and QR codes, and they
    click them. A locator should therefore be expressible as an **ordinary
-   https URL** — for example an `https://minion.town/…` link — with **all**
+   https URL** — for example an `https://minion.town/...` link — with **all**
    of the locator's information carried in the **fragment** (after `#`),
    which browsers never send on the wire. "Locator" henceforth means **any
    capability URL**: an `endo://` URL, or an `https://` URL whose fragment
@@ -43,7 +64,7 @@ Prior art this builds on:
 - [daemon-locator-reference](daemon-locator-reference.md) — the `endo://`
   grammar (`packages/daemon/src/locator.js`).
 - [endo-content-locators-magnet-urn](endo-content-locators-magnet-urn.md) —
-  the content-side analogue; its strict-parse posture (reject unknown
+  the content-side analog; its strict-parse posture (reject unknown
   parameters) is adopted here.
 - minion.town's invitation-URL fragment envelope
   (`kriscendobot/minion.town` `src/web/invitation-envelope.ts`,
@@ -64,7 +85,12 @@ endo store --locator-file <path>  --name <name> [--as <agent>]
 
 - `--locator -` reads the locator from **stdin** (the recommended form for a
   bearer: it never appears in shell history or `ps`). This is the direct
-  successor of `adopt-locator`'s default-stdin behavior.
+  successor of `adopt-locator`'s default-stdin behavior. `store` already
+  spells its other stdin modes as separate boolean flags (`--text-stdin`,
+  `--json-stdin`), so a `--locator-stdin` flag would match that family
+  better than a `-` sentinel value; the choice is
+  [§ Open questions](#open-questions) item 7. The stage-1 implementation
+  on #1333's branch uses `-`.
 - `--locator-file <path>` reads it from a file, succeeding `adopt-locator
   --file`. (`store --path` already means "store this file's *bytes* as a
   blob", so the locator file flag needs its own name.)
@@ -82,8 +108,8 @@ endo store --locator-file <path>  --name <name> [--as <agent>]
   `--as` composes exactly as it does for every other `store` mode and as it
   did for `adopt-locator`.
 
-The accepted locator is **any capability URL**: `endo://…` or
-`https://…#v=1&…`, behind one parser (§ API). The CLI does not parse the
+The accepted locator is **any capability URL**: `endo://...` or
+`https://...#v=1&...`, behind one parser (§ API). The CLI does not parse the
 locator itself beyond a fast is-this-plausibly-a-locator check for a clear
 early usage error; the daemon's parser is authoritative.
 
@@ -121,6 +147,12 @@ a single job and routes **all** parsing through one module:
   normalizing through `parseCapabilityUrl` (§ API) at their boundary. The
   rest of each method is unchanged and continues to operate on the parsed
   fields / the canonical `endo://` form.
+- The foreign/trusted split between the two methods is enforced only by
+  which method a caller invokes: both take a plain string. A caller that
+  wires foreign input to `storeLocator` skips verification with no static
+  or runtime signal. This predates the design (#1333, #150/#152) and is
+  not fixed here; a branded "verified locator" type at the `storeLocator`
+  boundary would close it and is a candidate follow-up.
 - `adoptFromLocator`'s name is now slightly askew of the CLI verb
   (`store --locator`); a rename to `storeFromLocator` is listed under
   [§ Open questions](#open-questions) rather than done here, because #152 and
@@ -147,23 +179,48 @@ fragment, like the minion.town shell). Whether the origin may additionally
 serve as a *default connection hint* is deliberately left open
 ([§ Open questions](#open-questions)); in this design it may not.
 
-An https URL is **not a locator** (parser answer: `undefined`, not an error)
-when its fragment is absent or empty, is not parseable as key-value pairs
-carrying `v`, carries an unrecognized `v`, or carries a recognized `v` but
-none of the capability field families. This is the maintainer's required
-discrimination rule: **`v` is sufficient to tell a locator URL from a
-non-locator URL.** An ordinary https URL with an unrelated fragment
-(`https://example.com/docs#section-3`) parses to no recognized `v` and is
-simply not a locator. Fail-closed is reserved for URLs that *claim* to be
-capability URLs: a fragment with a recognized `v` and capability keys that
-are malformed (bad hex, duplicate keys, both families at once) is an
-**error**, never silently treated as a plain URL — matching
-`invitation-envelope.ts`'s `none` / `invalid` split exactly.
+The rule that separates "not a locator" from "invalid" is stated in terms
+of **capability keys**: the union of both families' keys below
+(`invitation`, `guest`, `label`, `node`, `formula`, `type`, `hint`, `from`,
+`fromNode`, `view`). For an https URL:
+
+1. If the fragment is absent or empty, or does not parse as key-value
+   pairs, or has no `v`, or has an unrecognized `v`: **not a locator**
+   (`undefined`).
+2. Otherwise (recognized `v`), if the fragment has **zero** capability keys:
+   **not a locator** (`undefined`). The fragment makes no capability claim.
+3. Otherwise (recognized `v` and at least one capability key), the URL
+   **claims** to be a capability URL, and every remaining defect is an
+   **error** (fail closed): an unknown key alongside capability keys, keys
+   of both families, a duplicate key, a missing required key of the family
+   whose keys appear, or a malformed value (bad hex, unknown type).
+
+This is the maintainer's required discrimination rule: **`v` is sufficient
+to tell a locator URL from a non-locator URL**, and one capability key is
+enough to turn a partial or malformed fragment into an error rather than a
+silent pass-through. An ordinary https URL with an unrelated fragment
+(`https://example.com/docs#section-3`) has no recognized `v` and is simply
+not a locator. This matches `invitation-envelope.ts`'s `none` / `invalid`
+split.
+
+| Fragment (after `#`) | Outcome |
+|---|---|
+| (none), `section-3`, `v=2&node=...` | not a locator |
+| `v=1` | not a locator (no capability keys) |
+| `v=1&utm=x` | not a locator (no capability keys) |
+| `v=1&label=x` | invalid (envelope key, no `invitation`/`guest`) |
+| `v=1&node=<hex>` | invalid (locator family missing `formula`, `type`) |
+| `v=1&view=x` | invalid (locator family missing `node`, `formula`, `type`) |
+| `v=1&node=<hex>&formula=<hex>&type=guest&utm=x` | invalid (unknown key) |
+| `v=1&node=<hex>&formula=<hex>&type=guest&guest=<id>` | invalid (both families) |
+| `v=1&node=<hex>&node=<hex>&formula=<hex>&type=guest` | invalid (duplicate `node`) |
+| `v=1&node=<hex>&formula=<hex>&type=guest` | **locator** |
+| `v=1&invitation=<id>` | valid envelope; `parseCapabilityUrl` throws "not a self-contained locator" (see § API) |
 
 ### The v=1 registry
 
 Version `1` already exists in the wild: minion.town's invitation envelope
-uses `#v=1&invitation=<id>[&label=…]` and `#v=1&guest=<id>`. Rather than
+uses `#v=1&invitation=<id>[&label=...]` and `#v=1&guest=<id>`. Rather than
 burn `v=2` on the locator family (leaving two live versions with disjoint
 vocabularies), this design defines **v=1 as a registry of capability fragment
 families**, discriminated by which keys are present:
@@ -173,11 +230,16 @@ families**, discriminated by which keys are present:
 | **envelope** (existing) | `invitation` xor `guest` (+ optional `label`) | an **origin-relative** bearer credential: a formula identifier redeemed against the daemon behind the serving origin |
 | **locator** (this design) | `node` and `formula` | a **self-contained** locator: node key, formula number, type, and connection hints — origin not consulted |
 
-A fragment carrying keys of **both** families, or a recognized `v` with
-capability keys of **neither** complete family, is invalid (fail closed).
-This keeps minion.town's deployed links valid v=1 capability URLs — they are
-locators in the broad sense ("any capability URL") even though they are not
-self-contained — while the new family carries everything `endo://` carries.
+A fragment carrying keys of **both** families, or capability keys that do
+not complete either family, is invalid (fail closed; § Recognition's
+decision table). This keeps minion.town's deployed links valid v=1
+capability URLs, while the new family carries everything `endo://` carries.
+Envelope links are not **self-contained**: they must be redeemed against
+the daemon behind the serving origin, which an Endo daemon or CLI holding
+only the URL cannot do. So the Endo-side parser recognizes a well-formed
+envelope fragment and refuses it with a distinct error rather than
+treating it as "not a locator" (§ API); only minion.town's own shell
+consumes envelopes.
 Whether minion.town's envelope keys formally join this registry or remain a
 minion.town-private grammar is an open question for the maintainer
 ([§ Open questions](#open-questions)); this design assumes they join.
@@ -192,7 +254,7 @@ All information of an `endo://` locator maps 1:1 onto fragment keys:
 | `node` | exactly once | 64 lowercase hex chars (Ed25519 public key) | URL host |
 | `formula` | exactly once | 64 lowercase hex chars | first path component |
 | `type` | exactly once | a valid formula type, or `remote` | `?type=` |
-| `hint` | zero or more, **order significant** (preference order) | a transport URL, e.g. `ocapn+noise+tcp://host:port/?node=…&loc=…` | the `@`-delimited path components after the formula |
+| `hint` | zero or more, **order significant** (preference order) | a transport URL, e.g. `ocapn+noise+tcp://host:port/?node=...&loc=...` | the `@`-delimited path components after the formula |
 | `from` | at most once | 64 lowercase hex chars | `?from=` (invitation locators) |
 | `fromNode` | at most once | 64 lowercase hex chars | `?fromNode=` (invitation locators) |
 | `view` | at most once | short token, presentation only, no authority | the `&view=` suffix Chat's share links already append |
@@ -244,13 +306,17 @@ field by field:
 
 ```
 endo://<node>/<formula>[@<hint>]*?type=<type>[&from=<from>][&fromNode=<fromNode>][&view=<view>]
-        ⇅  (bijective on fields; base chosen at format time, discarded at parse time)
+        <->  (bijective on fields; base chosen at format time, discarded at parse time)
 https://<base>#v=1&node=<node>&formula=<formula>&type=<type>[&hint=<hint>]*[&from=<from>][&fromNode=<fromNode>][&view=<view>]
 ```
 
-(Today's `parseLocator` rejects `view`; it becomes a recognized optional
-parameter of the `endo://` grammar as part of this change, since share links
-already produce it.)
+(Today's `parseLocator` rejects `view`. This design proposes that it
+become a recognized optional parameter of the `endo://` grammar, since
+share links already produce it; that loosens a strict-parse module outside
+the https-fragment scope and needs the maintainer's explicit sign-off,
+which is [§ Open questions](#open-questions) item 6. The stage-1
+implementation on #1333's branch already recognizes `view`; if the
+maintainer decides against it, that part is reverted.)
 
 ### Version evolution
 
@@ -280,8 +346,8 @@ minion.town's web shell, without dragging daemon internals):
 /**
  * @typedef {object} CapabilityLocator
  * @property {string} node       64-hex agent/node key
- * @property {string} formula    64-hex formula number
- * @property {string} formulaType  a formula type or 'remote'
+ * @property {string} number     64-hex formula number (wire key `formula`)
+ * @property {string} formulaType  a formula type or 'remote' (wire key `type`)
  * @property {string[]} hints    transport URLs, preference order
  * @property {string} [from]     invitation locators
  * @property {string} [fromNode]
@@ -293,30 +359,47 @@ minion.town's web shell, without dragging daemon internals):
  * - endo:// URL          -> parsed locator (throws if malformed)
  * - https URL, fragment with recognized v + locator family -> parsed locator
  *                           (throws if the claimed family is malformed)
- * - anything else        -> undefined  (NOT an error: "not a locator")
+ * - https URL, well-formed envelope fragment (invitation/guest)
+ *                        -> throws "origin-relative envelope, not a
+ *                           self-contained locator"
+ * - anything else        -> undefined  (NOT an error: "not a locator";
+ *                           § Recognition rules 1-2)
  * @param {string} url
  * @returns {CapabilityLocator | undefined}
  */
-export const parseCapabilityUrl = url => { … };
+export const parseCapabilityUrl = url => { ... };
 
 /** Canonical endo:// serialization. */
-export const formatEndoLocator = locator => { … };
+export const formatEndoLocator = locator => { ... };
 
 /**
- * Canonical https form: `${base}#v=1&node=…&formula=…&type=…[&hint=…]*…`.
+ * Canonical https form: `${base}#v=1&node=...&formula=...&type=...[&hint=...]*...`.
  * The base must be an https URL with no fragment (e.g. 'https://minion.town/').
  * @param {CapabilityLocator} locator
  * @param {{ base: string }} options
  */
-export const formatCapabilityUrl = (locator, { base }) => { … };
+export const formatCapabilityUrl = (locator, { base }) => { ... };
 
-/** True iff parseCapabilityUrl(url) !== undefined (never throws). */
-export const isCapabilityUrl = url => { … };
+/**
+ * True iff parseCapabilityUrl(url) returns a locator (never throws).
+ * False for a well-formed envelope link: it is a capability URL but not
+ * one an Endo daemon can adopt.
+ */
+export const isCapabilityUrl = url => { ... };
 ```
+
+The parsed field names `number` and `formulaType` differ from the wire
+keys `formula` and `type` on purpose: they are the names `parseLocator` in
+`packages/daemon/src/locator.js` already returns, so every existing caller
+of the `endo://` parser reads the same object shape from the new one. The
+export names (`formatEndoLocator` beside `formatCapabilityUrl`) likewise
+follow what stage 1 implements; a scheme-symmetric pair such as
+`formatEndoLocator` / `formatHttpsLocator` is [§ Open questions](#open-questions)
+item 8.
 
 The existing `packages/daemon/src/locator.js` keeps its exports
 (`parseLocator`, `formatLocator`, `formatLocatorWithHints`,
-`internalizeLocator`, …) with their current strict endo://-only,
+`internalizeLocator`, ...) with their current strict endo://-only,
 throw-on-invalid contracts, re-implemented over the shared internals so
 there is exactly one grammar. `EndoHost.adoptFromLocator` and
 `EndoDirectory.storeLocator` normalize their input with
@@ -330,9 +413,12 @@ this module verbatim.
 
 ## Chat
 
-Chat reaches locators through `@endo/spaces-util`; the ramifications are
-(prior art: #150/#152, which moved the command executor's channel `adopt`
-from `storeLocator` to `storeIdentifier`):
+Chat reaches locators through `@endo/spaces-util`. Related in-flight work:
+#150/#152 move the command executor's channel `adopt` from `storeLocator`
+to `storeIdentifier` (an `EndoDirectory` method that records a formula
+identifier directly, without a locator string). #152 still carries a
+changes-requested review asking whether later changes have obviated it, so
+this design does not depend on that move landing; the ramifications are:
 
 1. **Paste flows accept any capability URL.** `add-space-modal.js`'s
    "Connect to Channel" flow currently gates on
@@ -340,8 +426,8 @@ from `storeLocator` to `storeIdentifier`):
    switches to `parseCapabilityUrl` (via `@endo/spaces-util/locator.js`),
    accepting both forms with identical semantics; the hint extraction and
    `?view=` reading come from the parsed locator instead of string surgery.
-   The field's placeholder widens from `endo://…` to `endo://… or
-   https://…#v=1&…`.
+   The field's placeholder widens from `endo://...` to `endo://... or
+   https://...#v=1&...`.
 2. **The command executor's `/adopt-locator` becomes `/store`** — the same
    verb pivot as the CLI. Fields: `locator` (any capability URL) and
    `petName` ("Save as"); it continues to call
@@ -356,12 +442,15 @@ from `storeLocator` to `storeIdentifier`):
    acceptance** — until then share UIs keep producing `endo://` while every
    *accepting* surface already understands both forms, so rollout is
    forward-compatible. The `&view=` string-append in `resolveLocator`
-   (which silently produces an invalid locator when the base locator has no
-   query string) is replaced by setting the parsed locator's `view` field.
+   (`packages/space-channel/src/channel-header.js`) is replaced by setting
+   the parsed locator's `view` field. Today's input always carries
+   `?type=`, so the append works, but it depends on that invariant of its
+   caller; setting a parsed field does not, and is the only form that
+   works for the https fragment.
 
 ## Worked examples
 
-Hex values are abbreviated (`aa…aa` is 64 `a`s, etc.); the full-length
+Hex values are abbreviated (`aa...aa` is 64 `a`s, etc.); the full-length
 example at the end is mechanically exact.
 
 ### 1. The #1333 guest locator, both forms
@@ -369,16 +458,16 @@ example at the end is mechanically exact.
 `E(host).locate('<guest>')` on the hosting daemon yields (as in #1333):
 
 ```
-endo://aa…aa/bb…bb@ocapn%2Bnoise%2Btcp%3A%2F%2Fdemo.minion.town%3A8484%2F%3Fnode%3Ddd…dd%26loc%3D…?type=guest
+endo://aa...aa/bb...bb@ocapn%2Bnoise%2Btcp%3A%2F%2Fdemo.minion.town%3A8484%2F%3Fnode%3Ddd...dd%26loc%3D...?type=guest
 ```
 
-— guest agent key `aa…aa` (node), formula number `bb…bb`, one hint
-`ocapn+noise+tcp://demo.minion.town:8484/?node=dd…dd&loc=…` (the hosting
-agent key `dd…dd` and OCapN location JSON), type `guest`. The same locator
+— guest agent key `aa...aa` (node), formula number `bb...bb`, one hint
+`ocapn+noise+tcp://demo.minion.town:8484/?node=dd...dd&loc=...` (the hosting
+agent key `dd...dd` and OCapN location JSON), type `guest`. The same locator
 as a capability URL over the base `https://minion.town/`:
 
 ```
-https://minion.town/#v=1&node=aa…aa&formula=bb…bb&type=guest&hint=ocapn%2Bnoise%2Btcp%3A%2F%2Fdemo.minion.town%3A8484%2F%3Fnode%3Ddd…dd%26loc%3D…
+https://minion.town/#v=1&node=aa...aa&formula=bb...bb&type=guest&hint=ocapn%2Bnoise%2Btcp%3A%2F%2Fdemo.minion.town%3A8484%2F%3Fnode%3Ddd...dd%26loc%3D...
 ```
 
 Adoption, from stdin, on a daemon that has never seen minion.town — either
@@ -392,13 +481,14 @@ $ endo eval 'E(mt).ping()' mt:minion-town
 
 ### 2. A multi-hint locator
 
-A guest reachable over TCP and (once #684's transport is installed) WSS, in
-preference order:
+A guest reachable over TCP and, once #684's WSS transport lands (it is
+itself waiting on a multi-transport connection-hints refactor in OCapN),
+WSS, in preference order:
 
 ```
-endo://aa…aa/bb…bb@ocapn%2Bnoise%2Btcp%3A%2F%2F…@ocapn%2Bnoise%2Bwss%3A%2F%2Fdemo.minion.town%2Focapn%3Fnode%3Ddd…dd?type=guest
+endo://aa...aa/bb...bb@ocapn%2Bnoise%2Btcp%3A%2F%2F...@ocapn%2Bnoise%2Bwss%3A%2F%2Fdemo.minion.town%2Focapn%3Fnode%3Ddd...dd?type=guest
 
-https://minion.town/#v=1&node=aa…aa&formula=bb…bb&type=guest&hint=ocapn%2Bnoise%2Btcp%3A%2F%2F…&hint=ocapn%2Bnoise%2Bwss%3A%2F%2Fdemo.minion.town%2Focapn%3Fnode%3Ddd…dd
+https://minion.town/#v=1&node=aa...aa&formula=bb...bb&type=guest&hint=ocapn%2Bnoise%2Btcp%3A%2F%2F...&hint=ocapn%2Bnoise%2Bwss%3A%2F%2Fdemo.minion.town%2Focapn%3Fnode%3Ddd...dd
 ```
 
 Repeated `hint` keys, order preserved; a consumer whose networks support
@@ -459,7 +549,7 @@ put the bearer on the wire to the *landing* server as part of the fetch.
   Authentication is the locator's `node` key: adoption verifies the peer
   against it before committing, and a tampered locator cannot redirect an
   existing peer (#1333's property, kept). But users *read* origins:
-  `https://rninion.town/#v=1&…` looks trustworthy and the fragment decides
+  `https://rninion.town/#v=1&...` looks trustworthy and the fragment decides
   everything. Consuming UIs must therefore present what is being adopted
   from the **fragment's** contents — the `type` and a `node`-key fingerprint
   — and never present the origin as the counterparty. CLI ditto: `store
@@ -479,7 +569,8 @@ Stage 1 (with this design, on #1333's branch — reworked in place, not
 superseded): the `capability-url.js` module with both grammars and full
 tests (round-trip, canonicalization/idempotence, non-locator https
 rejection, unknown-`v` rejection, duplicate-key and both-families
-rejection); `endo store --locator/--locator-file` replacing `adopt-locator`
+rejection, every row of § Recognition's decision table, and the
+well-formed envelope refusal with `isCapabilityUrl` false); `endo store --locator/--locator-file` replacing `adopt-locator`
 (CLI stdin test included); `adoptFromLocator`/`storeLocator` accepting both
 forms; Chat/spaces-util accepting both forms and `/adopt-locator` renamed
 `/store`; help text updated. **Accepting** the https form everywhere is
@@ -514,4 +605,13 @@ material track this).
    #152 and the ferry queue?
 6. **Is `view` worth carrying** as a recognized presentation key in both
    grammars (this design says yes, since share links already append it), or
-   should it be stripped at parse time and re-derived by each UI?
+   should it be stripped at parse time and re-derived by each UI? Carrying
+   it also means `parseLocator` accepts a key it rejects today.
+7. **`--locator -` or `--locator-stdin`?** A `-` value keeps one flag for
+   the mode; a boolean `--locator-stdin` matches `store`'s existing
+   `--text-stdin` / `--json-stdin` family. Stage 1 implements `-`.
+8. **Serializer names.** Keep `formatEndoLocator` / `formatCapabilityUrl`
+   (stage 1), or rename to a scheme-symmetric pair such as
+   `formatEndoLocator` / `formatHttpsLocator`, so the name says which form
+   is produced and does not read as the general inverse of
+   `parseCapabilityUrl`?
