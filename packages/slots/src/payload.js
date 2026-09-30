@@ -18,7 +18,7 @@ import {
 } from '@endo/cbor';
 import { bytesFromText } from '@endo/bytes/from-string.js';
 import { bytesToText } from '@endo/bytes/to-string.js';
-import { writeDescriptor, readDescriptor } from './descriptor.js';
+import { Kind, writeDescriptor, readDescriptor } from './descriptor.js';
 
 /** @import { Descriptor } from './descriptor.js' */
 
@@ -26,6 +26,12 @@ import { writeDescriptor, readDescriptor } from './descriptor.js';
 
 export const VERB_DELIVER = 'deliver';
 harden(VERB_DELIVER);
+export const VERB_GET = 'get';
+harden(VERB_GET);
+export const VERB_INDEX = 'index';
+harden(VERB_INDEX);
+export const VERB_UNTAG = 'untag';
+harden(VERB_UNTAG);
 export const VERB_RESOLVE = 'resolve';
 harden(VERB_RESOLVE);
 export const VERB_DROP = 'drop';
@@ -39,6 +45,9 @@ harden(VERB_ABORT);
  */
 export const isSlotVerb = verb =>
   verb === VERB_DELIVER ||
+  verb === VERB_GET ||
+  verb === VERB_INDEX ||
+  verb === VERB_UNTAG ||
   verb === VERB_RESOLVE ||
   verb === VERB_DROP ||
   verb === VERB_ABORT;
@@ -74,6 +83,222 @@ const readSlotUint = reader => {
   }
   return Number(value);
 };
+
+// ---- data-lane helpers (get / index / untag) ----
+
+// A JavaScript array index is an integer in `0 <= index < 2**32 - 1`.
+// This is the array-domain bound, not a safe-integer approximation of
+// OCapN's integer domain.
+export const INDEX_LIMIT = 2 ** 32 - 1;
+harden(INDEX_LIMIT);
+
+/**
+ * A data operation observes the shape of data at a target that carries
+ * no behavior selection: `Object`, `Promise`, or `Answer` (pipelining
+ * is preserved).  A `Device` target is rejected — data operations do
+ * not address devices.
+ *
+ * @param {Descriptor} target
+ */
+const assertDataTarget = target => {
+  if (target.kind === Kind.Device) {
+    throw makeError(X`data-operation target must not be a device`);
+  }
+};
+
+/**
+ * Every data operation produces an eventual result, so its reply
+ * descriptor is required and must have kind `Promise`.
+ *
+ * @param {Descriptor} reply
+ */
+const assertDataReply = reply => {
+  if (reply.kind !== Kind.Promise) {
+    throw makeError(X`data-operation reply must be a promise descriptor`);
+  }
+};
+
+/**
+ * @param {Uint8Array} raw
+ * @param {string} what
+ * @returns {string}
+ */
+const decodeUtf8 = (raw, what) => {
+  try {
+    return bytesToText(raw, { fatal: true });
+  } catch (e) {
+    throw makeError(X`slot ${q(what)} not valid utf-8: ${q(String(e))}`);
+  }
+};
+
+/**
+ * @param {number} index
+ * @returns {number}
+ */
+const assertIndexInRange = index => {
+  if (!Number.isSafeInteger(index) || index < 0 || index >= INDEX_LIMIT) {
+    throw makeError(X`slot index ${q(index)} out of array-index range`);
+  }
+  return index;
+};
+
+// ---- get ----
+
+/**
+ * `get` payload — string-named field access:
+ *
+ * ```text
+ * [target: Descriptor, fieldName: UTF-8 bytes, reply: Descriptor]
+ * ```
+ *
+ * @typedef {object} GetPayload
+ * @property {Descriptor} target
+ * @property {string} fieldName
+ * @property {Descriptor} reply
+ */
+
+/**
+ * @param {GetPayload} p
+ * @returns {Uint8Array}
+ */
+export const encodeGetPayload = p => {
+  assertDataTarget(p.target);
+  assertDataReply(p.reply);
+  const w = makeCborWriter();
+  writeArrayHeader(w, 3);
+  writeDescriptor(w, p.target);
+  writeByteString(w, bytesFromText(p.fieldName));
+  writeDescriptor(w, p.reply);
+  return cborWriterBytes(w);
+};
+harden(encodeGetPayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {GetPayload}
+ */
+export const decodeGetPayload = bytes => {
+  const r = makeCborReader(bytes, { name: 'slot get payload' });
+  const n = readArrayHeader(r);
+  if (n !== 3) {
+    throw makeError(X`get payload must be 3-element array, got ${q(n)}`);
+  }
+  const target = readDescriptor(r);
+  const fieldName = decodeUtf8(readByteString(r), 'get field name');
+  const reply = readDescriptor(r);
+  assertConsumed(r);
+  assertDataTarget(target);
+  assertDataReply(reply);
+  return { target, fieldName, reply };
+};
+harden(decodeGetPayload);
+
+// ---- index ----
+
+/**
+ * `index` payload — positional list access:
+ *
+ * ```text
+ * [target: Descriptor, index: uint, reply: Descriptor]
+ * ```
+ *
+ * @typedef {object} IndexPayload
+ * @property {Descriptor} target
+ * @property {number} index
+ * @property {Descriptor} reply
+ */
+
+/**
+ * @param {IndexPayload} p
+ * @returns {Uint8Array}
+ */
+export const encodeIndexPayload = p => {
+  assertDataTarget(p.target);
+  assertDataReply(p.reply);
+  assertIndexInRange(p.index);
+  const w = makeCborWriter();
+  writeArrayHeader(w, 3);
+  writeDescriptor(w, p.target);
+  writeCborUint(w, BigInt(p.index));
+  writeDescriptor(w, p.reply);
+  return cborWriterBytes(w);
+};
+harden(encodeIndexPayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {IndexPayload}
+ */
+export const decodeIndexPayload = bytes => {
+  const r = makeCborReader(bytes, { name: 'slot index payload' });
+  const n = readArrayHeader(r);
+  if (n !== 3) {
+    throw makeError(X`index payload must be 3-element array, got ${q(n)}`);
+  }
+  const target = readDescriptor(r);
+  const indexBig = readCborUint(r);
+  const reply = readDescriptor(r);
+  assertConsumed(r);
+  if (indexBig >= BigInt(INDEX_LIMIT)) {
+    throw makeError(X`slot index ${q(indexBig)} out of array-index range`);
+  }
+  const index = assertIndexInRange(Number(indexBig));
+  assertDataTarget(target);
+  assertDataReply(reply);
+  return { target, index, reply };
+};
+harden(decodeIndexPayload);
+
+// ---- untag ----
+
+/**
+ * `untag` payload — tag-checked payload access:
+ *
+ * ```text
+ * [target: Descriptor, tag: UTF-8 bytes, reply: Descriptor]
+ * ```
+ *
+ * @typedef {object} UntagPayload
+ * @property {Descriptor} target
+ * @property {string} tag
+ * @property {Descriptor} reply
+ */
+
+/**
+ * @param {UntagPayload} p
+ * @returns {Uint8Array}
+ */
+export const encodeUntagPayload = p => {
+  assertDataTarget(p.target);
+  assertDataReply(p.reply);
+  const w = makeCborWriter();
+  writeArrayHeader(w, 3);
+  writeDescriptor(w, p.target);
+  writeByteString(w, bytesFromText(p.tag));
+  writeDescriptor(w, p.reply);
+  return cborWriterBytes(w);
+};
+harden(encodeUntagPayload);
+
+/**
+ * @param {Uint8Array} bytes
+ * @returns {UntagPayload}
+ */
+export const decodeUntagPayload = bytes => {
+  const r = makeCborReader(bytes, { name: 'slot untag payload' });
+  const n = readArrayHeader(r);
+  if (n !== 3) {
+    throw makeError(X`untag payload must be 3-element array, got ${q(n)}`);
+  }
+  const target = readDescriptor(r);
+  const tag = decodeUtf8(readByteString(r), 'untag tag');
+  const reply = readDescriptor(r);
+  assertConsumed(r);
+  assertDataTarget(target);
+  assertDataReply(reply);
+  return { target, tag, reply };
+};
+harden(decodeUntagPayload);
 
 // ---- deliver ----
 

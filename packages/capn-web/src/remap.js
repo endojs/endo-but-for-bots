@@ -47,6 +47,19 @@ const checkPathSegment = segment => {
   }
 };
 
+const normalizeRecordedPathSegment = segment => {
+  const index = Number(segment);
+  if (Number.isSafeInteger(index) && index >= 0 && String(index) === segment) {
+    return index;
+  }
+  return segment;
+};
+
+const getPathSegment = (value, segment) =>
+  typeof segment === 'number'
+    ? HandledPromise.index(value, segment)
+    : HandledPromise.get(value, segment);
+
 /**
  * Encode a single argument value into a wire expression suitable for
  * inclusion in an instruction's args array.  Placeholders become
@@ -117,7 +130,10 @@ const makePlaceholder = (state, subject, pendingPath) => {
       // Accumulate into pending path; do NOT emit yet (deferred until
       // the user either calls the placeholder, or the recording ends
       // with this placeholder as its answer).
-      return makePlaceholder(state, subject, [...pendingPath, prop]);
+      return makePlaceholder(state, subject, [
+        ...pendingPath,
+        normalizeRecordedPathSegment(prop),
+      ]);
     },
     apply(_t, _thisArg, args) {
       const wireArgs = args.map(a => encodeArg(state, a));
@@ -233,9 +249,9 @@ export const replayRemap = async (recording, input) => {
   /**
    * Evaluate one expression: either a `pipeline` reference or a literal.
    *
-   * Uses `HandledPromise.get` / `applyMethod` / `applyFunction` for path
-   * descent so that remote presences (which look up properties via their
-   * handler, not as own properties) work uniformly with plain objects.
+   * Uses `HandledPromise.get` / `index` / `applyMethod` / `applyFunction`
+   * for path descent so that remote presences work uniformly with plain
+   * objects and arrays without conflating property and index operations.
    *
    * @param {unknown} expression
    */
@@ -247,10 +263,10 @@ export const replayRemap = async (recording, input) => {
       for (const segment of path) checkPathSegment(segment);
       let cur = /** @type {any} */ (await resolveSubject(subject));
       if (args === undefined) {
-        // Pure get: walk the whole path via HandledPromise.get so
-        // presence handlers are consulted at each step.
+        // Pure descent: string segments are gets and numeric segments are
+        // indexes, so presence handlers are consulted with the exact operation.
         for (const segment of path) {
-          cur = await HandledPromise.get(cur, /** @type {any} */ (segment));
+          cur = await getPathSegment(cur, segment);
         }
         return cur;
       }
@@ -259,12 +275,16 @@ export const replayRemap = async (recording, input) => {
       // (empty path).
       const evaluatedArgs = await Promise.all(args.map(a => evaluate(a)));
       for (const segment of path.slice(0, -1)) {
-        cur = await HandledPromise.get(cur, /** @type {any} */ (segment));
+        cur = await getPathSegment(cur, segment);
       }
       if (path.length === 0) {
         return HandledPromise.applyFunction(cur, evaluatedArgs);
       }
       const method = path[path.length - 1];
+      if (typeof method === 'number') {
+        const fn = await HandledPromise.index(cur, method);
+        return HandledPromise.applyFunction(fn, evaluatedArgs);
+      }
       return HandledPromise.applyMethod(
         cur,
         /** @type {any} */ (method),

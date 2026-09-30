@@ -6,6 +6,8 @@ import {
   localApplyFunction,
   localApplyMethod,
   localGet,
+  localIndex,
+  localUntag,
   getMethodNames,
 } from './local.js';
 import { makePostponedHandler } from './postponed.js';
@@ -410,6 +412,15 @@ export const makeHandledPromise = () => {
       prop = coerceToObjectProperty(prop);
       handle(target, 'getSendOnly', [prop]).catch(() => {});
     },
+    index(target, index) {
+      (Number.isSafeInteger(index) && index >= 0) ||
+        Fail`Array index must be a non-negative safe integer`;
+      return handle(target, 'index', [index]);
+    },
+    untag(target, tag) {
+      typeof tag === 'string' || Fail`Tag must be a string`;
+      return handle(target, 'untag', [tag]);
+    },
     applyFunction(target, args) {
       // Ensure args is an array.
       args = [...args];
@@ -477,6 +488,8 @@ export const makeHandledPromise = () => {
   forwardingHandler = {
     get: makeForwarder('get', localGet),
     getSendOnly: makeForwarder('getSendOnly', localGet),
+    index: makeForwarder('index', localIndex),
+    untag: makeForwarder('untag', localUntag),
     applyFunction: makeForwarder('applyFunction', localApplyFunction),
     applyFunctionSendOnly: makeForwarder(
       'applyFunctionSendOnly',
@@ -595,6 +608,8 @@ export const makeHandledPromise = () => {
  * @typedef {{
  *   get?(p: T, name: PropertyKey, returnedP?: Promise<unknown>): unknown;
  *   getSendOnly?(p: T, name: PropertyKey): void;
+ *   index?(p: T, index: number, returnedP?: Promise<unknown>): unknown;
+ *   untag?(p: T, tag: string, returnedP?: Promise<unknown>): unknown;
  *   applyFunction?(p: T, args: unknown[], returnedP?: Promise<unknown>): unknown;
  *   applyFunctionSendOnly?(p: T, args: unknown[]): void;
  *   applyMethod?(p: T, name: PropertyKey | undefined, args: unknown[], returnedP?: Promise<unknown>): unknown;
@@ -639,6 +654,8 @@ export const makeHandledPromise = () => {
  *   applyMethodSendOnly(target: unknown, prop: PropertyKey, args: unknown[]): void;
  *   get(target: unknown, prop: PropertyKey): Promise<unknown>;
  *   getSendOnly(target: unknown, prop: PropertyKey): void;
+ *   index(target: unknown, index: number): Promise<unknown>;
+ *   untag(target: unknown, tag: string): Promise<unknown>;
  * }} HandledPromiseStaticMethods
  */
 

@@ -408,9 +408,12 @@ fn route_message(sup: &Arc<Supervisor>, mut msg: Message, callbacks: &RoutingCal
 
     // Slot-machine splice: for capability-bearing verbs, translate
     // descriptors in the payload through the kref registry before
-    // forwarding.  Failure modes (decode error, missing session) fall
-    // through to pass-the-bytes routing, so legacy CapTP-style
-    // payloads keep working while slot-machine is the path of choice.
+    // forwarding.  For `deliver`/`resolve`, failure modes (decode error,
+    // missing session) fall through to pass-the-bytes routing, so legacy
+    // CapTP-style payloads keep working while slot-machine is the path of
+    // choice.  The data lanes (`get`/`index`/`untag`) are stricter: a
+    // malformed payload fails closed (see below), never forwarding
+    // unvalidated bytes.
     if let Some(sm) = sup.slot_machine() {
         if slots::wire::is_slot_verb(&msg.envelope.verb) && msg.from != 0 && msg.to != 0 {
             // Each ordered (sender, recipient) pair has its own
@@ -421,10 +424,53 @@ fn route_message(sup: &Arc<Supervisor>, mut msg: Message, callbacks: &RoutingCal
             let to = session_for_edge(msg.to, msg.from);
             match msg.envelope.verb.as_str() {
                 slots::wire::VERB_DELIVER => {
-                    if let Ok(out) =
-                        slots::wire::translate::translate_deliver(sm, from, to, &msg.envelope.payload)
-                    {
+                    if let Ok(out) = slots::wire::translate::translate_deliver(
+                        sm,
+                        from,
+                        to,
+                        &msg.envelope.payload,
+                    ) {
                         msg.envelope.payload = out;
+                    }
+                }
+                slots::wire::VERB_GET
+                | slots::wire::VERB_INDEX
+                | slots::wire::VERB_UNTAG => {
+                    // The data lanes carry validated scalar operands, so
+                    // the supervisor translates each through its dedicated
+                    // decoder.  A malformed payload for a claimed data verb
+                    // is a protocol error: it must NOT fall through to
+                    // opaque byte forwarding (which would let one supervisor
+                    // validate a different protocol from another).  Fail
+                    // closed — tear the edge's sessions down and drop the
+                    // message without dispatching the operation.
+                    let translated = match msg.envelope.verb.as_str() {
+                        slots::wire::VERB_GET => slots::wire::translate::translate_get(
+                            sm,
+                            from,
+                            to,
+                            &msg.envelope.payload,
+                        ),
+                        slots::wire::VERB_INDEX => slots::wire::translate::translate_index(
+                            sm,
+                            from,
+                            to,
+                            &msg.envelope.payload,
+                        ),
+                        _ => slots::wire::translate::translate_untag(
+                            sm,
+                            from,
+                            to,
+                            &msg.envelope.payload,
+                        ),
+                    };
+                    match translated {
+                        Ok(out) => msg.envelope.payload = out,
+                        Err(_) => {
+                            let _ = sm.close_session(from);
+                            let _ = sm.close_session(to);
+                            return;
+                        }
                     }
                 }
                 slots::wire::VERB_RESOLVE => {

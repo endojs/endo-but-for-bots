@@ -136,4 +136,45 @@ export const localApplyMethod = (recipient, methodName, args) => {
   return result;
 };
 
-export const localGet = (t, key) => t[key];
+export const localGet = (target, key) => {
+  !Array.isArray(target) ||
+    assert.fail(X`Cannot get a field from an array`, TypeError);
+  return target[key];
+};
+
+/**
+ * @param {any} target
+ * @param {number} index
+ */
+export const localIndex = (target, index) => {
+  Array.isArray(target) ||
+    assert.fail(X`Cannot index into a non-array value`, TypeError);
+  (Number.isSafeInteger(index) && index >= 0) ||
+    assert.fail(X`Array index must be a non-negative safe integer`, TypeError);
+  const { length } = /** @type {any[]} */ (target);
+  index < length ||
+    assert.fail(
+      X`Index ${index} out of bounds for array of length ${length}`,
+      RangeError,
+    );
+  return target[index];
+};
+
+/**
+ * @param {any} target
+ * @param {string} tag
+ */
+export const localUntag = (target, tag) => {
+  typeof tag === 'string' || assert.fail(X`Tag must be a string`, TypeError);
+  target?.[Symbol.for('passStyle')] === 'tagged' ||
+    assert.fail(X`Cannot untag a non-tagged value`, TypeError);
+  const actualTag = target?.[Symbol.toStringTag];
+  actualTag === tag ||
+    assert.fail(
+      X`Tag mismatch: expected ${q(tag)}, got ${q(actualTag)}`,
+      TypeError,
+    );
+  Object.hasOwn(target, 'payload') ||
+    assert.fail(X`Tagged value has no payload`, TypeError);
+  return target.payload;
+};

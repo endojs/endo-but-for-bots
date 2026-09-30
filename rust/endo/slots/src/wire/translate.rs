@@ -16,7 +16,9 @@ use crate::error::Result;
 use crate::session::SessionId;
 use crate::table::SlotMachine;
 use crate::wire::descriptor::Descriptor;
-use crate::wire::payload::{DeliverPayload, DropDelta, DropPayload, ResolvePayload};
+use crate::wire::payload::{
+    DeliverPayload, DropDelta, DropPayload, GetPayload, IndexPayload, ResolvePayload, UntagPayload,
+};
 
 fn translate_one(
     sm: &SlotMachine,
@@ -77,6 +79,60 @@ pub fn translate_resolve(
         body: p.body,
         targets: translate_slice(sm, from, to, &p.targets)?,
         promises: translate_slice(sm, from, to, &p.promises)?,
+    };
+    Ok(out.encode())
+}
+
+/// Translate a `get` payload from its sender's frame into the
+/// recipient's frame.  Only the `target` and `reply` descriptors are
+/// rewritten; the scalar field name is copied verbatim.  A malformed
+/// payload is an error the caller must treat as fatal — the data lanes
+/// never fall through to opaque byte forwarding.
+pub fn translate_get(
+    sm: &SlotMachine,
+    from: SessionId,
+    to: SessionId,
+    inbound: &[u8],
+) -> Result<Vec<u8>> {
+    let p = GetPayload::decode(inbound)?;
+    let out = GetPayload {
+        target: translate_one(sm, from, to, &p.target)?,
+        field_name: p.field_name,
+        reply: translate_one(sm, from, to, &p.reply)?,
+    };
+    Ok(out.encode())
+}
+
+/// Translate an `index` payload (same mechanics as `get`, with a
+/// numeric operand).
+pub fn translate_index(
+    sm: &SlotMachine,
+    from: SessionId,
+    to: SessionId,
+    inbound: &[u8],
+) -> Result<Vec<u8>> {
+    let p = IndexPayload::decode(inbound)?;
+    let out = IndexPayload {
+        target: translate_one(sm, from, to, &p.target)?,
+        index: p.index,
+        reply: translate_one(sm, from, to, &p.reply)?,
+    };
+    Ok(out.encode())
+}
+
+/// Translate an `untag` payload (same mechanics as `get`, with a tag
+/// operand).
+pub fn translate_untag(
+    sm: &SlotMachine,
+    from: SessionId,
+    to: SessionId,
+    inbound: &[u8],
+) -> Result<Vec<u8>> {
+    let p = UntagPayload::decode(inbound)?;
+    let out = UntagPayload {
+        target: translate_one(sm, from, to, &p.target)?,
+        tag: p.tag,
+        reply: translate_one(sm, from, to, &p.reply)?,
     };
     Ok(out.encode())
 }
@@ -181,6 +237,59 @@ mod tests {
         assert_eq!(outbound.is_reject, false);
         assert_eq!(outbound.body, b"result");
         assert_eq!(outbound.targets.len(), 1);
+    }
+
+    #[test]
+    fn get_translates_target_and_reply() {
+        let sm = SlotMachine::new();
+        let (a, b) = open_two(&sm);
+        let inbound = GetPayload {
+            target: Descriptor::new(Direction::Local, Kind::Object, 7),
+            field_name: "field".into(),
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 3),
+        }
+        .encode();
+        let outbound_bytes = translate_get(&sm, a, b, &inbound).unwrap();
+        let outbound = GetPayload::decode(&outbound_bytes).unwrap();
+        assert_eq!(outbound.field_name, "field");
+        assert_eq!(outbound.target.kind, Kind::Object);
+        assert_eq!(outbound.reply.kind, Kind::Promise);
+    }
+
+    #[test]
+    fn index_and_untag_translate() {
+        let sm = SlotMachine::new();
+        let (a, b) = open_two(&sm);
+        let index_in = IndexPayload {
+            target: Descriptor::new(Direction::Local, Kind::Object, 2),
+            index: 9,
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 4),
+        }
+        .encode();
+        let index_out = IndexPayload::decode(&translate_index(&sm, a, b, &index_in).unwrap())
+            .unwrap();
+        assert_eq!(index_out.index, 9);
+        assert_eq!(index_out.reply.kind, Kind::Promise);
+
+        let untag_in = UntagPayload {
+            target: Descriptor::new(Direction::Local, Kind::Object, 5),
+            tag: "example".into(),
+            reply: Descriptor::new(Direction::Local, Kind::Promise, 6),
+        }
+        .encode();
+        let untag_out = UntagPayload::decode(&translate_untag(&sm, a, b, &untag_in).unwrap())
+            .unwrap();
+        assert_eq!(untag_out.tag, "example");
+    }
+
+    #[test]
+    fn translate_get_rejects_malformed() {
+        // Fail-closed: a malformed data-lane payload is an error, never
+        // opaque pass-through.
+        let sm = SlotMachine::new();
+        let (a, b) = open_two(&sm);
+        let bogus = vec![0x83, 0x00, 0x00, 0x00];
+        assert!(translate_get(&sm, a, b, &bogus).is_err());
     }
 
     #[test]
