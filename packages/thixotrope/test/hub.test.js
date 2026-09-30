@@ -546,11 +546,12 @@ test('sturdyrefs transit the hub as opaque values', async t => {
   });
   const sturdyRef = attachedC.client.makeSturdyRef(location, 'a-secret');
   const returned = await E(echo).echo(sturdyRef);
-  t.is(
-    String(returned),
-    '[object ocapn-sturdyref]',
-    'the round-tripped value is a sturdyref again',
+  t.true(
+    // OCapN installed the realm SturdyRef when it minted `sturdyRef`.
+    /** @type {any} */ (globalThis).SturdyRef.isSturdyRef(returned),
+    'the round-tripped value is a SturdyRef again',
   );
+  t.is(String(returned), '[object SturdyRef]');
   t.not(returned, sturdyRef, 'a fresh reification, same pointer on the wire');
 });
 
