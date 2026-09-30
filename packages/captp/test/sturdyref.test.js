@@ -2,7 +2,8 @@ import '@endo/sturdyref/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
-import { Far } from '@endo/marshal';
+import { Far, Remotable } from '@endo/marshal';
+import { isPromise } from '@endo/promise-kit';
 import { passStyleOf } from '@endo/pass-style';
 import { makeCapTP, E } from '../src/captp.js';
 
@@ -119,4 +120,54 @@ test('enlivening an unknown CapTP SturdyRef export is a protocol failure', t => 
   t.is(observed.length, 1);
   t.regex(observed[0].error.message, /Unknown export "s\+1"/);
   t.deepEqual(observed[0].context, { kind: 'protocol' });
+});
+
+test('a SturdyRef crosses CapTP with custom import/export tables', async t => {
+  // Tables that know only the 'o' and 'p' slot kinds, as a custom table
+  // written before SturdyRefs existed would.
+  const makeCapTPImportExportTables = ({ makeRemoteKit }) => {
+    const slotToExported = new Map();
+    const slotToImported = new Map();
+    let lastID = 0;
+    return {
+      makeSlotForValue: val => {
+        lastID += 1;
+        return `${isPromise(val) ? 'p' : 'o'}+${lastID}`;
+      },
+      makeValueForSlot: (slot, iface) => {
+        slot[0] === 'o' || slot[0] === 'p' || assert.fail(`kind ${slot}`);
+        const { promise, settler } = makeRemoteKit(slot);
+        const val =
+          slot[0] === 'p'
+            ? promise
+            : Remotable(iface, undefined, settler.resolveWithPresence());
+        return { val, settler };
+      },
+      hasImport: slot => slotToImported.has(slot),
+      getImport: slot => slotToImported.get(slot),
+      markAsImported: (slot, val) => slotToImported.set(slot, val),
+      hasExport: slot => slotToExported.has(slot),
+      getExport: slot => slotToExported.get(slot),
+      markAsExported: (slot, val) => slotToExported.set(slot, val),
+      deleteExport: slot => slotToExported.delete(slot),
+      didDisconnect: () => slotToImported.clear(),
+    };
+  };
+  const target = Far('target', { hello: () => 'hi' });
+  const origin = new SturdyRef({ enliven: () => target });
+  const opts = { makeCapTPImportExportTables };
+  /** @type {any} */
+  let right;
+  const left = makeCapTP('left', obj => right.dispatch(obj), undefined, opts);
+  right = makeCapTP(
+    'right',
+    obj => left.dispatch(obj),
+    Far('bootstrap', { getRef: () => origin }),
+    opts,
+  );
+
+  const imported = await E(left.getBootstrap()).getRef();
+  t.is(passStyleOf(imported), 'sturdyRef', 'not imported as a remotable');
+  const live = /** @type {any} */ (await SturdyRef.enliven(imported));
+  t.is(await E(live).hello(), 'hi');
 });
