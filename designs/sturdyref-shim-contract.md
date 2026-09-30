@@ -122,8 +122,18 @@ first-wins mechanics:
   package loaded in one realm, for example from two versions in
   `node_modules`) therefore share one constructor and one `WeakMap`, so a ref
   minted by one twin is recognized and enlivened by another.
-- `provideSturdyRef` installs lazily, and hardening is applied by
-  `@endo/harden` after lockdown. Nothing is installed at import time.
+- `provideSturdyRef` installs lazily; nothing is installed at import time
+  except through the eager `shim.js` entry. Installation may happen before or
+  after `lockdown`, as for the `HandledPromise` shim. Before `lockdown`, the
+  shim must not call `@endo/harden`: that installs `Object[@harden]`, and
+  `lockdown` then throws "Cannot lockdown (repairIntrinsics) if a prior harden
+  implementation has been used and installed". So the shim hardens with
+  `@endo/harden` only when a harden is already present (`globalThis.harden` or
+  `Object[Symbol.for('harden')]`). Otherwise it freezes the constructor, its
+  prototype, and its statics, and leaves hardening to `lockdown`. Refs are
+  frozen at construction either way. Importing the shim before `lockdown` is
+  the ordering layer 2 needs, because SES must see `SturdyRef` at
+  `repairIntrinsics` time to share it with child compartments.
 - **The `@endo/pass-style` dependency is dropped.** #774 minted each token
   with `Far('SturdyRef', {})`. That makes layer 1 depend on layer 3 and
   classifies refs as remotables, which is a claim layer 3 must make, not
@@ -143,8 +153,9 @@ revive it.
 
 **Stance:** the shim takes no position of its own on propagation. It installs
 on `globalThis`, and SES decides what child compartments see. Before layer 2,
-SES has no permit for `SturdyRef`, and the lazy post-lockdown install is never
-present at `repairIntrinsics`. A new `Compartment` builds its global object
+SES has no permit for `SturdyRef`, so even a pre-lockdown install is not
+admitted as an intrinsic, and a post-lockdown install is never present at
+`repairIntrinsics`. A new `Compartment` builds its global object
 from the intrinsics that `repairIntrinsics` captured and permitted, not from
 the start compartment's `globalThis`, so a global added later is absent from
 child compartments. That is an
@@ -171,6 +182,7 @@ confined guests by construction" in #774's `sturdyref-shim.js` is removed.
 | withheld from child compartments | rescoped (see above) |
 | first-wins: selections converge on one mapping | kept: a twin's ref passes `isSturdyRef` and `enliven` in the other twin |
 | malformed pre-existing global is rejected | kept, with the new shape check |
+| *(new)* | installed before lockdown: `lockdown` succeeds (no prior harden), the constructor is frozen and matches SES's permit shape; with layer 2, a child `Compartment` sees the same constructor |
 | *(new)* | enliven dispatches to the hook in a later turn; enlivening one ref twice runs the hook twice and yields both results (no cached settlement); hook throw → rejection; non-ref → rejection; handler without `enliven` throws at construction; call without `new` throws; an object created with `Object.create(SturdyRef.prototype)` fails `isSturdyRef` |
 
 ### Disposition of the withdrawn HandledPromise-enliven vision
