@@ -1113,6 +1113,63 @@ fn a_fault_while_the_store_is_borrowed_is_an_engine_invariant_store_fault() {
     }
 }
 
+/// A lazily resumed session's checkpoint can fault pages in while it builds
+/// its batch (the regexp table reads each regexp's `lastIndex`), from the
+/// store it commits to. `checkpoint_to_store_cell` borrows that store
+/// exclusively only for the commit, and refuses one its caller holds.
+#[test]
+fn a_lazy_checkpoint_builds_its_batch_before_it_borrows_the_store() {
+    use ironhorse_snapshot::machine::checkpoint_to_store_cell;
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let compile = |source: &str| {
+        let (code, names) = ironhorse_compile::compile_atoms(source).unwrap();
+        (code, ironhorse_vm::parse_symbols(&names))
+    };
+    let crank = |session: &mut StoreSession, source: &str| {
+        let (code, names) = compile(source);
+        let code = session.machine_mut().relink_crank(&code, &names).unwrap();
+        let outcome = session.machine_mut().run(&code);
+        assert!(outcome.completed, "{:?}", outcome.halt);
+        outcome.result
+    };
+    let (build, names) = compile(
+        "var re = /a/g; re.lastIndex = 1; var pad = []; \
+         for (var i = 0; i < 3000; i++) pad.push({i}); var o = {};",
+    );
+    let mut m = Interp::new();
+    m.link_intrinsics(&names);
+    assert!(m.run(&build).completed);
+    let store = Rc::new(RefCell::new(MemoryStore::new()));
+    drop(begin(m, &mut *store.borrow_mut()));
+    let mut lazy = resume_from_store_lazy(store.clone(), &sig()).expect("lazy resume");
+    crank(&mut lazy, "o.x = {}; 0");
+    let pages = slot_page_count(store.borrow().manifest().unwrap().slot_count);
+    let evicted = (0..pages)
+        .filter(|&page| lazy.machine().slots().evict_page(page))
+        .count();
+    assert!(evicted > 0, "the batch has pages to fault in");
+
+    let held = store.borrow_mut();
+    assert_eq!(
+        checkpoint_to_store_cell(&mut lazy, &sig(), &*store),
+        Err(StoreError::MachineOperation(
+            "checkpoint: the store is already borrowed".to_string()
+        ))
+    );
+    drop(held);
+    assert_eq!(
+        checkpoint_to_store_cell(&mut lazy, &sig(), &*store).unwrap(),
+        2
+    );
+    let mut resumed = resume_from_store(&*store.borrow(), &sig()).unwrap();
+    assert_eq!(
+        crank(&mut resumed, "re.lastIndex + ':' + typeof o.x"),
+        "1:object"
+    );
+}
+
 /// A store wrapper whose next `commit` fails with an injected I/O
 /// error AFTER the shared verification would have passed — the
 /// durable-write failure a real backend can hit at any time.

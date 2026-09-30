@@ -24,8 +24,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::machine::{
-    begin_store_session, checkpoint_to_store, from_snapshot_bytes, resume_from_store,
-    resume_from_store_lazy, MachineSnapshot, StoreSession,
+    begin_store_session, checkpoint_to_store, checkpoint_to_store_cell, from_snapshot_bytes,
+    resume_from_store, resume_from_store_lazy, MachineSnapshot, StoreSession,
 };
 use crate::sha256::hex_sha256;
 use crate::store::{
@@ -283,7 +283,7 @@ fn run_store_scheduled<S: HeapStore + 'static>(
         let o = session.machine_mut().run(&code);
         results.push(crank_result(&o));
         computrons.push(o.computrons);
-        checkpoint_to_store(&mut session, &sig(), &mut *store.borrow_mut()).expect("checkpoint");
+        checkpoint_to_store_cell(&mut session, &sig(), &*store).expect("checkpoint");
         assert_valid(&*store.borrow());
         if let Resume::LazyAdversarialEvict = mode {
             // Evict AFTER the session's own checkpoint too: the rows

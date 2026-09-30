@@ -972,6 +972,36 @@ fn checkpoint_to_store_core(
     commit_checkpoint(interp, tracking, prepared, store)
 }
 
+/// [`checkpoint_to_store`] into a store held in a `RefCell`, for a lazily
+/// resumed session committing into the store it resumed from.
+///
+/// Building the batch can fault pages in (the small state's readers walk the
+/// heap: the regexp table reads each regexp's `lastIndex`), and a lazy
+/// session's faults read that same store, which [`checkpoint_to_store`]'s
+/// caller holds exclusively for the whole call. This borrows it shared while
+/// it builds and exclusively only for the commit. A store the caller already
+/// holds borrowed is refused with [`StoreError::MachineOperation`] before
+/// anything is built.
+pub fn checkpoint_to_store_cell(
+    session: &mut StoreSession,
+    signature: &Signature,
+    store: &std::cell::RefCell<dyn HeapStore + '_>,
+) -> Result<u64, StoreError> {
+    let StoreSession { interp, tracking } = session;
+    drop(store.try_borrow_mut().map_err(|_| store_borrowed())?);
+    let prepared = {
+        let store = store.try_borrow().map_err(|_| store_borrowed())?;
+        prepare_checkpoint(interp, tracking, signature, &*store)?
+    };
+    let mut store = store.try_borrow_mut().map_err(|_| store_borrowed())?;
+    commit_checkpoint(interp, tracking, prepared, &mut *store)
+}
+
+/// A checkpoint's refusal of a store its caller already holds borrowed.
+fn store_borrowed() -> StoreError {
+    StoreError::MachineOperation("checkpoint: the store is already borrowed".to_string())
+}
+
 /// A checkpoint's batch, built from the machine and checked against the
 /// store it commits to. Building it reads the store (its manifest, and
 /// after a resume its section digests) and can fault pages in (the small
@@ -1286,9 +1316,12 @@ pub fn resume_from_store(
 /// Reads go through the `RefCell` so the
 /// same store object also serves `commit` at checkpoint time (`&mut`
 /// via `borrow_mut`). Faults happen mid-crank, and during a checkpoint
-/// only while it prepares the machine and builds its batch, with the store
-/// borrowed at most shared ([`SharedStoreSession::checkpoint`]); the
-/// commit itself faults nothing, so the borrows never overlap.
+/// while it prepares the machine and builds its batch; the commit itself
+/// faults nothing. [`SharedStoreSession::checkpoint`] and
+/// [`checkpoint_to_store_cell`] hold the store at most shared until the
+/// commit, so the borrows never overlap; [`checkpoint_to_store`]'s caller
+/// holds it exclusively throughout, so a fault while its batch is built
+/// finds it borrowed.
 ///
 /// A fault reads the committed row and hands it to the arena, which
 /// checks its length and references before installing it. A bound
@@ -1383,8 +1416,9 @@ impl<S: HeapStore> ironhorse_vm::PageSource for StorePageSource<S> {
 /// one that fails in a later crank unwinds as a [`StoreFault`], which
 /// the host catches and rewinds on. The store rides in
 /// an `Rc<RefCell<…>>` so the returned machine's fault path and the
-/// caller's later [`checkpoint_to_store`] (`&mut *store.borrow_mut()`)
-/// share it.
+/// caller's later checkpoints share it; checkpoint into it with
+/// [`checkpoint_to_store_cell`], which borrows it exclusively only for the
+/// commit, since building a batch can fault.
 pub fn resume_from_store_lazy<S: HeapStore + 'static>(
     store: std::rc::Rc<std::cell::RefCell<S>>,
     expected_sig: &Signature,
@@ -2973,17 +3007,14 @@ impl SharedStoreSession {
         signature: &Signature,
         store: &std::cell::RefCell<dyn HeapStore + '_>,
     ) -> Result<u64, StoreError> {
-        let borrowed = || {
-            StoreError::MachineOperation("checkpoint: the store is already borrowed".to_string())
-        };
-        drop(store.try_borrow_mut().map_err(|_| borrowed())?);
+        drop(store.try_borrow_mut().map_err(|_| store_borrowed())?);
         self.machine
             .with_persistence(|interp| {
                 let prepared = {
-                    let store = store.try_borrow().map_err(|_| borrowed())?;
+                    let store = store.try_borrow().map_err(|_| store_borrowed())?;
                     prepare_checkpoint(interp, &mut self.tracking, signature, &*store)?
                 };
-                let mut store = store.try_borrow_mut().map_err(|_| borrowed())?;
+                let mut store = store.try_borrow_mut().map_err(|_| store_borrowed())?;
                 commit_checkpoint(interp, &mut self.tracking, prepared, &mut *store)
             })
             .map_err(shared_access_error)?

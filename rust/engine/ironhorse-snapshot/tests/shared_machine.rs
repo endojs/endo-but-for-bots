@@ -1363,17 +1363,10 @@ fn a_checkpoint_prepares_a_pending_compartment_before_it_borrows_the_store() {
     assert_eq!(eval(&ra, "re.lastIndex"), "1");
 
     // A store the caller holds borrowed is refused before the machine is
-    // prepared, and the session checkpoints once it is released. Preparing
-    // this compartment would fault: a collection leaves free slots, and a
-    // fresh lazy resume with its pages evicted allocates the environment
-    // from them.
-    eval(
-        &ra,
-        "var junk = []; for (var i = 0; i < 2000; i++) junk.push({i}); junk = null; 0",
-    );
-    assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 4);
-    restored.full_collect(&*store.borrow()).unwrap();
-    assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 5);
+    // prepared, and the session checkpoints once it is released. On a fresh
+    // lazy resume with its pages evicted, preparing this compartment would
+    // fault, as in the first case (its global bindings read the
+    // intrinsics).
     let ids = restored
         .machine()
         .with_persistence(|i| {
@@ -1397,11 +1390,11 @@ fn a_checkpoint_prepares_a_pending_compartment_before_it_borrows_the_store() {
     // faults through.
     let held = store.borrow_mut();
     assert_eq!(restored.checkpoint(&signature, &*store), refused());
-    assert_eq!(held.manifest().unwrap().epoch, 5);
+    assert_eq!(held.manifest().unwrap().epoch, 3);
     drop(held);
     let held = store.borrow();
     assert_eq!(restored.checkpoint(&signature, &*store), refused());
     drop(held);
-    assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 6);
+    assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 4);
     assert!(later.snapshot_id().is_some());
 }
