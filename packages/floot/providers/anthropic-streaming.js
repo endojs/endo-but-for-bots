@@ -10,10 +10,7 @@
  * they arrive and still resolves to the same buffered `{ message }` result.
  */
 
-import {
-  projectUsage,
-  tokenCount,
-} from '@endo/hosted-agent/token-usage.js';
+import { projectUsage, tokenCount } from '@endo/hosted-agent/token-usage.js';
 
 /** @import { Anthropic } from '@anthropic-ai/sdk' */
 /** @typedef {import('@anthropic-ai/sdk').default} AnthropicClient */
@@ -167,7 +164,7 @@ const rethrowAnthropic = error => {
     status === 401 || errBody?.type === 'authentication_error';
   if (isAuthError) {
     throw new Error(
-      'Anthropic API authentication failed (invalid or expired API key). Check FLOOT_AUTH_TOKEN (or LAL_AUTH_TOKEN).',
+      'Anthropic API authentication failed (invalid or expired API key). Check the configured Secret.',
     );
   }
   throw error;

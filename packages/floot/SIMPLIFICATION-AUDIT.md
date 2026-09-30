@@ -224,17 +224,22 @@ Both package lint runs have zero errors; the root documentation gate passes.
 Independent adversarial review approves the deletion and retained assertions.
 No deployment is claimed.
 
-Next verified compatibility mismatch: Floot's direct-provider constructor accepts
-both `FLOOT_*` and `LAL_*` fields even though its sole production caller already
-has a structured provider/model config and a separately resolved Secret.
-Neither setup nor that caller supplies a custom host.
-An explicit `lal` or an unknown provider currently falls through to default local
-Ollama, ignoring the caller's Floot model and credential fields.
-Replace this internal environment translation with explicit provider/model/key
-arguments, remove legacy aliases and buffered fallback, and reject unsupported
-provider kinds before setup acquires resources.
-Preserve Anthropic/OpenRouter behavior and leave Lal's own environment API alone.
-This follow-up is not implemented yet.
+Removed the direct-provider compatibility mismatch: Floot's constructor now takes
+explicit provider/model/key arguments instead of `FLOOT_*` and `LAL_*` aliases.
+Its sole production caller already has structured config and a resolved Secret;
+neither setup nor that caller supplied a custom host.
+The buffered Lal adapter and host inference are deleted.
+Previously, `lal` and unknown provider names silently selected default local
+Ollama, ignoring the caller's model and credential fields.
+Both runtime construction and setup now reject unsupported kinds; setup does so
+before host calls, credential access or resource acquisition.
+Anthropic/OpenRouter defaults and behavior remain; Lal's separate environment API
+is unchanged. Stale constructor fields reject rather than being ignored.
+The 787 Floot tests and package typecheck pass, including explicit selection,
+no-output-cap OpenRouter behavior, alias refusal and early setup rejection.
+Package lint has zero errors; formatting and the root documentation gate pass.
+Independent adversarial review approves; no stored schema, Secret ownership or
+rotation/cache behavior changes. Not deployed.
 
 | Mechanisms | Different responsibilities | Decision |
 |---|---|---|

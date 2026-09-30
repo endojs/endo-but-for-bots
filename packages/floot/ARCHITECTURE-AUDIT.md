@@ -37,6 +37,11 @@ The next source cleanup deletes four unused/test-only Claude/OpenCode broker
 constructors (89 runtime lines). Production already uses shared broker services;
 vendor policies and formula entrypoints remain unchanged.
 All 519 Claude and 299 OpenCode tests pass; independent review approves.
+Floot's runtime provider constructor now takes explicit provider/model/key
+configuration; environment aliases, host inference and the buffered Lal fallback
+are removed. Unsupported provider kinds reject before setup acquires resources.
+The 787 Floot tests and typecheck pass; independent review approves.
+These source-only changes preserve stored provider config and Secrets.
 The preceding simplification slice removes Codex's
 second hosted model-list authority in favor of the same account catalog used by
 admission, deletes its native-descriptor normalization API, removes OpenCode's

@@ -54,6 +54,8 @@ import {
   publishAccountBindings,
 } from '@endo/hosted-agent/account-bindings.js';
 
+import { assertProviderKind } from './providers/config.js';
+
 import {
   isNamePersisted,
   provisionMachineAdmin,
@@ -274,6 +276,7 @@ export const main = async agent => {
   const agentName = `profile-for-${guestName}`;
 
   const provider = env('FLOOT_PROVIDER') || 'anthropic';
+  assertProviderKind(provider);
   const model = env('FLOOT_MODEL');
   const authToken =
     env('FLOOT_AUTH_TOKEN') ||

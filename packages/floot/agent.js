@@ -3067,9 +3067,9 @@ export const make = async (
       return cached.providerP;
     const providerP = (async () =>
       createStreamingProvider({
-        FLOOT_PROVIDER: cfg.provider,
-        FLOOT_MODEL: model || cfg.model,
-        FLOOT_AUTH_TOKEN: token,
+        provider: cfg.provider,
+        model: model || cfg.model,
+        apiKey: token,
       }))().catch(error => {
       if (providersByModel.get(key)?.providerP === providerP) {
         providersByModel.delete(key);

@@ -15,52 +15,90 @@ test('OpenRouter selection fails early without credentials', t => {
   t.throws(
     () =>
       createStreamingProvider({
-        FLOOT_PROVIDER: 'openrouter',
-        FLOOT_MODEL: 'vendor/model',
+        provider: 'openrouter',
+        model: 'vendor/model',
       }),
     { message: /key/ },
   );
 });
 
-test.serial('OpenRouter factories never send an output cap', async t => {
-  const originalFetch = globalThis.fetch;
-  t.teardown(() => {
-    globalThis.fetch = originalFetch;
-  });
-  const bodies = [];
-  globalThis.fetch = async (_url, init) => {
-    bodies.push(JSON.parse(init.body));
-    return new Response(
-      JSON.stringify({
-        choices: [
-          {
-            finish_reason: 'stop',
-            message: { role: 'assistant', content: 'Done' },
-          },
-        ],
-      }),
+test.serial(
+  'explicit Floot and separate Lal OpenRouter factories never send an output cap',
+  async t => {
+    const originalFetch = globalThis.fetch;
+    t.teardown(() => {
+      globalThis.fetch = originalFetch;
+    });
+    const bodies = [];
+    globalThis.fetch = async (_url, init) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response(
+        JSON.stringify({
+          choices: [
+            {
+              finish_reason: 'stop',
+              message: { role: 'assistant', content: 'Done' },
+            },
+          ],
+        }),
+      );
+    };
+    const env = {
+      LAL_HOST: 'https://openrouter.ai/api/v1',
+      LAL_MODEL: 'openrouter/free',
+      LAL_AUTH_TOKEN: 'test-not-a-key',
+    };
+    await createProvider(env).chat([], []);
+    await createStreamingProvider({
+      provider: 'openrouter',
+      model: 'openrouter/free',
+      apiKey: 'test-not-a-key',
+    }).chat([], []);
+    // Lal's separate environment API is outside Floot's explicit constructor.
+    await createProvider({ ...env, LAL_MAX_TOKENS: '8192' }).chat([], []);
+    t.is(bodies.length, 3);
+    t.true(bodies.every(body => !('max_tokens' in body)));
+  },
+);
+
+test('Floot refuses stale environment aliases rather than selecting a provider from them', t => {
+  for (const field of [
+    'FLOOT_PROVIDER',
+    'FLOOT_MODEL',
+    'FLOOT_AUTH_TOKEN',
+    'FLOOT_MAX_TOKENS',
+    'LAL_HOST',
+    'LAL_MODEL',
+    'LAL_AUTH_TOKEN',
+    'LAL_MAX_TOKENS',
+    'unknown',
+  ]) {
+    const options = {
+      provider: 'openrouter',
+      model: 'openrouter/free',
+      apiKey: 'test-not-a-key',
+      [field]: 'stale',
+    };
+    t.throws(() => createStreamingProvider(options), {
+      message: new RegExp(field),
+    });
+  }
+});
+
+test('Floot provider selection is explicit and rejects unsupported kinds', t => {
+  for (const provider of ['lal', 'ollama', 'OpenRouter', 'unknown', '']) {
+    t.throws(
+      () => createStreamingProvider({ provider, apiKey: 'test-not-a-key' }),
+      { message: /provider/i },
     );
-  };
-  const env = {
-    LAL_HOST: 'https://openrouter.ai/api/v1',
-    LAL_MODEL: 'openrouter/free',
-    LAL_AUTH_TOKEN: 'test-not-a-key',
-  };
-  await createProvider(env).chat([], []);
-  await createStreamingProvider(env).chat([], []);
-  await createStreamingProvider({
-    ...env,
-    FLOOT_PROVIDER: 'openrouter',
-  }).chat([], []);
-  // Not from the environment either: a reply is as long as the model makes
-  // it, and a cap only ever turned a long answer into a failed turn.
-  await createStreamingProvider({ ...env, FLOOT_MAX_TOKENS: '8192' }).chat(
-    [],
-    [],
+  }
+  t.notThrows(() => createStreamingProvider({ apiKey: 'test-not-a-key' }));
+  t.notThrows(() =>
+    createStreamingProvider({
+      provider: 'anthropic',
+      apiKey: 'test-not-a-key',
+    }),
   );
-  await createProvider({ ...env, LAL_MAX_TOKENS: '8192' }).chat([], []);
-  t.is(bodies.length, 5);
-  t.true(bodies.every(body => !('max_tokens' in body)));
 });
 
 /**
