@@ -656,10 +656,10 @@ export const createShareModal = $container => {
     ).makeChannel(channelPetName, displayName);
 
     const newChannelRef = await E(
-      /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+      /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
         powers
       ),
-    ).lookup(channelPetName);
+    ).lookup([channelPetName]);
 
     // Post heritage chain into the new channel.
     for (let i = 0; i < heritageChain.length; i += 1) {
@@ -680,7 +680,7 @@ export const createShareModal = $container => {
         target.profilePath,
       );
       const targetChannelRef = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+        /** @type {{ lookup: (petNamePath: string[]) => Promise<unknown> }} */ (
           targetPersonaPowers
         ),
       ).lookup([targetChannelPetName]);

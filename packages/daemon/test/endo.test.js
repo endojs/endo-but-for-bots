@@ -8103,13 +8103,19 @@ testNeedsNodeWorker(
 test('makeUnconfinedFromTree refuses a bare-string powers name before staging', async t => {
   const { host, config } = await prepareHost(t);
 
-  const sourceDirectory = path.join(config.statePath, '..', 'unconfined-refuse-src');
+  const sourceDirectory = path.join(
+    config.statePath,
+    '..',
+    'unconfined-refuse-src',
+  );
   fs.mkdirSync(sourceDirectory, { recursive: true });
   fs.writeFileSync(
     path.join(sourceDirectory, 'index.js'),
     'export const make = () => 1;',
   );
-  await E(host).provideMount(sourceDirectory, ['refuse-tree'], { readOnly: true });
+  await E(host).provideMount(sourceDirectory, ['refuse-tree'], {
+    readOnly: true,
+  });
 
   await t.throwsAsync(
     E(host).makeUnconfinedFromTree(undefined, ['refuse-tree'], {
