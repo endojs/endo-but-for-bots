@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-09-28 |
 | **Author** | kriscendobot (prompted) |
-| **Updated** | 2026-09-29 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214)) |
+| **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214), then reconciled with [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) per design-panel review) |
 | **Status** | Draft, awaiting production evidence |
 | **Source** | Back-filled from the minion.town Claude CLI and Agent SDK experiments (kriscendobot/minion.town#105, kriscendobot/minion.town#106) and the production observations listed in § Evidence |
 
@@ -32,16 +32,18 @@ what it does not.
 [review](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214)
 answered the four open questions. This revision records those answers:
 
-- The deployed root user runs on kriscendobot's subscription (Decision 5).
+- The deployed root user runs on kriscendobot's subscription
+  ([Decision 5](#design-decisions)).
 - Multiple subscriptions are a hard requirement: the garden holds several, and
   guests must be able to bring their own subscription or API key. Credentials
   are stored in and delivered from the daemon secret manager
   ([daemon-secret-manager](daemon-secret-manager.md)), and the OS slice is
-  required for multi-principal use, for the reason given in Decision 9 (which is
-  not Claude Code's on-disk credential store).
+  required for multi-principal use, for the reason given in
+  [Decision 9](#design-decisions) (which is not Claude Code's on-disk
+  credential store).
 - The seam is a provider-neutral `@endo/inference`. "Claude" names only
   Anthropic's Claude Code and models in this document, never Codex or any other
-  provider (Decisions 1 and 2).
+  provider ([Decisions 1 and 2](#design-decisions)).
 - The document stays a draft until real evidence exists. A speculative build and
   deployment runs as the sibling probe job `ebfb-pr1357-inference-probe-20260929`
   (§ Evidence probe).
@@ -89,6 +91,12 @@ Both tracks were built. This document is the back-fill. It has four jobs:
 | kriscendobot/minion.town#120 (draft) | Root-only `delegate()` for the factory, and the inbox-watch driver. |
 | [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) (this repository) | The sourced finding that no vendor exposes a third-party broker role for an individual Claude subscription. |
 | Subscription-under-`--bare` probe (2026-09-28, Claude Code 2.1.280, a Max-subscription login on a garden host) | Whether a subscription OAuth token can authenticate a `--bare -p` turn, answering review on #1357. Results in § Subscription credentials under `--bare`. |
+
+This document calls the CLI experiment (#105) **Track A** and the Agent SDK
+experiment (#106) **Track B**, after their design files; each track's numbered
+"findings" and "gaps" are the ones in those files. Bare "Decision N", "gate N",
+and "phase N" refer to § Design Decisions, § Verification Gates, and
+§ Phased Implementation below.
 
 ### Subscription credentials under `--bare`
 
@@ -190,7 +198,7 @@ engineering answer is that **the choice does not constrain Endo**: Endo should
 own the boundary both satisfy and ship both backends behind it, and the first
 production canary decides the default.
 
-## The inference seam (`@endo/inference`)
+## The Inference Seam (`@endo/inference`)
 
 Four prototypes (Claude CLI, Claude Agent SDK, OpenAI Responses, Codex
 subscription) implemented one seam without changing its core. Two providers
@@ -320,7 +328,7 @@ identifier, because there is none to guess. This also makes Decision 7's
 admission unit exact: one inference slot per credential is one slot per backend
 instance's credential source.
 
-## Ownership map
+## Ownership Map
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle / commit authority | Value crossing |
 | --- | --- | --- | --- | --- | --- |
@@ -331,7 +339,8 @@ instance's credential source.
 | Backend → deployment broker | Lease request / release | Admission: one inference slot per credential, budget | Lease ledger, usage records | Broker | A lease (loopback endpoint and lease token) and a usage record |
 | Factory → backend | `infer(request)` | Which agent may infer, and how often; which credential's backend it holds | Retained-child ledger | Factory | An `InferRequest`; an `InferResult` back |
 
-The four ownership questions:
+The four ownership questions, per the repository's ownership-map convention
+for designs that span several owners:
 
 - **Persistent state:** the daemon owns formulas; the daemon secret manager owns
   credential bytes; the deployment broker owns the lease ledger and usage; the
@@ -353,7 +362,7 @@ The four ownership questions:
 
 1. **`@endo/inference` owns the seam; provider packages ship plugins; the
    deployment picks one.** `@endo/inference` holds the interfaces, guards, and
-   enrichers of § The inference seam and names no provider. `@endo/claude`
+   enrichers of § The Inference Seam and names no provider. `@endo/claude`
    provides `makeClaudeCliBackend` and `makeClaudeSdkBackend` over it. The two
    Claude paths share an engine, a flag set, and a result shape; the choice
    between them turns on projection delivery and dependency weight, and no
@@ -396,7 +405,7 @@ The four ownership questions:
    Gap 1) showed the failure mode when confinement is a deny-list that an upgrade
    can widen. The harness refresh that bumps the pinned binary also diffs its
    `--help` against a reviewed baseline and fails on any change, and reruns the
-   live confinement canary (§ Verification gates). The subscription-under-`--bare`
+   live confinement canary (§ Verification Gates). The subscription-under-`--bare`
    probe is part of that rerun, because the credential delivery below depends on
    it.
 
@@ -432,9 +441,9 @@ The four ownership questions:
      host side reads the `SecretBlob` and places the credential in the
      constructed child environment as `ANTHROPIC_AUTH_TOKEN` (the path
      observed with a short-lived access token; the stored `setup-token` itself
-     has not yet run through `--bare`). With built-ins removed the model cannot read it, but the binary
-     holds it, so this is a documented residual, acceptable only for a
-     single-principal deployment (Decision 9).
+     has not yet run through `--bare`). With built-ins removed the model
+     cannot read it, but the binary holds it. This is a documented residual,
+     acceptable only for a single-principal deployment (Decision 9).
    - **Not `CLAUDE_CODE_OAUTH_TOKEN`.** `--bare` ignores it (observed,
      § Subscription credentials under `--bare`). `@endo/claude-sandbox`
      currently materializes exactly that variable in its slice under a
@@ -442,17 +451,64 @@ The four ownership questions:
      subscription mode cannot be combined with this recipe as it stands and
      must move to one of the two deliveries above.
 
-   The target delivery needs one thing the broker does not yet do. It refuses a
-   `subscription` mode on the ground that "a Claude Code gateway credential
-   replaces the claude.ai login rather than carrying it." The 2026-09-28 probe
-   shows a subscription token presented as a plain bearer does authenticate, so
-   a broker that forwards the subscription token upstream, rather than
-   substituting its own gateway credential, may satisfy the retirement condition
-   of the `@endo/claude-sandbox` exception ("a way for a gateway to present a
-   subscription credential upstream"). That is not yet observed through a
-   loopback listener, and whether such a turn draws on the subscription's usage
-   limits rather than per-token billing is not yet observed either. Gate 6
-   settles both before the broker gains the mode.
+   **Reconciling with [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md).**
+   That design, which this one depends on, already examined the shape of the
+   target delivery for a Claude subscription and closed it. Its conclusion,
+   § *Claude Code with a Claude.ai subscription: still blocked for a
+   third-party broker*, rests on two documented points and one gate:
+
+   - Anthropic's gateway documentation says that "while a gateway credential
+     variable or `apiKeyHelper` is active, a developer's claude.ai subscription
+     isn't used … and the subscription's usage limits don't apply", with the
+     traffic "billed per token to whoever owns the credential the gateway
+     forwards" ([Other LLM gateways](https://code.claude.com/docs/en/llm-gateway)).
+     That text is keyed on the variable being populated, not on whose bytes
+     populate it. The 2026-09-28 probe populated exactly that variable
+     (`ANTHROPIC_AUTH_TOKEN`) with a subscription token, so it is inside the
+     documented case, not outside it.
+   - "Nothing documents a gateway holding [a `setup-token`] and presenting it
+     upstream on a user's behalf." A broker that did so relies on undocumented
+     behavior.
+   - `SUBSCRIPTION-AUTH.md`'s gate admits a subscription mode only through "an
+     officially supported proxy/gateway configuration."
+
+   The probe does not overturn any of the three. It shows that the API
+   *accepts* a subscription token as a bearer; that design already said its
+   finding "is a statement about what is documented, not a claim that the
+   bytes would be rejected." It says nothing about which account's limits the
+   turn draws on, and the vendor text above, read plainly, predicts per-token
+   billing or undocumented accounting rather than subscription usage.
+   Consequences for this design:
+
+   - **The broker's subscription mode stays closed.** Gate 6 is evidence, not
+     authorization: even a passing gate 6 leaves the mode closed under
+     `SUBSCRIPTION-AUTH.md` until Anthropic documents a proxy-holds-the-
+     subscription configuration or the maintainer amends that gate in
+     [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) itself. This
+     design does not amend it. The target delivery above is therefore the
+     target for **API keys** now, and for subscriptions only if that gate
+     opens.
+   - **The interim delivery has the same open accounting question.** It too
+     puts a subscription token in `ANTHROPIC_AUTH_TOKEN`, so the root user's
+     turns may already fall outside the subscription's usage limits. The
+     maintainer's decision to run the root user on kriscendobot's subscription
+     stands, but gate 1's canary must check where its usage lands, not only
+     gate 6.
+   - **Terms, not only mechanics.** Whether automated, multi-principal
+     inference over a personal Pro or Max subscription is permitted by
+     Anthropic's subscription terms, as distinct from the commercial API terms,
+     is a dependency this design does not resolve and cannot resolve by
+     probing. It is listed in § Known Gaps and TODOs and is a precondition,
+     alongside gate 6 and the `SUBSCRIPTION-AUTH.md` gate, for any
+     subscription credential a guest brings.
+   - **Fallback if the subscription path stays closed.** The root user keeps
+     the interim delivery as a single-principal residual (Decision 9), and
+     guest bring-your-own-credential (Decision 11) admits **API keys only**,
+     through the broker. That is a narrower product, not a different
+     architecture: the seam, the secret store, the one-backend-per-credential
+     rule, and the slice are unchanged, and only the set of credential kinds
+     the intake accepts shrinks. The interim delivery never becomes the
+     multi-principal policy.
 
 6. **The facet is the authority; the formula identifier is a host-set label**
    (§ The facet is the authority).
@@ -477,8 +533,8 @@ The four ownership questions:
    so every backend, of every provider, emits the same thing. The credential
    record identifier is the secret manager's `secretId`, never the bytes.
 
-9. **OS containment is required for multi-principal inference; it is not
-   required by Claude Code's credential store.** Multiple subscriptions are a
+9. **OS containment is required for multi-principal inference; Claude Code's
+   credential store does not require it.** Multiple subscriptions are a
    hard requirement
    ([comment 4129930579](https://github.com/endojs/endo-but-for-bots/pull/1357#discussion_r4129930579)),
    and guests bringing their own subscription or API key makes a deployment
@@ -540,7 +596,7 @@ The four ownership questions:
     Per-principal ownership in the store waits on the owning-principal column
     that [daemon-secret-manager](daemon-secret-manager.md) names as future work.
 
-## Verification gates
+## Verification Gates
 
 Nothing below has run yet. Each gate moves a "documented" row in
 § Observed versus documented to "observed". Gates 1–4 block recommending either
@@ -550,7 +606,10 @@ broker's subscription mode and guest bring-your-own-credential.
 1. **Live positive, real daemon guest.** With the production credential kind, one
    turn on each backend causes a write through an allowlisted live daemon guest,
    verified by an independent reader (minion.town
-   `claude-on-minion-town-evaluation.md`), never by model prose.
+   `claude-on-minion-town-evaluation.md`), never by model prose. When the
+   credential is a subscription token (the interim delivery of Decision 5), the
+   canary also records whether the turn's usage appears against the
+   subscription's usage limits or as per-token billing.
 2. **Live negative.** On each backend, in the same turn shape: a `CLAUDE.md` in
    `cwd` and its parent, a `.claude/skills/` entry, a `.claude/settings.json`
    hook, a `.mcp.json` server, and a user-level `~/.claude.json` MCP server are
@@ -558,9 +617,14 @@ broker's subscription mode and guest bring-your-own-credential.
    and another principal's formula identifier, named in the prompt, are
    unreachable.
 3. **Pinned failure shapes.** One deliberately invalid credential, one exhausted
-   budget or subscription window, and one rate-limited response are captured per
-   pinned CLI version and recorded as the #119 shape table. Until it exists,
-   `needs-auth` is never inferred.
+   budget or subscription window, one rate-limited response, and one turn that
+   produces no response at all are captured per pinned CLI version and recorded
+   as the #119 shape table. The fourth shape is already known to occur: the
+   2026-09-28 probe's malformed `ANTHROPIC_API_KEY` row hung until an external
+   120 s timeout killed it rather than failing fast. The canary confirms that
+   the backend's own wall-clock limit, not a probe script's timeout, ends such a
+   turn as `limit-exceeded: wall-clock`. Until the table exists, `needs-auth` is
+   never inferred.
 4. **Environment residual.** The confined process's `/proc/<pid>/environ` holds
    no credential, only a lease token, when the target delivery of Decision 5 is
    used.
@@ -572,7 +636,9 @@ broker's subscription mode and guest bring-your-own-credential.
    `ANTHROPIC_AUTH_TOKEN` is a lease token and whose `ANTHROPIC_BASE_URL` is the
    loopback listener succeeds when the broker forwards a subscription
    `setup-token` read from a `SecretBlob`, and the turn's usage appears against
-   that subscription's limits rather than as per-token billing.
+   that subscription's limits rather than as per-token billing. Passing gate 6
+   is necessary, not sufficient: the broker's subscription mode also needs the
+   `SUBSCRIPTION-AUTH.md` gate opened, as Decision 5 explains.
 7. **Two credentials, two principals.** Two backends over two distinct
    `SecretBlob` credentials run concurrent turns; each turn's usage lands on its
    own credential, a refused lease on one does not block the other, and, in the
@@ -599,7 +665,7 @@ opened it as of this revision).
 | --- | --- |
 | [endo-claude](endo-claude.md) | Amended by this design: Decisions 1, 2, 3 (permission mode), 5, 7, 8, and the result taxonomy. Its Decision 6 (slice for guest-influenced prompts) stands for multi-principal use. Its measurements, argv-order analysis, allow-list validation, and pinned-catalog contract stand. |
 | [daemon-secret-manager](daemon-secret-manager.md) | The only store for credentials (Decisions 5 and 11). Its single-principal limit and its future owning-principal column bound guest bring-your-own-credential. |
-| [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) and `@endo/hosted-agent` ([#1224](https://github.com/endojs/endo-but-for-bots/pull/1224), merged) | The provider broker that reads a `SecretBlob` per lease and injects the credential; Decision 5's target delivery. Gains a subscription mode only after gate 6. |
+| [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) and `@endo/hosted-agent` ([#1224](https://github.com/endojs/endo-but-for-bots/pull/1224), merged) | The provider broker that reads a `SecretBlob` per lease and injects the credential; Decision 5's target delivery. Its finding that Claude Code has no documented path for a third-party broker to carry a subscription stands; Decision 5 reconciles with it, and the broker gains a subscription mode only after gate 6 and an opened `SUBSCRIPTION-AUTH.md` gate. |
 | `@endo/claude-sandbox` README, "A deliberate, time-boxed exception" | Materializes `CLAUDE_CODE_OAUTH_TOKEN` in the slice, which `--bare` ignores; Decision 5 gives it a retirement path. |
 | [#1120](https://github.com/endojs/endo-but-for-bots/pull/1120) (merged) | Moved the Floot provider token into the secret manager; the precedent Decision 5 follows. |
 | [#1248](https://github.com/endojs/endo-but-for-bots/pull/1248) (open) | Sandbox unification and the `join` network profile that confines a slice to its broker listener (Decision 9). |
@@ -608,7 +674,7 @@ opened it as of this revision).
 | endo-claude-agents-capability ([#1102](https://github.com/endojs/endo-but-for-bots/pull/1102)) | The factory that calls `infer` as its primitive. |
 | [#1015](https://github.com/endojs/endo-but-for-bots/pull/1015) (`@endo/claude` confinement core) | The implementation Decision 2 reshapes into `@endo/inference`, a sandbox-free `@endo/claude`, and a sandbox composition. |
 
-## Phased implementation
+## Phased Implementation
 
 1. **Provider-neutral seam.** `@endo/inference` exports the `InferenceBackend`
    interface and its request, result, and usage-record shapes as guards, plus
@@ -630,7 +696,8 @@ opened it as of this revision).
    document's Status with the measured comparison.
 5. **Broker delivery.** Claude as an `@endo/hosted-agent` provider: a loopback
    listener injecting the credential per lease, API key first, then the
-   subscription mode once gate 6 passes.
+   subscription mode only once gate 6 passes and the `SUBSCRIPTION-AUTH.md`
+   gate opens (Decision 5).
 6. **Slice composition and guests' own credentials.** `@endo/claude-sandbox`
    wraps either Claude backend with the broker delivery; then the guest intake
    of Decision 11, after gate 7.
@@ -642,7 +709,7 @@ opened it as of this revision).
       (2.1.268); a revived SDK track must re-pin.
 - [ ] The Claude Code 2.1.265–2.1.267 regression that failed every turn against a
       third-party `ANTHROPIC_BASE_URL` (fixed in 2.1.268 per its release notes)
-      shows the broker delivery of Decision 5 is version-sensitive; the gate-2
+      shows the broker delivery of Decision 5 is version-sensitive; the gate 2
       canary must include the listener.
 - [ ] Managed (policy) settings: `--safe-mode`'s help text says policy settings
       "still apply"; whether `--setting-sources ""` drops them remains unverified,
@@ -657,14 +724,23 @@ opened it as of this revision).
 - [ ] A genuine API key under `--bare` is untested. The 2026-09-28 probe's
       `ANTHROPIC_API_KEY` row fed an OAuth token into the API-key slot and says
       nothing about real API-key behavior.
-- [ ] The broker refuses a subscription mode today; gate 6 decides whether it
-      gains one.
+- [ ] The broker refuses a subscription mode today, and
+      [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) closes it on
+      documentation grounds. Gate 6 supplies evidence; opening the mode also
+      needs vendor documentation of a proxy-holds-the-subscription
+      configuration or a maintainer amendment of the `SUBSCRIPTION-AUTH.md`
+      gate (Decision 5).
+- [ ] Subscription terms. Whether Anthropic's subscription terms permit
+      automated, multi-principal inference over a personal Pro or Max
+      subscription, as distinct from the commercial API, is unresolved. The
+      maintainer's decision covers the root user's own subscription; a guest
+      subscription is gated on this as well as on gate 6.
 - [ ] The `@endo/claude-sandbox` exception is due for review on 2026-12-08; this
       design supplies the retirement path, and the review should cite gate 6.
 - [ ] The secret manager's owning-principal column, needed before guests'
       credentials are partitioned from the operator's catalog.
 
-## Resolved questions
+## Resolved Questions
 
 The first draft's four open questions were answered in
 [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214).
@@ -672,7 +748,8 @@ The first draft's four open questions were answered in
 1. **May a deployment keep using the owner's own subscription for the owner's own
    agents?** Yes: the deployed root user runs on kriscendobot's subscription,
    option (b) of the first draft, stored in the secret manager and delivered as
-   `ANTHROPIC_AUTH_TOKEN` or injected by the broker under the `--bare` recipe.
+   `ANTHROPIC_AUTH_TOKEN` under the `--bare` recipe. Broker injection of a
+   subscription waits on the gate Decision 5 describes.
    Decision 5.
 2. **Is Decision 9's relaxation acceptable?** Reframed by the requirement for
    multiple subscriptions and guest-supplied credentials. Claude Code's on-disk
@@ -680,11 +757,11 @@ The first draft's four open questions were answered in
    The slice is optional only for the root user's own turns. Decisions 9 and 11.
 3. **Where does the provider-neutral seam live?** In a small `@endo/inference`,
    offering interfaces, provider plugins, and enrichers, with no provider named
-   in it. § The inference seam, Decisions 1 and 2.
+   in it. § The Inference Seam, Decisions 1 and 2.
 4. **Is "enough production evidence" met?** No. The document stays a draft, and
    the probe job gathers the evidence. § Evidence probe.
 
-## Open questions
+## Open Questions
 
 1. **Is the single-principal secret store acceptable for guests' credentials
    until the owning-principal column lands?** Decision 11 makes the operator
