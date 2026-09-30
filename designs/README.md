@@ -127,8 +127,10 @@ real-endpoint integration test gated behind `ENDO_IROH_INTEGRATION=1`),
 [thixotrope](thixotrope.md) (added 2026-07-16, revised 2026-09-30;
 `@endo/thixotrope` is an orthogonally persistent object-capability machine with an OCapN comms hub,
 XS and Ironhorse worker engines, durable guest references and listeners, a persistent workspace,
-application installation, directory-native resources with dedicated manager vats, acknowledged alarm
-settlement, configurable Ironhorse defaults, and retention diagnostics.
+one installation registry for applications and directory-native resources, each in a vat of its
+own, a manager and adapter kit for native resources, a guest prelude with exo interface guards in
+every vat, acknowledged alarm settlement, configurable Ironhorse defaults, retention diagnostics,
+and a glossary that gives each term one meaning.
 The main design describes current architecture and delivery limitations; potential upgrades,
 revocation mechanisms, and persistence-boundary experiments live in the package's designs directory),
 [endor-git-bindings](endor-git-bindings.md) (added 2026-07-15,
