@@ -46,8 +46,8 @@ import harden from '@endo/harden';
  * `lookup` names it, and `remove` forgets the name once the vat is gone,
  * taking the value out of the inventory only if the inventory still holds it.
  *
- * Self-contained: this factory's source is evaluated in the workspace vat,
- * where only E, Far and harden are in scope.
+ * Shipped by source: this factory is evaluated in the workspace vat, so it
+ * may import only what the guest prelude provides, under those names.
  *
  * @param {any} inventory
  */

@@ -2,6 +2,8 @@
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 
+import { makeSerialQueue } from '../serial-queue.js';
+
 /**
  * What a durable native manager has to do that is not about its resource:
  * keep the desired registrations in its heap, hold one disposable adapter
@@ -18,8 +20,8 @@ import harden from '@endo/harden';
  * `unbind(key)`, `restore([[key, spec], ...])` and `keys()`, where `spec` is
  * whatever passable record the author registers under a key.
  *
- * Self-contained: this factory's source is evaluated in the manager vat,
- * where only E, Far and harden are in scope.
+ * Shipped by source: this factory is evaluated in the manager vat, so it
+ * may import only what the guest prelude provides, under those names.
  *
  * @template Spec
  * @param {{ adapters: any, makeKeeper: any }} powers the adapter launcher
@@ -53,16 +55,7 @@ export const makeManager = (
    * @type {Map<unknown, {spec: Spec, handle: any}>}
    */
   const desired = new Map();
-  let chain = Promise.resolve();
-  /** @param {() => Promise<any>} operation */
-  const enqueue = operation => {
-    const result = chain.then(operation);
-    chain = result.then(
-      () => {},
-      () => {},
-    );
-    return result;
-  };
+  const enqueue = makeSerialQueue();
   const keeper = makeKeeper({
     create: async () => {
       const incarnation = await E(adapters).create();

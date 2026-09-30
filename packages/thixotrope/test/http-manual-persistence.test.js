@@ -131,7 +131,7 @@ test.serial(
       ]),
     );
     t.is(results[0].key, blocked);
-    t.regex(results[0].error, /EADDRINUSE/);
+    t.regex(String(results[0].error), /EADDRINUSE/);
     t.deepEqual(await E(adapter).keys(), [available]);
   },
 );

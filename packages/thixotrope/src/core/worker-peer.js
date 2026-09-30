@@ -2,10 +2,11 @@
 /// <reference types="ses" />
 import harden from '@endo/harden';
 import { Fail, q } from '@endo/errors';
-import { E, Far } from '@endo/far';
+import { Far } from '@endo/far';
 import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
+import { guestPrelude } from '../guest/prelude.js';
 import { makePipeNetwork } from '../net/pipe-network.js';
 
 /** @import { ERef } from '@endo/eventual-send' */
@@ -58,11 +59,7 @@ export const makeWorkerPeer = async (
   },
 ) => {
   const compartment = new Compartment();
-  Object.assign(compartment.globalThis, {
-    E,
-    Far,
-    harden,
-  });
+  Object.assign(compartment.globalThis, guestPrelude);
 
   const facet = Far('ThixotropeWorker', {
     help: () =>

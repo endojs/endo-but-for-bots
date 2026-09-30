@@ -4,6 +4,8 @@
 import harden from '@endo/harden';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { Fail, q } from '@endo/errors';
+
+import { makeSerialQueue } from '../serial-queue.js';
 import { WorkerHaltError } from './worker-engine.js';
 
 /**
@@ -109,12 +111,10 @@ export const makeDurableWorkerTransport = (
     }
   }
   /**
-   * The operation chain: deliveries, wakes, parks, crashes, and
+   * The operation queue: deliveries, wakes, parks, crashes, and
    * retirement all serialize here.
-   *
-   * @type {Promise<unknown>}
    */
-  let chain = Promise.resolve();
+  const serial = makeSerialQueue();
 
   // --- idle-sleep policy ---
 
@@ -166,7 +166,7 @@ export const makeDurableWorkerTransport = (
 
   /**
    * Enqueue an incarnation-touching operation. The returned promise
-   * settles with the operation; the chain itself swallows rejections
+   * settles with the operation; the queue itself swallows rejections
    * (each operation's failure is its caller's to observe or log,
    * never the next operation's).
    *
@@ -176,8 +176,7 @@ export const makeDurableWorkerTransport = (
    */
   const enqueue = operation => {
     noteActivity();
-    const result = chain.then(operation);
-    chain = result.catch(() => {});
+    const result = serial(operation);
     result.then(armIdleTimer, armIdleTimer);
     return result;
   };

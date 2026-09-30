@@ -19,8 +19,8 @@ import harden from '@endo/harden';
  * same value sits under several keys, the key set most recently wins, and
  * deleting it falls back to the others in reverse order of setting.
  *
- * This factory is self-contained: the supervisor also ships its source into
- * a guest compartment, where only E, Far, and harden are in scope.
+ * This factory is shipped by source: the supervisor evaluates it in a guest
+ * compartment, so it may import only what the guest prelude provides.
  */
 export const makeObservableMap = () => {
   /** @type {Map<string, any>} */
