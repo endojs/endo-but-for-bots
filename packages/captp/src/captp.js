@@ -138,7 +138,6 @@ export const makeDefaultCapTPImportExportTables = ({
   );
 
   let lastExportID = 0;
-  let lastSturdyRefID = 0;
   let lastPromiseID = 0;
 
   /**
@@ -156,11 +155,6 @@ export const makeDefaultCapTPImportExportTables = ({
       // with 'p+'.
       lastPromiseID += 1;
       slot = `p+${lastPromiseID}`;
-    } else if (passStyleOf(val) === 'sturdyRef') {
-      // A SturdyRef is exported under its own 's+' slot kind. The peer
-      // mints a SturdyRef of its own for it, which enlivens by asking us.
-      lastSturdyRefID += 1;
-      slot = `s+${lastSturdyRefID}`;
     } else {
       // Since this isn't a promise, we instead increment the lastExportId and
       // use that to construct the slot name.  Non-promises are prefaced with
@@ -188,19 +182,6 @@ export const makeDefaultCapTPImportExportTables = ({
       val = Remotable(iface, undefined, settler.resolveWithPresence());
     } else if (slot[0] === 'p') {
       val = promise;
-    } else if (slot[0] === 's') {
-      // A SturdyRef the peer exported. Its handler holds a presence for
-      // the peer's export, never exposed, and enlivening sends that
-      // export `enliven()`: the peer enlivens its own SturdyRef and
-      // returns the live result. It fails once the connection is gone.
-      const enlivener = /** @type {{ enliven: () => unknown }} */ (
-        settler.resolveWithPresence()
-      );
-      val = makeSturdyRef(
-        harden({
-          enliven: () => E(enlivener).enliven(),
-        }),
-      );
     } else {
       Fail`Unknown slot type ${slot}`;
     }
@@ -502,6 +483,7 @@ export const makeCapTP = (
   // and 't' for traps.;
   let lastQuestionID = 0;
   let lastTrapID = 0;
+  let lastSturdyRefID = 0;
 
   /** @type {Map<CapTPSlot, Settler<unknown>>} */
   const settlers = new Map();
@@ -626,6 +608,13 @@ export const makeCapTP = (
       if (exportedTrapHandlers.has(val)) {
         lastTrapID += 1;
         slot = `t+${lastTrapID}`;
+      } else if (passStyleOf(val) === 'sturdyRef') {
+        // A SturdyRef is exported under its own 's+' slot kind, allocated
+        // here rather than by the import/export tables so that custom
+        // tables carry SturdyRefs too. The peer mints a SturdyRef of its
+        // own for it, which enlivens by asking us.
+        lastSturdyRefID += 1;
+        slot = `s+${lastSturdyRefID}`;
       } else {
         slot = importExportTables.makeSlotForValue(val);
       }
@@ -720,6 +709,31 @@ export const makeCapTP = (
   };
 
   /**
+   * Make the local SturdyRef for an 's' slot the peer exported. Like the
+   * 's+' allocation in convertValToSlot, this lives outside the
+   * import/export tables so that custom tables need not know the kind.
+   *
+   * @param {CapTPSlot} slot
+   * @returns {{val: any, settler: Settler }}
+   */
+  const makeSturdyRefForSlot = slot => {
+    const { settler } = makeRemoteKit(slot);
+    // Its handler holds a presence for the peer's export, never exposed,
+    // and enlivening sends that export `enliven()`: the peer enlivens its
+    // own SturdyRef and returns the live result. It fails once the
+    // connection is gone.
+    const enlivener = /** @type {{ enliven: () => unknown }} */ (
+      settler.resolveWithPresence()
+    );
+    const val = makeSturdyRef(
+      harden({
+        enliven: () => E(enlivener).enliven(),
+      }),
+    );
+    return { val, settler };
+  };
+
+  /**
    * Set up import
    *
    * @type {import('@endo/marshal').ConvertSlotToVal<CapTPSlot>}
@@ -735,7 +749,10 @@ export const makeCapTP = (
       if (iface === undefined) {
         iface = `Alleged: Presence ${ourId} ${slot}`;
       }
-      const { val, settler } = importExportTables.makeValueForSlot(slot, iface);
+      const { val, settler } =
+        slot[0] === 's'
+          ? makeSturdyRefForSlot(slot)
+          : importExportTables.makeValueForSlot(slot, iface);
       if (importHook) {
         importHook(val, slot);
       }
