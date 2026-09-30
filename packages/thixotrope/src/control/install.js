@@ -3,6 +3,7 @@
 import harden from '@endo/harden';
 
 import { makeAdapterKeeper } from '../adapter-keeper.js';
+import { makeManager } from '../native/manager-kit.js';
 import { makeNativeManager } from '../native/manager.js';
 import { evaluateSource } from './evaluate-source.js';
 
@@ -191,7 +192,7 @@ export const installNative = async (
       manager,
       `(endowments => {
         const result = (globalThis.nativeManager ??= (${makeNativeManager.toString()})(
-          () => (${bundle}), (${makeAdapterKeeper.toString()}), endowments.adapters
+          () => (${bundle}), (${makeAdapterKeeper.toString()}), (${makeManager.toString()}), endowments.adapters
         ));
         if (result.error !== undefined) throw Error(result.error);
         return result.kit;
