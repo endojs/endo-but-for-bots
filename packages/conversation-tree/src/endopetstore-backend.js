@@ -63,7 +63,7 @@ export const makeEndoPetstoreBackend = powers => {
         const nodes = await Promise.all(
           ctNames.map(name =>
             E(powers)
-              .lookup(name)
+              .lookup([name])
               .then(
                 node => /** @type {ConversationNode} */ (node),
                 () => null,

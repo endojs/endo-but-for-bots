@@ -31,7 +31,7 @@ test('mock powers lookup with path', async t => {
   const values = new Map([['dir/subdir/name', 'nested-value']]);
   const { powers } = makeMockPowers({ values });
 
-  const result = await E(powers).lookup(['dir'], 'subdir', 'name');
+  const result = await E(powers).lookup(['dir', 'subdir', 'name']);
   t.is(result, 'nested-value');
 });
 
@@ -81,10 +81,10 @@ test('mock powers send records messages', async t => {
 
   t.is(sentMessages.length, 1);
   t.deepEqual(sentMessages[0], {
-    to: 'alice',
+    to: ['alice'],
     strings: ['hello ', '!'],
     edgeNames: ['attachment'],
-    petNames: ['file'],
+    petNames: [['file']],
   });
 });
 
@@ -93,7 +93,7 @@ test('mock powers storeValue adds name and value', async t => {
 
   await E(powers).storeValue({ data: 'test' }, ['new', 'name']);
 
-  const result = await E(powers).lookup(['new'], 'name');
+  const result = await E(powers).lookup(['new', 'name']);
   t.deepEqual(result, { data: 'test' });
 });
 
