@@ -93,7 +93,7 @@ export type PassByRef =
 export type Passable<
   PC extends PassableCap = PassableCap,
   E extends Error = Error,
-> = void | Atom | Container<PC, E> | PC | E;
+> = void | Atom | Container<PC, E> | PC | E | SturdyRef;
 
 export type Container<PC extends PassableCap, E extends Error> =
   | CopyArrayInterface<PC, E>

@@ -19,7 +19,7 @@ import { thawedBytes, frozenBytes } from '@endo/immutable-arraybuffer';
 import { encodeHex, decodeHex } from '@endo/hex';
 import { X, Fail, q } from '@endo/errors';
 
-/** @import {Passable, RemotableObject} from '@endo/pass-style' */
+/** @import {Passable, RemotableObject, SturdyRef} from '@endo/pass-style' */
 /** @import {Encoding, EncodingUnion} from './types.js' */
 
 const { ownKeys } = Reflect;
@@ -69,6 +69,10 @@ const qclassMatches = (encoded, qclass) =>
  *   encodeRecur: (p: Passable) => Encoding
  * ) => Encoding} [encodePromiseToCapData]
  * @property {(
+ *   sturdyRef: SturdyRef,
+ *   encodeRecur: (p: Passable) => Encoding
+ * ) => Encoding} [encodeSturdyRefToCapData]
+ * @property {(
  *   error: Error,
  *   encodeRecur: (p: Passable) => Encoding
  * ) => Encoding} [encodeErrorToCapData]
@@ -77,6 +81,8 @@ const qclassMatches = (encoded, qclass) =>
 const dontEncodeRemotableToCapData = rem => Fail`remotable unexpected: ${rem}`;
 
 const dontEncodePromiseToCapData = prom => Fail`promise unexpected: ${prom}`;
+
+const dontEncodeSturdyRefToCapData = ref => Fail`sturdyRef unexpected: ${ref}`;
 
 const dontEncodeErrorToCapData = err => Fail`error object unexpected: ${err}`;
 
@@ -88,6 +94,7 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
   const {
     encodeRemotableToCapData = dontEncodeRemotableToCapData,
     encodePromiseToCapData = dontEncodePromiseToCapData,
+    encodeSturdyRefToCapData = dontEncodeSturdyRefToCapData,
     encodeErrorToCapData = dontEncodeErrorToCapData,
   } = encodeOptions;
 
@@ -231,6 +238,18 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
           'slot',
         )}: ${encoded}`;
       }
+      case 'sturdyRef': {
+        const encoded = encodeSturdyRefToCapData(
+          passable,
+          encodeToCapDataRecur,
+        );
+        if (qclassMatches(encoded, 'sturdyRef')) {
+          return encoded;
+        }
+        throw Fail`internal: SturdyRef encoding must be an object with ${q(
+          QCLASS,
+        )} ${q('sturdyRef')}: ${encoded}`;
+      }
       case 'error': {
         const encoded = encodeErrorToCapData(passable, encodeToCapDataRecur);
         if (qclassMatches(encoded, 'error')) {
@@ -280,6 +299,10 @@ harden(makeEncodeToCapData);
  *   decodeRecur: (e: Encoding) => Passable
  * ) => (Promise|RemotableObject)} [decodePromiseFromCapData]
  * @property {(
+ *   encodedSturdyRef: Encoding,
+ *   decodeRecur: (e: Encoding) => Passable
+ * ) => SturdyRef} [decodeSturdyRefFromCapData]
+ * @property {(
  *   encodedError: Encoding,
  *   decodeRecur: (e: Encoding) => Passable
  * ) => Error} [decodeErrorFromCapData]
@@ -287,6 +310,8 @@ harden(makeEncodeToCapData);
 
 const dontDecodeRemotableOrPromiseFromCapData = slotEncoding =>
   Fail`remotable or promise unexpected: ${slotEncoding}`;
+const dontDecodeSturdyRefFromCapData = sturdyRefEncoding =>
+  Fail`sturdyRef unexpected: ${sturdyRefEncoding}`;
 const dontDecodeErrorFromCapData = errorEncoding =>
   Fail`error unexpected: ${errorEncoding}`;
 
@@ -307,6 +332,7 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
   const {
     decodeRemotableFromCapData = dontDecodeRemotableOrPromiseFromCapData,
     decodePromiseFromCapData = dontDecodeRemotableOrPromiseFromCapData,
+    decodeSturdyRefFromCapData = dontDecodeSturdyRefFromCapData,
     decodeErrorFromCapData = dontDecodeErrorFromCapData,
   } = decodeOptions;
 
@@ -390,6 +416,18 @@ export const makeDecodeFromCapData = (decodeOptions = {}) => {
           // capdata clients. We are deprecating capdata, and these clients
           // will need to update before switching to smallcaps.
           return decoded;
+        }
+        case 'sturdyRef': {
+          // Unlike a 'slot', a 'sturdyRef' names its kind, so the decoder
+          // can and does check the result.
+          const decoded = decodeSturdyRefFromCapData(
+            jsonEncoded,
+            decodeFromCapData,
+          );
+          if (passStyleOf(decoded) === 'sturdyRef') {
+            return decoded;
+          }
+          throw Fail`internal: decodeSturdyRefFromCapData option must return a sturdyRef: ${decoded}`;
         }
         case 'error': {
           const decoded = decodeErrorFromCapData(

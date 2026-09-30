@@ -109,6 +109,23 @@ const makeConverter = (mirrorConverter = undefined) => {
         }
         break;
       }
+      case 'sturdyRef': {
+        // Passing a SturdyRef makes a SturdyRef on your side whose handler
+        // enlivens mine and passes the live result across the membrane.
+        // `passStyleOf` recognized `mine`, so the realm's `SturdyRef` exists.
+        const { SturdyRef } = /** @type {any} */ (globalThis);
+        yours = new SturdyRef(
+          harden({
+            enliven: () => {
+              // As with remotables, use mineIf so that enlivening fails once
+              // the membrane is revoked.
+              const mineIf = passBack(yours);
+              return E.when(SturdyRef.enliven(mineIf), pass);
+            },
+          }),
+        );
+        break;
+      }
       default: {
         Fail`internal: Unrecognized passStyle ${passStyle}`;
       }
