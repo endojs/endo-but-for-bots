@@ -1,0 +1,352 @@
+--- a/ironhorse-vm/src/interp/natives/json.rs
++++ b/ironhorse-vm/src/interp/natives/json.rs
+@@ -18,6 +18,22 @@
+     Object(Vec<(ReadKey, JsonSource)>),
+ }
+ 
++/// PROTOTYPE: one open container of the explicit-stack `JSON.parse`.
++enum JsonParseFrame {
++    Array {
++        inst: crate::value::SlotIndex,
++        length: u32,
++        sources: Vec<JsonSource>,
++    },
++    Object {
++        inst: crate::value::SlotIndex,
++        member_count: usize,
++        source_positions: std::collections::HashMap<ReadKey, usize>,
++        sources: Vec<(ReadKey, JsonSource)>,
++        key_ref: ReadKey,
++    },
++}
++
+ /// One string property name retained by `JSON.stringify`.  The id drives the
+ /// VM's property MOP, `key` is the exact String value passed to `toJSON` and a
+ /// replacer callback, and `units` preserves the UTF-16 spelling used in the
+@@ -786,9 +802,234 @@
+         pos: &mut usize,
+         track_source: bool,
+     ) -> Result<(Slot, JsonSource), Step> {
+-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
+-            vm.json_parse_value_inner(input, pos, track_source)
+-        })
++        // PROTOTYPE (walkers stack-depth study): an explicit container stack.
++        // Every value still charges one LIGHT unit at the point the recursive
++        // form's `with_native_frame` did, and a container holds its unit until
++        // it closes, so `native_depth` (and hence `ReentryLimit` and its
++        // `depth`) evolves exactly as before; only the host frames are gone.
++        let base = self.native_depth;
++        let mut stack: Vec<JsonParseFrame> = Vec::new();
++        let result = self.json_parse_value_iter(input, pos, track_source, &mut stack);
++        if result.is_err() {
++            self.native_depth = base;
++        }
++        debug_assert_eq!(self.native_depth, base);
++        result
++    }
++
++    fn json_parse_member_key(
++        &mut self,
++        input: &[u8],
++        pos: &mut usize,
++        inst: crate::value::SlotIndex,
++    ) -> Result<ReadKey, Step> {
++        self.json_parse_whitespace(input, pos);
++        if *pos >= input.len() || input[*pos] != b'"' {
++            return Err(self.catchable_syntax_error());
++        }
++        let key_units = self.json_parse_string_units(input, pos)?;
++        let key = SymbolName::from_units(&key_units);
++        self.charge_and_check(JSON_PARSE_OBJECT_KEY_METERING)?;
++        self.charge_and_check(string_chunk_cost(key_units.len() as u64))?;
++        let key_ref = match key.as_str().and_then(string_to_index) {
++            Some(index) if self.indexes_by_index(inst) => ReadKey::Index(index),
++            _ => ReadKey::Id(self.intern_key(&key)?),
++        };
++        self.json_parse_whitespace(input, pos);
++        if *pos >= input.len() || input[*pos] != b':' {
++            return Err(self.catchable_syntax_error());
++        }
++        *pos += 1;
++        self.json_parse_whitespace(input, pos);
++        Ok(key_ref)
++    }
++
++    fn json_parse_value_iter(
++        &mut self,
++        input: &[u8],
++        pos: &mut usize,
++        track_source: bool,
++        stack: &mut Vec<JsonParseFrame>,
++    ) -> Result<(Slot, JsonSource), Step> {
++        'value: loop {
++            self.enter_native_frame(LIGHT_FRAME_COST)?;
++            if *pos >= input.len() {
++                return Err(self.catchable_syntax_error());
++            }
++            let mut done: (Slot, JsonSource) = match input[*pos] {
++                b'[' => {
++                    *pos += 1;
++                    self.charge_and_check(JSON_PARSE_ARRAY_INSTANCE_METERING)?;
++                    let inst = self.new_array_unmetered();
++                    self.json_parse_whitespace(input, pos);
++                    if *pos < input.len() && input[*pos] == b']' {
++                        *pos += 1;
++                        self.arrays.get_mut(&inst).unwrap().length = 0;
++                        self.leave_native_frame(LIGHT_FRAME_COST);
++                        (
++                            Slot::of(Kind::Reference, Payload::Reference(inst)),
++                            if track_source {
++                                JsonSource::Array(Vec::new())
++                            } else {
++                                JsonSource::Empty
++                            },
++                        )
++                    } else {
++                        stack.push(JsonParseFrame::Array {
++                            inst,
++                            length: 0,
++                            sources: Vec::new(),
++                        });
++                        self.json_parse_whitespace(input, pos);
++                        self.charge_and_check(JSON_PARSE_ARRAY_ELEMENT_METERING + 32 + 16)?;
++                        continue 'value;
++                    }
++                }
++                b'{' => {
++                    *pos += 1;
++                    self.charge_and_check(JSON_PARSE_OBJECT_INSTANCE_METERING)?;
++                    let inst = self.slots.alloc(Slot::instance(self.object_proto));
++                    self.json_parse_whitespace(input, pos);
++                    if *pos < input.len() && input[*pos] == b'}' {
++                        *pos += 1;
++                        self.leave_native_frame(LIGHT_FRAME_COST);
++                        (
++                            Slot::of(Kind::Reference, Payload::Reference(inst)),
++                            if track_source {
++                                JsonSource::Object(Vec::new())
++                            } else {
++                                JsonSource::Empty
++                            },
++                        )
++                    } else {
++                        let key_ref = self.json_parse_member_key(input, pos, inst)?;
++                        stack.push(JsonParseFrame::Object {
++                            inst,
++                            member_count: 0,
++                            source_positions: std::collections::HashMap::new(),
++                            sources: Vec::new(),
++                            key_ref,
++                        });
++                        continue 'value;
++                    }
++                }
++                _ => {
++                    // Scalars (and the malformed-token error): no nesting.
++                    let scalar = self.json_parse_value_inner(input, pos, track_source)?;
++                    self.leave_native_frame(LIGHT_FRAME_COST);
++                    scalar
++                }
++            };
++            // Deliver the completed value to the enclosing containers,
++            // closing each one whose input ends here.
++            loop {
++                let Some(frame) = stack.last_mut() else {
++                    return Ok(done);
++                };
++                match frame {
++                    JsonParseFrame::Array {
++                        inst,
++                        length,
++                        sources,
++                    } => {
++                        let inst = *inst;
++                        let (v, source) = done;
++                        self.admit_scratch::<Slot>(*length as usize + 1)?;
++                        self.arrays
++                            .get_mut(&inst)
++                            .unwrap()
++                            .insert_item(*length, v, &mut self.side_refs);
++                        if track_source {
++                            self.push_prepaid_scratch(sources, source)?;
++                        }
++                        *length += 1;
++                        self.json_parse_whitespace(input, pos);
++                        match input.get(*pos) {
++                            Some(b',') => {
++                                *pos += 1;
++                                self.json_parse_whitespace(input, pos);
++                                self.charge_and_check(JSON_PARSE_ARRAY_ELEMENT_METERING + 32)?;
++                                continue 'value;
++                            }
++                            Some(b']') => {
++                                *pos += 1;
++                                let len = *length;
++                                let sources = std::mem::take(sources);
++                                self.arrays.get_mut(&inst).unwrap().length = len;
++                                stack.pop();
++                                self.leave_native_frame(LIGHT_FRAME_COST);
++                                done = (
++                                    Slot::of(Kind::Reference, Payload::Reference(inst)),
++                                    if track_source {
++                                        JsonSource::Array(sources)
++                                    } else {
++                                        JsonSource::Empty
++                                    },
++                                );
++                            }
++                            _ => return Err(self.catchable_syntax_error()),
++                        }
++                    }
++                    JsonParseFrame::Object {
++                        inst,
++                        member_count,
++                        source_positions,
++                        sources,
++                        key_ref,
++                    } => {
++                        let inst = *inst;
++                        let key = *key_ref;
++                        let (v, source) = done;
++                        *member_count = member_count
++                            .checked_add(1)
++                            .ok_or(Step::Host(Halt::HeapExhausted))?;
++                        self.admit_scratch::<(ReadKey, Slot)>(*member_count)?;
++                        match key {
++                            ReadKey::Id(id) => self.set_own_unmetered(inst, id, v),
++                            ReadKey::Index(index) => self.index_prop_set(inst, index, v),
++                        }
++                        if track_source {
++                            match source_positions.get(&key) {
++                                Some(&at) => sources[at].1 = source,
++                                None => {
++                                    self.admit_scratch::<(ReadKey, usize)>(
++                                        source_positions.len() + 1,
++                                    )?;
++                                    source_positions
++                                        .try_reserve(1)
++                                        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
++                                    source_positions.insert(key, sources.len());
++                                    self.push_prepaid_scratch(sources, (key, source))?;
++                                }
++                            }
++                        }
++                        self.json_parse_whitespace(input, pos);
++                        match input.get(*pos) {
++                            Some(b',') => {
++                                *pos += 1;
++                                *key_ref = self.json_parse_member_key(input, pos, inst)?;
++                                continue 'value;
++                            }
++                            Some(b'}') => {
++                                *pos += 1;
++                                let sources = std::mem::take(sources);
++                                stack.pop();
++                                self.leave_native_frame(LIGHT_FRAME_COST);
++                                done = (
++                                    Slot::of(Kind::Reference, Payload::Reference(inst)),
++                                    if track_source {
++                                        JsonSource::Object(sources)
++                                    } else {
++                                        JsonSource::Empty
++                                    },
++                                );
++                            }
++                            _ => return Err(self.catchable_syntax_error()),
++                        }
++                    }
++                }
++            }
++        }
+     }
+ 
+     fn json_parse_value_inner(
+--- a/ironhorse-vm/src/interp/natives/array.rs
++++ b/ironhorse-vm/src/interp/natives/array.rs
+@@ -1855,17 +1855,34 @@
+         depth: u32,
+         budget: &mut u32,
+     ) -> bool {
+-        if *budget == 0 || self.arguments_objects.contains(&source) {
+-            return false;
+-        }
+-        *budget -= 1;
+-        let Some(array) = self.arrays.get(&source) else {
+-            return false;
++        // PROTOTYPE: the same depth-first visit with an explicit cursor per
++        // open array (a plain worklist would push every element of a wide
++        // self-containing array before the visit budget could stop it).
++        let visit = |vm: &Self, source: crate::value::SlotIndex, budget: &mut u32| -> bool {
++            if *budget == 0 || vm.arguments_objects.contains(&source) {
++                return false;
++            }
++            *budget -= 1;
++            let Some(array) = vm.arrays.get(&source) else {
++                return false;
++            };
++            array.items().len() as u32 == array.length
+         };
+-        if array.items().len() as u32 != array.length {
++        if !visit(self, source, budget) {
+             return false;
+         }
+-        for item in array.items().values() {
++        let mut stack: Vec<(crate::value::SlotIndex, u32, u32)> = vec![(source, depth, 0)];
++        while let Some(top) = stack.last_mut() {
++            let (array, depth, cursor) = *top;
++            let length = self.arrays[&array].length;
++            if cursor >= length {
++                stack.pop();
++                continue;
++            }
++            top.2 += 1;
++            let Some(item) = self.arrays[&array].items().get(&cursor).copied() else {
++                return false;
++            };
+             if item.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
+                 return false;
+             }
+@@ -1878,11 +1895,11 @@
+             if self.proxies.contains_key(&element) {
+                 return false;
+             }
+-            if depth > 0
+-                && self.arrays.contains_key(&element)
+-                && !self.array_flat_fast_safe(element, depth - 1, budget)
+-            {
+-                return false;
++            if depth > 0 && self.arrays.contains_key(&element) {
++                if !visit(self, element, budget) {
++                    return false;
++                }
++                stack.push((element, depth - 1, 0));
+             }
+         }
+         true
+@@ -4552,7 +4569,16 @@
+         depth: u32,
+         out: &mut Vec<Slot>,
+     ) -> Result<(), Step> {
+-        for index in 0..len {
++        // PROTOTYPE: preorder DFS with an explicit (array, length, cursor,
++        // depth) stack; the metering sequence is the recursive one.
++        let mut stack: Vec<(crate::value::SlotIndex, u32, u32, u32)> = vec![(src, len, 0, depth)];
++        while let Some(top) = stack.last_mut() {
++            let (src, len, index, depth) = *top;
++            if index >= len {
++                stack.pop();
++                continue;
++            }
++            top.2 += 1;
+             let item = match self
+                 .arrays
+                 .get(&src)
+@@ -4570,7 +4596,7 @@
+                 };
+                 self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
+                 let sub_len = self.arrays[&sub].length;
+-                self.flat_into(sub, sub_len, depth - 1, out)?;
++                stack.push((sub, sub_len, 0, depth - 1));
+             } else {
+                 // Append the leaf: the per-leaf cost plus the `mxDefineIndex`
+                 // chunk growth to `out.len() + 1` slots.
