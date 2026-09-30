@@ -7,12 +7,19 @@ The target is one owner per responsibility, not the smallest possible line count
 Fae compaction remains on hold.
 Process-loss recovery remains the separate investigation tracked in PR #1323.
 
-Current deployment: generation 188 runs app `5adeb4aa9` and host `934204f`,
-including the September 30 setup/model/MCP deletions and admission/dispatch
-separation below. All four backends pass fresh lifecycle and ordinary restart
+Current deployment: generation 189 runs app `604ec1a8d` and host `4a5ac8a`,
+including the September 30 setup/model/MCP deletions, admission/dispatch
+separation and four subsequent cleanup slices below.
+Those four slices remove 232 net runtime lines across the changed application
+packages: Claude conversion 3, broker constructors 89, provider selection 61,
+and public text protocol 79. No replacement framework is added.
+The four backend/shared packages total 42,712 non-test source lines versus the
+25,463 design baseline; this does not establish the overall size target.
+All four backends pass fresh lifecycle and ordinary restart
 acceptance. Earlier not-deployed notes describe the state when those slices landed.
 The architecture audit records exact coverage and the outstanding initial Claude
-tool-seed capture omission; no universal capture or process-loss claim is made.
+tool-seed capture omission and FA-14's dropped tool error classification;
+no universal capture or process-loss claim is made.
 
 ## Native-context mechanism inventory, 2026-09-30
 
@@ -271,7 +278,11 @@ that probe requires the rebuilt image and is part of deployment validation.
 The source change removes 79 runtime lines without adding a replacement protocol.
 Deployment must rebuild the provider-listener image (`worker-entry` imports
 `provider-http`), update all three listener pins and replace affected brokers.
-No deployed listener compatibility or live acceptance is claimed yet.
+Generation 189 completes that coordinated listener/broker cutover.
+All four backends pass lifecycle and ordinary restart acceptance, with the failed
+OpenCode tool-selection attempt retained separately from its fresh passing run.
+The no-credential HTTP/HTTPS/guest-listener probe also passes and cleans up.
+Native image pins, six Secret bindings and credential/renewal/workspace roots remain.
 
 | Mechanisms | Different responsibilities | Decision |
 |---|---|---|

@@ -14,8 +14,8 @@ The main structural unification is implemented, but the refactor is not complete
 The three native backends actually use common provisioning, lifecycle, grants,
 and execution-envelope code. Reimplementing those abstractions is not the next
 step. Simplicity and bounded context still need evidence or work.
-Protocol admission conformance is covered; generation 188 passes fresh lifecycle
-and ordinary restart acceptance with the generation-186 image pins.
+Protocol admission conformance is covered; generation 189 passes fresh lifecycle
+and ordinary restart acceptance with unchanged native images and a byte-only listener.
 Neither gate settles the remaining design questions.
 
 This audit evaluates the retained implementation against the design's
@@ -28,7 +28,23 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
 ## Current work, 2026-09-30
 
-Generation 188 supersedes the generation-187 evidence below: app `5adeb4aa9`,
+Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
+and the rebuilt byte-only provider listener `cc639390…` on all three brokers.
+The four September 30 cleanup slices are deployed: one Claude argument converter,
+obsolete broker constructors removed, explicit provider configuration, and no
+legacy public text-stream protocol. They remove 232 net runtime lines across
+the changed application packages without adding a replacement framework.
+All four backends pass lifecycle and ordinary restart acceptance; OpenCode's first
+seed chose JavaScript `exec` instead of native shell and failed correctly.
+A fresh auto-free run passes with an explicit tool distinction in the test prompt;
+the failed run was not replayed. Claude/Codex restoration has two native checkpoints
+each. Claude's initial tool-heavy seed still lacks one, so universal capture fidelity
+is not claimed. The newly recorded FA-14 tool-outcome classification gap remains open.
+Secrets, credential/renewal owners, host and workspaces are preserved.
+Detailed private manifests and acceptance scopes are recorded in endo-host
+`ops/explicit-journal-deployment-20260924.md`.
+
+Generation 188's earlier deployment ran app `5adeb4aa9`,
 host `934204f`, unchanged image pins, all four lifecycle/restoration scopes pass.
 It deploys setup/model/MCP cleanup and the explicit admission/dispatch journal
 boundary. Three old-format sessions were retired after workspace-root retention;
@@ -40,7 +56,7 @@ Floot context projection by reusing the adapter's conversion at composition.
 Journal evidence is unchanged; no durable/remote codec mechanism is added.
 The 784 Floot tests and 27 Claude transcript tests pass, including codec selection
 after journal reconstruction; types, lint, docs and independent review pass.
-This cleanup is pushed but not deployed.
+This cleanup is deployed in generation 189.
 Detailed current evidence is in [the architecture audit](ARCHITECTURE-AUDIT.md)
 and endo-host `ops/explicit-journal-deployment-20260924.md`.
 
@@ -259,8 +275,8 @@ new image pins stay `candidate` in the ledger until a recall passes.
 | Shared framing, admission and cancellation semantics | Shared turn channel and three protocol-specific state machines; RA-04's matrix covers preparation, restoration, dispatch, cancellation and failed successors | Bounded conformance complete. Retain actual protocol differences; extract further implementation only after identifying identical responsibilities. |
 | Bounded resident memory for long healthy work | `context-transcript.js` pages archived metadata but accumulates active/exception record arrays; without a checkpoint it selects all eligible nonpending history | Not complete. Per-value/per-turn bounds do not bound the whole context; direct Fae has no automatic compaction producer |
 | Runtime/provider/account/model are separate concepts | Explicit session identity and runtime configuration; hosted account authority; logical account bindings and exact reset identities | Session reports now select configured accounts by backend and subscription pin; automatic pools do not imply payer attribution or eligibility. Factory direct-provider reporting stays separate. |
-| Smaller common implementation; delete superseded paths | Vendor packages shrank and shared implementation grew substantially by the audit snapshot; since then the vendor packages grew back (16,718 to 19,028 lines) with native-context work while shared code stayed flat; generic sandbox `nativeProfile` path has been retired with operator approval | Simplicity target not demonstrated. Removing this obsolete mode is progress, not proof of the overall target |
-| One current set of guarantees and final conformance | Generation 188 runs app `5adeb4aa9` with host `934204f`; all four backends pass lifecycle and ordinary restart acceptance. Later source cleanups `c3089ee18`, `c1f7a7d35` and `207308d72` are pushed but not deployed. | RA-04/RA-05 acceptance is complete for the deployed scope, not the latest source. RA-01 simplicity, RA-02 bounded context and the initial Claude tool-seed capture omission remain. Historical status paragraphs below are not current completion claims. |
+| Smaller common implementation; delete superseded paths | At `604ec1a8d`, the four backend/shared packages total 42,712 lines versus 25,463 at the design baseline. Vendors total 18,555 versus 21,165; hosted-agent totals 24,157 versus 4,298. Superseded paths are removed and current owners documented. | Simplicity target not demonstrated. Real consolidation and deletions do not prove the overall target; added scope still needs justification. |
+| One current set of guarantees and final conformance | Generation 189 runs app `604ec1a8d` with host `4a5ac8a`; all four backends pass lifecycle and ordinary restart acceptance with the new listener. | RA-04/RA-05 acceptance is complete for this deployed scope. RA-01 simplicity, RA-02 bounded context, FA-14 tool error classification and the initial Claude tool-seed capture omission remain. Historical status paragraphs below are not current completion claims. |
 
 ## Priority findings
 
@@ -286,18 +302,20 @@ The identified unused hash and selector wrapper are removed; this review found
 no further concrete deletion in that inspected scope.
 This does not demonstrate the original implementation-size target:
 
-| Package | Design baseline `4e2644c` | `2b8df7d23` |
-|---|---:|---:|
-| hosted-agent | 4,298 | 24,227 |
-| claude-sandbox | 6,484 | 7,074 |
-| codex-sandbox | 7,901 | 6,945 |
-| opencode-sandbox | 6,780 | 4,763 |
-| Total | 25,463 | 43,009 |
+| Package | Design baseline `4e2644c` | `2b8df7d23` | Current `604ec1a8d` |
+|---|---:|---:|---:|
+| hosted-agent | 4,298 | 24,227 | 24,157 |
+| claude-sandbox | 6,484 | 7,074 | 7,025 |
+| codex-sandbox | 7,901 | 6,945 | 6,870 |
+| opencode-sandbox | 6,780 | 4,763 | 4,660 |
+| Total | 25,463 | 43,009 | 42,712 |
 
 Method: enumerate committed paths with `git ls-tree -r --name-only REV`, include
 `.js`, `.mjs` and `.ts`, exclude `.d.ts`, test/tests/fixtures/test-types/test-fixtures
 directories and `.test.*`/`.test-d.*`, and count newlines in committed contents.
 These figures include comments and types, not generated files or uncommitted work.
+The current count reconciles the committed non-test source delta from `2b8df7d23`:
+141 added and 438 removed lines, a net reduction of 297 in these four packages.
 RA-01 remains open for a like-for-like scope analysis of the growth or an explicit
 design decision; green tests and the absence of another deletion candidate do not
 waive the size requirement.
@@ -1502,9 +1520,12 @@ Current sequence (2026-09-30; the test counts above are historical evidence):
    justify remaining parallel mechanisms without creating another framework.
 2. Keep RA-02's bounded-context gap explicit; Fae compaction and evidence paging
    remain deferred by the operator, not silently completed.
-3. Investigate the initial Claude tool-heavy seed's missing native checkpoint;
+3. Address FA-14 in the existing shared outcome/journal/projection paths, retaining
+   explicit failure classification without text heuristics or another journal.
+4. Investigate the initial Claude tool-heavy seed's missing native checkpoint;
    successful ordinary restart recall does not prove universal capture fidelity.
-4. Deploy the reviewed source cleanups and repeat the affected acceptance scopes.
-   Preserve Secrets, renewal owners, host and workspaces; RA-03's dedicated live
+5. Generation 189 deploys the reviewed source cleanups and passes the affected
+   acceptance scopes. Preserve Secrets, renewal owners, host and workspaces on
+   subsequent slices; RA-03's dedicated live
    account-identity matrix is not implied by ordinary inference acceptance.
-5. Maintain this current-state map and the main audit as evidence changes.
+6. Maintain this current-state map and the main audit as evidence changes.

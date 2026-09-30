@@ -16,8 +16,9 @@ Priority current-state review (updated 2026-09-30):
 the intended end state, rather than reviewing historical commits. It is the
 current prioritization entry point: primary ownership and explicit account identity
 are consolidated, and the native protocol-conformance matrix is complete.
-All four backends pass generation-188 acceptance on app `5adeb4aa9`, host `934204f`.
-The release uses generation-186's unchanged image pins; fresh
+All four backends pass generation-189 acceptance on app `604ec1a8d`, host `4a5ac8a`.
+The release uses unchanged native image pins and the byte-only provider listener;
+fresh
 Claude/Codex restart recall retains native checkpoints on both completed turns.
 Simplicity is still unproven, and whole-context/unresolved-evidence memory bounds
 remain incomplete. Direct-Fae compaction, evidence paging, local-development
@@ -32,7 +33,7 @@ Latest source cleanup shares Claude's argument encoding between its writer and
 Floot's composition boundary, deleting the duplicate conversion from context
 projection. Floot retains evidence matching; non-Claude formats compare exact
 argument text. The 784-test Floot suite and 27 Claude transcript tests pass;
-independent review approves. This cleanup is not yet deployed.
+independent review approves. This cleanup is deployed in generation 189.
 The next source cleanup deletes four unused/test-only Claude/OpenCode broker
 constructors (89 runtime lines). Production already uses shared broker services;
 vendor policies and formula entrypoints remain unchanged.
@@ -41,12 +42,19 @@ Floot's runtime provider constructor now takes explicit provider/model/key
 configuration; environment aliases, host inference and the buffered Lal fallback
 are removed. Unsupported provider kinds reject before setup acquires resources.
 The 787 Floot tests and typecheck pass; independent review approves.
-These source-only changes preserve stored provider config and Secrets.
+These changes preserve stored provider config and Secrets and are deployed in generation 189.
 The legacy public text-stream endpoint and listener fallback are removed in
 newer source, with the byte-stream protocol owning HTTP delivery and cleanup.
 This also fixes byte-reader release after EOF.
-All 774 hosted-agent tests pass (one skipped); the updated listener image and
-coordinated broker replacement remain deployment gates.
+All 774 hosted-agent tests pass (one skipped); generation 189 completes the
+updated listener image and coordinated broker replacement gates.
+Fresh Claude/Codex/OpenCode lifecycle and all four ordinary restart scopes pass.
+The first OpenCode auto-free seed used Endo's JavaScript tool rather than native
+shell and failed correctly; a fresh run passes with an explicit test-prompt
+distinction, without replay or weakened evidence checks.
+All disposable test sessions are removed; private evidence remains in endo-host's
+deployment record. The missing initial Claude checkpoint repeats, and the source
+trace now records FA-14's shared tool-error classification gap below.
 The preceding simplification slice removes Codex's
 second hosted model-list authority in favor of the same account catalog used by
 admission, deletes its native-descriptor normalization API, removes OpenCode's
@@ -1578,6 +1586,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 159 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed; deployed since generation 159; the 2026-09-22 inventory finds only shared entrypoints in the host-root-reachable graph; two dormant direct-provider formulas pinned to a pruned release remain for a decision |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
+| FA-14 | High | Explicit tool failure status is lost from durable evidence | Source-proven ontology gap; live error-text observation | Open; preserve classification in the existing shared journal/projection path, not another store or error-text heuristic |
 
 ## FA-01 — Archived failures are missing from normal history
 
@@ -4533,6 +4542,43 @@ activation followed later as recorded below. Later app commits only update this 
 
 Completion: replace/remove the obsolete builder in favor of the shared image pipeline;
 verify the missing-image path, pinned artifacts, storage admission, and all runner overlays.
+
+## FA-14 — Preserve explicit tool outcome classification
+
+Discovered during generation-189 acceptance on September 30.
+The first OpenCode auto-free seed calls Endo `exec` with an unsupported `timeout`
+argument. Its transcript retains the refusal text but no normalized `failed` flag.
+The MCP wire uses `isError`; the canonical transcript uses `failed`.
+These are distinct representations, not property aliases to accept interchangeably.
+No evidence attributes this problem to the provider-listener change.
+
+Two shared source paths demonstrably lose authoritative classification:
+
+- `src/hosted-turn.js`'s `tool-result` branch ignores native `event.ok`/`error`,
+  then emits context, observed journal evidence and UI results containing text only.
+  OpenCode's mapper does emit `ok: false` for native error states.
+- `agent.js`'s `journaledToolCall` catches actual host execution rejection but
+  persists only an `Error: …` string. Its caller correctly rethrows, and shared
+  `mcp-bridge.js` therefore emits MCP `isError: true`; that does not make the
+  missing journal classification durable.
+
+`turn-journal.js` settles those records with result text only.
+`turn-evidence.js` and `transcript-projection.js` recover/reconcile text without
+failure status, and the reply writer contracts only id/name/result.
+Canonical records already carrying `failed` can survive the ordinary path,
+but a one-line hosted recording fix would not repair host-only or recovered evidence.
+The live transcript alone does not prove whether the native OpenCode CLI also
+flattens MCP `isError` before mapping; isolate that boundary separately if needed.
+
+The smallest coherent follow-up uses one explicit outcome representation through
+the existing journal, reconciliation and presentation path, mapping native and
+MCP flags at their respective boundaries. Do not infer failure from an `Error:`
+prefix or add a second outcome journal. A failed tool response is a settled
+response, not proof of undone effects, automatic whole-turn failure, or permission
+to replay. Cover successful and failed native/mediated tools, journal revival,
+archival and recovered/late results; keep unknown outcomes distinct.
+The acceptance helper must inspect canonical `failed`, not the MCP wire property.
+Implementation and durability validation are pending.
 
 ## Preserve these boundaries
 
