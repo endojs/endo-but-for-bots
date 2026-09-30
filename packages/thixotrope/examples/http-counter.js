@@ -23,6 +23,9 @@ export const make = ({ http }) => {
       'start(port) registers HTTP, status() inspects it, read() returns the count, and close() stops serving.',
     /** @param {number} port */
     start: async port => {
+      // Moving ports releases the old registration first; a handle nobody
+      // holds would keep serving until the manager was asked to close it.
+      if (registration !== undefined) await E(registration).close();
       registration = await E(http).register(port, handler);
       return E(registration).status();
     },

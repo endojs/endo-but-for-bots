@@ -14,7 +14,7 @@ export const make = () => {
     clearTimeout: handle =>
       clearTimeout(/** @type {NodeJS.Timeout} */ (handle)),
   });
-  /** @type {Map<number, {consumer: any, listener: any}>} */
+  /** @type {Map<number, {consumer: any, origins: string[], listener: any}>} */
   const routes = new Map();
   let chain = Promise.resolve();
   /** @param {() => Promise<any>} operation */
@@ -32,21 +32,25 @@ export const make = () => {
    * @param {any} request
    */
   const admitRequest = (port, origins, request) => {
-    const authority = `127.0.0.1:${port}`;
-    const allowed = origins.length === 0 ? [`http://${authority}`] : origins;
+    // Loopback answers to both of its spellings; a browser at either one is
+    // same-origin with itself, so both are allowed unless a policy says
+    // otherwise.
+    const authorities = [`127.0.0.1:${port}`, `localhost:${port}`];
+    const allowed =
+      origins.length === 0
+        ? authorities.map(authority => `http://${authority}`)
+        : origins;
     const origin = request.headers.origin;
     const site = request.headers['sec-fetch-site'];
-    if (
-      request.headers.host !== authority ||
-      (origin !== undefined && !allowed.includes(origin)) ||
-      (site !== undefined && site !== 'same-origin' && site !== 'none')
-    ) {
-      return harden({
-        allowed: /** @type {const} */ (false),
-        status: 403,
-        body: 'Request origin is not permitted',
-      });
-    }
+    /** @param {string} body */
+    const refuse = body =>
+      harden({ allowed: /** @type {const} */ (false), status: 403, body });
+    if (!authorities.includes(request.headers.host))
+      return refuse('Request host is not this listener');
+    if (origin !== undefined && !allowed.includes(origin))
+      return refuse('Request origin is not permitted');
+    if (site !== undefined && site !== 'same-origin' && site !== 'none')
+      return refuse('Cross-site requests are not permitted');
     return harden({ allowed: /** @type {const} */ (true) });
   };
 
@@ -56,13 +60,20 @@ export const make = () => {
    * @param {{origins?: string[]}} policy
    */
   const bind = async (port, consumer, policy) => {
+    const origins = harden([...(policy.origins ?? [])].sort());
     const standing = routes.get(port);
     if (standing) {
       if (standing.consumer !== consumer)
         throw Error('Port is already registered');
-      return port;
+      const same =
+        standing.origins.length === origins.length &&
+        standing.origins.every((origin, index) => origin === origins[index]);
+      if (same) return port;
+      // Same consumer, new policy: the listener closes over its origins, so
+      // it is replaced rather than edited.
+      routes.delete(port);
+      await standing.listener.close();
     }
-    const origins = harden([...(policy.origins ?? [])]);
     const listener = await listen({
       port,
       host: '127.0.0.1',
@@ -77,7 +88,7 @@ export const make = () => {
         E(consumer).handle(harden({ method, path, body })),
       onError: error => console.error('HTTP listener failed:', error),
     });
-    routes.set(port, { consumer, listener });
+    routes.set(port, { consumer, origins, listener });
     return port;
   };
   return Far('NativeHttpAdapter', {
