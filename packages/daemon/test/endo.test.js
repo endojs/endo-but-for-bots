@@ -8096,6 +8096,27 @@ testNeedsNodeWorker(
   },
 );
 
+test('makeUnconfinedFromTree refuses a bare-string powers name before staging', async t => {
+  const { host, config } = await prepareHost(t);
+
+  const srcDir = path.join(config.statePath, '..', 'unconfined-refuse-src');
+  fs.mkdirSync(srcDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(srcDir, 'index.js'),
+    'export const make = () => 1;',
+  );
+  await E(host).provideMount(srcDir, ['refuse-tree'], { readOnly: true });
+
+  await t.throwsAsync(
+    E(host).makeUnconfinedFromTree(undefined, ['refuse-tree'], {
+      powersName: /** @type {any} */ ('@none'),
+      resultName: ['refused'],
+    }),
+    { message: /a string is not a pet-name path/ },
+  );
+  t.false(await E(host).has('scratch-refused'));
+});
+
 test('Phase 7: makeFromTree errors clearly when compartment-map.json is missing', async t => {
   const { host, config } = await prepareHost(t);
 

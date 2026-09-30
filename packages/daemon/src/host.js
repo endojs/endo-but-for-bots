@@ -1778,6 +1778,14 @@ export const makeHostMaker = ({
 
     /** @type {EndoHost['makeUnconfinedFromTree']} */
     const makeUnconfinedFromTree = async (workerName, treeName, options) => {
+      // Refuse bad names before staging, so a refusal leaves no scratch
+      // mount behind.
+      if (workerName !== undefined) {
+        namePathFrom(workerName);
+      }
+      if (options?.powersName !== undefined) {
+        namePathFrom(options.powersName);
+      }
       const entry = options?.entry ?? 'index.js';
       const resultLabel =
         options?.resultName !== undefined
