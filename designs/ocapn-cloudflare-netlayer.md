@@ -189,6 +189,7 @@ harden({
   transport: 'cf', // legacy mirror during the network migration
   designator: '<64 lowercase hex: Ed25519 public key>',
   hints: {
+    // tree mode shown; bytes mode uses 'do+syrup' and 'capnweb+syrup'
     // binding-reachable; '#<facet id>' only when the vat is a DO facet
     'do+tree': '<script>/<class>/<id-hex or name>#<facet id>',
     'capnweb+tree': 'wss://example.workers.dev/ocapn', // internet-reachable
@@ -202,8 +203,10 @@ the routing identity is `(network, designator)` and hints are reachability
 only. The hints also follow that design's hint rule: exactly one hint per
 transport-and-codec combination, keyed `<transport>+<codec>`, whose value is
 the single dial string for that combination. Here the transports are `do`
-(the binding carrier) and `capnweb`, and the codec is `tree`. A vat reachable
-in bytes mode (phase 2) publishes `do+syrup` instead, and one reachable over
+(the binding carrier) and `capnweb`. A vat in bytes mode, the default from
+phase 2, publishes `do+syrup` (and `capnweb+syrup`). A vat in tree mode,
+once the tree codec is the default (*Why a tree codec rather than bytes in a
+tree carrier*), publishes `do+tree` and `capnweb+tree`. One reachable over
 the ws-bytes carrier publishes the existing `wss+cbor` hint.
 
 The **designator is the vat's long-term Ed25519 public key**, not a DO
@@ -263,8 +266,8 @@ depend on the codec the vat chose.
 
 | Carrier | Front door | Reach | Frame type |
 |---|---|---|---|
-| **binding** | `open` on a DO class (via `env.NS.get(id)`) or on a `WorkerEntrypoint` (service binding) | same account; the supervisor must hold the binding | tree (structured clone) |
-| **capnweb** | `open` on the Cap'n Web main `RpcTarget` (`newWorkersRpcResponse` in a Worker/DO; `newWebSocketRpcSession` from a browser or Node peer) | anywhere with HTTPS | tree (Cap'n Web JSON) |
+| **binding** | `open` on a DO class (via `env.NS.get(id)`) or on a `WorkerEntrypoint` (service binding) | same account; the supervisor must hold the binding | bytes by default; tree (structured clone) once the tree codec passes its gates (*Why a tree codec*) |
+| **capnweb** | `open` on the Cap'n Web main `RpcTarget` (`newWorkersRpcResponse` in a Worker/DO; `newWebSocketRpcSession` from a browser or Node peer) | anywhere with HTTPS | bytes by default; tree (Cap'n Web JSON) once the tree codec passes its gates |
 | **ws-bytes** | hibernatable WebSocket accepted by a DO (`ctx.acceptWebSocket`) | anywhere | bytes (existing Syrup/CBOR, optionally the `.np` Noise network) |
 
 The binding and capnweb carriers share one implementation: both pass
@@ -284,6 +287,22 @@ Mailbox discipline, which the network enforces on both ends:
   and persistence problems this design exists to avoid.
 - The two mailbox stubs are the only platform capabilities in a session. The
   network disposes them (`[Symbol.dispose]`) when the session closes.
+- **Each mailbox stub must outlive `open`, and the network says who keeps
+  it.** Both Workers RPC and Cap'n Web dispose a stub received as a *call
+  parameter* when the call returns, unless the callee calls `dup()` on it.
+  A stub in a *return value* belongs to the caller, which must dispose it
+  (verification item 10). So:
+  - The **responder** calls `initiatorMailbox.dup()` inside `open`, before
+    it returns, and keeps only the duplicate. The original is disposed by
+    the platform when `open` returns, and the responder never uses it.
+  - The **initiator** owns the returned `responderMailbox` outright and
+    needs no `dup()`.
+  - Each side disposes the stub it keeps, and only that one, when the
+    session closes, aborts, or loses a crossed-hello check. A pending
+    session that expires or fails verification disposes it the same way.
+  - The local `RpcTarget` each side passed stays reachable for as long as
+    the peer holds a stub to it, so neither side keeps an extra reference
+    to its own mailbox beyond the session record.
 
 #### Peer identity: the handshake
 
@@ -366,28 +385,66 @@ sequenceDiagram
   per source (for example with the Workers rate-limiting binding) before
   forwarding `open`; the default of 16 is a cost bound, not a DoS
   defense (*Known Gaps*).
-- Crossed hellos between the same two designators resolve by the comparison
-  rule that `compareSessionKeysForCrossedHellos` (`packages/ocapn/src/client/handshake.js`,
-  added by [endojs/endo-but-for-bots#806](https://github.com/endojs/endo-but-for-bots/pull/806)) implements: compare the two ids with `compareImmutableArrayBuffers`
-  and keep the session the higher id initiated. That function takes
-  `op:start-session` connection arguments, so phase 2 factors the comparison
-  out of it into a small exported helper over two key buffers, which both
-  `packages/ocapn/src/client/handshake.js` and the `cf` network call. The rule then has one
-  implementation.
-- **When a crossed hello is detected.** Because `open` is one round trip,
-  both handshakes can complete before either side notices the other. The
-  network therefore checks at one point only: when a session *leaves the
+- **A crossed hello is not the only reason for a second session.**
+  `sessionId` is `makeSessionId` over the two designator keys, so every
+  session between one pair of vats has the same id, and "same peer
+  designator" alone cannot tell a crossed hello from a reconnect. The
+  designator is a persistent key: a peer that was evicted comes back with
+  the same designator, and the side that was not evicted learns the old
+  session is dead only when a `deliver` rejects. With no traffic
+  outstanding there is no heartbeat (*Ordering and reliability*), so that
+  may be long after the peer has reopened. The rule below therefore asks
+  the existing session whether it is still alive before it compares.
+- The comparison rule is the one that `compareSessionKeysForCrossedHellos`
+  (`packages/ocapn/src/client/handshake.js`, added by
+  [endojs/endo-but-for-bots#806](https://github.com/endojs/endo-but-for-bots/pull/806))
+  implements: compare two keys with `compareImmutableArrayBuffers` and keep
+  the session whose key is higher. Here the two keys are the **initiator
+  designators** of the two sessions. That function takes `op:start-session`
+  connection arguments, so phase 2 factors the comparison out of it into a
+  small exported helper over two key buffers, which both
+  `packages/ocapn/src/client/handshake.js` and the `cf` network call. The
+  rule then has one implementation.
+- **When the check runs, and what it decides.** Because `open` is one round
+  trip, both handshakes can complete before either side notices the other.
+  The network therefore checks at one point only: when a session *leaves the
   pending state* (the initiator has verified `sig_R`, or the responder has
   verified `finish`), and before it is handed to OCapN core. At that point
-  the peer's designator is authenticated, so the check cannot be triggered by
-  a forged `hello`. If the network already holds a verified session, or a
-  pending outbound `open`, to the same designator, the two are a crossed
-  hello. The comparison rule picks the survivor on both sides independently
-  (both sides see the same two ids). The loser is aborted and its mailboxes
-  disposed, and a pending `provideSession` for that designator resolves to
-  the survivor. Two sessions to the same designator never both reach OCapN
-  core, so "crossed" means exactly "same peer designator", and there is no
-  case of two legitimate distinct sessions between one pair of vats.
+  the peer's designator is authenticated, so a forged `hello` cannot trigger
+  the check. If the network already holds another session to the same
+  designator, call it the *existing* session and the one leaving pending the
+  *new* session. The new session stays out of OCapN core until the check
+  decides:
+  - **Same initiator.** Both sessions were opened by the same side. That side
+    opened the newer one only because it gave up on the older one, so the
+    **new session supersedes** the existing one. The comparison rule would
+    tie here and is not used. Both sides reach the same answer, because both
+    see which of the two is newer from the initiator's order of `open`s.
+  - **Different initiators, existing session still pending.** Each side was
+    opening to the other at once: a crossed hello. The **comparison rule**
+    picks the survivor, and both sides pick the same one independently,
+    since a crossed pair has one session initiated by each side and the two
+    initiator designators always differ.
+  - **Different initiators, existing session verified.** Either a crossed
+    hello whose first half finished early, or a reconnect by a peer that has
+    lost the existing session. The network **probes** the existing session
+    with one `ping` (bounded by `pingTimeout`). If the `ping` rejects or
+    times out, the peer no longer holds it, and the **new session
+    supersedes** it. If the `ping` resolves, the peer still holds both
+    sessions, so it is a crossed hello and the **comparison rule** decides.
+    The peer runs the same check, and a live session answers its probe as
+    well, so both sides take the comparison branch together.
+  In every case the loser is aborted (`op:abort`, best effort), its
+  outstanding answers reject with "session severed" (*Ordering and
+  reliability*), its mailboxes are disposed, and a pending `provideSession`
+  for that designator resolves to the survivor. Only the authenticated peer
+  can supersede its own session, because the check runs after verification.
+  Two sessions to the same designator never both reach OCapN core. The probe
+  costs a reconnecting peer at most one `pingTimeout` before its new session
+  is usable. If a live but slow peer misses the `pingTimeout`, the two sides
+  can disagree and abort both sessions. That is a liveness cost, not a
+  safety one: the next `provideSession` opens a fresh session, and at most
+  one session was ever handed to core on each side (*Known Gaps*).
 
 Grant matching then works without any help from the platform. Three-party
 handoffs (`desc:handoff-give` / `desc:handoff-receive`) are signed by
@@ -638,8 +695,9 @@ design sets aside.
 
 dckc asked (p.s. on #117) to use the carriers' own structured serialization as
 the OCapN serialization rather than flattening OCapN to bytes and hiding the
-bytes inside the carrier. This is the default frame type for the binding and
-capnweb carriers.
+bytes inside the carrier. It becomes the default frame type for the binding
+and capnweb carriers once it passes the gates below. Until then, bytes mode
+is the default.
 
 #### Why a tree codec rather than bytes in a tree carrier
 
@@ -660,14 +718,33 @@ next subsection, *Generalizing the codec and session envelope*.)
 | Supervisor dial policy can read `hello` without a codec | no | yes |
 | Asked for by the design request | no | yes (dckc's p.s. on #117) |
 
-The design takes the tree codec as the default because the request asks for
-it explicitly and because readable frames are what make the platform's own
-tooling useful. The bytes option is not rejected: the carrier interface
-already carries either frame type, and phase 2 ships a bytes mode
-first, since it needs no core change. The tree codec lands in phase 1 in
-parallel and becomes the default only once the cross-codec equivalence tests
-(*Test Plan*) pass. If phase 1 proves more invasive than described here, the
-bytes mode is the fallback and the rest of the design is unchanged.
+On the table's own terms the bytes option is cheaper: it needs no core
+change and keeps `.np`. The tree codec's gains are three: frames the
+platform's tooling can read, a smaller Cap'n Web wire for text-heavy frames,
+and a `hello` the supervisor can read without a codec. Against them it costs
+a core change in `@endo/ocapn` and gives up Noise on these carriers. Only the
+readable frames are a benefit the bytes option cannot get some other way. The
+supervisor can decode a bytes `hello` with the codec it already links, and
+wire size matters only on capnweb. The design request asks for the tree codec
+explicitly (dckc's p.s. on #117), and that is the deciding reason, not a
+technical win.
+
+So the design does not make the tree codec the default up front. The
+carrier interface already carries either frame type. **Phase 2 ships bytes
+mode as the default**, since it needs no core change. The tree codec lands
+in phase 1 in parallel, and it becomes the default for the binding and
+capnweb carriers only when all three of these hold:
+
+1. The cross-codec equivalence tests (*Test Plan*) pass.
+2. The phase 1 core change stays within what *Generalizing the codec and
+   session envelope* describes: the envelope generic in `M` and the
+   `signingCodec` split, with no change to the cursor API that the Syrup
+   and CBOR codecs implement.
+3. No deployment on these carriers needs `.np`. A vat that needs Noise
+   stays in bytes mode (*Interaction with Noise*).
+
+If any of these fails, bytes mode stays the default and the rest of the
+design is unchanged: only the frame type `M` differs.
 
 #### Generalizing the codec and session envelope
 
@@ -806,6 +883,7 @@ results, checked on 2026-09-30:
 | 7 | Hibernatable WebSocket behavior | **Confirmed.** `ctx.acceptWebSocket`, the `webSocketMessage` handler after wake, and `serializeAttachment` (at most **16,384 bytes**, enough for an epoch and session tag) all behave as described. In-memory state resets while the socket stays open. | [DO WebSockets](https://developers.cloudflare.com/durable-objects/best-practices/websockets/) |
 | 8 | DO storage | **Confirmed.** Async KV, synchronous `ctx.storage.kv`, and SQL (`ctx.storage.sql.exec`) are available. The limit is 10 GB per SQLite-backed object, and a key plus its value may not exceed 2 MB. There is no per-facet quota below that, so quotas remain a supervisor concern. | [DO limits](https://developers.cloudflare.com/durable-objects/platform/limits/) |
 | 9 | Ed25519 signing inside a Worker or DO | **Confirmed.** workerd's WebCrypto lists `Ed25519` (the Secure Curves API) with `sign()`/`verify()`, `generateKey()`, `importKey()`, and `exportKey()`, plus a legacy `NODE-ED25519`. The design does not depend on it: `@endo/ocapn` signs with pure-JavaScript `@noble/curves`, which needs only the `crypto.getRandomValues` Workers provide. Phase 3's workerd harness exercises the handshake either way. | [runtime-apis/web-crypto](https://developers.cloudflare.com/workers/runtime-apis/web-crypto/) |
+| 10 | Stub lifetime across a call | **Documented; not yet exercised.** Workers RPC and Cap'n Web both dispose stubs received as call parameters when the call returns, unless the callee calls `dup()`. The caller owns stubs it receives in a return value and disposes them itself. The design depends on this for both mailboxes (*Carriers*: the responder `dup()`s `initiatorMailbox`; the initiator owns `responderMailbox`). The phase 3 workerd harness tests it directly: a responder that skips `dup()` must see its first `deliver` after `open` fail, and one that calls `dup()` must not. | [workers/runtime-apis/rpc/lifecycle](https://developers.cloudflare.com/workers/runtime-apis/rpc/lifecycle/), [capnweb README, resource management](https://github.com/cloudflare/capnweb#resource-management-and-disposal) |
 
 ## Ownership map
 
@@ -898,7 +976,11 @@ carrier stub.
   stay rejected; crossed
   hellos converge on one session, including when both handshakes complete
   before either side sees the other and when one side's pending outbound
-  `open` crosses an inbound one; a `ping` or `finish` frame never reaches
+  `open` crosses an inbound one; a peer that loses its session (its side is
+  discarded) and reopens with the same designator supersedes the stale
+  session after one failed probe instead of being refused, and a second
+  session opened by the same initiator supersedes its first without a
+  comparison; a `ping` or `finish` frame never reaches
   OCapN core, and an OCapN frame with `kind: 'ping'` is not decoded; a frame other than `finish` before the
   handshake completes aborts the pending session; an `open` beyond
   `maxPendingOpens` is rejected without signing; a pending session without
@@ -915,7 +997,9 @@ carrier stub.
   revocation takes effect immediately through the forwarder, and revoking one
   of an object's two swissnums leaves the other working; a facet loaded
   with `globalOutbound: null` fails `fetch` and still reaches peers through
-  `OCAPN`.
+  `OCAPN`; a responder that `dup()`s `initiatorMailbox` in `open` can
+  `deliver` on it after `open` returns, and one that does not cannot
+  (verification item 10), on both the binding and capnweb carriers.
 - **Confinement probes** (workerd harness): from inside a facet, `fetch` and
   `connect` throw; enumerating `env` and `globalThis` finds `OCAPN` and no
   other binding, DO namespace, or `ctx.exports` entry; `OCAPN` exposes only
@@ -937,8 +1021,10 @@ carrier stub.
    session, so nothing is delivered twice.
 4. **Sessions are isolate-scoped.** Persistence comes from sturdyrefs plus
    per-object storage rows, not from virtualized live references.
-5. **Trees on the wire, canonical bytes only for signing.** This follows from
-   verification already re-serializing decoded structure.
+5. **Trees on the wire, canonical bytes only for signing, once earned.**
+   The split follows from verification already re-serializing decoded
+   structure. Bytes mode stays the default until the tree codec passes the
+   gates in *Why a tree codec rather than bytes in a tree carrier*.
 6. **One escape convention for both carriers, pending the Cap'n Web
    round-trip test.** Wrap literal lists; tag everything else at index 0.
    Cap'n Web pass-through is a hypothesis until phase 2 (*Tree
@@ -965,6 +1051,11 @@ carrier stub.
 - [ ] Verify whether an RPC call to a DO or Worker whose isolate has
   vanished rejects promptly or can hang; the `ping` timeout covers the
   hang case either way.
+- [ ] Exercise mailbox stub lifetime across `open` in the phase 3 workerd
+  harness, for both the binding and capnweb carriers (verification item 10).
+- [ ] A live but slow peer that misses the crossed-hello probe's
+  `pingTimeout` can make both sides abort both sessions (*Peer identity*).
+  Measure how often in phase 3; the fallback is the next `provideSession`.
 - [ ] Per-source rate limiting for an unsupervised internet-reachable DO.
   `maxPendingOpens` bounds cost only; phase 3 documents the fronting Worker.
 - [ ] Revocation is per kind, not a network guarantee. Deleting a
