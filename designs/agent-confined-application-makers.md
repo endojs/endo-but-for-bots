@@ -47,20 +47,39 @@ reads that layout as it is.
 
 ### Capture to an archive, then run the archive
 
-Every new input is **captured** into a source-only compartment-mapper archive,
-the archive is stored in the CAS as a `readable-blob`, and the existing
-`make-archive` formula runs it. No worker method and no formula type is added.
+Every source shape reaches the worker as compartment-mapper archive bytes, and
+the worker's existing `makeArchive` method runs them. No worker method is
+added.
+
+- An **archive** carries original sources and a `compartment-map.json`, never
+  precompiled sources. `makeArchive` refuses an archive whose compartment map
+  names a precompiled parser.
+- A **bundle** keeps carrying precompiled sources. `makeFromBundle` decodes the
+  `endoZipBase64` payload, stores the decoded bytes in the CAS as a
+  `readable-blob`, and formulates `make-archive` with the precompiled parsers
+  enabled. It does not re-capture to sources, because a bundle does not carry
+  them.
+- A **tree or mount** is formulated as `make-from-tree`, which keeps a live
+  reference to the tree. At each incarnation the daemon captures the tree into
+  archive bytes (below) and hands them to the worker's `makeArchive`.
 
 ```mermaid
 flowchart LR
-  B[bundle blob] -->|decode endoZipBase64| A[archive bytes]
-  P[precompiled archive] -->|re-capture sources| A
-  T1[tree: node_modules + map] -->|tree ReadPowers + captureFromMap| A
-  T2[tree: node_modules, no map] -->|tree ReadPowers + mapNodeModules + captureFromMap| A
-  A -->|storeBlob| C[(CAS readable-blob)]
-  C --> M[make-archive formula]
-  M --> W[worker makeArchive: Node or XS]
+  A[source archive blob] --> MA[make-archive formula]
+  B[bundle blob] -->|decode endoZipBase64| PB[(CAS precompiled blob)]
+  PB --> MA
+  T[tree or mount] --> MT[make-from-tree formula]
+  MT -->|each incarnation: tree ReadPowers + mapNodeModules / captureFromMap| AB[archive bytes]
+  MA --> W[worker makeArchive: Node or XS]
+  AB --> W
 ```
+
+All options stay reachable, but the design moves away from precompiled
+artifacts. They remain only where no other system is practical, such as a web
+page, where running sources would require the runtime to carry the Babel
+transformations. A worker whose module system is native and has no precompiled
+support, such as endor's, refuses a `make-archive` formula with precompiled
+parsers enabled. A bundle is therefore of limited use on endor.
 
 This choice gives three properties:
 
@@ -71,11 +90,13 @@ This choice gives three properties:
   worker's `makeArchive` is still a stub (`bus-worker-xs-facet.js`,
   [worker-rust-xs](worker-rust-xs.md) § Known Gaps); this design adds no new
   XS gap.
-- **Reincarnation is deterministic.** The formula names the captured bytes, not
-  a tree that can change after the maker returns. `makeFromTree` keeps its live
-  tree reference; the new layouts do not need one.
-- **The formula record states what ran.** The inspector shows one archive blob
-  whatever its source.
+- **The tree stays live.** Every layout of `makeFromTree` keeps a live tree
+  reference, as the archive layout does today, so reincarnation reads the tree
+  as it is then. A caller who wants a fixed application passes a snapshot (an
+  immutable tree) instead of a mutable mount. A live mutable tree is a minor
+  foot-gun that the rest of the world already accepts.
+- **The formula record states what ran.** The inspector shows the archive blob,
+  the bundle blob, or the tree reference with its layout.
 
 Capture runs in the daemon (or a Node helper worker it owns), never in the
 target worker, so the confined worker receives only archive bytes.
@@ -94,6 +115,16 @@ A new `makeTreeReadPowers(tree, { root })` in `@endo/platform/fs` turns a
   needs to probe `node_modules` directories.
 - `canonical` is the identity. Symlink handling belongs to the `Mount`, which
   already confines links.
+
+A tree read from a mount must use a **hoisted** `node_modules` layout (for
+pnpm, `node-linker=hoisted`). The pnpm symlinked store links out of the package
+root, and following those links would escape the mount's confinement; the
+`Mount` hides and rejects them, so `mapNodeModules` would see missing packages.
+Detection reports a symlinked store as an unsupported layout rather than a
+missing dependency. A later filesystem mount attenuation that keeps the full
+POSIX namespace but shows only chosen roots, with a controller facet that adds
+and removes roots, would let a symlinked store run confined; it is out of scope
+here.
 
 `@endo/exo-npm`'s `makeMountReadPowers` serves the registry peer-directory
 layout and stays separate; both may later share the segment validator.
@@ -122,12 +153,13 @@ the made value and, with `resultName`, stores it.
 
 | Method | Host | Guest | Input |
 |---|---|---|---|
-| `makeArchive(workerName, archiveName, options?)` | exists | new | archive blob, sources or precompiled |
+| `makeArchive(workerName, archiveName, options?)` | exists | new | archive blob, sources and compartment map only |
 | `makeFromTree(workerName, treeName, options?)` | extended with `layout`, `entry` | new | tree or mount |
-| `makeFromBundle(workerName, bundleName, options?)` | new | new | blob or value holding an `endoZipBase64` bundle |
+| `makeFromBundle(workerName, bundleName, options?)` | new | new | blob or value holding an `endoZipBase64` bundle, precompiled |
 
 `makeFromBundle` does not bring back the `make-bundle` formula. It decodes the
-bundle, captures it as above, and formulates `make-archive`.
+bundle, stores the precompiled bytes, and formulates `make-archive` with the
+precompiled parsers enabled.
 
 The guest methods are bounded by the guest's authority:
 
@@ -137,6 +169,9 @@ The guest methods are bounded by the guest's authority:
 - The guest options shape omits `workerTrustedShims`, which runs code outside
   the confinement.
 - There is no guest `makeUnconfined` or `makeUnconfinedFromTree`.
+- A made application is bound to the guest's metering by default. It runs under
+  other metering only when the guest endows it with another agent's
+  capability, local or remote.
 
 ### MCP projection
 
@@ -160,13 +195,14 @@ Capture errors surface as an `isError` result, and a rejected option
 |---|---|---|---|---|---|
 | MCP adapter → guest | adapter validates JSON arguments | catalog declaration | none | guest | pet-name paths, strings |
 | Guest → daemon formulation | `prepareMakeCaplet` | guest name hub bounds worker and powers | pet store entry for `resultName` | daemon | formula identifiers |
-| Daemon capture → compartment-mapper | `makeTreeReadPowers`, `captureFromMap` | layout detection, root confinement | CAS blob of archive bytes | daemon | archive bytes |
+| Daemon capture → compartment-mapper | `makeTreeReadPowers`, `captureFromMap` | layout detection, root confinement, hoisted layout | CAS blob for an archive or bundle; the formula's tree reference for a tree | daemon | archive bytes |
 | Daemon → worker | `make-archive` worker method | worker kind | none in the worker | daemon (reincarnation) | archive blob, powers, context |
 
 - **Persistent state**: the daemon owns it (the CAS blob and the formula).
 - **Commit or discard**: the daemon; a capture failure formulates nothing.
-- **Restart and replay**: the daemon reincarnates `make-archive` from the
-  captured blob, never re-reading the tree.
+- **Restart and replay**: the daemon reincarnates `make-archive` from its blob,
+  and `make-from-tree` by capturing the live tree again. A snapshot tree
+  replays the same bytes; a mutable mount replays its current contents.
 - **Execution classification**: the worker reports the result or throws; it
   learns nothing about the original source shape.
 
@@ -175,7 +211,7 @@ Capture errors surface as an `isError` result, and a rejected option
 1. `makeTreeReadPowers` in `@endo/platform/fs`, with segment-confinement tests.
 2. Daemon capture for `node-modules-map` and `node-modules`; `EndoHost.makeFromTree`
    gains `layout` and `entry`.
-3. `EndoHost.makeFromBundle` and precompiled-archive capture.
+3. `EndoHost.makeFromBundle`, and `makeArchive`'s refusal of precompiled archives.
 4. Guest makers.
 5. MCP tools in `@endo/agent-mcp-stdio`.
 
@@ -186,8 +222,11 @@ Capture errors surface as an `isError` result, and a rejected option
 - A map or `package.json` naming `../outside` fails before any lookup.
 - A guest-made application given `@agent` holds the guest, not the host.
 - A guest call with `workerTrustedShims` is refused.
-- Changing the tree after `makeFromTree` (new layouts) does not change the
-  reincarnated application.
+- Changing a mutable mount after `makeFromTree` changes the reincarnated
+  application; a snapshot tree reincarnates the same application.
+- A pnpm symlinked store read from a mount is reported as an unsupported layout.
+- `makeArchive` refuses an archive whose compartment map names a precompiled
+  parser; `makeFromBundle` runs a precompiled bundle on a Node worker.
 - The MCP tools refuse a call without `resultName`.
 
 ## Dependencies
@@ -208,16 +247,17 @@ Capture errors surface as an `isError` result, and a rejected option
    [daemon-make-archive](daemon-make-archive.md) still holds.
 3. Considered and rejected: relocating a pre-generated map whose locations are
    outside the root. Reason: silent relocation hides which files ran.
-
-## Open Questions
-
-1. Should the pnpm symlinked store be read through the `Mount`'s link
-   confinement, or should `node-modules` require a hoisted (`node-linker=hoisted`)
-   layout?
-2. Should a precompiled archive or bundle be re-captured to sources, or should
-   `make-archive` accept precompiled formats directly? Re-capture needs original
-   sources, which an `endoZipBase64` bundle does not always carry.
-3. Should `makeFromTree` with a new layout keep a live tree reference, as the
-   archive layout does today, instead of capturing?
-4. Should the guest makers exist at all, or should the MCP server require a
-   host-granted maker capability the guest holds by name?
+4. A tree read from a mount requires a hoisted `node_modules` layout. Reading
+   the pnpm symlinked store would escape the mount's confinement. A filesystem
+   mount attenuation that shows chosen roots of the full POSIX namespace, with
+   a controller facet to add and remove roots, is tracked as a separate design.
+5. Archives carry original sources and a compartment map, never precompiled
+   sources. Bundles keep carrying precompiled sources. Every option stays
+   reachable, but precompiled artifacts are kept only where no other system is
+   practical, such as a web page.
+6. Every `makeFromTree` layout keeps a live tree reference rather than
+   capturing once. A caller who wants immutability provides a snapshot.
+7. The guest makers exist. A guest's made applications share its metering by
+   default. Whether guests make guests is out of scope here: guests already
+   `invite` and `accept` as themselves (`EndoGuest.invite`, `EndoGuest.accept`),
+   and guest-made guests belong to that line of work.
