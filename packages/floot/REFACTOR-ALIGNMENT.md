@@ -13,8 +13,9 @@ constitute production deployment or current-release acceptance.
 The main structural unification is implemented, but the refactor is not complete.
 The three native backends actually use common provisioning, lifecycle, grants,
 and execution-envelope code. Reimplementing those abstractions is not the next
-step. Simplicity, bounded context, remaining ownership boundaries, and final
-current-release acceptance still need evidence or work.
+step. Simplicity, bounded context and remaining admission boundaries still need
+evidence or work. Current-release acceptance passes on generation 185 within
+the scopes recorded below; it does not settle those remaining design questions.
 
 This audit evaluates the retained implementation against the design's
 [motivation and decisions](../../designs/hosted-agent-sandbox-unification.md#motivation),
@@ -1272,9 +1273,16 @@ Current-source recheck, 2026-09-30: shared preparation/restoration tests cancel
 after entering a held preparation gate; they do not prove cancellation before
 preparation begins. OpenCode separately tests its actual command-write boundary
 and successful queued successor. Codex's held ledger write does not isolate the
-last transport-send microtask, and Claude's restoration gate does not isolate
-pending subprocess acquisition. These distinctions remain open conformance work,
-not evidence that every unshared case lacks a test.
+last transport-send microtask. These remain open conformance work, not evidence
+that every unshared case lacks a test.
+
+Claude's pending subprocess acquisition now has a separate regression: the prompt
+has already crossed the spawn boundary in argv, but its process handle is late.
+Interruption waits for that handle and its kill acknowledgement, never reads its
+output, and does not replay the prompt. The closed reader cannot report success;
+an explicit successor completes once with supplied context.
+This proves handle ownership, not native process quiescence or zero dispatch.
+The change is test-only; no durable owner or runtime behavior changes.
 
 A test-only follow-up now covers a confirmed failed inference followed by a
 successful successor in Claude and OpenCode, using a small common assertion helper.

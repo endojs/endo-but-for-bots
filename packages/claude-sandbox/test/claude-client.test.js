@@ -1194,6 +1194,91 @@ test('raw stream backpressures a burst larger than the delivery queue', async t 
   t.is(events.at(-1).type, 'end');
 });
 
+test('interrupt owns a late spawn handle without replaying its admitted prompt', async t => {
+  t.timeout(5000);
+  let releaseSpawn;
+  const spawnGate = new Promise(resolve => {
+    releaseSpawn = resolve;
+  });
+  let entered;
+  const spawning = new Promise(resolve => {
+    entered = resolve;
+  });
+  let releaseKill;
+  const killGate = new Promise(resolve => {
+    releaseKill = resolve;
+  });
+  const admitted = [];
+  let kills = 0;
+  let lateReads = 0;
+  const lateProc = harden({
+    async kill() {
+      kills += 1;
+      await killGate;
+    },
+  });
+  const fake = makeFakeSlice();
+  const slice = harden({
+    async spawn(argv, options) {
+      await null;
+      admitted.push(argv[2]);
+      if (admitted.length === 1) {
+        entered();
+        await spawnGate;
+        return lateProc;
+      }
+      return fake.slice.spawn(argv, options);
+    },
+    dispose: () => fake.slice.dispose(),
+  });
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      slice,
+      makeStdoutIterable: proc => {
+        if (proc === lateProc) lateReads += 1;
+        return makeStdoutIterable(proc);
+      },
+    }),
+  );
+  t.teardown(async () => {
+    releaseSpawn();
+    releaseKill();
+    await client.terminate();
+  });
+  const first = await client.send('first');
+  await spawning;
+  t.deepEqual(
+    admitted,
+    ['first'],
+    'argv already dispatched before cancellation',
+  );
+  let settled = 0;
+  const interrupted = client.interrupt().then(() => {
+    settled += 1;
+  });
+  await new Promise(resolve => setImmediate(resolve));
+  t.is(settled, 0);
+  t.is(kills, 0, 'no handle exists yet');
+  releaseSpawn();
+  await new Promise(resolve => setImmediate(resolve));
+  t.is(kills, 1);
+  t.is(settled, 0, 'the late handle kill acknowledgement is still owned');
+  t.is(lateReads, 0);
+  releaseKill();
+  await interrupted;
+  t.is(settled, 1);
+  t.deepEqual(await drain(first), [], 'a closed reader cannot report success');
+  const successor = await client.send('second', {
+    transcript: continuedTranscript,
+  });
+  const events = await drain(successor);
+  t.is(events.at(-1).type, 'end');
+  t.is(events.filter(event => ['end', 'abort'].includes(event.type)).length, 1);
+  t.deepEqual(admitted, ['first', 'second']);
+  t.is(kills, 1);
+  t.is(lateReads, 0);
+});
+
 test('interrupt releases a producer waiting behind a full raw queue', async t => {
   t.timeout(5000);
   const fake = makeFakeSlice([
