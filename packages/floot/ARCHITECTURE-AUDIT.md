@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-21 |
-| **Updated** | 2026-09-24 |
+| **Updated** | 2026-09-30 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active — remediation and retrospective durability audit in progress |
 | **Baseline** | Endo `cdccdbb88`; endo-host `73405ca` |
@@ -11,14 +11,29 @@
 
 ## Purpose and maintenance
 
-Priority current-state review (2026-09-24):
+Priority current-state review (updated 2026-09-30):
 [Refactor alignment](REFACTOR-ALIGNMENT.md) compares the retained repository with
 the intended end state, rather than reviewing historical commits. It is the
-current prioritization entry point: primary ownership is consolidated, but
-simplicity is unproven, active-context/unresolved-evidence memory bounds remain
-incomplete, account discovery retains runtime coupling, and current-release
-deployment/acceptance is outstanding. Consult that document before treating a
-historical finding introduction as current implementation status.
+current prioritization entry point: primary ownership and explicit account identity
+are consolidated, and the native protocol-conformance matrix is complete.
+All four backends passed generation-185 acceptance; the Codex-only generation-186
+image change passed Luna lifecycle and restart recall with native checkpoints.
+Simplicity is still unproven, and whole-context/unresolved-evidence memory bounds
+remain incomplete. Direct-Fae compaction, evidence paging, local-development
+storage policy and native process-loss recovery retain their explicit deferrals.
+Consult the alignment document before treating historical introductions or
+chronological progress entries below as current implementation status.
+
+Current durability evidence includes a generation-186 retirement correction:
+removing broker/source pet names does not withdraw capabilities already stored
+in the profile's account-discovery record. Those capabilities revived the old
+Codex broker before setup could use the replacement. The host retirement helper
+now uses the existing atomic discovery-invalidation API, verifies the unavailable
+record, and restarts before normal setup republishes the replacement observers.
+Account/reset journals, renewal owners, Secrets and workspaces were preserved.
+The successful cutover and the failed pre-correction attempt are both recorded in
+endo-host `ops/explicit-journal-deployment-20260924.md`.
+This is ordinary restart/cutover evidence, not process-loss recovery proof.
 
 RA-02 continuation evidence (2026-09-24): Claude's reviewed single-boundary
 native compaction coverage is committed in `f9bb99e5e`; the current alignment
@@ -208,6 +223,30 @@ Public declaration fixes and independently useful landed lifecycle corrections
 remain on the main working branch. No runtime changes accompany this scope decision.
 
 ### Current retained-code durability audit — required, in progress
+
+Current-source reconciliation (2026-09-30): two concrete orderly-failure cleanup
+defects remain, separate from the deferred native process-loss design:
+
+- `manager.js` shifts collection callbacks before executing them and discards
+  failures. `collection-disposal-barrier.test.js` still characterizes that clearing
+  deletion/reclamation faults does not reclaim retained storage. Next: preserve
+  retry ownership for idempotent storage cleanup only after cancellation has
+  positively completed. Rejected cancellation must stay fenced, not be retried
+  as if it had succeeded. Do not starve sibling work or retry forever in one drain.
+- `guest-construction-cleanup.test.js` still expects an orphan agent identity key
+  after failed construction, despite no surviving formulas for its node. A bounded
+  never-exposed construction-key retirement design is needed; unconditional key
+  deletion or general peer-identity retirement is not authorized by this finding.
+
+The earlier lost-acknowledgement unnamed-marshal reclamation gap is superseded:
+the current publication regression requires that unpublished formula to be absent.
+Module-local pool draining and oracle disposal are implemented; cross-worker
+exclusion and safe retirement epochs are not established by those fixes.
+Root docs now pass, while test-inclusive package type diagnostics still need a
+fresh scoped reconciliation. Those build limitations must not be reported as a
+green whole-repository typecheck.
+RA-04 and the current cutover evidence are recorded above and in the alignment doc.
+No new cleanup implementation is claimed by this reconciliation.
 
 Native-context journal follow-up (2026-09-24): a real daemon/worker reconstruction
 regression now exercises the production Floot agent and private immutable storage

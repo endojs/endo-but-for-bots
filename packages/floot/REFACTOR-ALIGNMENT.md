@@ -85,7 +85,12 @@ review; its boundaries and deliberate backend differences are recorded below.
 Only Codex was rerun for generation 186; unchanged backends retain generation-185
 evidence. Test sessions are cleaned up, and the failed pre-retirement-fix creation
 manifest remains as evidence without replay.
-Next: RA-01's like-for-like scope analysis.
+The like-for-like review now records concrete relocation and added contracts in
+the simplification inventory; it does not waive RA-01's numerical target.
+It also reconfirmed two current daemon cleanup defects in the parent audit:
+failed collection callbacks lose retry ownership, and failed guest construction
+can leave an orphan identity key. Prioritize the bounded collection retry fix,
+keeping uncertain cancellation fenced and native process-loss recovery separate.
 RA-01's size target remains unproven; RA-03 is implemented, and direct-Fae
 compaction remains on hold.
 The older chronological entries and final sequence below are historical evidence,
