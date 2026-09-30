@@ -64,6 +64,65 @@ export const isSturdyRef = value => sturdyRefDetails.has(value);
 /** @param {SturdyRef} sturdyRef */
 export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
 
+/**
+ * The coordinates an OCapN SturdyRef is constructed from, in the vocabulary
+ * every CapTP layer shares (compare `@endo/captp`'s `makeSturdyRefFromData`).
+ *
+ * @typedef {object} SturdyRefData
+ * @property {string} peerId the peer's designator (its public key)
+ * @property {string | Uint8Array} objectId the swiss number
+ * @property {string} designator the network the peer is reachable on
+ * @property {Record<string, any>} [hints] how to connect to the peer
+ */
+
+/**
+ * @param {SturdyRefData} data
+ * @returns {SturdyRefDetails}
+ */
+export const sturdyRefDataToDetails = data => {
+  const { peerId, objectId, designator, hints = undefined, ...rest } = data;
+  const extra = Object.keys(rest);
+  if (extra.length !== 0) {
+    throw TypeError(
+      `ocapn: unexpected SturdyRef data properties ${extra.join(', ')}`,
+    );
+  }
+  if (typeof peerId !== 'string') {
+    throw TypeError('ocapn: SturdyRef peerId must be a string');
+  }
+  if (typeof designator !== 'string') {
+    throw TypeError('ocapn: SturdyRef designator must be a string');
+  }
+  if (typeof objectId !== 'string' && !(objectId instanceof Uint8Array)) {
+    // Intentionally do NOT include `objectId`: it is the secret.
+    throw TypeError('ocapn: SturdyRef objectId must be a string or bytes');
+  }
+  if (hints !== undefined && (typeof hints !== 'object' || hints === null)) {
+    throw TypeError('ocapn: SturdyRef hints must be a record');
+  }
+  return {
+    location: harden({
+      type: 'ocapn-peer',
+      designator: peerId,
+      transport: designator,
+      hints: hints === undefined ? false : { ...hints },
+    }),
+    secret: objectId,
+  };
+};
+
+/**
+ * @param {SturdyRefDetails} details
+ * @returns {SturdyRefData}
+ */
+export const sturdyRefDetailsToData = ({ location, secret }) =>
+  harden({
+    peerId: location.designator,
+    objectId: secret,
+    designator: location.network ?? location.transport,
+    ...(location.hints ? { hints: location.hints } : {}),
+  });
+
 /** @type {EnlivenSturdyRefDetails} */
 const enlivenUnbound = async () => {
   throw Error(

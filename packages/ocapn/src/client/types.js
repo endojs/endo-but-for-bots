@@ -6,7 +6,7 @@
  * @import { HandoffReceiveSigEnvelope } from '../codecs/descriptors.js'
  * @import { OcapnKeyPair, OcapnPublicKey } from '../cryptography.js'
  * @import { GrantTracker } from './grant-tracker.js'
- * @import { SturdyRef, SturdyRefTracker } from './sturdyrefs.js'
+ * @import { SturdyRef, SturdyRefData, SturdyRefTracker } from './sturdyrefs.js'
  * @import { Ocapn } from './ocapn.js'
  * @import { ERef, FarRef } from '@endo/eventual-send'
  * @import { RemotableObject } from '@endo/pass-style'
@@ -373,6 +373,12 @@
  *   form for locators keyed by name) or raw bytes for arbitrary-byte
  *   sturdyrefs (e.g. the 24-byte randoms Spritely Goblins mints).
  *   Peers resolve the secret against their own `NonceLocator`.
+ * @property {(data: SturdyRefData) => SturdyRef} makeSturdyRefFromData
+ *   Construct a SturdyRef from its recorded coordinates: peer id
+ *   (designator), object id (swiss number), network designator, and
+ *   connection hints. Closely held, like the client.
+ * @property {(sturdyRef: SturdyRef) => SturdyRefData | undefined} getSturdyRefData
+ *   The coordinates of a SturdyRef OCapN minted, including its secret.
  * @property {(sturdyRef: SturdyRef) => Promise<any>} enlivenSturdyRef
  *   Resolve a SturdyRef to a live capability: local SturdyRefs go
  *   through the injected locator; remote SturdyRefs fetch from the

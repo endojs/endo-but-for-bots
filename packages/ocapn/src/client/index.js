@@ -4,7 +4,7 @@
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { OcapnPublicKey } from '../cryptography.js'
  * @import { OcapnCodec } from '../codec-interface.js'
- * @import { SturdyRef } from './sturdyrefs.js'
+ * @import { SturdyRef, SturdyRefData } from './sturdyrefs.js'
  * @import { Client, Connection, InternalSession, LocationId, Logger, NetLayer, NetlayerHandlers, NetworkSession, NonceLocator, OcapnNetwork, PendingSession, SelfIdentity, Session, SessionManager, SocketOperations, SwissNum } from './types.js'
  */
 
@@ -17,6 +17,9 @@ import {
   makeSturdyRefTracker,
   enlivenSturdyRef,
   enlivenSturdyRefDetails,
+  getSturdyRefDetails,
+  sturdyRefDataToDetails,
+  sturdyRefDetailsToData,
 } from './sturdyrefs.js';
 import { locationToLocationId, toHex } from './util.js';
 import {
@@ -941,6 +944,33 @@ export const makeOcapn = async ({
      */
     makeSturdyRef(location, secret) {
       return sturdyRefTracker.makeSturdyRef(location, secret);
+    },
+    /**
+     * Construct a SturdyRef from its recorded coordinates: the peer id
+     * (designator), object id (swiss number), network designator, and
+     * connection hints. This is how a persistence layer re-issues a ref it
+     * stored with `getSturdyRefData`. The ref enlivens through this client.
+     * Like the client itself, this capability is closely held.
+     *
+     * @param {SturdyRefData} data
+     * @returns {SturdyRef}
+     */
+    makeSturdyRefFromData(data) {
+      const { location, secret } = sturdyRefDataToDetails(data);
+      return sturdyRefTracker.makeSturdyRef(location, secret);
+    },
+    /**
+     * The coordinates of a SturdyRef OCapN minted, from which
+     * `makeSturdyRefFromData` reconstructs an equivalent ref, or `undefined`
+     * for any other value. The data includes the secret, so this capability
+     * is closely held.
+     *
+     * @param {SturdyRef} sturdyRef
+     * @returns {SturdyRefData | undefined}
+     */
+    getSturdyRefData(sturdyRef) {
+      const details = getSturdyRefDetails(sturdyRef);
+      return details && sturdyRefDetailsToData(details);
     },
     /**
      * Resolve a `SturdyRef` to a live capability. Local SturdyRefs flow
