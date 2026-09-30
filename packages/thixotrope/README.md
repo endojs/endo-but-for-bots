@@ -185,15 +185,15 @@ Install a JavaScript module exporting `make(powers)` into a fresh guest vat:
 
 ```sh
 yarn workspace @endo/thixotrope thix install ./private-state counter ./examples/counter.js
-yarn workspace @endo/thixotrope thix applications ./private-state
+yarn workspace @endo/thixotrope thix installations ./private-state
 ```
 
 Module paths resolve from the CLI process's working directory.
 The Yarn workspace command runs inside `packages/thixotrope`.
 The module belongs to a JavaScript package with a `package.json`.
 The CLI bundles its static module graph locally; application code runs in the guest.
-The initial installation profile limits the serialized request to 16 KiB, rejecting
-larger bundles before sending them into the workspace crank.
+The bundle is staged into the application's vat in bounded messages, so there is no request-size
+cap; grants are checked in the workspace before any vat exists.
 Use the guest-provided `E`, `Far`, and `harden` rather than bundling those libraries.
 The guest has its usual `E`, `Far`, and `harden` globals, with no ambient Node powers.
 Append `powerName=inventoryKey` arguments to grant selected inventory capabilities to `make`.
@@ -201,23 +201,26 @@ This first profile accepts remotable capabilities as grants; copy data and promi
 rejected before forwarding, so a small request cannot hide a large copied grant.
 The inventory itself and the worker controller are not implicitly granted.
 
-From `attach`, call `E(E(apps).get('counter')).incr()`.
-`apps.list()` reports each installation's SHA-256 bundle digest, grants, and status.
-The registry retains the factory's result, including a pending result promise.
+The application's root takes the name in the inventory: from `attach`, call
+`E(inventory.get('counter')).incr()`.
+`thix installations`, or `installations.list()` from `attach`, reports each installation of either
+kind with its SHA-256 code digest, grants, and status.
+One workspace registry records applications and native resources alike: a name, a code digest, a
+grant mapping, the vat allocated for it, and its outcome.
+The registry retains the factory's result, including a pending result promise, which is guest to
+guest so a factory still pending when the host restarts settles afterwards.
 Its code and captured powers survive restart without reading the original module again.
 The digest identifies the exact bundle bytes, not a publisher or a signature.
 Repeating a name with the same bundle and grant mapping reuses its original result;
-changing its code or grants requires a different name or explicit `apps.remove(name)`.
+changing its code or grants requires a different name or removing the installation first.
 Inventory changes after installation do not change previously captured powers.
 
+Every phase of an installation is durable, so one interrupted by a crash resumes when the same
+name and bundle are installed again, reusing the vat it allocated and never running `make` twice;
+until then it stays listed as pending.
 Failed installations remain inspectable and do not automatically run `make` again.
-A crash during host-side worker allocation or acquisition of its evaluator can reject that installation under the
-existing at-most-once host-resource policy; remove its record before deliberately retrying.
-`apps.remove(name)`, or `thix remove ./private-state NAME`, releases the registry's reference,
-including a pending installation; it does not cancel work or revoke references already held
-elsewhere.
-Unused application vats become eligible for ordinary vat collection, so `thix collect` retires
-a removed application's vat once nothing else reaches it.
+`thix remove ./private-state NAME` removes an installation of either kind, completed, failed, or
+pending: its vat is retired, so references already held elsewhere break, and the name is free.
 This initial version provides installation, not live code upgrades.
 
 ## Persistent applications serving HTTP
@@ -229,7 +232,7 @@ facet to an application:
 thix install-native ./private-state web ./resources/http
 thix install ./private-state site ./examples/http-counter.js http=web
 # In `thix attach ./private-state`:
-# await E(E(apps).get('site')).start(8080)
+# await E(inventory.get('site')).start(8080)
 curl -X POST http://127.0.0.1:8080/incr
 curl http://127.0.0.1:8080/read
 ```
@@ -243,7 +246,8 @@ The primary daemon only loads directory metadata and bundles the durable module,
 connects the native process, and manages its lifetime.
 It contains no HTTP listener implementation or HTTP-specific installation commands.
 
-Installation stores only the public registration facet in the requested inventory slot.
+Installation stores only the public registration facet in the requested inventory slot, through
+the same workspace registry and phases as an application.
 An interrupted installation resumes when the same directory and name are installed again.
 The retry reuses the manager vat; it does not rerun a completed durable factory attempt.
 The HTTP facet provides `register(port, handler, policy?)`; the returned handle provides
@@ -267,10 +271,10 @@ Native installation pins the directory's complete file contents and the durable 
 Changing installed source requires a new explicit installation; the old manager will refuse to
 launch an adapter with different code.
 A name stays taken by its installation, completed, failed, or interrupted, until
-`thix remove-native ./private-state NAME` removes it: the manager vat is retired, the processes it
+`thix remove ./private-state NAME` removes it: the manager vat is retired, the processes it
 launched are closed and its ports released, its startup notice is withdrawn, and the name is free.
 Capabilities granted from the removed registration break; applications holding one need a new grant.
-A corrected package therefore installs under the same name after `remove-native`, and never by
+A corrected package therefore installs under the same name after `remove`, and never by
 overwriting.
 Dependencies outside the resource directory use ordinary Node module resolution and must remain
 compatible with the installed durable bundle.
@@ -293,8 +297,8 @@ In the attached workspace, enter each line separately to schedule a reminder usi
 <!-- prettier-ignore -->
 ```js
 globalThis.clock = inventory.get('clock');
-E(clock).now().then(now => E(E(apps).get('reminders')).arm(now + 60000n, 'check the oven'));
-E(E(apps).get('reminders')).status();
+E(clock).now().then(now => E(inventory.get('reminders')).arm(now + 60000n, 'check the oven'));
+E(inventory.get('reminders')).status();
 ```
 
 Applications receive `now()`, `when(deadline)`, and `arm(deadline)`.
@@ -321,12 +325,13 @@ The host checks wall-clock time before firing, so this is not a precise timer.
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 6 is required.
+Workspace metadata version 7 is required.
 It includes dedicated native manager vats (version 4), the alarm acknowledgement protocol
 (version 3), the mail address book that introduces contacts through the `mail-introductions`
-resource with observable inbox and outbox maps (version 5), and adapter launchers described by the
+resource with observable inbox and outbox maps (version 5), adapter launchers described by the
 manager vat that owns them, so that removing or collecting a manager closes its processes
-(version 6).
+(version 6), and one installation registry for applications and native resources whose values live
+in the inventory (version 7).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 See [alarm settlement](designs/alarm-settlement.md) for recovery and cleanup details.
@@ -355,8 +360,7 @@ thix mail ./bob
 ```
 
 The last argument to `send` selects one capability from Alice's inventory.
-For example, install the counter example and use `attach` to run
-`E(apps).get('counter').then(counter => { inventory.set('counter', counter); })`.
+For example, install the counter example; its root is in Alice's inventory under `counter`.
 Each message carries exactly one capability.
 Bob's mailbox view supports `r` to refresh, `take <id> <inventory-key>`,
 `discard <id>`, and `q` to disconnect.

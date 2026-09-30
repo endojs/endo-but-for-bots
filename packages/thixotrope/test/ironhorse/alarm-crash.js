@@ -110,7 +110,7 @@ test.serial(
     t.is(
       await first.client.call(
         'evaluate',
-        "E(E(apps).get('reminders')).arm(2000n, 'survive SIGKILL')",
+        "E(inventory.get('reminders')).arm(2000n, 'survive SIGKILL')",
       ),
       'true',
     );
@@ -123,7 +123,7 @@ test.serial(
     t.is(
       await first.client.call(
         'evaluate',
-        "E(E(apps).get('reminders')).status().then(s => s.count === 0n && s.items.length === 1 && s.items[0].state === 'waiting')",
+        "E(inventory.get('reminders')).status().then(s => s.count === 0n && s.items.length === 1 && s.items[0].state === 'waiting')",
       ),
       'true',
     );
@@ -141,7 +141,7 @@ test.serial(
     t.is(
       await recovered.client.call(
         'evaluate',
-        "E(E(apps).get('reminders')).status().then(s => s.count === 1n && s.items.length === 1 && s.items[0].state === 'fired' && s.items[0].message === 'survive SIGKILL' && s.items[0].firedAt === 3000n)",
+        "E(inventory.get('reminders')).status().then(s => s.count === 1n && s.items.length === 1 && s.items[0].state === 'fired' && s.items[0].message === 'survive SIGKILL' && s.items[0].firedAt === 3000n)",
       ),
       'true',
       'restart settles the original listener exactly once at the new host time',
@@ -151,14 +151,14 @@ test.serial(
     t.is(
       await recovered.client.call(
         'evaluate',
-        "E(E(apps).get('reminders')).arm(3000n, 'retained clock')",
+        "E(inventory.get('reminders')).arm(3000n, 'retained clock')",
       ),
       'true',
     );
     await waitUntil(async () => {
       const result = await recovered.client.call(
         'evaluate',
-        "E(E(apps).get('reminders')).status().then(s => s.count === 2n && s.items.length === 2 && s.items.every(item => item.state === 'fired' && item.firedAt === 3000n))",
+        "E(inventory.get('reminders')).status().then(s => s.count === 2n && s.items.length === 2 && s.items.every(item => item.state === 'fired' && item.firedAt === 3000n))",
       );
       return result === 'true';
     });

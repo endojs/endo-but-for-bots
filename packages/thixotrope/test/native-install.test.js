@@ -168,15 +168,15 @@ test.serial(
     await t.throwsAsync(() => client.call('installNative', 'web', directory), {
       message: /different installation/,
     });
-    t.true(await client.call('removeNative', 'web'));
+    t.true(await client.call('remove', 'web'));
     t.is((await managersOf()).length, 0, 'removal retires the manager');
-    t.false(await client.call('removeNative', 'web'));
+    t.false(await client.call('remove', 'web'));
     await client.call('installNative', 'web', directory);
     t.is(await client.call('evaluate', "E(inventory.get('web')).ok()"), 'true');
-    t.true(await client.call('removeNative', 'web'));
+    t.true(await client.call('remove', 'web'));
     t.is(await client.call('evaluate', "inventory.has('web')"), 'false');
     t.is((await managersOf()).length, 0);
-    await t.throwsAsync(() => client.call('removeNative', ''), {
+    await t.throwsAsync(() => client.call('remove', ''), {
       message: /inventory name/,
     });
   },

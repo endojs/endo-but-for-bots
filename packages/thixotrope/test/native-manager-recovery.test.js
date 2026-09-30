@@ -5,13 +5,10 @@ import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import test from '@endo/ses-ava/test.js';
 
-import {
-  installNativeResource,
-  removeNativeResource,
-} from '../src/control/install-native-resource.js';
+import { installNative, removeInstallation } from '../src/control/install.js';
+import { makeInstallations } from '../src/control/installations.js';
 import { makeThixotropeDaemon } from '../src/core/daemon.js';
 import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
-import { makeNativeResourceRegistry } from '../src/native/registry.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
 import { makeMemoryStore } from '../src/store/store-memory.js';
 
@@ -62,7 +59,7 @@ for (const phase of [
     const workspace = await first.createWorker({ debugLabel: 'workspace' });
     const root = await workspace.evaluate(`(() => {
       globalThis.inventory = new Map();
-      globalThis.nativeResources = (${makeNativeResourceRegistry.toString()})(inventory);
+      globalThis.installations = (${makeInstallations.toString()})(inventory);
       return Far('Workspace', {});
     })()`);
     first.publish(root, 'workspace');
@@ -101,17 +98,15 @@ for (const phase of [
       evaluate: async (source, endowments) => {
         const result = await workspace.evaluate(source, endowments);
         if (
-          (phase === 'attachment' &&
-            source.includes('nativeResources.attach')) ||
-          (phase === 'inventory' && source.includes('nativeResources.finish'))
+          (phase === 'attachment' && source.includes('installations.attach')) ||
+          (phase === 'inventory' && source.includes('installations.finish'))
         )
           interrupted();
         return result;
       },
     });
     await t.throwsAsync(
-      () =>
-        installNativeResource(installingDaemon, installingWorkspace, options),
+      () => installNative(installingDaemon, installingWorkspace, options),
       {
         message: 'interrupted after commit',
       },
@@ -126,7 +121,7 @@ for (const phase of [
     const second = await start(store);
     t.teardown(() => second.shutdown());
     const restored = second.getWorker(workspace.workerId);
-    await installNativeResource(second, restored, {
+    await installNative(second, restored, {
       ...options,
       allocationKey: '2'.repeat(32),
     });
@@ -166,7 +161,7 @@ test.serial(
     t.teardown(() => daemon.shutdown());
     const workspace = await daemon.createWorker({ debugLabel: 'workspace' });
     await workspace.evaluate(`(globalThis.inventory = new Map(),
-    globalThis.nativeResources = (${makeNativeResourceRegistry.toString()})(inventory), true)`);
+    globalThis.installations = (${makeInstallations.toString()})(inventory), true)`);
     const broken = {
       ...options,
       bundle: `({make: () => {
@@ -174,14 +169,12 @@ test.serial(
     throw Error('factory failed');
   }})`,
     };
-    await t.throwsAsync(
-      () => installNativeResource(daemon, workspace, broken),
-      { message: /factory failed/ },
-    );
-    await t.throwsAsync(
-      () => installNativeResource(daemon, workspace, broken),
-      { message: /factory failed/ },
-    );
+    await t.throwsAsync(() => installNative(daemon, workspace, broken), {
+      message: /factory failed/,
+    });
+    await t.throwsAsync(() => installNative(daemon, workspace, broken), {
+      message: /factory failed/,
+    });
     t.is(await workspace.evaluate('6 * 7'), 42);
     t.is(await workspace.evaluate('typeof attempts'), 'undefined');
     const managers = daemon
@@ -192,16 +185,16 @@ test.serial(
 
     // The name is not lost to the failure: removal retires the manager and a
     // corrected package installs under the same name.
-    t.true(await removeNativeResource(daemon, workspace, 'resource'));
+    t.true(await removeInstallation(daemon, workspace, 'resource'));
     t.false(daemon.listWorkerIds().includes(managers[0].workerId));
     t.is(
-      await workspace.evaluate('nativeResources.lookup(name)', {
+      await workspace.evaluate('installations.lookup(name)', {
         name: 'resource',
       }),
       undefined,
     );
-    t.false(await removeNativeResource(daemon, workspace, 'resource'));
-    await installNativeResource(daemon, workspace, {
+    t.false(await removeInstallation(daemon, workspace, 'resource'));
+    await installNative(daemon, workspace, {
       ...options,
       digest: 'corrected-code',
     });
@@ -225,10 +218,10 @@ test.serial(
     t.teardown(() => daemon.shutdown());
     const workspace = await daemon.createWorker({ debugLabel: 'workspace' });
     await workspace.evaluate(`(globalThis.inventory = new Map(),
-    globalThis.nativeResources = (${makeNativeResourceRegistry.toString()})(inventory), true)`);
-    await installNativeResource(daemon, workspace, options);
+    globalThis.installations = (${makeInstallations.toString()})(inventory), true)`);
+    await installNative(daemon, workspace, options);
     const { workerId } = await workspace.evaluate(
-      'nativeResources.lookup(name)',
+      'installations.lookup(name)',
       { name: 'resource' },
     );
     // The removal's first step, with nothing after it.
@@ -236,7 +229,7 @@ test.serial(
     t.true(await workspace.evaluate("inventory.has('resource')"));
     // A corrected package is the usual reason to remove; it must not be
     // refused as a different installation of the stale entry.
-    await installNativeResource(daemon, workspace, {
+    await installNative(daemon, workspace, {
       ...options,
       digest: 'corrected-code',
     });
@@ -247,61 +240,23 @@ test.serial(
     t.not(managers[0].workerId, workerId);
     t.is(await workspace.evaluate("E(inventory.get('resource')).starts()"), 0);
     t.deepEqual(
-      await workspace.evaluate('nativeResources.lookup(name)', {
+      await workspace.evaluate('installations.lookup(name)', {
         name: 'resource',
       }),
-      { workerId: managers[0].workerId, complete: true },
+      { kind: 'native', workerId: managers[0].workerId, complete: true },
     );
     // The same interruption, retried by a removal rather than an install.
     await daemon.getWorker(managers[0].workerId).retire();
-    t.true(await removeNativeResource(daemon, workspace, 'resource'));
+    t.true(await removeInstallation(daemon, workspace, 'resource'));
     t.false(await workspace.evaluate("inventory.has('resource')"));
     t.is(
-      await workspace.evaluate('nativeResources.lookup(name)', {
+      await workspace.evaluate('installations.lookup(name)', {
         name: 'resource',
       }),
       undefined,
     );
   },
 );
-
-test('registry preserves inventory edits made during and after installation', t => {
-  const inventory = new Map();
-  const registry = makeNativeResourceRegistry(inventory);
-  const registration = Far('Registration', {});
-  t.deepEqual(registry.prepare('name', 'digest', 'key'), {
-    allocationKey: 'key',
-    workerId: undefined,
-    complete: false,
-  });
-  registry.attach('name', 'digest', 'worker', Far('Worker', {}));
-  inventory.set('name', 'concurrent edit');
-  t.throws(() => registry.finish('name', 'digest', registration), {
-    message: /became occupied/,
-  });
-  t.is(inventory.get('name'), 'concurrent edit');
-  inventory.delete('name');
-  registry.finish('name', 'digest', registration);
-  inventory.set('name', 'later edit');
-  registry.finish('name', 'digest', registration);
-  t.true(registry.prepare('name', 'digest', 'unused key').complete);
-  t.is(inventory.get('name'), 'later edit');
-  t.throws(() => registry.prepare('name', 'other code', 'key'), {
-    message: /different installation/,
-  });
-  // Removal frees the name but never takes a value the user put there.
-  t.true(registry.remove('name'));
-  t.is(inventory.get('name'), 'later edit');
-  t.false(registry.remove('name'));
-  t.is(registry.lookup('name'), undefined);
-  inventory.delete('name');
-  registry.prepare('name', 'other code', 'key');
-  registry.attach('name', 'other code', 'worker', Far('Worker', {}));
-  registry.finish('name', 'other code', registration);
-  t.deepEqual(registry.lookup('name'), { workerId: 'worker', complete: true });
-  t.true(registry.remove('name'));
-  t.false(inventory.has('name'), 'its own registration goes with the name');
-});
 
 test.serial(
   'allocation retries validate options and do not alias diagnostic labels',
