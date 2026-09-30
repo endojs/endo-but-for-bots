@@ -117,6 +117,71 @@ test.serial(
   },
 );
 
+test.serial(
+  'a failed native installation keeps its name until it is removed',
+  async t => {
+    t.timeout(60_000);
+    const path = await mkdtemp('/tmp/thix-native-remove-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const supervisor = await serveThixotrope(powers, path, {
+      engine: harden({
+        ...makePeerJournalReplayEngine(powers),
+        acquireStore: async () => async () => {},
+      }),
+    });
+    t.teardown(() => supervisor.close());
+    const client = await connectLocalControl(
+      powers,
+      join(path, 'control.sock'),
+    );
+    t.teardown(() => client.close());
+    const directory = join(path, 'package');
+    await mkdir(directory);
+    await writeFile(
+      join(directory, 'package.json'),
+      '{"name":"native-remove-fixture","type":"module"}',
+    );
+    await writeFile(
+      join(directory, 'ephemeral.js'),
+      'export const make = () => harden({});',
+    );
+    await writeFile(
+      join(directory, 'durable.js'),
+      "export const make = () => { throw Error('factory failed'); };",
+    );
+    await t.throwsAsync(() => client.call('installNative', 'web', directory), {
+      message: /factory failed/,
+    });
+    const managersOf = async () =>
+      (await client.call('status')).workers.filter(
+        worker => worker.debugLabel === 'native:web',
+      );
+    t.is((await managersOf()).length, 1, 'the failure is kept in its manager');
+    // A corrected package is a different installation: the name is taken.
+    await writeFile(
+      join(directory, 'durable.js'),
+      `export const make = ({ Far }) => harden({
+        registration: Far('Registration', { ok: () => true }),
+        lifecycle: Far('Lifecycle', { started: () => {} }),
+      });`,
+    );
+    await t.throwsAsync(() => client.call('installNative', 'web', directory), {
+      message: /different installation/,
+    });
+    t.true(await client.call('removeNative', 'web'));
+    t.is((await managersOf()).length, 0, 'removal retires the manager');
+    t.false(await client.call('removeNative', 'web'));
+    await client.call('installNative', 'web', directory);
+    t.is(await client.call('evaluate', "E(inventory.get('web')).ok()"), 'true');
+    t.true(await client.call('removeNative', 'web'));
+    t.is(await client.call('evaluate', "inventory.has('web')"), 'false');
+    t.is((await managersOf()).length, 0);
+    await t.throwsAsync(() => client.call('removeNative', ''), {
+      message: /inventory name/,
+    });
+  },
+);
+
 test.serial('shutdown waits for an accepted native installation', async t => {
   t.timeout(30_000);
   const path = await mkdtemp('/tmp/thix-install-close-');
