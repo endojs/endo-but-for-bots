@@ -1302,12 +1302,14 @@ fn queued_native_promise_jobs_survive_a_shared_checkpoint() {
     }
 }
 
-/// A host compartment created but not yet used has its environment made at
-/// the next idle boundary, which for a checkpoint is its preparation. That
-/// can fault pages in (the new environment's global bindings read the
-/// intrinsics), so on a lazily resumed session it must run before the store
-/// is borrowed for the commit; the checkpoint then persists the new
-/// environment.
+/// A shared checkpoint can fault pages in before it commits: a host
+/// compartment created but not yet used gets its environment then (its
+/// global bindings read the intrinsics), and the small state's readers walk
+/// the heap (a regexp's `lastIndex`). On a lazily resumed session those
+/// faults read the store the checkpoint commits to, so the checkpoint
+/// borrows it exclusively only for the commit, and persists the new
+/// environment. A store the caller holds borrowed, shared or not, is
+/// refused before the machine is prepared.
 #[test]
 fn a_checkpoint_prepares_a_pending_compartment_before_it_borrows_the_store() {
     use ironhorse_snapshot::machine::{begin_shared_store_session, resume_shared_from_store_lazy};
@@ -1319,7 +1321,7 @@ fn a_checkpoint_prepares_a_pending_compartment_before_it_borrows_the_store() {
     let store = Rc::new(RefCell::new(MemoryStore::new()));
     let m = Machine::new();
     let a = m.new_compartment();
-    eval(&a, "var answer = 42; 0");
+    eval(&a, "var answer = 42; var re = /a/g; re.lastIndex = 1; 0");
     let ids = m
         .with_persistence(|i| {
             i.shared_environment_ids()
@@ -1335,12 +1337,15 @@ fn a_checkpoint_prepares_a_pending_compartment_before_it_borrows_the_store() {
     );
     let mut restored =
         resume_shared_from_store_lazy(store.clone(), &signature, empty_policy(&ids)).unwrap();
-    let pages = slot_page_count(store.borrow().manifest().unwrap().slot_count);
-    let evicted = restored
-        .machine()
-        .with_persistence(|i| (0..pages).filter(|&p| i.slots().evict_page(p)).count())
-        .unwrap();
-    assert!(evicted > 0, "the preparation has pages to fault in");
+    let evict = |restored: &ironhorse_snapshot::machine::SharedStoreSession| {
+        let pages = slot_page_count(store.borrow().manifest().unwrap().slot_count);
+        let evicted = restored
+            .machine()
+            .with_persistence(|i| (0..pages).filter(|&p| i.slots().evict_page(p)).count())
+            .unwrap();
+        assert!(evicted > 0, "the checkpoint has pages to fault in");
+    };
+    evict(&restored);
 
     let pending = restored.machine().new_compartment();
     assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 2);
@@ -1348,16 +1353,55 @@ fn a_checkpoint_prepares_a_pending_compartment_before_it_borrows_the_store() {
     assert_eq!(eval(&pending, "typeof Object"), "function");
     validate_store_content(&*store.borrow(), &signature).unwrap();
 
-    // A store the caller holds borrowed is refused before anything is
-    // committed, and the session checkpoints once it is released.
-    let held = store.borrow();
-    assert_eq!(
-        restored.checkpoint(&signature, &*store),
-        Err(StoreError::MachineOperation(
-            "checkpoint: the store is already borrowed".to_string()
-        ))
-    );
-    assert_eq!(held.manifest().unwrap().epoch, 2);
-    drop(held);
+    // With nothing to prepare, the small state's readers still fault.
+    evict(&restored);
     assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 3);
+    let ra = restored
+        .machine()
+        .claim_compartment(a.snapshot_id().unwrap())
+        .unwrap();
+    assert_eq!(eval(&ra, "re.lastIndex"), "1");
+
+    // A store the caller holds borrowed is refused before the machine is
+    // prepared, and the session checkpoints once it is released. Preparing
+    // this compartment would fault: a collection leaves free slots, and a
+    // fresh lazy resume with its pages evicted allocates the environment
+    // from them.
+    eval(
+        &ra,
+        "var junk = []; for (var i = 0; i < 2000; i++) junk.push({i}); junk = null; 0",
+    );
+    assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 4);
+    restored.full_collect(&*store.borrow()).unwrap();
+    assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 5);
+    let ids = restored
+        .machine()
+        .with_persistence(|i| {
+            i.shared_environment_ids()
+                .into_iter()
+                .map(EnvironmentId)
+                .collect::<Vec<_>>()
+        })
+        .unwrap();
+    drop(restored);
+    let mut restored =
+        resume_shared_from_store_lazy(store.clone(), &signature, empty_policy(&ids)).unwrap();
+    evict(&restored);
+    let later = restored.machine().new_compartment();
+    let refused = || {
+        Err(StoreError::MachineOperation(
+            "checkpoint: the store is already borrowed".to_string(),
+        ))
+    };
+    // Held exclusively first: a shared hold would let the preparation's
+    // faults through.
+    let held = store.borrow_mut();
+    assert_eq!(restored.checkpoint(&signature, &*store), refused());
+    assert_eq!(held.manifest().unwrap().epoch, 5);
+    drop(held);
+    let held = store.borrow();
+    assert_eq!(restored.checkpoint(&signature, &*store), refused());
+    drop(held);
+    assert_eq!(restored.checkpoint(&signature, &*store).unwrap(), 6);
+    assert!(later.snapshot_id().is_some());
 }

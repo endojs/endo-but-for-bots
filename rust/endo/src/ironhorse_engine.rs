@@ -1722,10 +1722,10 @@ pub mod engine {
             let r = {
                 let session = self.session.as_mut().ok_or(MachineError::SessionLost)?;
                 session.set_cranks(total);
-                // A lazy fault during the checkpoint, an engine defect
-                // since the store is borrowed for the commit, unwinds as a
-                // store fault; it comes back as the store's error and
-                // rewinds like any failed flush.
+                // The checkpoint can fault pages in before its commit
+                // (preparing the machine, building the batch); a failed
+                // read unwinds as a store fault, comes back as the store's
+                // error and rewinds like any failed flush.
                 ironhorse_snapshot::machine::catch_store_fault(|| {
                     session.checkpoint(&self.signature, &*self.store)
                 })

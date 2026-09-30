@@ -968,6 +968,27 @@ fn checkpoint_to_store_core(
     signature: &Signature,
     store: &mut dyn HeapStore,
 ) -> Result<u64, StoreError> {
+    let prepared = prepare_checkpoint(interp, tracking, signature, &*store)?;
+    commit_checkpoint(interp, tracking, prepared, store)
+}
+
+/// A checkpoint's batch, built from the machine and checked against the
+/// store it commits to. Building it reads the store (its manifest, and
+/// after a resume its section digests) and can fault pages in (the small
+/// state's readers walk the heap), so it needs the store only shared; the
+/// commit alone needs it exclusively ([`SharedStoreSession::checkpoint`]).
+struct PreparedCheckpoint {
+    batch: CheckpointBatch,
+    epoch: u64,
+    next_sections: [[u8; 32]; SMALL_SECTION_COUNT],
+}
+
+fn prepare_checkpoint(
+    interp: &mut Interp,
+    tracking: &mut StoreTracking,
+    signature: &Signature,
+    store: &dyn HeapStore,
+) -> Result<PreparedCheckpoint, StoreError> {
     signature.check_boot()?;
     if let Some(authority) = &tracking.backing_authority {
         interp.check_backing_authority(authority).map_err(|_| {
@@ -1104,6 +1125,24 @@ fn checkpoint_to_store_core(
         free_segs,
         page_edges,
     };
+    Ok(PreparedCheckpoint {
+        batch,
+        epoch,
+        next_sections,
+    })
+}
+
+fn commit_checkpoint(
+    interp: &mut Interp,
+    tracking: &mut StoreTracking,
+    prepared: PreparedCheckpoint,
+    store: &mut dyn HeapStore,
+) -> Result<u64, StoreError> {
+    let PreparedCheckpoint {
+        batch,
+        epoch,
+        next_sections,
+    } = prepared;
     store.commit(&batch)?;
     tracking.section_digests = Some(next_sections);
     tracking.free_ack = interp.acknowledge_free_list();
@@ -1246,8 +1285,10 @@ pub fn resume_from_store(
 /// The [`ironhorse_vm::PageSource`] adapter over a shared [`HeapStore`].
 /// Reads go through the `RefCell` so the
 /// same store object also serves `commit` at checkpoint time (`&mut`
-/// via `borrow_mut`); faults happen only mid-crank and commits only
-/// between cranks, so the borrows never overlap.
+/// via `borrow_mut`). Faults happen mid-crank, and during a checkpoint
+/// only while it prepares the machine and builds its batch, with the store
+/// borrowed at most shared ([`SharedStoreSession::checkpoint`]); the
+/// commit itself faults nothing, so the borrows never overlap.
 ///
 /// A fault reads the committed row and hands it to the arena, which
 /// checks its length and references before installing it. A bound
@@ -2915,27 +2956,35 @@ impl SharedStoreSession {
     /// Commit the machine's state since the last checkpoint, as
     /// [`checkpoint_to_store`] does for a [`StoreSession`].
     ///
-    /// The store is borrowed only once the machine is prepared for
-    /// persistence: preparation gives any host compartment still waiting for
-    /// one its environment, which can fault pages in, and a lazily resumed
-    /// session faults them from the store it resumed from, usually this one.
-    /// Preparation and commit run under one borrow of the machine, so no
-    /// evaluation lands between them. A store the caller already holds
-    /// borrowed is refused with [`StoreError::MachineOperation`], before
-    /// anything is committed.
+    /// The store is borrowed exclusively only for the commit itself. Before
+    /// it, the machine is prepared for persistence (a host compartment still
+    /// waiting for one gets its environment) and the batch is built (the
+    /// small state's readers walk the heap); both can fault pages in, and a
+    /// lazily resumed session faults them from the store it resumed from,
+    /// usually this one, so they run with the store borrowed at most shared.
+    /// All of it runs under one borrow of the machine, so no evaluation lands
+    /// in between. A failed row read along the way unwinds as a
+    /// [`StoreFault`], as any lazy fault does.
+    ///
+    /// A store the caller already holds borrowed is refused with
+    /// [`StoreError::MachineOperation`] before the machine is prepared.
     pub fn checkpoint(
         &mut self,
         signature: &Signature,
         store: &std::cell::RefCell<dyn HeapStore + '_>,
     ) -> Result<u64, StoreError> {
+        let borrowed = || {
+            StoreError::MachineOperation("checkpoint: the store is already borrowed".to_string())
+        };
+        drop(store.try_borrow_mut().map_err(|_| borrowed())?);
         self.machine
             .with_persistence(|interp| {
-                let mut store = store.try_borrow_mut().map_err(|_| {
-                    StoreError::MachineOperation(
-                        "checkpoint: the store is already borrowed".to_string(),
-                    )
-                })?;
-                checkpoint_to_store_core(interp, &mut self.tracking, signature, &mut *store)
+                let prepared = {
+                    let store = store.try_borrow().map_err(|_| borrowed())?;
+                    prepare_checkpoint(interp, &mut self.tracking, signature, &*store)?
+                };
+                let mut store = store.try_borrow_mut().map_err(|_| borrowed())?;
+                commit_checkpoint(interp, &mut self.tracking, prepared, &mut *store)
             })
             .map_err(shared_access_error)?
     }
