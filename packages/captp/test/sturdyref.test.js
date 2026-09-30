@@ -120,3 +120,107 @@ test('enlivening an unknown CapTP SturdyRef export is a protocol failure', t => 
   t.regex(observed[0].error.message, /Unknown export "s\+1"/);
   t.deepEqual(observed[0].context, { kind: 'protocol' });
 });
+
+/**
+ * Connect two CapTP instances directly, with options for each side.
+ *
+ * @param {object} leftOpts
+ * @param {object} rightOpts
+ */
+const makeOptsPair = (leftOpts, rightOpts) => {
+  /** @type {any} */
+  let right;
+  const left = makeCapTP(
+    'left',
+    obj => right.dispatch(obj),
+    undefined,
+    leftOpts,
+  );
+  right = makeCapTP('right', obj => left.dispatch(obj), undefined, rightOpts);
+  return { left, right };
+};
+
+test('a SturdyRef constructed from data enlivens through the peer locator', async t => {
+  const target = Far('target', { hello: () => 'hi' });
+  const located = [];
+  const { left } = makeOptsPair(
+    { peerId: 'right' },
+    {
+      locateSturdyRef: objectId => {
+        located.push(objectId);
+        return objectId === 'swiss-1' ? target : undefined;
+      },
+    },
+  );
+  const data = {
+    peerId: 'right',
+    objectId: 'swiss-1',
+    designator: 'tcp-testing-only',
+    hints: { host: '127.0.0.1', port: '1234' },
+  };
+  const ref = left.makeSturdyRefFromData(data);
+  t.is(passStyleOf(ref), 'sturdyRef');
+  t.deepEqual(Reflect.ownKeys(ref), []);
+  t.deepEqual(left.getSturdyRefData(ref), data);
+  t.true(Object.isFrozen(left.getSturdyRefData(ref)));
+  t.is(left.getSturdyRefData(harden({})), undefined);
+
+  const live = await SturdyRef.enliven(ref);
+  t.is(await E(live).hello(), 'hi');
+  t.deepEqual(located, ['swiss-1']);
+
+  // The recorded data reconstructs an equivalent, distinct ref.
+  const again = left.makeSturdyRefFromData(data);
+  t.not(again, ref);
+  t.is(await E(await SturdyRef.enliven(again)).hello(), 'hi');
+});
+
+test('constructing a SturdyRef from data validates the data', t => {
+  const { left } = makeOptsPair({ peerId: 'right' }, {});
+  t.throws(
+    () => left.makeSturdyRefFromData({ peerId: 'other', objectId: 'x' }),
+    {
+      message: /names peer "other"/,
+    },
+  );
+  t.throws(
+    () => left.makeSturdyRefFromData(/** @type {any} */ ({ peerId: 'right' })),
+    {
+      message: /objectId must be a string/,
+    },
+  );
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 'right', objectId: 'x', extra: 1 }),
+      ),
+    { message: /Unexpected SturdyRef data properties/ },
+  );
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'right',
+          objectId: 'x',
+          hints: { port: 1 },
+        }),
+      ),
+    { message: /hints must be a record of strings/ },
+  );
+});
+
+test('a SturdyRef from data rejects without a peer locator or connection', async t => {
+  const { left } = makeOptsPair({}, {});
+  const ref = left.makeSturdyRefFromData({ peerId: 'right', objectId: 'x' });
+  await t.throwsAsync(() => SturdyRef.enliven(ref), {
+    message: /does not locate SturdyRefs from data/,
+  });
+
+  const { left: left2 } = makeOptsPair(
+    {},
+    { locateSturdyRef: () => Far('t', {}) },
+  );
+  const ref2 = left2.makeSturdyRefFromData({ peerId: 'right', objectId: 'x' });
+  left2.abort(Error('gone'));
+  await t.throwsAsync(() => SturdyRef.enliven(ref2), { message: /gone/ });
+});
