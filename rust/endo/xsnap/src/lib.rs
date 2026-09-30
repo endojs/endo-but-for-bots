@@ -1433,7 +1433,12 @@ fn send_suspend_error(nonce: i64, msg: &str) {
 /// O(n²) hex-parse approach, which is critical for large envelopes
 /// (e.g. 1 MB CapTP payloads from storeBlob).
 fn dispatch_envelope(machine: &Machine, data: &[u8]) {
-    host_ledger::begin_delivery(data);
+    // A delivery the transcript refuses to record must not run: its host
+    // calls would be unrecorded or land in another delivery's crank.
+    if let Err(e) = host_ledger::begin_delivery(data) {
+        eprintln!("refusing delivery: {e}");
+        return;
+    }
     worker_io::set_pending_envelope(data.to_vec());
     machine.eval(
         "try { \
@@ -2213,6 +2218,12 @@ pub fn run_xs_program(
                                 break 'outer;
                             }
                             got_envelope = true;
+                            // One crank is one delivery plus its promise
+                            // jobs, which the round above has drained:
+                            // commit it so this envelope opens its own.
+                            if let Err(e) = host_ledger::end_delivery(true) {
+                                eprintln!("{label}: {e}");
+                            }
                             if matches!(handle_envelope(&machine, &data), EnvelopeAction::Suspend) {
                                 eprintln!("{label}: suspended (during pump)");
                                 break 'outer;
@@ -4703,7 +4714,7 @@ mod tests {
                     worker_io::install_transport(Box::new(MockTransport { sent: sent.clone() }));
                     let report = attach(&machine, &sent, "");
                     assert_eq!(report["reseated"], serde_json::json!([]));
-                    host_ledger::begin_delivery(b"d1");
+                    host_ledger::begin_delivery(b"d1").unwrap();
                     machine.eval(&format!(
                         "var r = openReader('test', 'a.txt');
                      var first = String.fromCharCode(...new Uint8Array(read(r, 4)));
@@ -4874,7 +4885,7 @@ mod tests {
                     )
                     .unwrap();
                     if abort {
-                        host_ledger::begin_delivery(b"d1");
+                        host_ledger::begin_delivery(b"d1").unwrap();
                         machine.eval(escape);
                         host_ledger::end_delivery(false).unwrap();
                     }
@@ -4933,7 +4944,7 @@ mod tests {
                 if attached.is_ok() && deliver {
                     // A crank commits after the snapshot, and the worker dies
                     // before the next suspend.
-                    host_ledger::begin_delivery(b"d1");
+                    host_ledger::begin_delivery(b"d1").unwrap();
                     machine.eval("var r = openReader('test', 'a.txt'); read(r, 4)");
                     host_ledger::end_delivery(true).unwrap();
                 }
@@ -4979,7 +4990,7 @@ mod tests {
             let heap = || Ok(machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot);
             host_ledger::attach(&transcript, "read-write", None, unsafe { &*powers }, heap)
                 .unwrap();
-            host_ledger::begin_delivery(b"d1");
+            host_ledger::begin_delivery(b"d1").unwrap();
             machine
                 .eval(&format!(
                     "var db = sqliteOpen({:?}); \

@@ -387,16 +387,23 @@ fn reseat(record: &HandleRecord, powers: &HostPowers) -> Result<Descriptor, Stri
 const PENDING_JOBS: &[u8] = b"pending-promise-jobs";
 
 /// Open a delivery's crank if a transcript is attached and none is open.
-pub(crate) fn begin_delivery(inbound: &[u8]) {
+/// An error means the transcript refused the crank (backpressure, say), so
+/// the caller must refuse the delivery rather than run it unrecorded.
+pub(crate) fn begin_delivery(inbound: &[u8]) -> Result<(), String> {
     LEDGER.with(|l| {
-        if let Some(ledger) = l.borrow_mut().as_mut() {
-            if ledger.transcript.active_crank().is_none() {
-                if let Err(e) = ledger.transcript.begin_crank(inbound) {
-                    eprintln!("host transcript: begin crank: {e}");
-                }
-            }
+        let mut ledger = l.borrow_mut();
+        let Some(ledger) = ledger.as_mut() else {
+            return Ok(());
+        };
+        if ledger.transcript.active_crank().is_some() {
+            return Ok(());
         }
-    });
+        ledger
+            .transcript
+            .begin_crank(inbound)
+            .map(drop)
+            .map_err(|e| format!("host transcript: begin crank: {e}"))
+    })
 }
 
 /// Close the open delivery's crank: commit it, or abort it when the
@@ -468,7 +475,7 @@ pub(crate) fn call(
     request: &[u8],
     invoke: impl FnOnce() -> Outcome,
 ) -> Result<Option<u32>, String> {
-    begin_delivery(PENDING_JOBS);
+    begin_delivery(PENDING_JOBS).map_err(|e| format!("Error: {e}"))?;
     let mut invoke = Some(invoke);
     let mut done: Option<Outcome> = None;
     let routed = LEDGER.with(|l| {
