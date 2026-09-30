@@ -1292,8 +1292,15 @@ export const makeOcapnNoiseNetwork = ({
   const waitForInboundSession = rawPeerKeyId => {
     // Validate/canonicalize like `provideSession`: this keys `active` and
     // `waiters`, so a non-canonical argument would park a waiter that
-    // never resolves and grow the map.
-    const peerKeyId = assertCanonicalKeyId(rawPeerKeyId);
+    // never resolves and grow the map. Surface the failure as a rejection
+    // (not a synchronous throw) so this method's contract matches
+    // `provideSession`'s: always Promise-returning.
+    let peerKeyId;
+    try {
+      peerKeyId = assertCanonicalKeyId(rawPeerKeyId);
+    } catch (err) {
+      return Promise.reject(err);
+    }
     const existing = active.get(peerKeyId);
     if (existing) return Promise.resolve(existing.session);
     return awaitActiveSession(peerKeyId);
