@@ -26,6 +26,19 @@ await withFormulaGraphLock(async () => {
 
 `@agent`, `@self`, `@host`, `@keypair`, `@mail` are reserved `@`-prefixed names managed by `makePetSitter` in `guest.js`. They match the pattern `/^@[a-z][a-z0-9-]{0,127}$/` (see `isSpecialName` in `src/pet-name.js`). The daemon exports `src/pet-name.js` as `@endo/daemon/pet-name.js`.
 
+### Pet-name paths
+
+The daemon's directory, host, guest, mail, channel, and inspector methods
+take a pet name only as a **pet-name path**, an array of path components:
+`lookup(['counter'])`, `lookup(['subdir', 'value'])`.
+A bare string is refused by `namePathFrom` (`src/pet-name.js`) with a
+`TypeError` telling the caller to retry with an array; it is never split on
+a delimiter.
+The argument guards use `NamePathArgumentShape`, which admits a string only
+so that `namePathFrom` can produce that error.
+The `adopt` edge name is a message edge label, not a path, and stays a string.
+The Mount and ReadableTree surfaces are the exception (see below).
+
 ## Guest Provisioning
 
 ### introducedNames
@@ -34,22 +47,22 @@ await withFormulaGraphLock(async () => {
 
 ### Handle vs Guest
 
-`lookup(petName)` where the pet name was written to a `handleId` returns a **Handle** (only has `open`, `receive`). To get the full `EndoGuest` (with `makeDirectory`, `list`, `send`, etc.), use the return value of `provideGuest()`.
+`lookup(petNamePath)` where the path names a `handleId` returns a **Handle** (only has `open`, `receive`). To get the full `EndoGuest` (with `makeDirectory`, `list`, `send`, etc.), use the return value of `provideGuest()`.
 
 ### provideGuest idempotency
 
-On restart, calling `provideGuest` with `introducedNames` on an already-existing guest fails because the reincarnated handle formula lacks `write`. Guard with `E(agent).has(name)` before calling `provideGuest`.
+On restart, calling `provideGuest` with `introducedNames` on an already-existing guest fails because the reincarnated handle formula lacks `write`. Guard with `E(agent).has(...petNamePath)` before calling `provideGuest`.
 
 ## Message Protocol
 
 ### Message types
 
 - `type: 'package'` messages work with `adopt()`.
-- `type: 'value'` messages (created by form submissions via `submit()`) have a `valueId`. Use `E(powers).lookup(msg.valueId)` to resolve the value — `adopt()` will throw `"Message must be a package"`.
+- `type: 'value'` messages (created by form submissions via `submit()`) have a `valueId`. Use `E(powers).lookupById(msg.valueId)` to resolve the value — `adopt()` will throw `"Message must be a package"`.
 
 ### Form flow
 
-A guest sends a form to HOST via `E(powers).form('HOST', title, fields)`.
+A guest sends a form to HOST via `E(powers).form(['@host'], title, fields)`.
 The host user submits via `E(agent).submit(messageNumber, values)`,
 which creates a `type: 'value'` message in the guest's inbox with
 `replyTo` pointing to the form's `messageId`.
@@ -76,13 +89,14 @@ Formula type: `readable-tree`.
 ### Mount
 
 Live, mutable daemon-side filesystem access created by
-`provideMount(path, petName, opts)`.
+`provideMount(path, petNamePath, opts)`.
 Implemented in `src/mount.js`.
 Methods: `has`, `list`, `lookup`, `entry`, `stat`, `readText`,
 `maybeReadText`, `writeText`, `remove`, `move`, `makeDirectory`,
 `makeFile`, `readOnly`, `snapshot`, `help`.
-Path arguments accept `string | string[]` (a single name or
-an array of path segments).
+Unlike the daemon's directory, host, and guest methods, Mount path
+arguments still accept `string | string[]` (a single name or an array of
+path segments).
 A slash inside a string is not a separator —
 `readText('src/foo.js')` and `entry('src/foo.js')` are rejected; pass
 `['src', 'foo.js']`. A string is always equivalent to a one-element array.
@@ -90,14 +104,14 @@ A slash inside a string is not a separator —
 ### ScratchMount
 
 Daemon-managed scratch directory via
-`provideScratchMount(petName)`.
+`provideScratchMount(petNamePath)`.
 Same interface as Mount but the filesystem path is managed by the
 daemon rather than supplied by the user.
 
 ### SubMount
 
 A persistent `mount` formula rooted at a subdirectory of an existing
-mount, minted by `provideSubMount(mountName, subpath, newName, opts)`.
+mount, minted by `provideSubMount(mountNamePath, subpath, newNamePath, opts)`.
 Same Mount interface; the child gets its own confinement root (a
 sub-mount at `/project/src` cannot reach `/project/.env` via `..`) and
 records its parent in the formula, so it is cancelled together with the
