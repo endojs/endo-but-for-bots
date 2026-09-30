@@ -132,10 +132,25 @@ impl CasStore {
             },
             Some(&mut half),
         )?;
-        self.op("cas:sync-blob", true, || File::open(temporary)?.sync_all(), None)?;
+        self.op(
+            "cas:sync-blob",
+            true,
+            || File::open(temporary)?.sync_all(),
+            None,
+        )?;
         let dest = self.directory.join(hash);
-        self.op("cas:rename-blob", false, || fs::rename(temporary, &dest), None)?;
-        self.op("cas:sync-dir", true, || sync_directory(&self.directory), None)
+        self.op(
+            "cas:rename-blob",
+            false,
+            || fs::rename(temporary, &dest),
+            None,
+        )?;
+        self.op(
+            "cas:sync-dir",
+            true,
+            || sync_directory(&self.directory),
+            None,
+        )
     }
 
     /// Read and verify the blob named `hash`.
