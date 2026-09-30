@@ -51,7 +51,7 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
         if (message.type !== 'request')
           throw Error('Expected a request message');
         const name = `workflow-answer-${number}`;
-        await E(powers).storeValue(harden(value), name);
+        await E(powers).storeValue(harden(value), [name]);
         await E(powers).resolve(message.number, name);
         await E(powers).storeValue(true, [`workflow-settled-${number}`]);
         settled.add(number);
@@ -139,7 +139,7 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
             params: { title, summary: design, base, rounds: BigInt(rounds) },
           }),
         );
-        await E(powers).storeValue(harden({ runId: result.runId }), receipt);
+        await E(powers).storeValue(harden({ runId: result.runId }), [receipt]);
         return `Design handed off. Run ${result.runId}, stored as ${receipt}. You will be notified when review is ready or needs attention.`;
       },
     ),

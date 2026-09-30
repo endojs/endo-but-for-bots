@@ -203,32 +203,35 @@ export const main = async agent => {
 
   const hasGuest = await E(agent).has(guestName);
   if (!hasGuest) {
-    await E(agent).provideGuest(guestName, {
+    await E(agent).provideGuest([guestName], {
       introducedNames: harden({ '@agent': 'host-agent' }),
-      agentName,
+      agentName: [agentName],
     });
   }
 
   // Write provider references into the factory's namespace
-  const factoryPowers = await E(agent).lookup(agentName);
+  const factoryPowers = await E(agent).lookup([agentName]);
   await E(factoryPowers).storeIdentifier(['llm-provider'], providerId);
 
   if (hasFastConfig) {
     const fastProviderId = await resolveProvider(agent, fastProviderName);
-    await E(factoryPowers).storeIdentifier(['llm-provider-fast'], fastProviderId);
+    await E(factoryPowers).storeIdentifier(
+      ['llm-provider-fast'],
+      fastProviderId,
+    );
     console.log(`[jaine] Fast provider "${fastProviderName}" configured.`);
   }
 
   // Launch the jaine factory caplet
   await E(agent).makeUnconfined(['@main'], jaineFactorySpecifier, {
-    powersName: agentName,
-    resultName: factoryName,
+    powersName: [agentName],
+    resultName: [factoryName],
   });
 
   console.log('[jaine] Factory created.');
 
   // Create default "jaine" agent, pinned for restart survival
-  const factory = await E(agent).lookup(factoryName);
+  const factory = await E(agent).lookup([factoryName]);
   const profileName = await E(factory).createAgent(
     'jaine',
     harden({ pin: true }),

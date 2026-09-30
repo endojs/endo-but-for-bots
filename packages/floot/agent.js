@@ -773,7 +773,7 @@ const provisionPresetObjects = async (
       for (const tmp of [gitTmp, scratchTmp]) {
         if (await E(host).has(tmp)) await E(host).remove(tmp);
       }
-      const mount = await E(host).provideScratchMount(scratchTmp);
+      const mount = await E(host).provideScratchMount([scratchTmp]);
       // provideGit requires an existing worktree, but a fresh scratch mount is
       // an empty dir — git-init it first. The factory is an unconfined,
       // fully-privileged host caplet, so resolving the host path and running
@@ -980,7 +980,7 @@ export const makeStreamingAgent = async (
     if (recorded) {
       usage = recorded;
     } else if (await E(powers).has(USAGE_NAME)) {
-      const stored = /** @type {any} */ (await E(powers).lookup(USAGE_NAME));
+      const stored = /** @type {any} */ (await E(powers).lookup([USAGE_NAME]));
       usage = {
         inputTokens: Number(stored?.inputTokens) || 0,
         outputTokens: Number(stored?.outputTokens) || 0,
@@ -1001,7 +1001,7 @@ export const makeStreamingAgent = async (
       .then(async () => {
         await null;
         if (await E(powers).has(USAGE_NAME)) await E(powers).remove(USAGE_NAME);
-        await E(powers).storeValue(snapshot, USAGE_NAME);
+        await E(powers).storeValue(snapshot, [USAGE_NAME]);
       })
       .catch(error => {
         console.error(
@@ -2721,7 +2721,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           registry = [...stored.sessions];
           registrySequence = stored.sequence + 1n;
         } else if (await E(powers).has(REGISTRY_BACKUP_NAME)) {
-          const stored = await E(powers).lookup(REGISTRY_BACKUP_NAME);
+          const stored = await E(powers).lookup([REGISTRY_BACKUP_NAME]);
           if (!Array.isArray(stored)) {
             throw Error('Floot legacy registry backup is corrupt');
           }
@@ -2736,7 +2736,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           registry = [...stored];
           registrySequence = 1n;
         } else if (await E(powers).has(REGISTRY_NAME)) {
-          const stored = await E(powers).lookup(REGISTRY_NAME);
+          const stored = await E(powers).lookup([REGISTRY_NAME]);
           registry = Array.isArray(stored) ? [...stored] : [];
         } else {
           registry = [];
@@ -2826,7 +2826,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           voicePrefs = {};
           return voicePrefs;
         }
-        const record = await E(powers).lookup(VOICE_PREFS_NAME);
+        const record = await E(powers).lookup([VOICE_PREFS_NAME]);
         voicePrefs = sanitizeVoicePrefs(record);
         return voicePrefs;
       })().catch(error => {
@@ -2848,7 +2848,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
     const result = voicePrefsWrite.then(async () => {
       const current = await loadVoicePrefs();
       const next = { ...current, ...patch };
-      await E(powers).storeValue(harden({ ...next }), VOICE_PREFS_NAME);
+      await E(powers).storeValue(harden({ ...next }), [VOICE_PREFS_NAME]);
       voicePrefs = next;
       return harden({ ...next });
     });
@@ -2880,8 +2880,8 @@ export const make = (hostPowers, _context, { env } = {}) => {
         // control methods. So we pass an explicit agentName and look the
         // controlling *agent* up by that name to get the full guest facet for
         // the session's powers (the same agent fae runs its driver against).
-        await E(host).provideGuest(handleName, { agentName });
-        const sessionGuest = await E(host).lookup(agentName);
+        await E(host).provideGuest([handleName], { agentName: [agentName] });
+        const sessionGuest = await E(host).lookup([agentName]);
         // Introduce the user to the session under the petname "user" so the
         // agent can mail them directly (send/reply target "user"). The factory
         // host's own "@host" is the user — the @agent that provisioned the

@@ -51,18 +51,18 @@ export const main = async agent => {
 
   const hasFactory = await E(agent).has(guestName);
   if (!hasFactory) {
-    await E(agent).provideGuest(guestName, {
+    await E(agent).provideGuest([guestName], {
       introducedNames: harden({ '@agent': 'host-agent' }),
-      agentName,
+      agentName: [agentName],
     });
   }
 
-  const factoryPowers = await E(agent).lookup(agentName);
+  const factoryPowers = await E(agent).lookup([agentName]);
   await E(factoryPowers).storeIdentifier(['llm-provider'], providerId);
 
   await E(agent).makeUnconfined(['@main'], jaineFactorySpecifier, {
-    powersName: agentName,
-    resultName: factoryName,
+    powersName: [agentName],
+    resultName: [factoryName],
   });
 
   console.log(
@@ -70,7 +70,7 @@ export const main = async agent => {
   );
 
   // Create default "jaine" agent instance, pinned for restart survival
-  const factory = await E(agent).lookup(factoryName);
+  const factory = await E(agent).lookup([factoryName]);
   const profileName = await E(factory).createAgent(
     'jaine',
     harden({ pin: true }),

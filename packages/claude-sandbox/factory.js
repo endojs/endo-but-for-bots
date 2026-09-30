@@ -131,15 +131,15 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
     !(await E(agent).has(guestTmp)) &&
     !(await E(agent).has(dirName, 'handle'))
   ) {
-    await E(agent).provideGuest(guestTmp, {
+    await E(agent).provideGuest([guestTmp], {
       introducedNames: harden({ '@agent': 'host-agent' }),
-      agentName: agentTmp,
+      agentName: [agentTmp],
     });
   }
 
   if (!(await E(agent).has(dirName, 'service'))) {
     await E(agent).makeUnconfined(['@main'], factoryCapletSpecifier, {
-      powersName: agentTmp,
+      powersName: [agentTmp],
       resultName: [dirName, 'service'],
       // Tell the caplet where its infra caplets live so the per-session powers
       // endows `<dir>/sandbox-factory` and `<dir>/fs-mounter` by path.

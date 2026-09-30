@@ -416,12 +416,12 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         ),
         harden(codeNames),
         harden(petNames),
-        powersName,
+        [powersName],
       );
 
       /** @type {Record<string, any>} */
       const options = {
-        powersName,
+        powersName: [powersName],
         env: harden({
           SESSION_ID: sessionId,
           CREATED_AT: new Date().toISOString(),

@@ -284,12 +284,12 @@ export const provisionClaudeSession = async (
       ),
       harden(codeNames),
       harden(petNames),
-      powersName,
+      [powersName],
     );
 
     /** @type {Record<string, any>} */
     const options = {
-      powersName,
+      powersName: [powersName],
       env: harden({
         SESSION_ID: sessionId,
         CREATED_AT: new Date().toISOString(),

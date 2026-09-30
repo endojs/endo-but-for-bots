@@ -401,7 +401,7 @@ export const makeExecutor = (powers, provider, channelContext) => {
       if (!petName) return 'Error: petName is required';
       const intervalMs = intervalMinutes * 60 * 1000;
       try {
-        await E(powers).makeTimer(petName, intervalMs, label);
+        await E(powers).makeTimer([petName], intervalMs, label);
         return `Timer "${label}" created as "${petName}", firing every ${intervalMinutes} minutes.`;
       } catch (err) {
         return `Failed to create timer: ${err.message || err}`;

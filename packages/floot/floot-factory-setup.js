@@ -178,15 +178,15 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
         await E(agent).remove(stray);
       }
     }
-    await E(agent).provideGuest(handleName, { agentName: powersName });
+    await E(agent).provideGuest([handleName], { agentName: [powersName] });
   }
-  const oracleGuest = await E(agent).lookup(powersName);
+  const oracleGuest = await E(agent).lookup([powersName]);
   await E(oracleGuest).storeLocator(
     ['account-profile'],
     await E(agent).locate(...profileNamePath),
   );
   await E(agent).makeUnconfined(['@main'], accountOracleSpecifier, {
-    powersName,
+    powersName: [powersName],
     resultName: oraclePath,
     env: harden({ ACCOUNT_PROVIDER_ID: provider }),
   });
@@ -310,7 +310,7 @@ export const main = async agent => {
           await E(agent).remove(stray);
         }
       }
-      await E(agent).provideHost(guestName, { agentName });
+      await E(agent).provideHost([guestName], { agentName: [agentName] });
     }
   }
   const factoryHost = await E(agent).lookup(

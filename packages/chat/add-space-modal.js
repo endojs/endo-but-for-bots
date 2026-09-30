@@ -1763,10 +1763,10 @@ export const createAddSpaceModal = ({
     try {
       // Create the host: handle points to powers, agentName points to the agent
       await E(
-        /** @type {{ provideHost: (name: string, opts: { agentName: string }) => Promise<void> }} */ (
+        /** @type {{ provideHost: (name: string[], opts: { agentName: string[] }) => Promise<void> }} */ (
           powers
         ),
-      ).provideHost(name, { agentName: finalAgentName });
+      ).provideHost([name], { agentName: [finalAgentName] });
 
       // Create the space pointing to the agent (not the handle)
       await onSubmit({
@@ -1927,11 +1927,11 @@ export const createAddSpaceModal = ({
       }
 
       await E(
-        /** @type {{ provideHost: (name: string, opts: { agentName: string, introducedNames?: Record<string, string> }) => Promise<void> }} */ (
+        /** @type {{ provideHost: (name: string[], opts: { agentName: string[], introducedNames?: Record<string, string> }) => Promise<void> }} */ (
           powers
         ),
-      ).provideHost(spaceName, {
-        agentName: newAgentName,
+      ).provideHost([spaceName], {
+        agentName: [newAgentName],
         ...(Object.keys(introducedNames).length > 0 ? { introducedNames } : {}),
       });
 
@@ -2054,10 +2054,10 @@ export const createAddSpaceModal = ({
         // 1. Create persona (host)
         const personaAgentName = `persona-for-${spaceName}`;
         await E(
-          /** @type {{ provideHost: (name: string, opts: { agentName: string }) => Promise<void> }} */ (
+          /** @type {{ provideHost: (name: string[], opts: { agentName: string[] }) => Promise<void> }} */ (
             powers
           ),
-        ).provideHost(spaceName, { agentName: personaAgentName });
+        ).provideHost([spaceName], { agentName: [personaAgentName] });
 
         // 2. Get persona's powers
         const personaPowers = await E(
@@ -2242,10 +2242,10 @@ export const createAddSpaceModal = ({
 
       // Create the whylip host profile.
       await E(
-        /** @type {{ provideHost: (name: string, opts: { agentName: string }) => Promise<void> }} */ (
+        /** @type {{ provideHost: (name: string[], opts: { agentName: string[] }) => Promise<void> }} */ (
           powers
         ),
-      ).provideHost(name, { agentName: finalAgentName });
+      ).provideHost([name], { agentName: [finalAgentName] });
 
       // Write the fae agent reference into the whylip host's pet store
       // under the well-known name "fae".

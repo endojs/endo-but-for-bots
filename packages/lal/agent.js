@@ -261,7 +261,7 @@ export const make = (guestPowers, _context) => {
               guest = await E(agent).lookup(name);
             } else {
               guest = await E(agent).provideGuest(name, {
-                agentName: `profile-for-${name}`,
+                agentName: [`profile-for-${name}`],
               });
             }
 

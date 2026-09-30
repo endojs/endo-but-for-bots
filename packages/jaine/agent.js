@@ -641,7 +641,7 @@ const handleMention = async (
   /** @type {object} */
   let member;
   try {
-    const ch = await E(powers).lookup(chRefName);
+    const ch = await E(powers).lookup([chRefName]);
     member = await E(ch).join(mentionInfo.join);
   } catch (joinErr) {
     console.error(
@@ -907,19 +907,21 @@ export const make = (guestPowers, _context) => {
       // Create agent guest
       const hasAgent = await E(hostAgent).has(guestName);
       if (!hasAgent) {
-        await E(hostAgent).provideGuest(guestName, { agentName });
+        await E(hostAgent).provideGuest([guestName], {
+          agentName: [agentName],
+        });
       }
 
       // Create driver guest
       const hasDriver = await E(hostAgent).has(driverHandleName);
       if (!hasDriver) {
-        await E(hostAgent).provideGuest(driverHandleName, {
-          agentName: driverProfileName,
+        await E(hostAgent).provideGuest([driverHandleName], {
+          agentName: [driverProfileName],
         });
       }
 
       // Write provider + agent refs into driver namespace
-      const driverPowers = await E(hostAgent).lookup(driverProfileName);
+      const driverPowers = await E(hostAgent).lookup([driverProfileName]);
       const providerId = await E(powers).identify('llm-provider');
       await E(driverPowers).storeIdentifier(['llm-provider'], providerId);
 
@@ -951,8 +953,8 @@ export const make = (guestPowers, _context) => {
       const hasDriverAlready = await E(hostAgent).has(driverResultName);
       if (!hasDriverAlready) {
         await E(hostAgent).makeUnconfined(['@main'], driverSpecifier, {
-          powersName: driverProfileName,
-          resultName: driverResultName,
+          powersName: [driverProfileName],
+          resultName: [driverResultName],
           env,
         });
       } else {

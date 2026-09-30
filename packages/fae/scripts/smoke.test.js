@@ -531,23 +531,23 @@ const setupDaemon = async () => {
         model: modelName,
         authToken: process.env.LAL_AUTH_TOKEN,
       }),
-      providerName,
+      [providerName],
     );
 
     const providerId = /** @type {string} */ (
       await E(host).identify(providerName)
     );
-    await E(host).provideGuest(factoryGuestName, {
+    await E(host).provideGuest([factoryGuestName], {
       introducedNames: harden({ '@agent': 'host-agent' }),
-      agentName: factoryAgentName,
+      agentName: [factoryAgentName],
     });
-    const factoryPowers = await E(host).lookup(factoryAgentName);
+    const factoryPowers = await E(host).lookup([factoryAgentName]);
     await E(factoryPowers).storeIdentifier(['llm-provider'], providerId);
     await E(host).makeUnconfined(['@main'], factorySpecifier, {
-      powersName: factoryAgentName,
-      resultName: factoryName,
+      powersName: [factoryAgentName],
+      resultName: [factoryName],
     });
-    const factory = await E(host).lookup(factoryName);
+    const factory = await E(host).lookup([factoryName]);
     factoriesByModel.set(modelName, factory);
     console.log(`[smoke] factory ready for model "${modelName}"`);
   }
@@ -1068,7 +1068,7 @@ const readFileMacro = test.macro({
       // name rather than colliding with siblings.
       const toolName = `read-file-${t.context.agentName}`;
       await E(shared.host).makeUnconfined(['@main'], readFileSpecifier, {
-        resultName: toolName,
+        resultName: [toolName],
         env: harden({ FAE_CWD: t.context.cwd }),
       });
 

@@ -179,9 +179,12 @@ export const provisionFaeAgent = async ({
     /** @type {string | undefined} */
     let spawnerLocator;
     if (depth < maxDepth) {
-      const spawnerGuest = await E(hostAgent).provideGuest(spawnerHandleName, {
-        agentName: spawnerProfileName,
-      });
+      const spawnerGuest = await E(hostAgent).provideGuest(
+        [spawnerHandleName],
+        {
+          agentName: [spawnerProfileName],
+        },
+      );
       await E(spawnerGuest).storeLocator(['llm-provider'], providerLocator);
       await E(spawnerGuest).storeLocator(['host-agent'], hostAgentLocator);
       if (authSecretLocator !== undefined) {
@@ -191,8 +194,8 @@ export const provisionFaeAgent = async ({
         );
       }
       await E(hostAgent).makeUnconfined(['@main'], spawnerSpecifier, {
-        powersName: spawnerProfileName,
-        resultName: spawnerResultName,
+        powersName: [spawnerProfileName],
+        resultName: [spawnerResultName],
         env: harden({
           SUBAGENT_PARENT: name,
           SUBAGENT_DEPTH: `${depth + 1}`,
@@ -211,8 +214,8 @@ export const provisionFaeAgent = async ({
     // 3. The driver's own guest holds capability references to everything the
     //    inbox loop needs, so the driver formula itself carries no
     //    configuration.
-    const driverGuest = await E(hostAgent).provideGuest(driverHandleName, {
-      agentName: driverProfileName,
+    const driverGuest = await E(hostAgent).provideGuest([driverHandleName], {
+      agentName: [driverProfileName],
     });
     await E(driverGuest).storeLocator(['llm-provider'], providerLocator);
     await E(driverGuest).storeLocator(
@@ -227,8 +230,8 @@ export const provisionFaeAgent = async ({
     }
 
     await E(hostAgent).makeUnconfined(['@main'], driverSpecifier, {
-      powersName: driverProfileName,
-      resultName: driverResultName,
+      powersName: [driverProfileName],
+      resultName: [driverResultName],
       env: harden({
         FAE_SYSTEM_PROMPT: systemPrompt || '',
         FAE_SUBAGENT_PROMPT: delegatedPrompt || '',

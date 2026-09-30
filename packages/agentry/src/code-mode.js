@@ -98,7 +98,7 @@ const lookupRequiredPower = (powers, petName, label) => {
   if (powers === undefined || powers === null) {
     throw new Error(`code-mode ${label} capability requires powers`);
   }
-  return E(powers).lookup(petName);
+  return E(powers).lookup(typeof petName === 'string' ? [petName] : petName);
 };
 
 /**

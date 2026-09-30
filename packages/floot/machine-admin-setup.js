@@ -290,7 +290,7 @@ export const grantDeployFactory = async (
           await E(agent).remove(stray);
         }
       }
-      await E(agent).provideGuest(handleName, { agentName: powersName });
+      await E(agent).provideGuest([handleName], { agentName: [powersName] });
     }
   }
   const powersRef = revived ? powersPath : powersName;
@@ -382,9 +382,9 @@ export const grantDeployFactories = async (agent, { dir, factoryHost }) => {
         return false;
       }
     }
-    service = await E(agent).lookup(WORKFLOW_SERVICE_NAME);
+    service = await E(agent).lookup([WORKFLOW_SERVICE_NAME]);
     endowments = harden({
-      performer: await E(agent).lookup(NIXOS_CONTROLLER_NAME),
+      performer: await E(agent).lookup([NIXOS_CONTROLLER_NAME]),
       operator: await E(agent).lookup(['@self']),
     });
   } catch (err) {

@@ -33,8 +33,8 @@
  * Usage from a host:
  *
  *   await E(host).makeUnconfined('@node', moduleUrl, {
- *     powersName,
- *     resultName,
+ *     powersName: ['@agent'],
+ *     resultName: ['tmp-layer'],
  *     env: { BACKING_NAME: 'tmp' },          // or 'a/b/c'
  *   });
  */
@@ -65,9 +65,9 @@ export const make = async (powers, _context, opts = {}) => {
       `layer-module: env.BACKING_NAME ${JSON.stringify(backingName)} did not yield any pet-name segments`,
     );
   }
-  let capPromise = E(powers).lookup(segments[0]);
+  let capPromise = E(powers).lookup([segments[0]]);
   for (let i = 1; i < segments.length; i += 1) {
-    capPromise = E(capPromise).lookup(segments[i]);
+    capPromise = E(capPromise).lookup([segments[i]]);
   }
   const backing = await capPromise;
   const layerFs = makeInMemoryFilesystem();

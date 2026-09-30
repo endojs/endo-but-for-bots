@@ -222,14 +222,14 @@ test.serial('agent replies to channel mention (not inbox)', async t => {
   const factoryGuestName = 'fae-factory-handle';
   const factoryAgentName = 'profile-for-fae-factory';
 
-  await E(host).provideGuest(factoryGuestName, {
+  await E(host).provideGuest([factoryGuestName], {
     introducedNames: harden({ '@agent': 'host-agent' }),
-    agentName: factoryAgentName,
+    agentName: [factoryAgentName],
   });
 
   // Write provider ref into factory's namespace
   /** @type {any} */
-  const factoryPowers = await E(host).lookup(factoryAgentName);
+  const factoryPowers = await E(host).lookup([factoryAgentName]);
   const providerId = await E(host).identify('llm-provider');
   await E(factoryPowers).write(
     'llm-provider',
@@ -238,7 +238,7 @@ test.serial('agent replies to channel mention (not inbox)', async t => {
 
   // Launch factory caplet
   await E(host).makeUnconfined(['@main'], faeFactorySpecifier, {
-    powersName: factoryAgentName,
+    powersName: [factoryAgentName],
     resultName: ['fae-factory'],
   });
 
