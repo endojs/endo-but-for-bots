@@ -362,6 +362,36 @@ fn a_regexp_literal_nested_past_the_pattern_limit_is_a_syntax_error() {
         );
         let far = compile(&format!("/{}/", wrapped("(", "a", ")", 10_000)));
         assert!(far.is_err(), "never an abort: {far:?}");
+        // The same literal at the deepest cascade level the parser admits
+        // (STACK-DEPTH-REFACTOR §5, Phase 0): the lexer's recursion sits on
+        // top of the parser's, and both fit.
+        let deepest = |groups| {
+            wrapped(
+                "(",
+                &format!("/{}/", wrapped("(", "a", ")", groups)),
+                ")",
+                91,
+            )
+        };
+        assert!(
+            compile(&deepest(512)).is_ok(),
+            "a 512-deep regexp literal at the deepest cascade level compiles"
+        );
+        assert!(
+            matches!(
+                compile(&deepest(513)),
+                Err(ParseError {
+                    kind: ParseErrorKind::Lex(_),
+                    ..
+                })
+            ),
+            "one group past the pattern limit there is still the lex-time SyntaxError"
+        );
+        let past_the_cascade = wrapped("(", &format!("/{}/", wrapped("(", "a", ")", 512)), ")", 92);
+        assert!(
+            is_stack_overflow(&compile(&past_the_cascade)),
+            "one cascade level more is the parser's refusal"
+        );
     });
 }
 

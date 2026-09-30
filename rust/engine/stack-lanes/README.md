@@ -91,16 +91,17 @@ Lane C is trend only: its frame tables, slopes and chains are the record, and
 the run fails only when a collector reads nothing.
 
 Three findings from building the lanes on this tree.
-Two are recorded in `cases.rs`: the report's `flat-fast` ceiling of 1,022 was a
-probe depth (the compact path halts at 2,015 like the generic one), and
-`instanceof` through bound functions halts at the budget with or without a
-`@@hasInstance` in the chain, so the report's U1 composition is a cross-host
-check of that halt rather than an accepted program.
-The third is in `common.py`: over every heavy family, the worst per-function
+One is recorded in `cases.rs`: the report's `flat-fast` ceiling of 1,022 was a
+probe depth (the compact path halts at 2,015 like the generic one).
+The report's U1 reproduces as written: `instanceof` through 2,000 bound
+functions with null prototypes completes natively, the walk uncharged, while a
+chain over an ordinary function is charged one intrinsic `@@hasInstance` call
+per layer and halts at 126; `native_recursion_budget.rs` pins both.
+The second is in `common.py`: over every heavy family, the worst per-function
 tier mix exceeds the larger pure tier by up to 17.5% (`take` and `iter-map`;
 `array-from` 13.5%), past the 13.6% the report allowed from the chains it
 modelled, so lane B's headroom is 17.6% and its stacks 425 and 836 KiB.
-Lane C also shows that for the left-folded chain kinds (`&&`, `||`, `??`,
+The third is from lane C: for the left-folded chain kinds (`&&`, `||`, `??`,
 comparison, computed member, `else if`) the deepest recursion at the ceiling
 is the post-parse `duplicate_proto_setter_line` walk, one frame per level,
 not the parser.
