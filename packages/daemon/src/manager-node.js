@@ -220,6 +220,15 @@ const main = async () => {
     const agentIdPath = filePowers.joinPath(statePath, 'root');
     await filePowers.writeFileText(agentIdPath, `${agentId}\n`);
 
+    // Record self as the official daemon process BEFORE signalling ready.
+    // A resolved start() promises a fully usable daemon, and callers act on
+    // endo.pid immediately: stop() reads it to kill the daemon, and a launcher
+    // may exit right after start() resolves.  Recording it only after ready
+    // (and after the ENDO_EXTRA setups below) left a window in which endo.pid
+    // was absent, so an early stop() silently skipped the kill and leaked the
+    // daemon.
+    await updateRecordedPid();
+
     informParentWhenReady(gatewayAddress);
 
     // Run ENDO_EXTRA bootstrap scripts (e.g., lal/fae setup for dev mode).
@@ -255,9 +264,6 @@ const main = async () => {
   }
 
   const servicesStopped = Promise.all(services.map(({ stopped }) => stopped));
-
-  // Record self as official daemon process
-  await updateRecordedPid();
 
   // Wait for services to end normally
   await servicesStopped;

@@ -166,6 +166,49 @@ test.serial(
 );
 
 test.serial(
+  'start() resolves only after the daemon records its pid',
+  async t => {
+    // stop() finds the daemon through endo.pid, and a launcher may exit (or call
+    // stop()) as soon as start() resolves.  The daemon used to signal ready
+    // before recording its pid, and ran ENDO_EXTRA setups in between, so a
+    // prompt reader could find no endo.pid — the orphan test below then read
+    // pid 0, and a prompt stop() skipped the kill and leaked the daemon.  A
+    // deliberately slow ENDO_EXTRA setup makes that window wide enough to hit
+    // every time.
+    const config = makeConfig('tmp', 'teardown-pid-ready');
+    await purge(config);
+
+    const slowSetup = url.pathToFileURL(
+      path.join(dirname, 'test', 'fixtures', 'slow-extra-setup.js'),
+    ).href;
+    const previousExtra = process.env.ENDO_EXTRA;
+    process.env.ENDO_EXTRA = slowSetup;
+    try {
+      await start(config);
+    } finally {
+      if (previousExtra === undefined) {
+        delete process.env.ENDO_EXTRA;
+      } else {
+        process.env.ENDO_EXTRA = previousExtra;
+      }
+    }
+
+    const daemonPid = await readPid(
+      path.join(config.ephemeralStatePath, 'endo.pid'),
+    );
+    t.true(daemonPid > 0, 'endo.pid is recorded by the time start() resolves');
+
+    await stop(config);
+    t.true(
+      await waitAllDead([daemonPid], 15_000),
+      `daemon ${daemonPid} exited after a stop() issued right after start()`,
+    );
+
+    await purge(config);
+  },
+);
+
+test.serial(
   'an orphaned daemon shuts itself down instead of lingering',
   async t => {
     const config = makeConfig('tmp', 'teardown-orphan');
