@@ -20,6 +20,7 @@ import {
   makeSturdyRefTracker,
 } from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
+import { AllCodecs, makeCodecTestKit } from './codecs/_codecs_util.js';
 
 const SturdyRef = provideSturdyRef();
 
@@ -110,6 +111,16 @@ test('a foreign realm SturdyRef is not an OCapN SturdyRef', t => {
   t.is(ocapnPassStyleOf(foreign), 'sturdyref', 'takes the sturdyref codec');
   t.false(isSturdyRef(foreign), 'but OCapN has no details for it');
   t.is(getSturdyRefDetails(foreign), undefined);
+  const { PassableCodec } = makeCodecTestKit();
+  for (const codec of AllCodecs) {
+    const writer = codec.makeWriter({ name: 'foreign SturdyRef' });
+    const error = t.throws(() => PassableCodec.write(foreign, writer));
+    let messages = '';
+    for (let e = /** @type {any} */ (error); e; e = e.cause) {
+      messages += `${e.message}\n`;
+    }
+    t.regex(messages, /SturdyRef was not minted by OCapN/);
+  }
 });
 
 testWithErrorUnwrapping(

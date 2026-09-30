@@ -99,3 +99,24 @@ test('a CapTP SturdyRef export answers only enliven', async t => {
   // ref has no methods, and the internal presence is unreachable.
   await t.throwsAsync(() => E(imported).enliven());
 });
+
+test('enlivening an unknown CapTP SturdyRef export is a protocol failure', t => {
+  /** @type {any[]} */
+  const observed = [];
+  const connection = makeCapTP('alice', () => {}, undefined, {
+    onReject: (error, context) => observed.push({ error, context }),
+  });
+
+  t.false(
+    connection.dispatch({
+      type: 'CTP_CALL',
+      epoch: 0,
+      questionID: 'q-1',
+      target: 's-1',
+      method: connection.serialize(harden(['enliven', []])),
+    }),
+  );
+  t.is(observed.length, 1);
+  t.regex(observed[0].error.message, /Unknown export "s\+1"/);
+  t.deepEqual(observed[0].context, { kind: 'protocol' });
+});
