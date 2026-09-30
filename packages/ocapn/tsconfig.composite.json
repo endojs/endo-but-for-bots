@@ -42,10 +42,10 @@
       "path": "../promise-kit/tsconfig.composite.json"
     },
     {
-      "path": "../sturdyref/tsconfig.composite.json"
+      "path": "../stream/tsconfig.composite.json"
     },
     {
-      "path": "../stream/tsconfig.composite.json"
+      "path": "../sturdyref/tsconfig.composite.json"
     },
     {
       "path": "../syrup-frame/tsconfig.composite.json"
