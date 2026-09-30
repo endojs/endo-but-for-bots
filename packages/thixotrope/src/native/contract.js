@@ -7,9 +7,9 @@
  * `durable.js` runs once in a dedicated manager vat whose heap persists,
  * with the guest prelude (`E`, `Far`, `makeExo`, `M`, and the rest) as
  * globals, typed as `GuestGlobals` from `@endo/thixotrope/guest.js`. Its
- * `make` is synchronous and receives the powers below; it returns a
- * registration facet, the only thing installed into the inventory, and a
- * lifecycle facet the daemon calls `started()` on at every start.
+ * `make` is synchronous and receives the powers below; it returns a public
+ * facet, the only thing installed into the inventory, and a lifecycle facet
+ * the daemon calls `started()` on at every start.
  *
  * `ephemeral.js` runs in a fresh Node process each time the manager needs an
  * adapter, with ordinary module resolution and no replay; its `make` receives
@@ -26,8 +26,8 @@
  *   the manager kit, bound to this installation's launcher and keeper
  *
  * @typedef {object} NativeDurableKit
- * @property {any} registration the public facet, installed into the
- *   inventory under the installation's name
+ * @property {any} facet the public facet, installed into the inventory
+ *   under the installation's name
  * @property {{ started: () => unknown }} lifecycle notified at every daemon
  *   start, after every vat is seated
  *

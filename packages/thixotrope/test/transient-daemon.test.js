@@ -40,7 +40,7 @@ test.serial(
       "Far('Handler', { handle: () => new Promise(() => {}) })",
     );
     const secret = daemon.publish(root);
-    const client = await daemon.openEphemeralClient();
+    const client = await daemon.openTransientClient();
     t.teardown(() => client.close());
     const handler = await client.lookup(secret);
     const result = E(handler).handle();
@@ -60,12 +60,12 @@ test.serial(
         key.startsWith('transient:'),
       ),
     );
-    const second = await daemon.openEphemeralClient();
+    const second = await daemon.openTransientClient();
     await daemon.shutdown();
     await t.throwsAsync(() => second.lookup(secret), {
-      message: /Ephemeral client closed/,
+      message: /Transient client closed/,
     });
-    await t.throwsAsync(() => daemon.openEphemeralClient(), {
+    await t.throwsAsync(() => daemon.openTransientClient(), {
       message: /stopping/,
     });
   },
@@ -94,7 +94,7 @@ test.serial(
       makeNetlayer,
     });
     t.teardown(() => first.shutdown());
-    await first.openEphemeralClient();
+    await first.openTransientClient();
     const crashImage = JSON.parse(JSON.stringify(store.getHubState()));
     const transientKey = Object.keys(crashImage.sessions).find(key =>
       key.startsWith('transient:'),
@@ -188,7 +188,7 @@ test.serial('shutdown drains a client still being constructed', async t => {
     }),
   });
   t.teardown(() => daemon.shutdown());
-  const opening = daemon.openEphemeralClient();
+  const opening = daemon.openTransientClient();
   const rejected = t.throwsAsync(() => opening, { message: /stopping/ });
   await daemon.shutdown();
   await rejected;

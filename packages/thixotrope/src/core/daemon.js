@@ -17,8 +17,8 @@ import {
 
 import { makeOcapnHub } from '../net/hub.js';
 import { makeDurableWorkerTransport } from './durable-worker-transport.js';
-import { makeEphemeralHubClient } from '../net/ephemeral-hub-client.js';
 import { derivePipeResumption } from '../net/pipe-network.js';
+import { makeTransientHubClient } from '../net/transient-hub-client.js';
 import { makeFirstFailure, makeInFlight } from '../in-flight.js';
 import { HEX128_PATTERN, randomHex128 as randomHexFrom } from '../random-id.js';
 import { makeNativeAdapters } from '../native/adapters.js';
@@ -96,7 +96,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {(value: object, secret?: string) => string} publish
  * @property {(secret: string) => void} unpublish
  * @property {(location: any, secret: string) => Promise<any>} importReference fetch a remote publication through the durable hub session
- * @property {() => Promise<Awaited<ReturnType<typeof makeEphemeralHubClient>>>} openEphemeralClient open disposable host request/observer session
+ * @property {() => Promise<Awaited<ReturnType<typeof makeTransientHubClient>>>} openTransientClient open disposable host request/observer session
  * @property {<T = any>(secret: string | Uint8Array) => Promise<T>} lookup the
  *   embedder's in-process route to a publication, through the endpoint.
  *   The daemon cannot know what interface a publication has — the
@@ -323,7 +323,7 @@ const buildDaemon = async (
   // handler.
   let stopped = false;
   let stopping = false;
-  /** @type {Set<Awaited<ReturnType<typeof makeEphemeralHubClient>>>} */
+  /** @type {Set<Awaited<ReturnType<typeof makeTransientHubClient>>>} */
   const transientClients = new Set();
   const openingTransientClients = makeInFlight();
   /** @type {Uint8Array[]} */
@@ -1399,9 +1399,9 @@ const buildDaemon = async (
     },
     unpublish: secret => hub.unpublish(secret),
     lookup,
-    openEphemeralClient: async () => {
+    openTransientClient: async () => {
       if (stopping) throw Error('Daemon is stopping');
-      const opening = makeEphemeralHubClient(random, {
+      const opening = makeTransientHubClient(random, {
         codec,
         hub,
         sessionKey: `transient:${randomHex128()}`,

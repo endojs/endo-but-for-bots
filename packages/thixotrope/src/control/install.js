@@ -19,7 +19,7 @@ import { evaluateSource } from './evaluate-source.js';
 /**
  * Forget a registry entry whose vat is gone. A removal retires the vat before
  * the registry forgets the name, so such an entry is a removal that did not
- * finish; finishing it before `prepare` lets a corrected package take the
+ * finish; finishing it before `prepare` lets a corrected directory take the
  * name rather than be refused as a different installation of the stale one.
  * @param {ThixotropeDaemon} daemon
  * @param {ThixotropeWorkerFacade} workspace
@@ -165,7 +165,7 @@ harden(installApplication);
  * Install a native resource: its durable module runs once in a fresh manager
  * vat, with an adapter launcher described by that vat so the processes it
  * starts are closed when the vat is retired; the host records the manager's
- * lifecycle facet for start notices and the workspace puts the registration
+ * lifecycle facet for start notices and the workspace puts the public
  * facet into the inventory under the name.
  *
  * @param {ThixotropeDaemon} daemon
@@ -206,8 +206,8 @@ export const installNative = async (
   // records it by reference, under a publication only it knows.
   manager.notifyOnStart(kit.lifecycle);
   await workspace.evaluate(
-    '(installations.finish(name, digest, registration), true)',
-    { name, digest, registration: kit.registration },
+    '(installations.finish(name, digest, facet), true)',
+    { name, digest, facet: kit.facet },
   );
 };
 harden(installNative);

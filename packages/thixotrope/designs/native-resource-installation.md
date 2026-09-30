@@ -11,11 +11,12 @@ The ephemeral module is imported by a separate Node process, which owns its nati
 exposes only its root capability over the existing OCapN pipe protocol.
 The primary daemon never imports or executes the resource's ephemeral module.
 
-The durable factory receives a package-scoped adapter launcher and its vat's E/Far helpers.
-It returns a public `registration` capability and a private `lifecycle` capability whose
-`started()` method reconciles desired state after daemon restart.
+The durable factory receives an adapter launcher scoped to the directory, with the guest prelude in
+scope.
+It returns a public `facet` and a private `lifecycle` capability whose `started()` method
+reconciles desired state after daemon restart.
 Installation publishes the private lifecycle facet for the manager's own startup notification and
-places only `registration` in the requested workspace inventory slot.
+places only the facet in the requested workspace inventory slot.
 Applications receive that reference through ordinary inventory grants.
 Each manager has its own startup notification, so recovery does not depend on workspace execution.
 
@@ -46,7 +47,7 @@ A state directory selects the daemon's existing single workspace; this change do
 another user naming or pet-name-path model.
 The durable factory is synchronous and receives `{adapters, makeKeeper, makeManager}`; the guest
 prelude is in scope as globals.
-It returns `{registration, lifecycle}`, both remotables.
+It returns `{facet, lifecycle}`, both remotables.
 `makeManager` is the manager kit, bound to the installation's launcher and keeper: it keeps the
 desired registrations, holds one adapter incarnation, reconciles each registration against it,
 hands out per-registration handles that report status and close only their own generation,
@@ -64,8 +65,8 @@ wire as a fresh copy each time, and the manager binds a registration again at ev
 The adapter forgets a binding only once its release succeeds, so a release that fails is retried
 by a later unbind and its failure reaches the manager, which retires the incarnation.
 `src/native/contract.js` states the contract as types.
-Only the registration facet is installed in inventory; applications get it through existing grants.
-Reinstalling the same identity returns the same registration without replacing later inventory edits.
+Only the public facet is installed in inventory; applications get it through existing grants.
+Reinstalling the same identity returns the same facet without replacing later inventory edits.
 Each installed lifecycle receives its own daemon startup notification.
 
 The directory digest covers its files recursively, including the two entry modules.
@@ -103,7 +104,7 @@ Collection waits for an active installation to finish so it cannot remove an unb
 
 Initialization evaluates the durable module once in the manager and retains its kit or failure there.
 Then the host publishes the lifecycle facet and installs that manager's startup notice.
-Finally, the workspace inserts registration into inventory, checking for intervening inventory edits.
+Finally, the workspace puts the facet into the inventory, checking for intervening inventory edits.
 Completed retries preserve later inventory edits; failed managers retain their identity and error.
 The chunked source transfer this uses serves any source too large for one message: the workspace's
 mail bootstrap goes the same way, on a staging slot of its own.
@@ -114,12 +115,12 @@ These records coordinate installation, not reconstruction of the manager's ordin
 Removal is the host's to drive, in the opposite order.
 The manager vat is retired first, which closes the native processes it launched (each launcher is
 described by the manager that owns it), withdraws its startup notice, and drops the host rows keyed
-by it; only then does the registry forget the name, taking the registration out of inventory if the
+by it; only then does the registry forget the name, taking the facet out of inventory if the
 inventory still holds it.
 A removal interrupted between the two steps leaves an entry naming a retired vat, which the next
 removal or installation under that name resolves; the reverse order could leave a manager that no
 name reaches but whose startup notice still roots it.
-A failed or interrupted installation is removed the same way, so a corrected package installs under
+A failed or interrupted installation is removed the same way, so a corrected directory installs under
 the same name rather than by overwriting an installation the registry still holds.
 
 Workspace metadata advances to version 4 because existing registry closures and installed managers

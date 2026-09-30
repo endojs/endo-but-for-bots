@@ -44,7 +44,7 @@ import { M } from '@endo/patterns';
  * identity: `prepare` reserves the name and resolves its grants, `attach`
  * records the vat the host allocated, then `start` (an application: run the
  * factory, guest to guest) or `finish` (a native resource: the host hands
- * over the registration facet) puts the public value into the inventory.
+ * over the public facet) puts the public value into the inventory.
  * `fail` records a factory that threw; the failure stays until the name is
  * removed. Removal is the host's too, since the vat must be retired first:
  * `lookup` names it, and `remove` forgets the name once the vat is gone,
@@ -298,7 +298,7 @@ export const makeInstallations = inventory => {
       return entry.acquiring;
     },
     /**
-     * Put a native resource's registration facet into the inventory.
+     * Put a native resource's public facet into the inventory.
      * @param {string} name
      * @param {string} digest
      * @param {any} value

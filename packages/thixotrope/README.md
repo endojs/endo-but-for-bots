@@ -73,7 +73,7 @@ Each module directly under `platform/` names one capability — `timers`,
 `random`, `files`, `processes`, `sockets`, and so on — whose methods take
 and return plain data, so no host API or host handle type reaches core.
 Only `platform/node/` imports Node built-ins, and `platform/node/powers.js`
-composes those adapters into the record an entry point passes in. Every
+composes those implementations into the record an entry point passes in. Every
 other module receives just the capability objects it names; the root ESLint
 configuration enforces both rules.
 
@@ -168,10 +168,10 @@ Closing it explicitly cancels its guest subscription and drops the bridge's obse
 reference, even if a notification is pending.
 On supervisor restart, old UI subscriptions are discarded while guest subscriptions remain.
 Shutdown bounds its wait for guest cancellation so a stalled guest cannot prevent
-worker cleanup and store release; restart discards any remaining UI registrations.
+worker cleanup and store release; restart discards any remaining UI subscriptions.
 Cancellation makes subscription objects collectible; physical reclamation follows
 normal heap GC and snapshot/journal cleanup rather than a special inventory GC rule.
-`inventory.subscriptionCounts()` reports the durable and ephemeral registrations for
+`inventory.subscriptionCounts()` reports the durable and ephemeral subscriptions for
 experiments; it is not a measure of physical heap reclamation.
 
 `status` reports worker state and cumulative process-local counts and milliseconds
@@ -231,8 +231,8 @@ This initial version provides installation, not live code upgrades.
 
 ## Persistent applications serving HTTP
 
-Install the native resource into this daemon's workspace inventory, then grant its registration
-facet to an application:
+Install the native resource into this daemon's workspace inventory, then grant its facet to an
+application:
 
 ```sh
 thix install-native ./private-state web ./resources/http
@@ -245,20 +245,20 @@ curl http://127.0.0.1:8080/read
 
 A trusted native-resource directory supplies `durable.js` and `ephemeral.js`.
 Each installation runs its durable module in a dedicated manager vat with its own heap and limits.
-Its `make({ adapters, makeKeeper, makeManager })` returns `{ registration, lifecycle }`;
+Its `make({ adapters, makeKeeper, makeManager })` returns `{ facet, lifecycle }`;
 `makeManager` writes the manager's bookkeeping once, so the module supplies only what identifies a
 registration and how to describe its status.
 The ephemeral module runs in a separate Node process with native platform APIs; its `make()`
 builds the adapter with `makeAdapter` from `@endo/thixotrope/native-adapter.js`, supplying the
 identity rules and the two verbs that acquire and release the resource.
 The two halves speak one protocol, so `resources/http` is HTTP and little else on each side.
-The workspace retains installation bookkeeping and the public registration reference.
+The workspace retains installation bookkeeping and the public facet.
 Each manager receives its own daemon startup notification, independently of workspace execution.
 The primary daemon only loads directory metadata and bundles the durable module, launches and
 connects the native process, and manages its lifetime.
 It contains no HTTP listener implementation or HTTP-specific installation commands.
 
-Installation stores only the public registration facet in the requested inventory slot, through
+Installation stores only the public facet in the requested inventory slot, through
 the same workspace registry and phases as an application.
 An interrupted installation resumes when the same directory and name are installed again.
 The retry reuses the manager vat; it does not rerun a completed durable factory attempt.
@@ -285,8 +285,9 @@ launch an adapter with different code.
 A name stays taken by its installation, completed, failed, or interrupted, until
 `thix remove ./private-state NAME` removes it: the manager vat is retired, the processes it
 launched are closed and its ports released, its startup notice is withdrawn, and the name is free.
-Capabilities granted from the removed registration break; applications holding one need a new grant.
-A corrected package therefore installs under the same name after `remove`, and never by
+Capabilities granted from the removed installation break; applications holding one need a new
+grant.
+A corrected directory therefore installs under the same name after `remove`, and never by
 overwriting.
 Dependencies outside the resource directory use ordinary Node module resolution and must remain
 compatible with the installed durable bundle.
@@ -737,12 +738,15 @@ requirement.
 
 Three kinds of session reach the hub, and they differ in what survives.
 
+The [root design](../../designs/thixotrope.md#vocabulary) keeps the glossary; the terms below are
+the ones this section relies on.
+
 A **durable session** is what a worker or a remote peer holds.
 Its c-list rows, answer routes, and delivery obligations are persisted, so the session
 outlives its socket, its worker process, and the daemon itself.
 
 A **transient client** is a disposable host-side OCapN session, opened by
-`daemon.openEphemeralClient()` and implemented in `src/net/ephemeral-hub-client.js`.
+`daemon.openTransientClient()` and implemented in `src/net/transient-hub-client.js`.
 The supervisor does not use one: its administrative calls go through the endpoint's own
 durable session to the workspace vat.
 The mechanism remains for embedders that want a request whose answers and imports die with
@@ -909,14 +913,14 @@ Invocation acceptance does not settle its result promise; later settlements use 
 machinery and survive disconnects.
 See the [layered delivery contract](designs/message-delivery.md).
 
-With the daemon's `resumption` adapter, both originator and acceptor sessions recover across restart.
+With the daemon's `resumption` power, both originator and acceptor sessions recover across restart.
 Their atomic session records contain inboxes, outboxes, watermarks, and pending handshake state.
 The daemon rebinds the transport to the existing hub session and drains accepted inbox work, even
 before the peer reconnects.
 A successor must retain the same reachable network identity and state directory.
 
 Peers advertise `restart` or `process` acceptance durability.
-Clients without a persistence adapter supply only the latter; their process exit can discard state.
+Clients without session resumption supply only the latter; their process exit can discard state.
 Version 1 receipt-only peers and stored sessions require explicit migration or retirement and are
 not silently treated as version 2 durable sessions.
 Resume tokens are bearer capabilities: use a confidential, authenticated base transport in production.

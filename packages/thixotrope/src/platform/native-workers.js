@@ -16,8 +16,8 @@
  * @typedef {object} NativeWorkerStartOptions
  * @property {string} id
  * @property {string} moduleUrl
- * @property {{ directory: string, digest: string }} [packageIdentity] the
- *   installed package the process must verify before importing `moduleUrl`
+ * @property {{ directory: string, digest: string }} [resourceIdentity] the
+ *   installed directory the process must verify before importing `moduleUrl`
  * @property {(bytes: Uint8Array) => void} onFrame
  * @property {() => void} onExit
  */

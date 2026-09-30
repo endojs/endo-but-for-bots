@@ -41,13 +41,13 @@ export const makeNativeManager = (
           makeManagerKit({ adapters, makeKeeper }, options),
       }),
     );
-    if (!kit || !isRemotable(kit.registration) || !isRemotable(kit.lifecycle)) {
+    if (!kit || !isRemotable(kit.facet) || !isRemotable(kit.lifecycle)) {
       throw Error(
-        'Native durable module must return registration and lifecycle facets synchronously',
+        'Native durable module must return its facet and lifecycle synchronously',
       );
     }
     return harden({
-      kit: harden({ registration: kit.registration, lifecycle: kit.lifecycle }),
+      kit: harden({ facet: kit.facet, lifecycle: kit.lifecycle }),
     });
   } catch (error) {
     // Store a printable failure as well as the failed attempt, not a rejected

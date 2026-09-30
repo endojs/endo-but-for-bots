@@ -69,6 +69,29 @@ Ironhorse and XS implement this interface.
 Internal replay engines exercise host behavior without a native worker; they are test doubles,
 not evidence of native heap persistence.
 
+## Vocabulary
+
+One word for one thing, throughout the code, the README and this document:
+
+| Word | Meaning |
+|---|---|
+| vat | One guest heap behind one OCapN endpoint, run by a worker. A **durable** vat has a heap image and journal and survives sleep and restart; an **ephemeral** vat or worker has no recovery baseline and is discarded at startup. |
+| session | A logical protocol relationship in the hub, with reference tables, answer routes and lifecycle; never a socket. A **durable session** belongs to a worker, a remote peer or the host endpoint itself and outlives sockets, processes and the daemon. A **transient session** (`transient:` key prefix) belongs to a transient client or a native adapter process and is discarded at startup. |
+| transient client | A disposable host-side OCapN client with a transient session, for embedders; `daemon.openTransientClient()`. |
+| resource | A host capability with a durable description, reconstructed through a registered factory at the host endpoint and retired when its meaning ends (`makeResource`, `retireResource`): alarms, introductions, worker facades. |
+| native resource | A directory with `durable.js` and `ephemeral.js`, installed by name; its **manager** runs the durable module in a dedicated vat and its **adapter** runs the ephemeral module in a Node process. |
+| manager | The durable half of a native resource: keeps desired registrations in its heap, holds one adapter incarnation through a **keeper**, and is notified at every start. |
+| adapter | The ephemeral half of a native resource: one incarnation per Node process, restored from the manager's desired state; the only sense of the word in this package's code and documents. Platform ports have implementations, not adapters. |
+| registration | One desired entry a manager keeps under a key, and the **handle** a caller holds for it, with `status()` and `close()`. The public object a native resource installs into the inventory is its **facet**. |
+| subscription | A listener on an observable map. A **durable** subscription is a guest's and survives restart; an **ephemeral** subscription is a view's, bridged by the running supervisor, and is discarded at restart. |
+| installation | One name in the workspace registry: an application or a native resource, with its code digest, grant mapping, allocation key, vat and outcome. |
+| grant | A user handing an inventory value to an installation under a power name. Host-provided services are **provided**, not granted. |
+| publication | A swissnum-to-capability mapping in the hub, fetched through the bootstrap; also a retention root. |
+| introduction | The exchange of contact inboxes that an **invitation** grants once; `invite`, `accept`, `revokeInvitation`. Dialling a peer is **connecting**, never introduction. |
+| message | One mailbox record, sent to a contact or received from one; the CLI area for this is **mail**. |
+| identity | An OCapN key pair and the node location it signs; a **contact** is a local object for one correspondent, and a contact name is a label, not an identity. |
+| guest prelude | The globals every vat has beside the language: `E`, `Far`, `harden`, `makeExo`, `M` and the rest, typed as `GuestGlobals`. |
+
 ## Guest state, identity, and authority
 
 Guest code runs in SES compartments and receives explicit capability endowments.
@@ -125,7 +148,8 @@ not execute.
 The Rust worker opens or restores one SQLite heap, runs trusted bootstrap code for a fresh heap,
 and accepts evaluation requests from the supervisor.
 A successful execution step, including its promise jobs, commits before the worker publishes its result.
-Guest outbound frames remain in the heap until the adapter drains them through a committed step.
+Guest outbound frames remain in the heap until the worker transport drains them through a committed
+step.
 A deterministic VM halt produces a fatal result and quarantines the vat; it does not commit the
 failed execution step or repeatedly replay it into service.
 
@@ -175,7 +199,7 @@ handshake identity and output.
 Ordinary socket loss preserves references, listeners, and delivery obligations.
 
 Peers advertise whether acceptance survives restart or only the current process.
-A peer without a persistence adapter supplies the weaker process-lifetime contract explicitly.
+A peer without session resumption supplies the weaker process-lifetime contract explicitly.
 The protocol refuses an acceptance-profile change within an incarnation and rejects receipt-only
 version 1 envelopes; old version 1 session records are not automatically migrated.
 This resumption envelope is Thixotrope-specific, not an OCapN standard.
@@ -213,8 +237,8 @@ heap reclamation has already happened.
 
 HTTP is a directory-installed native resource with `durable.js` and `ephemeral.js` entry modules.
 `thix install-native STATE NAME DIRECTORY` selects the daemon's workspace by its state directory.
-The durable factory runs in a dedicated manager vat and returns registration and lifecycle facets.
-Only the registration facet enters the named inventory slot; applications receive it through grants.
+The durable factory runs in a dedicated manager vat and returns a public facet and a lifecycle facet.
+Only the public facet enters the named inventory slot; applications receive it through grants.
 The workspace retains an installation record with code identity, manager reference, and completion
 status so interrupted installation can resume on explicit retry.
 Each manager receives its own startup notification through its privately published lifecycle facet.
@@ -345,8 +369,8 @@ Tests exercise the effective lint configuration with negative authority probes.
 The powers include storage, scheduling, entropy, process launch, network listeners, and terminal I/O.
 Calling a core factory does not construct default Node powers or fetch a shared platform singleton.
 An alternative host can supply these capabilities explicitly.
-The current Unix transport and Node worker adapters still implement platform-specific behavior;
-the boundary makes those dependencies replaceable, rather than claiming those adapters already run
+The current Unix transport and Node worker implementations still implement platform-specific
+behavior; the boundary makes those dependencies replaceable, rather than claiming they already run
 on every operating system.
 
 Persistent service metadata uses a `SyncStringAtom`: a synchronous `read()` returns a string or
@@ -356,7 +380,8 @@ The host alarm ledger performs its JSON encoding and transitions above this inte
 HTTP registrations live in their installed manager vat's heap; the public clock's promises live in
 the clock vat's heap.
 The manual persistence boundary is confined to host state that cannot rely on a durable guest heap.
-Platform adapters return plain data, iterator facades, and opaque tokens rather than Node streams,
+Platform implementations return plain data, iterator facades, and opaque tokens rather than Node
+streams,
 servers, or timer objects; callbacks likewise do not receive native objects as their receiver.
 
 ## Publications and host observation sessions
@@ -376,9 +401,8 @@ Durable peer sessions survive socket loss and daemon restart.
 The host endpoint is a reifying session used by host resources and administration.
 Worker sessions connect the hub to persistent guest heaps.
 
-An ephemeral client is a short-lived, reifying host client with its own hub session.
-Its implementation uses the `transient:` session prefix to mark that the client cannot be restored.
-“Ephemeral client” describes the API owner; “transient session” describes its hub representation.
+A transient client is a short-lived, reifying host client with its own transient hub session,
+keyed under the `transient:` prefix to mark that it cannot be restored.
 Nothing in the supervisor opens one today.
 Administration goes through the endpoint's durable session, and the inventory view holds a
 control-socket connection whose subscription the supervisor releases.

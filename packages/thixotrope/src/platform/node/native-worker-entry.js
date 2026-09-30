@@ -5,12 +5,12 @@ import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import process from 'node:process';
 
-import { describeNativePackage } from '../../native/describe-package.js';
+import { describeNativeResource } from '../../native/describe-resource.js';
 import { makePipeNetwork } from '../../net/pipe-network.js';
 import { silentLogger } from '../logging.js';
 import { makeNodePowers } from './powers.js';
 
-const [workerId, moduleUrl, packageJson] = process.argv.slice(2);
+const [workerId, moduleUrl, identityJson] = process.argv.slice(2);
 const { files, paths, hashes, random } = makeNodePowers();
 const pipe = makePipeNetwork({
   codec: syrupCodec,
@@ -25,17 +25,17 @@ process.on('message', message => {
 });
 
 try {
-  const identity = JSON.parse(packageJson ?? 'null');
+  const identity = JSON.parse(identityJson ?? 'null');
   if (identity !== null) {
     // The digest is checked here, in the process that will import the
     // module, so an edit between installation and start cannot slip in.
-    const actual = await describeNativePackage(
+    const actual = await describeNativeResource(
       { files, paths, hashes },
       identity.directory,
     );
     if (actual.digest !== identity.digest || actual.moduleUrl !== moduleUrl)
       throw Error(
-        'Installed native package has changed; install its new version explicitly',
+        'Installed native resource has changed; install its new version explicitly',
       );
   }
   const namespace = await import(moduleUrl);

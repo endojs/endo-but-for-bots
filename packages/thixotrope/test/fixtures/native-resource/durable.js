@@ -6,7 +6,7 @@ globals.nativeModuleInitializations = (globals.nativeModuleInitializations ?? 0)
 export const make = () => {
   let starts = 0;
   return harden({
-    registration: Far('Registration', {
+    facet: Far('Registration', {
       starts: () => starts,
       initializations: () => globals.nativeModuleInitializations,
       setMarker: value => { globals.marker = value; },

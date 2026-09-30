@@ -6,8 +6,8 @@ import { Fail, q } from '@endo/errors';
 import harden from '@endo/harden';
 
 /**
- * @typedef {object} NativePackageDescription
- * @property {string} directory the package's real path
+ * @typedef {object} NativeResourceDescription
+ * @property {string} directory the directory's real path
  * @property {string} digest SHA-256 over every file's relative path, length,
  *   and bytes, in sorted order
  * @property {string} durablePath the `durable.js` entry, to bundle
@@ -20,7 +20,7 @@ const encoder = new TextEncoder();
 /**
  * Pin the installed directory's contents; external dependencies use
  * ordinary module resolution and are not included in this digest.
- * Directories contain source, not node_modules. Edited packages require an
+ * Directories contain source, not node_modules. An edited directory requires an
  * explicit new installation.
  *
  * Entries are described without following links, so a symbolic link is
@@ -32,9 +32,9 @@ const encoder = new TextEncoder();
  * @param {PathPowers} powers.paths
  * @param {HashPowers} powers.hashes
  * @param {string} directory
- * @returns {Promise<NativePackageDescription>}
+ * @returns {Promise<NativeResourceDescription>}
  */
-export const describeNativePackage = async (
+export const describeNativeResource = async (
   { files, paths, hashes },
   directory,
 ) => {
@@ -55,13 +55,13 @@ export const describeNativePackage = async (
       const names = (await files.listDirectory(path)).sort();
       for (const name of names) {
         name !== 'node_modules' ||
-          Fail`Native package must not contain node_modules`;
+          Fail`Native resource must not contain node_modules`;
         // eslint-disable-next-line no-await-in-loop
         await visit(paths.join(relative, name));
       }
     } else {
       entry.kind === 'file' ||
-        Fail`Native package entries must be files or directories`;
+        Fail`Native resource entries must be files or directories`;
       const bytes = await files.readBytes(path);
       hash.update(encoder.encode(JSON.stringify([relative, bytes.length])));
       hash.update(bytes);
@@ -75,4 +75,4 @@ export const describeNativePackage = async (
     moduleUrl: paths.pathToFileURL(paths.join(root, 'ephemeral.js')),
   });
 };
-harden(describeNativePackage);
+harden(describeNativeResource);
