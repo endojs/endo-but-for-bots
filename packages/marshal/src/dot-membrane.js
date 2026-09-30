@@ -120,7 +120,24 @@ const makeConverter = (mirrorConverter = undefined) => {
               // As with remotables, use mineIf so that enlivening fails once
               // the membrane is revoked.
               const mineIf = passBack(yours);
-              return E.when(SturdyRef.enliven(mineIf), pass);
+              // As with promises, pass both the fulfillment and the
+              // rejection, so that neither crosses the membrane unwrapped.
+              return new Promise((yourResolve, yourReject) => {
+                E.when(
+                  SturdyRef.enliven(mineIf),
+                  myFulfillment => yourResolve(pass(myFulfillment)),
+                  myReason => yourReject(pass(myReason)),
+                )
+                  .catch(metaReason =>
+                    // This can happen if myFulfillment or myReason is not
+                    // passable.
+                    yourReject(pass(metaReason)),
+                  )
+                  .catch(metaMetaReason =>
+                    // In case metaReason itself doesn't pass
+                    yourReject(metaMetaReason),
+                  );
+              });
             },
           }),
         );

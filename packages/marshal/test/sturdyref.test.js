@@ -159,6 +159,23 @@ test('capdata cannot reuse a plain slot as a sturdyRef', t => {
   });
 });
 
+test('the dot-membrane passes an enliven rejection across', async t => {
+  const secret = Far('secret', { reveal: () => 'mine' });
+  const ref = new SturdyRef(harden({ enliven: () => Promise.reject(secret) }));
+  const { proxy, revoke } = makeDotMembraneKit(
+    Far('Holder', { get: () => ref }),
+  );
+  const yourRef = await proxy.get();
+  const reason = await SturdyRef.enliven(yourRef).then(
+    () => t.fail('enliven should reject'),
+    r => r,
+  );
+  t.not(reason, secret);
+  t.is(passStyleOf(reason), 'remotable');
+  t.is(await reason.reveal(), 'mine');
+  revoke('done');
+});
+
 test('the default converters carry a SturdyRef as its own slot', t => {
   // The default converters pass values through, so this only checks that
   // the smallcaps and capdata encoders accept a SturdyRef at all.
