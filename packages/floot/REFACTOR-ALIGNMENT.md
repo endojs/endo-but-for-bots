@@ -26,14 +26,14 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
 ## Current work, 2026-09-30
 
-Tokyo is on generation 183, pre-change application `984e8c78b`.
-Generation 182 passed the complete acceptance run, but that historical pass does
-not certify generation 183's rebuilt Claude and Codex images.
-Their restart recall failed, and both pins remain candidates.
-RA-05 is therefore open for the current release, despite its historical completion
-label in the table below.
+Tokyo is on generation 184, application `3ae3d5321`, host `00da646`.
+All four backends pass seed/restart/recall on this release; Claude and Codex
+retain native checkpoints on both completed turns with the rebuilt images.
+The stopped-incarnation error did not recur.
+This is ordinary restart evidence, not proof of abrupt process-loss recovery
+or the precise source of the earlier race.
 
-The next implementation keeps journal and inbox revival passive with respect to
+The implemented change keeps journal and inbox revival passive with respect to
 native runtime acquisition.
 An actual UI or mail turn acquires the hosted client; explicit create, resume,
 policy change and rebind still provision immediately and report their failures.
@@ -43,14 +43,22 @@ acknowledged checkpoint, and resolve the current backend binding without changin
 the incarnation's context contract.
 This is an incarnation-local timing change, not a new durable owner or storage
 format, and does not implement the process-loss research in #1323.
-Implementation and independent adversarial review are complete; not yet deployed.
+Implementation, independent adversarial review and deployment are complete.
 The Floot suite passes 732 tests; four real-daemon lifecycle/native-context tests
 pass, including cold restart and late native acquisition.
 Package lint reports no errors (278 warnings), and the root documentation gate
-passes. No current-release Tokyo restoration result is claimed.
+passes.
 
-Next gates: deploy the change, repeat restart recall on all
-four backends, then update the image ledger only from the new results.
+Separate tool acceptance found a Claude protocol failure:
+`phase=observe/rate_limit_event, check=5`.
+The failed session `munlenm2-p0cgen-0` retains both tool calls/results but no
+native checkpoint; it was not retried and is not a passing seed.
+Codex and OpenCode pass tool seeds, policy changes, cancellation and inspection;
+cancellation preserves unresolved outcomes rather than claiming effects settled.
+The host evidence and restoration ledger record the successful recall separately
+from this new failure; RA-05 remains open for the full current-release matrix.
+Next: diagnose the retained rate-limit event failure without weakening coverage
+blindly or replaying its failed prompt, then repeat the affected acceptance.
 RA-01 simplification justification and RA-04's remaining conformance coverage stay
 open; RA-03 is implemented, and direct-Fae compaction remains on hold.
 The older chronological entries and final sequence below are historical evidence,
