@@ -30,19 +30,22 @@ native formats or adding another framework.
 These retained layers explain responsibilities, not a claim that the overall
 refactor is smaller or that lifetime context is bounded.
 
-Concrete next deletions:
+Follow-up deletions, 2026-09-30:
 
-- Codex `restoreCodexContext` computes and returns a `sha256` receipt that no
-  production caller consumes: `codex-client.js` reads only `sessionId` and
-  `rolloutPath`; only the I/O test asserts the hash.
-  Remove the unused receipt and hash computation with the next Codex image change.
+- Removed Codex `restoreCodexContext`'s unused `sha256` receipt and computation:
+  `codex-client.js` reads only `sessionId` and `rolloutPath`.
+  Exact-byte tests, atomic publication and no-overwrite checks remain.
   Do not confuse it with Claude's actively checked `prefixSha256` receipt.
-- Codex's exported whole-string `selectCodexNativeContext` wrapper is used only
-  in tests; production uses the incremental selector.
-  Move that convenience into test helpers if retained; this is surface cleanup,
-  not a substantive complexity reduction.
+- Moved Codex's whole-string `selectCodexNativeContext` convenience into its only
+  test file; production keeps the incremental selector.
+  This is surface cleanup, not a substantive complexity reduction.
 
-No deletion above has landed yet.
+All 429 Codex tests pass; independent review passes 57 focused tests.
+Package typechecking still reports unrelated fixture errors, with none in the
+changed files. Formatting passes.
+No durable state owner, journal format or publication semantics change.
+These image-source deletions are not deployed; rebuild the Codex image and repeat
+its acceptance before marking the new pin verified.
 Fae compaction and evidence-storage scaling remain deferred as directed.
 
 ## Decisions on remaining parallel mechanisms

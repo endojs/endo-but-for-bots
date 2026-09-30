@@ -11,7 +11,6 @@ import {
   readFile,
   readdir,
 } from 'node:fs/promises';
-import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { execFile } from 'node:child_process';
@@ -164,14 +163,13 @@ const restoration = async t => {
   return { f, capture, target, parent, destination };
 };
 
-test('restoration publishes complete exact bytes with an exact digest', async t => {
+test('restoration publishes complete exact bytes at its returned path', async t => {
   const { f, capture, target, parent, destination } = await restoration(t);
   const result = await restoreCodexContext({ root: f.root, capture, target });
   const expected = renderCodexNativeContext(capture, target).transcript;
   t.deepEqual(result, {
     sessionId: target.sessionId,
     rolloutPath: destination,
-    sha256: createHash('sha256').update(expected).digest('hex'),
   });
   t.is(await readFile(result.rolloutPath, 'utf8'), expected);
   t.deepEqual(await readdir(parent), [path.basename(destination)]);

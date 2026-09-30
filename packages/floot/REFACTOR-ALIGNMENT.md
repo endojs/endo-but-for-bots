@@ -69,9 +69,13 @@ RA-05's current-release acceptance gate is satisfied under these recorded scopes
 this does not close the separate long-context or process-loss questions.
 Host evidence: `ops/explicit-journal-deployment-20260924.md`, generation 185.
 
-Next: finish RA-04's missing admission-boundary tests and remove the unused Codex
-restore receipt/test-only selector surface identified in the updated simplification
-inventory, batching the required image rebuild and renewed image acceptance.
+The unused Codex restore hash and production test-only selector wrapper are now
+removed in source (429 package tests pass, independent review approved).
+They do not change durable ownership or publication semantics.
+Tokyo still uses the earlier image; these deletions require a rebuilt Codex image
+and renewed acceptance before the new pin can be marked verified.
+Next: finish RA-04's missing admission-boundary tests and batch the image rebuild
+with renewed image acceptance.
 RA-01 simplification justification and RA-04's remaining conformance coverage stay
 open; RA-03 is implemented, and direct-Fae compaction remains on hold.
 The older chronological entries and final sequence below are historical evidence,
@@ -1273,8 +1277,15 @@ Current-source recheck, 2026-09-30: shared preparation/restoration tests cancel
 after entering a held preparation gate; they do not prove cancellation before
 preparation begins. OpenCode separately tests its actual command-write boundary
 and successful queued successor. Codex's held ledger write does not isolate the
-last transport-send microtask. These remain open conformance work, not evidence
-that every unshared case lacks a test.
+last transport-send microtask. The held-ledger regression nevertheless exercises
+the final admission guard: after `ledger.begin()` there is no intervening
+prompt-admission guard before `sendMessage` invokes `beforeSend`,
+immediately followed by `transport.send`.
+It observes zero `turn/start` writes and successor refusal.
+The public fixture has no hook at that internal microtask; adding one solely for
+a timing-specific test is not justified. Retain this behavioral evidence rather
+than claiming exact microtask isolation or adding an arbitrary microtask count.
+Cancellation before preparation begins still needs its public contract checked.
 
 Claude's pending subprocess acquisition now has a separate regression: the prompt
 has already crossed the spawn boundary in argv, but its process handle is late.
