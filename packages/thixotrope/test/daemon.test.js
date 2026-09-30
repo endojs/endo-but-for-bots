@@ -20,7 +20,7 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 
 import { makeThixotropeDaemon } from '../src/core/daemon.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
-import { makeTimerResource } from '../src/alarms/resources.js';
+import { MAX_TIMER_DELAY_MS } from '../src/platform/timers.js';
 import { makeFsStore } from '../src/store/store-fs.js';
 import { makeTestOcapn } from './_util.js';
 import { parkWorkers } from './_park-workers.js';
@@ -42,6 +42,32 @@ const COUNTER_SOURCE = `
 })()
 `;
 
+/**
+ * A minimal host resource for these tests: a non-durable timer whose
+ * `delay` is an ordinary host answer (it aborts on restart, which is what
+ * the tests about answers rely on).
+ * @param {import('../src/platform/timers.js').TimerPowers} timers
+ */
+const makeTimerResource = timers =>
+  Far('TestTimer', {
+    now: () => timers.now(),
+    /** @param {number} ms */
+    delay: async ms => {
+      const delayMs = Number(ms);
+      if (!(
+        Number.isFinite(delayMs) &&
+        delayMs >= 0 &&
+        delayMs <= MAX_TIMER_DELAY_MS
+      ))
+        throw Error(
+          `delay must be between 0 and ${MAX_TIMER_DELAY_MS} milliseconds`,
+        );
+      return new Promise(resolve =>
+        timers.setTimer(() => resolve(timers.now()), delayMs),
+      );
+    },
+  });
+
 /** @import { ExecutionContext } from 'ava' */
 /**
  * @param {ExecutionContext} t @param {{ onDeleteWorker?: (id: string) => void }} [options]
@@ -61,7 +87,7 @@ const makeDaemon = async (t, { onDeleteWorker = () => {} } = {}) => {
     engine: makePeerJournalReplayEngine(nodePowers),
     codec: syrupCodec,
     resources: {
-      timer: description => makeTimerResource(nodePowers.timers, description),
+      timer: () => makeTimerResource(nodePowers.timers),
     },
     makeNetlayer: ({ handlers, logger }) =>
       makeTcpNetLayer({ handlers, logger }),

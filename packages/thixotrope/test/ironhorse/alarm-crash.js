@@ -7,7 +7,6 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { bundleApplication } from '../../src/control/bundle-application.js';
 import { connectLocalControl } from '../../src/control/local-control.js';
 
 import { makeNodePowers } from '../../src/platform/node/powers.js';
@@ -102,8 +101,7 @@ test.serial(
     t.teardown(() => rm(path, { recursive: true, force: true }));
     const first = await start(t, path, 1000n);
     await first.client.call('clockGrant', 'clock');
-    const { bundle } = await bundleApplication(
-      nodePowers.bundler,
+    const { bundle } = await nodePowers.bundler.bundle(
       fileURLToPath(new URL('../../examples/reminder.js', import.meta.url)),
     );
     await first.client.call('install', 'reminders', bundle, [
@@ -136,7 +134,8 @@ test.serial(
     const waitForDelivery = () =>
       waitUntil(async () => {
         const status = await recovered.client.call('alarmStatus');
-        return status.pending === 0 && status.observations === 0;
+        // Delivered and acknowledged: the table holds no row at all.
+        return status.pending === 0 && status.retained === 0;
       });
     await waitForDelivery();
     t.is(
