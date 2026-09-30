@@ -1047,11 +1047,9 @@ export interface ReadableNameHub {
    * writable capabilities). Contrast `EndoMount.readOnly()`, whose
    * {@link ReadableTreeView} narrowing is recursive through nested lookups.
    */
-  lookup(petNamePath: string | readonly string[]): Promise<unknown>;
+  lookup(petNamePath: readonly string[]): Promise<unknown>;
   /** See {@link ReadableNameHub.lookup}: attenuation is shallow, not recursive. */
-  maybeLookup(
-    petNamePath: string | readonly string[],
-  ): Promise<unknown | undefined>;
+  maybeLookup(petNamePath: readonly string[]): Promise<unknown | undefined>;
 }
 
 export interface EndoDirectory extends NameHub {
@@ -1240,18 +1238,18 @@ export interface Mail {
     messageNumber: bigint,
     strings: Array<string>,
     edgeNames: Array<string>,
-    petNamesOrPaths: string[][],
+    petNamePaths: string[][],
   ): Promise<void>;
   request(
-    recipientNameOrPath: string[],
+    recipientNamePath: string[],
     what: string,
-    responseNameOrPath?: string[],
+    responseNamePath?: string[],
   ): Promise<unknown>;
   send(
-    recipientNameOrPath: string[],
+    recipientNamePath: string[],
     strings: Array<string>,
     edgeNames: Array<string>,
-    petNamesOrPaths: string[][],
+    petNamePaths: string[][],
     replyToMessageNumber?: bigint,
   ): Promise<void>;
   deliver(message: EnvelopedMessage): Promise<void>;
@@ -1260,7 +1258,7 @@ export interface Mail {
     slots: Record<string, { label: string; pattern?: unknown }>,
   ): Promise<void>;
   form(
-    recipientNameOrPath: string[],
+    recipientNamePath: string[],
     description: string,
     fields: FormField[],
   ): Promise<void>;
@@ -1277,7 +1275,7 @@ export interface Mail {
     guestHandleId: string;
   };
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
-  sendValue(messageNumber: bigint, petNameOrPath: string[]): Promise<void>;
+  sendValue(messageNumber: bigint, petNamePath: string[]): Promise<void>;
   /**
    * Deliver a value message to the local inbox only, bypassing the remote
    * recipient.  Used by endow() so the eval result appears in the host's
@@ -1303,7 +1301,7 @@ export interface Mail {
     messageNumber: bigint,
     strings: Array<string>,
     edgeNames: Array<string>,
-    petNamesOrPaths: string[][],
+    petNamePaths: string[][],
     options?: { done?: boolean },
   ): Promise<void>;
   /**
@@ -1710,15 +1708,15 @@ export interface EndoGuest extends EndoAgent {
     workerPetName: string[] | undefined,
     source: string,
     codeNames: Array<string>,
-    petNamesOrPaths: string[][],
-    resultNameOrPath?: string[],
+    petNamePaths: string[][],
+    resultNamePath?: string[],
   ): Promise<unknown>;
   define(
     source: string,
     slots: Record<string, { label: string; pattern?: unknown }>,
   ): Promise<void>;
   form(
-    recipientNameOrPath: string[],
+    recipientNamePath: string[],
     description: string,
     fields: FormField[],
   ): Promise<void>;
@@ -1859,7 +1857,7 @@ export type FarEndoGuest = FarRef<EndoGuest>;
 
 export interface EndoHost extends EndoAgent {
   form(
-    recipientNameOrPath: string[],
+    recipientNamePath: string[],
     description: string,
     fields: FormField[],
   ): Promise<void>;
@@ -2051,7 +2049,7 @@ export interface EndoHost extends EndoAgent {
     workerPetName: string[] | undefined,
     source: string,
     codeNames: Array<string>,
-    petNamesOrPaths: string[][],
+    petNamePaths: string[][],
     resultName?: string[],
   ): Promise<unknown>;
   makeUnconfined(
@@ -2087,7 +2085,7 @@ export interface EndoHost extends EndoAgent {
     treeName: string[],
     options?: MakeCapletOptions & { entry?: string },
   ): Promise<unknown>;
-  cancel(petNameOrPath: string[], reason?: Error): Promise<void>;
+  cancel(petNamePath: string[], reason?: Error): Promise<void>;
   greeter(): Promise<EndoGreeter>;
   gateway(): Promise<EndoGateway>;
   sign(hexBytes: string): Promise<string>;
@@ -2104,7 +2102,7 @@ export interface EndoHost extends EndoAgent {
   /** Locate a formula with connection hints. */
   locateWithHints(...petNamePath: string[]): Promise<string | undefined>;
   /** Adopt a value from a locator that includes connection hints. */
-  adoptFromLocator(locator: string, petNameOrPath: string[]): Promise<void>;
+  adoptFromLocator(locator: string, petNamePath: string[]): Promise<void>;
   invite(correspondentName: string[]): Promise<Invitation>;
   accept(invitationLocator: string, correspondentName: string[]): Promise<void>;
   endow(
@@ -2231,7 +2229,7 @@ export interface EndoChannel {
   post(
     strings: string[],
     names: string[],
-    petNamesOrPaths: string[][],
+    petNamePaths: string[][],
     replyTo?: string,
   ): Promise<void>;
   followMessages(): AsyncGenerator<ChannelMessage, undefined, undefined>;
@@ -2317,7 +2315,7 @@ export interface EndoChannelMember {
   post(
     strings: string[],
     names: string[],
-    petNamesOrPaths: string[][],
+    petNamePaths: string[][],
     replyTo?: string,
   ): Promise<void>;
   followMessages(): AsyncGenerator<ChannelMessage, undefined, undefined>;

@@ -56,9 +56,9 @@ export const helpTextEntries = harden([
       has: 'has(...path) -> Promise<boolean>\nWhether a name or path resolves in the backing hub.',
       list: 'list(...path) -> Promise<string[]>\nThe names at a path in the backing hub.',
       lookup:
-        'lookup(nameOrPath) -> Promise<unknown>\nResolve a name or path to its value. The result is live: a nested directory\ncomes back fully writable, so this narrowing reaches only one hop.',
+        'lookup(petNamePath) -> Promise<unknown>\nResolve a pet-name path (an array of path components) to its value; rejects a bare string. The result is live: a nested directory\ncomes back fully writable, so this narrowing reaches only one hop.',
       maybeLookup:
-        'maybeLookup(nameOrPath) -> Promise<unknown | undefined>\nResolve a name or path, or undefined if absent.',
+        'maybeLookup(petNamePath) -> Promise<unknown | undefined>\nResolve a pet-name path, or undefined if absent.',
     },
   ],
   [

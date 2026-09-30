@@ -2070,7 +2070,7 @@ export const createAddSpaceModal = ({
         //    Pass the original endo:// locator so the system can drop
         //    bare-identifier support in the future.
         await E(
-          /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
+          /** @type {{ storeLocator: (name: string[], id: string) => Promise<void> }} */ (
             personaPowers
           ),
         ).storeLocator(['general'], locator);
@@ -2156,7 +2156,7 @@ export const createAddSpaceModal = ({
         // Pass the original endo:// locator so the system can drop
         // bare-identifier support in the future.
         await E(
-          /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
+          /** @type {{ storeLocator: (name: string[], id: string) => Promise<void> }} */ (
             personaPowers
           ),
         ).storeLocator(['general'], locator);
@@ -2256,7 +2256,7 @@ export const createAddSpaceModal = ({
       ).lookup([finalAgentName]);
 
       await E(
-        /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
+        /** @type {{ storeLocator: (name: string[], id: string) => Promise<void> }} */ (
           whylipPowers
         ),
       ).storeLocator(['fae'], agentLocator);

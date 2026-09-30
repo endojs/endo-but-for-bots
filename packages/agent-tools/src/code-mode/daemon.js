@@ -6,10 +6,7 @@
 import { E } from '@endo/eventual-send';
 
 /**
- * The daemon accepts only pet-name paths.
- * A string is a single pet name and is never split on a delimiter, so a
- * model that sends `'a/b'` gets the daemon's invalid-name error and learns to
- * send `['a', 'b']`.
+ * Wrap a lone pet name as a one-segment path; never split on a delimiter.
  *
  * @param {string | string[]} nameOrPath
  * @returns {string[]}

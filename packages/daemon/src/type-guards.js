@@ -28,16 +28,9 @@ harden(NamePathShape);
 /**
  * A pet-name path argument on the daemon's Exo surface.
  *
- * This guard admits both an array of path components and a bare string, but
- * only the array is a valid pet-name path: every method using this guard must
- * pass the argument through `namePathFrom`, which refuses the string rather
- * than coercing it to a one-segment path. These methods are primarily
- * geared toward agents, and a string invites confusion about whether it may be
- * a delimited path and what the delimiter would be in the virtual file (and
- * other capability) systems. The guard admits a string solely so that
- * `namePathFrom` in `pet-name.js` can reject it with an error that tells the
- * caller to retry with an array of path components; the generic pattern
- * failure ("Must be a copyArray") does not.
+ * Deliberately wider than the contract: it admits a bare string so that
+ * `namePathFrom` (which every method using this guard must call) can refuse it
+ * with an error telling the caller to retry with an array of path components.
  */
 export const NamePathArgumentShape = M.or(NamePathShape, M.string());
 harden(NamePathArgumentShape);

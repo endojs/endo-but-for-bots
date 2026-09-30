@@ -60,7 +60,7 @@ const assertPowersName = name => {
  * than at the agent's top level.
  * @param {string[]} nameOrPath
  */
-const assertPowersNameOrPath = nameOrPath => {
+const assertPowersNamePath = nameOrPath => {
   const namePath = namePathFrom(nameOrPath);
   if (namePath.length === 1) {
     assertPowersName(namePath[0]);
@@ -1503,7 +1503,7 @@ export const makeHostMaker = ({
         env = {},
         workerTrustedShims,
       } = options;
-      assertPowersNameOrPath(powersName);
+      assertPowersNamePath(powersName);
       const powersNamePath = namePathFrom(powersName);
       // Refuse a malformed result name before any deferred task is queued.
       const resultNamePath =
@@ -2109,7 +2109,7 @@ export const makeHostMaker = ({
     /**
      * Create a timer that fires at a specified interval.
      *
-     * @param {NamePath} petName - Pet name or path to store the timer under
+     * @param {NamePath} petName - Pet-name path to store the timer under
      * @param {number} intervalMs - Interval in milliseconds
      * @param {string} [label] - Optional label for the timer
      */
@@ -2132,7 +2132,7 @@ export const makeHostMaker = ({
 
     /**
      * Create a new channel and store it under the given pet name.
-     * @param {NamePath} petName - Pet name or path to store the channel under.
+     * @param {NamePath} petName - Pet-name path to store the channel under.
      * @param {string} channelProposedName - Display name for the channel creator.
      */
     const makeChannelCmd = async (petName, channelProposedName) => {

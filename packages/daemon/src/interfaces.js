@@ -339,7 +339,7 @@ export const GuestInterface = M.interface('EndoGuest', {
   // Send a retained value as a reply
   sendValue: M.call(
     MessageNumberShape, // messageNumber
-    NamePathArgumentShape, // petNameOrPath
+    NamePathArgumentShape, // petNamePath
   ).returns(M.promise()),
   // Internal: deliver a message
   deliver: M.call(M.record()).returns(),
@@ -619,7 +619,7 @@ export const HostInterface = M.interface('EndoHost', {
   // Send a retained value as a reply
   sendValue: M.call(
     MessageNumberShape, // messageNumber
-    NamePathArgumentShape, // petNameOrPath
+    NamePathArgumentShape, // petNamePath
   ).returns(M.promise()),
   // Access the privileged diagnostics facet: formula records, the
   // formula dependency graph, and the error-trace aggregator. Grouped
@@ -841,7 +841,7 @@ export const MountInterface = M.interface('EndoMount', {
   // promise boundary here even though the shared name-hub record is broader.
   // It resolves to the same typed file/tree union as `lookup`, plus undefined.
   // `maybeLookup` is the `ReadableNameHub` primitive (lookup-or-undefined).
-  // Widened from the shared `NamePathArgumentShape` contract to `PathArgShape` so the
+  // Widened from the shared platform `NameOrPathShape` contract to `PathArgShape` so the
   // mount accepts a `MountEntry` cap as the path argument, exactly like
   // `lookup`. See designs/fs-interface-consolidation.md § C1.
   maybeLookup: M.call(PathArgShape).returns(M.promise()),

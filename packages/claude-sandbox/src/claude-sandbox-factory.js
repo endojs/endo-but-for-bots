@@ -267,7 +267,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   // provisioner (factory.js) to the factory's own directory.
   const sandboxNamespace =
     env.SANDBOX_NAMESPACE || process.env.SANDBOX_NAMESPACE || '';
-  /** @param {string} name @returns {string | string[]} */
+  /** @param {string} name @returns {string[]} */
   const underNamespace = name =>
     sandboxNamespace ? [sandboxNamespace, name] : [name];
   // A lone name becomes a one-segment path; a path passes through. Strings

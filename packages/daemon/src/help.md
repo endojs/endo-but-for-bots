@@ -157,14 +157,14 @@ Whether a name or path resolves in the backing hub.
 
 The names at a path in the backing hub.
 
-## lookup(nameOrPath) -> Promise<unknown>
+## lookup(petNamePath) -> Promise<unknown>
 
-Resolve a name or path to its value. The result is live: a nested directory
+Resolve a pet-name path (an array of path components) to its value; rejects a bare string. The result is live: a nested directory
 comes back fully writable, so this narrowing reaches only one hop.
 
-## maybeLookup(nameOrPath) -> Promise<unknown | undefined>
+## maybeLookup(petNamePath) -> Promise<unknown | undefined>
 
-Resolve a name or path, or undefined if absent.
+Resolve a pet-name path, or undefined if absent.
 
 # Mail Operations - Send and receive messages between agents.
 
