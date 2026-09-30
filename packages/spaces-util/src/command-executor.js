@@ -218,7 +218,7 @@ export const createCommandExecutor = ({
             BigInt(/** @type {number} */ (messageNumber)),
             strings,
             edgeNames,
-            petNames,
+            petNames.map(petName => petName.split('/')),
           );
           return {
             success: true,
@@ -281,18 +281,18 @@ export const createCommandExecutor = ({
             resultName,
             workerName = '@main',
           } = params;
-          /** @type {Record<string, string>} */
+          /** @type {Record<string, string[]>} */
           const bindings = {};
           for (const pair of /** @type {Array<{codeName: string, petName: string}>} */ (
             bindingPairs
           )) {
-            bindings[pair.codeName] = pair.petName;
+            bindings[pair.codeName] = pair.petName.split('/');
           }
           await E(powers).endow(
             BigInt(/** @type {number} */ (messageNumber)),
             bindings,
-            String(workerName),
-            resultName ? String(resultName) : undefined,
+            String(workerName).split('/'),
+            resultName ? String(resultName).split('/') : undefined,
           );
           return {
             success: true,
@@ -325,7 +325,7 @@ export const createCommandExecutor = ({
           let result;
           try {
             result = await E(powers).evaluate(
-              String(workerName),
+              String(workerName).split('/'),
               String(source),
               codeNames,
               petNamePaths,

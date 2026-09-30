@@ -1264,7 +1264,7 @@ export function useFileExplorer(powers, profilePath = []) {
         await E(resolveProfileHost()).makeUnconfined(
           '@node',
           ENDO_FS_IN_MEMORY_MODULE_URL,
-          { powersName, resultName: petName },
+          { powersName: ['@agent'], resultName: [petName] },
         )
       );
       const source = addSource({

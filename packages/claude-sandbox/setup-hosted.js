@@ -119,7 +119,7 @@ const provisionCredentials = async (
     // working (on the old secret) until they are re-provisioned.
     let existingKind = 'apiKey';
     try {
-      const existing = /** @type {any} */ (await E(hostAgent).lookup(name));
+      const existing = /** @type {any} */ (await E(hostAgent).lookup([name]));
       existingKind = await E(existing).kind();
     } catch {
       // A credential too old to report its kind predates `oauthToken`.
@@ -137,7 +137,7 @@ const provisionCredentials = async (
   const credentialsFile = await persistKeyToSidecar(name, apiKey);
   await E(hostAgent).makeUnconfined(['@main'], credentialsModuleSpecifier, {
     powersName: ['@none'],
-    resultName: name,
+    resultName: [name],
     env: harden({
       CREDENTIALS_FILE: credentialsFile,
       CREDENTIALS_KIND: kind,

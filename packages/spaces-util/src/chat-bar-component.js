@@ -1684,7 +1684,7 @@ export const chatBarComponent = (
           const workerName = data.workerName || '@main';
 
           await E(powers).evaluate(
-            workerName,
+            workerName.split('/'),
             data.source,
             codeNames,
             petNamePaths,
@@ -1784,9 +1784,14 @@ export const chatBarComponent = (
         onSubmit: async data => {
           await E(powers).endow(
             data.messageNumber,
-            data.bindings,
-            data.workerName,
-            data.resultName,
+            Object.fromEntries(
+              Object.entries(data.bindings).map(([codeName, petName]) => [
+                codeName,
+                petName.split('/'),
+              ]),
+            ),
+            data.workerName.split('/'),
+            data.resultName ? data.resultName.split('/') : undefined,
           );
         },
         onClose: () => {

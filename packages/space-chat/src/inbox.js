@@ -602,7 +602,7 @@ const DefinitionBody = ({ message, powers, setError }) => {
   );
 
   const doSubmit = () => {
-    /** @type {Record<string, string>} */
+    /** @type {Record<string, string[]>} */
     const collected = {};
     for (const [codeName] of slotEntries) {
       const val = (bindings[codeName] || '').trim();
@@ -610,7 +610,7 @@ const DefinitionBody = ({ message, powers, setError }) => {
         setError(` Missing binding for ${codeName}`);
         return;
       }
-      collected[codeName] = val;
+      collected[codeName] = val.split('/');
     }
     setError('');
     E(powers)
@@ -1061,7 +1061,7 @@ const EditPanel = ({ message, powers, setError, onClose }) => {
           number,
           [text],
           kept.map(e => e.name),
-          kept.map(e => e.petName),
+          kept.map(e => e.petName.split('/')),
         );
       })
       .then(

@@ -20,7 +20,7 @@ const selectedAtRuntime = host.provideGit(mount, ['selected-at-runtime'], {
 });
 const optionsSelectedAtRuntimeResult = host.provideGit(
   mount,
-  'options-selected-at-runtime',
+  ['options-selected-at-runtime'],
   optionsSelectedAtRuntime,
 );
 

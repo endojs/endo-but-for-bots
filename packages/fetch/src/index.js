@@ -118,7 +118,7 @@ const parseOptionalOriginList = value => {
 const lookupOptional = async (powers, name) => {
   await null;
   try {
-    return await E(powers).lookup(name);
+    return await E(powers).lookup([name]);
   } catch (_error) {
     return undefined;
   }

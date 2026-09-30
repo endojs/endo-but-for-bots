@@ -386,7 +386,7 @@ const bodyComponent = (
     /** @type {unknown} */
     let powers = rootPowers;
     for (const name of profilePath) {
-      powers = E(/** @type {ERef<EndoHost>} */ (powers)).lookup(name);
+      powers = E(/** @type {ERef<EndoHost>} */ (powers)).lookup([name]);
     }
     return powers;
   };
@@ -399,7 +399,7 @@ const bodyComponent = (
       const currentPowers = await resolvePowers();
       const targetPowers = await E(
         /** @type {ERef<EndoHost>} */ (currentPowers),
-      ).lookup(hostName);
+      ).lookup([hostName]);
 
       // Verify the target has the minimum required interface for a profile
       // by checking if it responds to identify() - a lightweight check
@@ -545,7 +545,7 @@ const bodyComponent = (
         }
 
         E(/** @type {ERef<EndoHost>} */ (resolvedPowers))
-          .lookup(activeSpaceInfo.channelPetName)
+          .lookup([activeSpaceInfo.channelPetName])
           .then(async channelRef => {
             // Determine if we're the channel admin or a joiner.
             // If the channel's proposed name matches our space's proposed name,
@@ -1253,7 +1253,7 @@ const bodyComponent = (
               // Look up and join the channel
               const channelRef = await E(
                 /** @type {ERef<EndoHost>} */ (resolvedPowers),
-              ).lookup(localName);
+              ).lookup([localName]);
               const displayName =
                 window.prompt('Your display name in this channel:', 'Guest') ||
                 'Guest';
@@ -1521,8 +1521,8 @@ const bodyComponent = (
         const sendStrings = [`You were mentioned in `];
         /** @type {string[]} */
         const sendEdgeNames = [edgeName];
-        /** @type {string[]} */
-        const sendPetNames = [channelPetName];
+        /** @type {string[][]} */
+        const sendPetNames = [channelPetName.split('/')];
 
         if (recap.edgeNames.length > 0) {
           // String after the channel ref: separator + recap
@@ -1538,7 +1538,7 @@ const bodyComponent = (
             }
             usedEdgeNames.add(recapEdge);
             sendEdgeNames.push(recapEdge);
-            sendPetNames.push(recap.petNames[ri]);
+            sendPetNames.push(recap.petNames[ri].split('/'));
             sendStrings.push(recap.strings[ri + 1] || '');
           }
           sendStrings[sendStrings.length - 1] += instructions;
@@ -1550,7 +1550,7 @@ const bodyComponent = (
         }
 
         await E(/** @type {ERef<EndoHost>} */ (resolvedPowers)).send(
-          petName,
+          petName.split('/'),
           sendStrings,
           sendEdgeNames,
           sendPetNames,

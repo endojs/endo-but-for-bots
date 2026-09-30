@@ -55,8 +55,9 @@ const makePowers = async ({ policyAuthority } = {}) => {
   const storeRoot = await E(root).makeDirectory('fetch-store');
 
   const powers = Far('Powers', {
-    /** @param {string} name */
-    lookup(name) {
+    /** @param {string[]} path */
+    lookup(path) {
+      const name = path.join('/');
       if (name === 'fetch-store') return storeRoot;
       if (name === 'fetch-policy-authority') {
         if (policyAuthority) return policyAuthority;

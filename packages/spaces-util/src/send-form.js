@@ -698,7 +698,12 @@ export const sendFormComponent = ({
           ? conversationPetName.split('/')
           : conversationPetName;
       E(powers)
-        .send(conversationRecipient, messageStrings, edgeNames, petNames)
+        .send(
+          conversationRecipient,
+          messageStrings,
+          edgeNames,
+          petNames.map(petName => petName.split('/')),
+        )
         .then(
           () => {
             // `lastRecipient` is consumed downstream as a string — token
@@ -791,7 +796,12 @@ export const sendFormComponent = ({
     // `floot/controller-profile/session-…`) resolve — the daemon validates a
     // recipient string as a single name segment and rejects embedded "/".
     E(powers)
-      .send(to.split('/'), messageStrings, messageEdgeNames, messagePetNames)
+      .send(
+        to.split('/'),
+        messageStrings,
+        messageEdgeNames,
+        messagePetNames.map(petName => petName.split('/')),
+      )
       .then(
         () => {
           lastRecipient = to;

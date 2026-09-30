@@ -20,7 +20,7 @@ import { E } from '@endo/eventual-send';
  * copied onto `lookup` by mistake (this exact bug shipped once already).
  *
  * @typedef {object} LookupHub
- * @property {(petNamePath: string | string[]) => Promise<unknown>} lookup
+ * @property {(petNamePath: string[]) => Promise<unknown>} lookup
  */
 
 /**

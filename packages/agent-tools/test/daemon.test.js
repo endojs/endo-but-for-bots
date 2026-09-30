@@ -32,7 +32,10 @@ test('makeDaemonEvaluate forwards source and lexical names to a powers host', as
       undefined,
       'await E(git).status()',
       ['workspace', 'git'],
-      ['repo/workspace', ['repo', 'git']],
+      [
+        ['repo', 'workspace'],
+        ['repo', 'git'],
+      ],
       ['results', 'status'],
     ],
   ]);
