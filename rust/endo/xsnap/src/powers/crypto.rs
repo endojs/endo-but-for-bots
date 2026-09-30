@@ -216,6 +216,31 @@ pub unsafe extern "C" fn host_sha256_init(the: *mut XsMachine) {
     });
 }
 
+/// Update `handle`'s hasher with `data`, keeping the bytes within the
+/// retention limits ([`feed`]). Returns whether the hasher keeps (or just
+/// stopped keeping) its bytes, so its descriptor needs restaging.
+fn update(hashers: &mut HashMap<u32, Hasher>, handle: u32, data: &[u8]) -> bool {
+    let retained: usize = hashers
+        .values()
+        .filter_map(|h| h.fed.as_ref().map(Vec::len))
+        .sum();
+    let Some(hasher) = hashers.get_mut(&handle) else {
+        return false;
+    };
+    hasher.sha256.update(data);
+    let Some(fed) = &mut hasher.fed else {
+        return false;
+    };
+    if fed.len() + data.len() > host_ledger::HASHER_DESCRIPTOR_LIMIT
+        || retained + data.len() > host_ledger::HASHERS_RETAINED_LIMIT
+    {
+        hasher.fed = None;
+    } else {
+        fed.extend_from_slice(data);
+    }
+    true
+}
+
 /// Feed `data` to a hasher under the host-call ledger. Under a transcript
 /// the hasher keeps every fed byte, up to
 /// [`host_ledger::HASHER_DESCRIPTOR_LIMIT`] for the hasher and
@@ -233,23 +258,8 @@ unsafe fn feed(the: *mut XsMachine, callback: &str, handle: u32, data: &[u8]) {
     request.extend_from_slice(data);
     let result = host_ledger::call(callback, Some(handle), &request, || {
         HASHER_MAP.with(|m| {
-            let mut m = m.borrow_mut();
-            let retained: usize = m
-                .values()
-                .filter_map(|h| h.fed.as_ref().map(Vec::len))
-                .sum();
-            if let Some(hasher) = m.get_mut(&handle) {
-                hasher.sha256.update(data);
-                if let Some(fed) = &mut hasher.fed {
-                    if fed.len() + data.len() > host_ledger::HASHER_DESCRIPTOR_LIMIT
-                        || retained + data.len() > host_ledger::HASHERS_RETAINED_LIMIT
-                    {
-                        hasher.fed = None;
-                    } else {
-                        fed.extend_from_slice(data);
-                    }
-                    FED_THIS_CRANK.with(|f| f.borrow_mut().insert(handle));
-                }
+            if update(&mut m.borrow_mut(), handle, data) {
+                FED_THIS_CRANK.with(|f| f.borrow_mut().insert(handle));
             }
         });
         Outcome::default()
@@ -397,6 +407,39 @@ pub unsafe fn register(machine: &crate::Machine) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Retention stops at the aggregate limit across hashers, flipping only
+    /// the hasher whose byte crosses it, and only at the crossing.
+    #[test]
+    fn hashers_stop_retaining_exactly_at_the_aggregate_limit() {
+        let per = host_ledger::HASHER_DESCRIPTOR_LIMIT;
+        let full = host_ledger::HASHERS_RETAINED_LIMIT / per;
+        assert_eq!(full * per, host_ledger::HASHERS_RETAINED_LIMIT);
+        let mut hashers = HashMap::new();
+        for handle in 0..full as u32 {
+            hashers.insert(handle, Hasher::new(Some(vec![1; per - 1])));
+        }
+        let (last, spare) = (full as u32 - 1, full as u32);
+        hashers.insert(spare, Hasher::new(Some(Vec::new())));
+        // One byte short of the aggregate limit: `full - 1` more bytes fill it.
+        for handle in 0..last {
+            assert!(update(&mut hashers, handle, &[2]));
+        }
+        let retained = |h: &HashMap<u32, Hasher>| -> usize {
+            h.values().filter_map(|h| h.fed.as_ref().map(Vec::len)).sum()
+        };
+        assert_eq!(retained(&hashers), host_ledger::HASHERS_RETAINED_LIMIT - 1);
+        assert!(update(&mut hashers, spare, &[3]));
+        assert_eq!(retained(&hashers), host_ledger::HASHERS_RETAINED_LIMIT);
+        assert_eq!(hashers[&spare].fed.as_deref(), Some(&[3][..]));
+        // At the limit, the next byte breaks the hasher it is fed to alone.
+        assert!(update(&mut hashers, last, &[4]));
+        assert!(hashers[&last].fed.is_none());
+        assert!(hashers[&spare].fed.is_some());
+        assert!((0..last).all(|h| hashers[&h].fed.as_ref().map(Vec::len) == Some(per)));
+        // A broken hasher still hashes but no longer needs restaging.
+        assert!(!update(&mut hashers, last, &[5]));
+    }
 
     #[test]
     fn worker_panic_does_not_expose_hasher_state_to_siblings() {
