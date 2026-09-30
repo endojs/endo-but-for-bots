@@ -5,8 +5,8 @@
 //! contract stack. Before each stage under measurement (compiling the source;
 //! running it on a fresh machine) the unused stack below the caller's frame is
 //! painted with a sentinel, and afterwards the lowest byte the stage dirtied
-//! gives its high-water mark in bytes below that frame. One run per case,
-//! byte-exact, no bisection and no engine instrumentation.
+//! gives its high-water mark in bytes below that frame (`stack-lanes/paint.rs`).
+//! One run per case, byte-exact, no bisection and no engine instrumentation.
 //!
 //! Frame sizes are a property of the build, so the marks are deterministic for
 //! one compiler, target and profile and move when any of those does. The gate
@@ -28,66 +28,10 @@ use ironhorse_vm::{Interp, RunOutcome, NATIVE_STACK_BYTES};
 
 #[path = "../../stack-lanes/cases.rs"]
 mod cases;
+#[path = "../../stack-lanes/paint.rs"]
+mod paint;
 use cases::{cases, Case};
-
-const SENTINEL: u8 = 0xA5;
-const PAGE: usize = 4096;
-/// Left unpainted at the bottom of the thread's stack: the guard pages, and the
-/// thread's own start frames above the painter, whose sizes are not known.
-const BOTTOM_MARGIN: usize = 256 * 1024;
-/// Left unpainted just below the painter's own frame.
-const TOP_GAP: usize = 2 * PAGE;
-
-struct Painted {
-    top: usize,
-    bottom: usize,
-}
-
-/// Paint the unused stack below this frame. Pages are touched from the top
-/// down: Windows commits thread stacks through a moving guard page and faults
-/// on a touch more than one page below it.
-#[inline(never)]
-fn paint() -> Painted {
-    let marker = 0u8;
-    let here = std::hint::black_box(&marker) as *const u8 as usize;
-    let top = (here - TOP_GAP) & !(PAGE - 1);
-    let bottom = (here + BOTTOM_MARGIN - NATIVE_STACK_BYTES) & !(PAGE - 1);
-    let mut page = top;
-    while page > bottom {
-        page -= PAGE;
-        // SAFETY: `[bottom, top)` lies inside this thread's stack mapping and
-        // below every live frame; nothing owns it until a callee grows into it.
-        unsafe { std::ptr::write_bytes(page as *mut u8, SENTINEL, PAGE) };
-    }
-    Painted { top, bottom }
-}
-
-/// Bytes below `base` that were dirtied since `paint`, or the floor
-/// (`base - top`) when nothing below the gap was touched.
-#[inline(never)]
-fn high_water(painted: &Painted, base: usize) -> usize {
-    let mut addr = painted.bottom;
-    while addr < painted.top {
-        // SAFETY: as in `paint`.
-        if unsafe { std::ptr::read_volatile(addr as *const u8) } != SENTINEL {
-            return base - addr;
-        }
-        addr += 1;
-    }
-    base - painted.top
-}
-
-/// Run `f` with the stack below this frame painted; return its value and the
-/// bytes of stack it used below this frame.
-#[inline(never)]
-fn stage<T>(f: impl FnOnce() -> T) -> (T, usize) {
-    let marker = 0u8;
-    let base = std::hint::black_box(&marker) as *const u8 as usize;
-    let painted = paint();
-    let value = f();
-    let used = high_water(&painted, base);
-    (value, used)
-}
+use paint::stage;
 
 fn on_contract_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
     std::thread::Builder::new()

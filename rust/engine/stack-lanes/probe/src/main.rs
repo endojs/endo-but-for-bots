@@ -7,6 +7,7 @@
 //! ```text
 //! ih-stack-probe dump-cases              # the corpus, one JSON object per line
 //! ih-stack-probe case <name> [--compile-only]
+//! ih-stack-probe family <heavy|walker|chain> <name> <n>   # a family at depth n
 //! ih-stack-probe source [--compile-only] [--eval-compiler]  # the program on standard input
 //! ```
 //!
@@ -16,11 +17,15 @@
 //! that ask for it and for `source --eval-compiler`.
 //!
 //! A run prints one line, `halt=<Halt> result=<string> meter=<n>`; a compile
-//! prints `compile=ok` or `compile=refused message=<string>`.
+//! prints `compile=ok` or `compile=refused message=<string>`. With `--stack`,
+//! natively, each line also carries the stage's host-stack high-water mark
+//! (`stack-lanes/paint.rs`), so scripts can measure bytes per level without
+//! the harness.
 
 #[path = "../../cases.rs"]
-#[allow(dead_code)]
 mod cases;
+#[path = "../../paint.rs"]
+mod paint;
 
 use std::io::{Read, Write};
 
@@ -49,16 +54,30 @@ fn compile(source: &str) -> Result<(Vec<u8>, Vec<ironhorse_vm::SymbolName>), Str
     }
 }
 
-fn run(source: &str, compile_only: bool, eval_compiler: bool) {
-    let (bytecode, names) = match compile(source) {
+/// With `--stack`, each stage's native high-water mark is appended as
+/// ` stack=<bytes>` (0 on wasm, where the host paints the shadow stack).
+fn run(source: &str, compile_only: bool, eval_compiler: bool, stack: bool) {
+    let (compiled, compile_bytes) = paint::stage(|| compile(source));
+    let suffix = |bytes: usize| {
+        if stack {
+            format!(" stack={bytes}")
+        } else {
+            String::new()
+        }
+    };
+    let (bytecode, names) = match compiled {
         Ok(compiled) => compiled,
         Err(message) => {
-            println!("compile=refused message={}", json_string(&message));
+            println!(
+                "compile=refused message={}{}",
+                json_string(&message),
+                suffix(compile_bytes)
+            );
             return;
         }
     };
     if compile_only {
-        println!("compile=ok");
+        println!("compile=ok{}", suffix(compile_bytes));
         return;
     }
     let mut machine = ironhorse_vm::Interp::new();
@@ -66,12 +85,13 @@ fn run(source: &str, compile_only: bool, eval_compiler: bool) {
     if eval_compiler {
         machine.set_source_compiler(std::rc::Rc::new(ironhorse_runtime::IronhorseSourceCompiler));
     }
-    let out = machine.run(&bytecode).host_coerced();
+    let (out, run_bytes) = paint::stage(|| machine.run(&bytecode).host_coerced());
     println!(
-        "halt={:?} result={} meter={}",
+        "halt={:?} result={} meter={}{}",
         out.halt,
         json_string(&out.result),
-        machine.meter_index()
+        machine.meter_index(),
+        suffix(run_bytes)
     );
 }
 
@@ -100,14 +120,42 @@ fn dump_cases() {
 fn dispatch(args: Vec<String>) {
     let compile_only = args.iter().any(|a| a == "--compile-only");
     let eval_compiler = args.iter().any(|a| a == "--eval-compiler");
+    let stack = args.iter().any(|a| a == "--stack");
     match args.get(1).map(String::as_str) {
         Some("dump-cases") => dump_cases(),
         Some("case") => {
             let name = args.get(2).map(String::as_str).unwrap_or("");
             match cases::cases().into_iter().find(|c| c.name == name) {
-                Some(case) => run(&case.source, compile_only || !case.run, case.eval_compiler),
+                Some(case) => run(
+                    &case.source,
+                    compile_only || !case.run,
+                    case.eval_compiler,
+                    stack,
+                ),
                 None => {
                     eprintln!("unknown case: {name}");
+                    std::process::exit(2);
+                }
+            }
+        }
+        Some("family") => {
+            // family <heavy|walker|chain> <name> <n>: generate the program at that
+            // depth and run it (chains compile only), for `ceilings.py`.
+            let kind = args.get(2).map(String::as_str).unwrap_or("");
+            let name = args.get(3).map(String::as_str).unwrap_or("");
+            let n: usize = args.get(4).and_then(|a| a.parse().ok()).unwrap_or(0);
+            let generated = match kind {
+                "heavy" => cases::heavy(name, n),
+                "walker" => cases::walker(name, n).map(|s| (s, false)),
+                "chain" => cases::chain(name, n).map(|s| (s, false)),
+                _ => None,
+            };
+            match generated {
+                Some((source, needs_eval)) => {
+                    run(&source, compile_only || kind == "chain", needs_eval, stack)
+                }
+                None => {
+                    eprintln!("unknown family: {kind} {name}");
                     std::process::exit(2);
                 }
             }
@@ -117,12 +165,12 @@ fn dispatch(args: Vec<String>) {
             std::io::stdin()
                 .read_to_string(&mut source)
                 .expect("read the program from standard input");
-            run(&source, compile_only, eval_compiler);
+            run(&source, compile_only, eval_compiler, stack);
         }
         _ => {
             eprintln!(
                 "usage: ih-stack-probe dump-cases | case <name> [--compile-only] | \
-                 source [--compile-only] [--eval-compiler]"
+                 family <heavy|walker|chain> <name> <n> | source [--compile-only] [--eval-compiler]"
             );
             std::process::exit(2);
         }
