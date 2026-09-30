@@ -273,13 +273,15 @@ fn initiator_write_syn() -> i32 {
 ///       (SYN intended for a different responder; relays should reroute)
 ///   4 = Noise read_message failed (auth tag mismatch / replay /
 ///       prologue mismatch / wrong responder static)
-///   5 = the initiator's claimed Ed25519 verifying key is invalid,
-///       small-order, or does not correspond to the static X25519 key
-///       it used in the handshake (impersonation attempt)
+///   5 = the initiator's claimed Ed25519 verifying key is invalid, has
+///       a small-order component, or does not correspond to the static
+///       X25519 key it used in the handshake (impersonation attempt)
 #[unsafe(no_mangle)]
 fn responder_read_syn() -> i32 {
     #[allow(static_mut_refs)]
     unsafe {
+        // Every early return below leaves no handshake to continue.
+        HS = None;
         let signing_key =
             match SigningKey::try_from(&BUFFER[SIGNING_KEY_OFFSET..][..SIGNING_KEY_LENGTH]) {
                 Err(_) => return 1,
@@ -327,13 +329,20 @@ fn responder_read_syn() -> i32 {
         // claimed Ed25519 key must map onto exactly that static, or an
         // initiator holding any keypair could present itself as any
         // identity.  Small-order keys are refused outright: a
-        // small-order static contributes nothing to `ss`.
+        // small-order static contributes nothing to `ss`, so it proves
+        // nothing.  Keys with a small-order component are refused too:
+        // X25519 clamping erases that component, so the holder of A
+        // could otherwise also claim each A + T for torsion point T.
+        // The Edwards-to-Montgomery map drops the sign of x, so the
+        // holder of A can still claim -A: a second identity for the
+        // same key holder, not an impersonation.
         let mut claimed = [0u8; VERIFYING_KEY_LENGTH];
         claimed.copy_from_slice(&BUFFER[INITIATOR_VERIFYING_KEY_OFFSET..][..VERIFYING_KEY_LENGTH]);
         let claimed_matches_static = match VerifyingKey::from_bytes(&claimed) {
             Err(_) => false,
             Ok(vk) => {
                 !vk.is_weak()
+                    && vk.to_edwards().is_torsion_free()
                     && match hs.get_rs() {
                         None => false,
                         Some(rs) => rs.as_slice() == vk.to_montgomery().as_bytes(),

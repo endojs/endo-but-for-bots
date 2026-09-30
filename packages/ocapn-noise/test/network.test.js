@@ -316,9 +316,11 @@ test('impostor SYN claiming a peer identity cannot displace that peer session', 
   await netV.addTransport(fabric.transportFor('V'));
   const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
 
-  // The victim V dials A.  A leaves the inbound session unclaimed,
-  // which is the state in which a fresh SYN from V displaces it.
+  // The victim V dials A, and A settles the session.  Nothing takes it
+  // from A's `inboundSessions`, so it stays unclaimed: the state in
+  // which a fresh SYN from V displaces it.
   const sessionV = await netV.provideSession(locA);
+  const sessionA = await netA.waitForInboundSession(keyV);
   const pendingRead = sessionV.reader.next(undefined);
 
   // The attacker completes a Noise handshake with its own keypair but
@@ -337,16 +339,15 @@ test('impostor SYN claiming a peer identity cannot displace that peer session', 
   const attackerStream = await fabric.transportFor('M').connect({ to: 'A' });
   await attackerStream.writer.next(prefixedSyn);
   const reply = await attackerStream.reader.next(undefined);
-  t.true(reply.done, 'A drops the impostor without answering its SYN');
 
   // V's session with A is undisturbed.
-  const sessionA = await netA.waitForInboundSession(keyV);
   await sessionA.writer.next(new TextEncoder().encode('still-here'));
   const received = await pendingRead;
   t.false(received.done, 'victim session is still live');
   if (!received.done) {
     t.is(new TextDecoder().decode(received.value), 'still-here');
   }
+  t.true(reply.done, 'A drops the impostor without answering its SYN');
 });
 
 test('provideSession rejects after handshake timeout', async t => {

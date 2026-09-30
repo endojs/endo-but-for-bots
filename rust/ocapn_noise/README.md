@@ -24,8 +24,9 @@ boundary.
 - **Noise IK pattern**: 2-message handshake.  Initiator already knows
   the responder's static (its Ed25519 identity, converted to X25519);
   responder learns the initiator's static through the encrypted msg 1.
-  Identity hiding (Noise §7.8 property 8): the initiator's static is
-  encrypted on the wire.
+  Identity hiding (Noise §7.8 property 4): the initiator's static is
+  encrypted on the wire under the responder's static, without forward
+  secrecy.
 - **X25519**: Diffie-Hellman, derived from each peer's Ed25519 seed.
 - **ChaCha20-Poly1305**: AEAD for the handshake payloads and all
   session messages.
@@ -97,7 +98,7 @@ paid when the inputs change.
 
 IK is a 2-message pattern in which the initiator already knows the
 responder's static — exactly OCapN's dial-by-identity model — and
-gives initiator identity hiding (Noise §7.8 property 8): the
+gives initiator identity hiding (Noise §7.8 property 4): the
 initiator's static is encrypted in msg 1 under the responder's
 static.  The responder's identity is fixed at handshake start, so the
 prologue can bind to the responder's published Ed25519 verifying key
@@ -111,6 +112,13 @@ The initiator's Ed25519 verifying key, however, arrives as a claim in
 the encrypted SYN payload, and Noise authenticates only the static
 X25519 key the initiator used.
 `responder_read_syn` therefore rejects the SYN (error code 5) unless
-the claimed verifying key is a valid, non-small-order point whose
-Montgomery form equals that static; otherwise an initiator holding any
-keypair could present itself as any identity.
+the claimed verifying key is a valid point with no small-order
+component whose Montgomery form equals that static; otherwise an
+initiator holding any keypair could present itself as any identity.
+The torsion check matters because X25519 clamping erases a small-order
+component, so without it the holder of A could also claim A + T for
+each torsion point T.
+The conversion drops the sign of x, so the holder of A can still claim
+-A, a second identity for the same key holder.
+IK message 1 carries no freshness (Noise §7.7 destination property 2),
+so a captured SYN passes this check again when replayed.
