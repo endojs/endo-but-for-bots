@@ -2,6 +2,10 @@
 '@endo/daemon': major
 '@endo/cli': patch
 '@endo/lal': patch
+'@endo/sandbox': minor
+'@endo/agentry': minor
+'@endo/agent-tools': patch
+'@endo/platform': patch
 ---
 
 The daemon's Exo surface (host, guest, directory, mail, channel, and inspector
@@ -24,3 +28,19 @@ are replaced by `NamePathArgumentShape` and `NamePathsArgumentShape`, and the
 `NameOrPath` and `NamesOrPaths` types are removed in favor of `NamePath`. The
 `endo` CLI already parses slash-delimited command-line names into arrays; the
 `cancel`, `request`, `form`, and verbose `list` commands now do so too.
+
+`@endo/sandbox`'s `SandboxPowers.provideScratchMount` now takes a pet-name
+path (`string[]`) instead of a pet name, and `@endo/agentry`'s
+`NormalizedGitRemoteSpec.credential` is now always a pet-name path
+(`string[]`). `@endo/agentry`'s provisioning and `@endo/platform`'s
+extended-filesystem modules pass pet-name paths to the daemon, so they require
+this daemon. `@endo/agent-tools`' code-mode daemon helpers keep accepting a
+slash-delimited string from the model and split it into a pet-name path before
+calling the daemon.
+
+Invitation records minted before this change, whose stored `guestName` is a
+bare string, still revive: the daemon reads such a record as a one-segment
+path. The mount and readable-tree surface (`lookup` and `listTree` on mounts)
+intentionally still accepts a string, as do `@endo/platform`'s portable
+name-hub guards; the daemon's directories, hosts, and guests are stricter than
+that portable contract.
