@@ -4,7 +4,9 @@
  * two entry modules export, what each receives, and the protocol the two
  * halves speak. Types only; nothing here runs.
  *
- * `durable.js` runs once in a dedicated manager vat whose heap persists. Its
+ * `durable.js` runs once in a dedicated manager vat whose heap persists,
+ * with the guest prelude (`E`, `Far`, `makeExo`, `M`, and the rest) as
+ * globals, typed as `GuestGlobals` from `@endo/thixotrope/guest.js`. Its
  * `make` is synchronous and receives the powers below; it returns a
  * registration facet, the only thing installed into the inventory, and a
  * lifecycle facet the daemon calls `started()` on at every start.
@@ -15,8 +17,6 @@
  * to.
  *
  * @typedef {object} NativeDurablePowers
- * @property {any} E eventual send, as in the guest globals
- * @property {any} Far remotable maker, as in the guest globals
  * @property {any} adapters the launcher: `create()` starts a fresh adapter
  *   process from this installation and returns its incarnation, whose
  *   `getRoot()` is the adapter and whose `retire()` ends the process

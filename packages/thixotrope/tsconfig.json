@@ -3,6 +3,7 @@
   "include": [
     "*.js",
     "bin/**/*.js",
+    "examples/**/*.js",
     "src/**/*.js",
     "resources/**/*.js",
     "test"

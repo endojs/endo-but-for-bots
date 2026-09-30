@@ -15,7 +15,7 @@ import { makeMemoryStore } from '../src/store/store-memory.js';
 const powers = makeNodePowers();
 const bundle = `(() => {
   globalThis.loads = (globalThis.loads ?? 0) + 1;
-  return { make: ({Far}) => {
+  return { make: () => {
     globalThis.factories = (globalThis.factories ?? 0) + 1;
     let starts = 0;
     return harden({
