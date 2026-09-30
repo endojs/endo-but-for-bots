@@ -539,7 +539,7 @@ export const makeXsCryptoPowers = () => {
       },
       /** @param {Uint8Array} message */
       sign: message => {
-        const sigHex = hostEd25519Sign(privHex, toHex(message));
+        const sigHex = hostResult(hostEd25519Sign(privHex, toHex(message)));
         return fromHex(sigHex);
       },
     };
@@ -552,7 +552,9 @@ export const makeXsCryptoPowers = () => {
    * @returns {Uint8Array}
    */
   const ed25519Sign = (privateKey, message) => {
-    const sigHex = hostEd25519Sign(toHex(privateKey), toHex(message));
+    const sigHex = hostResult(
+      hostEd25519Sign(toHex(privateKey), toHex(message)),
+    );
     return fromHex(sigHex);
   };
 
