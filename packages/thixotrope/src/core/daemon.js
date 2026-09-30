@@ -19,6 +19,7 @@ import { makeDurableWorkerTransport } from './durable-worker-transport.js';
 import { makeEphemeralHubClient } from '../net/ephemeral-hub-client.js';
 import { derivePipeResumption } from '../net/pipe-network.js';
 import { makeFirstFailure, makeInFlight } from '../in-flight.js';
+import { HEX128_PATTERN, randomHex128 as randomHexFrom } from '../random-id.js';
 import { makeNativeAdapters } from '../native/adapters.js';
 import { makeLogPowers, silentLogger } from '../platform/logging.js';
 import { settleWithin } from '../platform/timers.js';
@@ -72,8 +73,9 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {() => Promise<void>} wake
  * @property {() => Promise<void>} sleep
  * @property {() => Promise<void>} retire
- * @property {(secret: string) => string | undefined} notifyOnStart
- * @property {() => string | undefined} clearStartNotice
+ * @property {(target: object) => void} notifyOnStart ask the host to call
+ *   `started()` on this held object at every daemon startup
+ * @property {() => void} clearStartNotice
  *
  * @typedef {object} ThixotropeDaemon
  * @property {any} location this daemon's OCapN location; combine with a
@@ -153,12 +155,7 @@ const buildDaemon = async (
   },
 ) => {
   // 128 random bits as lowercase hex: worker ids and default swissnums.
-  const randomHex128 = () => {
-    const bytes = random.randomBytes(16);
-    return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(
-      '',
-    );
-  };
+  const randomHex128 = () => randomHexFrom(random);
 
   // Verbose puts the daemon's own diagnostics and OCapN's protocol tracing
   // on stderr together. A durable-record write failure is not opt-in, so the
@@ -922,32 +919,49 @@ const buildDaemon = async (
     return entry.shellP;
   };
 
-  /** @param {string} workerId */
   /**
-   * Ask the host to call `started()` on a publication at every daemon startup.
+   * Record which held object to call `started()` on at every daemon startup.
    *
-   * Waking a vat runs none of its code — orthogonal persistence resumes the
-   * heap exactly where it was, and sleep is host policy rather than a guest
-   * lifecycle event — so a vat that must act on a new host incarnation needs a
-   * delivery, and this is it. The delivery is also the wake: nothing has to
-   * start the vat separately.
-   *
-   * Durable, because the request outlives the process that was asked.
+   * The publication that lets a later process find the object again is the
+   * daemon's own: its secret is minted here, kept in worker meta, and never
+   * handed out. A start notice is therefore a reference the caller holds,
+   * not a bearer token it has to keep somewhere, and nothing that reads
+   * worker meta learns a way to reach the object.
    *
    * @param {string} workerId
-   * @param {string | undefined} secret
+   * @param {object | undefined} target an object the endpoint holds, or
+   *   undefined to clear the notice
    */
-  const setStartNotice = (workerId, secret) => {
-    secret === undefined ||
-      typeof secret === 'string' ||
-      Fail`start notice must be a publication secret, got ${q(secret)}`;
+  const setStartNotice = (workerId, target) => {
     workers.has(workerId) || Fail`unknown worker ${q(workerId)}`;
     const workerStore = store.provideWorkerStore(workerId);
-    const { startNotify: _previous, ...meta } = workerStore.getMeta();
-    workerStore.setMeta(
-      secret === undefined ? meta : { ...meta, startNotify: secret },
-    );
-    return secret;
+    const { startNotify: previous, ...meta } = workerStore.getMeta();
+    if (target === undefined) {
+      if (previous !== undefined) hub.unpublish(previous);
+      workerStore.setMeta(meta);
+      return;
+    }
+    const position = importPositions.get(target);
+    if (position === undefined) {
+      throw Fail`start notice target must be an object held by the daemon endpoint`;
+    }
+    // Reusing the secret keeps a retried installation to one row. The secret
+    // is recorded before the row is published: a crash between the two then
+    // leaves a secret that names nothing, which the next startup reports and
+    // a retry republishes under, rather than a pinned row nothing names.
+    const secret = previous ?? randomHex128();
+    workerStore.setMeta({ ...meta, startNotify: secret });
+    hub.publishHeld(secret, { session: ENDPOINT_SESSION, position });
+  };
+
+  /**
+   * A worker is going away for good: withdraw the publication its start
+   * notice holds, which no later process could otherwise find or release.
+   * @param {string} workerId
+   */
+  const withdrawStartNotice = workerId => {
+    const { startNotify } = store.provideWorkerStore(workerId).getMeta();
+    if (startNotify !== undefined) hub.unpublish(startNotify);
   };
 
   /** @param {string} workerId */
@@ -960,6 +974,7 @@ const buildDaemon = async (
     }
     // Worker ids are random and never reused: drop the session's
     // table entry along with its rows.
+    withdrawStartNotice(workerId);
     hub.forgetSession(workerId);
     store.deleteWorker(workerId);
     // Only now is the worker gone for good; host state keyed by it can be
@@ -1001,7 +1016,7 @@ const buildDaemon = async (
       wake: async () => entryOf().transport.wake(),
       sleep: async () => entryOf().transport.sleep(),
       retire: async () => retireWorkerNow(workerId),
-      notifyOnStart: secret => setStartNotice(workerId, secret),
+      notifyOnStart: target => setStartNotice(workerId, target),
       clearStartNotice: () => setStartNotice(workerId, undefined),
     });
   };
@@ -1025,11 +1040,11 @@ const buildDaemon = async (
       },
       retire: async () => retireWorkerNow(workerId),
       /**
-       * Ask the host to call `started()` on `secret` at every daemon startup.
+       * Ask the host to call `started()` on `target` at every daemon startup.
        *
-       * @param {string} secret a publication of this worker
+       * @param {object} target an object this worker holds
        */
-      notifyOnStart: secret => setStartNotice(workerId, secret),
+      notifyOnStart: target => setStartNotice(workerId, target),
       clearStartNotice: () => setStartNotice(workerId, undefined),
     });
   };
@@ -1119,6 +1134,7 @@ const buildDaemon = async (
         store.provideWorkerStore(workerId).getMeta().ephemeral === true,
     );
   for (const workerId of ephemeralWorkerIds) {
+    withdrawStartNotice(workerId);
     hub.forgetSession(workerId);
     store.deleteWorker(workerId);
   }
@@ -1293,7 +1309,7 @@ const buildDaemon = async (
       typeof ephemeral === 'boolean' || Fail`ephemeral must be a boolean`;
       if (allocationKey !== undefined) {
         (typeof allocationKey === 'string' &&
-          /^[0-9a-f]{32}$/.test(allocationKey)) ||
+          HEX128_PATTERN.test(allocationKey)) ||
           Fail`Expected a host-generated allocation key`;
         for (const [id] of workers) {
           const meta = store.provideWorkerStore(id).getMeta();
@@ -1465,9 +1481,17 @@ export const makeThixotropeDaemon = async (powers, options) => {
         harden(
           daemon.listWorkerIds().map(workerId => {
             const workerStore = options.store.provideWorkerStore(workerId);
+            // Meta carries two keys that must not leave the daemon: the
+            // start-notice publication secret and the allocation key.
+            const {
+              startNotify,
+              allocationKey: _allocationKey,
+              ...meta
+            } = workerStore.getMeta();
             return harden({
               workerId,
-              ...workerStore.getMeta(),
+              ...meta,
+              startNotice: startNotify !== undefined,
               journalLength: workerStore.journalLength(),
               awake: daemon.getWorker(workerId).isAwake(),
             });

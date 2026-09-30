@@ -78,8 +78,8 @@ for (const phase of [
             interrupted();
           return result;
         },
-        notifyOnStart: secret => {
-          const result = manager.notifyOnStart(secret);
+        notifyOnStart: target => {
+          const result = manager.notifyOnStart(target);
           if (phase === 'notice') interrupted();
           return result;
         },

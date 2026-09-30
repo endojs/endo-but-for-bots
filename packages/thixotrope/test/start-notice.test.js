@@ -55,6 +55,16 @@ const NOTICED_SOURCE = `
   })()
 `;
 
+/**
+ * @param {Awaited<ReturnType<typeof makeDaemon>>} daemon
+ * @param {string} workerId
+ */
+const workerMeta = (daemon, workerId) => {
+  const meta = daemon.inspectWorkers().find(w => w.workerId === workerId);
+  if (meta === undefined) throw Error(`no worker ${workerId}`);
+  return meta;
+};
+
 test.serial('a start notice is delivered at every daemon startup', async t => {
   t.timeout(30_000);
   const statePath = await mkdtemp(join(tmpdir(), 'thixotrope-start-notice-'));
@@ -65,8 +75,15 @@ test.serial('a start notice is delivered at every daemon startup', async t => {
     t.teardown(() => d1.shutdown().catch(() => {}));
     const worker = await d1.createWorker({ debugLabel: 'noticed' });
     const root = await worker.evaluate(NOTICED_SOURCE);
+    // The test's own publication, so later daemons can reach the root;
+    // the start notice itself no longer needs one.
     d1.publish(root, 'noticed-cap');
-    t.is(worker.notifyOnStart('noticed-cap'), 'noticed-cap');
+    worker.notifyOnStart(root);
+    t.true(workerMeta(d1, worker.workerId).startNotice);
+    t.false(
+      'startNotify' in workerMeta(d1, worker.workerId),
+      'the publication secret never leaves the daemon',
+    );
     t.is(await E(root).starts(), 0, 'nothing delivered yet');
     await parkWorkers(d1);
     await d1.crash();
@@ -102,8 +119,9 @@ test.serial('clearing the notice stops the delivery', async t => {
     const worker = await d1.createWorker({ debugLabel: 'noticed' });
     const root = await worker.evaluate(NOTICED_SOURCE);
     d1.publish(root, 'noticed-cap');
-    worker.notifyOnStart('noticed-cap');
+    worker.notifyOnStart(root);
     t.is(worker.clearStartNotice(), undefined);
+    t.false(workerMeta(d1, worker.workerId).startNotice);
     await parkWorkers(d1);
     await d1.crash();
   }
@@ -145,3 +163,35 @@ test.serial('an ephemeral vat is resident without asking', async t => {
   await ephemeral.sleep();
   t.false(ephemeral.isAwake(), 'an explicit sleep is still honoured');
 });
+
+test.serial(
+  'retiring a noticed worker withdraws its start-notice publication',
+  async t => {
+    t.timeout(30_000);
+    const statePath = await mkdtemp(
+      join(tmpdir(), 'thixotrope-notice-retire-'),
+    );
+    t.teardown(() => rm(statePath, { recursive: true, force: true }));
+    const d1 = await makeDaemon(statePath);
+    t.teardown(() => d1.shutdown().catch(() => {}));
+    const worker = await d1.createWorker({ debugLabel: 'noticed' });
+    const root = await worker.evaluate(NOTICED_SOURCE);
+    worker.notifyOnStart(root);
+    const publications = () =>
+      Object.keys(
+        makeFsStore(nodePowers, statePath).getHubState().publications,
+      );
+    t.is(
+      publications().length,
+      1,
+      'the daemon holds the notice under its own secret',
+    );
+    await worker.retire();
+    t.deepEqual(
+      publications(),
+      [],
+      'nothing is left pinned for a worker no later process could release',
+    );
+    t.deepEqual(d1.listWorkerIds(), []);
+  },
+);

@@ -2,8 +2,10 @@
 import harden from '@endo/harden';
 
 /**
- * Workspace bookkeeping, not manager state. Retaining the worker facade roots
- * an unfinished installation until its registration is ready for inventory.
+ * Workspace bookkeeping, not manager state. The worker facade roots an
+ * unfinished installation only until its registration is ready for
+ * inventory; from then on the registration reference retains the manager
+ * the ordinary way, and the facade's administrative authority is dropped.
  * This self-contained factory is evaluated in the workspace.
  * @param {any} inventory
  */
@@ -55,6 +57,7 @@ export const makeNativeResourceRegistry = inventory => {
         throw Error('Inventory name became occupied during installation');
       inventory.set(name, registration);
       entry.registration = registration;
+      entry.worker = undefined;
       entry.complete = true;
     },
   });
