@@ -37,7 +37,7 @@
 //! written outside any transaction, so it cannot join a SQLite commit.
 //! [`Transcript::publish_snapshot`] therefore orders the steps: the
 //! transcript's cranks are already committed; the blob is written, synced,
-//! renamed, and its directory synced ([`CasStore::write_blob`]); only then is
+//! renamed, and its directory synced ([`ContentAddressedStore::write_blob`]); only then is
 //! its hash recorded with the exact committed watermark it covers; and only
 //! after that record is durable may [`Transcript::compact`] drop the covered
 //! prefix. A crash anywhere leaves the previous published snapshot and its
@@ -50,8 +50,8 @@
 //! COMMIT and `NORMAL` may forget a recent commit on power loss. Per crank the
 //! transcript pays one admission transaction and one release transaction;
 //! acknowledgments of released frames ride the next transaction instead of
-//! paying their own. Outbound events per crank are bounded by
-//! [`TranscriptLimits`] and refused, not truncated, past the bound.
+//! paying their own. Outbound events and recorded host calls per crank are
+//! bounded by [`TranscriptLimits`] and refused, not truncated, past the bound.
 //!
 //! **Storage failures** (§ Open Questions, "SQLite I/O failure inside a
 //! transcript write") surface as a
@@ -79,7 +79,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
-pub use cas::{blob_hash, sync_directory, CasError, CasStore};
+pub use cas::{blob_hash, sync_directory, CasError, ContentAddressedStore};
 pub use embargo::{CrankVerdict, DuplicateSuppressor, Embargo, FrameSink, Received, Settlement};
 pub use fault::{FaultMode, FaultPlan};
 pub use host::{
@@ -111,6 +111,8 @@ pub enum Operation {
     Recover,
     Admit,
     Commit,
+    /// A barrier's request made durable before its effect runs.
+    HostBarrier,
     Abort,
     AcknowledgeRelease,
     WriteSnapshotBlob,
@@ -205,6 +207,10 @@ pub struct TranscriptLimits {
     pub max_outbound_bytes: usize,
     /// Largest inbound payload admitted.
     pub max_inbound_bytes: usize,
+    /// Most recorded (non-`pure`) host calls one crank may stage.
+    pub max_host_calls: usize,
+    /// Most host-call request and reply bytes one crank may stage.
+    pub max_host_bytes: usize,
 }
 
 impl Default for TranscriptLimits {
@@ -213,6 +219,8 @@ impl Default for TranscriptLimits {
             max_outbound_events: 4096,
             max_outbound_bytes: 16 << 20,
             max_inbound_bytes: 16 << 20,
+            max_host_calls: 4096,
+            max_host_bytes: 16 << 20,
         }
     }
 }
@@ -851,7 +859,7 @@ impl Transcript {
     /// directory, then record its hash with the committed watermark.
     pub fn publish_snapshot(
         &mut self,
-        cas: &CasStore,
+        cas: &ContentAddressedStore,
         blob: &[u8],
         meta: SnapshotMeta,
     ) -> Result<SnapshotRecord, TranscriptError> {
@@ -988,7 +996,7 @@ impl Transcript {
     /// The latest published snapshot, verified, and the committed cranks
     /// after its watermark. A missing or corrupt blob is a storage fault:
     /// recovery stops rather than falling back to another snapshot.
-    pub fn replay_plan(&self, cas: &CasStore) -> Result<ReplayPlan, TranscriptError> {
+    pub fn replay_plan(&self, cas: &ContentAddressedStore) -> Result<ReplayPlan, TranscriptError> {
         let Some(snapshot) = self.latest_snapshot()? else {
             return Err(TranscriptError::Protocol("no published snapshot".into()));
         };

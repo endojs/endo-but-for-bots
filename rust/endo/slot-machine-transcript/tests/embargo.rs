@@ -9,8 +9,8 @@ use std::rc::Rc;
 
 use common::{meta, snapshot_bytes, WorkerFiles};
 use slot_machine_transcript::{
-    CasStore, CrankVerdict, DuplicateSuppressor, Embargo, FrameSink, Received, ReleasableFrame,
-    Settlement, Transcript, TranscriptConfig,
+    ContentAddressedStore, CrankVerdict, DuplicateSuppressor, Embargo, FrameSink, Received,
+    ReleasableFrame, Settlement, Transcript, TranscriptConfig,
 };
 
 /// A peer outside the worker process. It survives a worker crash, and it
@@ -60,8 +60,8 @@ fn open(
     files: &WorkerFiles,
     peer: &Rc<RefCell<Peer>>,
     crash_after: Option<usize>,
-) -> (Embargo<Link>, CasStore) {
-    let cas = CasStore::open(files.cas_directory()).expect("cas directory");
+) -> (Embargo<Link>, ContentAddressedStore) {
+    let cas = ContentAddressedStore::open(files.cas_directory()).expect("cas directory");
     let (mut transcript, _recovery) =
         Transcript::open(files.transcript(), TranscriptConfig::new(&files.worker))
             .expect("open transcript");

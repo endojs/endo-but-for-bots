@@ -6,8 +6,8 @@
 use std::path::{Path, PathBuf};
 
 use slot_machine_transcript::{
-    CasStore, FaultPlan, Recovery, ReleasableFrame, SnapshotMeta, SnapshotRecord, Transcript,
-    TranscriptConfig, TranscriptError,
+    ContentAddressedStore, FaultPlan, Recovery, ReleasableFrame, SnapshotMeta, SnapshotRecord,
+    Transcript, TranscriptConfig, TranscriptError,
 };
 
 /// The vat's whole heap.
@@ -111,7 +111,7 @@ impl WorkerFiles {
 /// The Slot Machine supervisor loop, reduced to what the transcript sees.
 pub struct Supervisor {
     pub transcript: Transcript,
-    pub cas: CasStore,
+    pub cas: ContentAddressedStore,
     pub state: VatState,
     pub recovery: Recovery,
     pub replayed: usize,
@@ -129,7 +129,7 @@ impl Supervisor {
         wire: &mut Wire,
     ) -> Result<Supervisor, TranscriptError> {
         let mut config = TranscriptConfig::new(&files.worker);
-        let mut cas = CasStore::open(files.cas_directory()).expect("cas directory");
+        let mut cas = ContentAddressedStore::open(files.cas_directory()).expect("cas directory");
         if let Some(plan) = &plan {
             config = config.with_fault_plan(plan.clone());
             cas = cas.with_fault_plan(plan.clone());

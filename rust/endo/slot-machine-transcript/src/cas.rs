@@ -28,7 +28,7 @@ use crate::fault::FaultPlan;
 
 /// A directory of content-addressed snapshot blobs.
 #[derive(Clone, Debug)]
-pub struct CasStore {
+pub struct ContentAddressedStore {
     directory: PathBuf,
     fault: Option<FaultPlan>,
 }
@@ -41,6 +41,8 @@ pub enum CasError {
     Io(io::Error),
     /// The blob's bytes do not hash to its name.
     Corrupt { expected: String, actual: String },
+    /// The name is not a SHA-256 digest, so it names no blob in the store.
+    InvalidName(String),
 }
 
 impl std::fmt::Display for CasError {
@@ -52,6 +54,9 @@ impl std::fmt::Display for CasError {
                     f,
                     "snapshot blob {expected} is corrupt (hashes to {actual})"
                 )
+            }
+            CasError::InvalidName(name) => {
+                write!(f, "snapshot blob name {name:?} is not a SHA-256 digest")
             }
         }
     }
@@ -66,19 +71,19 @@ pub fn blob_hash(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-impl CasStore {
-    /// A CAS store rooted at `directory`, created if absent.
-    pub fn open(directory: impl Into<PathBuf>) -> io::Result<CasStore> {
+impl ContentAddressedStore {
+    /// A content-addressed store rooted at `directory`, created if absent.
+    pub fn open(directory: impl Into<PathBuf>) -> io::Result<ContentAddressedStore> {
         let directory = directory.into();
         fs::create_dir_all(&directory)?;
-        Ok(CasStore {
+        Ok(ContentAddressedStore {
             directory,
             fault: None,
         })
     }
 
     /// The same store with its durability operations routed through `plan`.
-    pub fn with_fault_plan(mut self, plan: FaultPlan) -> CasStore {
+    pub fn with_fault_plan(mut self, plan: FaultPlan) -> ContentAddressedStore {
         self.fault = Some(plan);
         self
     }
@@ -154,7 +159,12 @@ impl CasStore {
     }
 
     /// Read and verify the blob named `hash`.
+    /// The name must be 64 lowercase hexadecimal digits: it comes from the
+    /// durable transcript, and anything else could leave the directory.
     pub fn read_blob(&self, hash: &str) -> Result<Vec<u8>, CasError> {
+        if !is_blob_name(hash) {
+            return Err(CasError::InvalidName(hash.to_string()));
+        }
         let bytes = fs::read(self.directory.join(hash)).map_err(CasError::Io)?;
         let actual = blob_hash(&bytes);
         if actual != hash {
@@ -184,6 +194,12 @@ impl CasStore {
     }
 }
 
+/// Whether `name` has the shape of a [`blob_hash`]: 64 lowercase
+/// hexadecimal digits.
+fn is_blob_name(name: &str) -> bool {
+    name.len() == 64 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// Sync a directory so a rename or create inside it survives power loss.
 pub fn sync_directory(directory: &Path) -> io::Result<()> {
     #[cfg(unix)]
@@ -192,7 +208,8 @@ pub fn sync_directory(directory: &Path) -> io::Result<()> {
     }
     #[cfg(not(unix))]
     {
-        // Windows has no directory handle to sync; NTFS journals the rename.
+        // Only unix targets are supported. Windows has no directory handle
+        // to sync, and no durability guarantee is claimed there.
         let _ = directory;
         Ok(())
     }

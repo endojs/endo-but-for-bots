@@ -7,8 +7,8 @@ mod common;
 
 use common::{meta, oracle, snapshot_bytes, Supervisor, Wire, WorkerFiles};
 use slot_machine_transcript::{
-    transcript_path, CasStore, FaultMode, FaultPlan, Operation, SnapshotMeta, Transcript,
-    TranscriptConfig, TranscriptError, TranscriptLimits,
+    transcript_path, ContentAddressedStore, FaultMode, FaultPlan, Operation, SnapshotMeta,
+    Transcript, TranscriptConfig, TranscriptError, TranscriptLimits,
 };
 
 fn fresh(root: &std::path::Path, worker: &str) -> (WorkerFiles, Supervisor, Wire) {
@@ -36,7 +36,7 @@ fn admission_requires_a_published_snapshot() {
         t.begin_crank(b"x"),
         Err(TranscriptError::Protocol(_))
     ));
-    let cas = CasStore::open(root.path().join("cas")).unwrap();
+    let cas = ContentAddressedStore::open(root.path().join("cas")).unwrap();
     t.publish_snapshot(&cas, &snapshot_bytes(0), meta())
         .unwrap();
     t.begin_crank(b"x").unwrap();
@@ -122,9 +122,10 @@ fn staging_past_the_per_crank_bound_is_refused_not_truncated() {
         max_outbound_events: 2,
         max_outbound_bytes: 8,
         max_inbound_bytes: 4,
+        ..TranscriptLimits::default()
     };
     let (mut t, _) = Transcript::open(&path, config).unwrap();
-    let cas = CasStore::open(root.path().join("cas")).unwrap();
+    let cas = ContentAddressedStore::open(root.path().join("cas")).unwrap();
     t.publish_snapshot(&cas, &snapshot_bytes(0), meta())
         .unwrap();
     assert!(matches!(
@@ -400,13 +401,13 @@ fn a_blob_write_fault_poisons_before_anything_is_published() {
     drop(Supervisor::start(&files, None, &mut wire).unwrap());
     let plan = FaultPlan::counting();
     let (mut t, _) = Transcript::open(files.transcript(), TranscriptConfig::new("w")).unwrap();
-    let cas = CasStore::open(files.cas_directory())
+    let cas = ContentAddressedStore::open(files.cas_directory())
         .unwrap()
         .with_fault_plan(plan.clone());
     let before = t.latest_snapshot().unwrap();
     // Aim at the directory sync, the step xsnap's suspend_to_cas omitted.
     let plan2 = FaultPlan::fail_at(4, FaultMode::FailOnce);
-    let cas2 = CasStore::open(files.cas_directory())
+    let cas2 = ContentAddressedStore::open(files.cas_directory())
         .unwrap()
         .with_fault_plan(plan2.clone());
     let Err(TranscriptError::Fault(fault)) = t.publish_snapshot(&cas2, &snapshot_bytes(1), meta())
@@ -424,4 +425,25 @@ fn a_blob_write_fault_poisons_before_anything_is_published() {
         t.publish_snapshot(&cas, &snapshot_bytes(1), meta()),
         Err(TranscriptError::Poisoned(_))
     ));
+}
+
+#[test]
+fn blob_names_that_are_not_digests_are_refused() {
+    let root = tempfile::tempdir().unwrap();
+    let cas = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    for name in [
+        "../t.sqlite",
+        "/etc/passwd",
+        "",
+        &"A".repeat(64),
+        &"0".repeat(63),
+    ] {
+        assert!(
+            matches!(
+                cas.read_blob(name),
+                Err(slot_machine_transcript::CasError::InvalidName(_))
+            ),
+            "{name:?} must be refused"
+        );
+    }
 }

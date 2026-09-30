@@ -22,8 +22,8 @@ use endo::ironhorse_engine::engine::{
 };
 use ironhorse_vm::{DecodeError, Halt, PanicKind};
 use slot_machine_transcript::{
-    CasStore, CrankVerdict, Embargo, FrameSink, ReleasableFrame, Settlement, SnapshotMeta,
-    Transcript, TranscriptConfig,
+    ContentAddressedStore, CrankVerdict, Embargo, FrameSink, ReleasableFrame, Settlement,
+    SnapshotMeta, Transcript, TranscriptConfig,
 };
 
 /// Everything that reached the wire.
@@ -55,7 +55,7 @@ fn run(source: &str) -> ExecutionOutcome {
 
 fn embargo(directory: &std::path::Path) -> (Embargo<Wire>, Rc<RefCell<Vec<ReleasableFrame>>>) {
     let path = slot_machine_transcript::transcript_path(directory, "vat-1");
-    let cas = CasStore::open(directory.join("snapshots")).unwrap();
+    let cas = ContentAddressedStore::open(directory.join("snapshots")).unwrap();
     let (mut transcript, _) = Transcript::open(&path, TranscriptConfig::new("vat-1")).unwrap();
     if transcript.latest_snapshot().unwrap().is_none() {
         let meta = SnapshotMeta {

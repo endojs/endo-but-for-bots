@@ -235,6 +235,11 @@ pub enum HostCallError {
     /// `transactional` callback must use
     /// [`Transcript::host_call_transactional`], and only it may.
     WrongEntryPoint(String),
+    /// A `pure` callback's adapter reported opening or closing a handle.
+    /// The effect escaped the transcript, so the call is refused rather
+    /// than leaving the authoritative handle log disagreeing with the
+    /// native resources. The callback must be reclassified.
+    Misclassified(String),
     /// The transcript refused the write.
     Transcript(TranscriptError),
 }
@@ -289,7 +294,9 @@ pub enum RecoveryStop {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReplayStop {
     /// The recorded call is a barrier: replay halts here instead of
-    /// re-invoking the effect.
+    /// re-invoking the effect. The barrier is consumed from the replay
+    /// queue; after [`Transcript::clear_barrier`], restart from a fresh
+    /// [`Transcript::host_replay`].
     Barrier {
         crank: CrankId,
         seq: Seq,
@@ -358,7 +365,7 @@ pub(crate) const SCHEMA: &str = "
         closes INTEGER NOT NULL DEFAULT 0,
         cleared INTEGER NOT NULL DEFAULT 0
     ) STRICT;
-    CREATE INDEX IF NOT EXISTS host_call_by_crank ON host_call (crank_id, call_ordinal);
+    CREATE UNIQUE INDEX IF NOT EXISTS host_call_by_crank ON host_call (crank_id, call_ordinal);
     CREATE TABLE IF NOT EXISTS host_handle (
         handle_id INTEGER PRIMARY KEY,
         created_by_seq INTEGER NOT NULL,
@@ -536,6 +543,47 @@ impl Transcript {
         })
     }
 
+    /// Refuse, not truncate, a host call past the crank's bound. A reply's
+    /// size is known only after the effect runs, so the byte bound admits a
+    /// call whose request fits and counts its reply against later calls.
+    fn check_host_call_bounds(&self, request_bytes: usize) -> Result<(), TranscriptError> {
+        let limits = self.limits;
+        let Some(active) = &self.active else {
+            return Ok(());
+        };
+        let mut calls = 0usize;
+        let mut bytes = 0usize;
+        for staged in &active.host {
+            match staged {
+                Staged::Call { request, reply, .. } => {
+                    calls += 1;
+                    bytes = bytes.saturating_add(request.len() + reply.len());
+                }
+                Staged::Effect { request, .. } => {
+                    calls += 1;
+                    bytes = bytes.saturating_add(request.len());
+                }
+                Staged::Loss { .. } => {}
+            }
+        }
+        if calls >= limits.max_host_calls {
+            return Err(TranscriptError::Backpressure(format!(
+                "crank {} would exceed {} host calls",
+                active.crank, limits.max_host_calls
+            )));
+        }
+        if bytes
+            .checked_add(request_bytes)
+            .is_none_or(|sum| sum > limits.max_host_bytes)
+        {
+            return Err(TranscriptError::Backpressure(format!(
+                "crank {} would exceed {} host call bytes",
+                active.crank, limits.max_host_bytes
+            )));
+        }
+        Ok(())
+    }
+
     fn next_handle_id(&self) -> Result<HandleId, TranscriptError> {
         let durable: i64 = self
             .conn
@@ -616,6 +664,9 @@ impl Transcript {
                 HandleState::Closed => return Err(HostCallError::UnknownHandle(h)),
             }
         }
+        if class != HostClass::Pure {
+            self.check_host_call_bounds(request.len())?;
+        }
         let ordinal = self.next_call_ordinal();
         if let HostClass::Outbound { .. } = class {
             self.active
@@ -631,8 +682,8 @@ impl Transcript {
         }
         // A barrier's request is durable before the effect runs.
         let request_seq = if class == HostClass::Barrier {
-            let cb = callback.to_string();
-            Some(self.transact(Operation::Commit, Some(crank), |tx| {
+            let callback = callback.to_string();
+            Some(self.transact(Operation::HostBarrier, Some(crank), |tx| {
                 let seq = insert_event(tx, crank, "host-request", request)?;
                 tx.execute(
                     "INSERT INTO host_call
@@ -642,7 +693,7 @@ impl Transcript {
                         seq as i64,
                         crank as i64,
                         ordinal as i64,
-                        cb,
+                        callback,
                         handle.map(|h| h as i64)
                     ],
                 )?;
@@ -654,11 +705,11 @@ impl Transcript {
         let (outcome, write) = invoke(request);
         if class == HostClass::Pure {
             // A pure callback has no effect, so an adapter reporting one
-            // is misclassified and would leak an untracked handle.
-            debug_assert!(
-                outcome.opens.is_none() && !outcome.closes,
-                "pure callback {callback} reported a handle effect",
-            );
+            // is misclassified and would leak an untracked handle. This is
+            // enforced in release builds too: the handle log is authoritative.
+            if outcome.opens.is_some() || outcome.closes {
+                return Err(HostCallError::Misclassified(callback.to_string()));
+            }
             return Ok(HostReply::Reply {
                 reply: outcome.reply,
                 opened: None,
@@ -807,6 +858,12 @@ impl Transcript {
     /// ran in a crank that never committed, or while any handle is broken.
     /// The active crank has not failed to commit, so a barrier it has
     /// already run does not stop the gate.
+    ///
+    /// Consult the gate at restart, or between cranks. While a crank is
+    /// active its fate is still undetermined, so a clear gate says nothing
+    /// about a barrier that crank has already run: decide whether to keep
+    /// issuing calls in that crank from the crank's own outcome, not from
+    /// this gate.
     pub fn recovery_gate(&self) -> Result<Result<(), RecoveryStop>, TranscriptError> {
         let active = self.active_crank().map_or(-1, |c| c as i64);
         let escaped = self
@@ -845,6 +902,12 @@ impl Transcript {
 
     /// An operator's intervention: mark a barrier as handled so recovery may
     /// proceed past it.
+    ///
+    /// A [`HostReplay`] snapshots each barrier's cleared flag when
+    /// [`Transcript::host_replay`] builds it, and has already consumed the
+    /// barrier that stopped it. After clearing, discard that replay and call
+    /// [`Transcript::host_replay`] again; resuming the stale one desyncs its
+    /// queue from the recorded calls.
     pub fn clear_barrier(&mut self, seq: Seq) -> Result<(), TranscriptError> {
         self.check_healthy()?;
         let changed = self.transact(Operation::Recover, None, |tx| {
@@ -868,11 +931,11 @@ impl Transcript {
         let read = || -> rusqlite::Result<BTreeMap<CrankId, VecDeque<Recorded>>> {
             let mut stmt = self.conn.prepare(
                 "SELECT h.crank_id, h.request_seq, h.callback, h.class, h.handle_id,
-                        req.payload, rep.payload, h.opened_handle, h.cleared
+                        request.payload, reply.payload, h.opened_handle, h.cleared
                  FROM host_call h
                  JOIN crank c ON c.crank_id = h.crank_id
-                 JOIN event req ON req.seq = h.request_seq
-                 LEFT JOIN event rep ON rep.seq = h.reply_seq
+                 JOIN event request ON request.seq = h.request_seq
+                 LEFT JOIN event reply ON reply.seq = h.reply_seq
                  WHERE c.state = 'committed' AND h.crank_id > ?1
                  ORDER BY h.crank_id, h.call_ordinal",
             )?;
