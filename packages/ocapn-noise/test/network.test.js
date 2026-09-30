@@ -213,10 +213,11 @@ test('waitForInboundSession rejects a non-canonical peer key', async t => {
   const { keyId } = addFreshKey(network);
   // waitForInboundSession keys `active`/`waiters` by its argument, so it
   // must reject a non-canonical spelling rather than park a waiter that
-  // never resolves.
-  t.throws(() => network.waitForInboundSession(keyId.toUpperCase()), {
-    message: /designator must be 64 lowercase hex chars/,
-  });
+  // never resolves. It rejects (not a sync throw) to match provideSession.
+  await t.throwsAsync(
+    async () => network.waitForInboundSession(keyId.toUpperCase()),
+    { message: /designator must be 64 lowercase hex chars/ },
+  );
   network.shutdown();
 });
 
