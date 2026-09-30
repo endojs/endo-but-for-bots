@@ -76,10 +76,10 @@ Context cancellation tears the child down the same way.
 import { E } from '@endo/far';
 
 // Load this package as an unconfined formula in the host's @node worker.
-const greeter = await E(host).makeUnconfined('@node', shellModuleHref, {
-  powersName: '@none',
+const greeter = await E(host).makeUnconfined(['@node'], shellModuleHref, {
+  powersName: ['@none'],
   env: { command: 'echo', args: JSON.stringify(['hello']) },
-  resultName: 'greeter',
+  resultName: ['greeter'],
 });
 
 // Drain stdout across CapTP with @endo/exo-stream.
@@ -98,8 +98,8 @@ Writing to the process is symmetric, via `iterateBytesWriter`:
 ```js
 import { iterateBytesWriter } from '@endo/exo-stream/iterate-bytes-writer.js';
 
-const proc = await E(host).makeUnconfined('@node', shellModuleHref, {
-  powersName: '@none',
+const proc = await E(host).makeUnconfined(['@node'], shellModuleHref, {
+  powersName: ['@none'],
   env: { command: 'cat' },
 });
 const writer = iterateBytesWriter(E(proc).stdin(), { buffer: 64 });
@@ -111,8 +111,8 @@ To use a pipeline or chain, opt into a shell and put the **whole command
 line in `command`**:
 
 ```js
-await E(host).makeUnconfined('@node', shellModuleHref, {
-  powersName: '@none',
+await E(host).makeUnconfined(['@node'], shellModuleHref, {
+  powersName: ['@none'],
   env: { command: 'grep foo log.txt | wc -l', shell: 'true' },
 });
 ```

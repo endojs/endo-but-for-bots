@@ -102,7 +102,7 @@ make()
   │
   ├─ createProvider(env)              # LLM provider from env vars
   ├─ Initialize transcript with system prompt
-  ├─ E(powers).send('@host', [...])   # greeting with call to action
+  ├─ E(powers).send(['@host'], [...]) # greeting with call to action
   ├─ E(powers).locate('@self')        # Get own locator
   └─ runAgent()                       # Enter message-following loop
 ```
@@ -427,11 +427,11 @@ Lal is provisioned as a guest caplet inside the Endo daemon:
 ```
 E(agent).provideGuest('lal', { introducedNames: {}, agentName: 'profile-for-lal' })
     │
-    ├─ E(guest).storeValue(config, 'lal-config')   # Persist config
+    ├─ E(guest).storeValue(config, ['lal-config'])   # Persist config
     │
-    └─ E(agent).makeUnconfined('@main', 'agent.js', {
-         powersName: 'profile-for-lal',
-         resultName: 'controller-for-lal',
+    └─ E(agent).makeUnconfined(['@main'], 'agent.js', {
+         powersName: ['profile-for-lal'],
+         resultName: ['controller-for-lal'],
          env: { LAL_HOST, LAL_AUTH_TOKEN, LAL_MODEL }
        })
 ```

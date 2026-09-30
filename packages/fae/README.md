@@ -115,7 +115,7 @@ yarn setup-with-tools
 Use the factory to create more agents programmatically:
 
 ```js
-const factory = await E(host).lookup('fae-factory');
+const factory = await E(host).lookup(['fae-factory']);
 
 // Pinned agent — survives endo restart
 await E(factory).createAgent('researcher', { pin: true });

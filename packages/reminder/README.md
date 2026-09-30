@@ -35,9 +35,9 @@ repackaged as an unconfined plugin whose durable tracking lives on the platform
 granted at provisioning; it holds no ambient authority beyond the Node worker it
 runs in.
 
-- `E(powers).lookup('reminder-store')` -> a writable virtual-file-system
+- `E(powers).lookup(['reminder-store'])` -> a writable virtual-file-system
   **directory** backing the durable store.
-- `E(powers).lookup('reminder-recipient')` -> the **subscriber capability** the
+- `E(powers).lookup(['reminder-recipient'])` -> the **subscriber capability** the
   service is bound to (one scheduler per recipient). Each reminder message is
   delivered by `E(recipient).notify(message)`, with the one-shot
   `ReminderResponse` attached.

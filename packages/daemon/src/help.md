@@ -301,7 +301,7 @@ Example: define("E(counter).incr()", { counter: { label: "A counter capability" 
 Send a structured form to another agent.
 The form appears in the recipient's inbox. They can submit values using submit().
 
-- recipientName: Pet name of the recipient (e.g., "@host")
+- recipientName: Pet-name path of the recipient (e.g., ["@host"])
 - description: Human-readable description of the form
 - fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]
 
@@ -451,11 +451,11 @@ Example: evaluate(undefined, "x + y", ["x", "y"], [["a"], ["b"]], ["result"])
 ## makeUnconfined(workerName, specifier, options?) -> Promise<any>
 
 Load and instantiate an unconfined module (has access to Node.js APIs).
-- workerName: Worker to use (undefined for new worker)
+- workerName: Pet-name path of the worker to use (undefined for new worker)
 - specifier: Module path or URL
 - options: Optional object with:
-  - powersName: Pet name of the powers to grant (default: '@none')
-  - resultName: Pet name or path to store the result
+  - powersName: Pet-name path of the powers to grant (default: ['@none'])
+  - resultName: Pet-name path to store the result, e.g. ["my-counter"]
   - env: Environment variables as { KEY: "value" } record
 
 The module's make(powers, context, { env }) function is called.
@@ -465,11 +465,11 @@ The module's make(powers, context, { env }) function is called.
 Instantiate a module from a source-only ZIP archive (a
 `compartment-map.json` plus modules in their original mjs/cjs
 sources, with no precompiled module formats).
-- workerName: Worker to use (undefined for new worker)
-- archiveName: Pet name of the readable blob holding the archive
+- workerName: Pet-name path of the worker to use (undefined for new worker)
+- archiveName: Pet-name path of the readable blob holding the archive
 - options: Optional object with:
-  - powersName: Pet name of the powers to grant (default: '@none')
-  - resultName: Pet name or path to store the result
+  - powersName: Pet-name path of the powers to grant (default: ['@none'])
+  - resultName: Pet-name path to store the result, e.g. ["my-counter"]
   - env: Environment variables as { KEY: "value" } record
 
 The module's make(powers, context, { env }) function is called.
@@ -544,7 +544,7 @@ Example: endow(0, { counter: "my-counter" })
 Send a structured form to another agent.
 The form appears in the recipient's inbox. They can submit values using submit().
 
-- recipientName: Pet name or path of the recipient
+- recipientName: Pet-name path of the recipient, e.g. ["alice"]
 - description: Human-readable description of what the form is for
 - fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]
 
@@ -790,7 +790,8 @@ Example: list("assets") -> ["style.css", "logo.png"]
 ## lookup(namePath) -> Promise<EndoReadable | ReadableTree>
 
 Get the value at a path.
-namePath: string[] - Path segments; pass an array, not a delimited string.
+namePath: string | string[] - A string is one segment, never split on a
+delimiter; an array is a sequence of segments.
 Returns EndoReadable for files, ReadableTree for subdirectories.
 Example: lookup(["index.html"]) -> EndoReadable
 Example: lookup(["assets", "style.css"]) -> EndoReadable
