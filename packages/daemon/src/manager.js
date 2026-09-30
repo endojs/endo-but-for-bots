@@ -126,6 +126,7 @@ import {
   EndoInterface,
 } from './interfaces.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
+import { makeFormulaSturdyRefKit } from './formula-sturdyref.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
 
 /** @import { Passable } from '@endo/pass-style' */
@@ -1418,6 +1419,12 @@ const makeDaemonCore = async (
       // eslint-disable-next-line no-use-before-define
       provideController(id).value
     );
+
+  // SturdyRefs for formulas, minted without incarnating them; enlivening one
+  // incarnates its formula through `provide`.
+  const { sturdyRefForFormula, formulaIdOf } = makeFormulaSturdyRefKit({
+    provide: id => provide(/** @type {FormulaIdentifier} */ (id)),
+  });
 
   /** @param {FormulaIdentifier} id */
   const dropLiveValue = id => {
@@ -8425,6 +8432,8 @@ const makeDaemonCore = async (
   return {
     formulateEndo,
     provide,
+    sturdyRefForFormula,
+    formulaIdOf,
     nodeNumber: localNodeNumber,
     capTpConnectionRegistrar,
     traceAggregator,
