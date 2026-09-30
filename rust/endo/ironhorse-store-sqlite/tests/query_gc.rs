@@ -13,7 +13,9 @@ use std::rc::Rc;
 use ironhorse_snapshot::machine::{
     begin_store_session, checkpoint_to_store, partial_collect, resume_from_store_lazy,
 };
-use ironhorse_snapshot::store::{reachable_pages, slot_page_count, HeapStore, MemoryStore};
+use ironhorse_snapshot::store::{
+    reachable_pages, slot_page_count, HeapStore, MemoryStore, StoreError, StoreFailure,
+};
 use ironhorse_snapshot::{FileStore, Signature};
 use ironhorse_store_sqlite::SqliteHeapStore;
 use ironhorse_vm::{parse_symbols, Interp};
@@ -403,12 +405,14 @@ fn summary_page_count_refuses_gapped_page_edges() {
         raw.close().unwrap();
     }
 
+    // The gap fails closed, and the indexed count refuses the store as the
+    // dense read of the same rows does: by the first missing page, a
+    // corrupt store rather than a retryable fault.
     let store = SqliteHeapStore::open(&path).unwrap();
     let err = store.summary_page_count().unwrap_err();
-    assert!(
-        format!("{err:?}").contains("not contiguous"),
-        "gap + phantom row fails closed, got {err:?}"
-    );
+    assert_eq!(err, StoreError::MissingRow("page edges", 1));
+    assert_eq!(store.page_edges().unwrap_err(), err);
+    assert_eq!(err.classify(), StoreFailure::Poisoned);
     store.close().unwrap();
 }
 

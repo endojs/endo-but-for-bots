@@ -45,20 +45,35 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 /// Map a rusqlite failure into the store vocabulary. SQLite errors are
 /// I/O-class faults (a crashed crank at the machine surface), never
-/// silently absorbed, except the two that describe the file itself: one
-/// that is not a SQLite database, or whose pages SQLite finds malformed,
-/// reads the same on every retry, so it is a corrupt store, like the
-/// foreign-database refusal at open.
+/// silently absorbed, except those that describe what the file holds: one
+/// that is not a SQLite database, whose pages SQLite finds malformed, or
+/// whose column holds a value of the wrong type reads the same on every
+/// retry, so it is a corrupt store, like the foreign-database refusal at
+/// open and the content checks in this module ([`content_damage`]).
 fn sql_err(e: rusqlite::Error) -> StoreError {
+    if matches!(
+        e,
+        rusqlite::Error::InvalidColumnType(..)
+            | rusqlite::Error::FromSqlConversionFailure(..)
+            | rusqlite::Error::IntegralValueOutOfRange(..)
+    ) {
+        return content_damage("sqlite: stored value of the wrong type");
+    }
     match e.sqlite_error_code() {
-        Some(rusqlite::ErrorCode::NotADatabase) => {
-            StoreError::Snapshot(SnapshotError::Corrupt("sqlite: not a database"))
+        Some(rusqlite::ErrorCode::NotADatabase) => content_damage("sqlite: not a database"),
+        Some(rusqlite::ErrorCode::DatabaseCorrupt) => {
+            content_damage("sqlite: database disk image is malformed")
         }
-        Some(rusqlite::ErrorCode::DatabaseCorrupt) => StoreError::Snapshot(SnapshotError::Corrupt(
-            "sqlite: database disk image is malformed",
-        )),
         _ => StoreError::Io(format!("sqlite: {e}")),
     }
+}
+
+/// Stored content this backend cannot read as a store: a corrupt store
+/// ([`StoreFailure::Poisoned`](ironhorse_snapshot::store::StoreFailure)),
+/// never [`StoreError::Io`], whose class tells a supervisor to retry a
+/// read that will fail the same way every time.
+fn content_damage(what: &'static str) -> StoreError {
+    StoreError::Snapshot(SnapshotError::Corrupt(what))
 }
 
 /// A page/target column read back from the database, range-checked
@@ -66,7 +81,7 @@ fn sql_err(e: rusqlite::Error) -> StoreError {
 /// or oversized value fails closed like a malformed blob would, never
 /// wraps into a plausible page number (review nit).
 fn page_col(v: i64) -> Result<u32, StoreError> {
-    u32::try_from(v).map_err(|_| StoreError::Io(format!("sqlite: page column out of range ({v})")))
+    u32::try_from(v).map_err(|_| content_damage("sqlite: page column out of range"))
 }
 
 /// The `meta` key holding the encoded [`StoreManifest`].
@@ -177,10 +192,10 @@ fn read_section_hashes(conn: &Connection) -> Result<[[u8; 32]; SMALL_SECTION_COU
         let bytes: Vec<u8> = row.get(1).map_err(sql_err)?;
         *hash = bytes
             .try_into()
-            .map_err(|_| StoreError::Io("sqlite: small section hash length".into()))?;
+            .map_err(|_| content_damage("sqlite: small section hash length"))?;
     }
     if rows.next().map_err(sql_err)?.is_some() {
-        return Err(StoreError::Io("sqlite: extra small section hashes".into()));
+        return Err(content_damage("sqlite: extra small section hashes"));
     }
     Ok(hashes)
 }
@@ -227,7 +242,7 @@ fn read_sectioned_state(conn: &Connection) -> Result<Vec<u8>, StoreError> {
         *payload = row.get(1).map_err(sql_err)?;
     }
     if rows.next().map_err(sql_err)?.is_some() {
-        return Err(StoreError::Io("sqlite: extra small sections".into()));
+        return Err(content_damage("sqlite: extra small sections"));
     }
     frame_small_state(&std::array::from_fn(|id| payloads[id].as_slice()))
 }
@@ -517,7 +532,7 @@ impl SqliteHeapStore {
             for row in rows {
                 let (page, blob) = row.map_err(sql_err)?;
                 if blob.len() % 4 != 0 {
-                    return Err(StoreError::Io("sqlite: malformed page edges".to_string()));
+                    return Err(content_damage("sqlite: malformed page edges"));
                 }
                 for c in blob.chunks_exact(4) {
                     let target = u32::from_be_bytes(c.try_into().unwrap());
@@ -714,9 +729,11 @@ impl HeapStore for SqliteHeapStore {
             )
             .map_err(sql_err)?;
         if count != extent {
-            return Err(StoreError::Io(format!(
-                "sqlite: page_edges not contiguous ({count} rows, extent {extent})"
-            )));
+            // Not contiguous. The dense read names the first missing page,
+            // so both answers to this query refuse the store the same way;
+            // it runs only on this failure path.
+            self.page_edges()?;
+            return Err(content_damage("sqlite: page_edges not contiguous"));
         }
         Ok(count as u32)
     }
@@ -912,8 +929,8 @@ impl HeapStore for SqliteHeapStore {
             )
             .optional()
             .map_err(sql_err)?
-            .ok_or(StoreError::Io(
-                "sqlite: committed store has no small-state row".to_string(),
+            .ok_or(content_damage(
+                "sqlite: committed store has no small-state row",
             ))
     }
 
@@ -1019,7 +1036,7 @@ impl HeapStore for SqliteHeapStore {
                 return Err(StoreError::MissingRow("page edges", out.len() as u32));
             }
             if blob.len() % 4 != 0 {
-                return Err(StoreError::Io("sqlite: malformed page edges".to_string()));
+                return Err(content_damage("sqlite: malformed page edges"));
             }
             out.push(
                 blob.chunks_exact(4)
@@ -1558,6 +1575,95 @@ mod tests {
             .replace_for_migration(&current, &moved, &small)
             .unwrap();
         assert_eq!(marker(&store), None);
+    }
+
+    /// Damage to what the database holds reads the same on every retry, so
+    /// every read that meets it refuses the store as corrupt (poisoned),
+    /// never as an I/O fault a supervisor would retry. Each case plants one
+    /// defect an outside writer could leave (check constraints off, as a
+    /// writer that skips them would) and reads it back.
+    #[test]
+    fn content_damage_is_a_corrupt_store() {
+        use ironhorse_snapshot::store::{StoreFailure, StoreManifest};
+        let mut machine = Interp::new();
+        assert!(machine.run(&PROG_A).completed);
+        let image = machine.snapshot_image(&sig()).unwrap();
+        type Read = fn(&SqliteHeapStore) -> Result<(), StoreError>;
+        let cases: [(&str, Read, &'static str); 7] = [
+            (
+                "UPDATE small_sections SET bytes = 7 WHERE id = 0",
+                |s| s.read_small_state().map(drop),
+                "sqlite: stored value of the wrong type",
+            ),
+            (
+                "UPDATE small_sections SET hash = x'00' WHERE id = 0",
+                |s| s.small_section_hashes().map(drop),
+                "sqlite: small section hash length",
+            ),
+            (
+                "INSERT INTO small_sections (id, bytes, hash) VALUES (32, x'', zeroblob(32))",
+                |s| s.read_small_state().map(drop),
+                "sqlite: extra small sections",
+            ),
+            (
+                "INSERT INTO small_sections (id, bytes, hash) VALUES (32, x'', zeroblob(32))",
+                |s| s.small_section_hashes().map(drop),
+                "sqlite: extra small section hashes",
+            ),
+            (
+                "UPDATE page_edges SET targets = x'000000' WHERE page = 0",
+                |s| s.page_edges().map(drop),
+                "sqlite: malformed page edges",
+            ),
+            (
+                "INSERT INTO edge_pairs (target, page) VALUES (0, -1)",
+                |s| s.pages_referencing(0).map(drop),
+                "sqlite: page column out of range",
+            ),
+            (
+                "UPDATE slot_pages SET bytes = 'text' WHERE page = 0",
+                |s| s.read_slot_page(0).map(drop),
+                "sqlite: stored value of the wrong type",
+            ),
+        ];
+        for (damage, read, what) in cases {
+            let mut store = SqliteHeapStore::open_in_memory().unwrap();
+            store
+                .commit(&image_to_batch(&image, 1, CommitToken::ZERO))
+                .unwrap();
+            store
+                .conn
+                .execute_batch(&format!("PRAGMA ignore_check_constraints = ON; {damage};"))
+                .unwrap();
+            let error = read(&store).expect_err(damage);
+            assert_eq!(
+                error,
+                StoreError::Snapshot(SnapshotError::Corrupt(what)),
+                "{damage}"
+            );
+            assert_eq!(error.classify(), StoreFailure::Poisoned, "{damage}");
+        }
+
+        // A store stamped before schema 28 keeps its small state in one row.
+        let mut store = SqliteHeapStore::open_in_memory().unwrap();
+        store
+            .commit(&image_to_batch(&image, 1, CommitToken::ZERO))
+            .unwrap();
+        let current = store.manifest().unwrap();
+        let small = store.read_small_state().unwrap();
+        let old = StoreManifest {
+            store_schema: 27,
+            ..current.clone()
+        };
+        store.replace_for_migration(&current, &old, &small).unwrap();
+        assert_eq!(store.read_small_state().unwrap(), small);
+        store.conn.execute("DELETE FROM small_state", []).unwrap();
+        assert_eq!(
+            store.read_small_state(),
+            Err(StoreError::Snapshot(SnapshotError::Corrupt(
+                "sqlite: committed store has no small-state row"
+            )))
+        );
     }
 
     #[test]
