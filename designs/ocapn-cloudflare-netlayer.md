@@ -28,7 +28,9 @@ most are:
   checks that the session presenting the handoff is authenticated as that
   designator.
 
-Cloudflare Workers offer object-capability-flavored RPC: service bindings,
+Cloudflare Workers offer object-capability-flavored RPC (the platform terms
+in this and the next few paragraphs are defined under *Cloudflare
+vocabulary*, just below): service bindings,
 Durable Object (DO) stubs, `WorkerEntrypoint`, `RpcTarget`, and the
 browser-reachable [Cap'n Web](https://github.com/cloudflare/capnweb)
 protocol. Dynamic Worker facets look a lot like Endo compartments. Two things
@@ -82,8 +84,8 @@ The rest of this document uses these platform terms:
   its `fetch()` and `connect()` go; `null` makes them throw.
 - **Facet, DO facet.** This document calls a dynamically loaded Worker a
   *facet* of its supervisor. A *DO facet* (`ctx.facets.get(...)`) is a facet
-  that is itself a Durable Object class hosted inside the supervisor DO. It
-  gets its own SQLite database. The facet and the supervisor each have their
+  that is an instance of a Durable Object class, running inside the
+  supervisor DO. It gets its own SQLite database. The facet and the supervisor each have their
   own storage that the other cannot access; the supervisor reaches the facet
   only through its stub. A plain (non-DO) facet has no storage of its own.
 - **Cap'n Web.** Cloudflare's JSON-based object-capability RPC protocol for
@@ -145,18 +147,33 @@ hands OCapN core a finished, authenticated `NetworkSession`. It does not use
 the connect-style `op:start-session` path.
 
 ```ts
-interface CloudflareNetworkOptions {
-  port?: OcapnPort;          // confined facet: dial through the supervisor
-  bindings?: CarrierBindings; // unconfined vat: DO namespaces, capnweb URLs
-  maxPendingOpens?: number;   // default 16 (Peer identity)
-  handshakeTimeout?: number;  // ms, default 10_000 (Peer identity)
-  maxReorder?: number;        // default 64; 0 on ordered carriers (Ordering)
-  maxInFlight?: number;       // default 64 (Ordering)
-  idleProbe?: number;         // ms, default 30_000 (Failure detection)
+// Exactly one deployment mode: a confined facet dials through its
+// supervisor's port; an unconfined vat holds the carrier bindings itself.
+type CloudflareNetworkOptions =
+  | ({ port: OcapnPort } & CloudflareTuning)             // confined facet
+  | ({ bindings: CarrierBindings } & CloudflareTuning);  // unconfined vat
+
+interface CarrierBindings {
+  // DO namespaces and service bindings, by the name a `do+tree` dial
+  // string uses for them (`<script>/<class>`).
+  doNamespaces?: Record<string, DurableObjectNamespace | Fetcher>;
+  // Whether this vat may dial `capnweb+tree` hints (outbound HTTPS).
+  capnweb?: boolean;
+  // Hints this vat publishes in its own location.
+  selfHints: Record<string, string>;
+}
+
+interface CloudflareTuning {
+  maxPendingOpens?: number;       // default 16 (Peer identity)
+  handshakeTimeout?: number;      // ms, default 10_000 (Peer identity)
+  maxReorder?: number;            // default 64; 0 on ordered carriers (Ordering)
+  maxInFlight?: number;           // default 64 (Ordering)
+  idleProbeInterval?: number;     // ms, default 30_000 (Failure detection)
 }
 ```
 
-Each option is explained in the section named beside it.
+Each tuning option is explained in the section named beside it. `OcapnPort`,
+the supervisor-provided dialer, is defined under *Confinement*, below.
 
 #### Location scheme
 
@@ -206,7 +223,7 @@ vat that answers holds the designator's key, so a wrong or forged hint can
 only cause a failed handshake, not a session with the wrong vat.
 
 The sturdyref URI is the existing `ocapn://<designator>.cf/s/<swissnum>`
-serialization from `locationToLocationId` and `sturdyrefs.js`, with the hints
+serialization from `locationToLocationId` and `packages/ocapn/src/client/sturdyrefs.js`, with the hints
 as query parameters. It replaces the counter demo's "copy URL".
 
 #### Carriers
@@ -251,7 +268,7 @@ depend on the codec the vat chose.
 
 The binding and capnweb carriers share one implementation: both pass
 `RpcTarget`s by reference and both preserve the tree. The ws-bytes carrier is
-the existing byte world (`websocket.js`, or the `.np` WebSocket transport)
+the existing byte world (`packages/ocapn/src/netlayers/websocket.js`, or the `.np` WebSocket transport)
 hosted inside a DO. It is listed for completeness, it is phase 4, and it
 gives no session persistence (see *Session lifetime*).
 
@@ -271,15 +288,17 @@ Mailbox discipline, which the network enforces on both ends:
 
 The platform tells the callee nothing about its caller. The default OCapN
 `op:start-session` check is not enough either: the location signature in
-`client/handshake.js` "only proves the peer holds the fresh session key it just
+`packages/ocapn/src/client/handshake.js` "only proves the peer holds the fresh session key it just
 minted — nothing ties that to who the transport says they are". A
 `verifyPeerLocation` hook cannot fill the gap either, because the platform
 supplies no transport fact to check against.
 
 The `cf` network therefore authenticates the designator key itself. It reuses
-the proven shape of the two existing authenticating netlayers: the Goblins
-`init:peer-auth` challenge in `netlayers/websocket.js`, and the designator
-check in `ocapn-noise`'s `exchangeIdentity`.
+the proven shape of the two existing authenticating netlayers in this
+repository: the `init:peer-auth` challenge (the Goblins-compatible
+WebSocket netlayer's peer authentication) in
+`packages/ocapn/src/netlayers/websocket.js`, and the designator check in
+`exchangeIdentity` in `packages/ocapn-noise/src/network.js`.
 
 ```mermaid
 sequenceDiagram
@@ -304,7 +323,7 @@ sequenceDiagram
   Noise handshake hash). The resulting `NetworkSession.remoteLocationSignature`
   therefore cannot be replayed into another session.
 - Signing and verification use `@endo/ocapn`'s existing Ed25519 code
-  (`cryptography.js`, pure JavaScript over `@noble/curves`), so the scheme
+  (`packages/ocapn/src/cryptography.js`, pure JavaScript over `@noble/curves`), so the scheme
   does not depend on the platform's crypto. workerd's WebCrypto also supports
   Ed25519 `sign`/`verify` (verification item 9), which a later optimization
   may use.
@@ -321,24 +340,32 @@ sequenceDiagram
   a `finish` whose signature fails, aborts the pending session and disposes
   both mailbox stubs. No frame reaches OCapN core, and no `NetworkSession`
   is handed to `inboundSessions`, until verification succeeds.
-- The initiator verifies `sig_R` *before* it sends `finish`. It does not
-  await the returned promise as a trusted value: the reply is untrusted data
-  from an unauthenticated callee, and the initiator checks its shape and
-  signature before it uses `responderMailbox` for anything but `finish`.
+- The initiator verifies `sig_R` *before* it sends `finish`. It treats the
+  resolved reply as untrusted data from an unauthenticated callee: it checks
+  the reply's shape and signature before it uses `responderMailbox` for
+  anything but `finish`.
 - **Unauthenticated `open` is bounded.** Each `open` costs the responder an
   activation, a signature, and a pending-session slot. The front door limits
   pending sessions to `maxPendingOpens` (default 16) and expires a pending
   session that has not received `finish` within `handshakeTimeout` (default
   10 s). An `open` beyond the limit is rejected before any signing. Rate
   limiting by source is the supervisor's or the Worker's policy (for
-  capnweb, the platform's own request limits apply first).
+  capnweb, the platform's own request limits apply first). The budget is
+  per front door (one DO or supervisor), not per source, so on its own it
+  bounds cost but not starvation: a remote party that keeps
+  `maxPendingOpens` never-finished opens alive can deny new sessions to
+  that front door. An internet-reachable DO with no supervisor must
+  therefore put the capnweb front door behind a Worker that rate-limits
+  per source (for example with the Workers rate-limiting binding) before
+  forwarding `open`; the default of 16 is a cost bound, not a DoS
+  defense (*Known Gaps*).
 - Crossed hellos between the same two designators resolve by the comparison
-  rule that `compareSessionKeysForCrossedHellos` (`client/handshake.js`,
-  ebfb#806) implements: compare the two ids with `compareImmutableArrayBuffers`
+  rule that `compareSessionKeysForCrossedHellos` (`packages/ocapn/src/client/handshake.js`,
+  added by [endojs/endo-but-for-bots#806](https://github.com/endojs/endo-but-for-bots/pull/806)) implements: compare the two ids with `compareImmutableArrayBuffers`
   and keep the session the higher id initiated. That function takes
   `op:start-session` connection arguments, so phase 2 factors the comparison
   out of it into a small exported helper over two key buffers, which both
-  `handshake.js` and the `cf` network call. The rule then has one
+  `packages/ocapn/src/client/handshake.js` and the `cf` network call. The rule then has one
   implementation.
 - **When a crossed hello is detected.** Because `open` is one round trip,
   both handshakes can complete before either side notices the other. The
@@ -380,10 +407,15 @@ rely on a platform ordering guarantee:
   there is traffic to send. A peer that crashes while the local side is only
   waiting on answers would otherwise leave those answers pending forever. The
   network therefore sends a heartbeat: when a session has outstanding
-  answers or questions and has sent nothing for `idleProbe` (default 30 s),
+  answers or questions and has sent nothing for `idleProbeInterval` (default 30 s),
   it delivers an empty `ping` frame (consumed by the network, never passed to
-  OCapN core). If the peer's isolate is gone, the stub call rejects and the
-  session aborts as above. A session with nothing outstanding sends no
+  OCapN core). If the peer's isolate is gone, the stub call is expected to
+  reject and the session aborts as above. That a call to a vanished
+  callee rejects rather than hanging is not documented by the platform
+  (verification item 6 covers only stubs broken by a disconnect), so the
+  network also bounds each `ping` by its own timer: a `ping` unresolved
+  after one further `idleProbeInterval` aborts the session as if it had
+  rejected (*Known Gaps*). A session with nothing outstanding sends no
   heartbeat, so an idle DO is still free to be evicted. The heartbeat rides
   the same `seq` counter, so it cannot be used to reorder frames.
 - **The heartbeat is not a keep-alive.** It is an ordinary `setTimeout` in
@@ -396,12 +428,14 @@ rely on a platform ordering guarantee:
   platform fact (*Known Gaps*). Either answer is safe for correctness, since
   eviction ends the session anyway. What it changes is cost: if a pending
   timer does delay eviction, a vat with a long-outstanding question pays wall
-  time for up to one `idleProbe` beyond its last traffic, per probe, until
+  time for up to one `idleProbeInterval` beyond its last traffic, per probe, until
   the answer arrives or the peer is found dead.
 
-On E-ordering: the platform already orders calls on one stub (verification
-item 3), so in the common case the reorder buffer never holds a frame. `seq`
-remains because the guarantee is per stub and undocumented for Cap'n Web, and
+For E-ordering: the platform orders calls on one DO stub (verification
+item 3), so on the binding carrier to a DO the reorder buffer should
+never hold a frame. That is verified only for DO stubs, not for
+`WorkerEntrypoint` service bindings or Cap'n Web (item 6). `seq`
+remains because the guarantee is per stub and undocumented elsewhere, and
 because it is what turns a duplicate from a retry into a detected abort
 rather than a double delivery. `maxReorder` may be set to `0` on carriers
 known to be ordered, which reduces `seq` to a duplicate and gap check.
@@ -474,7 +508,10 @@ flowchart TB
 - The supervisor holds the carrier bindings (DO namespaces, service bindings,
   the Cap'n Web endpoint) and the **dial policy** (which designators or hints a
   facet may open). Policy is the supervisor's business, so revoking a facet's
-  network reach means refusing `dial`.
+  network reach means refusing `dial`. Refusing `dial` is prospective only:
+  sessions already open keep working. To cut an open session the
+  supervisor also drops its forwarding mailboxes for that session, which
+  the facet observes as a rejected `deliver` and a session abort.
 - **What `dial` exposes to the supervisor.** To apply dial policy, the
   supervisor reads `location` (designator and hints). It does not need to
   parse `hello`, and it passes `hello` and the returned `reply` through
@@ -534,8 +571,8 @@ everything a facet obtains after that is an OCapN capability.
 ### Sturdyrefs in DO storage
 
 `makeOcapn({ locator })` already accepts a caller-owned
-`{ get(secret) -> object | Promise<object> }` (`client/index.js`,
-`makeSturdyRefTracker` in `client/sturdyrefs.js`), and bootstrap
+`{ get(secret) -> object | Promise<object> }` (`packages/ocapn/src/client/index.js`,
+`makeSturdyRefTracker` in `packages/ocapn/src/client/sturdyrefs.js`), and bootstrap
 `fetch(swissnum)` calls it. The Cloudflare vat supplies a storage-backed
 locator. Liveslots is not needed.
 
@@ -593,7 +630,8 @@ and pass each frame to `deliver` as a `Uint8Array`. Both carriers move a
 `Uint8Array` (structured clone copies it; Cap'n Web tags it `bytes` and
 base64-encodes it). That option needs no `@endo/ocapn` core change: no
 generic `OcapnCodec<M>`, no `atEnd`/`diagnoseRemainder`, no `signingCodec`
-split, and it can reuse `.np` unchanged.
+split, and it can reuse `.np` unchanged. (Those three core changes are defined in the
+next subsection, *Generalizing the codec and session envelope*.)
 
 | | Bytes in the carrier | Tree codec |
 |---|---|---|
@@ -632,17 +670,17 @@ export interface OcapnCodec<M = Uint8Array> {
 // NetworkSession<M>: reader: Reader<M>, writer: Writer<M>.
 ```
 
-- `dispatchMessageData` in `client/ocapn.js` and the handshake reader in
-  `client/handshake.js` loop `while (reader.index < data.length)`. They switch
+- `dispatchMessageData` in `packages/ocapn/src/client/ocapn.js` and the handshake
+  reader in `packages/ocapn/src/client/handshake.js` loop `while (reader.index < data.length)`. They switch
   to `codec.atEnd`. For the tree codec one frame is exactly one message.
-- The `catch` blocks after those loops (`client/ocapn.js` and
-  `client/handshake.js`) call `codec.diagnose(data.slice(start))` to show the
+- The `catch` blocks after those loops (`packages/ocapn/src/client/ocapn.js` and
+  `packages/ocapn/src/client/handshake.js`) call `codec.diagnose(data.slice(start))` to show the
   undecoded remainder. That is byte-shaped: a tree message need not support
   `slice`, and has no "remainder". The call becomes
   `codec.diagnoseRemainder(message, reader)`, which a byte codec implements as
   today's slice-and-diagnose and the tree codec implements as `diagnose` of
   the whole frame.
-- `writeOcapnMessage` (`codecs/operations.js`) returns `M`.
+- `writeOcapnMessage` (`packages/ocapn/src/codecs/operations.js`) returns `M`.
 - The op and descriptor codecs above the reader and writer do not change.
 - The `cf` network's frame type `M` is fixed by the codec of the
   `makeOcapn` it is registered with: `OcapnTree` with `treeCodec`,
@@ -701,7 +739,7 @@ The sketch said signed subterms must stay canonical Syrup bytes. Reading the
 code shows a weaker requirement is enough. Signatures (location signatures,
 `desc:handoff-give`, `desc:handoff-receive`) are made **and verified** by
 re-serializing the *decoded structure*: `serializeHandoffGive(handoffGive,
-codec)` and `getLocationBytesForSignature` in `cryptography.js`. That is
+codec)` and `getLocationBytesForSignature` in `packages/ocapn/src/cryptography.js`. That is
 already how Syrup peers verify. So:
 
 - Signed objects travel **as trees**, in their normal `desc:sig-envelope`
@@ -740,7 +778,7 @@ results, checked on 2026-09-30:
 
 | # | Claim | Result | Source |
 |---|---|---|---|
-| 1 | Workers RPC carries structured-clone values | **Confirmed, with extensions.** It covers "nearly all" structured-cloneable types, and functions, `RpcTarget` subclasses, streams, and `Request`/`Response` become stubs or pass by reference. The page does not list bigint, typed arrays, NaN, +/-Infinity, or -0 one by one; they come from the structured-clone algorithm, which preserves all of them. The tree codec depends on exactly these and on nothing else. | [workers/runtime-apis/rpc](https://developers.cloudflare.com/workers/runtime-apis/rpc/) |
+| 1 | Workers RPC carries structured-clone values | **Confirmed for the documented types; the rest is a hypothesis.** It covers "nearly all" structured-cloneable types, and functions, `RpcTarget` subclasses, streams, and `Request`/`Response` become stubs or pass by reference. The page does not list bigint, typed arrays, NaN, +/-Infinity, or -0 one by one; that they survive is inferred from the structured-clone algorithm, which preserves all of them, the same kind of inference item 5 found wrong for Cap'n Web. It stays a hypothesis until the phase 2 `structuredClone` leg of the cross-codec equivalence test runs, and then until the phase 3 workerd harness repeats it over a real binding. The tree codec depends on exactly these and on nothing else. | [workers/runtime-apis/rpc](https://developers.cloudflare.com/workers/runtime-apis/rpc/) |
 | 2 | Platform RPC gives the callee no caller identity | **Confirmed.** `ctx.props` exists, but the *binding configurer* sets it (a service binding, or `getEntrypoint(name, { props })` on a Worker Loader). It is configuration, not an assertion by the caller. `ctx.access` does not propagate across RPC hops. A supervisor may use `props` to tell a facet its own facet id, but peer identity still has to come from the in-band handshake. | [runtime-apis/context](https://developers.cloudflare.com/workers/runtime-apis/context/), [bindings/worker-loader](https://developers.cloudflare.com/workers/runtime-apis/bindings/worker-loader/) |
 | 3 | Ordering and at-most-once across DO RPC | **Partially.** Calls on one DO stub are E-ordered, and input gates serialize handling around storage. Errors marked `.retryable` are left to the *caller* to retry "if idempotent", and `.overloaded` errors should not be retried. The runtime does not guarantee at-most-once for a caller that retries. Hence: `seq` checking stays as defense in depth, and the network never retries (*Ordering and reliability*). | [DO state API](https://developers.cloudflare.com/durable-objects/api/state/), [DO error handling](https://developers.cloudflare.com/durable-objects/best-practices/error-handling/) |
 | 4 | Dynamic Worker `globalOutbound: null` | **Confirmed.** `null` makes `fetch()` and `connect()` throw. `env` may hold serializable values and service bindings, including `ctx.exports` loopback bindings (for the supervisor's `OcapnPort`). DO facets (`ctx.facets.get(...)`) each get their **own SQLite database**, which the dynamic code uses without seeing the supervisor's data. | [worker-loader.mdx](https://github.com/cloudflare/cloudflare-docs/blob/production/src/content/docs/workers/runtime-apis/bindings/worker-loader.mdx), [DO facets](https://developers.cloudflare.com/dynamic-workers/usage/durable-object-facets/) |
@@ -819,8 +857,8 @@ carrier stub.
   Web's serialize/deserialize.
 - **Existing client suites over the tree network:** parameterize
   `client.test.js`, `handoffs.test.js`, `sturdyref.test.js`,
-  `pipeline.test.js`, and `gc.test.js` (via `makeTestClientPair` in
-  `test/_util.js`) over the in-memory `cf` network with `treeCodec` and
+  `pipeline.test.js`, and `gc.test.js` in `packages/ocapn/test/` (via
+  `makeTestClientPair` in `packages/ocapn/test/_util.js`) over the in-memory `cf` network with `treeCodec` and
   `signingCodec: syrupCodec`. Handoff tests cover signing over canonical bytes
   while carrying trees.
 - **Network tests:** designator mismatch aborts; a replayed transcript
@@ -834,7 +872,10 @@ carrier stub.
   handshake completes aborts the pending session; an `open` beyond
   `maxPendingOpens` is rejected without signing; a pending session without
   `finish` expires; a peer whose isolate is discarded while answers are
-  outstanding is detected by the heartbeat and its answers reject.
+  outstanding is detected by the heartbeat and its answers reject; a `ping`
+  that never settles aborts the session after its timeout; and a session
+  with no outstanding question or answer sends no `ping` at all, however
+  long it stays idle.
 - **workerd harness** (`@cloudflare/vitest-pool-workers` or Miniflare, run
   from a separate CI job): two DO vats bootstrap-fetch each other over the
   binding carrier; a Node peer reaches a DO over capnweb; a sturdyref minted in
@@ -886,6 +927,11 @@ carrier stub.
   detection*). Phase 3's workerd harness measures it.
 - [ ] Verify DO facet storage across a supervisor DO class rename or
   migration.
+- [ ] Verify whether an RPC call to a DO or Worker whose isolate has
+  vanished rejects promptly or can hang; the `ping` timeout covers the
+  hang case either way.
+- [ ] Per-source rate limiting for an unsupervised internet-reachable DO.
+  `maxPendingOpens` bounds cost only; phase 3 documents the fronting Worker.
 - [ ] Revocation is per kind, not a network guarantee. Deleting a
   `sturdyref` row stops new enlivenments, but a live reference obtained
   earlier keeps working until its session ends unless the kind's maker
