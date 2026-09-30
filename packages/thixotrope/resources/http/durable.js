@@ -63,7 +63,7 @@ export const make = ({ makeManager }) => {
     replaces: (existing, wanted) => existing.handler === wanted.handler,
     /**
      * @param {unknown} port
-     * @param {HttpRegistrationSpec} _spec
+     * @param {HttpRegistrationSpec | undefined} _spec
      * @param {'bound' | 'inactive' | 'closed'} state
      * @param {string} [error]
      */
