@@ -313,8 +313,10 @@ The host checks wall-clock time before firing, so this is not a precise timer.
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 4 is required for dedicated native manager vats and includes the alarm
-acknowledgement protocol introduced in version 3.
+Workspace metadata version 5 is required.
+It includes dedicated native manager vats (version 4), the alarm acknowledgement protocol
+(version 3), and the mail address book that introduces contacts through the `mail-introductions`
+resource with observable inbox and outbox maps.
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 See [alarm settlement](designs/alarm-settlement.md) for recovery and cleanup details.
@@ -335,7 +337,7 @@ Run two supervisors with different private state directories, then use these com
 ```sh
 thix invite ./alice bob
 # Copy the JSON invitation into Bob's command, quoted as one argument:
-thix connect ./bob alice '<invitation JSON>'
+thix accept ./bob alice '<invitation JSON>'
 thix contacts ./alice
 thix contacts ./bob
 thix send ./alice bob 'Try this counter' counter
@@ -345,28 +347,62 @@ thix mail ./bob
 The last argument to `send` selects one capability from Alice's inventory.
 For example, install the counter example and use `attach` to run
 `E(apps).get('counter').then(counter => { inventory.set('counter', counter); })`.
+Each message carries exactly one capability.
 Bob's mailbox view supports `r` to refresh, `take <id> <inventory-key>`,
 `discard <id>`, and `q` to disconnect.
 `inbox`, `outbox`, and `contacts` provide the same descriptions as JSON for scripts.
-`take` copies a capability into the inventory; `discard` releases only the mailbox's reference.
-The view never receives the offered capabilities themselves and creates no guest subscriptions.
+`take` copies a message's capability into the inventory; `discard` releases only the mailbox's reference.
+The view never receives the capabilities themselves and creates no guest subscriptions.
+Message text and contact labels are remote-controlled, so every command that prints them
+escapes terminal control characters, including the C1 controls and Unicode line separators
+that JSON quoting leaves raw.
 
 Contact names are local labels, not claims of authenticated human identity.
 Possession of an invitation permits one reciprocal exchange of inbox capabilities.
-A different receiver cannot redeem the same invitation again.
-`revoke-invite ./alice '<invitation JSON>'` cancels future redemption and removes its publication;
-it does not revoke an already established contact or capabilities previously sent.
+Once the exchange completes, the publication is withdrawn: the same correspondent may repeat
+`accept` through the reference it already holds, but nobody can fetch the invitation again,
+and a different correspondent is refused.
+`revoke-invite ./alice '<invitation JSON>'` closes an unredeemed invitation and withdraws its publication.
+It prints `false` when nothing remained to revoke, and it never disturbs an established contact
+or capabilities previously sent.
 Treat invitations as secrets and share them only with the intended recipient.
 
+A pet name can be reused after a failed `accept`.
+The contact keeps its name with status `failed` and the error;
+`invite` or `accept` with the same name retries on that contact, and the last error stays
+visible in `contacts` until an attempt succeeds.
+A contact whose invitation was revoked before redemption is `cancelled` and can be invited again the same way.
+`accept` validates the invitation before it records any session intent, so an invalid invitation reserves no name.
+
+Invitations embed the inviter's `peers.sock` path as an absolute path, because `thix` resolves
+the state directory argument against the current working directory when it starts serving.
+Unix socket paths are limited by `sun_path`, 103 bytes here, so a deeply nested state directory
+cannot serve peers; choose a short absolute path.
+
 The mailbox is a separate persistent guest vat, created on first use.
-Its ordinary Maps retain contacts, offers, and delivery statuses without a special GC policy.
-The workspace holds its owner capability; remote contacts receive only their own submission facet.
-Connect while the destination is online and wait for contact status `ready` before sending.
+The workspace inventory holds the `contacts` map and the `mail` address book, so an application
+can be granted mail the same way as any other inventory entry.
+The address book reaches the host authority an introduction needs — publishing, withdrawing and
+fetching invitations — through one `mail-introductions` resource, so a guest that holds the address
+book can invite and accept without holding the daemon.
+Granting `mail` therefore also grants the authority to make this node dial the peer named in any
+invitation it accepts and to keep a durable session with that peer.
+The inbox and outbox are observable maps of immutable message records that retain the sending or
+receiving contact object; labels resolve against the contacts map when a list is read, so renaming
+a contact relabels its messages and a contact removed from the map shows as `<unnamed>`.
+The workspace holds the mailbox's owner capability; remote contacts receive only their own submission facet.
+Accept while the destination is online and wait for contact status `ready` before sending.
 Once established, calls use durable sessions: a send while the recipient is offline can remain
 `sending` until reconnect, including after both supervisors restart.
 The guest issues one invocation per send; the node owns delivery retries after admission.
 This does not yet provide a separate application admission API or user-space retry proxy.
 An interrupted introduction command can have an uncertain outcome; inspect `contacts` before retrying.
+
+`@endo/daemon` has the same three ideas under other names: a mailbox, a pet store, and invitations.
+There, the daemon owns the mailbox, a message names several capabilities by pet name and stores
+them by formula identifier, and the pet store resolves names when the message is sent.
+Here, the mailbox lives in a guest vat, records retain the contact object and resolve labels
+only when read, and each message carries exactly one capability.
 
 ## Ironhorse demos and CI tests
 

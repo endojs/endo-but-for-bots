@@ -32,7 +32,8 @@ An export the guest has released is dropped from the endpoint's records as the r
 Retirement is part of the general host-resource contract, not an alarm-specific mechanism.
 
 Workspace metadata version 3 introduced clocks with this acknowledgement protocol.
-The current version 4 also requires dedicated native manager vats.
+Later versions add dedicated native manager vats and the mail address book; the current version
+is recorded once in the supervisor.
 Startup checks it under the store lease before restoring workers or starting alarms.
 Older heap-persisted clock implementations cannot acknowledge outcomes and require migration or
 fresh state; automatically substituting new source would not replace their retained closures.
