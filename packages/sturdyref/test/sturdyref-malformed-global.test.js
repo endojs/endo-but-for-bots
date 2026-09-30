@@ -7,10 +7,11 @@
 import '@endo/init';
 import test from 'ava';
 import harden from '@endo/harden';
-import { selectSturdyRef } from '../src/sturdyref-pony.js';
+import { selectSturdyRef } from '../src/sturdyref-shim.js';
 
 test('first-wins: a malformed pre-existing SturdyRef is rejected', t => {
-  // The retired #774 namespace shape is no longer accepted.
+  // An earlier draft's `{ fromLocation, toLocation }` namespace shape is
+  // not a constructor, so it is rejected.
   Object.defineProperty(globalThis, 'SturdyRef', {
     value: harden({ fromLocation: () => {}, toLocation: () => {} }),
     enumerable: false,

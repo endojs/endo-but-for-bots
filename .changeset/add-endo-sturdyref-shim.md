@@ -1,5 +1,5 @@
 ---
-'@endo/sturdyref': minor
+'@endo/sturdyref': major
 ---
 
 Add `@endo/sturdyref`, a first-wins shim and ponyfill that installs a

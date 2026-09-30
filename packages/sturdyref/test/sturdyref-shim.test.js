@@ -11,10 +11,12 @@ import {
   makeSturdyRef,
   enliven,
   isSturdyRef,
+} from '../src/sturdyref-pony.js';
+import {
   provideSturdyRef,
   selectSturdyRef,
   makeSturdyRefConstructor,
-} from '../src/sturdyref-pony.js';
+} from '../src/sturdyref-shim.js';
 
 const { isFrozen, getPrototypeOf } = Object;
 

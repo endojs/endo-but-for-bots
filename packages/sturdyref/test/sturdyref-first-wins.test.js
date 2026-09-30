@@ -11,9 +11,8 @@ import {
   makeSturdyRefConstructor,
   provideSturdyRef,
   selectSturdyRef,
-  enliven,
-  isSturdyRef,
-} from '../src/sturdyref-pony.js';
+} from '../src/sturdyref-shim.js';
+import { enliven, isSturdyRef } from '../src/sturdyref-pony.js';
 
 test('first-wins: an already-installed constructor is adopted, not overwritten', async t => {
   // A prior eval twin installed first.
@@ -28,9 +27,9 @@ test('first-wins: an already-installed constructor is adopted, not overwritten',
   t.is(selectSturdyRef(), TwinSturdyRef, 'selectSturdyRef adopts the twin');
   t.is(provideSturdyRef(), TwinSturdyRef, 'provideSturdyRef adopts the twin');
   t.is(globalThis.SturdyRef, TwinSturdyRef, 'the twin install is untouched');
-  const desc = Object.getOwnPropertyDescriptor(globalThis, 'SturdyRef');
-  t.false(desc.configurable, 'adoption locks a configurable global');
-  t.false(desc.writable, 'adoption locks a writable global');
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'SturdyRef');
+  t.false(descriptor.configurable, 'adoption locks a configurable global');
+  t.false(descriptor.writable, 'adoption locks a writable global');
   t.throws(
     () =>
       Object.defineProperty(globalThis, 'SturdyRef', {

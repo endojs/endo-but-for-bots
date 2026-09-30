@@ -8,11 +8,8 @@
 import '../shim.js';
 import 'ses';
 import test from 'ava';
-import {
-  provideSturdyRef,
-  enliven,
-  isSturdyRef,
-} from '../src/sturdyref-pony.js';
+import { provideSturdyRef } from '../src/sturdyref-shim.js';
+import { enliven, isSturdyRef } from '../src/sturdyref-pony.js';
 
 const { isFrozen, getPrototypeOf, getOwnPropertyDescriptor } = Object;
 const { ownKeys } = Reflect;
@@ -49,10 +46,10 @@ test('lockdown succeeds after the shim was imported', t => {
 test('the pre-lockdown install is the realm constructor, locked in place', t => {
   t.is(globalThis.SturdyRef, Installed);
   t.is(provideSturdyRef(), Installed);
-  const desc = getOwnPropertyDescriptor(globalThis, 'SturdyRef');
-  t.false(desc.writable);
-  t.false(desc.configurable);
-  t.false(desc.enumerable);
+  const descriptor = getOwnPropertyDescriptor(globalThis, 'SturdyRef');
+  t.false(descriptor.writable);
+  t.false(descriptor.configurable);
+  t.false(descriptor.enumerable);
 });
 
 test('the constructor, prototype, and statics are frozen', t => {
@@ -62,16 +59,20 @@ test('the constructor, prototype, and statics are frozen', t => {
   t.true(isFrozen(Installed.isSturdyRef));
 });
 
-test('lockdown hardens the constructor along with the intrinsics', t => {
+// SES does not yet permit `SturdyRef` as an intrinsic, so lockdown does not
+// itself harden the constructor; the shim froze it, lockdown hardened the
+// shared intrinsics beneath it, and `harden` then accepts it.
+test('after lockdown, harden accepts the pre-lockdown constructor', t => {
   t.false(functionPrototypeFrozenBeforeLockdown, 'shim did not harden');
   t.true(isFrozen(getPrototypeOf(Installed)), 'lockdown hardened the rest');
   t.is(harden(Installed), Installed, 'harden accepts it as already hardened');
 });
 
 test('the constructor matches the shape SES permits for SturdyRef', t => {
-  // Mirrors the `SturdyRef` and `%SturdyRefPrototype%` permits: any extra own
-  // property would be removed (or would break lockdown) once SES admits the
-  // shim's constructor as an intrinsic.
+  // Pins the shape that the intended layer-2 `SturdyRef` and
+  // `%SturdyRefPrototype%` SES permits will expect; no such permit exists in
+  // SES yet, but any extra own property would be removed (or would break
+  // lockdown) once one is added.
   t.is(getPrototypeOf(Installed), Function.prototype);
   t.deepEqual(ownKeys(Installed).sort(), [
     'enliven',

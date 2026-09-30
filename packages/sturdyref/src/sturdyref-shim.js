@@ -26,11 +26,12 @@
  * `lockdown`: doing so installs `Object[@harden]`, after which `lockdown`
  * refuses to run. So the constructor is hardened with `@endo/harden` only
  * when a harden is already present (`lockdown` has run, or another library
- * already installed one). Otherwise the constructor, its prototype, and its
- * statics are merely frozen, and `lockdown` hardens them later along with
- * every other intrinsic. Installing before `lockdown` is what lets SES admit
- * `SturdyRef` at `repairIntrinsics` time and share it with child
- * compartments. Every ref is frozen at construction either way.
+ * already installed one). The constructor, its prototype, and its statics are
+ * always frozen first, because an installed harden may be a no-op (for
+ * example under `hardenTaming: 'unsafe'`). SES does not yet permit
+ * `SturdyRef` as an intrinsic, so a constructor installed before `lockdown`
+ * stays a frozen start-compartment global until a later layer adds that
+ * permit. Every ref is frozen at construction either way.
  *
  * Installation is still LAZY: nothing is installed at import time. The first
  * call to `provideSturdyRef()` performs the race-to-install. The eager
@@ -42,10 +43,15 @@ import harden from '@endo/harden';
 const { defineProperty, freeze, getOwnPropertyDescriptor } = Object;
 const { apply } = Reflect;
 
-// Captured at module load, so that later mutation of `WeakMap.prototype` in a
-// realm that has not (yet) been locked down cannot observe or redirect the
-// closely held ref-to-handler map.
+// Captured at module load, so that later mutation of `WeakMap`, `Promise`, or
+// their prototypes in a realm that has not (yet) been locked down cannot
+// observe or redirect the closely held ref-to-handler map or the result of
+// enlivening.
+const SafeWeakMap = WeakMap;
 const { get: weakMapGet, set: weakMapSet, has: weakMapHas } = WeakMap.prototype;
+const SafePromise = Promise;
+const { then: promiseThen } = Promise.prototype;
+const SafeTypeError = TypeError;
 
 const symbolForHarden = Symbol.for('harden');
 
@@ -56,8 +62,8 @@ const symbolForHarden = Symbol.for('harden');
  * harden of its own and make `lockdown` throw.
  */
 const isHardenInstalled = () =>
-  /** @type {any} */ (Object)[symbolForHarden] !== undefined ||
-  /** @type {any} */ (globalThis).harden !== undefined;
+  typeof (/** @type {any} */ (Object)[symbolForHarden]) === 'function' ||
+  typeof (/** @type {any} */ (globalThis).harden) === 'function';
 
 /**
  * An opaque, frozen object with no own properties. What it captures is
@@ -91,7 +97,8 @@ const isHardenInstalled = () =>
  * Make a fresh `SturdyRef` constructor closing over its own private WeakMap
  * from ref to handler. Only the first constructor to reach `globalThis` (see
  * `selectSturdyRef`) is retained by the realm; the rest are discarded.
- * Exported for tests that need an un-installed control instance.
+ * Exported only from this module, for tests that need an un-installed
+ * control instance; the package's public entry does not re-export it.
  *
  * @returns {SturdyRefConstructor}
  */
@@ -102,7 +109,7 @@ export const makeSturdyRefConstructor = () => {
    *
    * @type {WeakMap<SturdyRef, { handler: SturdyRefHandler, enliven: (ref: SturdyRef) => unknown }>}
    */
-  const handlers = new WeakMap();
+  const handlers = new SafeWeakMap();
 
   class SturdyRef {
     /**
@@ -144,13 +151,16 @@ export const makeSturdyRefConstructor = () => {
      * @returns {Promise<unknown>}
      */
     static enliven(ref) {
-      return Promise.resolve().then(() => {
-        const entry = apply(weakMapGet, handlers, [ref]);
-        if (entry === undefined) {
-          throw TypeError('SturdyRef.enliven expects a SturdyRef');
-        }
-        return apply(entry.enliven, entry.handler, [ref]);
-      });
+      const settled = new SafePromise(resolve => resolve(undefined));
+      return apply(promiseThen, settled, [
+        () => {
+          const entry = apply(weakMapGet, handlers, [ref]);
+          if (entry === undefined) {
+            throw SafeTypeError('SturdyRef.enliven expects a SturdyRef');
+          }
+          return apply(entry.enliven, entry.handler, [ref]);
+        },
+      ]);
     }
   }
 
@@ -161,15 +171,15 @@ export const makeSturdyRefConstructor = () => {
     configurable: false,
   });
 
+  // Always freeze everything reachable that is ours: an installed harden may
+  // be a no-op, and freezing never installs a harden, so it cannot make
+  // `lockdown` refuse to run.
+  freeze(SturdyRef.enliven);
+  freeze(SturdyRef.isSturdyRef);
+  freeze(SturdyRef.prototype);
+  freeze(SturdyRef);
   if (isHardenInstalled()) {
     harden(SturdyRef);
-  } else {
-    // Before lockdown: freeze everything reachable that is ours, and leave
-    // hardening (including the shared intrinsics above these) to lockdown.
-    freeze(SturdyRef.enliven);
-    freeze(SturdyRef.isSturdyRef);
-    freeze(SturdyRef.prototype);
-    freeze(SturdyRef);
   }
 
   return /** @type {SturdyRefConstructor} */ (
@@ -211,18 +221,23 @@ export const selectSturdyRef = () => {
         '@endo/sturdyref expected globalThis.SturdyRef to be a constructor with enliven and isSturdyRef statics',
       );
     }
-    const desc = getOwnPropertyDescriptor(globalThis, 'SturdyRef');
+    const descriptor = getOwnPropertyDescriptor(globalThis, 'SturdyRef');
     if (
-      desc === undefined ||
-      desc.configurable ||
-      !('value' in desc) ||
-      desc.writable
+      descriptor === undefined ||
+      descriptor.configurable ||
+      !('value' in descriptor) ||
+      descriptor.writable
     ) {
       // Throws if the binding is a non-configurable accessor, which cannot
-      // be locked to one constructor.
+      // be locked to one constructor. A non-configurable data binding keeps
+      // its enumerability, since a non-configurable property rejects any
+      // change to it.
       defineProperty(globalThis, 'SturdyRef', {
         value: existing,
-        enumerable: false,
+        enumerable:
+          descriptor !== undefined && !descriptor.configurable
+            ? descriptor.enumerable
+            : false,
         writable: false,
         configurable: false,
       });

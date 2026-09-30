@@ -16,11 +16,7 @@ import { provideSturdyRef } from './sturdyref-shim.js';
 
 /** @import { SturdyRef, SturdyRefHandler } from './sturdyref-shim.js' */
 
-export {
-  provideSturdyRef,
-  selectSturdyRef,
-  makeSturdyRefConstructor,
-} from './sturdyref-shim.js';
+const { freeze } = Object;
 
 /**
  * Construct a SturdyRef with the realm's shared constructor. Equivalent to
@@ -51,3 +47,7 @@ export const enliven = ref => provideSturdyRef().enliven(ref);
  * @returns {value is SturdyRef}
  */
 export const isSturdyRef = value => provideSturdyRef().isSturdyRef(value);
+
+freeze(makeSturdyRef);
+freeze(enliven);
+freeze(isSturdyRef);
