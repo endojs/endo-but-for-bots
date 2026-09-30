@@ -22,6 +22,7 @@ const call = (id, name) => ({ kind: 'tool-call', id, name, args: '{}' });
 const result = (id, content) => ({ kind: 'tool-result', id, content });
 const turn = (turnId, records, extra = {}) => ({
   turnId: `${turnId}`,
+  dispatchState: 'possibly-dispatched',
   state: 'completed',
   transcriptComplete: true,
   input: `input ${turnId}`,
@@ -717,6 +718,7 @@ test('real journal late old-turn settlement survives subsequent archive publicat
     modelId: 'sol',
   });
   const old = await journal.begin(options);
+  await journal.dispatch(old);
   await journal.recordTranscript(old, '0', call('native', 'exec'));
   await journal.append(old, {
     type: 'observed-tool-call',
@@ -726,12 +728,14 @@ test('real journal late old-turn settlement survives subsequent archive publicat
   });
   await journal.append(old, { type: 'finish', state: 'completed' });
   const boundary = await journal.begin(options);
+  await journal.dispatch(boundary);
   await journal.recordTranscript(boundary, '0', checkpoint('durable summary'));
   await journal.append(boundary, { type: 'finish', state: 'completed' });
   // Publish the checkpoint before the earlier unresolved turn can be archived.
   /* eslint-disable no-await-in-loop */
   for (let index = 0; index < 290; index += 1) {
     const id = await journal.begin(options);
+    await journal.dispatch(id);
     await journal.append(id, { type: 'finish', state: 'completed' });
   }
   await journal.append(old, {
@@ -742,6 +746,7 @@ test('real journal late old-turn settlement survives subsequent archive publicat
   await journal.resolve(old, 'Effect checked');
   for (let index = 0; index < 80; index += 1) {
     const id = await journal.begin(options);
+    await journal.dispatch(id);
     await journal.append(id, { type: 'finish', state: 'completed' });
   }
   const revived = makeTurnJournal(powers);

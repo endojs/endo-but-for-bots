@@ -33,7 +33,12 @@ const projectContext = async (
   { portableFallback = false } = {},
 ) => {
   const eligible = turn =>
-    turn.state !== 'pending' && turn.turnId !== excludeTurnId;
+    turn.state !== 'pending' &&
+    turn.turnId !== excludeTurnId &&
+    // An admitted prompt is history, not prior backend dialogue. This state
+    // is established by the journal's write-before-send contract, never by
+    // absence of streamed events or a transport's delivery report.
+    turn.dispatchState !== 'not-dispatched';
   /** @type {{ turnId: string, ordinal: number, sequence: string } | undefined} */
   let boundary = initialBoundary;
   await selectTurns(turn => {

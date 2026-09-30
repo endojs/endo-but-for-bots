@@ -19,7 +19,7 @@ const PREFIX = 'floot-turn-event-';
 const CONTENT_PREFIX = 'floot-turn-content-';
 const SNAPSHOT_PREFIX = 'floot-turn-snapshot-';
 const ARCHIVE_PREFIX = 'floot-turn-archive-';
-const SNAPSHOT_VERSION = 2;
+const SNAPSHOT_VERSION = 3;
 
 /**
  * Bounds, and what each one protects.
@@ -73,7 +73,7 @@ const ARCHIVE_CHUNK_TURNS = 256;
 
 /** Text fields an event may carry that are externalized when large. */
 const CONTENT_FIELDS = harden({
-  dispatch: harden(['input']),
+  begin: harden(['input']),
   'tool-intent': harden(['args']),
   'observed-tool-call': harden(['args']),
   'tool-result': harden(['result']),
@@ -138,6 +138,22 @@ harden(assertBackendCheckpoint);
 const assertCheckpointState = record => {
   (record !== null && typeof record === 'object') ||
     Fail`Invalid turn journal checkpoint record`;
+  ['not-dispatched', 'possibly-dispatched'].includes(record.dispatchState) ||
+    Fail`Invalid turn journal dispatch state`;
+  if (record.dispatchState === 'not-dispatched') {
+    (record.state !== 'completed' &&
+      record.tools?.length === 0 &&
+      record.activity?.length === 0 &&
+      (record.transcript?.length ?? 0) === 0 &&
+      !record.transcriptComplete &&
+      record.presentation === undefined &&
+      (record.output === undefined || record.output === '') &&
+      record.outputRef === undefined &&
+      record.usage === undefined &&
+      record.servedBy === undefined &&
+      record.backendCheckpoint === undefined) ||
+      Fail`Execution evidence requires dispatch intent`;
+  }
   if (record.nativeContextFormat !== undefined)
     assertText(record.nativeContextFormat, 128);
   if (record.backendCheckpoint === undefined) return;
@@ -261,9 +277,11 @@ export const makeTurnJournal = powers => {
     // A replayed event may predate content references, when a field could
     // fill the whole event; a new one is cut to a preview before it is written.
     const textLimit = recovered ? MAX_EVENT_SIZE : PREVIEW_CHARS;
-    if (type === 'dispatch') {
-      turnId === `${sequence}` || Fail`Invalid turn journal dispatch ID`;
-      !records.has(turnId) || Fail`Duplicate turn journal dispatch`;
+    if (type === 'begin') {
+      turnId === `${sequence}` || Fail`Invalid turn journal begin ID`;
+      !records.has(turnId) || Fail`Duplicate turn journal begin`;
+      event.dispatchState === 'not-dispatched' ||
+        Fail`Invalid turn journal initial dispatch state`;
       assertText(event.input, textLimit, true);
       assertText(event.backendId);
       assertText(event.modelId, 1024, true);
@@ -275,6 +293,7 @@ export const makeTurnJournal = powers => {
       assertMailReceipt(event.mail);
       const record = {
         turnId,
+        dispatchState: 'not-dispatched',
         input: event.input,
         ...(event.inputRef === undefined ? {} : { inputRef: event.inputRef }),
         backendId: event.backendId,
@@ -298,6 +317,28 @@ export const makeTurnJournal = powers => {
     }
     const record = records.get(turnId);
     record || Fail`Unknown turn journal turn`;
+    if (type === 'dispatch-intent') {
+      (!record.terminal && record.dispatchState === 'not-dispatched') ||
+        Fail`Invalid turn journal dispatch transition`;
+      recovered ||
+        record.state === 'pending' ||
+        Fail`Cannot dispatch a recovered turn`;
+      return () => {
+        record.dispatchState = 'possibly-dispatched';
+      };
+    }
+    if (
+      [
+        'presentation',
+        'transcript-record',
+        'transcript-complete',
+        'tool-intent',
+        'observed-tool-call',
+      ].includes(type)
+    ) {
+      record.dispatchState === 'possibly-dispatched' ||
+        Fail`Execution evidence requires dispatch intent`;
+    }
     if (type === 'presentation') {
       (!record.terminal && record.presentation === undefined) ||
         Fail`Presentation already settled`;
@@ -419,6 +460,10 @@ export const makeTurnJournal = powers => {
           : event.state;
       assertCheckpointState({
         ...event,
+        dispatchState: record.dispatchState,
+        transcript: record.transcript,
+        transcriptComplete: record.transcriptComplete,
+        presentation: record.presentation,
         terminal: true,
         state,
         tools: record.tools,
@@ -992,8 +1037,22 @@ export const makeTurnJournal = powers => {
         ![...records.values()].some(record => record.state === 'pending') ||
           Fail`A turn is already active`;
         const turnId = `${next}`;
-        await write({ ...options, type: 'dispatch', turnId });
+        await write({
+          ...options,
+          type: 'begin',
+          turnId,
+          dispatchState: 'not-dispatched',
+        });
         return turnId;
+      }),
+    /** @param {string} turnId */
+    dispatch: turnId =>
+      serialized(async () => {
+        const record = records.get(turnId);
+        (record && !record.terminal && record.state === 'pending') ||
+          Fail`Cannot dispatch a recovered or terminal turn`;
+        if (record.dispatchState === 'possibly-dispatched') return;
+        await write({ type: 'dispatch-intent', turnId });
       }),
     /**
      * @param {string} turnId

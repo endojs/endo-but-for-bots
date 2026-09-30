@@ -923,6 +923,7 @@ export const makeStreamingAgent = async (
           // conversation as records it can rebuild its CLI's native store
           // from, keeping tool calls as tool calls with their results.
           transcript: await getContextTranscript(turnId),
+          beforeSend: () => turnJournal.dispatch(turnId),
           recordToolEvent: event => turnJournal.append(turnId, event),
           recordTranscript: (ordinal, record) =>
             turnJournal.recordTranscript(turnId, ordinal, record),
@@ -985,11 +986,6 @@ export const makeStreamingAgent = async (
       );
       transcriptOrdinal += 1;
     };
-    await recordProviderTranscript({
-      kind: 'message',
-      role: 'user',
-      content: text,
-    });
 
     // Agentic loop: stream a reply; if it calls tools, run them, persist the
     // assistant turn plus tool results, and loop again until the model returns a
@@ -1035,6 +1031,16 @@ export const makeStreamingAgent = async (
         const provider = await currentProvider();
         let answer;
         try {
+          await turnJournal.dispatch(turnId);
+          if (signal?.aborted) throw Error('Floot turn aborted');
+          if (transcriptOrdinal === 0) {
+            await recordProviderTranscript({
+              kind: 'message',
+              role: 'user',
+              content: text,
+            });
+          }
+          if (signal?.aborted) throw Error('Floot turn aborted');
           answer = await provider.chatStream(
             context,
             tools.providerSchemas,

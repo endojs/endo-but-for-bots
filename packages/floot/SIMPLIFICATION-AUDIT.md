@@ -165,8 +165,21 @@ Not deployed.
 The context review also reproduced a distinct intent/execution conflation:
 an `onBegun` cancellation before any native send leaves a cancelled turn carrying
 `nativeContextFormat`; a later Codex turn refuses it as unsafe native evidence.
-This remains open. A declared context format is not evidence of native dispatch,
-and an empty observed stream is not proof that no dispatch happened.
+The correction separates admission (`begin`) from a write-ahead
+`dispatch-intent` acknowledged before either runtime may send.
+A declared context format is not evidence of native dispatch, and an empty
+observed stream is not proof that no dispatch happened.
+The journal explicitly records `not-dispatched` or `possibly-dispatched`.
+Only the former is omitted from model continuation; both remain in history.
+The marker is conservative across a lost acknowledgement and never claims that
+the backend executed anything or stopped safely.
+This is a journal-format replacement, not a migration: legacy admission events
+and version-2 snapshots/archives are rejected.
+Deployment must retire affected test sessions first, preserving host, Secrets,
+renewal owners and workspaces.
+All 777 Floot tests pass; Floot types and lint pass (zero errors, 286 warnings).
+Clean root type build, all 14 type-contract tasks and docs pass (zero errors,
+180 warnings). Independent adversarial review approves. Not deployed.
 Do not repair this by silently treating all empty cancelled turns as safe or by
 overloading transcript completeness with an undocumented dispatch guarantee.
 The journal/context projection also contains Claude-specific argument round-trip

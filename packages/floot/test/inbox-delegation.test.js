@@ -490,7 +490,7 @@ test('poisoned journal preserves queued mail and shutdown releases its readiness
     { message: /Lost journal acknowledgement/ },
   );
   t.is(journalValues.size, 1);
-  t.is([...journalValues.values()][0].type, 'dispatch');
+  t.is([...journalValues.values()][0].type, 'begin');
   agent.startInbox();
   const message = mailbox.deliver({
     from: locatorFor(HOST),

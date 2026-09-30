@@ -17,6 +17,7 @@ import { readClaudeTranscript } from '../../claude-sandbox/src/claude-transcript
 import { makeStreamingAgent } from '../agent.js';
 import { makeReplyChannel } from '../src/stream.js';
 import { makeTurnJournal } from '../src/turn-journal.js';
+import { readContextTranscript } from '../src/context-transcript.js';
 import { usageCounts } from './helpers/usage.js';
 
 /** @import { RuntimeConfig } from '../src/runtime-config.js' */
@@ -114,6 +115,243 @@ const callEffect = () =>
   });
 const completed = () =>
   harden({ message: { role: 'assistant', content: 'Done' } });
+
+for (const boundary of ['onBegun', 'setup']) {
+  for (const revive of [false, true]) {
+    test(`native pre-send cancellation at ${boundary} preserves history without poisoning context (revive=${revive})`, async t => {
+      t.timeout(5000);
+      const f = fixture();
+      const controller = new AbortController();
+      let release = () => {};
+      const setup = new Promise(resolve => {
+        release = () => resolve(undefined);
+      });
+      let entered = () => {};
+      const entering = new Promise(resolve => {
+        entered = () => resolve(undefined);
+      });
+      t.teardown(release);
+      const transcripts = [];
+      const client = harden({
+        async send(_text, options) {
+          transcripts.push(options.transcript);
+          const channel = makeBufferedReader();
+          channel.push({ type: 'text-delta', text: 'Done' });
+          channel.push({
+            type: 'native-context',
+            checkpoint: {
+              kind: 'native-context',
+              format: 'codex-rollout-v1',
+              payload: 'opaque',
+              context: [],
+            },
+          });
+          channel.push({ type: 'end' });
+          return channel.reader;
+        },
+        async terminate() {
+          /* No external resources in this fixture. */
+        },
+      });
+      /** @type {RuntimeConfig} */
+      const runtime = {
+        kind: 'hosted',
+        provideHostedClient: async () => {
+          entered();
+          if (boundary === 'setup') await setup;
+          return client;
+        },
+      };
+      const options = {
+        journalPowers: f.powers,
+        nativeContextFormat: 'codex-rollout-v1',
+      };
+      const agent = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        runtime,
+        'Test',
+        options,
+      );
+      t.teardown(() => agent.shutdown());
+      const cancellation = agent.converse(
+        'cancelled input',
+        makeReplyChannel().writer,
+        undefined,
+        controller.signal,
+        undefined,
+        async () => {
+          if (boundary === 'onBegun') controller.abort();
+        },
+      );
+      if (boundary === 'setup') {
+        await entering;
+        controller.abort();
+        release();
+      }
+      await cancellation;
+      t.is(transcripts.length, 0);
+      t.false(f.events().some(event => event.type === 'dispatch-intent'));
+      const [cancelled] = await agent.getTurns();
+      t.is(cancelled.state, 'cancelled');
+      t.is(cancelled.dispatchState, 'not-dispatched');
+      t.true(
+        (await agent.getTranscript()).some(
+          row => row.content === 'cancelled input',
+        ),
+      );
+      let next = agent;
+      if (revive) {
+        await agent.shutdown();
+        next = await makeStreamingAgent(
+          f.powers,
+          undefined,
+          runtime,
+          'Test',
+          options,
+        );
+        t.teardown(() => next.shutdown());
+      }
+      await next.converse('next input', makeReplyChannel().writer);
+      t.is(transcripts.length, 1);
+      t.false(JSON.stringify(transcripts[0]).includes('cancelled input'));
+      t.is((await next.getTurns())[0].input, 'cancelled input');
+      t.is((await next.getTurns())[1].state, 'completed');
+    });
+  }
+}
+
+for (const fault of ['beforeStore', 'afterStore']) {
+  for (const kind of ['hosted', 'provider']) {
+    test(`${kind} dispatch intent ${fault} failure refuses send and revival preserves uncertainty`, async t => {
+      t.timeout(5000);
+      const f = fixture();
+      let sends = 0;
+      const client = harden({
+        async send() {
+          sends += 1;
+          throw Error('Unexpected send');
+        },
+        async terminate() {
+          /* No external resources in this fixture. */
+        },
+      });
+      const provider = harden({
+        async chatStream() {
+          sends += 1;
+          return completed();
+        },
+      });
+      /** @type {RuntimeConfig} */
+      const runtime =
+        kind === 'hosted'
+          ? { kind: 'hosted', provideHostedClient: () => client }
+          : { kind: 'provider', provideProvider: () => provider };
+      f[fault](event => {
+        if (event.type === 'dispatch-intent') throw Error('Marker unavailable');
+      });
+      const agent = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        runtime,
+        'Test',
+        { journalPowers: f.powers },
+      );
+      t.teardown(() => agent.shutdown());
+      await t.throwsAsync(
+        agent.converse('uncertain input', makeReplyChannel().writer),
+      );
+      t.is(sends, 0);
+      t.is(
+        f.events().some(event => event.type === 'dispatch-intent'),
+        fault === 'afterStore',
+      );
+      await agent.shutdown();
+      f.beforeStore(undefined);
+      f.afterStore(undefined);
+      const revived = await makeStreamingAgent(
+        f.powers,
+        undefined,
+        runtime,
+        'Test',
+        { journalPowers: f.powers },
+      );
+      t.teardown(() => revived.shutdown());
+      const [turn] = await revived.getTurns();
+      t.is(
+        turn.dispatchState,
+        fault === 'afterStore' ? 'possibly-dispatched' : 'not-dispatched',
+      );
+      t.is(turn.state, 'outcome-unknown');
+      t.is(sends, 0, 'revival never replays the uncertain input');
+      const context = await readContextTranscript(makeTurnJournal(f.powers));
+      t.is(
+        context.some(row => row.content === 'uncertain input'),
+        fault === 'afterStore',
+        'a persisted marker retains uncertain input rather than claiming non-dispatch',
+      );
+    });
+  }
+}
+
+for (const refusal of ['rejection', 'leading abort']) {
+  test(`native ${refusal} after dispatch intent remains unsafe after revival`, async t => {
+    t.timeout(5000);
+    const f = fixture();
+    let sends = 0;
+    const client = harden({
+      async send() {
+        sends += 1;
+        if (refusal === 'rejection') throw Error('Send refused');
+        const channel = makeBufferedReader();
+        channel.push({ type: 'abort', reason: 'Send refused' });
+        return channel.reader;
+      },
+      async interrupt() {
+        /* No external resources in this fixture. */
+      },
+      async terminate() {
+        /* No external resources in this fixture. */
+      },
+    });
+    /** @type {RuntimeConfig} */
+    const runtime = { kind: 'hosted', provideHostedClient: () => client };
+    const options = {
+      journalPowers: f.powers,
+      nativeContextFormat: 'codex-rollout-v1',
+    };
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      runtime,
+      'Test',
+      options,
+    );
+    t.teardown(() => agent.shutdown());
+    await t.throwsAsync(
+      agent.converse('refused input', makeReplyChannel().writer),
+    );
+    t.is(sends, 1);
+    t.is((await agent.getTurns())[0].dispatchState, 'possibly-dispatched');
+    await agent.shutdown();
+    const revived = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      runtime,
+      'Test',
+      options,
+    );
+    t.teardown(() => revived.shutdown());
+    await t.throwsAsync(
+      revived.converse('successor', makeReplyChannel().writer),
+    );
+    t.is(
+      sends,
+      1,
+      'no silent native-context fallback after an actual send attempt',
+    );
+  });
+}
 
 test('verified Claude failure journals native context and restores without becoming success', async t => {
   t.timeout(10_000);
@@ -288,7 +526,7 @@ test('first native-required failure stays readable but cannot resume portably af
     message: /capture unavailable/,
   });
   t.is(
-    f.events().find(event => event.type === 'dispatch').nativeContextFormat,
+    f.events().find(event => event.type === 'begin').nativeContextFormat,
     'claude-code-jsonl-v1',
   );
   t.true(
@@ -301,7 +539,7 @@ test('first native-required failure stays readable but cannot resume portably af
     message: /cannot conceal unresolved or recovered tool evidence/,
   });
   await agent.shutdown();
-  // The old dispatch carries the requirement even if a later descriptor no
+  // The old begin record carries the requirement even if a later descriptor no
   // longer advertises it. Only a backend declaring `continuity: 'transcript'`
   // (portableContextFallback) may take the portable path instead; see the
   // next test. This agent does not, so it still refuses.
@@ -423,7 +661,7 @@ test('a completed turn without a native checkpoint resumes portably with its rep
 });
 
 for (const fault of ['beforeStore', 'afterStore']) {
-  test(`mail dispatch publication ${fault} failure prevents inference and preserves committed receipt`, async t => {
+  test(`mail begin publication ${fault} failure prevents inference and preserves committed receipt`, async t => {
     const f = fixture();
     let requests = 0;
     const provider = harden({
@@ -433,8 +671,7 @@ for (const fault of ['beforeStore', 'afterStore']) {
       },
     });
     f[fault](value => {
-      if (value.type === 'dispatch')
-        throw Error('Dispatch publication refused');
+      if (value.type === 'begin') throw Error('Begin publication refused');
     });
     const agent = await makeStreamingAgent(
       f.powers,
@@ -799,11 +1036,14 @@ test('checkpoint recovery orders archived evidence by turn rather than publicati
   const options = { input: 'seed', backendId: 'codex', modelId: 'luna' };
   const initial = makeTurnJournal(f.powers);
   const oldest = await initial.begin(options);
+  await initial.dispatch(oldest);
   const journal = makeTurnJournal(f.powers);
   for (let i = 0; i < 290; i += 1) {
     // Deliberately await sequential journal writes.
     // eslint-disable-next-line no-await-in-loop
     const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.dispatch(id);
     // eslint-disable-next-line no-await-in-loop
     await journal.append(id, {
       type: 'finish',
@@ -819,6 +1059,8 @@ test('checkpoint recovery orders archived evidence by turn rather than publicati
   for (let i = 0; i < 35; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.dispatch(id);
     // eslint-disable-next-line no-await-in-loop
     await journal.append(id, { type: 'finish', state: 'completed' });
   }
@@ -1177,6 +1419,71 @@ for (const phase of ['beforeStore', 'afterStore']) {
       t.is(calls, boundary === 'call' || boundary === 'result' ? 1 : 2);
     });
   }
+}
+
+for (const hook of ['beforeStore', 'afterStore']) {
+  test(`provider cancellation while initial transcript ${hook} awaits acknowledgement refuses inference`, async t => {
+    t.timeout(5000);
+    const f = fixture();
+    const controller = new AbortController();
+    let sends = 0;
+    let entered = () => {};
+    const entering = new Promise(resolve => {
+      entered = () => resolve(undefined);
+    });
+    let release = () => {};
+    const held = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    t.teardown(release);
+    f[hook](async event => {
+      if (event.type === 'transcript-record' && event.ordinal === '0') {
+        t.is(JSON.parse(event.payload).role, 'user');
+        entered();
+        await held;
+      }
+    });
+    const provider = harden({
+      async chatStream() {
+        sends += 1;
+        return completed();
+      },
+    });
+    const agent = await makeStreamingAgent(
+      f.powers,
+      undefined,
+      { kind: 'provider', provideProvider: () => provider },
+      'Test',
+      { journalPowers: f.powers },
+    );
+    t.teardown(() => agent.shutdown());
+    const turn = agent.converse(
+      'cancel before inference',
+      makeReplyChannel().writer,
+      undefined,
+      controller.signal,
+    );
+    await entering;
+    t.true(f.events().some(event => event.type === 'dispatch-intent'));
+    controller.abort();
+    t.is(sends, 0);
+    release();
+    await turn;
+    t.is(
+      sends,
+      0,
+      'late transcript acknowledgement must not invoke the provider',
+    );
+    const [record] = await agent.getTurns();
+    t.is(record.dispatchState, 'possibly-dispatched');
+    t.is(record.state, 'cancelled');
+    t.false(record.transcriptComplete === true);
+    t.false(
+      f
+        .events()
+        .some(event => event.type === 'finish' && event.state === 'completed'),
+    );
+  });
 }
 
 for (const boundary of ['transcript-record', 'tool-intent']) {
@@ -1703,11 +2010,15 @@ test('provider usage notifications and returned totals are not double counted', 
 test('usage context follows dispatch order across late archive publication', async t => {
   const f = fixture();
   const options = { input: 'seed', backendId: 'provider', modelId: 'free' };
-  const old = await makeTurnJournal(f.powers).begin(options);
+  const initial = makeTurnJournal(f.powers);
+  const old = await initial.begin(options);
+  await initial.dispatch(old);
   const journal = makeTurnJournal(f.powers);
   for (let i = 0; i < 290; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.dispatch(id);
     // eslint-disable-next-line no-await-in-loop
     await journal.append(id, {
       type: 'finish',
@@ -1841,6 +2152,8 @@ test('usage projection failure cannot undo successful journal settlement', async
       backendId: 'provider',
       modelId: 'free',
     });
+    // eslint-disable-next-line no-await-in-loop
+    await journal.dispatch(id);
     // eslint-disable-next-line no-await-in-loop
     await journal.append(id, { type: 'finish', state: 'completed' });
   }
@@ -2720,7 +3033,7 @@ test('failed intent persistence never dispatches the actual Endo tool', async t 
   t.is(effects, 0);
   t.deepEqual(
     f.events().map(event => event.type),
-    ['dispatch', 'transcript-record', 'transcript-record'],
+    ['begin', 'dispatch-intent', 'transcript-record', 'transcript-record'],
   );
 });
 

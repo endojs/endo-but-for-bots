@@ -44,6 +44,7 @@ const fixture = () => {
 const finishMore = async (journal, count, sealTranscript = false) => {
   for (let index = 0; index < Number(count); index += 1) {
     const id = await journal.begin(options);
+    await journal.dispatch(id);
     if (sealTranscript) await journal.completeTranscript(id, '0');
     await journal.append(id, { type: 'finish', state: 'completed' });
   }
@@ -61,6 +62,7 @@ test('native context requirement survives replay and archive without hiding fore
     ...options,
     nativeContextFormat: 'claude-code-jsonl-v1',
   });
+  await journal.dispatch(id);
   await journal.append(id, {
     type: 'finish',
     state: 'failed',
@@ -101,6 +103,7 @@ test('native checkpoint payload survives immutable publication, archive index an
     content: 'suffix',
   });
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.recordTranscript(id, '0', native);
   await journal.recordTranscript(id, '0', native);
   await journal.recordTranscript(id, '1', suffix);
@@ -123,6 +126,7 @@ test('archive index chooses numeric dispatch and last ordinal, not late publicat
   const f = fixture();
   const journal = makeTurnJournal(f.powers);
   const old = await journal.begin(options);
+  await journal.dispatch(old);
   await journal.recordTranscript(old, '0', checkpoint('old'));
   await journal.append(old, {
     type: 'tool-intent',
@@ -132,6 +136,7 @@ test('archive index chooses numeric dispatch and last ordinal, not late publicat
   });
   await journal.append(old, { type: 'finish', state: 'completed' });
   const current = await journal.begin(options);
+  await journal.dispatch(current);
   await journal.recordTranscript(current, '0', checkpoint('first'));
   await journal.recordTranscript(
     current,
@@ -158,7 +163,7 @@ test('archive index chooses numeric dispatch and last ordinal, not late publicat
   t.true(pages[0].endsWith(initial.chunk.padStart(20, '0')));
   t.false(f.reads.some(name => name.startsWith('floot-turn-content-')));
   const snapshot = f.store.get(latestSnapshot(f));
-  t.is(snapshot.version, 2);
+  t.is(snapshot.version, 3);
   t.deepEqual(snapshot.archivedCheckpoint, initial);
 });
 
@@ -173,6 +178,7 @@ test('snapshot index rejects missing, malformed, out-of-range, and mismatched po
   const f = fixture();
   const journal = makeTurnJournal(f.powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.recordTranscript(id, '0', checkpoint('summary'));
   await journal.append(id, { type: 'finish', state: 'completed' });
   await finishMore(journal, 290);
@@ -201,6 +207,7 @@ for (const target of ['archive', 'snapshot']) {
       const f = fixture();
       const journal = makeTurnJournal(f.powers);
       const id = await journal.begin(options);
+      await journal.dispatch(id);
       await journal.recordTranscript(id, '0', checkpoint('summary'));
       await journal.append(id, { type: 'finish', state: 'completed' });
       // Arm at the first archival publication, not an earlier retained-only snapshot.

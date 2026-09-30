@@ -74,6 +74,22 @@ type-contract tasks and docs pass (zero errors, 180 warnings).
 Independent review approves; no durable owner or storage schema changes.
 Not deployed.
 
+Current ontology correction: turn admission is not backend dispatch.
+The reproduced pre-send cancellation defect is addressed by a `begin` record
+followed by a write-ahead `dispatch-intent` before either runtime sends.
+History retains undispatched requests; model continuation excludes only explicit
+`not-dispatched` records, never a turn inferred safe from an empty stream.
+`possibly-dispatched` remains conservative after failed or uncertain delivery.
+This replaces the journal format rather than supporting old event names;
+affected test sessions must be retired before deployment, preserving host,
+Secrets, renewal owners and workspaces.
+All 777 Floot tests pass, including pre-send cancellation and revival, failed
+marker publication/lost acknowledgement, conservative native send failures,
+and rejection of contradictory snapshot/archive records.
+Floot types and lint pass (zero lint errors, 286 warnings); clean root type build,
+all 14 type-contract tasks and docs pass (zero documentation errors, 180 warnings).
+Independent adversarial review approves. Not deployed.
+
 Current durability evidence includes a generation-186 retirement correction:
 removing broker/source pet names does not withdraw capabilities already stored
 in the profile's account-discovery record. Those capabilities revived the old

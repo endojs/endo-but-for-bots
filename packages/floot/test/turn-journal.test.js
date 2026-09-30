@@ -46,6 +46,203 @@ const options = harden({
   modelId: 'sol',
 });
 
+test('admission and dispatch are distinct durable transitions', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const id = await journal.begin(options);
+  t.is((await journal.get(id)).dispatchState, 'not-dispatched');
+  t.is(
+    (await makeTurnJournal(f.powers).get(id)).dispatchState,
+    'not-dispatched',
+  );
+  for (const type of ['tool-intent', 'observed-tool-call']) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      journal.append(id, { type, callId: 'a', name: 'exec', args: {} }),
+      {
+        message: /requires dispatch intent/,
+      },
+    );
+  }
+  await t.throwsAsync(
+    journal.recordTranscript(id, '0', {
+      kind: 'message',
+      role: 'user',
+      content: 'hello',
+    }),
+    { message: /requires dispatch intent/ },
+  );
+  await t.throwsAsync(
+    journal.append(id, {
+      type: 'finish',
+      state: 'completed',
+      backendCheckpoint: 'checkpoint',
+    }),
+    { message: /requires dispatch intent/ },
+  );
+  t.is(f.store.size, 1);
+  await journal.dispatch(id);
+  t.is((await journal.get(id)).dispatchState, 'possibly-dispatched');
+  await journal.dispatch(id);
+  t.is(f.store.size, 2);
+  const revived = makeTurnJournal(f.powers);
+  t.is((await revived.get(id)).dispatchState, 'possibly-dispatched');
+  await t.throwsAsync(revived.dispatch(id), {
+    message: /recovered or terminal/,
+  });
+  await journal.append(id, { type: 'finish', state: 'failed' });
+  await t.throwsAsync(journal.dispatch(id), {
+    message: /recovered or terminal/,
+  });
+});
+
+for (const persisted of [false, true]) {
+  test(`dispatch write rejection poisons the incarnation (persisted=${persisted})`, async t => {
+    const f = fixture();
+    const powers = Far('DispatchFailure', {
+      ...f.powers,
+      storeValue: async (value, name) => {
+        if (value.type === 'dispatch-intent') {
+          if (persisted) await f.powers.storeValue(value, name);
+          throw Error('Dispatch write uncertain');
+        }
+        return f.powers.storeValue(value, name);
+      },
+    });
+    const journal = makeTurnJournal(powers);
+    const id = await journal.begin(options);
+    await t.throwsAsync(journal.dispatch(id), {
+      message: 'Dispatch write uncertain',
+    });
+    await t.throwsAsync(journal.dispatch(id), { message: /uncertain storage/ });
+    const revived = makeTurnJournal(f.powers);
+    t.is(
+      (await revived.get(id)).dispatchState,
+      persisted ? 'possibly-dispatched' : 'not-dispatched',
+    );
+    await t.throwsAsync(revived.dispatch(id), {
+      message: /recovered or terminal/,
+    });
+  });
+}
+
+test('dispatch acknowledgement waits for durable marker storage', async t => {
+  t.timeout(5000);
+  const f = fixture();
+  let release = () => {};
+  let entered = () => {};
+  const waiting = new Promise(resolve => {
+    entered = () => resolve(undefined);
+  });
+  const barrier = new Promise(resolve => {
+    release = () => resolve(undefined);
+  });
+  t.teardown(() => release());
+  const powers = Far('DelayedDispatch', {
+    ...f.powers,
+    storeValue: async (value, name) => {
+      if (value.type === 'dispatch-intent') {
+        entered();
+        await barrier;
+      }
+      return f.powers.storeValue(value, name);
+    },
+  });
+  const journal = makeTurnJournal(powers);
+  const id = await journal.begin(options);
+  let acknowledged = false;
+  const dispatch = journal.dispatch(id).then(() => {
+    acknowledged = true;
+  });
+  await waiting;
+  t.false(acknowledged);
+  t.is(f.store.size, 1);
+  release();
+  await dispatch;
+  t.true(acknowledged);
+  t.is(f.store.size, 2);
+});
+
+for (const mutation of [
+  'legacy',
+  'missing-state',
+  'wrong-state',
+  'duplicate-marker',
+]) {
+  test(`event replay refuses ${mutation}`, async t => {
+    const f = fixture();
+    const journal = makeTurnJournal(f.powers);
+    await journal.begin(options);
+    const [name] = f.store.keys();
+    const event = { ...f.store.get(name) };
+    if (mutation === 'legacy') event.type = 'dispatch';
+    if (mutation === 'missing-state') delete event.dispatchState;
+    if (mutation === 'wrong-state') event.dispatchState = 'possibly-dispatched';
+    f.store.set(name, harden(event));
+    if (mutation === 'duplicate-marker') {
+      await journal.dispatch(event.turnId);
+      f.store.set(
+        'floot-turn-event-00000000000000000003',
+        harden({ type: 'dispatch-intent', turnId: event.turnId }),
+      );
+    }
+    await t.throwsAsync(makeTurnJournal(f.powers).list());
+  });
+}
+
+for (const location of ['snapshot', 'archive']) {
+  for (const mutation of [
+    'legacy-version',
+    'missing-state',
+    'wrong-state',
+    'contradictory-tools',
+    'contradictory-transcript',
+    'contradictory-completion',
+    'contradictory-presentation',
+    'contradictory-output',
+    'contradictory-usage',
+    'contradictory-served-by',
+    'contradictory-checkpoint',
+    'contradictory-completed',
+  ]) {
+    test(`${location} refuses ${mutation} dispatch evidence`, async t => {
+      const f = fixture();
+      const journal = makeTurnJournal(f.powers);
+      for (let i = 0; i < (location === 'snapshot' ? 34 : 290); i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        const id = await journal.begin(options);
+        // eslint-disable-next-line no-await-in-loop
+        await journal.append(id, { type: 'finish', state: 'failed' });
+      }
+      const name = [...f.store.keys()].find(key =>
+        key.startsWith(`floot-turn-${location}-`),
+      );
+      const data = JSON.parse(JSON.stringify(f.store.get(name)));
+      const record = data.records[0];
+      if (mutation === 'legacy-version') data.version = 2;
+      if (mutation === 'missing-state') delete record.dispatchState;
+      if (mutation === 'wrong-state') record.dispatchState = 'sent';
+      if (mutation === 'contradictory-tools')
+        record.tools.push({ callId: 'a' });
+      if (mutation === 'contradictory-transcript') record.transcript = [{}];
+      if (mutation === 'contradictory-completion')
+        record.transcriptComplete = true;
+      if (mutation === 'contradictory-presentation') record.presentation = {};
+      if (mutation === 'contradictory-output') record.output = 'reply';
+      if (mutation === 'contradictory-usage') record.usage = {};
+      if (mutation === 'contradictory-served-by') record.servedBy = ['model'];
+      if (mutation === 'contradictory-checkpoint')
+        record.backendCheckpoint = 'native';
+      if (mutation === 'contradictory-completed') record.state = 'completed';
+      f.store.set(name, harden(data));
+      const revived = makeTurnJournal(f.powers);
+      await t.throwsAsync(
+        location === 'snapshot' ? revived.list() : revived.listArchived(),
+      );
+    });
+  }
+}
+
 // These fixtures deliberately serialize journal transitions and publication.
 /* eslint-disable no-await-in-loop */
 const thinkingBlock = harden({
@@ -61,6 +258,7 @@ test('thinking presentation is immutable, idempotent and survives replay and arc
   const f = fixture();
   const journal = makeTurnJournal(f.powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   const blocks = [{ ...thinkingBlock, text: '\u0000'.repeat(65_536) }];
   await journal.recordPresentation(id, blocks);
   const size = f.store.size;
@@ -78,6 +276,7 @@ test('thinking presentation is immutable, idempotent and survives replay and arc
   await journal.append(id, { type: 'finish', state: 'failed' });
   for (let index = 0; index < 290; index += 1) {
     const next = await journal.begin(options);
+    await journal.dispatch(next);
     await journal.append(next, { type: 'finish', state: 'completed' });
   }
   const archived = await makeTurnJournal(f.powers).listArchived();
@@ -102,8 +301,9 @@ test('thinking presentation rejects malformed data before storage', async t => {
     const f = fixture();
     const journal = makeTurnJournal(f.powers);
     const id = await journal.begin(options);
+    await journal.dispatch(id);
     await t.throwsAsync(journal.recordPresentation(id, blocks));
-    t.is(f.store.size, 1);
+    t.is(f.store.size, 2);
   }
 });
 
@@ -112,6 +312,7 @@ for (const location of ['snapshot', 'archive']) {
     const f = fixture();
     const journal = makeTurnJournal(f.powers);
     const id = await journal.begin(options);
+    await journal.dispatch(id);
     await journal.recordPresentation(id, [thinkingBlock]);
     await journal.append(id, { type: 'finish', state: 'failed' });
     for (
@@ -120,6 +321,7 @@ for (const location of ['snapshot', 'archive']) {
       index += 1
     ) {
       const next = await journal.begin(options);
+      await journal.dispatch(next);
       await journal.append(next, { type: 'finish', state: 'completed' });
     }
     const key = [...f.store.keys()]
@@ -143,6 +345,7 @@ test('mail receipt metadata survives dispatch replay and archival unchanged', as
   const journal = makeTurnJournal(f.powers);
   const mail = { from: 'sender', messageNumber: '123' };
   const id = await journal.begin({ ...options, mail });
+  await journal.dispatch(id);
   // The journal's existing pass-style boundary hardens all admitted data.
   t.throws(
     () => {
@@ -157,6 +360,7 @@ test('mail receipt metadata survives dispatch replay and archival unchanged', as
   await journal.append(id, { type: 'finish', state: 'failed' });
   for (let index = 0; index < 290; index += 1) {
     const next = await journal.begin(options);
+    await journal.dispatch(next);
     await journal.append(next, { type: 'finish', state: 'completed' });
   }
   const archived = await makeTurnJournal(f.powers).listArchived();
@@ -207,6 +411,7 @@ for (const location of ['snapshot', 'archive']) {
       ...options,
       mail: { from: 'sender', messageNumber: '123' },
     });
+    await journal.dispatch(id);
     await journal.append(id, { type: 'finish', state: 'failed' });
     for (
       let index = 0;
@@ -214,6 +419,7 @@ for (const location of ['snapshot', 'archive']) {
       index += 1
     ) {
       const next = await journal.begin(options);
+      await journal.dispatch(next);
       await journal.append(next, { type: 'finish', state: 'completed' });
     }
     const key = [...f.store.keys()]
@@ -235,6 +441,7 @@ test('backend checkpoint survives event replay, snapshots and archival', async t
   const f = fixture();
   const journal = makeTurnJournal(f.powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.append(id, {
     type: 'finish',
     state: 'completed',
@@ -246,6 +453,7 @@ test('backend checkpoint survives event replay, snapshots and archival', async t
   );
   for (let index = 0; index < 290; index += 1) {
     const next = await journal.begin(options);
+    await journal.dispatch(next);
     await journal.append(next, { type: 'finish', state: 'completed' });
   }
   const revived = makeTurnJournal(f.powers);
@@ -262,6 +470,7 @@ for (const location of ['snapshot', 'archive']) {
       const f = fixture();
       const journal = makeTurnJournal(f.powers);
       const id = await journal.begin(options);
+      await journal.dispatch(id);
       await journal.append(id, {
         type: 'finish',
         state: 'completed',
@@ -273,6 +482,7 @@ for (const location of ['snapshot', 'archive']) {
         index += 1
       ) {
         const next = await journal.begin(options);
+        await journal.dispatch(next);
         await journal.append(next, { type: 'finish', state: 'completed' });
       }
       const key = [...f.store.keys()]
@@ -302,6 +512,7 @@ test('backend checkpoints require bounded text and a truly completed turn', asyn
     const f = fixture();
     const journal = makeTurnJournal(f.powers);
     const id = await journal.begin(options);
+    await journal.dispatch(id);
     await t.throwsAsync(
       journal.append(id, {
         type: 'finish',
@@ -309,13 +520,14 @@ test('backend checkpoints require bounded text and a truly completed turn', asyn
         backendCheckpoint: value,
       }),
     );
-    t.is(f.store.size, 1);
+    t.is(f.store.size, 2);
     t.is((await journal.get(id)).state, 'pending');
   }
   for (const state of ['failed', 'cancelled', 'outcome-unknown', 'unsettled']) {
     const f = fixture();
     const journal = makeTurnJournal(f.powers);
     const id = await journal.begin(options);
+    await journal.dispatch(id);
     if (state === 'unsettled')
       await journal.append(id, {
         type: 'tool-intent',
@@ -338,6 +550,7 @@ test('lost checkpoint finish acknowledgement replays the durable completed token
   const f = fixture();
   const journal = makeTurnJournal(f.powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   f.fail();
   await t.throwsAsync(
     journal.append(id, {
@@ -359,6 +572,7 @@ test('targeted reads are detached snapshots and invalid transitions leave eviden
   const { powers, store } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.append(id, {
     type: 'tool-intent',
     callId: 'a',
@@ -375,12 +589,13 @@ test('targeted reads are detached snapshots and invalid transitions leave eviden
     { message: /Invalid terminal/ },
   );
   t.deepEqual(await journal.get(id), before);
-  t.is(store.size, 2);
+  t.is(store.size, 3);
   await journal.append(id, { type: 'tool-result', callId: 'a', result: 'ok' });
   t.is(before.tools[0].settled, undefined);
   t.true((await journal.get(id)).tools[0].settled);
   await journal.append(id, { type: 'finish', state: 'completed' });
   const next = await journal.begin(options);
+  await journal.dispatch(next);
   t.is((await journal.get(next)).state, 'pending');
   t.is((await journal.get(id)).state, 'completed');
   await t.throwsAsync(journal.get('missing'), { message: /Unknown turn/ });
@@ -415,6 +630,7 @@ test('prepared transitions wait for storage and serialize following reads', asyn
   });
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   const intent = journal.append(id, {
     type: 'tool-intent',
     callId: 'a',
@@ -434,7 +650,7 @@ test('prepared transitions wait for storage and serialize following reads', asyn
   await Promise.resolve();
   t.false(readFinished);
   t.false(readyFinished);
-  t.is(store.size, 1);
+  t.is(store.size, 2);
   release();
   await intent;
   t.is((await read).tools[0].callId, 'a');
@@ -448,6 +664,7 @@ test('lost result acknowledgement poisons prepared writer and revival reads comm
   const f = fixture();
   const journal = makeTurnJournal(f.powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.append(id, {
     type: 'tool-intent',
     callId: 'a',
@@ -518,6 +735,7 @@ test('empty input and backend-default model are valid, optional usage is omitted
     backendId: 'direct',
     modelId: '',
   });
+  await journal.dispatch(id);
   await journal.append(id, {
     type: 'finish',
     state: 'completed',
@@ -530,7 +748,9 @@ test('empty input and backend-default model are valid, optional usage is omitted
 
 test('recovered turns cannot acquire new tool intents even after acknowledgement', async t => {
   const { powers } = fixture();
-  const id = await makeTurnJournal(powers).begin(options);
+  const first = makeTurnJournal(powers);
+  const id = await first.begin(options);
+  await first.dispatch(id);
   const journal = makeTurnJournal(powers);
   await journal.resolve(id, 'Checked');
   await t.throwsAsync(
@@ -548,6 +768,7 @@ test('observed native activity is durable and separate from write-ahead tools', 
   const { powers } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await Promise.all(
     ['tool-intent', 'observed-tool-call'].map(type =>
       journal.append(id, {
@@ -585,6 +806,7 @@ test('unsettled observed activity fences terminal outcome and late results do no
   const { powers } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.append(id, {
     type: 'observed-tool-call',
     callId: 'native',
@@ -633,6 +855,7 @@ test('journal persists complete turns and concurrent tool results in order', asy
   const { powers, store } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.assertReady();
   await journal.append(id, {
     type: 'tool-intent',
@@ -661,13 +884,14 @@ test('journal persists complete turns and concurrent tool results in order', asy
   await revived.assertReady();
   t.deepEqual(await revived.list(), await journal.list());
   t.is((await revived.list())[0].tools.length, 2);
-  t.is(store.size, 6);
+  t.is(store.size, 7);
 });
 
 test('revival preserves unknown outcomes while new work and explicit resolution remain independent', async t => {
   const { powers } = fixture();
   const first = makeTurnJournal(powers);
   const id = await first.begin(options);
+  await first.dispatch(id);
   await first.append(id, {
     type: 'tool-intent',
     callId: 'a',
@@ -677,6 +901,7 @@ test('revival preserves unknown outcomes while new work and explicit resolution 
   const journal = makeTurnJournal(powers);
   await journal.assertReady();
   const next = await journal.begin(options);
+  await journal.dispatch(next);
   t.is((await journal.get(id)).resolution, undefined);
   await t.throwsAsync(journal.begin(options), { message: /already active/ });
   await journal.resolve(id, 'Operator checked the effect');
@@ -697,6 +922,7 @@ test('terminal turn with unresolved effect is unknown, including cancellation', 
   const { powers } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.append(id, {
     type: 'tool-intent',
     callId: 'a',
@@ -750,6 +976,7 @@ test('invalid or excessive values never persist capabilities or partial events',
   const { powers, store } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await t.throwsAsync(
     journal.append(id, { type: 'tool-result', callId: 'missing', result: 'x' }),
     { message: /without intent/ },
@@ -781,7 +1008,7 @@ test('invalid or excessive values never persist capabilities or partial events',
     }),
     { message: /storage value bound/ },
   );
-  t.is(store.size, 1);
+  t.is(store.size, 2);
   await journal.append(id, {
     type: 'finish',
     state: 'completed',
@@ -795,6 +1022,7 @@ test('large text is stored by reference: the record keeps a preview, the content
   const journal = makeTurnJournal(powers);
   const big = 'y'.repeat(131_072);
   const id = await journal.begin({ ...options, input: big });
+  await journal.dispatch(id);
   await journal.append(id, {
     type: 'tool-intent',
     callId: 'a',
@@ -846,6 +1074,8 @@ test('replay is bounded by snapshots: covered events are kept but not read again
   for (let i = 0; i < 40; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     const id = await journal.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await journal.dispatch(id);
     ids.push(id);
     // eslint-disable-next-line no-await-in-loop
     await journal.append(id, {
@@ -854,9 +1084,9 @@ test('replay is bounded by snapshots: covered events are kept but not read again
       output: `out ${i}`,
     });
   }
-  // 80 events and a snapshot at 64. Every event is still there — the
+  // 120 events and a snapshot at 64. Every event is still there — the
   // transcript is kept until the session is removed — but a revival reads
-  // the snapshot and only the 16 events after it.
+  // the snapshot and only the 56 events after it.
   const events = [...store.keys()].filter(name =>
     name.startsWith('floot-turn-event-'),
   );
@@ -864,23 +1094,24 @@ test('replay is bounded by snapshots: covered events are kept but not read again
     name.startsWith('floot-turn-snapshot-'),
   );
   t.is(snapshots.length, 1);
-  t.is(events.length, 80);
+  t.is(events.length, 120);
   const expected = await journal.list();
   t.is(expected.length, 40);
   reads.length = 0;
   const revived = makeTurnJournal(powers);
   t.deepEqual(await revived.list(), expected);
   const replayed = reads.filter(name => name.startsWith('floot-turn-event-'));
-  t.is(replayed.length, 16);
+  t.is(replayed.length, 56);
   t.true(replayed.every(name => BigInt(name.slice(-20)) > 64n));
   t.like(await revived.status(), {
-    usedEvents: '80',
+    usedEvents: '120',
     retainedTurns: 40,
     archivedTurns: 0,
   });
   // A turn pending at the snapshot is recovered as outcome-unknown, and a
   // later event still settles it.
   const pending = await revived.begin(options);
+  await revived.dispatch(pending);
   for (let i = 0; i < 64; i += 1) {
     // eslint-disable-next-line no-await-in-loop
     await revived.append(pending, {
@@ -900,17 +1131,17 @@ test('a stale snapshot left by a crash is superseded, never trusted over the new
   const journal = makeTurnJournal(powers);
   for (let i = 0; i < 64; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    await journal
-      .begin(options)
-      .then(id => journal.append(id, { type: 'finish', state: 'completed' }));
+    await journal.begin(options).then(async id => {
+      await journal.dispatch(id);
+      await journal.append(id, { type: 'finish', state: 'completed' });
+    });
   }
-  // Two snapshots have been taken (at 64 and 128) and the first was removed;
-  // put a stale copy of it back, as a crash between the second write and the
-  // first's removal would leave it.
+  // Snapshots at 64, 128 and 192 have superseded each other; put a stale
+  // copy back as a crash before its removal would leave it.
   const [newest] = [...store.keys()].filter(name =>
     name.startsWith('floot-turn-snapshot-'),
   );
-  t.is(newest, 'floot-turn-snapshot-00000000000000000128');
+  t.is(newest, 'floot-turn-snapshot-00000000000000000192');
   const stale = { ...store.get(newest), through: '64', records: [] };
   store.set('floot-turn-snapshot-00000000000000000064', harden(stale));
   const revived = makeTurnJournal(powers);
@@ -918,13 +1149,14 @@ test('a stale snapshot left by a crash is superseded, never trusted over the new
   // The next snapshot clears the stale one.
   for (let i = 0; i < 32; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    await revived
-      .begin(options)
-      .then(id => revived.append(id, { type: 'finish', state: 'completed' }));
+    await revived.begin(options).then(async id => {
+      await revived.dispatch(id);
+      await revived.append(id, { type: 'finish', state: 'completed' });
+    });
   }
   t.deepEqual(
     [...store.keys()].filter(name => name.startsWith('floot-turn-snapshot-')),
-    ['floot-turn-snapshot-00000000000000000192'],
+    ['floot-turn-snapshot-00000000000000000256'],
   );
 });
 
@@ -934,6 +1166,7 @@ test('settled turns beyond the retained window are archived; unresolved ones nev
   // One unresolved turn at the very start, then enough settled turns to push
   // the window.
   const unknown = await journal.begin(options);
+  await journal.dispatch(unknown);
   await journal.append(unknown, {
     type: 'tool-intent',
     callId: 'a',
@@ -944,13 +1177,14 @@ test('settled turns beyond the retained window are archived; unresolved ones nev
   t.is((await journal.get(unknown)).state, 'outcome-unknown');
   for (let i = 0; i < 300; i += 1) {
     // eslint-disable-next-line no-await-in-loop
-    await journal.begin(options).then(id =>
-      journal.append(id, {
+    await journal.begin(options).then(async id => {
+      await journal.dispatch(id);
+      await journal.append(id, {
         type: 'finish',
         state: 'completed',
         output: `${i}`,
-      }),
-    );
+      });
+    });
   }
   const { retainedTurns, archivedTurns } = await journal.status();
   t.is(retainedTurns + archivedTurns, 301);
@@ -984,6 +1218,8 @@ test('settled turns beyond the retained window are archived; unresolved ones nev
   for (let index = 0; index < 40; index += 1) {
     // eslint-disable-next-line no-await-in-loop
     const id = await revived.begin(options);
+    // eslint-disable-next-line no-await-in-loop
+    await revived.dispatch(id);
     // eslint-disable-next-line no-await-in-loop
     await revived.append(id, { type: 'finish', state: 'completed' });
   }
@@ -1083,23 +1319,21 @@ test('archive pages never publish an uncounted chunk after failed snapshot', asy
   const f = fixture();
   const journal = makeTurnJournal(f.powers);
   t.deepEqual(await journal.listArchivedPage(), { records: [], next: null });
-  for (let index = 0; index < 287; index += 1) {
+  for (let index = 0; index < 277; index += 1) {
     // eslint-disable-next-line no-await-in-loop
     const id = await journal.begin(options);
     // eslint-disable-next-line no-await-in-loop
+    await journal.dispatch(id);
+    // eslint-disable-next-line no-await-in-loop
     await journal.append(id, { type: 'finish', state: 'completed' });
   }
-  const id = await journal.begin(options);
   f.refuseSnapshots();
-  await t.throwsAsync(
-    journal.append(id, { type: 'finish', state: 'completed' }),
-    { message: /Snapshot refused/ },
-  );
+  await t.throwsAsync(journal.begin(options), { message: /Snapshot refused/ });
   t.true(
     [...f.store.keys()].some(name => name.startsWith('floot-turn-archive-')),
   );
   await t.throwsAsync(journal.listArchivedPage(), { message: /unavailable/ });
   const revived = makeTurnJournal(f.powers);
   t.deepEqual(await revived.listArchivedPage(), { records: [], next: null });
-  t.is((await revived.readView()).retained.length, 288);
+  t.is((await revived.readView()).retained.length, 278);
 });
