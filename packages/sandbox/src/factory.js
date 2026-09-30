@@ -1038,9 +1038,9 @@ export const makeSandboxFactory = (
       // Lifecycle is bound to the slice; the daemon's scratch GC
       // sweeps the host directory when the cap is unpinned.
       const scratchCap = /** @type {MountCap} */ (
-        await E(scratchProvider).provideScratchMount(
+        await E(scratchProvider).provideScratchMount([
           `sandbox-scratch-${innerPath.replace(/[^a-zA-Z0-9-]/g, '-')}`,
-        )
+        ])
       );
       return makeMountHandle(scratchCap, innerPath, 'rw');
     };
