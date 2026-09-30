@@ -245,7 +245,7 @@ curl http://127.0.0.1:8080/read
 
 A trusted native-resource directory supplies `durable.js` and `ephemeral.js`.
 Each installation runs its durable module in a dedicated manager vat with its own heap and limits.
-Its `make({ E, Far, adapters, makeKeeper, makeManager })` returns `{ registration, lifecycle }`;
+Its `make({ adapters, makeKeeper, makeManager })` returns `{ registration, lifecycle }`;
 `makeManager` writes the manager's bookkeeping once, so the module supplies only what identifies a
 registration and how to describe its status.
 The ephemeral module runs in a separate Node process with native platform APIs; its `make()`

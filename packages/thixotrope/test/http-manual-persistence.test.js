@@ -4,8 +4,17 @@ import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
 
 import { makeAdapterKeeper } from '../src/adapter-keeper.js';
+import { guestPrelude } from '../src/guest/prelude.js';
 import { makeManager } from '../src/native/manager-kit.js';
-import { make as makeHttp } from '../resources/http/durable.js';
+
+// The durable module reads the guest prelude off globalThis, as it would in
+// its vat. This test runs it in the host, so the names the host lacks are
+// installed first; AVA gives each test file an isolate of its own.
+for (const [name, value] of Object.entries(guestPrelude)) {
+  if (!(name in globalThis))
+    Object.defineProperty(globalThis, name, { value, configurable: true });
+}
+const { make: makeHttp } = await import('../resources/http/durable.js');
 
 // A deterministic adapter double isolates manager ordering from real sockets;
 // http-integration.test.js covers the installed package in a native process.
@@ -39,8 +48,6 @@ const fixture = (failClose = false, failBind = false) => {
       }),
   });
   const kit = makeHttp({
-    E,
-    Far,
     makeKeeper: makeAdapterKeeper,
     adapters,
     makeManager: options =>
