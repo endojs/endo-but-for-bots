@@ -38,7 +38,21 @@ const waitFor = async (predicate, { timeout = 3000, step = 20 } = {}) => {
 };
 
 /**
- * Build mock root powers whose `lookup(name)` returns a persona namespace
+ * Refuse anything but a pet-name path, as the daemon does, so a bare-string
+ * `lookup` in the modal fails the test instead of passing silently.
+ *
+ * @param {unknown} petNamePath
+ */
+const assertPetNamePath = petNamePath => {
+  if (!Array.isArray(petNamePath)) {
+    throw TypeError(
+      `lookup expects a pet-name path, got ${typeof petNamePath}`,
+    );
+  }
+};
+
+/**
+ * Build mock root powers whose `lookup([name])` returns a persona namespace
  * exposing `list()` over a fixed set of pet names, and a `powers` capability
  * that records `makeChannel` / `post` calls.
  */
@@ -59,8 +73,9 @@ const makeSharePowers = () => {
       calls.push({ method: 'makeChannel', args: [petName, proposedName] });
       return Promise.resolve();
     },
-    lookup(...path) {
-      calls.push({ method: 'lookup', args: path });
+    lookup(petNamePath) {
+      assertPetNamePath(petNamePath);
+      calls.push({ method: 'lookup', args: [petNamePath] });
       return Promise.resolve(channelRef);
     },
   });
@@ -71,15 +86,17 @@ const makeSharePowers = () => {
       yield 'general';
       yield 'random';
     },
-    lookup(...path) {
-      calls.push({ method: 'persona-lookup', args: path });
+    lookup(petNamePath) {
+      assertPetNamePath(petNamePath);
+      calls.push({ method: 'persona-lookup', args: [petNamePath] });
       return Promise.resolve(channelRef);
     },
   });
 
   const rootPowers = Far('RootPowers', {
-    lookup(name) {
-      calls.push({ method: 'root-lookup', args: [name] });
+    lookup(petNamePath) {
+      assertPetNamePath(petNamePath);
+      calls.push({ method: 'root-lookup', args: [petNamePath] });
       return Promise.resolve(personaNamespace);
     },
     send(...args) {
@@ -275,6 +292,12 @@ test.serial('submit creates the channel and fires onNavigate', async t => {
   const makeChannelCall = calls.find(c => c.method === 'makeChannel');
   t.truthy(makeChannelCall, 'makeChannel called');
   t.is(makeChannelCall.args[0], 'my-thread', 'channel named from the label');
+  const lookupCall = calls.find(c => c.method === 'lookup');
+  t.deepEqual(
+    lookupCall?.args,
+    [['my-thread']],
+    'new channel looked up by a one-segment pet-name path',
+  );
   t.is(navigations.length, 1, 'onNavigate fired once');
   t.is(navigations[0], 'my-thread', 'navigated to the new channel');
 
