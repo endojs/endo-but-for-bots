@@ -2,6 +2,8 @@
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
 
+import { makeSerialQueue } from '../serial-queue.js';
+
 /**
  * What a native adapter process has to do that is not about its resource:
  * serialize its operations, keep what it has bound under each key, answer a
@@ -49,16 +51,7 @@ export const makeAdapter = ({
     throw Error('makeAdapter needs bind() and unbind()');
   /** @type {Map<unknown, {spec: Spec, binding: Binding}>} */
   const bound = new Map();
-  let chain = Promise.resolve();
-  /** @param {() => Promise<any>} operation */
-  const enqueue = operation => {
-    const result = chain.then(operation);
-    chain = result.then(
-      () => {},
-      () => {},
-    );
-    return result;
-  };
+  const enqueue = makeSerialQueue();
   /**
    * @param {unknown} key
    * @param {Spec} spec
@@ -102,6 +95,7 @@ export const makeAdapter = ({
      */
     restore: entries =>
       enqueue(async () => {
+        /** @type {Array<{ key: unknown, error?: string }>} */
         const results = [];
         for (const [key, spec] of entries) {
           // eslint-disable-next-line no-await-in-loop

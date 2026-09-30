@@ -112,7 +112,8 @@ Ctrl-D or Ctrl-C detaches the terminal, leaving the supervisor running.
 Piped input works too, and evaluation failures produce a nonzero exit status.
 A lost connection reports an uncertain evaluation outcome and never retries it.
 
-The workspace has `E`, `Far`, `harden`, and a `vats` controller.
+The workspace has the guest prelude (`E`, `Far`, `harden`, `makeExo`, `M`, and the rest) and a
+`vats` controller.
 For example, enter each of these as one line and wait for its result before entering the next.
 `E` accepts both capabilities and promises for capabilities, so the stored results can be used directly.
 
@@ -194,8 +195,13 @@ The module belongs to a JavaScript package with a `package.json`.
 The CLI bundles its static module graph locally; application code runs in the guest.
 The bundle is staged into the application's vat in bounded messages, so there is no request-size
 cap; grants are checked in the workspace before any vat exists.
-Use the guest-provided `E`, `Far`, and `harden` rather than bundling those libraries.
-The guest has its usual `E`, `Far`, and `harden` globals, with no ambient Node powers.
+Use the guest prelude rather than bundling those libraries: every vat has `E`, `Far`, `harden`,
+`makeExo`, `defineExoClass`, `defineExoClassKit`, `M`, `matches`, `mustMatch`, `passStyleOf`,
+`Fail`, `q`, `makeError`, `makePromiseKit`, and `makeSerialQueue` as globals, with no ambient Node
+powers.
+Bundled code reads the ones it wants off `globalThis` in one destructure, typed as `GuestGlobals`
+from `@endo/thixotrope/guest.js`; `mustMatch`, being an assertion, needs a binding of its own
+annotated as `GuestGlobals['mustMatch']`.
 Append `powerName=inventoryKey` arguments to grant selected inventory capabilities to `make`.
 This first profile accepts remotable capabilities as grants; copy data and promises are
 rejected before forwarding, so a small request cannot hide a large copied grant.

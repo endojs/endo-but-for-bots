@@ -13,8 +13,8 @@ import harden from '@endo/harden';
  * settles at a deadline and survives the host's own restart. Listening on it
  * is what wakes this vat when the time comes.
  *
- * Self-contained, because the supervisor ships this factory's source into a
- * vat where only E, Far and harden are in scope.
+ * Shipped by source: the supervisor evaluates this factory in a vat, so it
+ * may import only what the guest prelude provides, under those names.
  *
  * @param {any} alarms a DurableAlarms facet
  * @param {object} options

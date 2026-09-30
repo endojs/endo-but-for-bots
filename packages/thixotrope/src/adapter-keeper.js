@@ -2,6 +2,8 @@
 import { E } from '@endo/far';
 import harden from '@endo/harden';
 
+import { makeSerialQueue } from './serial-queue.js';
+
 /**
  * A durable manager's hold on one disposable incarnation.
  * Creation and restoration are supplied by the manager; the keeper knows
@@ -16,16 +18,7 @@ export const makeAdapterKeeper = ({ create, restore = async () => {} }) => {
   let current;
   let incarnations = 0n;
   let building = false;
-  let chain = Promise.resolve();
-  /** @param {() => Promise<any>} operation */
-  const enqueue = operation => {
-    const result = chain.then(operation);
-    chain = result.then(
-      () => {},
-      () => {},
-    );
-    return result;
-  };
+  const enqueue = makeSerialQueue();
   return harden({
     provide: () =>
       enqueue(async () => {

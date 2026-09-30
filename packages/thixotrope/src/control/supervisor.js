@@ -37,6 +37,7 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { makeInFlight } from '../in-flight.js';
 import { settleWithin, withExpiry } from '../platform/timers.js';
 import { randomHex128 } from '../random-id.js';
+import { makeSerialQueue } from '../serial-queue.js';
 import { describeNativePackage } from '../native/describe-package.js';
 
 import { evaluateSource } from './evaluate-source.js';
@@ -533,16 +534,7 @@ export const serveThixotrope = async (
     // Installations, removals and collection take turns: an allocation has
     // no guest root until its facade reaches the registry, and a removal
     // must not race the installation it removes.
-    let installing = Promise.resolve();
-    /** @param {() => Promise<any>} operation */
-    const serialized = operation => {
-      const result = installing.then(operation);
-      installing = result.then(
-        () => {},
-        () => {},
-      );
-      return result;
-    };
+    const serialized = makeSerialQueue();
     const assertWorkspace = () => {
       if (requested) throw Error('Supervisor is stopping');
       if (installations === undefined)
@@ -767,7 +759,13 @@ export const serveThixotrope = async (
         // Remove the endpoint while still holding the lease. A successor's
         // socket must never be removed by this process after ownership passes.
         try {
-          await settleWithin(timers, INSTALL_DRAIN_MS, installing);
+          // Draining the queue: an empty turn settles once everything
+          // before it has, and nothing new is admitted once stopping.
+          await settleWithin(
+            timers,
+            INSTALL_DRAIN_MS,
+            serialized(async () => {}),
+          );
           await closeControl();
         } finally {
           try {
