@@ -95,8 +95,8 @@ impl Supervisor {
     /// Retire a worker whose run has ended, consuming its classified
     /// outcome (design `designs/ironhorse-panic.md` § Architectural
     /// Boundary). The supervisor reads only the outcome's arm: it
-    /// unregisters the worker (a suspended worker's record survives in the
-    /// suspended set), records the outcome, and returns the crank
+    /// records the outcome, unregisters the worker (a suspended worker's
+    /// record survives in the suspended set), and returns the crank
     /// disposition. Discarding embargoed
     /// effects and the restore/replay policy act on that disposition in
     /// later slices; today no outbound effect is staged, so there is
@@ -106,12 +106,16 @@ impl Supervisor {
         if disposition != CrankDisposition::Commit {
             eprintln!("endor: worker {h} {outcome}; crank disposition {disposition:?}");
         }
-        self.unregister(h);
-        let mut retired = self.retired.lock().unwrap_or_else(|e| e.into_inner());
-        if retired.len() == RETIRED_OUTCOMES {
-            retired.pop_front();
+        // Record the outcome before unregistering, so a caller that sees
+        // the worker gone always finds its outcome.
+        {
+            let mut retired = self.retired.lock().unwrap_or_else(|e| e.into_inner());
+            if retired.len() == RETIRED_OUTCOMES {
+                retired.pop_front();
+            }
+            retired.push_back((h, outcome));
         }
-        retired.push_back((h, outcome));
+        self.unregister(h);
         disposition
     }
 

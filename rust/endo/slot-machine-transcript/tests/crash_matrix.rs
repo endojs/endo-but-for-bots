@@ -6,7 +6,7 @@
 //! compacted crank behind it, and a committed replay suffix. The measured
 //! phase then restarts that worker under a [`FaultPlan`] and does one full
 //! committing crank's lifecycle: admission, staging, the release commit,
-//! release and acknowledgement, snapshot publication (blob write, blob sync,
+//! release and acknowledgment, snapshot publication (blob write, blob sync,
 //! rename, directory sync, snapshot record), and compaction. A counting dry
 //! run numbers every mutating durability operation in that phase; the matrix
 //! then replays the phase once per (operation, fault mode), restarts the
@@ -39,7 +39,7 @@ fn setup(files: &WorkerFiles, wire: &mut Wire) {
     sup.crank(SETUP[1], wire).expect("beta");
     sup.publish().expect("publish after beta");
     sup.compact().expect("compact after beta");
-    // gamma is committed and released, but its acknowledgement is still
+    // gamma is committed and released, but its acknowledgment is still
     // pending when the worker stops: the restart must re-release it.
     sup.crank(SETUP[2], wire).expect("gamma");
 }

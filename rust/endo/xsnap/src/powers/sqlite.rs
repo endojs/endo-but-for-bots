@@ -148,9 +148,35 @@ fn execute_stmt(conn: &Connection, sql: &str, params: &ParamSet) -> Result<usize
     }
 }
 
+/// `sqliteStmtGet` and `sqliteStmtAll` are classed `Read`, so under a host
+/// transcript they must not reach a statement that writes (an `INSERT ...
+/// RETURNING`, say): a retried crank would repeat the write. Such a
+/// statement goes through the `Barrier`-classed `sqliteStmtRun` instead.
+///
+/// `transcript` is whether one is attached, read before the host call
+/// borrows the ledger.
+fn refuse_write_under_transcript(
+    stmt: &rusqlite::Statement<'_>,
+    transcript: bool,
+) -> Result<(), String> {
+    if transcript && !stmt.readonly() {
+        return Err(
+            "Error: a statement that writes must run through sqliteStmtRun under a host transcript"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// Query a single row.
-fn query_get(conn: &Connection, sql: &str, params: &ParamSet) -> Result<Option<JsonValue>, String> {
+fn query_get(
+    conn: &Connection,
+    sql: &str,
+    params: &ParamSet,
+    transcript: bool,
+) -> Result<Option<JsonValue>, String> {
     let mut stmt = conn.prepare(sql).map_err(|e| format!("Error: {}", e))?;
+    refuse_write_under_transcript(&stmt, transcript)?;
     let col_count = stmt.column_count();
     let col_names: Vec<String> = (0..col_count)
         .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
@@ -195,8 +221,14 @@ fn query_get(conn: &Connection, sql: &str, params: &ParamSet) -> Result<Option<J
 }
 
 /// Query all rows.
-fn query_all(conn: &Connection, sql: &str, params: &ParamSet) -> Result<JsonValue, String> {
+fn query_all(
+    conn: &Connection,
+    sql: &str,
+    params: &ParamSet,
+    transcript: bool,
+) -> Result<JsonValue, String> {
     let mut stmt = conn.prepare(sql).map_err(|e| format!("Error: {}", e))?;
+    refuse_write_under_transcript(&stmt, transcript)?;
     let col_count = stmt.column_count();
     let col_names: Vec<String> = (0..col_count)
         .map(|i| stmt.column_name(i).unwrap_or("?").to_string())
@@ -485,11 +517,12 @@ pub unsafe extern "C" fn host_sqlite_stmt_run(the: *mut XsMachine) {
 /// `sqliteStmtGet(stmtH, paramsJson) -> JSON | "null" | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_stmt_get(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
+        let transcript = host_ledger::attached();
         with_statement(
             the,
             "sqliteStmtGet",
             true,
-            |conn, sql, params| match query_get(conn, sql, params) {
+            |conn, sql, params| match query_get(conn, sql, params, transcript) {
                 Ok(Some(row)) => row.to_string(),
                 Ok(None) => "null".to_string(),
                 Err(e) => e,
@@ -501,11 +534,12 @@ pub unsafe extern "C" fn host_sqlite_stmt_get(the: *mut XsMachine) {
 /// `sqliteStmtAll(stmtH, paramsJson) -> JSON | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_stmt_all(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
+        let transcript = host_ledger::attached();
         with_statement(
             the,
             "sqliteStmtAll",
             true,
-            |conn, sql, params| match query_all(conn, sql, params) {
+            |conn, sql, params| match query_all(conn, sql, params, transcript) {
                 Ok(rows) => rows.to_string(),
                 Err(e) => e,
             },
@@ -547,6 +581,12 @@ pub unsafe extern "C" fn host_sqlite_stmt_finalize(the: *mut XsMachine) {
 }
 
 /// Native handles cannot be serialized with the XS heap.
+/// Drop every open database and statement handle.
+pub(crate) fn drop_open_handles() {
+    STMT_MAP.with(|map| map.borrow_mut().clear());
+    DB_MAP.with(|map| map.borrow_mut().clear());
+}
+
 pub(crate) fn has_open_handles() -> bool {
     DB_MAP.with(|map| !map.borrow().is_empty()) || STMT_MAP.with(|map| !map.borrow().is_empty())
 }
@@ -626,7 +666,13 @@ mod tests {
 
     #[test]
     fn private_and_uri_databases_are_not_reopenable() {
-        for path in ["", ":memory:", "file::memory:", "file:x?mode=memory", "file:data.db"] {
+        for path in [
+            "",
+            ":memory:",
+            "file::memory:",
+            "file:x?mode=memory",
+            "file:data.db",
+        ] {
             assert!(!reopenable(path), "{path:?}");
         }
         assert!(reopenable("data.db"));

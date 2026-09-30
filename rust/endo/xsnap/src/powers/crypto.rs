@@ -291,6 +291,12 @@ pub unsafe extern "C" fn host_sha256_finish(the: *mut XsMachine) {
 }
 
 /// Native handles cannot be serialized with the XS heap.
+/// Drop every open hasher handle.
+pub(crate) fn drop_open_handles() {
+    HASHER_MAP.with(|map| map.borrow_mut().clear());
+    FED_THIS_CRANK.with(|fed| fed.borrow_mut().clear());
+}
+
 pub(crate) fn has_open_handles() -> bool {
     HASHER_MAP.with(|map| !map.borrow().is_empty())
 }

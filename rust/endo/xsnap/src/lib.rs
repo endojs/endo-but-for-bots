@@ -4850,7 +4850,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             std::fs::write(root.path().join("seed"), "seed").unwrap();
             let transcript = root.path().join("worker.sqlite");
-            let incarnation = |abort: bool| {
+            let incarnation = |abort: bool, resumed: Option<String>| {
                 let root = root.path().to_owned();
                 let transcript = transcript.clone();
                 std::thread::spawn(move || {
@@ -4868,7 +4868,7 @@ mod tests {
                     let attachment = host_ledger::attach(
                         &transcript,
                         "barrier",
-                        None,
+                        resumed.as_deref(),
                         unsafe { &*powers },
                         heap,
                     )
@@ -4884,7 +4884,7 @@ mod tests {
                 .join()
                 .unwrap()
             };
-            assert_eq!(incarnation(true).stopped, None, "{escape}");
+            assert_eq!(incarnation(true, None).stopped, None, "{escape}");
             assert_eq!(
                 root.path().join(witness).symlink_metadata().is_ok(),
                 present,
@@ -4892,7 +4892,7 @@ mod tests {
             );
             assert!(
                 matches!(
-                    incarnation(false).stopped,
+                    incarnation(false, Some(published_hash(&transcript, "barrier"))).stopped,
                     Some(slot_machine_transcript::RecoveryStop::EscapedBarrier { .. })
                 ),
                 "{escape}"
@@ -4908,7 +4908,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("a.txt"), "abcdefgh").unwrap();
         let transcript = root.path().join("worker.sqlite");
-        let incarnation = |resumed: Option<&'static str>, deliver: bool| {
+        let incarnation = |resumed: Option<String>, deliver: bool| {
             let root = root.path().to_owned();
             let transcript = transcript.clone();
             std::thread::spawn(move || {
@@ -4923,8 +4923,13 @@ mod tests {
                 let powers = Box::into_raw(Box::new(powers));
                 machine.register_powers(powers);
                 let heap = || Ok(machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot);
-                let attached =
-                    host_ledger::attach(&transcript, "behind", resumed, unsafe { &*powers }, heap);
+                let attached = host_ledger::attach(
+                    &transcript,
+                    "behind",
+                    resumed.as_deref(),
+                    unsafe { &*powers },
+                    heap,
+                );
                 if attached.is_ok() && deliver {
                     // A crank commits after the snapshot, and the worker dies
                     // before the next suspend.
@@ -4939,10 +4944,68 @@ mod tests {
             .unwrap()
         };
         incarnation(None, true).unwrap();
-        let refused = incarnation(None, false).unwrap_err();
+        let published = published_hash(&transcript, "behind");
+        let refused = incarnation(Some(published), false).unwrap_err();
         assert!(refused.contains("past the snapshot watermark"), "{refused}");
-        let refused = incarnation(Some("not-the-published-heap"), false).unwrap_err();
+        let refused = incarnation(Some("0".repeat(64)), false).unwrap_err();
         assert!(refused.contains("is not the transcript's published snapshot"), "{refused}");
+        // Leaving the resumed hash out (a two-line payload, or an empty
+        // third line) must not skip the check.
+        let refused = incarnation(None, false).unwrap_err();
+        assert!(refused.contains("no resumed heap was named"), "{refused}");
+    }
+
+    fn published_hash(transcript: &std::path::Path, worker: &str) -> String {
+        let (transcript, _) = slot_machine_transcript::Transcript::open(
+            transcript,
+            slot_machine_transcript::TranscriptConfig::new(worker),
+        )
+        .unwrap();
+        transcript.latest_snapshot().unwrap().unwrap().hash
+    }
+
+    /// `sqliteStmtGet` and `sqliteStmtAll` are classed `Read`, so under a
+    /// transcript they refuse a statement that writes.
+    #[test]
+    fn host_transcript_refuses_a_write_through_a_read_statement() {
+        let root = tempfile::tempdir().unwrap();
+        let transcript = root.path().join("worker.sqlite");
+        let database = root.path().join("guest.db");
+        let replies = std::thread::spawn(move || {
+            setup();
+            let powers = Box::into_raw(Box::new(powers::HostPowers::new()));
+            let machine = Machine::new(&DEFAULT_CREATION, "read-write").unwrap();
+            machine.register_powers(powers);
+            let heap = || Ok(machine.suspend(SNAPSHOT_SIGNATURE).unwrap().snapshot);
+            host_ledger::attach(&transcript, "read-write", None, unsafe { &*powers }, heap)
+                .unwrap();
+            host_ledger::begin_delivery(b"d1");
+            machine
+                .eval(&format!(
+                    "var db = sqliteOpen({:?}); \
+                     sqliteExec(db, 'CREATE TABLE t (id INTEGER PRIMARY KEY)')",
+                    database.to_str().unwrap()
+                ))
+                .unwrap();
+            let replies = [
+                "sqliteStmtGet(sqlitePrepare(db, 'INSERT INTO t VALUES (1) RETURNING id'), '[]')",
+                "sqliteStmtAll(sqlitePrepare(db, 'INSERT INTO t VALUES (2) RETURNING id'), '[]')",
+                "sqliteStmtAll(sqlitePrepare(db, 'SELECT id FROM t'), '[]')",
+            ]
+            .map(|source| match machine.eval(source).unwrap() {
+                JsValue::String(reply) => reply,
+                other => panic!("expected a string, got {:?}", js_value_debug(&other)),
+            });
+            host_ledger::end_delivery(true).unwrap();
+            host_ledger::detach();
+            replies
+        })
+        .join()
+        .unwrap();
+        for refused in &replies[..2] {
+            assert!(refused.contains("must run through sqliteStmtRun"), "{refused}");
+        }
+        assert_eq!(replies[2], "[]");
     }
 
     /// Only the supervisor may attach a transcript or suspend: a peer

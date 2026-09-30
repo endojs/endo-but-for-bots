@@ -26,8 +26,8 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use slot_machine_transcript::{
-    AdmittedCallbacks, CallbackRegistry, CasStore, HandleRecord, HostCallError, HostClass,
-    HostOutcome, HostReply, RecoveryStop, SnapshotMeta, Transcript, TranscriptConfig,
+    AdmittedCallbacks, CallbackRegistry, Cas, HandleRecord, HostCallError, HostClass, HostOutcome,
+    HostReply, RecoveryStop, SnapshotMeta, Transcript, TranscriptConfig,
 };
 
 use crate::powers::{self, HostPowers};
@@ -127,7 +127,7 @@ pub(crate) struct Outcome {
 struct Ledger {
     transcript: Transcript,
     callbacks: AdmittedCallbacks,
-    heaps: CasStore,
+    heaps: Cas,
     /// Why a crank failed to commit, once one has: the heap now runs ahead
     /// of the log, so no later snapshot may be published against it.
     lost_crank: Option<String>,
@@ -209,7 +209,8 @@ impl Attachment {
 /// crank, so re-seating is only sound on the heap of the latest published
 /// snapshot with no committed host calls past its watermark. `resumed` is
 /// the hash of the heap the worker resumed from, when it resumed one:
-/// attaching refuses when it is not the published snapshot, and refuses
+/// attaching refuses when it is not the published snapshot, refuses when
+/// it is absent though the transcript has published one, and refuses
 /// while committed host calls lie past the watermark, since nothing yet
 /// replays them.
 pub fn attach(
@@ -228,21 +229,27 @@ pub fn attach(
     let (mut transcript, _) = Transcript::open(path, TranscriptConfig::new(worker))
         .map_err(|e| format!("open host transcript: {e}"))?;
     let snapshot = transcript.latest_snapshot().map_err(|e| e.to_string())?;
-    if let Some(resumed) = resumed {
-        match &snapshot {
-            Some(snapshot) if snapshot.hash == resumed => {}
-            Some(snapshot) => {
-                return Err(format!(
-                    "resumed heap {resumed} is not the transcript's published snapshot {}",
-                    snapshot.hash
-                ))
-            }
-            None => {
-                return Err(format!(
-                    "resumed heap {resumed}, but the transcript has no published snapshot"
-                ))
-            }
+    match (resumed, &snapshot) {
+        (Some(resumed), Some(snapshot)) if snapshot.hash == resumed => {}
+        (Some(resumed), Some(snapshot)) => {
+            return Err(format!(
+                "resumed heap {resumed} is not the transcript's published snapshot {}",
+                snapshot.hash
+            ))
         }
+        (Some(resumed), None) => {
+            return Err(format!(
+                "resumed heap {resumed}, but the transcript has no published snapshot"
+            ))
+        }
+        (None, Some(snapshot)) => {
+            return Err(format!(
+                "the transcript's published snapshot is {}, but no resumed heap was named; \
+                 re-seating is only sound on that heap",
+                snapshot.hash
+            ))
+        }
+        (None, None) => {}
     }
     let unreplayed = transcript
         .host_replay()
@@ -255,25 +262,41 @@ pub fn attach(
             snapshot.as_ref().map_or(0, |s| s.watermark_crank)
         ));
     }
+    let heaps =
+        Cas::open(path.with_extension("heaps")).map_err(|e| format!("open heap store: {e}"))?;
+    // Re-seating registers native handles as it goes, so a failure from
+    // here on drops them all: `has_native_handles` refused entry, so every
+    // open handle is one this attach registered, and none may outlive a
+    // refused attach to run unrecorded.
     let mut descriptors = HashMap::new();
-    let report = transcript
-        .reseat_handles(|record| {
-            let descriptor = reseat(record, powers)?;
-            descriptors.insert(record.handle as u32, Some(descriptor));
-            Ok(())
-        })
-        .map_err(|e| format!("re-seat handles: {e}"))?;
-    let heaps = CasStore::open(path.with_extension("heaps"))
-        .map_err(|e| format!("open heap store: {e}"))?;
-    if snapshot.is_none() {
-        transcript
-            .publish_snapshot(&heaps, &heap()?, snapshot_meta())
-            .map_err(|e| format!("publish initial heap: {e}"))?;
-    }
-    let stopped = transcript
-        .recovery_gate()
-        .map_err(|e| format!("recovery gate: {e}"))?
-        .err();
+    let finish = (|| {
+        let report = transcript
+            .reseat_handles(|record| {
+                let descriptor = reseat(record, powers)?;
+                let handle =
+                    u32::try_from(record.handle).map_err(|_| "handle out of range".to_string())?;
+                descriptors.insert(handle, Some(descriptor));
+                Ok(())
+            })
+            .map_err(|e| format!("re-seat handles: {e}"))?;
+        if snapshot.is_none() {
+            transcript
+                .publish_snapshot(&heaps, &heap()?, snapshot_meta())
+                .map_err(|e| format!("publish initial heap: {e}"))?;
+        }
+        let stopped = transcript
+            .recovery_gate()
+            .map_err(|e| format!("recovery gate: {e}"))?
+            .err();
+        Ok::<_, String>((report, stopped))
+    })();
+    let (report, stopped) = match finish {
+        Ok(done) => done,
+        Err(e) => {
+            drop_native_handles();
+            return Err(e);
+        }
+    };
     DESCRIPTORS.with(|d| *d.borrow_mut() = descriptors);
     LEDGER.with(|l| {
         *l.borrow_mut() = Some(Ledger {
@@ -305,7 +328,9 @@ pub(crate) fn publish_heap(heap: &[u8]) -> Result<(), String> {
         Some(Ledger {
             lost_crank: Some(e),
             ..
-        }) => Err(format!("publish heap: an earlier crank did not commit: {e}")),
+        }) => Err(format!(
+            "publish heap: an earlier crank did not commit: {e}"
+        )),
         Some(ledger) => ledger
             .transcript
             .publish_snapshot(&ledger.heaps, heap, snapshot_meta())
@@ -321,6 +346,12 @@ pub fn detach() -> Option<Transcript> {
         eprintln!("{e}");
     }
     LEDGER.with(|l| l.borrow_mut().take()).map(|l| l.transcript)
+}
+
+fn drop_native_handles() {
+    powers::fs::drop_open_handles();
+    powers::sqlite::drop_open_handles();
+    powers::crypto::drop_open_handles();
 }
 
 fn has_native_handles() -> bool {

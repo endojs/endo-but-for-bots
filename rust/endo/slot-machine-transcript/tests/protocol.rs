@@ -6,7 +6,7 @@ mod common;
 
 use common::{meta, oracle, snapshot_bytes, Supervisor, Wire, WorkerFiles};
 use slot_machine_transcript::{
-    transcript_path, CasStore, FaultMode, FaultPlan, Operation, SnapshotMeta, Transcript,
+    transcript_path, Cas, FaultMode, FaultPlan, Operation, SnapshotMeta, Transcript,
     TranscriptConfig, TranscriptError, TranscriptLimits,
 };
 
@@ -35,7 +35,7 @@ fn admission_requires_a_published_snapshot() {
         t.begin_crank(b"x"),
         Err(TranscriptError::Protocol(_))
     ));
-    let cas = CasStore::open(root.path().join("cas")).unwrap();
+    let cas = Cas::open(root.path().join("cas")).unwrap();
     t.publish_snapshot(&cas, &snapshot_bytes(0), meta())
         .unwrap();
     t.begin_crank(b"x").unwrap();
@@ -123,7 +123,7 @@ fn staging_past_the_per_crank_bound_is_refused_not_truncated() {
         max_inbound_bytes: 4,
     };
     let (mut t, _) = Transcript::open(&path, config).unwrap();
-    let cas = CasStore::open(root.path().join("cas")).unwrap();
+    let cas = Cas::open(root.path().join("cas")).unwrap();
     t.publish_snapshot(&cas, &snapshot_bytes(0), meta())
         .unwrap();
     assert!(matches!(
@@ -260,13 +260,13 @@ fn an_ambiguous_commit_releases_nothing_until_reconciled() {
 }
 
 #[test]
-fn a_crash_after_release_before_acknowledgement_is_observed_once() {
+fn a_crash_after_release_before_acknowledgment_is_observed_once() {
     let root = tempfile::tempdir().unwrap();
     let files = WorkerFiles::new(root.path(), "w");
     let mut wire = Wire::default();
     let mut sup = Supervisor::start(&files, None, &mut wire).unwrap();
     sup.crank(b"one", &mut wire).unwrap();
-    // The acknowledgement for "one" is still in memory: crash now.
+    // The acknowledgment for "one" is still in memory: crash now.
     drop(sup);
     let sup = Supervisor::start(&files, None, &mut wire).unwrap();
     assert_eq!(sup.recovery.unreleased, 2);
@@ -393,13 +393,13 @@ fn a_blob_write_fault_poisons_before_anything_is_published() {
     drop(Supervisor::start(&files, None, &mut wire).unwrap());
     let plan = FaultPlan::counting();
     let (mut t, _) = Transcript::open(files.transcript(), TranscriptConfig::new("w")).unwrap();
-    let cas = CasStore::open(files.cas_dir())
+    let cas = Cas::open(files.cas_dir())
         .unwrap()
         .with_fault_plan(plan.clone());
     let before = t.latest_snapshot().unwrap();
     // Aim at the directory sync, the step xsnap's suspend_to_cas omitted.
     let plan2 = FaultPlan::fail_at(4, FaultMode::FailOnce);
-    let cas2 = CasStore::open(files.cas_dir())
+    let cas2 = Cas::open(files.cas_dir())
         .unwrap()
         .with_fault_plan(plan2.clone());
     let Err(TranscriptError::Fault(fault)) = t.publish_snapshot(&cas2, &snapshot_bytes(1), meta())

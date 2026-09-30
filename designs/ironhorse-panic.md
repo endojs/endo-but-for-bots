@@ -574,7 +574,7 @@ The Slot Machine worker supervisor is the only writer. Its crank protocol is:
    in one transaction. Only after that transaction is durable may the supervisor
    release outbound messages, in sequence order. Each released frame carries its
    stable event sequence so the receiver can discard a duplicate if the
-   supervisor crashes after send but before recording the acknowledgement.
+   supervisor crashes after send but before recording the acknowledgment.
 4. On `ExecutionOutcome::Panicked` or `ExecutionOutcome::Uncaught`, discard the staged
    outbound payloads, close tentative native handles, and mark every event and
    the crank aborted. The original inbound row remains available for diagnosis

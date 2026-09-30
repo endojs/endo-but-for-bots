@@ -6,7 +6,7 @@ use std::cell::Cell;
 use std::path::Path;
 
 use slot_machine_transcript::{
-    AdmissionError, AdmittedCallbacks, CallbackRegistry, CasStore, HostCallError, HostClass,
+    AdmissionError, AdmittedCallbacks, CallbackRegistry, Cas, HostCallError, HostClass,
     HostOutcome, HostReply, RecoveryStop, ReplayStop, SnapshotMeta, Transcript, TranscriptConfig,
 };
 
@@ -33,8 +33,8 @@ fn callbacks() -> AdmittedCallbacks {
 }
 
 /// Open a transcript with an initial snapshot published.
-fn open(root: &Path) -> (Transcript, CasStore) {
-    let cas = CasStore::open(root.join("cas")).unwrap();
+fn open(root: &Path) -> (Transcript, Cas) {
+    let cas = Cas::open(root.join("cas")).unwrap();
     let (mut t, _) = Transcript::open(root.join("t.sqlite"), TranscriptConfig::new("w")).unwrap();
     if t.latest_snapshot().unwrap().is_none() {
         t.publish_snapshot(&cas, b"heap-0", meta()).unwrap();

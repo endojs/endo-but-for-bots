@@ -28,7 +28,7 @@ use crate::fault::FaultPlan;
 
 /// A directory of content-addressed snapshot blobs.
 #[derive(Clone, Debug)]
-pub struct CasStore {
+pub struct Cas {
     directory: PathBuf,
     fault: Option<FaultPlan>,
 }
@@ -66,19 +66,19 @@ pub fn blob_hash(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-impl CasStore {
+impl Cas {
     /// A CAS store rooted at `directory`, created if absent.
-    pub fn open(directory: impl Into<PathBuf>) -> io::Result<CasStore> {
+    pub fn open(directory: impl Into<PathBuf>) -> io::Result<Cas> {
         let directory = directory.into();
         fs::create_dir_all(&directory)?;
-        Ok(CasStore {
+        Ok(Cas {
             directory,
             fault: None,
         })
     }
 
     /// The same store with its durability operations routed through `plan`.
-    pub fn with_fault_plan(mut self, plan: FaultPlan) -> CasStore {
+    pub fn with_fault_plan(mut self, plan: FaultPlan) -> Cas {
         self.fault = Some(plan);
         self
     }

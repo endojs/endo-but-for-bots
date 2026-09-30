@@ -10,7 +10,7 @@
 //!   through a wrapping VFS ([`FaultPlan::vfs_name`]) that delegates to the
 //!   platform default VFS;
 //! - the CAS snapshot publication steps performed in Rust (blob write, blob
-//!   sync, rename, directory sync), counted by the CAS writer ([`crate::CasStore`]).
+//!   sync, rename, directory sync), counted by the CAS writer ([`crate::Cas`]).
 //!
 //! Reads, locks, and SQLite's shared-memory index are not counted: they
 //! cannot make a durable state torn.

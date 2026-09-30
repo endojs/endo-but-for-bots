@@ -3,7 +3,7 @@
 //! transcript).
 //!
 //! Each Endor worker owns one SQLite database,
-//! `<endo-dir>/workers/<handle>/transcript.sqlite` ([`transcript_path`]),
+//! `<endo-directory>/workers/<handle>/transcript.sqlite` ([`transcript_path`]),
 //! holding:
 //!
 //! - `snapshot`: published CAS snapshot identities with the transcript
@@ -37,7 +37,7 @@
 //! written outside any transaction, so it cannot join a SQLite commit.
 //! [`Transcript::publish_snapshot`] therefore orders the steps: the
 //! transcript's cranks are already committed; the blob is written, synced,
-//! renamed, and its directory synced ([`CasStore::write_blob`]); only then is
+//! renamed, and its directory synced ([`Cas::write_blob`]); only then is
 //! its hash recorded with the exact committed watermark it covers; and only
 //! after that record is durable may [`Transcript::compact`] drop the covered
 //! prefix. A crash anywhere leaves the previous published snapshot and its
@@ -48,7 +48,7 @@
 //! `synchronous=FULL`, never `NORMAL`, because effects are released after
 //! COMMIT and `NORMAL` may forget a recent commit on power loss. Per crank the
 //! transcript pays one admission transaction and one release transaction;
-//! acknowledgements of released frames ride the next transaction instead of
+//! acknowledgments of released frames ride the next transaction instead of
 //! paying their own. Outbound events per crank are bounded by
 //! [`TranscriptLimits`] and refused, not truncated, past the bound.
 //!
@@ -77,7 +77,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
-pub use cas::{blob_hash, sync_directory, CasError, CasStore};
+pub use cas::{blob_hash, sync_directory, Cas, CasError};
 pub use embargo::{CrankVerdict, DuplicateSuppressor, Embargo, FrameSink, Received, Settlement};
 pub use fault::{FaultMode, FaultPlan};
 pub use host::{
@@ -90,8 +90,8 @@ pub use host::{
 pub const SCHEMA_VERSION: i64 = 2;
 
 /// The per-worker transcript database path.
-pub fn transcript_path(endo_dir: &Path, worker_handle: &str) -> PathBuf {
-    endo_dir
+pub fn transcript_path(endo_directory: &Path, worker_handle: &str) -> PathBuf {
+    endo_directory
         .join("workers")
         .join(worker_handle)
         .join("transcript.sqlite")
@@ -337,7 +337,7 @@ pub struct TranscriptStats {
     pub publications: u64,
     /// Compaction transactions committed.
     pub compactions: u64,
-    /// Standalone acknowledgement flushes committed.
+    /// Standalone acknowledgment flushes committed.
     pub ack_flushes: u64,
 }
 
@@ -789,7 +789,7 @@ impl Transcript {
         Ok(())
     }
 
-    /// Note that frames were handed to the transport. The acknowledgement is
+    /// Note that frames were handed to the transport. The acknowledgment is
     /// made durable by the next transaction (or [`Transcript::flush_acks`]);
     /// a crash first merely re-releases them, and receivers drop the
     /// duplicates by sequence.
@@ -797,7 +797,7 @@ impl Transcript {
         self.pending_acks.extend(seqs);
     }
 
-    /// Make pending release acknowledgements durable now.
+    /// Make pending release acknowledgments durable now.
     pub fn flush_acks(&mut self) -> Result<(), TranscriptError> {
         self.check_healthy()?;
         if self.pending_acks.is_empty() {
@@ -843,7 +843,7 @@ impl Transcript {
     /// directory, then record its hash with the committed watermark.
     pub fn publish_snapshot(
         &mut self,
-        cas: &CasStore,
+        cas: &Cas,
         blob: &[u8],
         meta: SnapshotMeta,
     ) -> Result<SnapshotRecord, TranscriptError> {
@@ -980,7 +980,7 @@ impl Transcript {
     /// The latest published snapshot, verified, and the committed cranks
     /// after its watermark. A missing or corrupt blob is a storage fault:
     /// recovery stops rather than falling back to another snapshot.
-    pub fn replay_plan(&self, cas: &CasStore) -> Result<ReplayPlan, TranscriptError> {
+    pub fn replay_plan(&self, cas: &Cas) -> Result<ReplayPlan, TranscriptError> {
         let Some(snapshot) = self.latest_snapshot()? else {
             return Err(TranscriptError::Protocol("no published snapshot".into()));
         };

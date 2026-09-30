@@ -17,7 +17,7 @@
 //!
 //! Release is at-least-once. A frame handed to the sink is acknowledged by
 //! the transcript's next transaction, so a crash after the send and before
-//! that acknowledgement re-releases it on restart. Each released frame
+//! that acknowledgment re-releases it on restart. Each released frame
 //! carries its stable event sequence, and a receiver's
 //! [`DuplicateSuppressor`] drops any sequence at or below the highest it
 //! has delivered for that worker, so the peer observes every frame exactly
@@ -202,7 +202,7 @@ impl<S: FrameSink> Embargo<S> {
 
     /// Hand queued committed frames to the sink in sequence order, stopping
     /// at the first sink error. Returns the sequences handed off and the
-    /// error, if any. Their acknowledgement rides the transcript's next
+    /// error, if any. Their acknowledgment rides the transcript's next
     /// transaction (or [`Embargo::flush_acks`]).
     pub fn pump(&mut self) -> (Vec<Seq>, Option<S::Error>) {
         let mut released = Vec::new();
@@ -223,7 +223,7 @@ impl<S: FrameSink> Embargo<S> {
         (released, blocked)
     }
 
-    /// Make release acknowledgements durable now.
+    /// Make release acknowledgments durable now.
     pub fn flush_acks(&mut self) -> Result<(), TranscriptError> {
         self.transcript.flush_acks()
     }
