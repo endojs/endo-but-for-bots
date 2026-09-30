@@ -3531,7 +3531,6 @@ __metadata:
   dependencies:
     "@endo/harden": "workspace:^"
     "@endo/init": "workspace:^"
-    "@endo/pass-style": "workspace:^"
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
