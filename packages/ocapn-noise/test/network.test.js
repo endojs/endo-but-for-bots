@@ -208,6 +208,18 @@ test('provideSession rejects an uppercase spelling of a peer designator', async 
   network.shutdown();
 });
 
+test('waitForInboundSession rejects a non-canonical peer key', async t => {
+  const network = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId } = addFreshKey(network);
+  // waitForInboundSession keys `active`/`waiters` by its argument, so it
+  // must reject a non-canonical spelling rather than park a waiter that
+  // never resolves.
+  t.throws(() => network.waitForInboundSession(keyId.toUpperCase()), {
+    message: /designator must be 64 lowercase hex chars/,
+  });
+  network.shutdown();
+});
+
 test('multiple keys on one network route inbound sessions to the right local key', async t => {
   const netA = makeNetworkForTest(t, { codec: cborCodec });
   const netB = makeNetworkForTest(t, { codec: cborCodec });

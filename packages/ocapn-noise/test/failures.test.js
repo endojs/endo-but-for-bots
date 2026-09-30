@@ -483,3 +483,18 @@ test('initiatorWriteSyn accepts a strong intended responder key', async t => {
   const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
   t.notThrows(() => initiatorWriteSyn(responder.publicKey, prefixedSyn));
 });
+
+test('initiatorWriteSyn rejects the identity point as responder key', async t => {
+  // The Edwards identity (0, 1) encodes as y=1: byte 0 is 0x01, the rest
+  // zero. It is order 1, so only the `is_weak` check catches it.
+  const identity = new Uint8Array(32);
+  identity[0] = 1;
+  const { initiatorWriteSyn } = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator();
+  const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  t.throws(() => initiatorWriteSyn(identity, prefixedSyn), {
+    message: /not a valid, strong ed25519 verifying key/,
+  });
+});
