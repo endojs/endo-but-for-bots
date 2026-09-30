@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-30 |
-| **Author** | Dan Connolly (prompted), Kriscendo Bot (prompted) |
+| **Author** | Dan Connolly (prompted) |
 | **Status** | Proposed |
 
 ## What is the Problem Being Solved?
@@ -103,6 +103,8 @@ single-threaded, has durable `ctx.storage`, and has a stable id. In the
 confined deployment (*Confinement*), the vat is a **DO facet** inside a
 supervisor DO, with its own SQLite database; the supervisor is never a vat.
 It holds no designator key, runs no OCapN client, and only routes frames.
+It is still in the facet's trusted computing base (see *Trust model of the
+supervisor*).
 Either way, one vat has exactly one designator key and one storage, and "the
 vat's storage" below means the storage of that DO or DO facet.
 
@@ -246,12 +248,37 @@ sequenceDiagram
   Ed25519 `sign`/`verify` (verification item 9), which a later optimization
   may use.
 - `sessionId` is `makeSessionId` over the two designator keys, as today.
+- **Nothing is trusted before the handshake completes.** The initiator hands
+  over `mailbox_I` before it has seen `sig_R`, and the responder hands over
+  `mailbox_R` before it has seen `sig_I`, so each side holds a live stub to a
+  peer it has not authenticated. The mailbox discipline limits what that stub
+  can do: it is a `deliver` that carries no stubs, so the only thing an
+  unauthenticated party can do with it is send frames. Each side therefore
+  keeps the session in a *pending* state until it has verified the peer's
+  signature. In the pending state the responder accepts exactly one frame,
+  `finish` at `seq` `0n`, and the initiator accepts none. Any other frame, or
+  a `finish` whose signature fails, aborts the pending session and disposes
+  both mailbox stubs. No frame reaches OCapN core, and no `NetworkSession`
+  is handed to `inboundSessions`, until verification succeeds.
+- The initiator verifies `sig_R` *before* it sends `finish`. It does not
+  await the returned promise as a trusted value: the reply is untrusted data
+  from an unauthenticated callee, and the initiator checks its shape and
+  signature before it uses `responderMailbox` for anything but `finish`.
+- **Unauthenticated `open` is bounded.** Each `open` costs the responder an
+  activation, a signature, and a pending-session slot. The front door limits
+  pending sessions to `maxPendingOpens` (default 16) and expires a pending
+  session that has not received `finish` within `handshakeTimeout` (default
+  10 s). An `open` beyond the limit is rejected before any signing. Rate
+  limiting by source is the supervisor's or the Worker's policy (for
+  capnweb, the platform's own request limits apply first).
 - Crossed hellos between the same two designators resolve by the comparison
   rule that `compareSessionKeysForCrossedHellos` (`client/handshake.js`,
   ebfb#806) implements: compare the two ids with `compareImmutableArrayBuffers`
   and keep the session the higher id initiated. That function takes
-  `op:start-session` connection arguments, so the `cf` network reimplements
-  the rule over its own hellos rather than calling it.
+  `op:start-session` connection arguments, so phase 2 factors the comparison
+  out of it into a small exported helper over two key buffers, which both
+  `handshake.js` and the `cf` network call. The rule then has one
+  implementation.
 
 Grant matching then works without any help from the platform. Three-party
 handoffs (`desc:handoff-give` / `desc:handoff-receive`) are signed by
@@ -274,6 +301,23 @@ rely on a platform ordering guarantee:
 - The sender limits itself to `maxInFlight` unresolved `deliver` calls
   (default 64) and queues the rest. The resolution of `deliver` is the only
   back-pressure signal.
+- **Failure detection.** A rejected `deliver` detects a dead peer only when
+  there is traffic to send. A peer that crashes while the local side is only
+  waiting on answers would otherwise leave those answers pending forever. The
+  network therefore sends a heartbeat: when a session has outstanding
+  answers or questions and has sent nothing for `idleProbe` (default 30 s),
+  it delivers an empty `ping` frame (consumed by the network, never passed to
+  OCapN core). If the peer's isolate is gone, the stub call rejects and the
+  session aborts as above. A session with nothing outstanding sends no
+  heartbeat, so an idle DO is still free to be evicted. The heartbeat rides
+  the same `seq` counter, so it cannot be used to reorder frames.
+
+On E-ordering: the platform already orders calls on one stub (verification
+item 3), so in the common case the reorder buffer never holds a frame. `seq`
+remains because the guarantee is per stub and undocumented for Cap'n Web, and
+because it is what turns a duplicate from a retry into a detected abort
+rather than a double delivery. `maxReorder` may be set to `0` on carriers
+known to be ordered, which reduces `seq` to a duplicate and gap check.
 
 This makes delivery at-most-once and ordered per session, which is what OCapN
 assumes. Exactly-once across sessions is out of scope: application state that
@@ -342,11 +386,43 @@ flowchart TB
   the Cap'n Web endpoint) and the **dial policy** (which designators or hints a
   facet may open). Policy is the supervisor's business, so revoking a facet's
   network reach means refusing `dial`.
+- **What `dial` exposes to the supervisor.** To apply dial policy, the
+  supervisor reads `location` (designator and hints). It does not need to
+  parse `hello`, and it passes `hello` and the returned `reply` through
+  unchanged. It hands the carrier a mailbox of its own that forwards to the
+  facet's `initiatorMailbox`, because the facet's stub is not otherwise
+  reachable from the carrier.
 - Storage: a DO facet (`ctx.facets.get`) uses its own SQLite database,
   isolated from the supervisor, which holds its key and its sturdyref tables.
   A facet that must mint sturdyrefs is therefore a DO facet. A plain facet
   could instead be given an attenuated storage `RpcTarget` scoped to its
   facet id, with a quota (see *Open Questions*).
+
+#### Trust model of the supervisor
+
+Confinement here protects **the world from the facet**, not the facet from its
+supervisor. The supervisor is in the facet's trusted computing base:
+
+- It loads the facet's code and chooses its `env`, so it can already do
+  anything the facet can.
+- It sees every frame and every designator the facet exchanges. Frames on
+  the binding and capnweb carriers are not encrypted end to end.
+- It is a man in the middle for `dial` and for inbound `open`. It can
+  substitute mailboxes, drop or inject frames, or route a session to a
+  different vat. The designator handshake still binds the session to the
+  peer's key, so the supervisor cannot impersonate a peer whose private key
+  it does not hold. It holds its facets' keys only in the sense that it can
+  read their storage, which is the same trust the platform operator has over
+  any DO.
+- It holds carrier stubs for every session of every facet it hosts. "The
+  supervisor is never a vat" means it runs no OCapN client and exports no
+  objects of its own. It does not mean it lacks authority: it holds, by
+  construction, the union of its facets' network reach.
+
+A facet that must not trust its supervisor needs end-to-end protection that
+this design does not provide on tree carriers: the ws-bytes carrier with the
+`.np` network (*Interaction with Noise*), with the supervisor forwarding
+opaque ciphertext.
 
 This removes the web-key relay and its URL allowlist from #78: there is no
 HTTP relay left, so the HTTP proxying and URL parsing it needed are gone. The
@@ -409,6 +485,33 @@ the OCapN serialization rather than flattening OCapN to bytes and hiding the
 bytes inside the carrier. This is the default frame type for the binding and
 capnweb carriers.
 
+#### Why a tree codec rather than bytes in a tree carrier
+
+The cheaper alternative is to keep OCapN as canonical bytes (Syrup or CBOR)
+and pass each frame to `deliver` as a `Uint8Array`. Both carriers move a
+`Uint8Array` (structured clone copies it; Cap'n Web tags it `bytes` and
+base64-encodes it). That option needs no `@endo/ocapn` core change: no
+generic `OcapnCodec<M>`, no `atEnd`/`diagnoseRemainder`, no `signingCodec`
+split, and it can reuse `.np` unchanged.
+
+| | Bytes in the carrier | Tree codec |
+|---|---|---|
+| `@endo/ocapn` core change | none | codec envelope generic in `M`; `signingCodec` |
+| Frames readable by platform tooling (Cap'n Web inspectors, logs, `wrangler tail`) | no, opaque base64 | yes |
+| Cap'n Web wire size | base64 inflates by a third | JSON, roughly Syrup-sized for text-heavy frames |
+| Noise (`.np`) composes | yes | no (*Interaction with Noise*) |
+| Supervisor dial policy can read `hello` without a codec | no | yes |
+| Asked for by the design request | no | yes (dckc's p.s. on #117) |
+
+The design takes the tree codec as the default because the request asks for
+it explicitly and because readable frames are what make the platform's own
+tooling useful. The bytes option is not rejected: the carrier interface
+already accepts `OcapnTree | Uint8Array`, and phase 2 ships a bytes mode
+first, since it needs no core change. The tree codec lands in phase 1 in
+parallel and becomes the default only once the cross-codec equivalence tests
+(*Test Plan*) pass. If phase 1 proves more invasive than described here, the
+bytes mode is the fallback and the rest of the design is unchanged.
+
 #### Generalizing the codec and session envelope
 
 `OcapnReader`/`OcapnWriter` (`packages/ocapn/src/codec-interface.d.ts`) are a
@@ -468,11 +571,18 @@ first element) is a decode error. Sets and dictionaries are not required to
 arrive in canonical order, because the tree is never signed (below).
 
 **One convention serves both carriers.** Workers RPC structured-clones the
-tree as it is. Cap'n Web round-trips any JS value made of these types, and it
-escapes our tagged arrays inside its own wire encoding (its literal-array
-wrapping), so the tags pass through without our touching its wire format. The
-same frame therefore works on either carrier, and a supervisor can forward
-frames between a binding and a Cap'n Web session without re-encoding.
+tree as it is. For Cap'n Web, the claim is that it round-trips any JS value
+made of these types and escapes our tagged arrays inside its own wire
+encoding (its literal-array wrapping), so the tags pass through without our
+touching its wire format. This follows from reading its serializer
+(verification item 5: every array is wrapped, and `bigint`, `bytes`, `nan`,
+`inf`, `undefined` are tagged), but it has **not been run**. It is a
+hypothesis until the phase 2 test that round-trips every tree-table row,
+including nested `[[...]]` lists and every tag, through Cap'n Web's own
+serialize/deserialize passes. If a row does not survive, the tree codec gains
+a Cap'n Web-specific escape for that row, or the capnweb carrier falls back to
+bytes. Once that test passes, a supervisor can forward frames between a
+binding and a Cap'n Web session without re-encoding.
 
 A tree the platform delivers may contain JS values outside this table (a
 `Map`, a `Date`, a stub, an object with a prototype). The reader rejects them.
@@ -573,9 +683,12 @@ carrier stub.
    `signingCodec`, `atEnd`, and `@endo/ocapn/tree` (`treeCodec`). Byte codecs
    are unchanged apart from the alias. No Cloudflare dependency.
 2. **`@endo/ocapn-cloudflare` network over an in-process carrier.** Implement
-   the handshake, seq/reorder, and mailbox discipline against an in-memory
-   carrier that round-trips each frame through `structuredClone`. Add a second
-   in-memory carrier through Cap'n Web's own serializer. Both run in Node CI.
+   the handshake (with the pending-session rules), seq/reorder, heartbeat,
+   and mailbox discipline against an in-memory carrier that round-trips each
+   frame through `structuredClone`, first in bytes mode, then with the tree
+   codec. Add a second in-memory carrier through Cap'n Web's own serializer,
+   whose first test is the tree-table round-trip that confirms or refutes the
+   pass-through claim. Both run in Node CI.
 3. **workerd.** Add DO and `WorkerEntrypoint` front doors, the storage-backed
    locator and sturdyref tables, the supervisor `OcapnPort`, and facet loading
    with `globalOutbound: null`. Port the counter demo: "copy sturdyref"
@@ -606,7 +719,11 @@ carrier stub.
   signature from another session fails the `binding` check; out-of-order
   `seq` within `maxReorder` is reordered; a gap, a duplicate, or a stub inside
   a frame aborts; a rejected `deliver` aborts and is not retried; crossed
-  hellos converge on one session.
+  hellos converge on one session; a frame other than `finish` before the
+  handshake completes aborts the pending session; an `open` beyond
+  `maxPendingOpens` is rejected without signing; a pending session without
+  `finish` expires; a peer whose isolate is discarded while answers are
+  outstanding is detected by the heartbeat and its answers reject.
 - **workerd harness** (`@cloudflare/vitest-pool-workers` or Miniflare, run
   from a separate CI job): two DO vats bootstrap-fetch each other over the
   binding carrier; a Node peer reaches a DO over capnweb; a sturdyref minted in
