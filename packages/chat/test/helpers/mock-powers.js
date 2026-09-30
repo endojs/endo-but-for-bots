@@ -203,13 +203,13 @@ export const makeMockPowers = ({
     },
 
     /**
-     * Cancel an incarnation by pet name or path. The real EndoHost.cancel
-     * takes a single name-or-path argument plus an optional Error reason.
-     * @param {string | string[]} petNameOrPath
+     * Cancel an incarnation by pet-name path. The real EndoHost.cancel
+     * takes a pet-name path argument plus an optional Error reason.
+     * @param {string[]} petNamePath
      * @param {Error} [reason]
      */
-    cancel(petNameOrPath, reason) {
-      calls.push({ method: 'cancel', args: [petNameOrPath, reason] });
+    cancel(petNamePath, reason) {
+      calls.push({ method: 'cancel', args: [petNamePath, reason] });
     },
 
     /**
