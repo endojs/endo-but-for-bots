@@ -33,9 +33,9 @@ const refuseInspect = async (file, args) => {
 };
 
 /**
- * @param {{ hostId?: string, failMint?: (specifier: string) => boolean }} [options]
+ * @param {{ hostId?: string, failMint?: (specifier: string) => boolean, failCopy?: (to: string[]) => boolean }} [options]
  */
-const makeFakeHost = ({ hostId = 'fake-host-id', failMint } = {}) => {
+const makeFakeHost = ({ hostId = 'fake-host-id', failMint, failCopy } = {}) => {
   const bindings = new Map();
   /** @type {any[]} */
   const calls = [];
@@ -49,6 +49,7 @@ const makeFakeHost = ({ hostId = 'fake-host-id', failMint } = {}) => {
     },
     async copy(from, to) {
       calls.push(['copy', from, to]);
+      if (failCopy && failCopy(to)) throw Error('copy failed');
       bindings.set(key(...to), bindings.get(key(...from)) ?? 'cap');
     },
     async remove(...parts) {
@@ -468,7 +469,7 @@ test('the backend caplet is minted beside the live one and swapped in; a failed 
   // A stale replacement from an interrupted run goes first.
   t.deepEqual(
     calls.map(call => call[0]),
-    ['remove', 'mint', 'remove', 'copy', 'remove'],
+    ['remove', 'mint', 'copy', 'remove'],
   );
   t.deepEqual(calls[0][1], ['x', 'backend-next']);
   t.deepEqual(calls[1][3], {
@@ -480,7 +481,7 @@ test('the backend caplet is minted beside the live one and swapped in; a failed 
       X_MOUNTER_ENV: '{"NINEP_SUDO":"1"}',
     },
   });
-  t.deepEqual(calls[2][1], ['x', 'backend']);
+  t.deepEqual(calls[2][2], ['x', 'backend']);
   t.is(bindings.get(key('x', 'backend')), 'minted-file:///backend.js');
   t.false(bindings.has(key('x', 'backend-next')));
 
@@ -488,7 +489,7 @@ test('the backend caplet is minted beside the live one and swapped in; a failed 
   await provideBackendCaplet(host, { ...options, mounterEnvText: undefined });
   t.deepEqual(
     calls.map(call => call[0]),
-    ['mint', 'remove', 'copy', 'remove'],
+    ['mint', 'copy', 'remove'],
   );
   t.deepEqual(Object.keys(calls[0][3].env), [
     'X_WORKSPACE_BASE_DIR',
@@ -505,6 +506,43 @@ test('the backend caplet is minted beside the live one and swapped in; a failed 
   t.deepEqual(
     calls.map(call => call[0]),
     ['mint'],
+  );
+});
+
+test('a failed backend copy preserves the live binding and a later setup retries', async t => {
+  await null;
+  let refuseCopy = true;
+  const { host, calls, bindings } = makeFakeHost({
+    failCopy: to => refuseCopy && key(...to) === key('x', 'backend'),
+  });
+  bindings.set(key('x', 'backend'), 'live');
+  const options = {
+    label: 'Adapter',
+    sandboxDir: 'x',
+    specifier: 'file:///backend.js',
+    envPrefix: 'X',
+    workspaceDir: '/srv/ws',
+    mcpDir: '/srv/mcp',
+    mounterEnvText: undefined,
+  };
+  await t.throwsAsync(provideBackendCaplet(host, options), {
+    message: 'copy failed',
+  });
+  t.is(bindings.get(key('x', 'backend')), 'live');
+  t.is(bindings.get(key('x', 'backend-next')), 'minted-file:///backend.js');
+  t.deepEqual(
+    calls.map(call => call[0]),
+    ['mint', 'copy'],
+  );
+
+  refuseCopy = false;
+  calls.length = 0;
+  await provideBackendCaplet(host, options);
+  t.is(bindings.get(key('x', 'backend')), 'minted-file:///backend.js');
+  t.false(bindings.has(key('x', 'backend-next')));
+  t.deepEqual(
+    calls.map(call => call[0]),
+    ['remove', 'mint', 'copy', 'remove'],
   );
 });
 

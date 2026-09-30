@@ -483,9 +483,6 @@ export const provideBackendCaplet = async (
         : { [`${envPrefix}_MOUNTER_ENV`]: mounterEnvText }),
     }),
   });
-  if (await E(hostAgent).has(...backendPath)) {
-    await E(hostAgent).remove(...backendPath);
-  }
   await E(hostAgent).copy(backendNextPath, backendPath);
   await E(hostAgent).remove(...backendNextPath);
   console.log(

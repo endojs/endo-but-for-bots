@@ -141,10 +141,13 @@ same roots and parser; the formula entrypoint is retained unchanged.
 Unused adapter MCP constants are removed without changing socket/config paths.
 These changes are not yet deployed.
 
-Next verified simplification candidates: remove shared setup's redundant
-remove-before-copy publication step (with failed-copy retention coverage), reuse
-its existing Floot binding helper in Codex, and remove OpenCode's diagnostic-only
-MCP configuration file while retaining its actual `OPENCODE_CONFIG_CONTENT`.
+Setup follow-up removes the redundant remove-before-copy publication step and
+reuses `bindFlootBackend` in Codex. Directory `copy` already owns replacement;
+prepublication failure keeps the old binding, and retry remains possible.
+All 57 setup tests and both affected package typechecks pass; independent review
+approves. No persistent schema or environment names change. Not deployed.
+Next: remove OpenCode's diagnostic-only MCP configuration file while retaining
+its actual `OPENCODE_CONFIG_CONTENT`.
 The generic MCP transport should own sockets and relay lifetime; adapters should
 own only the configuration their native runtime actually consumes.
 

@@ -42,6 +42,18 @@ cannot fall back to a native model query. Codex types, scoped lint, formatting,
 the clean root type build, all 14 type-contract tasks, and documentation pass
 (documentation: zero errors, 180 warnings). Independent adversarial review approves.
 
+Setup simplification follow-up: shared backend publication no longer removes the
+live binding before overwrite-copy, and Codex reuses `bindFlootBackend` rather
+than maintaining a second profile-publication block.
+The existing daemon directory operation owns replacement; no new publication
+protocol, durable record or environment alias is introduced.
+A regression injects rejection before copy publication, preserves the live binding,
+and retries the staged replacement. It does not claim an arbitrary lost
+acknowledgement leaves the old identity in place.
+All 57 shared/Claude/Codex/OpenCode setup tests pass, shared and Codex typechecks
+pass, and scoped lint reports zero errors. Independent review approves.
+Not deployed.
+
 Current durability evidence includes a generation-186 retirement correction:
 removing broker/source pet names does not withdraw capabilities already stored
 in the profile's account-discovery record. Those capabilities revived the old
