@@ -188,8 +188,8 @@ bug in commit-time maintenance would now persist across reopens instead of being
 next one.
 Nothing in production reads the index yet (the host's scheduled and explicit collection is
 `full_collect`), which bounds that risk today.
-Deleting the marker from a closed store forces the next open to rebuild the index, and once phase
-13 lands, the validator's full level compares the index with the summaries.
+Deleting the marker from a closed store forces the next open to rebuild the index, and the
+validator's full level (phase 13) compares the index with the summaries.
 
 **F043 section storage increment (schema 28, 2026-09-09).**
 *Phase 13 (the 2026-09-24 trust model) retires the small-state root, its binding into the
@@ -607,8 +607,8 @@ Landed as infrastructure and instruments:
   reachability), so open never trusts the derived index at all —
   wiped-index and moved-pair recovery are both locked by test, and
   the geometry delete mirrors the sealed rows' normalization verbatim
-  (the divergent `OR target >=` disjunct is gone). (Superseded
-  2026-09-23 by [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330):
+  (the divergent `OR target >=` disjunct is gone).
+  (Superseded 2026-09-23 by [#1330](https://github.com/endojs/endo-but-for-bots/issues/1330):
   open now trusts an index whose epoch marker is current and rebuilds
   only a stale one; see the 2026-09-23 entry.) The
   `summary_page_count` override checks contiguity, not just COUNT
@@ -4146,13 +4146,13 @@ time.
    The side-table completeness ledger governs the store schema exactly
    as it governs atoms: a ledger row is `Serialized` only when both
    the atom and the store carry it.
-6. **Fail closed.** A malformed or foreign store is refused at open
+6. **Fail closed.** A ~~malformed or~~ foreign store is refused at open
    with structured errors (the analogue of
    `NotIronhorse`/`SignatureMismatch`/`CostTableMismatch`)~~, never a
    wrong answer~~.
-   An I/O fault after a successful open is a crashed crank — worker
+   ~~An I/O fault after a successful open is a crashed crank — worker
    death and supervisor recovery, the existing story — never silent
-   corruption.
+   corruption.~~
    *Amended by phase 13 (the 2026-09-24 trust model): fail closed on
    incompatibility, and trust the content.*
    A store this build cannot read — a foreign file, an unsupported
@@ -4229,8 +4229,8 @@ The arenas gain two bitmaps and an optional backing:
   deliberately NOT by `free`/sweep/mark, which never change record
   bytes (the reclamation travels as free-list state — since phase 9,
   segment rows, leafed until phase 13, plus the manifest's
-  `free_len`). The
-  checkpoint peeks `dirty_pages()`/`dirty_extents()` and clears only
+  `free_len`).
+  The checkpoint peeks `dirty_pages()`/`dirty_extents()` and clears only
   after a successful commit.
 - **Residency bits + fault hook** (active only when a backing is
   attached): `get`/`payload` consult residency and fault a missing

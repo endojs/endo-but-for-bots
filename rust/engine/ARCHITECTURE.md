@@ -239,8 +239,8 @@ The manifest records the collection policy and counters; it does not choose a fl
 GC schedule.
 
 Checkpoint performance carries deliberate derived state:
-section-level hashes/inventories, dirty-state tracking and cached aggregate hashes
-avoid repeatedly processing the whole live state.
+section-level digests (change detection only), dirty-state tracking and the free list's low-water
+mark avoid repeatedly processing the whole live state.
 Do not replace those with unconditional whole-image scans without measuring the cost.
 [Performance tradeoffs](architecture-review/2026-09-06/PERFORMANCE-TRADEOFFS.md)
 records the retained allocations and consistency obligations.
