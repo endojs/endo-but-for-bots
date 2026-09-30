@@ -1285,7 +1285,18 @@ It observes zero `turn/start` writes and successor refusal.
 The public fixture has no hook at that internal microtask; adding one solely for
 a timing-specific test is not justified. Retain this behavioral evidence rather
 than claiming exact microtask isolation or adding an arbitrary microtask count.
-Cancellation before preparation begins still needs its public contract checked.
+Early cancellation now has public-boundary regressions rather than a promise of
+zero incidental setup. Claude and OpenCode hold active A, cancel queued B through
+B's reader, complete A and then complete C. Only A/C prompts are admitted; A is
+not interrupted. Claude also proves that B's otherwise-eligible context is never
+restored. OpenCode proves command omission, not import suppression (a live native
+conversation already skips later imports).
+Codex has no queued-turn API: immediate `send()` followed by `interrupt()` before
+awaiting the reader admits no `turn/start` and explicitly refuses a successor on
+the terminated incarnation. It does not promise zero transport/thread setup.
+Focused client suites pass: Claude 104, Codex 115, OpenCode 38; scoped lint has
+zero errors and 39 warnings. These test-only changes introduce no durable owner
+or runtime behavior and do not claim native quiescence.
 
 Claude's pending subprocess acquisition now has a separate regression: the prompt
 has already crossed the spawn boundary in argv, but its process handle is late.

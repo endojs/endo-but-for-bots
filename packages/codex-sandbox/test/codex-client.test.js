@@ -3667,6 +3667,23 @@ test('interrupt during ledger admission fences the prompt and terminal-microtask
   });
 });
 
+test('an immediate interrupt fences a reserved send before its reader is returned', async t => {
+  t.timeout(5000);
+  const fixture = makeFixture();
+  t.teardown(() => fixture.client.terminate());
+  const sending = fixture.client.send('must not execute');
+  const failedSend = t.throwsAsync(sending, { message: /terminated|startup/ });
+  const stopping = fixture.client.interrupt();
+  await t.throwsAsync(stopping, { message: /during startup/ });
+  await failedSend;
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+  t.true((await fixture.client.status()).terminated);
+  await t.throwsAsync(fixture.client.send('successor'), {
+    message: 'Codex session terminated',
+  });
+  t.false(fixture.sent.some(message => message.method === 'turn/start'));
+});
+
 test('an idle interrupt cannot terminate a turn that starts afterward', async t => {
   const fixture = makeFixture({ threadId: 'thread-saved' });
   const stopP = fixture.client.interrupt();

@@ -1194,6 +1194,66 @@ test('raw stream backpressures a burst larger than the delivery queue', async t 
   t.is(events.at(-1).type, 'end');
 });
 
+test('closing a queued reader skips its restoration without interrupting the active turn', async t => {
+  t.timeout(5000);
+  let release;
+  const gate = new Promise(resolve => {
+    release = resolve;
+  });
+  let entered;
+  const active = new Promise(resolve => {
+    entered = resolve;
+  });
+  const fake = makeFakeSlice();
+  const restored = [];
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      restoreTranscript: async records => {
+        restored.push(records);
+        return restoredReceipt;
+      },
+      makeStdoutIterable: proc => {
+        if (proc === fake.spawned[0])
+          return harden({
+            async *[Symbol.asyncIterator]() {
+              entered();
+              await gate;
+              yield new Uint8Array();
+            },
+          });
+        return makeStdoutIterable(proc);
+      },
+    }),
+  );
+  t.teardown(async () => {
+    release();
+    await client.terminate();
+  });
+  const first = await client.send('first');
+  await active;
+  const cancelled = await client.send('must not execute', {
+    transcript: [
+      { kind: 'message', role: 'user', content: 'must not restore' },
+    ],
+  });
+  await iterateReader(cancelled).return();
+  t.is(fake.spawned.length, 1);
+  t.false(Boolean(procKilled.get(fake.spawned[0])));
+  t.deepEqual(restored, []);
+  release();
+  t.is((await drain(first)).at(-1).type, 'end');
+  const successor = await client.send('third', {
+    transcript: continuedTranscript,
+  });
+  t.is((await drain(successor)).at(-1).type, 'end');
+  t.deepEqual(
+    fake.spawned.map(proc => proc.argv[2]),
+    ['first', 'third'],
+  );
+  t.deepEqual(restored, [continuedTranscript]);
+  t.false(Boolean(procKilled.get(fake.spawned[0])));
+});
+
 test('interrupt owns a late spawn handle without replaying its admitted prompt', async t => {
   t.timeout(5000);
   let releaseSpawn;

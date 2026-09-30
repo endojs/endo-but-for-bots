@@ -271,6 +271,38 @@ test('concurrent sends queue and serialize with one terminal each', async t => {
   t.deepEqual(eventsB, [{ type: 'text-delta', text: 'two' }, { type: 'end' }]);
 });
 
+test('closing a queued reader omits its command without interrupting the active turn', async t => {
+  t.timeout(5000);
+  const bridge = makeFakeBridge();
+  const client = makeOpencodeClient(baseArgs(makeFakeSlice(bridge)));
+  t.teardown(() => client.terminate());
+  bridge.push(readyLine('ses_1'));
+  const first = await client.send('first');
+  await waitFor(() => bridge.commands.length === 1);
+  const cancelled = await client.send('must not execute', {
+    transcript: [{ kind: 'message', role: 'user', content: 'must not import' }],
+  });
+  t.is((await client.status()).pendingPrompts, 1);
+  await iterateReader(cancelled).return();
+  t.deepEqual(
+    bridge.commands.map(text => JSON.parse(text)),
+    [{ op: 'send', text: 'first' }],
+  );
+  bridge.push(JSON.stringify({ type: 'end' }));
+  t.is((await drain(first)).at(-1).type, 'end');
+  const successor = await client.send('third');
+  await waitFor(() => bridge.commands.length === 2);
+  t.deepEqual(
+    bridge.commands.map(text => JSON.parse(text)),
+    [
+      { op: 'send', text: 'first' },
+      { op: 'send', text: 'third' },
+    ],
+  );
+  bridge.push(JSON.stringify({ type: 'end' }));
+  t.is((await drain(successor)).at(-1).type, 'end');
+});
+
 test('a confirmed failed turn retains its native session for a successful successor', async t => {
   const bridge = makeFakeBridge();
   const fake = makeFakeSlice(bridge);
