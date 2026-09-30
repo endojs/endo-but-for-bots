@@ -317,3 +317,44 @@ test('a SturdyRef from data rejects without a peer locator or connection', async
   left2.abort(Error('gone'));
   await t.throwsAsync(() => SturdyRef.enliven(ref2), { message: /gone/ });
 });
+
+test('constructing a SturdyRef from data checks each coordinate type', t => {
+  const { left } = makeOptsPair({}, {});
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 1, objectId: 'x' }),
+      ),
+    { message: /peerId must be a string/ },
+  );
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 'right', objectId: 'x', designator: 1 }),
+      ),
+    { message: /designator must be a string/ },
+  );
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 'right', objectId: 'x', hints: null }),
+      ),
+    { message: /hints must be a record of strings/ },
+  );
+  // Without our own `peerId`, any peer name is accepted, and omitted
+  // coordinates are recorded as their defaults.
+  const ref = left.makeSturdyRefFromData({ peerId: 'anyone', objectId: 'x' });
+  t.deepEqual(left.getSturdyRefData(ref), {
+    peerId: 'anyone',
+    objectId: 'x',
+    hints: {},
+  });
+});
+
+test('the SturdyRef locator refuses a non-string object id', async t => {
+  const { left } = makeOptsPair({}, { locateSturdyRef: () => Far('t', {}) });
+  const { promise: locator } = left.makeRemoteKit('l-0');
+  await t.throwsAsync(() => E(locator).locate(1), {
+    message: /object id must be a string/,
+  });
+});
