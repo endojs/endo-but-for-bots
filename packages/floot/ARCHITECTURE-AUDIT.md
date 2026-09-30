@@ -267,6 +267,15 @@ Malformed/torn payloads still cross an explicitly marked test boundary and are
 rejected by the unchanged runtime parser. Full Codex tests pass (430), package
 typechecking passes, and lint reports zero errors (74 warnings).
 Independent adversarial review passes; no runtime implementation changed.
+Floot follow-up: the agent return declaration now includes its two existing
+replacement methods, and nine ignored `hostedContinuity` fixture options are gone.
+The journal tests describe their shared contract rather than obsolete backend modes;
+reply-event assertions explicitly reject malformed events before reading their type.
+All 732 Floot tests pass; scoped lint has zero errors (54 warnings), formatting
+passes, and root documentation builds with zero errors (163 warnings).
+The explicit Floot typecheck drops from 82 to 72 diagnostics, all in other tests;
+this is partial reconciliation, not a green package type gate.
+No runtime implementation or durable state format changes.
 RA-04 and the current cutover evidence are recorded above and in the alignment doc.
 Both cleanup changes are deployed in generation 187 with fresh cross-backend
 lifecycle and ordinary restart-recall acceptance.

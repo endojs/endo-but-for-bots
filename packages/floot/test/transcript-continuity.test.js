@@ -1,9 +1,7 @@
 // @ts-check
-// A hosted backend whose continuity is its own transcript (a CLI resuming the
-// conversation it persisted) retains every delivered prompt and whatever
-// streamed before a stop or a failure. The tree is display-only on that path,
-// so it must mirror what the transcript retains. The backend-independent
-// journal additionally retains failures, cancellations, and uncertain effects.
+// The shared hosted journal retains delivered prompts, streamed replies and
+// tool evidence across cancellation and failure. These tests exercise that
+// common contract, not a backend-specific native-context restoration mode.
 import test from '@endo/ses-ava/prepare-endo.js';
 import { makeBufferedReader } from '@endo/exo-stream/buffered-channel.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
@@ -87,7 +85,7 @@ const makeFakeHostedClient = () => {
   };
 };
 
-test('a stopped turn on a transcript backend keeps the prompt and partial reply', async t => {
+test('a stopped hosted turn keeps the prompt, tool result and partial reply', async t => {
   t.timeout(5000);
   const powers = makeFakePowers();
   const { client, turns, waitForTurn } = makeFakeHostedClient();
@@ -96,7 +94,7 @@ test('a stopped turn on a transcript backend keeps the prompt and partial reply'
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { journalPowers: powers, hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   const controller = new AbortController();
   const { writer, reader } = makeReplyChannel(() => controller.abort());
@@ -153,7 +151,7 @@ test('a stopped turn on a transcript backend keeps the prompt and partial reply'
   );
 });
 
-test('a failed turn on a transcript backend keeps the delivered prompt', async t => {
+test('a failed hosted turn keeps the delivered prompt', async t => {
   t.timeout(5000);
   const powers = makeFakePowers();
   const { client, turns, waitForTurn } = makeFakeHostedClient();
@@ -162,7 +160,7 @@ test('a failed turn on a transcript backend keeps the delivered prompt', async t
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { journalPowers: powers, hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   const { writer, reader } = makeReplyChannel();
   const replyP = (async () => {
@@ -221,7 +219,7 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { journalPowers: powers, hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   const { writer } = makeReplyChannel();
   const turnP = agent.converse('build it', writer);
@@ -301,7 +299,7 @@ test('a failed turn keeps the tool activity and text that streamed before it', a
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { journalPowers: powers, hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   t.deepEqual(await restored.getTranscript(), transcript);
 });
@@ -318,7 +316,7 @@ test('a leading backend refusal remains a durable failed dispatch', async t => {
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { journalPowers: powers, hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   const { writer } = makeReplyChannel();
   const turnP = agent.converse('do it', writer);
@@ -335,7 +333,7 @@ test('a leading backend refusal remains a durable failed dispatch', async t => {
   );
 });
 
-test('a checkpoint-reconciled backend retains a cancelled turn in the journal', async t => {
+test('a cancelled text-only hosted turn remains in the journal', async t => {
   t.timeout(5000);
   const powers = makeFakePowers();
   const { client, turns, waitForTurn } = makeFakeHostedClient();
@@ -344,7 +342,7 @@ test('a checkpoint-reconciled backend retains a cancelled turn in the journal', 
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'test prompt',
-    { journalPowers: powers, hostedContinuity: 'opaque-reconciled' },
+    { journalPowers: powers },
   );
   const controller = new AbortController();
   const { writer, reader } = makeReplyChannel(() => controller.abort());
@@ -382,7 +380,7 @@ test('public thinking persists after failure and restart but is absent from mode
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'prompt',
-    { journalPowers: powers, hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   const run = agent.converse('go', makeReplyChannel().writer);
   await waitForTurn(1);
@@ -403,7 +401,7 @@ test('public thinking persists after failure and restart but is absent from mode
     undefined,
     { kind: 'hosted', provideHostedClient: () => client },
     'prompt',
-    { journalPowers: powers, hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   t.deepEqual(await restored.getHistory(), history);
 });

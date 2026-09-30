@@ -317,7 +317,13 @@ test('a hosted backend persists completed turns and scopes reused tool IDs', asy
   );
   // 'Built.' preceded a tool call, so it was flushed as its own message at
   // tool_call time; a final would re-merge it with any later text.
-  t.false(events.some(event => event.type === 'final'));
+  t.false(
+    events.some(event => {
+      if (event === null || typeof event !== 'object' || !('type' in event))
+        throw Error('Expected a typed reply event');
+      return event.type === 'final';
+    }),
+  );
   t.deepEqual(
     (await agent.getHistory()).map(message => [message.role, message.content]),
     [
@@ -466,7 +472,7 @@ test('failed transcript-backed turns keep text/tool interleaving in history', as
     undefined,
     { kind: 'hosted', provideHostedClient: () => failedClient },
     'test prompt',
-    { journalPowers: powers, hostedContinuity: 'transcript' },
+    { journalPowers: powers },
   );
   const reply = makeReplyChannel();
   await t.throwsAsync(() => agent.converse('review it', reply.writer), {

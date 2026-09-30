@@ -515,6 +515,8 @@ const provisionPresetObjects = async (
  *   getUsage: () => Promise<import('@endo/hosted-agent/token-usage.js').TokenUsage & { turns: number, incompleteTurns: number }>,
  *   startInbox: () => void,
  *   prepareHostedClient: (signal?: AbortSignal) => Promise<void>,
+ *   assertIdleForReplacement: () => void,
+ *   stopForReplacement: () => Promise<void>,
  *   shutdown: (allowBackendQuarantine?: boolean) => Promise<void>,
  * }>}
  */
