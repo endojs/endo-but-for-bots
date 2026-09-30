@@ -304,8 +304,8 @@ arms an alarm, since arming is the operation that needs a row.
 Acknowledgement retires the alarm's promise resource, so a restart re-seats only alarms still pending
 or unacknowledged, and retiring a vat drops the rows it armed.
 OS timers are disposable, and there is no periodic scan of a guest clock vat.
-`alarms` reports `pending` deadlines, `materialised` promise resources, and `stopped` status.
-Its legacy `observations` field is always zero; the command does not expose the retained-outcome count.
+`alarms` reports `pending` deadlines, `retained` rows in the durable table (armed, or settled and
+awaiting the clock's acknowledgement), `materialised` promise resources, and `stopped` status.
 
 This version supports one-shot absolute deadlines, with up to 1,024 pending or unacknowledged rows.
 Deadlines are nonnegative signed 64-bit bigint milliseconds.
@@ -952,11 +952,18 @@ Register makers on the daemon and pass instances as evaluate
 endowments:
 
 ```js
-import { makeTimerResource } from '@endo/thixotrope';
-
+// `powers` are the platform powers the daemon itself receives.
+const makeTimerResource = () =>
+  Far('Timer', {
+    now: () => powers.timers.now(),
+    delay: ms =>
+      new Promise(resolve =>
+        powers.timers.setTimer(() => resolve(powers.timers.now()), ms),
+      ),
+  });
 const daemon = await makeThixotropeDaemon(powers, {
   // ...
-  resources: { timer: description => makeTimerResource(powers.timers, description) },
+  resources: { timer: makeTimerResource },
 });
 const worker = await daemon.createWorker({ debugLabel: 'clock' });
 const timer = daemon.makeResource('timer');

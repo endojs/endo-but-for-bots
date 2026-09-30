@@ -11,6 +11,5 @@ export { makeThixotropeDaemon } from './src/core/daemon.js';
 export { makeXsEngine } from './src/ironhorse/xs-engine.js';
 export { makeIronhorseEngine } from './src/ironhorse/ironhorse-engine.js';
 export { makeFsStore } from './src/store/store-fs.js';
-export { makeTimerResource } from './src/alarms/resources.js';
 export { makeDurableNetLayer } from './src/net/durable-netlayer.js';
 export { inspectIronhorseStore } from './src/ironhorse/inspect-ironhorse.js';

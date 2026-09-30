@@ -116,7 +116,8 @@ const SHELL_SWISSNUM = swissnumFromBytes(textEncoder.encode('shell'));
 // descriptions, pending answers) live in this worker store.
 const ENDPOINT_ID = 'e'.repeat(32);
 const ENDPOINT_SESSION = 'endpoint';
-// How long startup waits for one notified vat to re-establish whatever it owns.
+// How long startup waits, in all, for notified vats to re-establish whatever
+// they own.
 const START_NOTICE_MS = 10_000;
 
 /**
@@ -138,6 +139,10 @@ const START_NOTICE_MS = 10_000;
  *   called once a worker has been retired and its store and session deleted,
  *   so a host service holding state keyed by that worker (alarm rows, say)
  *   can drop it; a failure is reported and does not undo the retirement
+ * @param {() => void | Promise<void>} [options.beforeStartNotices] runs once
+ *   every session is seated and the netlayer is up, before start notices are
+ *   delivered, so a host service that resumes from durable state (the alarm
+ *   table, say) does so before any vat runs
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
@@ -152,6 +157,7 @@ const buildDaemon = async (
     nativeWorkers,
     idleSleepMs = undefined,
     onRetireWorker = undefined,
+    beforeStartNotices = undefined,
     verbose = false,
   },
 ) => {
@@ -1127,14 +1133,33 @@ const buildDaemon = async (
   // half-restored incarnation of whatever it was adapting. A clean shutdown
   // could have retired these, but a crash does not, so startup is the path
   // that has to be right.
-  const ephemeralWorkerIds = store
+  const ephemeralWorkers = store
     .listWorkerIds()
-    .filter(
+    .filter(workerId => workerId !== ENDPOINT_ID)
+    .map(
       workerId =>
-        workerId !== ENDPOINT_ID &&
-        store.provideWorkerStore(workerId).getMeta().ephemeral === true,
-    );
-  for (const workerId of ephemeralWorkerIds) {
+        /** @type {const} */ ([
+          workerId,
+          store.provideWorkerStore(workerId).getMeta(),
+        ]),
+    )
+    .filter(([, meta]) => meta.ephemeral === true);
+  for (const [workerId, meta] of ephemeralWorkers) {
+    // An image left by an explicit sleep, or by a build that parked ephemeral
+    // workers at shutdown, will never be restored: release it with the
+    // worker. A release that fails leaks one image; it must not stop the
+    // sweep, or startup would fail on the same worker every time.
+    const ref = meta.snapshot?.ref;
+    if (ref !== undefined && engine.releaseSnapshot) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await engine.releaseSnapshot(ref);
+      } catch (error) {
+        logging
+          .sub('thixotrope', 'daemon')
+          .error('ephemeral worker image not released:', error);
+      }
+    }
     withdrawStartNotice(workerId);
     hub.forgetSession(workerId);
     store.deleteWorker(workerId);
@@ -1237,36 +1262,37 @@ const buildDaemon = async (
       }),
     );
 
+    // Host services resume from their durable state before any vat runs, so
+    // what they settle on resumption (an overdue alarm, say) is part of this
+    // startup rather than something that happens after it.
+    if (beforeStartNotices !== undefined) await beforeStartNotices();
+
     // Start notices, after every session is seated and the netlayer is up.
     //
     // No separate wake: the delivery is the wake.
     //
-    // Awaited, within a bound. A caller that gets a started daemon back is
-    // entitled to assume that whatever a notified vat re-establishes — a bound
-    // socket, say — is in place, which send-only would not give it. But a vat
-    // that cannot restore must not be able to wedge startup, and one that
-    // fails must not abort it: the failure is for that vat to report.
+    // Awaited, within one bound for all of them. A caller that gets a
+    // started daemon back is entitled to assume that whatever a notified vat
+    // re-establishes — a bound socket, say — is in place, which send-only
+    // would not give it. But a vat that cannot restore must not be able to
+    // wedge startup, and one that fails must not abort it: the failure is
+    // for that vat to report. Delivering the notices together keeps startup
+    // latency from growing with the number of installed resources.
+    const report = (/** @type {unknown} */ error) =>
+      logging.sub('thixotrope', 'daemon').error('start notice failed:', error);
+    /** @type {Array<Promise<unknown>>} */
+    const notices = [];
     for (const [workerId] of workers) {
       const { startNotify } = store.provideWorkerStore(workerId).getMeta();
-      // eslint-disable-next-line no-continue
-      if (startNotify === undefined) continue;
-      const report = (/** @type {unknown} */ error) =>
-        logging
-          .sub('thixotrope', 'daemon')
-          .error('start notice failed:', error);
-      // eslint-disable-next-line no-await-in-loop
-      const target = await lookup(startNotify).catch(error => {
-        report(error);
-        return undefined;
-      });
-      if (target === undefined) continue; // eslint-disable-line no-continue
-      // eslint-disable-next-line no-await-in-loop
-      await settleWithin(
-        timers,
-        START_NOTICE_MS,
-        E(target).started().catch(report),
-      );
+      if (startNotify !== undefined) {
+        notices.push(
+          lookup(startNotify)
+            .then(target => E(target).started())
+            .catch(report),
+        );
+      }
     }
+    await settleWithin(timers, START_NOTICE_MS, Promise.all(notices));
   } catch (error) {
     await stopDaemon();
     throw error;
@@ -1413,9 +1439,15 @@ const buildDaemon = async (
     },
     shutdown: async () => {
       try {
-        for (const entry of workers.values()) {
-          // eslint-disable-next-line no-await-in-loop
-          await entry.transport.sleep();
+        for (const [workerId, entry] of workers) {
+          // An ephemeral worker's heap is discarded at the next startup, so
+          // a parting image would be I/O for something nobody restores; it
+          // is terminated with the rest instead of parked.
+          const { ephemeral } = store.provideWorkerStore(workerId).getMeta();
+          if (ephemeral !== true) {
+            // eslint-disable-next-line no-await-in-loop
+            await entry.transport.sleep();
+          }
         }
       } finally {
         // A later vat can reopen one parked earlier, and a failed sleep must
@@ -1433,11 +1465,17 @@ const buildDaemon = async (
  * @param {TimerPowers} powers.timers
  * @param {RandomPowers} powers.random
  * @param {Logger} powers.logging
- * @param {Parameters<typeof buildDaemon>[1]} options
+ * @param {Parameters<typeof buildDaemon>[1] & { validateState?: () => void | Promise<void> }} options
+ *   `validateState` runs under the store lease before any worker is
+ *   restored; throw from it to refuse startup
  */
 export const makeThixotropeDaemon = async (powers, options) => {
   const release = await options.engine.acquireStore?.(options.store.statePath);
   try {
+    // The embedder's own state (a workspace's metadata version, say) is
+    // checked under the lease and before any worker is restored, so a state
+    // directory this build cannot serve is refused without touching it.
+    if (options.validateState !== undefined) await options.validateState();
     /** @param {any} record @returns {any} */
     const guard = record =>
       harden(
