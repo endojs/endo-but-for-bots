@@ -1,6 +1,10 @@
 // @ts-check
-import { E, Far } from '@endo/far';
+import { Fail } from '@endo/errors';
+import { makeExo } from '@endo/exo';
+import { E } from '@endo/far';
 import harden from '@endo/harden';
+import { passStyleOf } from '@endo/pass-style';
+import { M } from '@endo/patterns';
 
 /** @import { Mailbox } from './mailbox.js' */
 /** @import { MailContact } from './mail-contact.js' */
@@ -39,23 +43,46 @@ export const makeMailAddressBook = (
   makeContact,
   introductions,
 ) => {
+  // Shipped by source: the guards travel with the factory, defined here.
+  const NameShape = M.string({ stringLengthLimit: 128 });
+  const MailAddressBookI = M.interface('MailAddressBook', {
+    help: M.call().returns(M.string()),
+    invite: M.call(NameShape).returns(M.promise()),
+    accept: M.call(NameShape, M.string()).returns(M.promise()),
+    revokeInvitation: M.call(M.string()).returns(M.promise()),
+    contacts: M.call().returns(M.promise()),
+    // The capability is whatever the user keeps under the key: checked, not
+    // hardened on the way to being refused.
+    send: M.call(NameShape, M.string(), M.raw()).returns(M.promise()),
+    inbox: M.call().returns(M.promise()),
+    outbox: M.call().returns(M.promise()),
+    take: M.call(M.string()).returns(M.promise()),
+    discard: M.call(M.string()).returns(M.promise()),
+  });
+
   // Secret → the contact whose invitation is published under it. Ownership
   // follows the contact, not its pet name, which the user may reassign.
   /** @type {Map<string, any>} */
   const invitations = new Map();
-  /** @param {unknown} name */
+  /** @param {string} name */
   const assertName = name => {
-    if (typeof name !== 'string' || !name.length || name.length > 128)
-      throw Error('Expected a contact name of 1–128 characters');
+    name.length > 0 || Fail`Expected a contact name of 1–128 characters`;
+  };
+  /** @param {unknown} value */
+  const isRemotable = value => {
+    try {
+      return passStyleOf(value) === 'remotable';
+    } catch (_error) {
+      return false;
+    }
   };
   /**
    * Only the secret is read here; the host validates the rest when the
    * invitation is redeemed.
-   * @param {unknown} text
+   * @param {string} text
    */
   const secretOf = text => {
-    if (typeof text !== 'string' || text.length > 4096)
-      throw Error('Invalid invitation');
+    text.length <= 4096 || Fail`Invalid invitation`;
     /** @type {any} */
     let invitation;
     try {
@@ -65,7 +92,7 @@ export const makeMailAddressBook = (
     }
     const secret = invitation?.secret;
     if (typeof secret !== 'string' || !/^[0-9a-f]{32}$/.test(secret))
-      throw Error('Invalid invitation');
+      throw Fail`Invalid invitation`;
     return secret;
   };
   /** @param {string} name */
@@ -90,7 +117,7 @@ export const makeMailAddressBook = (
       .unpublish(secret)
       .catch(() => {});
   };
-  return Far('MailAddressBook', {
+  return makeExo('MailAddressBook', MailAddressBookI, {
     help: () =>
       'Capability mail by pet name: invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), send(name, text, capability), inbox(), outbox(), take(id), discard(id). Contacts are the inventory contacts map.',
     /**
@@ -160,10 +187,17 @@ export const makeMailAddressBook = (
           ...(await E(contact).status()),
         })),
       ),
+    /**
+     * @param {string} name
+     * @param {string} text
+     * @param {any} capability
+     */
     send: async (name, text, capability) => {
+      isRemotable(capability) || Fail`Expected a remotable capability`;
       const contact = contacts.get(name);
-      if (!contact || (await E(contact).status()).status !== 'ready')
-        throw Error('Contact is not ready');
+      (contact !== undefined &&
+        (await E(contact).status()).status === 'ready') ||
+        Fail`Contact is not ready`;
       return E(provideMailbox()).send(contact, text, capability);
     },
     inbox: async () =>
@@ -176,7 +210,9 @@ export const makeMailAddressBook = (
         ...message,
         to: label(message.to),
       })),
+    /** @param {string} id */
     take: id => E(provideMailbox()).take(id),
+    /** @param {string} id */
     discard: id => E(provideMailbox()).discard(id),
   });
 };

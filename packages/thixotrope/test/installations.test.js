@@ -134,7 +134,7 @@ test('grants are checked when the name is reserved, before any vat exists', t =>
   });
   const kind = /** @type {any} */ ('other');
   t.throws(() => installations.prepare('app', kind, 'hash', 'key'), {
-    message: /installation kind/,
+    message: /application.*native/s,
   });
 });
 

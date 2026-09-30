@@ -22,7 +22,10 @@ import { makeSerialQueue } from '../serial-queue.js';
  * A factory shipped by source runs in the host as a module and in the vat
  * as an expression, so it may import only names the prelude provides,
  * under those names: `import { E, Far } from '@endo/far'` is the host's
- * binding of the same functions the vat has as globals.
+ * binding of the same functions the vat has as globals. Everything else it
+ * uses it defines inside itself; a binding beside it at module level is
+ * present in the host and missing in the vat. `test/shipped-factories.test.js`
+ * evaluates each such factory with only the prelude in scope.
  *
  * Bundled guest code reads the names it wants off `globalThis` in one
  * destructure, typed as `GuestGlobals` (`@endo/thixotrope/guest.js`); only

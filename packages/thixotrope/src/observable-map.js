@@ -1,6 +1,8 @@
 // @ts-check
-import { E, Far } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { E } from '@endo/far';
 import harden from '@endo/harden';
+import { M } from '@endo/patterns';
 
 /**
  * A string-keyed Map whose mutations are observable: `subscribe` delivers a
@@ -23,6 +25,32 @@ import harden from '@endo/harden';
  * compartment, so it may import only what the guest prelude provides.
  */
 export const makeObservableMap = () => {
+  // Shipped by source: the guards travel with the factory, defined here.
+  // Values are held as given, whatever they are: raw guards leave them alone.
+  const ObservableMapI = M.interface('ObservableMap', {
+    help: M.call().returns(M.string()),
+    get: M.call(M.string()).returns(M.raw()),
+    has: M.call(M.string()).returns(M.boolean()),
+    set: M.call(M.string(), M.raw()).returns(M.remotable('map')),
+    delete: M.call(M.string()).returns(M.boolean()),
+    clear: M.call().returns(M.undefined()),
+    keys: M.call().returns(M.arrayOf(M.string())),
+    entries: M.call().returns(M.raw()),
+    getSize: M.call().returns(M.number()),
+    keyOf: M.call(M.raw()).returns(M.opt(M.string())),
+    snapshot: M.call().returns(M.record()),
+    // A listener may be a plain local object with a `changed` method, as
+    // guest code writes it, or a presence from another vat: left raw.
+    subscribe: M.call(M.raw())
+      .optional(M.boolean())
+      .returns(M.remotable('subscription')),
+    disconnectEphemeral: M.call().returns(M.undefined()),
+    subscriptionCounts: M.call().returns(M.record()),
+  });
+  const ObservableMapSubscriptionI = M.interface('ObservableMapSubscription', {
+    unsubscribe: M.call().returns(M.undefined()),
+  });
+
   /** @type {Map<string, any>} */
   const values = new Map();
   // Reverse index: value → the keys holding it, in the order they were set.
@@ -80,10 +108,6 @@ export const makeObservableMap = () => {
       pump(state);
     }
   };
-  /** @param {string} key */
-  const assertKey = key => {
-    if (typeof key !== 'string') throw Error('Keys must be strings');
-  };
   /**
    * @param {string} key
    * @param {any} value
@@ -106,25 +130,18 @@ export const makeObservableMap = () => {
     keys.delete(key);
     if (keys.size === 0) holders.delete(value);
   };
-  const observableMap = Far('ObservableMap', {
+  const observableMap = makeExo('ObservableMap', ObservableMapI, {
     help: () =>
       'Observable Map: get, has, set, delete, clear, keys, entries, getSize, keyOf(value); subscribe(listener, ephemeral?) sends display snapshots to listener.changed. Subscription.unsubscribe releases it.',
     /** @param {string} key */
-    get: key => {
-      assertKey(key);
-      return values.get(key);
-    },
+    get: key => values.get(key),
     /** @param {string} key */
-    has: key => {
-      assertKey(key);
-      return values.has(key);
-    },
+    has: key => values.has(key),
     /**
      * @param {string} key
      * @param {any} value
      */
     set: (key, value) => {
-      assertKey(key);
       if (!values.has(key) || !Object.is(values.get(key), value)) {
         if (values.has(key)) release(key, values.get(key));
         values.set(key, value);
@@ -135,7 +152,6 @@ export const makeObservableMap = () => {
     },
     /** @param {string} key */
     delete: key => {
-      assertKey(key);
       if (!values.has(key)) return false;
       release(key, values.get(key));
       values.delete(key);
@@ -173,8 +189,6 @@ export const makeObservableMap = () => {
      * @param {boolean} [ephemeral]
      */
     subscribe: (listener, ephemeral = false) => {
-      if (typeof ephemeral !== 'boolean')
-        throw Error('Expected ephemeral boolean');
       const state = {
         listener,
         ephemeral,
@@ -184,7 +198,7 @@ export const makeObservableMap = () => {
       };
       subscriptions.add(state);
       pump(state);
-      return Far('ObservableMapSubscription', {
+      return makeExo('ObservableMapSubscription', ObservableMapSubscriptionI, {
         unsubscribe: () => cancel(state),
       });
     },
