@@ -1348,6 +1348,8 @@ stacks as well.
   `ReentryLimit` at depth 2,064 with 3,285 at 64.
 - **Parity, snapshot, unsafe:** no effect.
 - **Performance:** one extra direct call per built-in *(est. negligible)*.
+  Measured natively in isolation, A1 alone is within the ±5% noise of the run
+  ([`stack-depth-prototypes/README.md` § Runtime cost](stack-depth-prototypes/README.md#runtime-cost)).
   Gate it with `benches/run.py --check-baseline`, which reads its ratio from the baseline
   (`benches/run.py:78`, `maximum = 1.25 if baseline is None else baseline["maximum_ratio"]`;
   `benches/baseline.json:61`, `"maximum_ratio": 1.25`).
@@ -1446,6 +1448,16 @@ stacks as well.
   | `forEach` callbacks | 1.07 | 1.29 |
   | getter loop | 1.14 | 1.51 |
   | `valueOf` loop | 1.04 | 1.45 |
+
+  A second native measurement, per patch group in isolation with each group built into its
+  own tree and the runs interleaved
+  ([`stack-depth-prototypes/README.md` § Runtime cost](stack-depth-prototypes/README.md#runtime-cost);
+  medians of up to three samples of a median-of-7, ±5% baseline noise), puts the
+  table-routing build with A1 at 1.13× on the arithmetic loop, 1.14× on property get/set,
+  1.10× on a getter loop, 1.12× on guest-to-guest recursion and 1.04× on `forEach`
+  callbacks, while A1 alone is within noise.
+  The cost is the group split itself: a second `match` on the opcode per instruction, a
+  non-inlined call, and a `Flow` value re-matched in the loop.
 
   `benches/run.py` does not exercise calls or re-entry.
   Its targets are `dispatch_bench`, `attached_bench`, `gc_bench` and `wake_latency_bench`
@@ -1869,7 +1881,11 @@ The scratch data file names still say E1-E4: `d1a-compiler-outline-only.patch` i
   charge-delta sequence.
   The copy's own tests pass, including `recursion_bounds` and `parse_meter_determinism`.
   **The `parity`-gated XS suites were not run.**
-- **Performance:** not measured.
+- **Performance:** measured natively in isolation
+  ([`stack-depth-prototypes/README.md` § Runtime cost](stack-depth-prototypes/README.md#runtime-cost)):
+  within the ±5% noise on a 16,000-statement compile and a 3,000-function compile.
+  The coder's binary spine allocates a `Vec` per binary node, even for `a + b`, which does
+  not show at those sizes.
 
 **D2. Scoper and coder continuation stacks (M each).**
 
