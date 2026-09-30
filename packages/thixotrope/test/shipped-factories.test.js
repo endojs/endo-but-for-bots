@@ -109,7 +109,7 @@ test('the native manager and its kit are whole', async t => {
           describe: (key, spec, state) => harden({ key, spec, state }),
         });
         return harden({
-          registration: Far('Registration', { keys: () => inner.keys() }),
+          facet: Far('Registration', { keys: () => inner.keys() }),
           lifecycle: inner.lifecycle,
         });
       },
@@ -118,5 +118,5 @@ test('the native manager and its kit are whole', async t => {
     evaluateShipped(makeManager),
     adapters,
   );
-  t.deepEqual(await E(kit.registration).keys(), []);
+  t.deepEqual(await E(kit.facet).keys(), []);
 });

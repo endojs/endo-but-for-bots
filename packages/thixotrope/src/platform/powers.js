@@ -17,7 +17,7 @@
 /**
  * Everything a host composes for the supervisor and the command line: one
  * record of ports. Core names this contract and never a host module; a host
- * that is not Node supplies the same record from its own adapters.
+ * that is not Node supplies the same record from its own implementations.
  *
  * @typedef {object} PlatformPowers
  * @property {TimerPowers} timers

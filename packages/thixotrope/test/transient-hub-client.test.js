@@ -4,9 +4,9 @@ import { E } from '@endo/far';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { syrupCodec } from '@endo/ocapn/syrup';
 
-import { makeEphemeralHubClient } from '../src/net/ephemeral-hub-client.js';
-import { makeOcapnHub } from '../src/net/hub.js';
 import { makeWorkerPeer } from '../src/core/worker-peer.js';
+import { makeOcapnHub } from '../src/net/hub.js';
+import { makeTransientHubClient } from '../src/net/transient-hub-client.js';
 
 import { makeNodePowers } from '../src/platform/node/powers.js';
 
@@ -35,7 +35,7 @@ const setup = async t => {
   });
   for (const bytes of outbound) sink.deliver(bytes);
   hub.publish('worker', { session: workerId, position: 0n });
-  const client = await makeEphemeralHubClient(nodePowers.random, {
+  const client = await makeTransientHubClient(nodePowers.random, {
     codec: syrupCodec,
     hub,
     sessionKey: 'transient:first',
@@ -75,7 +75,7 @@ test('closing rejects pending calls and releases transient holdings', async t =>
     hub.inspect().holdings.some(row => row.holders.includes('transient:first')),
   );
   await t.throwsAsync(() => client.lookup('worker'), {
-    message: 'Ephemeral client closed',
+    message: 'Transient client closed',
   });
 });
 
@@ -83,7 +83,7 @@ test('one transient close leaves another client and guest effects intact', async
   t.timeout(10_000);
   const { hub, client, shell } = await setup(t);
   await E(shell).evaluate(`globalThis.count = 0`);
-  const second = await makeEphemeralHubClient(nodePowers.random, {
+  const second = await makeTransientHubClient(nodePowers.random, {
     codec: syrupCodec,
     hub,
     sessionKey: 'transient:second',
@@ -114,7 +114,7 @@ test('failed hub cleanup remains retryable after the client is aborted', async t
   t.timeout(10_000);
   const { hub } = await setup(t);
   let fail = true;
-  const client = await makeEphemeralHubClient(nodePowers.random, {
+  const client = await makeTransientHubClient(nodePowers.random, {
     codec: syrupCodec,
     sessionKey: 'transient:retry',
     hub: {
@@ -134,7 +134,7 @@ test('failed hub cleanup remains retryable after the client is aborted', async t
     message: 'Injected cleanup persistence failure',
   });
   await t.throwsAsync(() => client.lookup('worker'), {
-    message: 'Ephemeral client closed',
+    message: 'Transient client closed',
   });
   fail = false;
   client.close();

@@ -19,7 +19,7 @@ const bundle = `(() => {
     globalThis.factories = (globalThis.factories ?? 0) + 1;
     let starts = 0;
     return harden({
-      registration: Far('Registration', { loads: () => loads, factories: () => factories, starts: () => starts }),
+      facet: Far('Registration', { loads: () => loads, factories: () => factories, starts: () => starts }),
       lifecycle: Far('Lifecycle', { started: () => { starts += 1; } }),
       // Implementation helpers need not be passable across vats.
       helper: () => undefined,
@@ -147,7 +147,7 @@ for (const phase of [
       await third
         .getWorker(managers[0].workerId)
         .evaluate(
-          'E(nativeManager.kit.registration).starts().then(count => count >= 1)',
+          'E(nativeManager.kit.facet).starts().then(count => count >= 1)',
         ),
     );
   });

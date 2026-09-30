@@ -78,7 +78,10 @@ export const makeNativeAdapters = (
             const child = await nativeWorkers.start({
               id,
               moduleUrl: description.moduleUrl,
-              packageIdentity: description.packageIdentity,
+              // A description recorded before the field was renamed still
+              // names the identity the process must verify.
+              resourceIdentity:
+                description.resourceIdentity ?? description.packageIdentity,
               onFrame: bytes => {
                 if (exited) return;
                 if (sink) sink.deliver(bytes);
