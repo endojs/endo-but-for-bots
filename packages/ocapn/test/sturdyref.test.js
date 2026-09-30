@@ -3,7 +3,9 @@
 
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/marshal';
+import harden from '@endo/harden';
 import { passStyleOf } from '@endo/pass-style';
+import { provideSturdyRef } from '@endo/sturdyref';
 import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import {
   decodeSwissnum,
@@ -14,9 +16,12 @@ import {
 import {
   isSturdyRef,
   getSturdyRefDetails,
+  makeSturdyRef,
   makeSturdyRefTracker,
 } from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
+
+const SturdyRef = provideSturdyRef();
 
 test('swissnum text conversion rejects U+0080 without changing raw bytes', t => {
   t.throws(() => encodeSwissnum('\u0080'), { instanceOf: RangeError });
@@ -42,7 +47,7 @@ test('SturdyRef lookup preserves non-ASCII swissnum bytes', async t => {
   t.deepEqual([.../** @type {Uint8Array} */ (lookedUpSecret)], [0x80]);
 });
 
-testWithErrorUnwrapping('SturdyRef is a tagged type', async t => {
+testWithErrorUnwrapping('SturdyRef is a realm SturdyRef', async t => {
   const { client: clientA, location: locationB } = await makeTestClient({
     debugLabel: 'A',
   });
@@ -50,18 +55,15 @@ testWithErrorUnwrapping('SturdyRef is a tagged type', async t => {
 
   const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
 
-  t.is(passStyleOf(sturdyRef), 'tagged', 'passStyleOf returns tagged');
+  t.true(SturdyRef.isSturdyRef(sturdyRef), 'brand check accepts it');
+  t.is(passStyleOf(sturdyRef), 'sturdyRef', 'passStyleOf returns sturdyRef');
   t.is(
     ocapnPassStyleOf(sturdyRef),
     'sturdyref',
     'ocapnPassStyleOf returns sturdyref',
   );
-  t.is(
-    sturdyRef[Symbol.toStringTag],
-    'ocapn-sturdyref',
-    'has correct tag name',
-  );
-  t.is(sturdyRef.payload, undefined, 'payload is undefined');
+  t.is(Object.getPrototypeOf(sturdyRef), SturdyRef.prototype);
+  t.deepEqual(Reflect.ownKeys(sturdyRef), [], 'no own properties');
 
   clientA.shutdown();
   clientB.shutdown();
@@ -80,14 +82,34 @@ testWithErrorUnwrapping("SturdyRef doesn't expose secret/location", async t => {
   t.false('swissNum' in sturdyRef, 'no swissNum property');
 
   const stringified = String(sturdyRef);
-  t.is(
-    stringified,
-    '[object ocapn-sturdyref]',
-    'stringification shows tag name',
-  );
+  t.is(stringified, '[object SturdyRef]', 'stringification shows no details');
 
   clientA.shutdown();
   clientB.shutdown();
+});
+
+test('a SturdyRef minted without a client refuses to enliven', async t => {
+  const location = harden({
+    type: /** @type {const} */ ('ocapn-peer'),
+    network: 'tcp-test',
+    transport: 'tcp',
+    designator: '127.0.0.1:9999',
+    hints: /** @type {const} */ (false),
+  });
+  const sturdyRef = makeSturdyRef(location, 'a-secret');
+  t.true(isSturdyRef(sturdyRef));
+  await t.throwsAsync(() => SturdyRef.enliven(sturdyRef), {
+    message: /minted without an OCapN client/,
+  });
+});
+
+test('a foreign realm SturdyRef is not an OCapN SturdyRef', t => {
+  const foreign = /** @type {any} */ (
+    new SturdyRef({ enliven: () => 'elsewhere' })
+  );
+  t.is(ocapnPassStyleOf(foreign), 'sturdyref', 'takes the sturdyref codec');
+  t.false(isSturdyRef(foreign), 'but OCapN has no details for it');
+  t.is(getSturdyRefDetails(foreign), undefined);
 });
 
 testWithErrorUnwrapping(
@@ -166,6 +188,29 @@ test('client.enlivenSturdyRef() returns promise for fetched value', async t => {
   const resolved = await resolveResult;
   const value = await E(resolved).getValue();
   t.is(value, 42, 'fetched value works correctly');
+
+  clientA.shutdown();
+  clientB.shutdown();
+});
+
+test('SturdyRef.enliven() fetches through the minting client', async t => {
+  const testObjectTable = new Map();
+  testObjectTable.set(
+    'test-object',
+    Far('TestObject', {
+      getValue: () => 42,
+    }),
+  );
+
+  const { client: clientA } = await makeTestClient({ debugLabel: 'A' });
+  const { client: clientB, location: locationB } = await makeTestClient({
+    debugLabel: 'B',
+    makeDefaultSwissnumTable: () => testObjectTable,
+  });
+
+  const sturdyRef = clientA.makeSturdyRef(locationB, 'test-object');
+  const resolved = /** @type {any} */ (await SturdyRef.enliven(sturdyRef));
+  t.is(await E(resolved).getValue(), 42);
 
   clientA.shutdown();
   clientB.shutdown();

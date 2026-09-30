@@ -332,7 +332,9 @@ export const makeDescCodecs = referenceKit => {
     (sturdyRef, writer) => {
       const details = getSturdyRefDetails(sturdyRef);
       if (!details) {
-        throw Error('Cannot serialize: not a valid SturdyRef object');
+        // A realm SturdyRef that OCapN did not mint has no
+        // `(location, secret)` pair for OCapN to write.
+        throw Error('Cannot serialize: SturdyRef was not minted by OCapN');
       }
       const { location, secret } = details;
       OcapnPeerCodec.write(location, writer);

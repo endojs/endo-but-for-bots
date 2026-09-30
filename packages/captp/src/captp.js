@@ -11,6 +11,8 @@ import harden from '@endo/harden';
 import { Remotable, Far, makeMarshal, QCLASS } from '@endo/marshal';
 import { E, HandledPromise } from '@endo/eventual-send';
 import { isPromise, makePromiseKit } from '@endo/promise-kit';
+import { passStyleOf } from '@endo/pass-style';
+import { makeSturdyRef, enliven } from '@endo/sturdyref';
 
 import { X, Fail, annotateError } from '@endo/errors';
 import { makeTrap } from './trap.js';
@@ -136,6 +138,7 @@ export const makeDefaultCapTPImportExportTables = ({
   );
 
   let lastExportID = 0;
+  let lastSturdyRefID = 0;
   let lastPromiseID = 0;
 
   /**
@@ -153,6 +156,11 @@ export const makeDefaultCapTPImportExportTables = ({
       // with 'p+'.
       lastPromiseID += 1;
       slot = `p+${lastPromiseID}`;
+    } else if (passStyleOf(val) === 'sturdyRef') {
+      // A SturdyRef is exported under its own 's+' slot kind. The peer
+      // mints a SturdyRef of its own for it, which enlivens by asking us.
+      lastSturdyRefID += 1;
+      slot = `s+${lastSturdyRefID}`;
     } else {
       // Since this isn't a promise, we instead increment the lastExportId and
       // use that to construct the slot name.  Non-promises are prefaced with
@@ -180,6 +188,17 @@ export const makeDefaultCapTPImportExportTables = ({
       val = Remotable(iface, undefined, settler.resolveWithPresence());
     } else if (slot[0] === 'p') {
       val = promise;
+    } else if (slot[0] === 's') {
+      // A SturdyRef the peer exported. Its handler holds a presence for
+      // the peer's export, never exposed, and enlivening sends that
+      // export `enliven()`: the peer enlivens its own SturdyRef and
+      // returns the live result. It fails once the connection is gone.
+      const enlivener = settler.resolveWithPresence();
+      val = makeSturdyRef(
+        harden({
+          enliven: () => E(enlivener).enliven(),
+        }),
+      );
     } else {
       Fail`Unknown slot type ${slot}`;
     }
@@ -779,6 +798,13 @@ export const makeCapTP = (
       let val;
       if (answers.has(target)) {
         val = answers.get(target);
+      } else if (typeof target === 'string' && target[0] === 's') {
+        // The peer is enlivening a SturdyRef we exported. The target is
+        // an enliven facet for it, not the SturdyRef itself.
+        const slot = reverseSlot(target);
+        importExportTables.hasExport(slot) || Fail`Unknown export ${slot}`;
+        const sturdyRef = importExportTables.getExport(slot);
+        val = harden({ enliven: () => enliven(sturdyRef) });
       } else {
         val = unserialize({
           body: JSON.stringify({
