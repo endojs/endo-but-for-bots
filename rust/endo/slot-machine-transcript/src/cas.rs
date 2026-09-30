@@ -120,14 +120,15 @@ impl Cas {
 
     fn write_blob_steps(&self, bytes: &[u8], temporary: &Path, hash: &str) -> io::Result<()> {
         let mut half = || -> io::Result<()> {
-            let mut f = File::create(temporary)?;
+            let mut f = crate::private_file(temporary)?;
             f.write_all(&bytes[..bytes.len() / 2])
         };
         self.op(
             "cas:write-blob",
             false,
             || {
-                let mut f = File::create(temporary)?;
+                // A heap snapshot holds the worker's secrets: owner only.
+                let mut f = crate::private_file(temporary)?;
                 f.write_all(bytes)
             },
             Some(&mut half),

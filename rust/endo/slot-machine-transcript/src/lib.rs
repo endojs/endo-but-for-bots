@@ -366,6 +366,23 @@ fn sqlite_codes(e: &rusqlite::Error) -> (Option<i32>, Option<i32>) {
     }
 }
 
+/// Create `path` readable and writable by its owner alone, or restrict an
+/// existing file to its owner.
+pub(crate) fn private_file(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        options.mode(0o600);
+        let file = options.open(path)?;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+        Ok(file)
+    }
+    #[cfg(not(unix))]
+    options.open(path)
+}
+
 impl Transcript {
     /// Open (creating if absent) the transcript at `path` and reconcile it
     /// to its last proven durable state.
@@ -392,6 +409,11 @@ impl Transcript {
             std::fs::create_dir_all(parent)
                 .map_err(|e| open_fault(format!("create {}: {e}", parent.display()), None))?;
         }
+        // The log records every host reply, including generated keys and
+        // random bytes, so only its owner may read it. SQLite gives the WAL
+        // the database file's mode.
+        private_file(path)
+            .map_err(|e| open_fault(format!("secure {}: {e}", path.display()), None))?;
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_CREATE
             | OpenFlags::SQLITE_OPEN_NO_MUTEX;

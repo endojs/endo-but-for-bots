@@ -26,6 +26,27 @@ fn transcript_lives_under_the_worker_directory() {
     );
 }
 
+/// The transcript records every host reply, generated keys and random bytes
+/// included, and a heap blob holds the worker's secrets: only their owner
+/// may read either, whatever the umask, and an existing transcript is
+/// restricted when opened.
+#[cfg(unix)]
+#[test]
+fn transcript_and_heap_blobs_are_readable_by_their_owner_alone() {
+    use std::os::unix::fs::PermissionsExt;
+    let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+    let root = tempfile::tempdir().unwrap();
+    let path = root.path().join("transcript.sqlite");
+    drop(Transcript::open(&path, TranscriptConfig::new("w")).unwrap());
+    assert_eq!(mode(&path), 0o600);
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    drop(Transcript::open(&path, TranscriptConfig::new("w")).unwrap());
+    assert_eq!(mode(&path), 0o600);
+    let cas = Cas::open(root.path().join("cas")).unwrap();
+    let hash = cas.write_blob(b"heap").unwrap();
+    assert_eq!(mode(&root.path().join("cas").join(hash)), 0o600);
+}
+
 #[test]
 fn admission_requires_a_published_snapshot() {
     let root = tempfile::tempdir().unwrap();
