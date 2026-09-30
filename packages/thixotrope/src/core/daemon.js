@@ -976,7 +976,15 @@ const buildDaemon = async (
     const entry = workers.get(workerId);
     if (entry !== undefined) {
       workers.delete(workerId);
-      await entry.transport.retire();
+      try {
+        await entry.transport.retire();
+      } catch (error) {
+        // Still here: a caller that decides by `listWorkerIds` must see the
+        // worker until it is gone, and retry the retirement rather than
+        // forget a vat whose store and start notice survive.
+        workers.set(workerId, entry);
+        throw error;
+      }
       entry.sink.detach();
     }
     // Worker ids are random and never reused: drop the session's
@@ -985,15 +993,20 @@ const buildDaemon = async (
     hub.forgetSession(workerId);
     store.deleteWorker(workerId);
     // Only now is the worker gone for good; host state keyed by it can be
-    // released. A failure here is reported, not allowed to leave the worker
-    // half-retired: the store and session are already deleted.
+    // released: the native processes it launched, then whatever the embedder
+    // keys by worker. A failure here is reported, not allowed to leave the
+    // worker half-retired: the store and session are already deleted.
+    // Not opt-in: host state keyed by a worker that no longer exists is a
+    // leak the operator should hear about.
+    const retireLog = logging.sub('thixotrope', 'daemon');
+    await nativeAdapters
+      .retireWorker(workerId)
+      .catch(error => retireLog.error('native adapters not retired:', error));
     if (onRetireWorker !== undefined) {
       try {
         await onRetireWorker(workerId);
       } catch (error) {
-        // Not opt-in: host state keyed by a worker that no longer exists is
-        // a leak the operator should hear about.
-        logging.sub('thixotrope', 'daemon').error('retire hook failed:', error);
+        retireLog.error('retire hook failed:', error);
       }
     }
   };

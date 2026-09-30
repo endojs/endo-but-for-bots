@@ -46,6 +46,65 @@ test.serial(
   },
 );
 
+test.serial(
+  'retiring a manager closes the adapters it launched and no others',
+  async t => {
+    t.timeout(5000);
+    const { makeNativeAdapters } = await import('../src/native/adapters.js');
+    /** @type {Array<{owner: string, terminated: boolean}>} */
+    const children = [];
+    const adapters = makeNativeAdapters(
+      {
+        random: makeNodePowers().random,
+        nativeWorkers: {
+          start: async ({ moduleUrl }) => {
+            const child = { owner: moduleUrl, terminated: false };
+            children.push(child);
+            let resolveClosed;
+            const closed = new Promise(resolve => {
+              resolveClosed = resolve;
+            });
+            return {
+              send() {},
+              closed,
+              terminate: async () => {
+                child.terminated = true;
+                resolveClosed();
+              },
+            };
+          },
+        },
+      },
+      {
+        hub: {
+          attachSession: () => ({ deliver() {} }),
+          forgetSession: () => {},
+        },
+        importBootstrap: () => ({ fetch: async () => 'root' }),
+      },
+    );
+    t.teardown(() => adapters.shutdown());
+    const launcherOf = owner =>
+      adapters.resource({ moduleUrl: owner, workerId: owner });
+    await launcherOf('a').create();
+    await launcherOf('a').create();
+    await launcherOf('b').create();
+    await adapters.retireWorker('a');
+    t.deepEqual(
+      children.map(child => child.terminated),
+      [true, true, false],
+    );
+    await t.throwsAsync(() => launcherOf('a').create(), {
+      message: /retired vat/,
+    });
+    await adapters.retireWorker('a');
+    t.false(children[2].terminated, 'b is untouched');
+    await adapters.retireWorker('c');
+    await adapters.shutdown();
+    t.true(children[2].terminated);
+  },
+);
+
 test.serial('native shutdown closes a process awaiting its root', async t => {
   t.timeout(5000);
   const { makeNativeAdapters } = await import('../src/native/adapters.js');

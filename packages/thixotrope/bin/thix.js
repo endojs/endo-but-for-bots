@@ -58,6 +58,8 @@ try {
     command === 'collect' ||
     command === 'install' ||
     command === 'applications' ||
+    command === 'remove' ||
+    command === 'remove-native' ||
     command === 'inventory' ||
     command === 'attach' ||
     command === 'status' ||
@@ -138,6 +140,11 @@ try {
             2,
           ),
         );
+      } else if (command === 'remove' || command === 'remove-native') {
+        const [name] = args;
+        if (!name) throw Error(`Usage: thix ${command} state-directory name`);
+        const method = command === 'remove' ? 'remove' : 'removeNative';
+        logging.log(JSON.stringify(await client.call(method, name)));
       } else if (command === 'inventory') {
         await showInventory(platform.terminal.open(), client);
       } else if (command === 'attach') {
@@ -162,7 +169,7 @@ try {
     }
   } else {
     logging.log(
-      'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|accept|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|install-native|reachability|collect|status|stop [state-directory]',
+      'Usage: thix serve|attach|install|remove|applications|inventory|invite|revoke-invite|accept|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|install-native|remove-native|reachability|collect|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }

@@ -251,6 +251,33 @@ export const registerHttpIntegration = (test, kind) => {
         await host.client.call('evaluate', "E(E(apps).get('site')).read()"),
         '2n',
       );
+
+      // Removing the resource retires its manager and closes the adapter
+      // process it launched, so the port is released without the daemon
+      // stopping; the name is free for a fresh installation.
+      await host.client.call(
+        'evaluate',
+        `E(E(apps).get('site')).start(${port})`,
+      );
+      t.is(await request('GET', '/read'), '2\n');
+      const adapter = nativeChildren.at(-1);
+      t.true(await host.client.call('removeNative', 'web'));
+      await adapter.closed;
+      await t.throwsAsync(() => request('GET', '/read'), {
+        code: 'ECONNREFUSED',
+      });
+      t.false(
+        (await host.client.call('status')).workers.some(
+          worker => worker.debugLabel === 'native:web',
+        ),
+      );
+      t.is(await host.client.call('evaluate', "inventory.has('web')"), 'false');
+      await host.client.call(
+        'installNative',
+        'web',
+        fileURLToPath(new URL('../resources/http/', import.meta.url)),
+      );
+      t.is(await host.client.call('evaluate', "inventory.has('web')"), 'true');
     },
   );
 };
