@@ -841,7 +841,8 @@ export const MountInterface = M.interface('EndoMount', {
   // promise boundary here even though the shared name-hub record is broader.
   // It resolves to the same typed file/tree union as `lookup`, plus undefined.
   // `maybeLookup` is the `ReadableNameHub` primitive (lookup-or-undefined).
-  // Widened from the shared platform `NameOrPathShape` contract to `PathArgShape` so the
+  // Widened from `@endo/platform`'s fs `NameOrPathShape` contract (not the
+  // daemon's removed shape of that name) to `PathArgShape` so the
   // mount accepts a `MountEntry` cap as the path argument, exactly like
   // `lookup`. See designs/fs-interface-consolidation.md § C1.
   maybeLookup: M.call(PathArgShape).returns(M.promise()),
