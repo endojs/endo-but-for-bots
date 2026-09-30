@@ -222,8 +222,6 @@ jobs:
           fetch-depth: 0
       - name: Test benchmark checker
         run: python3 -m unittest discover -s rust/engine/benches -p 'test_*.py'
-      - name: Test stack-lane scripts
-        run: python3 -m unittest discover -s rust/engine/stack-lanes -p 'test_*.py'
       - name: Check snapshot performance baselines
         run: |
           set -euo pipefail
@@ -287,3 +285,126 @@ jobs:
             property-lookup.log
             checkpoint-scaling.log
           if-no-files-found: error
+
+  # STACK-DEPTH-REFACTOR.md §5, Phase 0: the corpus of rust/engine/stack-lanes
+  # under Wasmtime (lane A), Node and workerd with V8's tiers pinned (lane B),
+  # the per-function frame report (lane C) and the grammar sweep. Lanes A and
+  # B compare every case's output with the native probe's byte for byte and
+  # fail on a trap their expected-trap lists do not name; the ceilings and
+  # the sweep's pins must still hold; lane C is trend only. The marks and
+  # frame sizes are uploaded for the ratchet that lowers the lanes' stacks as
+  # the refactor phases land.
+  stack-lanes:
+    name: Stack lanes (Wasmtime, Node, workerd)
+    runs-on: ubuntu-latest
+    # Three engine builds (native, wasm with build-std, native again with
+    # -Z emit-stack-sizes) and the whole corpus on three hosts.
+    timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: '0'
+      WASMTIME_VERSION: v49.0.0
+      WASMTIME_SHA256: a956c279ac6e80109369a285db30fc46f68239fa1bbeb03ccfa8e913bbca85fc
+      WORKERD_VERSION: 1.20260930.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Cache Cargo downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-stack-lanes-cargo-${{ hashFiles('rust/engine/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-stack-lanes-cargo-
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22.x
+      - name: Install the pinned toolchain's wasm target, rust-src and llvm-tools
+        # The wasm probe is built with -Zbuild-std (WASM-BLOCKERS.md B1), which
+        # needs rust-src; lane C reads native frame sizes with llvm-readobj.
+        # rustup picks the channel from rust/engine/rust-toolchain.toml.
+        working-directory: rust/engine
+        run: |
+          set -euo pipefail
+          rustup target add wasm32-wasip1
+          rustup component add rust-src llvm-tools
+      - name: Install Wasmtime
+        run: |
+          set -euo pipefail
+          archive="wasmtime-${WASMTIME_VERSION}-x86_64-linux"
+          curl -fsSL -o wasmtime.tar.xz \
+            "https://github.com/bytecodealliance/wasmtime/releases/download/${WASMTIME_VERSION}/${archive}.tar.xz"
+          echo "${WASMTIME_SHA256}  wasmtime.tar.xz" | sha256sum --check
+          tar -xJf wasmtime.tar.xz
+          echo "WASMTIME=${GITHUB_WORKSPACE}/${archive}/wasmtime" >> "$GITHUB_ENV"
+      - name: Install workerd
+        # The platform package holds the binary itself; the `workerd` wrapper
+        # package only resolves it in a postinstall, which the repository's
+        # npm posture (no lifecycle scripts) would skip.
+        run: |
+          set -euo pipefail
+          mkdir -p workerd-install
+          npm install --prefix workerd-install --no-save --ignore-scripts "@cloudflare/workerd-linux-64@${WORKERD_VERSION}"
+          echo "WORKERD=${GITHUB_WORKSPACE}/workerd-install/node_modules/@cloudflare/workerd-linux-64/bin/workerd" >> "$GITHUB_ENV"
+      - name: Test the lane scripts
+        run: python3 -m unittest discover -s rust/engine/stack-lanes -p 'test_*.py'
+      - name: Build the probe, native and wasm
+        working-directory: rust/engine/stack-lanes
+        run: python3 build_probe.py
+      - name: Check the corpus ceilings
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 ceilings.py --no-build --table 2>&1 | tee ceilings.log
+      - name: Lane A, Wasmtime
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 lane_a.py --no-build --shard all --output lane-a.json 2>&1 | tee lane-a.log
+      - name: Lane B, Node
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 lane_b_node.py --no-build --shard all --paint --output lane-b-node.json 2>&1 | tee lane-b-node.log
+      - name: Lane B, workerd
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 lane_b_workerd.py --no-build --shard all --paint --output lane-b-workerd.json 2>&1 | tee lane-b-workerd.log
+      - name: Lane C, frames, slopes and the tier mix
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 lane_c.py --no-build --output lane-c.json 2>&1 | tee lane-c.log
+      - name: Grammar sweep
+        if: ${{ !cancelled() }}
+        working-directory: rust/engine/stack-lanes
+        run: |
+          set -euo pipefail
+          python3 sweep.py --no-build --check --output sweep.json 2>&1 | tee sweep.log
+      - name: Upload lane reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ironhorse-stack-lanes
+          path: |
+            rust/engine/stack-lanes/ceilings.log
+            rust/engine/stack-lanes/lane-a.json
+            rust/engine/stack-lanes/lane-a.log
+            rust/engine/stack-lanes/lane-b-node.json
+            rust/engine/stack-lanes/lane-b-node.log
+            rust/engine/stack-lanes/lane-b-workerd.json
+            rust/engine/stack-lanes/lane-b-workerd.log
+            rust/engine/stack-lanes/lane-c.json
+            rust/engine/stack-lanes/lane-c.log
+            rust/engine/stack-lanes/sweep.json
+            rust/engine/stack-lanes/sweep.log
+          if-no-files-found: warn
