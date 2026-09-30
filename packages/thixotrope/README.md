@@ -1025,6 +1025,10 @@ When a resource is exported into a worker session, its
 `(name, description)` is recorded against the export slot; on daemon
 restart the export is re-instantiated at the same slot, so presences
 inside the worker's snapshot keep working.
+`daemon.retireResource(name, description)` ends one: the instance is
+forgotten and its recorded exports are nulled, so a restart seats
+tombstones there instead of re-running the maker, and a guest's release
+of an export drops that export's record.
 Resource results reach the worker as OCapN frames, which the daemon
 journals before delivery, so nondeterministic resources (clocks) do
 not break deterministic replay, and a pending `timer.delay` wakes a

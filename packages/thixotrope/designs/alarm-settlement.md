@@ -32,12 +32,14 @@ An export the guest has released is dropped from the endpoint's records as the r
 Retirement is part of the general host-resource contract, not an alarm-specific mechanism.
 
 Workspace metadata version 3 introduced clocks with this acknowledgement protocol.
-Later versions add dedicated native manager vats and the mail address book; the current version
-is recorded once in the supervisor.
+Later versions add dedicated native manager vats, the mail address book, the one installation
+registry, and the clock and mailbox provided through it as installations in vats of their own; the
+current version is recorded once in the supervisor.
 Startup checks it under the store lease before restoring workers or starting alarms.
 Older heap-persisted clock implementations cannot acknowledge outcomes and require migration or
 fresh state; automatically substituting new source would not replace their retained closures.
-The alarm ledger reads version-1 pending rows and writes version 2, which also carries outcomes.
+The alarm ledger reads and writes version 2, which carries pending rows and outcomes; the
+version-1 shape never shipped and is refused with a message naming the migration.
 
 Validation covers fulfillment and cancellation crashes immediately after the terminal write,
 restoration through the daemon with a listener in another vat, release interruption before and
