@@ -41,6 +41,30 @@ test('makeDaemonEvaluate forwards source and lexical names to a powers host', as
   ]);
 });
 
+test('makeDaemonEvaluate splits string names into pet-name paths', async t => {
+  /** @type {unknown[]} */
+  const calls = [];
+  const powers = Far('Powers', {
+    evaluate: async (...args) => {
+      calls.push(args);
+      return 'done';
+    },
+  });
+
+  const evaluate = makeDaemonEvaluate(powers);
+  await evaluate({
+    source: '1',
+    resultName: 'results/one',
+    globals: [{ name: 'counter' }],
+  });
+  await evaluate({ source: '2', globals: [] });
+
+  t.deepEqual(calls, [
+    [undefined, '1', ['counter'], [['counter']], ['results', 'one']],
+    [undefined, '2', [], [], undefined],
+  ]);
+});
+
 test('makeDaemonEvaluate always advertises resultName through the tool schema', t => {
   const powers = Far('Powers', {
     evaluate: async () => 'done',

@@ -825,10 +825,9 @@ test('stored blob textRange: line boundaries, terminal-LF, CRLF, byte/text compo
 
   const store = async text => {
     const readerRef = bytesReaderFromIterator([encodeUtf8(text)]);
-    return E(host).storeBlob(
-      readerRef,
-      [`tr-${Math.random().toString(36).slice(2)}`],
-    );
+    return E(host).storeBlob(readerRef, [
+      `tr-${Math.random().toString(36).slice(2)}`,
+    ]);
   };
 
   // LF-delimited lines, 0-based end-exclusive; agrees with lines.slice.join.
@@ -2914,26 +2913,51 @@ testNeedsNodeWorker('indirect cancellation via caplet', async t => {
 
   t.is(
     1,
-    await E(host).evaluate(['w1'], 'E(counter).incr()', ['counter'], [['counter']]),
+    await E(host).evaluate(
+      ['w1'],
+      'E(counter).incr()',
+      ['counter'],
+      [['counter']],
+    ),
   );
   t.is(
     4,
-    await E(host).evaluate(['w2'], 'E(doubler).incr()', ['doubler'], [['doubler']]),
+    await E(host).evaluate(
+      ['w2'],
+      'E(doubler).incr()',
+      ['doubler'],
+      [['doubler']],
+    ),
   );
   t.is(
     6,
-    await E(host).evaluate(['w2'], 'E(doubler).incr()', ['doubler'], [['doubler']]),
+    await E(host).evaluate(
+      ['w2'],
+      'E(doubler).incr()',
+      ['doubler'],
+      [['doubler']],
+    ),
   );
 
   await E(host).cancel(['counter']);
 
   t.is(
     1,
-    await E(host).evaluate(['w1'], 'E(counter).incr()', ['counter'], [['counter']]),
+    await E(host).evaluate(
+      ['w1'],
+      'E(counter).incr()',
+      ['counter'],
+      [['counter']],
+    ),
   );
   t.is(
     4,
-    await E(host).evaluate(['w2'], 'E(doubler).incr()', ['doubler'], [['doubler']]),
+    await E(host).evaluate(
+      ['w2'],
+      'E(doubler).incr()',
+      ['doubler'],
+      [['doubler']],
+    ),
   );
 });
 
@@ -3660,7 +3684,13 @@ testNeedsNodeWorker('read remote value', async t => {
   await E(hostA).addPeerInfo(await E(hostB).getPeerInfo());
 
   // create value to share
-  await E(hostB).evaluate(['@main'], '"hello, world!"', [], [], ['salutations']);
+  await E(hostB).evaluate(
+    ['@main'],
+    '"hello, world!"',
+    [],
+    [],
+    ['salutations'],
+  );
   const hostBValueLocator = await E(hostB).locate('salutations');
 
   // insert in hostA out of band
@@ -3906,7 +3936,13 @@ testNeedsNodeWorker('locate remote value', async t => {
   await E(hostB).addPeerInfo(await E(hostA).getPeerInfo());
 
   // create value to share
-  await E(hostB).evaluate(['@main'], '"hello, world!"', [], [], ['salutations']);
+  await E(hostB).evaluate(
+    ['@main'],
+    '"hello, world!"',
+    [],
+    [],
+    ['salutations'],
+  );
   const hostBValueLocator = await E(hostB).locate('salutations');
 
   // insert in hostA out of band
@@ -3933,7 +3969,13 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   t.is(await E(hostB).identify('@pins', 'guest-alice'), undefined);
 
   // create value to share
-  await E(hostA).evaluate(['@main'], '"hello, world!"', [], [], ['salutations']);
+  await E(hostA).evaluate(
+    ['@main'],
+    '"hello, world!"',
+    [],
+    [],
+    ['salutations'],
+  );
   const expectedSalutationsLocator = await E(hostA).locate('salutations');
 
   await E(hostA).send(['bob'], ['Hello'], ['salutations'], [['salutations']]);
@@ -4374,7 +4416,13 @@ testNeedsNodeWorker('reverse locate remote value', async t => {
   await E(hostB).addPeerInfo(await E(hostA).getPeerInfo());
 
   // create value to share
-  await E(hostB).evaluate(['@main'], '"hello, world!"', [], [], ['salutations']);
+  await E(hostB).evaluate(
+    ['@main'],
+    '"hello, world!"',
+    [],
+    [],
+    ['salutations'],
+  );
   const hostBValueLocator = await E(hostB).locate('salutations');
 
   // insert in hostA out of band
@@ -4459,7 +4507,12 @@ testNeedsNodeWorker('follow messages across nodes', async t => {
   await drainIterator(iterator, existingMessages.length);
 
   await E(hostA).evaluate(['@main'], '"streamed"', [], [], ['stream-val']);
-  await E(hostA).send(['bob'], ['Stream test'], ['stream-val'], [['stream-val']]);
+  await E(hostA).send(
+    ['bob'],
+    ['Stream test'],
+    ['stream-val'],
+    [['stream-val']],
+  );
 
   const { value: msg } = await iterator.next();
   t.is(msg.type, 'package');
@@ -4882,7 +4935,12 @@ test('guest evaluate ephemeral (no resultName)', async t => {
   await E(guest).adopt(pkg.number, 'x', ['seven']);
 
   // Ephemeral eval, no result name, value returned directly.
-  const result = await E(guest).evaluate(undefined, 'x + 3', ['x'], [['seven']]);
+  const result = await E(guest).evaluate(
+    undefined,
+    'x + 3',
+    ['x'],
+    [['seven']],
+  );
 
   t.is(result, 10);
 });
@@ -5370,9 +5428,12 @@ test('sendValue rejects unknown pet name', async t => {
   const { value: pkgMsg } = await guestIterator.next();
 
   // Attempt to sendValue with a nonexistent pet name
-  await t.throwsAsync(() => E(guest).sendValue(pkgMsg.number, ['nonexistent']), {
-    message: /Unknown pet name/,
-  });
+  await t.throwsAsync(
+    () => E(guest).sendValue(pkgMsg.number, ['nonexistent']),
+    {
+      message: /Unknown pet name/,
+    },
+  );
 });
 
 test('sendValue rejects invalid message number', async t => {
@@ -5617,7 +5678,9 @@ test('a guest carries the content-locate family', async t => {
 test('HTTP web-seed loads and verifies a readable blob', async t => {
   const { host, config } = await prepareHost(t);
   const originalBytes = encodeUtf8('web-seed payload\n');
-  await E(host).storeBlob(bytesReaderFromIterator([originalBytes]), ['original']);
+  await E(host).storeBlob(bytesReaderFromIterator([originalBytes]), [
+    'original',
+  ]);
   const originalLocator = await E(host).locateContent('original');
   const { hash } = parseContentLocator(originalLocator);
   const gatewayAddress = fs
@@ -5929,7 +5992,9 @@ testNeedsNodeWorker(
       'history rewrite target',
     ]);
 
-    const mount = await E(host).provideMount(repoPath, ['git-history-worktree']);
+    const mount = await E(host).provideMount(repoPath, [
+      'git-history-worktree',
+    ]);
     const ordinaryGit = await E(host).provideGit(mount, 'git-ordinary');
     const gitHistory = await E(host).provideGit(mount, 'git-history', {
       allowHistoryRewrite: true,
@@ -5971,7 +6036,9 @@ testNeedsNodeWorker(
     const repoPath = path.join(config.statePath, '..', 'git-identity-repo');
     await createGitFixture(repoPath);
 
-    const mount = await E(host).provideMount(repoPath, ['git-identity-worktree']);
+    const mount = await E(host).provideMount(repoPath, [
+      'git-identity-worktree',
+    ]);
     const gitCap = await E(host).provideGit(mount, 'git-identity', {
       identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
     });
@@ -6089,10 +6156,9 @@ testNeedsNodeWorker(
     const repoPath = path.join(config.statePath, '..', 'git-writable-repo');
     await createGitFixture(repoPath);
 
-    const writableMount = await E(host).provideMount(
-      repoPath,
-      ['git-writable-worktree'],
-    );
+    const writableMount = await E(host).provideMount(repoPath, [
+      'git-writable-worktree',
+    ]);
     const gitCap = await E(host).provideGit(writableMount, 'git-writable');
     await fs.promises.writeFile(
       path.join(repoPath, 'writable.txt'),
@@ -6113,10 +6179,9 @@ test('provideGit rejects a malformed commit identity at the host boundary', asyn
     'git-identity-reject-repo',
   );
   await createGitFixture(repoPath);
-  const mount = await E(host).provideMount(
-    repoPath,
-    ['git-identity-reject-worktree'],
-  );
+  const mount = await E(host).provideMount(repoPath, [
+    'git-identity-reject-worktree',
+  ]);
 
   // These identities all satisfy the interface guard (both fields are strings)
   // yet must be rejected by the host's `normalizeGitIdentity`, so the failure
@@ -6299,7 +6364,9 @@ test('storeTree falls back for export-ignore trees the archive would drop', asyn
     'add export-ignored file',
   ]);
 
-  const mount = await E(host).provideMount(repoPath, ['export-ignore-worktree']);
+  const mount = await E(host).provideMount(repoPath, [
+    'export-ignore-worktree',
+  ]);
   const gitCap = await E(host).provideGit(mount, 'export-ignore-cap');
   const tree = await E(gitCap).tree('HEAD');
 
@@ -7916,7 +7983,10 @@ test('stageTree preserves binary blobs in a scratch mount', async t => {
   fs.writeFileSync(path.join(srcDir, 'bytes.bin'), expected);
   await E(host).provideMount(srcDir, ['binary-src-mount'], { readOnly: true });
 
-  const scratch = await E(host).stageTree(['binary-src-mount'], ['binary-staged']);
+  const scratch = await E(host).stageTree(
+    ['binary-src-mount'],
+    ['binary-staged'],
+  );
   const file = await E(scratch).lookup(['bytes.bin']);
   const reader = iterateBytesReader(file);
   const chunks = [];
@@ -7977,7 +8047,9 @@ test('Phase 7: makeFromTree errors clearly when compartment-map.json is missing'
 
   await t.throwsAsync(
     async () =>
-      E(host).makeFromTree(undefined, ['no-map-tree'], { powersName: ['@none'] }),
+      E(host).makeFromTree(undefined, ['no-map-tree'], {
+        powersName: ['@none'],
+      }),
     { message: /compartment-map\.json|Unknown name/ },
   );
 });
@@ -7995,7 +8067,9 @@ test('Phase 7: makeFromTree errors clearly when compartment-map.json is malforme
 
   await t.throwsAsync(
     async () =>
-      E(host).makeFromTree(undefined, ['bad-map-tree'], { powersName: ['@none'] }),
+      E(host).makeFromTree(undefined, ['bad-map-tree'], {
+        powersName: ['@none'],
+      }),
     { message: /compartment-map\.json|JSON|Unexpected/ },
   );
 });
@@ -8628,6 +8702,13 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
     E(/** @type {any} */ (readOnlyDirectory)).has(42),
     { message: /ReadableNameHub/ },
     'has rejects a non-string path segment at the exo boundary',
+  );
+  // A bare string passes the guard only so that `namePathFrom` can refuse it
+  // with a hint to retry with an array of path components.
+  await t.throwsAsync(
+    E(/** @type {any} */ (readOnlyDirectory)).lookup('one'),
+    { message: /a string is not a pet-name path.*\["one"\]/ },
+    'a bare-string pet name is refused with a retry hint',
   );
 
   // A live write to the backing directory is observable through the view,

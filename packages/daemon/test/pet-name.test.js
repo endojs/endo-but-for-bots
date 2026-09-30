@@ -192,9 +192,15 @@ test('assertPetNamePath allows special name in prefix', t => {
 
 // --- namePathFrom ---
 
-test('namePathFrom normalizes string to array', t => {
-  const result = namePathFrom('hello');
-  t.deepEqual(result, ['hello']);
+test('namePathFrom rejects a bare string with a retry hint', t => {
+  t.throws(() => namePathFrom('hello'), {
+    instanceOf: TypeError,
+    message: /a string is not a pet-name path.*\["hello"\]/,
+  });
+  t.throws(() => namePathFrom('dir/name'), {
+    instanceOf: TypeError,
+    message: /never split on a delimiter.*\["dir\/name"\]/,
+  });
 });
 
 test('namePathFrom passes through array', t => {
@@ -203,19 +209,26 @@ test('namePathFrom passes through array', t => {
 });
 
 test('namePathFrom validates', t => {
-  t.throws(() => namePathFrom(''), { message: /Invalid/ });
+  t.throws(() => namePathFrom(''), { message: /Invalid pet-name path/ });
   t.throws(() => namePathFrom([]), { message: /Invalid/ });
-  t.throws(() => namePathFrom('a/b'), { message: /Invalid name/ });
   t.throws(() => namePathFrom(['a/b']), { message: /Invalid name/ });
+  t.throws(() => namePathFrom(['']), { message: /Invalid name/ });
 });
 
 // --- petNamePathFrom ---
 
-test('petNamePathFrom coerces a string and returns structured result', t => {
-  const result = petNamePathFrom('hello');
+test('petNamePathFrom returns structured result for a one-segment path', t => {
+  const result = petNamePathFrom(['hello']);
   t.deepEqual(result.namePath, ['hello']);
   t.deepEqual(result.prefixPath, []);
   t.is(result.petName, 'hello');
+});
+
+test('petNamePathFrom rejects a bare string', t => {
+  t.throws(() => petNamePathFrom('hello'), {
+    instanceOf: TypeError,
+    message: /Invalid pet-name path "hello"/,
+  });
 });
 
 test('petNamePathFrom coerces a path and returns structured result', t => {
@@ -230,7 +243,7 @@ test('petNamePathFrom allows a special name in the prefix', t => {
 });
 
 test('petNamePathFrom rejects a special name leaf', t => {
-  t.throws(() => petNamePathFrom('@self'), { message: /Invalid pet name/ });
+  t.throws(() => petNamePathFrom(['@self']), { message: /Invalid pet name/ });
   t.throws(() => petNamePathFrom(['a', '@self']), {
     message: /Invalid pet name/,
   });
