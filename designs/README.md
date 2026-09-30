@@ -491,6 +491,9 @@ LLM-agent stack).*
 | [ocapn-noise-network](ocapn-noise-network.md) | 2026-02-14 | 2026-05-18 | **Complete** |
 | [ocapn-noise-session-reconnect](ocapn-noise-session-reconnect.md) | 2026-05-14 | 2026-05-19 | Proposed |
 | [thixotrope](thixotrope.md) | 2026-07-16 | 2026-09-08 | In Progress |
+| [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) | 2026-09-23 | 2026-09-24 | Proposed |
+| [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) | 2026-09-24 | 2026-09-24 | Proposed |
+| [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) | 2026-09-24 | 2026-09-24 | Reference |
 | [ocapn-tcp-for-test-extraction](ocapn-tcp-for-test-extraction.md) | 2026-02-14 | 2026-02-24 | In Progress |
 | [ocapn-tcp-syrup-framing](ocapn-tcp-syrup-framing.md) | 2026-04-23 | 2026-05-06 | **Complete** |
 | [syrup-frame](syrup-frame.md) | 2026-05-04 | 2026-05-06 | Deprecated |
@@ -569,7 +572,7 @@ LLM-agent stack).*
 | [thixotrope/message-delivery](../packages/thixotrope/designs/message-delivery.md) | 2026-09-08 | — | **Implemented** |
 | [thixotrope/vat-replacement](../packages/thixotrope/designs/vat-replacement.md) | 2026-09-08 | — | Proposed (exploratory) |
 
-**Current totals (2026-09-27 full corpus reconciliation):** 76 Complete/Implemented, 83 In Progress, 19 Not Started, 23 Proposed, 3 Active, 20 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**240 indexed records**). The bucket sum is 240. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase.
+**Current totals (2026-09-27 full corpus reconciliation):** 76 Complete/Implemented, 83 In Progress, 19 Not Started, 25 Proposed, 3 Active, 21 Reference, 4 Deprecated, 2 Draft, 5 Superseded, 1 Consolidated, 1 Abandoned, and 1 Approved (`ironhorse-engine`), plus [cbor-codec](cbor-codec.md) at *Phases 1–2 implemented* and [genie-integration](genie-integration.md) as a *Largely realized* retrospective (**243 indexed records**). The bucket sum is 243. The raw audit covered 242 files (`designs/*.md` plus `packages/*/designs/*.md`): six ledger/support files were excluded, while four already-indexed nested channel-thread research records lie outside those two globs. Every indexed record and untallied file was checked in six disjoint batches against document metadata, all-state PR searches, and the `llm` log; 63 claimed-to-verified status corrections and 16 new rows are recorded in [`ARCHIVE.md`](ARCHIVE.md). The totals also count [daemon-guest-bot-incarnation](daemon-guest-bot-incarnation.md) (**Implemented**, #1306), which landed on `llm` concurrently with this pass and was folded in at rebase. The Cloudflare pass adds [thixotrope-on-cloudflare](thixotrope-on-cloudflare.md) (Proposed), [thixotrope-on-cloudflare-addendum-single-vat-hub](thixotrope-on-cloudflare-addendum-single-vat-hub.md) (Proposed) and [thixotrope-on-cloudflare-review](thixotrope-on-cloudflare-review.md) (Reference) to the summary table (Proposed 23 → 25, Reference 20 → 21, records 240 → 243), and both Proposed designs to the M4 table, the dependency graph and the estimates table. Neither is estimated: the base design's Phase 0 is a go/no-go measurement gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`, so no milestone-duration, critical-path or timeline change is assigned.
 
 ## Roadmap
 
@@ -778,6 +781,11 @@ flowchart TD
         okey --> oreconn
         orev --> oreconn
         onoise --> oortho
+        ocf[thixotrope-on-cloudflare<br/><i>PROPOSED</i>]
+        ocfa[thixotrope-on-cloudflare-addendum-single-vat-hub<br/><i>PROPOSED</i>]
+        oortho --> ocf
+        ihengine --> ocf
+        ocf --> ocfa
         oreconn --> oortho
         onet --> docapn
         onoise --> docapn
@@ -1166,6 +1174,8 @@ finalized.
 | ~~ocapn-noise-network~~ | **Complete** | Noise IK netlayer for OCapN landed via PR #137 (merged 2026-05-08), consolidating the stacked PRs #111 (CBOR codec) + #112 (Noise IK netlayer) + #113 (transport tests) |
 | ~~ocapn-iroh-netlayer~~ | **Complete** | iroh 1.0 QUIC netlayer for `@endo/ocapn` (`@endo/ocapn-iroh`): dial-by-EndpointId with discovery/relays, netstring framing under the `ocapn/netstring/0` ALPN, standard `op:start-session`; implemented with the design |
 | thixotrope | In Progress | OCapN comms hub owned by Thixotrope; XS and Ironhorse SQLite workers; snapshot/journal recovery; persistent guest objects, answers, and listeners; local supervisor, application installation, observable inventory, and vat retention diagnostics. Layered durable acceptance and outbox recovery are implemented in protocol v2; the application admission API remains separate design work. Potential mechanisms are tracked separately in the package designs. |
+| thixotrope-on-cloudflare | Proposed | Run each Thixotrope worker as a hibernating SQLite-backed Durable Object, with Ironhorse compiled to wasm and the heap store on Durable Object SQLite. Gated on the engine work in `rust/engine/WASM-BLOCKERS.md` and `rust/engine/STACK-DEPTH-REFACTOR.md`; the [verification review](thixotrope-on-cloudflare-review.md) ranks the blockers. |
+| thixotrope-on-cloudflare-addendum-single-vat-hub | Proposed | Replaces the base design's architecture with single-vat hubs (vat and OCapN hub tables in one Durable Object) and a per-tenant control object for lifecycle and collection. |
 | `thixotrope/message-delivery` | **Implemented** | Package-level implementation record for the durable message-delivery slice. |
 | `thixotrope/vat-replacement` | Proposed (exploratory) | Package-level replacement experiment; remains exploratory rather than a committed standalone deliverable. |
 | `daemon/iroh-network-design` | **Implemented** | Package-level Iroh transport implementation supporting the M4 networking cut. |
@@ -1874,6 +1884,8 @@ have been remapped: 0 -> 1, ½ -> 2, 1 -> 3, 2 -> 4, 3 -> 7, 4 -> 9,
 | slots-ocapn-op-lanes | S | 1-2 days to reconcile the candidate | 4 | Separate get/index/untag lanes across Eventual Send, JavaScript slots, and the Rust supervisor; implementation exists in draft [endojs/endo-but-for-bots#990](https://github.com/endojs/endo-but-for-bots/pull/990) but needs dedicated payloads and fail-closed translation parity |
 | ocapn-noise-cryptographic-review | S | 1 day | 4 | External review coordination |
 | thixotrope | M | Not re-estimated | 4 | XS and Ironhorse engines, comms hub, supervisor, and application installation are implemented. Remaining delivery-contract work and package experiments need a new estimate; the earlier XS-adapter estimate is obsolete. |
+| thixotrope-on-cloudflare | — | not estimated; its Phase 0 is a go/no-go measurement | 4 | The stack prerequisites are costed in `rust/engine/STACK-DEPTH-REFACTOR.md`; the other engine prerequisites (`rust/engine/WASM-BLOCKERS.md` B1, B5, B7, B8) are not costed; the rest waits on Phase 0. |
+| thixotrope-on-cloudflare-addendum-single-vat-hub | — | not estimated | 4 | Phase 2 of the base design; its protocol findings in the review must be resolved first. |
 | daemon-agent-network-identity | S-M | 3 days | 4 | Network registration, locator construction |
 | ~~ocapn-noise-network~~ | L | — | 4 | ✅ Complete (PR #137 consolidates stacked PRs #111/#112/#113; merged 2026-05-08) |
 | ~~ocapn-iroh-netlayer~~ | M | — | 4 | ✅ Complete (implemented with the design: `@endo/ocapn-iroh`, mock-iroh CI tests plus `ENDO_IROH_INTEGRATION=1`-gated real-endpoint test) |
