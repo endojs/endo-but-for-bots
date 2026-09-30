@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-09-28 |
 | **Author** | kriscendobot (prompted) |
-| **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214), then reconciled with [hosted-agent-broker-oauth](hosted-agent-broker-oauth.md) per design-panel review, split admission, delivery, classification, and prompt origin per panel round 3, then gated prompt origin and the root canary per panel round 4, then routed containment by backend instance and gave `budget` its own result tag per panel round 5) |
+| **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214) and the design-panel rounds on PR #1357) |
 | **Status** | Draft, awaiting production evidence |
 | **Source** | Back-filled from the minion.town Claude CLI and Agent SDK experiments (kriscendobot/minion.town#105, kriscendobot/minion.town#106) and the production observations listed in § Evidence |
 
@@ -242,7 +242,9 @@ these experiments ready to solidify in Endo, as a small package,
    and returns a backend that satisfies the same interface, acting only on the
    request and the classified result. There are two: the prompt-origin gate
    (Decision 9, on OS containment), which refuses a guest-influenced request
-   with `needs-containment` before it reaches an unsliced backend, and the usage recorder (Decision 8),
+   with `needs-containment` before it reaches an unsliced backend (one whose
+   turns run on flags without the `@endo/claude-sandbox` OS slice), and the
+   usage recorder (Decision 8),
    which turns each result into one usage record and hands it to the
    deployment's usage sink. Admission is not an enricher; it belongs to the
    credential source (Decision 7).
@@ -290,7 +292,7 @@ interface CredentialSource {
 
 interface AdmissionRefusal {
   // Policy: why this turn may not run. The plugin maps it to an InferResult.
-  reason: 'rate-limited' | 'usage-exhausted' | 'budget';
+  reason: 'rate-limited' | 'usage-exhausted' | 'budget-exhausted';
   retryAfterMs?: number;
 }
 
@@ -315,7 +317,7 @@ type InferResult =
   | { type: 'limit-exceeded'; which: 'wall-clock' | 'output-bytes' | 'max-turns' }
   | { type: 'cancelled' }
   | { type: 'needs-containment' }
-  | { type: 'unavailable'; reason: string };
+  | { type: 'unavailable'; detail: string };
 ```
 
 The shape above is TypeScript for brevity; the Endo package expresses it as a
@@ -325,24 +327,27 @@ What changed from [endo-claude](endo-claude.md) Design Decision 8's taxonomy, an
 why:
 
 - `bridge-down`, `facet-threw`, `nonzero-exit`, and `parse-error` collapse into
-  `unavailable` with a `reason`. None of the four prototypes emitted them
-  separately; each reports these faults as `unavailable` with a reason, and no
-  caller needed to branch on the difference.
+  `unavailable` with a free-text `detail`. None of the four prototypes emitted
+  them separately; each reports these faults as `unavailable` with a message,
+  and no caller needed to branch on the difference. The field is `detail`, not
+  `reason`, because `reason` on `AdmissionRefusal` is a closed enum a caller
+  may switch on, and `detail` is display text only.
 - `needs-auth` and `usage-exhausted` are separate tags because #96/#119 showed the
   distinction drives different human escalations (reauthenticate versus wait or
   pay).
 - `needs-auth` is emitted **only** from a response shape pinned to the running CLI
   version (#119's `classifyProviderResponse`), by the plugin's call into the
   classifier library while the raw response is still in hand. No enricher
-  parses `unavailable.reason`. An unrecognized failure is
+  parses `unavailable.detail`. An unrecognized failure is
   `unavailable`, never `needs-auth`, so a CLI upgrade that changes the error wire
   cannot trigger a false reauthentication storm.
 - `budget-exhausted` comes from the Codex API-key track (#115), where a broker
   refuses a lease before any request. The broker does not write that tag: it
-  refuses with an `AdmissionRefusal` whose reason is `budget`, and the plugin
-  maps the three admission reasons, `rate-limited`, `usage-exhausted`, and
-  `budget`, to the three top-level tags `rate-limited`, `usage-exhausted`, and
-  `budget-exhausted`, each carrying the refusal's `retryAfterMs`. It is not a
+  refuses with an `AdmissionRefusal` whose reason is `budget-exhausted`, and
+  the plugin passes the three admission reasons, `rate-limited`,
+  `usage-exhausted`, and `budget-exhausted`, through unchanged as the
+  top-level tags of the same names, each carrying the refusal's
+  `retryAfterMs`. It is not a
   `limit-exceeded` arm, because `limit-exceeded` reports a per-turn
   `InferLimits` ceiling reached while the turn ran, and a budget refusal
   happens before any process starts. The plugin stays the only classifier of
@@ -352,7 +357,7 @@ why:
   guest-influenced, unlabeled, or unknown-origin request that reached an
   unsliced backend. Under Decision 9's routing that request should never have
   reached one, so the tag reports a factory defect; it is a separate tag so the
-  defect is visible and not buried in `unavailable.reason`.
+  defect is visible and not buried in `unavailable.detail`.
 - Every "come back later" tag spells its timing the same way: an optional
   `retryAfterMs`, relative to classification time. `rate-limited`,
   `usage-exhausted`, and `budget-exhausted` carry it when the broker or
@@ -401,9 +406,17 @@ hold: the root user's agents hold a backend made over kriscendobot's
 subscription; a guest that brings its own subscription or API key holds a
 backend made over its own. Nothing in a request can name another principal's
 credential, and a guest cannot widen its reach by guessing a credential
-identifier, because there is none to guess. This also makes Decision 7's
-(admission) unit exact: one inference slot per credential is one slot per backend
-instance's credential source.
+identifier, because there is none to guess.
+
+The admission unit is the `CredentialSource`, not the backend instance.
+Several backend instances may be made over one credential (Decision 9 holds a
+sliced and an unsliced backend over the root's), and when they are, the
+deployment makes them over **one shared** `CredentialSource` object, never
+two sources over the same secret. Every such backend then serializes through
+the same `acquire()`/`release()`, so Decision 7's one inference slot per
+credential holds across all of them, and gate 7 checks it. The rule in the
+other direction is unchanged: a backend never holds more than one
+`CredentialSource`.
 
 ## Ownership Map
 
@@ -556,10 +569,25 @@ for designs that span several owners:
      isn't used … and the subscription's usage limits don't apply", with the
      traffic "billed per token to whoever owns the credential the gateway
      forwards" ([Other LLM gateways](https://code.claude.com/docs/en/llm-gateway)).
-     That text is keyed on the variable being populated, not on whose bytes
-     populate it. The 2026-09-28 probe populated exactly that variable
-     (`ANTHROPIC_AUTH_TOKEN`) with a subscription token, so it is inside the
-     documented case, not outside it.
+     The same section scopes the trigger to the credential variable and
+     separately to the base URL: "`ANTHROPIC_BASE_URL` is the variable that
+     points Claude Code at the gateway. Setting only that variable, without a
+     gateway credential, doesn't replace the subscription." The connection
+     guide names `ANTHROPIC_AUTH_TOKEN` as a gateway credential variable and
+     says "a gateway credential variable takes precedence over a saved
+     claude.ai login … With `ANTHROPIC_AUTH_TOKEN`, the variable takes
+     precedence immediately"
+     ([Connect to a gateway](https://code.claude.com/docs/en/llm-gateway-connect#conflicts-with-an-existing-login)).
+     So the caveat turns on the credential variable being set, and the base
+     URL alone does not trigger it. The 2026-09-28 probe populated exactly that
+     variable (`ANTHROPIC_AUTH_TOKEN`) with a subscription token, so it is
+     inside the documented case, not outside it. What the text does not
+     address is the probe's exact combination, a subscription token in the
+     variable with the default Anthropic base URL; the billing sentence names
+     "the credential the gateway forwards" and no gateway was in the path.
+     That combination is therefore undocumented rather than documented either
+     way, which is why gate 1 measures where the usage lands instead of
+     assuming it.
    - "Nothing documents a gateway holding [a `setup-token`] and presenting it
      upstream on a user's behalf." A broker that did so relies on undocumented
      behavior.
@@ -612,7 +640,7 @@ for designs that span several owners:
    inference-slot lease (atomic acquire, expiry as free, sweep). **Settled:**
    the plugin calls its `CredentialSource.acquire()` before spawning and
    releases the grant on every terminal result. A refusal is an
-   `AdmissionRefusal` (`rate-limited`, `usage-exhausted`, or `budget`) delivered
+   `AdmissionRefusal` (`rate-limited`, `usage-exhausted`, or `budget-exhausted`) delivered
    before any process starts, and the plugin maps it to the matching
    `InferResult` tag. The policy lives in the broker (or in
    #87's slot lease during the interim delivery), so it is written once, not
@@ -657,7 +685,7 @@ for designs that span several owners:
    and guests bringing their own subscription or API key makes a deployment
    multi-principal by definition. The maintainer asked whether the slice is
    optional given that Claude Code stores credentials in the user's home
-   directory. The honest assessment has two halves.
+   directory. The honest assessment has three parts.
 
    *The on-disk credential store does not force the slice.* Under `--bare` the
    binary never reads the stored login (`~/.claude/.credentials.json`) or the
@@ -713,6 +741,10 @@ for designs that span several owners:
      an unsliced root backend, reachable only from the root operator's
      direct-prompt path, and a sliced backend for every other path (a
      delegated request, an inbox message, a guest argument, a tool result).
+     Both are made over the one `CredentialSource` for the root's credential
+     (§ One backend instance per credential), so a root-authored turn and a
+     delegated turn contend for the same admission slot rather than running
+     at once on one subscription.
      Until phase 6 supplies the sliced backend, those other paths hold none
      and cannot infer. A path that includes guest text therefore never holds
      the unsliced backend, whatever it would label its request.
@@ -789,8 +821,12 @@ unsliced root backend (Decision 9).
    2026-09-28 probe's malformed `ANTHROPIC_API_KEY` row hung until an external
    120 s timeout killed it rather than failing fast. The canary confirms that
    the backend's own wall-clock limit, not a probe script's timeout, ends such a
-   turn as `limit-exceeded: wall-clock`. Until the table exists, `needs-auth` is
-   never inferred.
+   turn as `limit-exceeded: wall-clock`. A fifth shape exercises the faults
+   folded into `unavailable` (§ The Inference Seam): one turn each whose
+   process is killed mid-stream, exits nonzero, and emits malformed
+   stream-json output, each observed to classify as `unavailable` with a
+   `detail`, never as `needs-auth` or a silent `ok`. Until the table exists,
+   `needs-auth` is never inferred.
 4. **Environment residual.** The confined process's `/proc/<pid>/environ` holds
    no credential, only a lease token, when the target delivery of Decision 5 is
    used.
@@ -811,7 +847,10 @@ unsliced root backend (Decision 9).
    slice, neither turn's process can read the other's environment, config
    directory, or listener. On one credential, a second concurrent `acquire()`
    while the first grant is held is refused (Decision 7's one slot per
-   credential), and succeeds once the first grant is released.
+   credential), and succeeds once the first grant is released. The same holds
+   across backend instances: with the unsliced and sliced root backends of
+   Decision 9 made over the one shared `CredentialSource`, a turn on each
+   issued concurrently is admitted one at a time, never both at once.
 8. **Containment routing, end to end.** Negative: a real guest-influenced
    input (an inbox message through the inbox-watch driver, a guest's delegated
    request, a guest-supplied argument, and a tool result carrying guest text)
