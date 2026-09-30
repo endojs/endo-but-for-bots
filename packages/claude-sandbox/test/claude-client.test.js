@@ -9,6 +9,8 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 // Internal test harness, deliberately not a runtime package export.
 // eslint-disable-next-line import/no-relative-packages
 import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
+// eslint-disable-next-line import/no-relative-packages
+import { exerciseFailedTurnSuccessor } from '../../hosted-agent/test/failed-turn-conformance.js';
 
 import {
   makeClaudeClient,
@@ -660,6 +662,69 @@ test('incomplete failed native result with zero exit does not certify context', 
   t.false(events.some(event => event.type === 'endo_native_context'));
   t.true(events.some(event => event.type === 'result' && event.is_error));
   t.is(fake.spawned.length, 1);
+});
+
+test('a confirmed failed turn restores supplied context for its successful successor', async t => {
+  const first = nativeWire('first');
+  first.raw.at(-1).is_error = true;
+  first.raw.at(-1).subtype = 'error_max_turns';
+  const second = nativeWire('second');
+  const prefix = first.captured.nativeContext.transcript;
+  const receipt = harden({
+    payload: prefix,
+    sessionId: restoredUuid,
+    leafUuid: first.rows.at(-1).uuid,
+    prefixSha256: sha256(prefix),
+  });
+  second.rows[0].uuid = '00000000-0000-4000-8000-000000000020';
+  second.rows[0].parentUuid = receipt.leafUuid;
+  second.rows[1].uuid = '00000000-0000-4000-8000-000000000021';
+  second.rows[1].parentUuid = second.rows[0].uuid;
+  second.raw.find(event => event.type === 'assistant').uuid =
+    second.rows[1].uuid;
+  second.captured.nativeContext.transcript =
+    prefix + second.rows.map(row => `${JSON.stringify(row)}\n`).join('');
+  const fake = makeFakeSlice([
+    first.raw.map(jsonBytes),
+    [jsonBytes(first.captured)],
+    second.raw.map(jsonBytes),
+    [jsonBytes(second.captured)],
+  ]);
+  const restored = [];
+  const client = makeClaudeClient(
+    baseArgs(fake, makeFakeMount(), {
+      restoreTranscript: async records => {
+        restored.push(records);
+        return receipt;
+      },
+      makeStderrIterable: () => bytesIterable([]),
+    }),
+  );
+  t.teardown(() => client.terminate());
+  await exerciseFailedTurnSuccessor(t, {
+    fail: async () => {
+      const reader = await client.send('first');
+      const events = await drain(reader);
+      t.regex(events.at(-1).reason, /reported a failed turn/);
+      t.true(events.some(event => event.type === 'endo_native_context'));
+      return events;
+    },
+    succeed: async () => {
+      const reader = await client.send('second', {
+        transcript: continuedTranscript,
+      });
+      return drain(reader);
+    },
+    admitted: () =>
+      fake.spawned
+        .filter(proc => proc.argv[0] !== 'node')
+        .map(proc => proc.argv[2]),
+  });
+  t.deepEqual(restored, [continuedTranscript]);
+  const resumed = fake.spawned.filter(proc => proc.argv[0] !== 'node')[1];
+  t.true(resumed.argv.includes('--resume'));
+  t.true(resumed.argv.includes(restoredUuid));
+  t.false(resumed.argv.includes('--continue'));
 });
 
 for (const exitCode of [0, 1, 7]) {

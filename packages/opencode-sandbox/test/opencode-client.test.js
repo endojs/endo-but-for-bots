@@ -6,6 +6,8 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 // Internal test harness, deliberately not a runtime package export.
 // eslint-disable-next-line import/no-relative-packages
 import { exercisePromptCancellation } from '../../hosted-agent/test/prompt-cancellation-conformance.js';
+// eslint-disable-next-line import/no-relative-packages
+import { exerciseFailedTurnSuccessor } from '../../hosted-agent/test/failed-turn-conformance.js';
 
 import { makeOpencodeClient } from '../src/opencode-client.js';
 
@@ -267,6 +269,40 @@ test('concurrent sends queue and serialize with one terminal each', async t => {
   const eventsB = await drain(readerB);
   t.deepEqual(eventsA, [{ type: 'phase', phase: 'busy' }, { type: 'end' }]);
   t.deepEqual(eventsB, [{ type: 'text-delta', text: 'two' }, { type: 'end' }]);
+});
+
+test('a confirmed failed turn retains its native session for a successful successor', async t => {
+  const bridge = makeFakeBridge();
+  const fake = makeFakeSlice(bridge);
+  const client = makeOpencodeClient(baseArgs(fake));
+  t.teardown(() => client.terminate());
+  bridge.push(readyLine('ses_1'));
+  await exerciseFailedTurnSuccessor(t, {
+    fail: async () => {
+      const reader = await client.send('first');
+      await waitFor(() => bridge.commands.length === 1);
+      bridge.push(
+        JSON.stringify({ type: 'abort', reason: 'provider refused' }),
+      );
+      const events = await drain(reader);
+      t.is(events.at(-1).reason, 'provider refused');
+      return events;
+    },
+    succeed: async () => {
+      const reader = await client.send('second');
+      await waitFor(() => bridge.commands.length === 2);
+      bridge.push(JSON.stringify({ type: 'text-delta', text: 'Succeeded.' }));
+      bridge.push(JSON.stringify({ type: 'end' }));
+      return drain(reader);
+    },
+    admitted: () => bridge.commands.map(text => JSON.parse(text).text),
+  });
+  t.is(fake.spawnCalls.length, 1);
+  t.is((await client.status()).opencodeSessionId, 'ses_1');
+  t.deepEqual(
+    bridge.commands.map(text => JSON.parse(text).op),
+    ['send', 'send'],
+  );
 });
 
 test('interrupt writes the command and is a terminal barrier', async t => {
