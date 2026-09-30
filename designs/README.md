@@ -183,7 +183,9 @@ neither package ever touches a token; first concrete instance of the
 M7 OAuth-integration pattern and a template for Gmail / Calendar
 siblings),
 [sturdy-refs-endor-syscall](sturdy-refs-endor-syscall.md) (added
-2026-06-23; design 2 of 2 in a competing pair addressing the
+2026-06-23; its SturdyRef representation is superseded by the layering stack
+starting at [sturdyref-shim-contract](sturdyref-shim-contract.md), while its
+retention design remains input to the daemon layer; design 2 of 2 in a competing pair addressing the
 maintainer's directive on PR #500 to land SturdyRefs in
 `@endo/pass-style` and thread them through the daemon's
 pet-name-path surface; this design rejects worker-local SturdyRef

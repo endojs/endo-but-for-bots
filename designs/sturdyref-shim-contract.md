@@ -88,7 +88,7 @@ const live = await SturdyRef.enliven(ref); // the value connectAndFetch resolved
   `handler.enliven` once, at construction (*provisional*, Open question 3:
   read once or on every call). That protects only the dispatch target. The
   constructor does not harden or freeze the handler (*provisional*, Open
-  question 4: harden the handler or not), so state the hook reads through
+  question 4: harden the handler or not), so any state the hook reads through
   `this` or its closure stays mutable and is the handler author's to protect.
   A handler that keeps mutable state on `this` works; a handler that needs
   stability hardens itself. It returns a fresh object that is frozen and has no own properties. The
@@ -181,7 +181,7 @@ first-wins mechanics:
 - The shim wants its constructor, prototype, and statics tamper-proof as soon
   as they are installed, because every ref in the realm trusts them, and
   after `lockdown` that means `harden`. Before `lockdown`, though, the shim
-  must not call `@endo/harden`: that installs `Object[@harden]`, and
+  must not call `@endo/harden`: that installs `Object[Symbol.for('harden')]`, and
   `lockdown` then throws "Cannot lockdown (repairIntrinsics) if a prior harden
   implementation has been used and installed".
 - So the shim hardens with `@endo/harden` only when a harden is already
@@ -220,7 +220,7 @@ Minter provenance is therefore not a layer-1 property, and layer 1 does not
 claim it. It belongs to the layer that accepts refs across a trust boundary.
 Layer 5 owns it for CapTP: a CapTP serializes or enlivens on a peer's behalf
 only refs it finds in its own side table (see
-[Forward sketch](#forward-sketch-layers-35-no-implementation)), which is a
+[Forward Sketch](#forward-sketch-layers-35-no-implementation)), which is a
 provenance check, not a brand check. Layer 8 owns it for the daemon. Until
 those layers exist, the rule for callers is plain: enlivening a ref runs its
 minter's code, so enliven only refs from a source you would let run code in
@@ -293,6 +293,31 @@ here so that none of them is lost or silently reintroduced:
   belongs to the handler, which can reject. The identity of an enlivened
   presence belongs to the handler or CapTP, which can memoize. Persistence
   belongs to layers 5–8.
+
+### Relation to the `sturdy-refs-endor-syscall` Design
+
+[`sturdy-refs-endor-syscall.md`](sturdy-refs-endor-syscall.md) is the
+earlier SturdyRef design, built on #521's `sturdyref` pass-style. Its
+central correction still holds here: a SturdyRef is not a presence, is not
+registered with `HandledPromise`, and `E(ref).foo()` is not a valid
+operation. The bearer enlivens the ref first and sends to the result.
+`SturdyRef.enliven(ref)` is the layer-1 counterpart of that design's
+`enlivenSturdyRef(sturdyRef)`. The "`enliven` message" above means exactly
+this call-through to the handler's hook; `@endo/eventual-send` is unchanged.
+
+The two designs differ on what the ref *is*:
+
+- **Representation: superseded.** That design makes a SturdyRef a
+  pass-by-copy data box carrying `(location, secret)`. Here the ref carries
+  nothing; its content lives with the handler, and whether and how it
+  passes is decided by layers 3 and 4. Once those layers land, the data-box
+  representation is retired along with `@endo/ocapn`'s tagged record.
+- **Retention: still live, and not decided here.** That design's
+  worker-side `retain` / `release` syscalls and daemon-side retention table
+  concern the daemon, and layer 8 inherits them as input. Layer 1 takes no
+  position on them.
+
+The roadmap entry for `sturdy-refs-endor-syscall` links here.
 
 ### Ownership Map
 
