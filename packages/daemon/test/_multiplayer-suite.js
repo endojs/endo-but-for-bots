@@ -204,7 +204,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host, config } = await prepareHostWithGcAndNetwork(t);
 
       // Create a guest.
-      await E(host).provideGuest(['my-guest'], { agentName: 'my-agent' });
+      await E(host).provideGuest(['my-guest'], { agentName: ['my-agent'] });
 
       // Verify the guest formula exists.
       const guestId = await E(host).identify('my-agent');
@@ -407,7 +407,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
 
     // The inviter is a guest on A, driven only through its guest facet.
     const guestA = await E(hostA).provideGuest(['guest-handle'], {
-      agentName: 'guest-agent',
+      agentName: ['guest-agent'],
     });
 
     // Guest-safety: the guest can invite but holds no network administration.
@@ -528,10 +528,10 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostB } = await prepareHostWithGcAndNetwork(t);
 
       const guestA = await E(hostA).provideGuest(['guest-a-handle'], {
-        agentName: 'guest-a-agent',
+        agentName: ['guest-a-agent'],
       });
       const guestB = await E(hostB).provideGuest(['guest-b-handle'], {
-        agentName: 'guest-b-agent',
+        agentName: ['guest-b-agent'],
       });
 
       // Populate the acceptor guest's `@nets` so the inviter's daemon can dial
@@ -741,10 +741,10 @@ export const runMultiplayerSuite = ({ test, network }) => {
     async t => {
       const { host } = await prepareHostWithGcAndNetwork(t);
       const guestA = await E(host).provideGuest(['guest-a-handle'], {
-        agentName: 'guest-a-agent',
+        agentName: ['guest-a-agent'],
       });
       const guestB = await E(host).provideGuest(['guest-b-handle'], {
-        agentName: 'guest-b-agent',
+        agentName: ['guest-b-agent'],
       });
 
       // Give the accepting guest a reachable `@nets` so its handle locator
@@ -794,7 +794,7 @@ export const runMultiplayerSuite = ({ test, network }) => {
       const { host: hostC } = await prepareHostWithGcAndNetwork(t);
 
       const guestA = await E(hostA).provideGuest(['guest-handle'], {
-        agentName: 'guest-agent',
+        agentName: ['guest-agent'],
       });
 
       // Two independent pending invitations from the same guest.

@@ -170,7 +170,7 @@ test.serial(
     // 1. Create a persona (like the UI does when creating a channel space)
     const spaceName = 'smoke-space';
     const agentName = `persona-for-${spaceName}`;
-    await E(host).provideHost([spaceName], { agentName });
+    await E(host).provideHost([spaceName], { agentName: [agentName] });
     const personaPowers = await E(host).lookup([agentName]);
 
     // 2. Create a channel within the persona
@@ -734,14 +734,14 @@ test.serial(
 
     // 1. Admin creates a channel (like creating a channel space in the UI)
     const adminAgentName = 'persona-admin-ui';
-    await E(host).provideHost(['admin-space'], { agentName: adminAgentName });
+    await E(host).provideHost(['admin-space'], { agentName: [adminAgentName] });
     const adminPowers = await E(host).lookup([adminAgentName]);
     await E(adminPowers).makeChannel(['general'], 'AdminAlice');
     await E(adminPowers).lookup(['general']);
 
     // 2. Non-admin persona connects to the channel (like the UI's channel switch flow)
     const bobAgentName = 'persona-bob-ui';
-    await E(host).provideHost(['bob-space'], { agentName: bobAgentName });
+    await E(host).provideHost(['bob-space'], { agentName: [bobAgentName] });
     const bobPowers = await E(host).lookup([bobAgentName]);
     const channelId = await E(host).identify(adminAgentName, 'general');
     await E(bobPowers).storeIdentifier(['channel'], channelId);
@@ -791,7 +791,7 @@ test.serial(
 
     // Admin flow: channel ref used directly (not via join)
     const agentName = 'persona-admin-direct';
-    await E(host).provideHost(['admin-space'], { agentName });
+    await E(host).provideHost(['admin-space'], { agentName: [agentName] });
     const powers = await E(host).lookup([agentName]);
     await E(powers).makeChannel(['general'], 'Alice');
     const channel = await E(powers).lookup(['general']);
@@ -836,7 +836,7 @@ test.serial(
 
     // --- Admin creates a channel inside a persona ---
     const adminAgentName = 'persona-for-admin-space';
-    await E(host).provideHost(['admin-space'], { agentName: adminAgentName });
+    await E(host).provideHost(['admin-space'], { agentName: [adminAgentName] });
     const adminPowers = await E(host).lookup([adminAgentName]);
 
     // Create channel inside admin's persona
@@ -931,7 +931,7 @@ test.serial(
 
     // --- Admin persona creates a channel ---
     const adminAgentName = 'persona-for-admin';
-    await E(host).provideHost(['admin-space'], { agentName: adminAgentName });
+    await E(host).provideHost(['admin-space'], { agentName: [adminAgentName] });
     const adminPowers = await E(host).lookup([adminAgentName]);
 
     await E(adminPowers).makeChannel(['channel'], 'AdminAlice');
@@ -940,7 +940,7 @@ test.serial(
 
     // --- Bob's persona receives the channel formula ID ---
     const bobAgentName = 'persona-for-bob';
-    await E(host).provideHost(['bob-space'], { agentName: bobAgentName });
+    await E(host).provideHost(['bob-space'], { agentName: [bobAgentName] });
     const bobPowers = await E(host).lookup([bobAgentName]);
 
     // Write the channel formula ID into Bob's pet store
@@ -1299,7 +1299,7 @@ test.serial(
 
     // Create a persona host
     const agentName = 'persona-multi';
-    await E(host).provideHost(['multi-space'], { agentName });
+    await E(host).provideHost(['multi-space'], { agentName: [agentName] });
     const personaPowers = await E(host).lookup([agentName]);
 
     // Create two channels inside the persona
@@ -1333,14 +1333,14 @@ test.serial(
 
     // Admin creates a channel
     const adminAgentName = 'persona-admin';
-    await E(host).provideHost(['admin-space'], { agentName: adminAgentName });
+    await E(host).provideHost(['admin-space'], { agentName: [adminAgentName] });
     const adminPowers = await E(host).lookup([adminAgentName]);
     await E(adminPowers).makeChannel(['channel'], 'AdminAlice');
     const adminChannel = await E(adminPowers).lookup(['channel']);
 
     // Persona A creates a host, writes channel formula ID, joins as "Alice"
     const aliceAgentName = 'persona-alice';
-    await E(host).provideHost(['alice-space'], { agentName: aliceAgentName });
+    await E(host).provideHost(['alice-space'], { agentName: [aliceAgentName] });
     const alicePowers = await E(host).lookup([aliceAgentName]);
 
     const channelId = await E(host).identify(adminAgentName, 'channel');
@@ -1351,7 +1351,7 @@ test.serial(
 
     // Persona B creates a separate host, writes same formula ID, joins as "Bob"
     const bobAgentName = 'persona-bob';
-    await E(host).provideHost(['bob-space'], { agentName: bobAgentName });
+    await E(host).provideHost(['bob-space'], { agentName: [bobAgentName] });
     const bobPowers = await E(host).lookup([bobAgentName]);
 
     await E(bobPowers).storeIdentifier(['channel'], channelId);
@@ -1391,7 +1391,7 @@ test.serial('channel - channel enumeration within a persona', async t => {
 
   // Create persona host, create 3 channels
   const agentName = 'persona-enum';
-  await E(host).provideHost(['enum-space'], { agentName });
+  await E(host).provideHost(['enum-space'], { agentName: [agentName] });
   /** @type {ERef<EndoHost>} */
   const personaPowers = await E(host).lookup([agentName]);
 
@@ -1729,7 +1729,7 @@ test.serial(
     const displayNameA = 'Alice';
 
     // Step 1: Create persona (host)
-    await E(host).provideHost([spaceNameA], { agentName: agentNameA });
+    await E(host).provideHost([spaceNameA], { agentName: [agentNameA] });
 
     // Step 2: Get the persona's powers (what the UI navigates into)
     const personaPowersA = await E(host).lookup([agentNameA]);
@@ -1742,7 +1742,7 @@ test.serial(
     const agentNameB = `persona-for-${spaceNameB}`;
     const displayNameB = 'Bob';
 
-    await E(host).provideHost([spaceNameB], { agentName: agentNameB });
+    await E(host).provideHost([spaceNameB], { agentName: [agentNameB] });
     const personaPowersB = await E(host).lookup([agentNameB]);
     await E(personaPowersB).makeChannel(['general'], displayNameB);
 
@@ -1801,7 +1801,9 @@ test.serial(
     const adminAgentName = `persona-for-${adminSpaceName}`;
     const adminDisplayName = 'AdminAlice';
 
-    await E(host).provideHost([adminSpaceName], { agentName: adminAgentName });
+    await E(host).provideHost([adminSpaceName], {
+      agentName: [adminAgentName],
+    });
     const adminPowers = await E(host).lookup([adminAgentName]);
     await E(adminPowers).makeChannel(['general'], adminDisplayName);
     const adminChannel = await E(adminPowers).lookup(['general']);
@@ -1817,7 +1819,7 @@ test.serial(
 
     // Step 1: Create new persona for the joiner
     await E(host).provideHost([joinerSpaceName], {
-      agentName: joinerAgentName,
+      agentName: [joinerAgentName],
     });
     const joinerPowers = await E(host).lookup([joinerAgentName]);
 
@@ -1901,7 +1903,7 @@ test.serial(
     const agentName = `persona-for-${spaceName}`;
 
     // First call: creates the agent
-    await E(host).provideHost([spaceName], { agentName });
+    await E(host).provideHost([spaceName], { agentName: [agentName] });
     const powersFirst = await E(host).lookup([agentName]);
     const agentIdFirst = await E(host).identify(agentName);
 
@@ -1909,7 +1911,7 @@ test.serial(
     await E(powersFirst).makeChannel(['general'], 'Alice');
 
     // Second call with same spaceName: should return SAME agent (not create new)
-    await E(host).provideHost([spaceName], { agentName });
+    await E(host).provideHost([spaceName], { agentName: [agentName] });
     const powersSecond = await E(host).lookup([agentName]);
     const agentIdSecond = await E(host).identify(agentName);
 
@@ -1938,7 +1940,7 @@ test.serial(
     const agentName = `persona-for-${spaceName}`;
     const displayName = 'Alice';
 
-    await E(host).provideHost([spaceName], { agentName });
+    await E(host).provideHost([spaceName], { agentName: [agentName] });
     const personaPowers = await E(host).lookup([agentName]);
     await E(personaPowers).makeChannel(['general'], displayName);
 
@@ -1968,7 +1970,7 @@ test.serial(
     await E(host).remove(agentName);
 
     // === Step 3: Recreate with the same name ===
-    await E(host).provideHost([spaceName], { agentName });
+    await E(host).provideHost([spaceName], { agentName: [agentName] });
     const newPowers = await E(host).lookup([agentName]);
     const agentIdAfter = await E(host).identify(agentName);
 
@@ -2010,7 +2012,7 @@ test.serial(
     const agentName = `persona-for-${spaceName}`;
 
     // === Create first space, invite a member, post messages ===
-    await E(host).provideHost([spaceName], { agentName });
+    await E(host).provideHost([spaceName], { agentName: [agentName] });
     const powers1 = await E(host).lookup([agentName]);
     await E(powers1).makeChannel(['general'], 'Alice');
     const channel1 = await E(powers1).lookup(['general']);
@@ -2031,7 +2033,7 @@ test.serial(
     await E(host).remove(agentName);
 
     // === Recreate with the same name ===
-    await E(host).provideHost([spaceName], { agentName });
+    await E(host).provideHost([spaceName], { agentName: [agentName] });
     const powers2 = await E(host).lookup([agentName]);
     const petStore2Id = await E(host).identify(agentName);
 
@@ -2067,7 +2069,7 @@ test.serial(
     const spaceName = 'general';
     const agentName = `persona-for-${spaceName}`;
 
-    await E(host).provideHost([spaceName], { agentName });
+    await E(host).provideHost([spaceName], { agentName: [agentName] });
     const personaPowers = await E(host).lookup([agentName]);
     await E(personaPowers).makeChannel(['general'], 'Alice');
 
@@ -2082,7 +2084,7 @@ test.serial(
     // since we're testing the root pet store behavior.)
 
     // === Recreate WITHOUT cleaning up handle/agent ===
-    await E(host).provideHost([spaceName], { agentName });
+    await E(host).provideHost([spaceName], { agentName: [agentName] });
     const sameAgentId = await E(host).identify(agentName);
 
     // BUG: Same agent, same channels, same messages

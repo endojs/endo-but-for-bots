@@ -43,7 +43,7 @@ test.serial(
     const host = await connect();
     await E(host).storeValue(10, ['ten']);
     const guest = await E(host).provideGuest(['guest'], {
-      agentName: 'guest-powers',
+      agentName: ['guest-powers'],
     });
     const messages = iterateReader(E(guest).followMessages());
     E.sendOnly(guest).request(['@host'], 'need a number');

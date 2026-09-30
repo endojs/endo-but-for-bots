@@ -269,7 +269,11 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     env.SANDBOX_NAMESPACE || process.env.SANDBOX_NAMESPACE || '';
   /** @param {string} name @returns {string | string[]} */
   const underNamespace = name =>
-    sandboxNamespace ? [sandboxNamespace, name] : name;
+    sandboxNamespace ? [sandboxNamespace, name] : [name];
+  // A lone name becomes a one-segment path; a path passes through. Strings
+  // are never split on a delimiter.
+  /** @param {string | string[]} name */
+  const toPath = name => (typeof name === 'string' ? [name] : name);
   const backend =
     env.CLAUDE_SANDBOX_BACKEND ||
     process.env.CLAUDE_SANDBOX_BACKEND ||
@@ -398,14 +402,14 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       toCleanup = [powersName, ...removeNames];
       const codeNames = ['agent', 'sandboxFactory', 'fsMounter', 'filesystem'];
       const petNames = [
-        '@agent',
+        ['@agent'],
         underNamespace(sandboxFactoryName),
         underNamespace(fsMounterName),
-        filesystemName,
+        toPath(filesystemName),
       ];
       if (credentialsName) {
         codeNames.push('credentials');
-        petNames.push(credentialsName);
+        petNames.push(toPath(credentialsName));
       }
       await E(hostAgent).evaluate(
         ['@main'],
@@ -437,7 +441,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         }),
       };
       if (resultName !== undefined) {
-        options.resultName = resultName;
+        options.resultName = toPath(resultName);
       }
       const client = await E(hostAgent).makeUnconfined(
         ['@main'],
@@ -453,7 +457,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       // `remove` must not turn a completed session into a reported failure
       // (which would strand a live orphan behind an error reply) — hence
       // `allSettled`, matching the catch path below.
-      await Promise.allSettled(toCleanup.map(n => E(hostAgent).remove(n)));
+      await Promise.allSettled(
+        toCleanup.map(n => E(hostAgent).remove(...toPath(n))),
+      );
 
       return harden({
         client,
@@ -462,7 +468,9 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         rootfsLabel: rootfsLabel(parsedRootfs),
       });
     } catch (error) {
-      await Promise.allSettled(toCleanup.map(n => E(hostAgent).remove(n)));
+      await Promise.allSettled(
+        toCleanup.map(n => E(hostAgent).remove(...toPath(n))),
+      );
       throw error;
     }
   };
@@ -498,12 +506,12 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
     const removeNames = [];
     try {
       // adopt = thisDiesIfThatDies import edge + a host name the powers endow.
-      await E(hostAgent).adopt(msg.number, 'filesystem', fsTmp);
+      await E(hostAgent).adopt(msg.number, 'filesystem', [fsTmp]);
       removeNames.push(fsTmp);
       let credentialsName = null;
       if (Array.isArray(msg.names) && msg.names.includes('credentials')) {
         const credTmp = `${tag}-credcap`;
-        await E(hostAgent).adopt(msg.number, 'credentials', credTmp);
+        await E(hostAgent).adopt(msg.number, 'credentials', [credTmp]);
         removeNames.push(credTmp);
         credentialsName = credTmp;
       }

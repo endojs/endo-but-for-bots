@@ -501,7 +501,7 @@ export const makePetstoreAuditJournal = (
     if (await E(powers).has(name)) {
       throw makeError(X`audit journal sequence already exists: ${q(name)}`);
     }
-    await E(powers).storeValue(entry, name);
+    await E(powers).storeValue(entry, [name]);
   };
   let anchorBytes = 0;
   const readHead = async () => {
@@ -546,7 +546,7 @@ export const makePetstoreAuditJournal = (
     }
     anchorBytes + headBytes <= maxAnchorBytes ||
       Fail`audit anchor store exceeded ${maxAnchorBytes} bytes`;
-    await E(anchorPowers).storeValue(head, name);
+    await E(anchorPowers).storeValue(head, [name]);
     anchorBytes += headBytes;
   };
   return makeAuditJournal({

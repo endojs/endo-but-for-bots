@@ -365,10 +365,10 @@ test('petstore audit journal survives reconstruction outside the session', async
       async has(name) {
         return valuesMap.has(name);
       },
-      async lookup(name) {
+      async lookup([name]) {
         return valuesMap.get(name);
       },
-      async storeValue(value, name) {
+      async storeValue(value, [name]) {
         if (valuesMap.has(name)) throw Error('already exists');
         valuesMap.set(name, value);
       },
@@ -430,10 +430,10 @@ test('petstore journals do not cross-select overlapping head prefixes', async t 
       async has(name) {
         return valuesMap.has(name);
       },
-      async lookup(name) {
+      async lookup([name]) {
         return valuesMap.get(name);
       },
-      async storeValue(value, name) {
+      async storeValue(value, [name]) {
         if (valuesMap.has(name)) throw Error('already exists');
         valuesMap.set(name, value);
       },
@@ -465,10 +465,10 @@ test('petstore audit journal rejects one capability for entries and heads', t =>
     async has(name) {
       return values.has(name);
     },
-    async lookup(name) {
+    async lookup([name]) {
       return values.get(name);
     },
-    async storeValue(value, name) {
+    async storeValue(value, [name]) {
       values.set(name, value);
     },
   });
@@ -494,10 +494,10 @@ test('petstore anchor storage has an independent durable byte bound', async t =>
       async has(name) {
         return valuesMap.has(name);
       },
-      async lookup(name) {
+      async lookup([name]) {
         return valuesMap.get(name);
       },
-      async storeValue(value, name) {
+      async storeValue(value, [name]) {
         valuesMap.set(name, value);
       },
     });
@@ -526,10 +526,10 @@ test('concurrent readers share one recovery of a prepared append', async t => {
       async has(name) {
         return valuesMap.has(name);
       },
-      async lookup(name) {
+      async lookup([name]) {
         return valuesMap.get(name);
       },
-      async storeValue(value, name) {
+      async storeValue(value, [name]) {
         // The real petstore rejects a duplicate name, which is what turned a
         // doubled replay into a thrown integrity check rather than a silent
         // one.

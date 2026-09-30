@@ -362,7 +362,7 @@ const doMakeArchive = async (host, packageDir, callback) => {
   );
   const archiveReaderRef = bytesReaderFromIterator([archiveBytes]);
 
-  await E(host).storeBlob(archiveReaderRef, archiveName);
+  await E(host).storeBlob(archiveReaderRef, [archiveName]);
   const result = await callback(archiveName);
   await E(host).remove(archiveName);
   return result;
@@ -941,7 +941,7 @@ test('move renames value, for a single guest', async t => {
   const { host } = await prepareHost(t);
 
   const guest = await E(host).provideGuest(['guest'], {
-    agentName: 'guest-agent',
+    agentName: ['guest-agent'],
   });
 
   await E(host).storeValue(10, ['ten']);
@@ -974,8 +974,8 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
   test(`provideAgent gives ${kind} a caller-selected pins directory`, async t => {
     const { host } = await prepareHost(t);
     const pins = await E(host).makeDirectory([`retained-${kind}-pins`]);
-    const agent = await provideAgent(host, kind, {
-      agentName: `${kind}-agent`,
+    const agent = await provideAgent(host, [kind], {
+      agentName: [`${kind}-agent`],
       pins,
     });
 
@@ -995,8 +995,8 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
   test(`provideAgent gives ${kind} a caller-selected networks directory`, async t => {
     const { host } = await prepareHost(t);
     const networks = await E(host).makeDirectory([`delegated-${kind}-nets`]);
-    const agent = await provideAgent(host, kind, {
-      agentName: `${kind}-agent`,
+    const agent = await provideAgent(host, [kind], {
+      agentName: [`${kind}-agent`],
       networks,
     });
 
@@ -1015,7 +1015,7 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
   test(`provideAgent introduces ordinary and special names to ${kind}`, async t => {
     const { host } = await prepareHost(t);
     await E(host).storeValue(10, ['ten']);
-    const agent = await provideAgent(host, kind, {
+    const agent = await provideAgent(host, [kind], {
       introducedNames: {
         ten: 'dix',
         '@pins': 'retained',
@@ -1036,10 +1036,10 @@ test('move moves value, between different guests', async t => {
   const { host } = await prepareHost(t);
 
   const guest1 = await E(host).provideGuest(['guest1'], {
-    agentName: 'guest1-agent',
+    agentName: ['guest1-agent'],
   });
   const guest2 = await E(host).provideGuest(['guest2'], {
-    agentName: 'guest2-agent',
+    agentName: ['guest2-agent'],
   });
 
   await E(host).storeValue(10, ['ten']);
@@ -1250,7 +1250,7 @@ testNeedsNodeWorker(
       const { host } = await makeHost(config, cancelled);
       await E(host).provideWorker(['w1']);
       await E(host).provideGuest(['h1'], {
-        agentName: 'a1',
+        agentName: ['a1'],
       });
 
       const servicePath = path.join(dirname, 'test', 'service.js');
@@ -1315,7 +1315,7 @@ testNeedsNodeWorker('persist confined services and their requests', async t => {
   const requesterFinished = (async () => {
     const { host } = await makeHost(config, cancelled);
     await E(host).provideWorker(['w1']);
-    await E(host).provideGuest(['h1'], { agentName: 'a1' });
+    await E(host).provideGuest(['h1'], { agentName: ['a1'] });
 
     const servicePath = path.join(
       dirname,
@@ -1389,7 +1389,7 @@ const pinGuestResponder = async host => {
   // responder in the very directory reincarnateMailboxPins walks.
   const pins = await E(host).makeDirectory(['responder-pins']);
   const guest = await E(host).provideGuest(['responder'], {
-    agentName: 'responder-agent',
+    agentName: ['responder-agent'],
     pins,
   });
   await E(host).makeUnconfined(['responder-worker'], autoResponderLocation, {
@@ -1544,7 +1544,7 @@ testNeedsNodeWorker(
 test('guest facet receives a message for host', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = E(host).provideGuest(['guest'], { agentName: 'guest-agent' });
+  const guest = E(host).provideGuest(['guest'], { agentName: ['guest-agent'] });
   await E(host).provideWorker(['worker']);
   await E(host).evaluate(['worker'], '10', [], [], ['ten1']);
 
@@ -2658,7 +2658,7 @@ test('facet group (agent + handle) collects atomically', async t => {
   const { host } = await makeHost(config, cancelled);
 
   // Create a guest with both handle and agent names
-  await E(host).provideGuest(['guest-handle'], { agentName: 'guest-agent' });
+  await E(host).provideGuest(['guest-handle'], { agentName: ['guest-agent'] });
 
   // Get IDs for guest and handle
   const guestId = await E(host).identify('guest-agent');
@@ -2897,7 +2897,7 @@ testNeedsNodeWorker('indirect cancellation via caplet', async t => {
   });
 
   await E(host).provideWorker(['w2']);
-  await E(host).provideGuest(['guest'], { agentName: 'guest-agent' });
+  await E(host).provideGuest(['guest'], { agentName: ['guest-agent'] });
   const doublerPath = path.join(dirname, 'test', 'doubler.js');
   const doublerLocation = url.pathToFileURL(doublerPath).href;
   await E(host).makeUnconfined(['w2'], doublerLocation, {
@@ -3167,7 +3167,7 @@ testNeedsNodeWorker('cancel because of requested capability', async t => {
   const { host } = await prepareHost(t);
 
   await E(host).provideWorker(['worker']);
-  await E(host).provideGuest(['guest'], { agentName: 'guest-agent' });
+  await E(host).provideGuest(['guest'], { agentName: ['guest-agent'] });
 
   const messages = iterateReader(E(host).followMessages());
 
@@ -4005,7 +4005,7 @@ testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
   const hostB = await prepareHostWithTestNetwork(t);
 
   const guestA = await E(hostA).provideGuest(['guest-a-handle'], {
-    agentName: 'guest-a',
+    agentName: ['guest-a'],
   });
   const invitation = await E(guestA).invite(['guest-b']);
   const invitationLocator = await E(invitation).locate();
@@ -4055,7 +4055,7 @@ testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
 test('EndoGuest.invite nests the invitation at a directory path', async t => {
   const { host } = await prepareHost(t);
   const guest = await E(host).provideGuest(['guest-handle'], {
-    agentName: 'guest-agent',
+    agentName: ['guest-agent'],
   });
   await E(guest).makeDirectory(['peers']);
   const invitation = await E(guest).invite(['peers', 'bob']);
@@ -4072,10 +4072,10 @@ testNeedsNodeWorker(
     // siblings under a single daemon. No network is required.
     const { host } = await prepareHost(t);
     const guestA = await E(host).provideGuest(['guest-a-handle'], {
-      agentName: 'guest-a',
+      agentName: ['guest-a'],
     });
     const guestB = await E(host).provideGuest(['guest-b-handle'], {
-      agentName: 'guest-b',
+      agentName: ['guest-b'],
     });
 
     const invitation = await E(guestA).invite(['to-b']);
@@ -4162,13 +4162,13 @@ testNeedsNodeWorker(
     // pre-existing correspondent already bound under that name.
     const { host } = await prepareHost(t);
     const guestA = await E(host).provideGuest(['guest-a-handle'], {
-      agentName: 'guest-a',
+      agentName: ['guest-a'],
     });
     const guestB = await E(host).provideGuest(['guest-b-handle'], {
-      agentName: 'guest-b',
+      agentName: ['guest-b'],
     });
     const guestC = await E(host).provideGuest(['guest-c-handle'], {
-      agentName: 'guest-c',
+      agentName: ['guest-c'],
     });
 
     // B binds a genuine correspondent (A's handle) under 'contact'.
@@ -4214,10 +4214,10 @@ testNeedsNodeWorker(
     // remove() arm reddens here.
     const { host } = await prepareHost(t);
     const guestB = await E(host).provideGuest(['guest-b-handle'], {
-      agentName: 'guest-b',
+      agentName: ['guest-b'],
     });
     const guestC = await E(host).provideGuest(['guest-c-handle'], {
-      agentName: 'guest-c',
+      agentName: ['guest-c'],
     });
 
     // Produce a spent invitation from C.
@@ -4268,10 +4268,10 @@ testNeedsNodeWorker(
     // guard on the duplicate-accept outcome; it does not claim to pin the queue.
     const { host } = await prepareHost(t);
     const guestA = await E(host).provideGuest(['guest-a-handle'], {
-      agentName: 'guest-a',
+      agentName: ['guest-a'],
     });
     const guestB = await E(host).provideGuest(['guest-b-handle'], {
-      agentName: 'guest-b',
+      agentName: ['guest-b'],
     });
 
     const invitation = await E(guestA).invite(['to-b']);
@@ -4306,9 +4306,15 @@ testNeedsNodeWorker(
     // A guest that has accepted an invitation can itself invite and accept
     // further guests: "a guest may invite more guests, transitively."
     const { host } = await prepareHost(t);
-    const guestI = await E(host).provideGuest(['i-handle'], { agentName: 'i' });
-    const guestJ = await E(host).provideGuest(['j-handle'], { agentName: 'j' });
-    const guestK = await E(host).provideGuest(['k-handle'], { agentName: 'k' });
+    const guestI = await E(host).provideGuest(['i-handle'], {
+      agentName: ['i'],
+    });
+    const guestJ = await E(host).provideGuest(['j-handle'], {
+      agentName: ['j'],
+    });
+    const guestK = await E(host).provideGuest(['k-handle'], {
+      agentName: ['k'],
+    });
 
     const invIJ = await E(guestI).invite(['j']);
     await E(guestJ).accept(await E(invIJ).locate(), ['i']);
@@ -5666,7 +5672,7 @@ test('locateContent resolves a readable-tree to an xt-only magnet URN', async t 
 test('a guest carries the content-locate family', async t => {
   const { host } = await prepareHost(t);
   const guest = await E(host).provideGuest(['guest'], {
-    agentName: 'guest-agent',
+    agentName: ['guest-agent'],
   });
   const readerRef = bytesReaderFromIterator([encodeUtf8('guest blob\n')]);
   await E(host).storeBlob(readerRef, ['guest-blob']);
@@ -7454,7 +7460,7 @@ test('provideHostPath is an EndoHost-only capability not reachable through an En
   // that should not learn host filesystem paths receives a guest, not
   // an EndoHost; this is the attenuation the platform relies on.
   const guest = await E(host).provideGuest(['danger-guest'], {
-    agentName: 'danger-guest-agent',
+    agentName: ['danger-guest-agent'],
   });
   // eslint-disable-next-line no-underscore-dangle
   const guestMethods = await E(guest).__getMethodNames__();

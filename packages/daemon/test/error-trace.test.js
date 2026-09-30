@@ -232,7 +232,7 @@ test.serial('lookup of unknown errorId returns undefined', async t => {
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
   const traces = await E(E(host).diagnostics()).traces();
-  const result = await E(traces).lookup(['error:nope#999']);
+  const result = await E(traces).lookup('error:nope#999');
   t.is(result, undefined);
 });
 

@@ -67,7 +67,7 @@ const makeMockPowers = () => {
         number: formMessageNumber,
       });
     },
-    async lookup(name) {
+    async lookup([name]) {
       if (name === 'host-agent') return powers.hostAgent;
       throw new Error(`unknown lookup: ${name}`);
     },
@@ -141,7 +141,7 @@ const makeMockHostAgent = ({ filesystems = {}, evaluateThrows } = {}) => {
       if (typeof edge !== 'string' || edge.length === 0) {
         throw new Error(`adopt: invalid edge name ${JSON.stringify(edge)}`);
       }
-      adoptCalls.push({ number, edge, petName });
+      adoptCalls.push({ number, edge, petName: nameKey(petName) });
       storedNames.add(nameKey(petName));
     },
     async evaluate(workerName, source, codeNames, petNames, resultName) {
@@ -149,22 +149,31 @@ const makeMockHostAgent = ({ filesystems = {}, evaluateThrows } = {}) => {
         workerName,
         source,
         codeNames,
-        petNames,
-        resultName,
+        petNames: petNames.map(nameKey),
+        resultName: nameKey(resultName),
       });
       if (evaluateThrows) throw new Error(evaluateThrows);
       if (resultName !== undefined) storedNames.add(nameKey(resultName));
       return harden({ kind: 'fake-powers', name: resultName });
     },
     async makeUnconfined(powersName, specifier, opts) {
-      unconfinedCalls.push({ powersName, specifier, opts });
+      unconfinedCalls.push({
+        powersName,
+        specifier,
+        opts: {
+          ...opts,
+          powersName: nameKey(opts.powersName),
+          resultName: nameKey(opts.resultName),
+        },
+      });
       if (opts.resultName !== undefined)
         storedNames.add(nameKey(opts.resultName));
       return harden({ kind: 'fake-client', name: opts.resultName });
     },
-    async remove(name) {
+    async remove(...path) {
+      const name = nameKey(path);
       removeCalls.push(name);
-      storedNames.delete(nameKey(name));
+      storedNames.delete(name);
     },
     async reply(number, strings, edgeNames, petNames) {
       // Mirror the daemon's Mail.reply validation so an interface-shape mistake
@@ -294,7 +303,7 @@ test('submission formulates a claude-client caplet with the right env', async t 
   const call = host.unconfinedCalls[0];
 
   // First-class formulation, stored under the chosen pet name.
-  t.is(call.powersName, '@main');
+  t.deepEqual(call.powersName, ['@main']);
   t.regex(call.specifier, /claude-client-module\.js$/);
   t.is(call.opts.resultName, 'my-claude');
   // Least authority: the client runs as a per-session powers cap, not @agent
@@ -367,8 +376,8 @@ test('SANDBOX_NAMESPACE endows the infra caps under the factory directory', asyn
   await waitFor(() => host.evaluateCalls.length > 0);
   t.deepEqual(host.evaluateCalls[0].petNames, [
     '@agent',
-    ['claude-sandbox', 'sandbox-factory'],
-    ['claude-sandbox', 'fs-mounter'],
+    'claude-sandbox/sandbox-factory',
+    'claude-sandbox/fs-mounter',
     'my-fs',
   ]);
 });
@@ -481,7 +490,7 @@ test('a session-request package adopts the cap, formulates, replies, and dismiss
 
   // Replied with a `client` edge naming the session, then dismissed the request.
   t.deepEqual(host.replyCalls[0].edgeNames, ['client']);
-  t.is(host.replyCalls[0].petNames[0], resultName);
+  t.deepEqual(host.replyCalls[0].petNames[0], [resultName]);
   t.deepEqual(host.dismissCalls, [7]);
 
   // No residue: the adopted temp name and powers were removed.

@@ -2073,7 +2073,7 @@ export const createAddSpaceModal = ({
           /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
             personaPowers
           ),
-        ).storeLocator('general', locator);
+        ).storeLocator(['general'], locator);
 
         // 4. Create space config
         // Use the view mode from the locator if provided, else default chat.
@@ -2159,7 +2159,7 @@ export const createAddSpaceModal = ({
           /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
             personaPowers
           ),
-        ).storeLocator('general', locator);
+        ).storeLocator(['general'], locator);
 
         // No new space needed — the existing space already renders the channel
         hide();
@@ -2253,13 +2253,13 @@ export const createAddSpaceModal = ({
         /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
           powers
         ),
-      ).lookup(finalAgentName);
+      ).lookup([finalAgentName]);
 
       await E(
         /** @type {{ storeLocator: (name: string | string[], id: string) => Promise<void> }} */ (
           whylipPowers
         ),
-      ).storeLocator('fae', agentLocator);
+      ).storeLocator(['fae'], agentLocator);
 
       await onSubmit({
         name,

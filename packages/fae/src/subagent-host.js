@@ -171,7 +171,7 @@ export const provisionFaeAgent = async ({
   const build = async () => {
     await null;
     // 1. The agent's own guest: inbox, pet store, tools.
-    await E(hostAgent).provideGuest(name, { agentName: profileName });
+    await E(hostAgent).provideGuest([name], { agentName: [profileName] });
 
     // 2. A spawner caplet, unless this agent is at the delegation bound. It is
     //    a durable formula rather than a live object so that a revived driver
