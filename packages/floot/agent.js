@@ -414,7 +414,7 @@ names, because re-running mints a fresh scratch mount and rebinds the names,
 orphaning the earlier work area and its commits:
 \`\`\`
 const endo = await E(powers).lookup(['endo']);
-const credential = await E(endo).lookup('forgejo-credential');
+const credential = await E(endo).lookup(['forgejo-credential']);
 // The forge's https origin is the credential's audience; this repository's
 // mirror is floot/endo.git under it.
 const url = \`\${await E(credential).audience()}/floot/endo.git\`;
@@ -423,14 +423,14 @@ if (!url.startsWith('https:')) {
   return \`The forge at \${url} is not served over https; nothing here can push to it.\`;
 }
 const identity = { authorName: 'Floot', authorEmail: 'floot@goooooo.ooo' };
-const mount = await E(endo).provideScratchMount('endo-work-mount');
+const mount = await E(endo).provideScratchMount(['endo-work-mount']);
 await E(endo).provideGitClone({
   destMount: mount,
   endpoint: { url, credential },
   identity,
 });
-const git = await E(endo).provideGit(mount, 'endo-work', { identity });
-await E(endo).provideGitRemote(git, 'endo-work-origin', {
+const git = await E(endo).provideGit(mount, ['endo-work'], { identity });
+await E(endo).provideGitRemote(git, ['endo-work-origin'], {
   name: 'origin', url, credential,
   allowedDirections: ['push'], allowedBranches: ['agent'],
 });
@@ -458,7 +458,7 @@ THROUGH THE GIT capability — it carries the author identity from the clone,
 which in-sandbox \`git commit\` does not:
 \`\`\`
 const endo = await E(powers).lookup(['endo']);
-const git = await E(endo).lookup('endo-work');
+const git = await E(endo).lookup(['endo-work']);
 const branches = await E(git).branches();
 if (branches.some(b => b.name === 'agent')) await E(git).switchBranch('agent');
 else await E(git).createBranch('agent', { switchAfterCreate: true });
@@ -474,8 +474,8 @@ For a one-line change, or when no disk is attached, edit through the MOUNT
 capability instead and commit the same way:
 \`\`\`
 const endo = await E(powers).lookup(['endo']);
-const mount = await E(endo).lookup('endo-work-mount');
-const git = await E(endo).lookup('endo-work');
+const mount = await E(endo).lookup(['endo-work-mount']);
+const git = await E(endo).lookup(['endo-work']);
 const file = 'packages/floot/agent.js';
 const entry = await E(mount).entry(file);   // the one call that splits on "/"
 const before = await E(mount).readText(entry);
@@ -490,10 +490,10 @@ Push, then PROPOSE the pushed revision through "deploy-endo". Do not call
 \`stageRev\`, \`build\`, or \`apply\` yourself:
 \`\`\`
 const endo = await E(powers).lookup(['endo']);
-const result = await E(await E(endo).lookup('endo-work-origin')).push({
+const result = await E(await E(endo).lookup(['endo-work-origin'])).push({
   source: 'refs/heads/agent', destination: 'refs/heads/agent',
 });
-const head = await E(await E(endo).lookup('endo-work')).revParse('HEAD');
+const head = await E(await E(endo).lookup(['endo-work'])).revParse('HEAD');
 const deployEndo = await E(powers).lookup(['deploy-endo']);
 const { runId } = await E(deployEndo).start({
   params: {
@@ -782,7 +782,7 @@ const provisionPresetObjects = async (
       // location).
       const repoRoot = await E(host).provideHostPath(mount);
       await initGitRepo(repoRoot);
-      await E(host).provideGit(mount, gitTmp);
+      await E(host).provideGit(mount, [gitTmp]);
       await E(host).move([gitTmp], [agentName, obj.petName]);
       await E(host).remove(scratchTmp);
     } else if (obj.kind === 'host-powers') {
@@ -813,7 +813,7 @@ const provisionPresetObjects = async (
       } else {
         const mountTmp = `_floot-codemount-${id}`;
         if (await E(host).has(mountTmp)) await E(host).remove(mountTmp);
-        await E(host).provideMount(codePath, mountTmp, { readOnly: true });
+        await E(host).provideMount(codePath, [mountTmp], { readOnly: true });
         await E(host).move([mountTmp], [agentName, obj.petName]);
       }
     } else {

@@ -266,9 +266,9 @@ export const provisionDevReview = async ({
   const resolver = await E(host).lookup([resolverName]);
   const endowments = {
     project: resolver,
-    developer: await E(developer).lookup('@self'),
+    developer: await E(developer).lookup(['@self']),
     operator,
-    initiator: await E(initiator).lookup('@self'),
+    initiator: await E(initiator).lookup(['@self']),
   };
   const names = [];
   for (const [index, reviewer] of reviewers.entries()) {
@@ -277,7 +277,7 @@ export const provisionDevReview = async ({
     const name = `reviewer-${index}`;
     names.push(name);
     // eslint-disable-next-line no-await-in-loop
-    endowments[name] = await E(reviewer).lookup('@self');
+    endowments[name] = await E(reviewer).lookup(['@self']);
   }
   const result = await E(service).makeFactory(
     harden({

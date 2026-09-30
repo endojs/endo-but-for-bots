@@ -412,7 +412,7 @@ const doMakeFromTreeViaMount = async (host, config, packageDir, callback) => {
   treeFixtureId += 1;
   await E(host).provideMount(treeDir, [treePetName], { readOnly: true });
 
-  const result = await callback(treePetName);
+  const result = await callback([treePetName]);
   await E(host).remove(treePetName);
   return result;
 };
@@ -6001,8 +6001,8 @@ testNeedsNodeWorker(
     const mount = await E(host).provideMount(repoPath, [
       'git-history-worktree',
     ]);
-    const ordinaryGit = await E(host).provideGit(mount, 'git-ordinary');
-    const gitHistory = await E(host).provideGit(mount, 'git-history', {
+    const ordinaryGit = await E(host).provideGit(mount, ['git-ordinary']);
+    const gitHistory = await E(host).provideGit(mount, ['git-history'], {
       allowHistoryRewrite: true,
     });
 
@@ -6045,7 +6045,7 @@ testNeedsNodeWorker(
     const mount = await E(host).provideMount(repoPath, [
       'git-identity-worktree',
     ]);
-    const gitCap = await E(host).provideGit(mount, 'git-identity', {
+    const gitCap = await E(host).provideGit(mount, ['git-identity'], {
       identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
     });
 
@@ -6110,11 +6110,11 @@ testNeedsNodeWorker(
       { readOnly: true },
     );
     await t.throwsAsync(
-      E(host).provideGit(readOnlyMount, 'git-readonly-ordinary'),
+      E(host).provideGit(readOnlyMount, ['git-readonly-ordinary']),
       { message: /cannot construct writable Git over a read-only mount/ },
     );
     await t.throwsAsync(
-      E(host).provideGit(readOnlyMount, 'git-readonly-history', {
+      E(host).provideGit(readOnlyMount, ['git-readonly-history'], {
         allowHistoryRewrite: true,
       }),
       { message: /cannot construct writable Git over a read-only mount/ },
@@ -6140,7 +6140,7 @@ testNeedsNodeWorker(
     );
     const gitCap = await E(host).provideGit(
       readOnlyMount,
-      'git-readonly-declared',
+      ['git-readonly-declared'],
       { readOnly: true },
     );
     const status = await E(gitCap).status();
@@ -6165,7 +6165,7 @@ testNeedsNodeWorker(
     const writableMount = await E(host).provideMount(repoPath, [
       'git-writable-worktree',
     ]);
-    const gitCap = await E(host).provideGit(writableMount, 'git-writable');
+    const gitCap = await E(host).provideGit(writableMount, ['git-writable']);
     await fs.promises.writeFile(
       path.join(repoPath, 'writable.txt'),
       'writable\n',
@@ -6196,19 +6196,19 @@ test('provideGit rejects a malformed commit identity at the host boundary', asyn
   // the error crosses the daemon marshal boundary and the assertions can name
   // the rejected field; only the offending value stays undisclosed.
   await t.throwsAsync(
-    E(host).provideGit(mount, 'git-identity-empty', {
+    E(host).provideGit(mount, ['git-identity-empty'], {
       identity: { authorName: '', authorEmail: 'ada@example.test' },
     }),
     { message: /identity\.authorName.*must be a non-empty string/ },
   );
   await t.throwsAsync(
-    E(host).provideGit(mount, 'git-identity-blank', {
+    E(host).provideGit(mount, ['git-identity-blank'], {
       identity: { authorName: 'Ada Agent', authorEmail: '   ' },
     }),
     { message: /identity\.authorEmail.*must not be blank/ },
   );
   await t.throwsAsync(
-    E(host).provideGit(mount, 'git-identity-control', {
+    E(host).provideGit(mount, ['git-identity-control'], {
       identity: { authorName: 'Ada\nAgent', authorEmail: 'ada@example.test' },
     }),
     { message: /identity\.authorName.*must not contain control characters/ },
@@ -6242,7 +6242,7 @@ test('provideGit tree exposes immutable commit contents', async t => {
   ]);
 
   const mount = await E(host).provideMount(repoPath, ['git-tree-worktree']);
-  const gitCap = await E(host).provideGit(mount, 'git-tree-cap');
+  const gitCap = await E(host).provideGit(mount, ['git-tree-cap']);
   const tree = await E(gitCap).tree('HEAD');
   // eslint-disable-next-line no-underscore-dangle
   const treeMethods = await E(tree).__getMethodNames__();
@@ -6373,7 +6373,7 @@ test('storeTree falls back for export-ignore trees the archive would drop', asyn
   const mount = await E(host).provideMount(repoPath, [
     'export-ignore-worktree',
   ]);
-  const gitCap = await E(host).provideGit(mount, 'export-ignore-cap');
+  const gitCap = await E(host).provideGit(mount, ['export-ignore-cap']);
   const tree = await E(gitCap).tree('HEAD');
 
   // The tree reports itself NOT archive-lossless, so checkinTree routes
@@ -6415,7 +6415,7 @@ test('storeTree falls back for export-subst trees the archive would rewrite', as
   ]);
 
   const mount = await E(host).provideMount(repoPath, ['export-subst-worktree']);
-  const gitCap = await E(host).provideGit(mount, 'export-subst-cap');
+  const gitCap = await E(host).provideGit(mount, ['export-subst-cap']);
   const tree = await E(gitCap).tree('HEAD');
 
   t.is(await E(tree).archiveLossless(), false);
@@ -6453,7 +6453,7 @@ test('storeTree falls back for info attributes the archive would honor', async t
   );
 
   const mount = await E(host).provideMount(repoPath, ['info-attrs-worktree']);
-  const gitCap = await E(host).provideGit(mount, 'info-attrs-cap');
+  const gitCap = await E(host).provideGit(mount, ['info-attrs-cap']);
   const tree = await E(gitCap).tree('HEAD');
 
   t.is(await E(tree).archiveLossless(), false);
@@ -6491,7 +6491,7 @@ test('git tree reports a gitlink as not archive-lossless', async t => {
   ]);
 
   const mount = await E(host).provideMount(repoPath, ['gitlink-worktree']);
-  const gitCap = await E(host).provideGit(mount, 'gitlink-cap');
+  const gitCap = await E(host).provideGit(mount, ['gitlink-cap']);
   const tree = await E(gitCap).tree('HEAD');
 
   // Fail-closed: the unfixed flow lacks this signal and would archive
@@ -6915,9 +6915,9 @@ test('provideSubMount read-only attenuation confines writes', async t => {
   // attenuation is an independent per-formula property, not inherited.
   await E(host).provideMount(mountPath, ['submount-ro-parent']);
   await E(host).provideSubMount(
-    'submount-ro-parent',
+    ['submount-ro-parent'],
     ['src'],
-    'submount-ro-child',
+    ['submount-ro-child'],
     { readOnly: true },
   );
   const child = await E(host).lookup(['submount-ro-child']);
@@ -6960,9 +6960,9 @@ test('provideSubMount isolates the child from parent siblings', async t => {
 
   await E(host).provideMount(mountPath, ['submount-iso-parent']);
   await E(host).provideSubMount(
-    'submount-iso-parent',
+    ['submount-iso-parent'],
     ['src'],
-    'submount-iso-child',
+    ['submount-iso-child'],
   );
 
   const parent = await E(host).lookup(['submount-iso-parent']);
@@ -6996,7 +6996,7 @@ test('provideSubMount clamps a .. subpath at the parent root', async t => {
   // A `..` subpath would lexically point at `submount-clamp` (which holds
   // topsecret.txt), but formulateSubMount clamps it at the parent root,
   // so the child is rooted back at `proj` and cannot reach the secret.
-  await E(host).provideSubMount('clamp-parent', ['..'], 'clamp-child');
+  await E(host).provideSubMount(['clamp-parent'], ['..'], ['clamp-child']);
   const child = await E(host).lookup(['clamp-child']);
 
   t.true(await E(child).has('app.js'));
@@ -7022,9 +7022,9 @@ test('provideSubMount cannot widen a read-only parent to read-write', async t =>
     readOnly: true,
   });
   await E(host).provideSubMount(
-    'monotonic-parent',
+    ['monotonic-parent'],
     ['src'],
-    'monotonic-child',
+    ['monotonic-child'],
     { readOnly: false },
   );
   const child = await E(host).lookup(['monotonic-child']);
@@ -7068,7 +7068,7 @@ test('provideSubMount rejects a symlinked subpath that escapes the parent', asyn
   // A sub-mount rooted at the symlink would resolve (via realpath) to
   // `outside/`, escaping the parent — formulateSubMount must throw.
   await t.throwsAsync(
-    E(host).provideSubMount('symlink-parent', ['escape'], 'symlink-child'),
+    E(host).provideSubMount(['symlink-parent'], ['escape'], ['symlink-child']),
     { message: /escapes parent mount root/ },
   );
 });

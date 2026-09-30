@@ -472,8 +472,9 @@ export const makeSandboxFactory = (
     // Preferred path: mint a scratch mount and resolve it via
     // `provideHostPath`.
     try {
-      const scratchCap =
-        await E(scratchProvider).provideScratchMount('sandbox-scratch');
+      const scratchCap = await E(scratchProvider).provideScratchMount([
+        'sandbox-scratch',
+      ]);
       return await resolveHostPath(
         scratchProvider,
         /** @type {MountCap} */ (scratchCap),

@@ -2250,7 +2250,7 @@ export const createAddSpaceModal = ({
       // Write the fae agent reference into the whylip host's pet store
       // under the well-known name "fae".
       const whylipPowers = await E(
-        /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
+        /** @type {{ lookup: (namePath: string[]) => Promise<unknown> }} */ (
           powers
         ),
       ).lookup([finalAgentName]);
