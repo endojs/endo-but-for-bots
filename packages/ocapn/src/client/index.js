@@ -13,7 +13,11 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { writeOcapnHandshakeMessage } from '../codecs/operations.js';
 import { makeCryptography } from '../cryptography.js';
 import { makeGrantTracker } from './grant-tracker.js';
-import { makeSturdyRefTracker, enlivenSturdyRef } from './sturdyrefs.js';
+import {
+  makeSturdyRefTracker,
+  enlivenSturdyRef,
+  enlivenSturdyRefDetails,
+} from './sturdyrefs.js';
 import { locationToLocationId, toHex } from './util.js';
 import {
   handleHandshakeMessageData,
@@ -533,7 +537,16 @@ export const makeOcapn = async ({
   };
 
   const grantTracker = makeGrantTracker();
-  const sturdyRefTracker = makeSturdyRefTracker(locator);
+  // The SturdyRefs this client mints enliven through this client. The
+  // session helpers are declared below; they are only reached on enliven.
+  const sturdyRefTracker = makeSturdyRefTracker(locator, details =>
+    enlivenSturdyRefDetails(
+      details,
+      provideInternalSession,
+      isSelfLocation,
+      locator,
+    ),
+  );
 
   /**
    * Check whether a location refers to this instance (as opposed to
