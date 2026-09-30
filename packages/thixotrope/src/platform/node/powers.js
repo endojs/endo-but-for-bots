@@ -1,4 +1,5 @@
 // @ts-check
+import { Fail, q } from '@endo/errors';
 import harden from '@endo/harden';
 import * as childProcess from 'node:child_process';
 import * as crypto from 'node:crypto';
@@ -16,23 +17,23 @@ import * as util from 'node:util';
 // Powers whose implementation is already portable: they take plain
 // functions, so the Node host only has to supply them.
 import { makeDisplayPowers } from '../display.js';
-import { makeEnvironmentPowers, makeUserPowers } from '../environment.js';
-import { makeHashPowers } from '../hashes.js';
+import { makeEnvironmentPowers } from '../environment.js';
 import { makeLogPowers } from '../logging.js';
 import { makePathPowers } from '../paths.js';
 import { makeRandomPowers } from '../random.js';
-import { makeTimerPowers } from '../timers.js';
+import { MAX_TIMER_DELAY_MS, makeTimerPowers } from '../timers.js';
 
 // Powers with a Node-specific implementation, each the sole module allowed
 // to see the corresponding Node API.
 import { makeFilePowers } from './files.js';
-import { describeNativePackage } from './native-package.js';
+import { makeHashPowers } from './hashes.js';
 import { makeProcessPowers } from './processes.js';
 import { makeNativeWorkerPowers } from './native-workers.js';
 import { makeSocketPowers } from './sockets.js';
 import { makeSyncFilePowers } from './sync-files.js';
 import { makeTerminalPowers } from './terminal.js';
 
+/** @import { PlatformPowers } from '../powers.js' */
 /** @typedef {import('../timers.js').TimerHandle} TimerHandle */
 
 /**
@@ -40,6 +41,8 @@ import { makeTerminalPowers } from './terminal.js';
  * Every member is a minimal capability object with plain return values, and
  * core factories receive only the members they name; the record itself is a
  * convenience for entry points, never a parameter to core.
+ *
+ * @returns {PlatformPowers}
  */
 export const makeNodePowers = () => {
   /** @type {Map<TimerHandle, NodeJS.Timeout>} */
@@ -48,6 +51,14 @@ export const makeNodePowers = () => {
     now: () => Date.now(),
     monotonicNow: () => performance.now(),
     setTimer: (callback, delayMs) => {
+      // Node would silently treat a wider or non-finite delay as about a
+      // millisecond; fail here instead, where the port documents the bound.
+      (Number.isFinite(delayMs) &&
+        delayMs >= 0 &&
+        delayMs <= MAX_TIMER_DELAY_MS) ||
+        Fail`Timer delay ${q(delayMs)} must be between 0 and ${q(
+          MAX_TIMER_DELAY_MS,
+        )} milliseconds`;
       const token = harden({});
       const timer = nodeTimers.setTimeout(() => {
         timers.delete(token);
@@ -85,14 +96,20 @@ export const makeNodePowers = () => {
     fileURLToPath: u => url.fileURLToPath(u),
     pathToFileURL: p => url.pathToFileURL(p).href,
   });
+  const randomUUID = () => crypto.randomUUID();
+  const getUserId = () => process.getuid?.();
   const files = makeFilePowers({
     fsp,
     createReadStream: p => fs.createReadStream(p),
     dirname: p => path.dirname(p),
+    randomUUID,
+    getUserId,
   });
   const syncFiles = makeSyncFilePowers({
     fs,
     dirname: p => path.dirname(p),
+    randomUUID,
+    getUserId,
   });
   const processes = makeProcessPowers({ childProcess, readline });
   const sockets = makeSocketPowers({
@@ -100,11 +117,13 @@ export const makeNodePowers = () => {
     chmod: (p, mode) => fsp.chmod(p, mode),
   });
   const terminal = makeTerminalPowers({ readline, process });
-  const hashes = makeHashPowers({ files });
+  const hashes = makeHashPowers({
+    createHash: algorithm => crypto.createHash(algorithm),
+    readChunks: files.readChunks,
+  });
   const environment = makeEnvironmentPowers({
     get: name => process.env[name],
   });
-  const user = makeUserPowers({ getUserId: () => process.getuid?.() });
   const display = makeDisplayPowers({
     describe: value =>
       util.inspect(value, { customInspect: false, getters: false, depth: 3 }),
@@ -134,17 +153,15 @@ export const makeNodePowers = () => {
     files,
     syncFiles,
     processes,
-    nativeWorkers: makeNativeWorkerPowers(),
+    nativeWorkers: makeNativeWorkerPowers({ timers: timerPowers }),
     sockets,
-    nativePackages: harden({ describe: describeNativePackage }),
     terminal,
     hashes,
     environment,
-    user,
     display,
     bundler,
   });
 };
 harden(makeNodePowers);
 
-/** @typedef {ReturnType<typeof makeNodePowers>} NodePowers */
+/** @typedef {PlatformPowers} NodePowers */

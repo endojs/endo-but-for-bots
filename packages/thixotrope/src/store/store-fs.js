@@ -342,5 +342,3 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
   return harden(store);
 };
 harden(makeFsStore);
-
-export { makeMemoryStore } from './store-memory.js';

@@ -25,7 +25,7 @@
  * Everything durable lives in the daemon's store or the guest heap; this
  * file holds only the process-lifetime wiring between them.
  */
-/** @import { NodePowers } from '../platform/node/powers.js' */
+/** @import { PlatformPowers } from '../platform/powers.js' */
 /** @import { FilePowers } from '../platform/files.js' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
 import { E, Far } from '@endo/far';
@@ -36,6 +36,8 @@ import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeInFlight } from '../in-flight.js';
 import { settleWithin, withExpiry } from '../platform/timers.js';
+import { randomHex128 } from '../random-id.js';
+import { describeNativePackage } from '../native/describe-package.js';
 
 import { makeApplicationRegistry } from './application-registry.js';
 import { installNativeResource } from './install-native-resource.js';
@@ -73,7 +75,7 @@ const save = async (files, path, value) => {
 
 /**
  * Run a single local supervisor. The engine lease encloses socket lifetime.
- * @param {NodePowers} platform
+ * @param {PlatformPowers} platform
  * @param {string} statePath
  * @param {{engine?: WorkerEngine, idleSleepMs?: number, alarmNow?: () => bigint}} [options]
  */
@@ -93,24 +95,14 @@ export const serveThixotrope = async (
     sockets,
     hashes,
     environment,
-    user,
     display,
   } = platform;
   const log = logging.sub('thixotrope', 'supervisor');
-  const randomId = () =>
-    Array.from(random.randomBytes(16), byte =>
-      byte.toString(16).padStart(2, '0'),
-    ).join('');
+  const randomId = () => randomHex128(random);
   statePath = paths.resolve(statePath);
   await files.makeDirectory(statePath, { mode: 0o700 });
   const stat = await files.stat(statePath);
-  if (
-    stat.kind !== 'directory' ||
-    // Unix permission bits.
-    // eslint-disable-next-line no-bitwise
-    (stat.mode & 0o077) !== 0 ||
-    stat.uid !== user.getUserId()
-  ) {
+  if (stat.kind !== 'directory' || !(await files.isPrivateToUser(statePath))) {
     throw Error(
       'The state directory must be a private directory owned by this user (mode 0700).',
     );
@@ -192,7 +184,19 @@ export const serveThixotrope = async (
       });
     },
   });
+  /** @type {Set<SocketConnection>} */
   const controlConnections = new Set();
+  /**
+   * Drop a control connection at once: a throw on the writer takes pending
+   * reads and writes down with it, and `closed` resolves for the cleanup
+   * registered on it.
+   * @param {SocketConnection} connection
+   */
+  const drop = connection => {
+    void connection.writer
+      .throw(Error('Supervisor closed the connection'))
+      .catch(() => {});
+  };
   const pendingDisconnects = makeInFlight();
   /** @type {Map<SocketConnection, () => Promise<void>>} */
   const disconnectViews = new Map();
@@ -231,7 +235,7 @@ export const serveThixotrope = async (
     await peerNetlayer?.closed;
   };
   const closeSocket = () => {
-    for (const connection of controlConnections) connection.destroy();
+    for (const connection of controlConnections) drop(connection);
   };
   const closeControl = async () => {
     if (!listening || !controlListener) return;
@@ -242,7 +246,9 @@ export const serveThixotrope = async (
       [...disconnectViews.values()].map(disconnect => disconnect()),
     );
     // Flush the stop acknowledgement, then bound the wait for clients to close.
-    for (const connection of controlConnections) connection.end();
+    for (const connection of controlConnections) {
+      void connection.writer.return(undefined).catch(() => {});
+    }
     await withExpiry(timers, 1000, closeSocket, () => closed);
     // A failed guest may never settle subscription setup or cancellation.
     // Continue to daemon shutdown after a grace period; startup discards any
@@ -282,7 +288,7 @@ export const serveThixotrope = async (
               resumption,
               makeBaseNetlayer: async networkPowers => {
                 peerNetlayer = await makeUnixNetLayer(
-                  { sockets, syncFiles, paths, user },
+                  { sockets, syncFiles, paths },
                   {
                     ...networkPowers,
                     socketPath: peerPath,
@@ -437,7 +443,7 @@ export const serveThixotrope = async (
       return {
         ...invitation,
         location: assertUnixPeerLocation(
-          { syncFiles, paths, user },
+          { syncFiles, paths },
           invitation.location,
         ),
       };
@@ -508,12 +514,14 @@ export const serveThixotrope = async (
           if (requested) throw Error('Supervisor is stopping');
           if (typeof directory !== 'string')
             throw Error('Expected a native resource directory');
-          const description = await platform.nativePackages.describe(
+          const description = await describeNativePackage(
+            { files, paths, hashes },
             paths.resolve(directory),
           );
           const { bundle, digest: bundleDigest } =
             await platform.bundler.bundle(description.durablePath);
-          const checked = await platform.nativePackages.describe(
+          const checked = await describeNativePackage(
+            { files, paths, hashes },
             description.directory,
           );
           if (checked.digest !== description.digest)
@@ -642,7 +650,7 @@ export const serveThixotrope = async (
       mode: 0o600,
       onConnection: connection => {
         if (requested) {
-          connection.destroy();
+          drop(connection);
           return;
         }
         controlConnections.add(connection);
@@ -652,7 +660,7 @@ export const serveThixotrope = async (
           return view.disconnect();
         };
         disconnectViews.set(connection, disconnect);
-        connection.onClose(() => {
+        void connection.closed.then(() => {
           controlConnections.delete(connection);
           const cleanup = disconnect().catch(error => {
             // A quarantined vat cannot run cancellation; its ephemeral
@@ -674,7 +682,7 @@ export const serveThixotrope = async (
           connection,
           'worker',
           admin,
-        ).catch(() => connection.destroy());
+        ).catch(() => drop(connection));
       },
       onError: error => {
         log.error('control listener failed:', error);

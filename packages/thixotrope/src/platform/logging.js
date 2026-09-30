@@ -31,6 +31,14 @@ import harden from '@endo/harden';
  */
 
 /**
+ * The root logger a host composes is the logging power; every other power
+ * type is named `XxxPowers`, and this name lets the factory and the
+ * modules that take the whole power say so.
+ *
+ * @typedef {Logger} LogPowers
+ */
+
+/**
  * @param {{ log: Logger['log'], info: Logger['info'], error: Logger['error'] }} write
  * @param {string[]} path
  * @returns {Logger}
@@ -57,7 +65,7 @@ const makeLogger = (write, path) => {
  * @param {Logger['info']} host.info pass the same function as `error` to
  *   merge the channels, or a no-op to run without tracing
  * @param {Logger['error']} host.error
- * @returns {Logger}
+ * @returns {LogPowers}
  */
 export const makeLogPowers = ({ log, info, error }) =>
   makeLogger(harden({ log, info, error }), []);

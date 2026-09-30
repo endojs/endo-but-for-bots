@@ -2,7 +2,7 @@
 import harden from '@endo/harden';
 import { makePromiseKit } from '@endo/promise-kit';
 import test from '@endo/ses-ava/test.js';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { serveThixotrope } from '../src/control/supervisor.js';
 import { connectLocalControl } from '../src/control/local-control.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { describeNativePackage } from '../src/native/describe-package.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const powers = makeNodePowers();
@@ -174,10 +175,33 @@ test.serial('native package descriptions require both entry files', async t => {
   const path = await mkdtemp('/tmp/thix-native-package-');
   t.teardown(() => rm(path, { recursive: true, force: true }));
   await writeFile(join(path, 'durable.js'), 'export const make = () => ({});');
-  await t.throwsAsync(() => powers.nativePackages.describe(path), {
+  await t.throwsAsync(() => describeNativePackage(powers, path), {
     code: 'ENOENT',
   });
 });
+
+test.serial(
+  'native package descriptions refuse links and node_modules',
+  async t => {
+    const path = await mkdtemp('/tmp/thix-native-package-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const source = 'export const make = () => ({});';
+    await writeFile(join(path, 'durable.js'), source);
+    await writeFile(join(path, 'ephemeral.js'), source);
+    const { digest } = await describeNativePackage(powers, path);
+    t.regex(digest, /^[0-9a-f]{64}$/);
+    await symlink(join(path, 'durable.js'), join(path, 'alias.js'));
+    await t.throwsAsync(() => describeNativePackage(powers, path), {
+      message: /files or directories/,
+    });
+    await rm(join(path, 'alias.js'));
+    t.is((await describeNativePackage(powers, path)).digest, digest);
+    await mkdir(join(path, 'node_modules'));
+    await t.throwsAsync(() => describeNativePackage(powers, path), {
+      message: /node_modules/,
+    });
+  },
+);
 
 test.serial('collection waits for native installation to finish', async t => {
   t.timeout(30_000);

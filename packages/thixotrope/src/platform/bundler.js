@@ -25,10 +25,7 @@ export const makeBundlerPowers = ({
 }) =>
   harden({
     bundle: async file => {
-      const bundle = await makeBundle(
-        readPowers,
-        pathToFileURL(resolve(file)),
-      );
+      const bundle = await makeBundle(readPowers, pathToFileURL(resolve(file)));
       return harden({
         bundle,
         digest: sha256Hex(new TextEncoder().encode(bundle)),

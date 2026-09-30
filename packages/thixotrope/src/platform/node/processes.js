@@ -2,6 +2,8 @@
 /** @import { ProcessPowers } from '../processes.js' */
 import harden from '@endo/harden';
 
+import { makeLineReader } from './line-reader.js';
+
 /**
  * Node's `child_process.spawn`, with each pipe surfaced as an async
  * iterable of text lines rather than a stream.
@@ -12,62 +14,6 @@ import harden from '@endo/harden';
  * @returns {ProcessPowers}
  */
 export const makeProcessPowers = ({ childProcess, readline }) => {
-  /**
-   * @param {import('stream').Readable | null | undefined} source
-   * @returns {AsyncIterable<string>}
-   */
-  const linesFrom = source => {
-    let failure;
-    /** @type {(value?: unknown) => void} */
-    let resolveWake = () => {};
-    let done = false;
-    /** @type {string[]} */
-    const queue = [];
-    const wake = () => {
-      const resolve = resolveWake;
-      resolveWake = () => {};
-      resolve();
-    };
-    if (source) {
-      const lines = readline.createInterface({ input: source });
-      lines.on('line', line => {
-        queue.push(line);
-        wake();
-      });
-      lines.on('close', () => {
-        done = true;
-        wake();
-      });
-      /** @param {Error} error */
-      const fail = error => {
-        failure = error;
-        wake();
-      };
-      lines.on('error', fail);
-      source.on('error', fail);
-    } else {
-      done = true;
-    }
-    return {
-      async *[Symbol.asyncIterator]() {
-        for (;;) {
-          if (queue.length > 0) {
-            yield /** @type {string} */ (queue.shift());
-          } else if (failure !== undefined) {
-            throw failure;
-          } else if (done) {
-            return;
-          } else {
-            // eslint-disable-next-line no-await-in-loop
-            await new Promise(resolve => {
-              resolveWake = resolve;
-            });
-          }
-        }
-      },
-    };
-  };
-
   /** @type {ProcessPowers['spawn']} */
   const spawn = (executable, args, options) => {
     const stdio = options.stdio.map(entry =>
@@ -93,9 +39,27 @@ export const makeProcessPowers = ({ childProcess, readline }) => {
       if (fd === 0) return child.stdin;
       return /** @type {any} */ (child.stdio)[fd];
     };
+    // One reader per pipe: a second reader of the same pipe would attach a
+    // second readline and split the lines between them.
+    /** @type {Map<number, AsyncIterable<string>>} */
+    const readers = new Map();
+    /** @param {number} fd */
+    const linesFrom = fd => {
+      let reader = readers.get(fd);
+      if (reader === undefined) {
+        /** @type {import('stream').Readable | null | undefined} */
+        const source = streamFor(fd);
+        reader = makeLineReader(
+          source ? readline.createInterface({ input: source }) : undefined,
+          source ?? undefined,
+        );
+        readers.set(fd, reader);
+      }
+      return reader;
+    };
     return harden({
       pid: child.pid ?? 0,
-      lines: fd => linesFrom(streamFor(fd)),
+      lines: linesFrom,
       input: fd => {
         const stream = streamFor(fd);
         if (!stream || typeof stream.write !== 'function') return undefined;

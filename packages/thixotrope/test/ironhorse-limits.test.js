@@ -1,13 +1,14 @@
 // @ts-check
 import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
+import { createHash } from 'node:crypto';
 
 import {
   makeIronhorseLimits,
   readIronhorseLimits,
 } from '../src/ironhorse/ironhorse-limits.js';
 import { acquireIronhorseRuntime } from '../src/ironhorse/ironhorse-runtime.js';
-import { makeHashPowers } from '../src/platform/hashes.js';
+import { makeHashPowers } from '../src/platform/node/hashes.js';
 
 /** @import { ExecutionContext } from 'ava' */
 /** @import { FilePowers } from '../src/platform/files.js' */
@@ -119,7 +120,7 @@ const makeFakeHost = () => {
     },
     realPath: unused,
     stat: unused,
-    chmod: unused,
+    isPrivateToUser: async () => true,
     open: async () => ({
       fd: undefined,
       writeText: async () => {},
@@ -191,7 +192,7 @@ const makeFakeHost = () => {
     fileURLToPath: unused,
     pathToFileURL: unused,
   };
-  const hashes = makeHashPowers({ files });
+  const hashes = makeHashPowers({ createHash, readChunks: files.readChunks });
   return harden({ powers: { processes, files, paths, hashes }, texts });
 };
 

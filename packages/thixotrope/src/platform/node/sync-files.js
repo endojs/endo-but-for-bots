@@ -9,9 +9,12 @@ import harden from '@endo/harden';
  * @param {object} host
  * @param {import('fs')} host.fs
  * @param {(...parts: string[]) => string} host.dirname
+ * @param {() => string} host.randomUUID a fresh name for a scratch file
+ * @param {() => number | undefined} host.getUserId the user running this
+ *   process, when the host has one
  * @returns {SyncFilePowers}
  */
-export const makeSyncFilePowers = ({ fs, dirname }) => {
+export const makeSyncFilePowers = ({ fs, dirname, randomUUID, getUserId }) => {
   /** @param {string} path */
   const syncPath = path => {
     const fd = fs.openSync(path, 'r');
@@ -35,19 +38,22 @@ export const makeSyncFilePowers = ({ fs, dirname }) => {
     readText: path => fs.readFileSync(path, 'utf8'),
     exists: path => fs.existsSync(path),
     writeTextAtomic: (path, text, { mode } = {}) => {
-      const temporary = `${path}.tmp`;
-      const fd = fs.openSync(temporary, 'w', mode);
+      // See the asynchronous twin: a scratch of this call's own, created
+      // exclusively, so concurrent writers and a crashed predecessor cannot
+      // interfere.
+      const scratch = `${path}.${randomUUID()}.tmp`;
       try {
-        fs.writeFileSync(fd, text);
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
-      }
-      try {
-        fs.renameSync(temporary, path);
+        const fd = fs.openSync(scratch, 'wx', mode);
+        try {
+          fs.writeFileSync(fd, text);
+          fs.fsyncSync(fd);
+        } finally {
+          fs.closeSync(fd);
+        }
+        fs.renameSync(scratch, path);
         syncPath(dirname(path));
       } finally {
-        fs.rmSync(temporary, { force: true });
+        fs.rmSync(scratch, { force: true });
       }
     },
     appendTextDurable: (path, text) => {
@@ -73,7 +79,12 @@ export const makeSyncFilePowers = ({ fs, dirname }) => {
         : stats.isFile()
           ? 'file'
           : 'other';
-      return harden({ kind, mode: stats.mode, uid: stats.uid });
+      return harden({ kind, mode: stats.mode });
+    },
+    isPrivateToUser: path => {
+      const stats = fs.statSync(path);
+      // No group or other permission bits, and owned by this process's user.
+      return stats.mode % 0o100 === 0 && stats.uid === getUserId();
     },
   });
 };

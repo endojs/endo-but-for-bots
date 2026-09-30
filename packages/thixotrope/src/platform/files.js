@@ -1,15 +1,15 @@
 // @ts-check
 
 /**
- * File kind as reported to core; `other` covers sockets, devices, and
- * anything the host cannot classify.
+ * File kind as reported to core. `symlink` is reported only by a `stat`
+ * asked not to follow links; `other` covers sockets, devices, and anything
+ * the host cannot classify.
  *
- * @typedef {'file' | 'directory' | 'other'} FileKind
+ * @typedef {'file' | 'directory' | 'symlink' | 'other'} FileKind
  *
  * @typedef {object} FileStat
  * @property {FileKind} kind
  * @property {number} mode permission bits
- * @property {number | undefined} uid owning user, when meaningful
  *
  * @typedef {object} OpenFile
  * @property {number | undefined} fd raw descriptor, for handing to
@@ -29,18 +29,27 @@
  * @property {(path: string) => AsyncIterable<Uint8Array>} readChunks
  * @property {(path: string, text: string, options?: { mode?: number }) => Promise<void>} writeTextAtomic
  *   replace the file's contents as one durable step, optionally with
- *   permission bits for a newly created file
- * @property {(path: string, options?: { recursive?: boolean, mode?: number }) => Promise<void>} makeDirectory
- *   create the directory, recursively when asked, and persist the new
- *   directory entries up to their nearest existing ancestor
+ *   permission bits for a newly created file; concurrent writers to one
+ *   path each publish a whole file, and the last to finish wins
+ *   (each through its own scratch file, `<path>.<id>.tmp`; one left behind by
+ *   a crash before the rename is never read as a record and may be deleted)
+ * @property {(path: string, options?: { mode?: number }) => Promise<void>} makeDirectory
+ *   create the directory and any missing ancestors, each with `mode`, and
+ *   persist the new directory entries up to their nearest existing ancestor
  * @property {(prefix: string) => Promise<string>} makeTempDirectory
  * @property {(path: string) => Promise<string[]>} listDirectory
  * @property {(from: string, to: string) => Promise<void>} rename
  * @property {(path: string, options?: { recursive?: boolean, force?: boolean }) => Promise<void>} remove
+ *   unlink `path`, and persist the removed directory entry
  * @property {(from: string, to: string) => Promise<void>} copyFile
  * @property {(path: string) => Promise<string>} realPath
- * @property {(path: string) => Promise<FileStat>} stat
- * @property {(path: string, mode: number) => Promise<void>} chmod
+ * @property {(path: string, options?: { followLinks?: boolean }) => Promise<FileStat>} stat
+ *   describe `path`; with `followLinks: false` a symbolic link is described
+ *   itself, as kind `symlink`, rather than its target
+ * @property {(path: string) => Promise<boolean>} isPrivateToUser whether
+ *   only the user running this process may read or write `path`. The host
+ *   decides what ownership and permission mean; one that cannot make the
+ *   promise answers false
  * @property {(path: string, flags: string, mode?: number) => Promise<OpenFile>} open
  * @property {(path: string) => Promise<void>} syncPath flush a file or
  *   directory entry to stable storage

@@ -1,5 +1,6 @@
 // @ts-check
 /** @import { Logger } from '../platform/logging.js' */
+/** @import { NativeWorkerPowers } from '../platform/native-workers.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
 /** @import { TimerPowers } from '../platform/timers.js' */
 import harden from '@endo/harden';
@@ -129,7 +130,7 @@ const START_NOTICE_MS = 10_000;
  * @param {any} options.codec an OCapN codec, e.g. `syrupCodec`
  * @param {(powers: { handlers: any, logger: any, resumption: any }) => Promise<any> | any} options.makeNetlayer
  * @param {Record<string, (description?: unknown) => object>} [options.resources]
- * @param {import('../platform/node/native-workers.js').NativeWorkerPowers} [options.nativeWorkers]
+ * @param {NativeWorkerPowers} [options.nativeWorkers]
  * @param {number} [options.idleSleepMs] park a worker after this long
  *   with no deliveries (see the durable worker transport's idle-sleep
  *   policy); omitted means workers sleep only on request

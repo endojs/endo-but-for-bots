@@ -1,33 +1,25 @@
 // @ts-check
-import { sha256 } from '@noble/hashes/sha2.js';
-import harden from '@endo/harden';
-
-/** @import { FilePowers } from './files.js' */
-
-/** @param {Uint8Array} bytes */
-const toHex = bytes =>
-  [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('');
 
 /**
- * SHA-256 over bytes, text, or a file. This is pure computation over
- * @noble/hashes, so it is not host authority; `sha256File` reads through
- * the injected {@link FilePowers}.
+ * An incremental SHA-256, for content too large or too scattered to gather
+ * into one buffer.
+ *
+ * @typedef {object} Sha256
+ * @property {(bytes: Uint8Array) => void} update
+ * @property {() => string} digestHex finish and return the lowercase hex
+ *   digest; the hash accepts no further updates
+ */
+
+/**
+ * SHA-256 over bytes or a file. Hashing is pure computation, but the host
+ * supplies it so that core carries no cryptographic implementation of its
+ * own and a host may use its native one.
  *
  * @typedef {object} HashPowers
  * @property {(bytes: Uint8Array) => string} sha256Hex
  * @property {(path: string) => Promise<string>} sha256File
- *
- * @param {object} host
- * @param {FilePowers} host.files
- * @returns {HashPowers}
+ * @property {() => Sha256} makeSha256
  */
-export const makeHashPowers = ({ files }) =>
-  harden({
-    sha256Hex: bytes => toHex(sha256(bytes)),
-    sha256File: async path => {
-      const hash = sha256.create();
-      for await (const chunk of files.readChunks(path)) hash.update(chunk);
-      return toHex(hash.digest());
-    },
-  });
-harden(makeHashPowers);
+
+// Port only: the host implementation is `node/hashes.js`.
+export {};

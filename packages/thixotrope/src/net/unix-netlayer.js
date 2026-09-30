@@ -1,5 +1,4 @@
 // @ts-check
-/** @import { UserPowers } from '../platform/environment.js' */
 /** @import { PathPowers } from '../platform/paths.js' */
 /** @import { SocketConnection, SocketListener, SocketPowers } from '../platform/sockets.js' */
 /** @import { SyncFilePowers } from '../platform/sync-files.js' */
@@ -22,13 +21,9 @@ const networkId = 'thix-unix';
  * @param {object} powers
  * @param {SyncFilePowers} powers.syncFiles
  * @param {PathPowers} powers.paths
- * @param {UserPowers} powers.user
  * @param {any} location
  */
-export const assertUnixPeerLocation = (
-  { syncFiles, paths, user },
-  location,
-) => {
+export const assertUnixPeerLocation = ({ syncFiles, paths }, location) => {
   (location !== null &&
     typeof location === 'object' &&
     location.type === 'ocapn-peer' &&
@@ -39,10 +34,9 @@ export const assertUnixPeerLocation = (
     !location.designator.includes('\0') &&
     new TextEncoder().encode(location.designator).length <= 103) ||
     Fail`Invalid Unix peer location`;
-  const parent = syncFiles.stat(paths.dirname(location.designator));
-  (parent.kind === 'directory' &&
-    parent.mode % 0o100 === 0 &&
-    parent.uid === user.getUserId()) ||
+  const parent = paths.dirname(location.designator);
+  (syncFiles.stat(parent).kind === 'directory' &&
+    syncFiles.isPrivateToUser(parent)) ||
     Fail`Unix socket directory must be private and owned by this user`;
   return harden({
     type: /** @type {const} */ ('ocapn-peer'),
@@ -68,26 +62,25 @@ harden(assertUnixPeerLocation);
  * @param {SocketPowers} powers.sockets
  * @param {SyncFilePowers} powers.syncFiles
  * @param {PathPowers} powers.paths
- * @param {UserPowers} powers.user
  * @param {object} options
  * @param {string} options.socketPath
  * @param {NetlayerHandlers} options.handlers
  * @param {Logger} options.logger
  */
 export const makeUnixNetLayer = async (
-  { sockets, syncFiles, paths, user },
+  { sockets, syncFiles, paths },
   { socketPath, handlers, logger },
 ) => {
   assertUnixPeerLocation(
-    { syncFiles, paths, user },
+    { syncFiles, paths },
     {
       type: 'ocapn-peer',
       network: networkId,
       designator: socketPath,
     },
   );
-  /** @type {Set<SocketConnection>} */
-  const connections = new Set();
+  /** @type {Map<SocketConnection, () => void>} */
+  const connections = new Map();
   let stopped = false;
   /** @type {SocketListener} */
   let listener;
@@ -104,10 +97,16 @@ export const makeUnixNetLayer = async (
    * @param {boolean} originator
    */
   const attach = (socket, originator) => {
-    connections.add(socket);
+    let open = true;
+    const drop = () => {
+      if (!open) return;
+      open = false;
+      void socket.writer.throw(Error('Unix connection dropped'));
+    };
+    connections.set(socket, drop);
     const connection = handlers.makeConnection(netlayer, originator, {
       write(bytes) {
-        (!stopped && !socket.isDestroyed()) || Fail`Unix connection is closed`;
+        (!stopped && open) || Fail`Unix connection is closed`;
         bytes.length > 0 || Fail`Invalid Unix frame length`;
         for (let offset = 0; offset < bytes.length; offset += maxFrameLength) {
           const payload = bytes.subarray(offset, offset + maxFrameLength);
@@ -118,12 +117,17 @@ export const makeUnixNetLayer = async (
             payload.length + (more ? continuationFlag : 0),
           );
           frame.set(payload, 4);
-          socket.write(frame);
+          // Writes are paced by the host, not awaited here: the OCapN
+          // connection's write is synchronous. A write the host could not
+          // complete ends the connection.
+          socket.writer.next(frame).catch(error => {
+            if (!open) return;
+            logger.error('Unix socket write failed', error);
+            drop();
+          });
         }
       },
-      end() {
-        socket.destroy();
-      },
+      end: drop,
     });
     const header = new Uint8Array(4);
     let headerUsed = 0;
@@ -133,72 +137,78 @@ export const makeUnixNetLayer = async (
     /** @type {Uint8Array[]} */
     let fragments = [];
     let messageLength = 0;
-    socket.onData(data => {
-      if (typeof data === 'string') {
-        socket.destroy();
-        return;
-      }
+    /** @param {Uint8Array} data */
+    const feed = data => {
       let offset = 0;
-      try {
-        while (offset < data.length && !socket.isDestroyed()) {
-          if (headerUsed < 4) {
-            const count = Math.min(4 - headerUsed, data.length - offset);
-            header.set(data.subarray(offset, offset + count), headerUsed);
-            headerUsed += count;
-            offset += count;
-            if (headerUsed < 4) return;
-            const encodedSize = new DataView(header.buffer).getUint32(0);
-            more = encodedSize >= continuationFlag;
-            const size = encodedSize % continuationFlag;
-            (size > 0 && size <= maxFrameLength) ||
-              Fail`Invalid Unix frame length`;
-            payload = new Uint8Array(size);
-          }
-          const count = Math.min(
-            payload.length - payloadUsed,
-            data.length - offset,
-          );
-          payload.set(data.subarray(offset, offset + count), payloadUsed);
-          payloadUsed += count;
+      while (offset < data.length && open) {
+        if (headerUsed < 4) {
+          const count = Math.min(4 - headerUsed, data.length - offset);
+          header.set(data.subarray(offset, offset + count), headerUsed);
+          headerUsed += count;
           offset += count;
-          if (payloadUsed === payload.length) {
-            const complete = payload;
-            headerUsed = 0;
-            payloadUsed = 0;
-            payload = new Uint8Array();
-            if (more) {
-              fragments.push(complete);
-              messageLength += complete.length;
-            } else if (fragments.length === 0) {
-              handlers.handleMessageData(connection, complete);
-            } else {
-              const message = new Uint8Array(messageLength + complete.length);
-              let messageOffset = 0;
-              for (const fragment of fragments) {
-                message.set(fragment, messageOffset);
-                messageOffset += fragment.length;
-              }
-              message.set(complete, messageOffset);
-              fragments = [];
-              messageLength = 0;
-              handlers.handleMessageData(connection, message);
+          if (headerUsed < 4) return;
+          const encodedSize = new DataView(header.buffer).getUint32(0);
+          more = encodedSize >= continuationFlag;
+          const size = encodedSize % continuationFlag;
+          (size > 0 && size <= maxFrameLength) ||
+            Fail`Invalid Unix frame length`;
+          payload = new Uint8Array(size);
+        }
+        const count = Math.min(
+          payload.length - payloadUsed,
+          data.length - offset,
+        );
+        payload.set(data.subarray(offset, offset + count), payloadUsed);
+        payloadUsed += count;
+        offset += count;
+        if (payloadUsed === payload.length) {
+          const complete = payload;
+          headerUsed = 0;
+          payloadUsed = 0;
+          payload = new Uint8Array();
+          if (more) {
+            fragments.push(complete);
+            messageLength += complete.length;
+          } else if (fragments.length === 0) {
+            handlers.handleMessageData(connection, complete);
+          } else {
+            const message = new Uint8Array(messageLength + complete.length);
+            let messageOffset = 0;
+            for (const fragment of fragments) {
+              message.set(fragment, messageOffset);
+              messageOffset += fragment.length;
             }
+            message.set(complete, messageOffset);
+            fragments = [];
+            messageLength = 0;
+            handlers.handleMessageData(connection, message);
           }
         }
-      } catch (error) {
-        logger.error('Unix frame delivery failed', error);
-        socket.destroy();
       }
-    });
-    socket.onError(error => {
-      logger.error('Unix socket failed', error);
-      socket.destroy();
-    });
-    socket.onClose(() => {
+    };
+    void (async () => {
+      let failed = false;
+      try {
+        // A frame the peer sends after we drop the socket is not read: the
+        // loop ends because the reader does.
+        for await (const data of socket.reader) feed(data);
+      } catch (error) {
+        failed = true;
+        logger.error('Unix socket failed', error);
+      }
+      if (failed) {
+        drop();
+      } else {
+        // The peer ended its side, or we dropped ours: end ours in turn so
+        // anything still buffered is flushed rather than discarded.
+        open = false;
+        void socket.writer.return(undefined).catch(() => {});
+      }
+      await socket.closed;
       connections.delete(socket);
       connection.end();
       handlers.handleConnectionClose(connection);
-    });
+    })().catch(error => logger.error('Unix connection teardown failed', error));
     return connection;
   };
 
@@ -212,7 +222,7 @@ export const makeUnixNetLayer = async (
     locationId: locationToLocationId(location),
     connect(remote) {
       !stopped || Fail`Unix netlayer is shut down`;
-      assertUnixPeerLocation({ syncFiles, paths, user }, remote);
+      assertUnixPeerLocation({ syncFiles, paths }, remote);
       // The durable layer owns logical session reuse. Sharing a physical
       // stream here would mix envelopes from distinct session tokens.
       return attach(sockets.connectPath(remote.designator), true);
@@ -224,7 +234,7 @@ export const makeUnixNetLayer = async (
       // socket) here. Never perform a later unlink in the asynchronous close
       // callback.
       listener.close();
-      for (const socket of connections) socket.destroy();
+      for (const drop of connections.values()) drop();
     },
     sendSessionHandshake(connection, captpVersion, identity, codec) {
       const { keyPair, location: peerLocation, locationSignature } = identity;
@@ -246,7 +256,8 @@ export const makeUnixNetLayer = async (
     path: socketPath,
     mode: 0o600,
     onConnection: connection => {
-      if (stopped) connection.destroy();
+      if (stopped)
+        void connection.writer.throw(Error('Unix netlayer is shut down'));
       else attach(connection, false);
     },
     onError: error => logger.error('Unix listener failed', error),

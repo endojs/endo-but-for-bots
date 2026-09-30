@@ -63,18 +63,20 @@ const fixture = async t => {
     path: socketPath,
     onConnection: socket => {
       connections.add(socket);
-      socket.onClose(() => connections.delete(socket));
+      void socket.closed.then(() => connections.delete(socket));
       void makeLocalControl(
         controlPowers,
         socket,
         'worker',
         Far('Admin', { echo: value => value }),
-      ).catch(() => socket.destroy());
+      ).catch(error => socket.writer.throw(error));
     },
     onError: () => {},
   });
   t.teardown(async () => {
-    for (const socket of connections) socket.destroy();
+    await Promise.all(
+      [...connections].map(socket => socket.writer.throw(Error('teardown'))),
+    );
     listener.close();
     await listener.closed;
     await rm(path, { recursive: true, force: true });
@@ -112,12 +114,9 @@ test.serial('malformed local frame closes only that connection', async t => {
   t.timeout(10_000);
   const path = await fixture(t);
   const bad = nodePowers.sockets.connectPath(path);
-  t.teardown(() => bad.destroy());
-  const closed = new Promise(resolve => {
-    bad.onClose(() => resolve(undefined));
-  });
-  bad.write(new Uint8Array([255, 255, 255, 255]));
-  await closed;
+  t.teardown(() => bad.writer.throw(Error('teardown')));
+  await bad.writer.next(new Uint8Array([255, 255, 255, 255]));
+  await bad.closed;
   const client = await connectLocalControl(controlPowers, path);
   t.teardown(client.close);
   t.is(await client.call('echo', 'still available'), 'still available');
