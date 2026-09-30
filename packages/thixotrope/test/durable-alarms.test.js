@@ -478,6 +478,17 @@ test.serial('retiring a vat drops the rows and promises it armed', async t => {
   doomedFacet.arm('b', 6000n);
   survivorFacet.arm('c', 7000n);
   t.is(host.alarms.status().retained, 3n);
+  // A kit without a row: the factory re-run for an alarm already released.
+  await t.throwsAsync(
+    Promise.resolve(
+      host.daemon.makeResource('alarm', {
+        workerId: doomed.workerId,
+        alarmId: 'released-earlier',
+      }),
+    ),
+    { message: 'Alarm released' },
+  );
+  t.is(host.alarms.status().materialised, 4n);
   await doomed.retire();
   t.is(host.alarms.status().retained, 1n, "only the survivor's row is left");
   t.is(host.alarms.status().materialised, 1n);
