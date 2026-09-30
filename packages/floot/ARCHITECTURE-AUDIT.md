@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-21 |
-| **Updated** | 2026-09-30 |
+| **Updated** | 2026-10-01 |
 | **Author** | kumavis (prompted) |
 | **Status** | Active — remediation and retrospective durability audit in progress |
 | **Baseline** | Endo `cdccdbb88`; endo-host `73405ca` |
@@ -11,15 +11,18 @@
 
 ## Purpose and maintenance
 
-Priority current-state review (updated 2026-09-30):
+Priority current-state review (updated 2026-10-01):
 [Refactor alignment](REFACTOR-ALIGNMENT.md) compares the retained repository with
 the intended end state, rather than reviewing historical commits. It is the
 current prioritization entry point: primary ownership and explicit account identity
 are consolidated, and the native protocol-conformance matrix is complete.
-All four backends pass generation-189 acceptance on app `604ec1a8d`, host `4a5ac8a`.
-The release uses unchanged native image pins and the byte-only provider listener;
-fresh
-Claude/Codex restart recall retains native checkpoints on both completed turns.
+Generation 190 runs app `9b888d1cc`, host `15fd7b1`, with the rebuilt Claude image.
+Both requested correctness fixes pass targeted live probes and ordinary restart
+checks on all four backends; Claude/Codex recall retains two native checkpoints.
+OpenCode's new policy gate refuses a model-modified command despite successful
+network access, so the preceding complete lifecycle matrix remains generation 189.
+The [source-bulk audit](SOURCE-BULK-AUDIT.md) measures 42,786 backend/shared
+lines and records pending deletion, duplication and scope decisions.
 Simplicity is still unproven, and whole-context/unresolved-evidence memory bounds
 remain incomplete. Direct-Fae compaction, evidence paging, local-development
 storage policy and native process-loss recovery retain their explicit deferrals.
@@ -53,8 +56,9 @@ The first OpenCode auto-free seed used Endo's JavaScript tool rather than native
 shell and failed correctly; a fresh run passes with an explicit test-prompt
 distinction, without replay or weakened evidence checks.
 All disposable test sessions are removed; private evidence remains in endo-host's
-deployment record. The missing initial Claude checkpoint repeats, and the source
-trace now records FA-14's shared tool-error classification gap below.
+deployment record. The missing initial Claude checkpoint and FA-14's shared
+tool-error classification gap were found on generation 189; both are fixed and
+verified on generation 190 as recorded below.
 The preceding simplification slice removes Codex's
 second hosted model-list authority in favor of the same account catalog used by
 admission, deletes its native-descriptor normalization API, removes OpenCode's
@@ -1586,7 +1590,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 159 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed; deployed since generation 159; the 2026-09-22 inventory finds only shared entrypoints in the host-root-reachable graph; two dormant direct-provider formulas pinned to a pruned release remain for a decision |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
-| FA-14 | High | Explicit tool failure status is lost from durable evidence | Source-proven ontology gap; live error-text observation | Source fix and local durability regressions pass; Tokyo deployment verification pending |
+| FA-14 | High | Explicit tool failure status is lost from durable evidence | Source-proven ontology gap; live error-text observation | Fixed and deployed on generation 190; all four backends retain host failure/success flags through restart |
 
 ## FA-01 — Archived failures are missing from normal history
 
@@ -4578,7 +4582,7 @@ response, not proof of undone effects, automatic whole-turn failure, or permissi
 to replay. Cover successful and failed native/mediated tools, journal revival,
 archival and recovered/late results; keep unknown outcomes distinct.
 The acceptance helper must inspect canonical `failed`, not the MCP wire property.
-Source implementation, 2026-10-01; Tokyo verification pending:
+Source implementation and Tokyo verification, 2026-10-01:
 native explicit status maps to the canonical optional boolean `failed` at the
 adapter/hosted-turn boundary, and actual host rejection records it before rethrow.
 The existing journal reducer validates and retains classification through event
@@ -4593,6 +4597,21 @@ No new journal, storage format, effect owner or automatic replay policy is added
 Full Floot, space-floot and chat tests pass, alongside native mapping and archival
 regressions; the independent review also checks the actual provider wire conversion.
 
+Generation 190 deploys app `9b888d1cc` and host `15fd7b1`.
+One-shot probes on Claude, Codex Luna, OpenCode auto-free and Fae auto-free
+retain actual Endo execution rejection as `failed: true` and successful mediated
+execution as `failed: false` in turns, canonical transcript and history.
+Those records survive an ordinary daemon restart without another inference.
+Claude and Codex retain explicit failure for a native exit-7 command too.
+OpenCode marks its shell tool completed despite a nonzero exit; the shared path
+retains that native classification and does not invent an error-text heuristic.
+All four also pass fresh seed/restart/recall; Claude/Codex retain checkpoints on
+both restoration turns. These are ordinary restart tests, not process-loss proof.
+Full OpenCode policy-matrix verification stops because the model quotes the URL
+in its otherwise successful public-network command; no full-matrix pass is claimed.
+Detailed manifests and cleanup are recorded in endo-host
+`ops/explicit-journal-deployment-20260924.md`.
+
 ### Initial Claude tool-heavy checkpoint omission — 2026-10-01
 
 A fresh generation-189 diagnostic session reproduces the static capture warning
@@ -4603,7 +4622,7 @@ these siblings through their shared assistant API message ID.
 Our capture/helper and host coverage instead required a strictly linear frontier.
 This is native format handling, not another host-effects journal or runtime owner.
 
-Source fix and independent review pass; deployment verification is pending.
+Source fix, independent review and generation-190 deployment verification pass.
 Capture and host coverage reuse one predicate for a previously retained exact
 tool owner, matching source UUID and tool ID in the current message group.
 Declared ownership is checked even on the linear path, and arbitrary, future,
@@ -4617,6 +4636,15 @@ All 540 Claude tests pass; the independent reviewer reruns 209 changed-suite
 tests and package lint reports no errors.
 Both in-image helpers and the trusted host consume the existing shape module,
 so the Claude image must be rebuilt before a live claim is made.
+The rebuilt `9867f318…` image produces the initial tool-heavy native checkpoint
+in the generation-190 intentional-failure probe, including native and Endo tools.
+The checkpoint remains after restart, and the separate ordinary restart-recall
+pair contains two native checkpoints. This does not claim every possible native
+record/branch is supported or establish process-loss recovery.
+
+The requested follow-up [source-bulk audit](SOURCE-BULK-AUDIT.md) measures the
+current 42,786-line backend/shared scope and records remaining dead-code,
+compatibility and duplication candidates with explicit pending status.
 
 ## Preserve these boundaries
 

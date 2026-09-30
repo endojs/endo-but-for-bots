@@ -7,28 +7,35 @@ The target is one owner per responsibility, not the smallest possible line count
 Fae compaction remains on hold.
 Process-loss recovery remains the separate investigation tracked in PR #1323.
 
-Current deployment: generation 189 runs app `604ec1a8d` and host `4a5ac8a`,
+Current deployment: generation 190 runs app `9b888d1cc` and host `15fd7b1`.
+Both October 1 fixes pass targeted durable-status and Claude capture probes,
+and all four backends pass ordinary restart recall.
+The OpenCode policy-matrix verifier refuses harmless URL quoting by its auto-free
+model, despite a successful public request; a complete new matrix is not claimed.
+Generation 189 ran app `604ec1a8d` and host `4a5ac8a`,
 including the September 30 setup/model/MCP deletions, admission/dispatch
 separation and four subsequent cleanup slices below.
 Those four slices remove 232 net runtime lines across the changed application
 packages: Claude conversion 3, broker constructors 89, provider selection 61,
 and public text protocol 79. No replacement framework is added.
-The four backend/shared packages total 42,712 non-test source lines versus the
+The four backend/shared packages now total 42,786 non-test source lines versus the
 25,463 design baseline; this does not establish the overall size target.
-All four backends pass fresh lifecycle and ordinary restart
-acceptance. Earlier not-deployed notes describe the state when those slices landed.
-The architecture audit records exact coverage and the outstanding initial Claude
-tool-seed capture omission and FA-14's dropped tool error classification;
+Generation 189 passed fresh lifecycle and ordinary restart acceptance on all
+four backends. Earlier not-deployed notes describe the state when those slices landed.
+The architecture audit records exact coverage and the fixed initial Claude
+tool-seed capture omission and FA-14's explicit tool error classification;
 no universal capture or process-loss claim is made.
 
 October 1 source follow-up: FA-14 retains explicit tool failure classification
 through the existing reducer, evidence reconciler, projections and UI folds.
 It closes a missing fact in those contracts, not a reason to create another
 outcome store or infer failures from text.
-Local replay/archive/provider-wire tests and independent review pass;
-the deployed generation-189 evidence above predates this fix.
-The requested post-fix source-bulk audit will quantify the retained code and
-trace remaining duplication and dead-code candidates rather than assuming these
+Local replay/archive/provider-wire tests and independent review pass.
+Generation-190 probes retain the classification after daemon restart on all
+four backends; the older generation-189 evidence predates this fix.
+The requested [post-fix source-bulk audit](SOURCE-BULK-AUDIT.md) quantifies the
+retained code and traces remaining duplication and dead-code candidates.
+It records pending deletion/contract/scope decisions, not a claim that these
 correctness changes prove a smaller implementation.
 
 The Claude checkpoint slice also removes the separate ordinary host-coverage
@@ -37,8 +44,9 @@ One predicate in the existing native-shape module describes the pinned CLI's
 parallel tool-result ancestry for both capture and host coverage.
 It does not merge the filesystem/parser boundary with host authority validation,
 add a context owner, or relax signed/opaque byte and prior-prefix checks.
-The realistic regression and byte-exact capture/import/recapture tests pass;
-live verification requires the rebuilt Claude image, not only the host source.
+The realistic regression and byte-exact capture/import/recapture tests pass.
+The rebuilt Claude image captures the initial tool-heavy probe on generation 190;
+that checkpoint survives restart and ordinary native restart recall also passes.
 
 ## Native-context mechanism inventory, 2026-09-30
 
