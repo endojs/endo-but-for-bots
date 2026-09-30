@@ -478,11 +478,26 @@ const prepareConfig = async (t, { gcEnabled = true } = {}) => {
 const testNeedsNodeWorker =
   process.env.ENDO_BIN && !process.env.ENDO_NODE_WORKER_BIN ? test.skip : test;
 
+// A leaked rejection (typically a daemon's graceful-disconnect reason,
+// "Termination requested", arriving on a promise nobody observes) is reported
+// by ava only after the whole file has run, so its report cannot say which
+// test leaked it.  Log it when it happens, naming the test in flight; ava
+// still fails the file.
+let testInFlight = '(no test yet)';
+process.on('unhandledRejection', reason => {
+  console.error(
+    `Unhandled rejection while running ${JSON.stringify(testInFlight)}:`,
+    reason,
+  );
+});
+
 test.beforeEach(t => {
+  testInFlight = t.title;
   t.context = [];
 });
 
 test.afterEach.always(async t => {
+  testInFlight = `${t.title} (teardown)`;
   // Stop all daemons first, then cancel the client connections.
   // Stopping first avoids an unhandled rejection race: if cancel() fires
   // before the daemon has shut down, CapTP teardown can produce derivative
