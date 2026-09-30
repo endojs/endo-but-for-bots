@@ -756,13 +756,13 @@ impl HeapStore for SqliteHeapStore {
             _ => false,
         };
         if !contiguous {
-            // The dense read names the first missing page, so both answers
-            // to this query refuse the store the same way; it runs only on
-            // this failure path.
+            // Take the dense read's refusal (the row index where the rows
+            // stop being `0, 1, 2, …`), so both answers to this query refuse
+            // the store the same way; it runs only on this failure path.
             self.page_edges()?;
             return Err(content_damage("sqlite: page_edges not contiguous"));
         }
-        Ok(count as u32)
+        u32::try_from(count).map_err(|_| content_damage("sqlite: page_edges beyond the page space"))
     }
 
     fn reachable_page_set(
@@ -962,8 +962,13 @@ impl HeapStore for SqliteHeapStore {
     }
 
     fn small_section_hashes(&self) -> Result<[[u8; 32]; SMALL_SECTION_COUNT], StoreError> {
-        if Self::stored_manifest(&self.conn)?.is_none() {
-            return Err(StoreError::Empty);
+        let manifest = Self::stored_manifest(&self.conn)?.ok_or(StoreError::Empty)?;
+        // A store stamped before schema 28 keeps its small state in one row
+        // and has no section digests until it is migrated.
+        if manifest.store_schema < 28 {
+            return Err(StoreError::NeedsMigration {
+                found: manifest.store_schema,
+            });
         }
         read_section_hashes(&self.conn)
     }
@@ -1691,6 +1696,11 @@ mod tests {
         };
         store.replace_for_migration(&current, &old, &small).unwrap();
         assert_eq!(store.read_small_state().unwrap(), small);
+        // It has no section digests until it is migrated, which is not damage.
+        assert_eq!(
+            store.small_section_hashes(),
+            Err(StoreError::NeedsMigration { found: 27 })
+        );
         store.conn.execute("DELETE FROM small_state", []).unwrap();
         assert_eq!(
             store.read_small_state(),

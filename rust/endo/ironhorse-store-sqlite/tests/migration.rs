@@ -96,11 +96,25 @@ fn historical_boot_cannot_authorize_migration_even_with_matching_signature() {
     store.close().unwrap();
 }
 
+/// Also without the section table, which a schema-5 store never had (the
+/// fixture writer's store keeps the one this build's commit made): its small
+/// state is the one row, and the migration's write creates the sections.
 #[test]
 fn v5_sqlite_store_migrates_in_place_and_keeps_working() {
-    let dir = TempDir::new("ih-migrate-sqlite");
+    for without_sections in [false, true] {
+        v5_sqlite_store_migrates(without_sections);
+    }
+}
+
+fn v5_sqlite_store_migrates(without_sections: bool) {
+    let dir = TempDir::new(&format!("ih-migrate-sqlite-{without_sections}"));
     let path = dir.join("store.sqlite");
     write_matching_boot_v5(&path);
+    if without_sections {
+        let raw = rusqlite::Connection::open(&path).unwrap();
+        raw.execute_batch("DROP TABLE small_sections").unwrap();
+        raw.close().unwrap();
+    }
 
     // Open no longer migrates (review wave 4, F2): the caller runs the
     // signature-gated migration.

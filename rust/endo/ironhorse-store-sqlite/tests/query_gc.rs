@@ -389,7 +389,7 @@ fn summary_page_count_refuses_gapped_page_edges() {
     );
     drop(store);
 
-    for (label, damage, first_missing) in [
+    for (label, damage, out_of_place) in [
         (
             "gap and phantom",
             format!(
@@ -423,13 +423,13 @@ fn summary_page_count_refuses_gapped_page_edges() {
             raw.close().unwrap();
         }
         // The indexed count refuses the store as the dense read of the same
-        // rows does: by the first missing page, a corrupt store rather than
-        // a retryable fault.
+        // rows does (at the row index where they stop being 0, 1, 2, …), a
+        // corrupt store rather than a retryable fault.
         let store = SqliteHeapStore::open(&path).unwrap();
         let err = store.summary_page_count().unwrap_err();
         assert_eq!(
             err,
-            StoreError::MissingRow("page edges", first_missing),
+            StoreError::MissingRow("page edges", out_of_place),
             "{label}"
         );
         assert_eq!(store.page_edges().unwrap_err(), err, "{label}");
