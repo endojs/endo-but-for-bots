@@ -299,7 +299,10 @@ original promise and listener.
 The host retains each deadline and its eventual fulfillment time or cancellation in an alarm ledger.
 It records the outcome before notifying the clock, and deletes it only after the clock acknowledges
 recording its own settlement.
-Interrupted acknowledgements retry; other cleanup failures retry on the next clock operation.
+Interrupted acknowledgements retry at once; other cleanup failures retry the next time the clock
+arms an alarm, since arming is the operation that needs a row.
+Acknowledgement retires the alarm's promise resource, so a restart re-seats only alarms still pending
+or unacknowledged, and retiring a vat drops the rows it armed.
 OS timers are disposable, and there is no periodic scan of a guest clock vat.
 `alarms` reports `pending` deadlines, `materialised` promise resources, and `stopped` status.
 Its legacy `observations` field is always zero; the command does not expose the retained-outcome count.

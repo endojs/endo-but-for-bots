@@ -627,6 +627,12 @@ export const makeOcapn = async ({
                 /** @type {NonNullable<import('./types.js').SessionHooks['onExport']>} */ (
                   sessionHooks.onExport
                 )(connection, slot, value)),
+            onExportReleased:
+              sessionHooks.onExportReleased &&
+              (slot =>
+                /** @type {NonNullable<import('./types.js').SessionHooks['onExportReleased']>} */ (
+                  sessionHooks.onExportReleased
+                )(connection, slot)),
             onImport:
               sessionHooks.onImport &&
               ((slot, value) =>

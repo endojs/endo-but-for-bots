@@ -30,6 +30,7 @@
 /** @import { PromiseKit } from '@endo/promise-kit' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
+import { PENDING_ANSWER_ABORTED_MESSAGE } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makePromiseKit } from '@endo/promise-kit';
 
@@ -218,6 +219,8 @@ export const serveThixotrope = async (
       ),
       makeResource: (name, description) =>
         daemon.makeResource(name, description),
+      retireResource: (name, description) =>
+        daemon.retireResource(name, description),
       ...(alarmNow === undefined ? {} : { now: alarmNow }),
     },
   );
@@ -261,6 +264,9 @@ export const serveThixotrope = async (
         nativeWorkers: platform.nativeWorkers,
         codec: syrupCodec,
         idleSleepMs,
+        onRetireWorker: workerId => {
+          alarms.retireWorker(workerId);
+        },
         resources: {
           alarm: alarms.resource,
           alarms: alarms.clockResource,
@@ -394,9 +400,10 @@ export const serveThixotrope = async (
     const getClock = () => {
       if (workspaceClock) return workspaceClock;
       const opening = workspace.evaluate(
-        `(globalThis.clock ??= (${makeGuestClock.toString()})(alarms))`,
+        `(globalThis.clock ??= (${makeGuestClock.toString()})(alarms, { restartMessage }))`,
         {
           alarms: daemon.makeResource('alarms', { workerId: config.workerId }),
+          restartMessage: PENDING_ANSWER_ABORTED_MESSAGE,
         },
       );
       workspaceClock = opening;

@@ -190,6 +190,10 @@ establish hardware power-loss behavior.
 ## Host resources and persistence boundaries
 
 Host capabilities have durable descriptions and are reconstructed through registered factories.
+A resource whose meaning has ended is retired: the host forgets its instance and nulls its recorded
+exports, so a restart seats tombstones for it rather than re-running the factory, and the guest's
+release of an export drops that export's record.
+Retiring a worker also releases the host state keyed by it, such as its alarm rows.
 Host-origin nondeterministic results enter guest state as journaled protocol replies.
 The host endpoint treats unrecoverable pending host-operation answers as at-most-once obligations:
 restart rejects them rather than blindly repeating an external effect.

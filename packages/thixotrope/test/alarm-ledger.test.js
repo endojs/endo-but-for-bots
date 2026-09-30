@@ -1,14 +1,15 @@
 // @ts-check
 import harden from '@endo/harden';
 import { E, Far } from '@endo/far';
+import { PENDING_ANSWER_ABORTED_MESSAGE } from '@endo/ocapn';
 import { makePromiseKit } from '@endo/promise-kit';
 import test from '@endo/ses-ava/test.js';
 
 import { makeDurableAlarms } from '../src/alarms/durable-alarms.js';
 import { makeGuestClock } from '../src/alarms/guest-clock.js';
 
-const restarted = () =>
-  Error('session resumed after restart; pending answer aborted');
+const restartMessage = PENDING_ANSWER_ABORTED_MESSAGE;
+const restarted = () => Error(restartMessage);
 
 const makeFixture = () => {
   let saved;
@@ -43,6 +44,7 @@ const makeFixture = () => {
         storage,
         now: () => now,
         makeResource: (_name, description) => alarms.resource(description),
+        retireResource: () => true,
       },
     );
     return {
@@ -142,6 +144,7 @@ for (const applied of [false, true]) {
           done.resolve(undefined);
         },
       }),
+      { restartMessage },
     );
     const { settlement } = await E(clock).arm(2000n);
     t.not(settlement, host.promise, 'callers receive a guest-local promise');
@@ -153,16 +156,22 @@ for (const applied of [false, true]) {
   });
 }
 
-test('guest abandons an interrupted arm and retries failed cleanup on use', async t => {
+test('guest abandons an interrupted arm and retries failed cleanup on the next arm', async t => {
   t.timeout(5000);
   const attempted = makePromiseKit();
+  const pending = makePromiseKit();
+  let arms = 0;
   let calls = 0;
   let retained = false;
   const clock = makeGuestClock(
     Far('HostClock', {
       arm: () => {
-        retained = true;
-        throw restarted();
+        arms += 1;
+        if (arms === 1) {
+          retained = true;
+          throw restarted();
+        }
+        return harden({ settlement: pending.promise });
       },
       release: () => {
         calls += 1;
@@ -174,6 +183,7 @@ test('guest abandons an interrupted arm and retries failed cleanup on use', asyn
       },
       now: () => 3000n,
     }),
+    { restartMessage },
   );
   await t.throwsAsync(() => E(clock).arm(2000n), {
     message: restarted().message,
@@ -183,7 +193,12 @@ test('guest abandons an interrupted arm and retries failed cleanup on use', asyn
   await new Promise(resolve => setTimeout(resolve, 0));
   t.is(calls, 1, 'permanent failure does not spin');
   t.true(retained);
+  // Reading the time is not a use that pays for cleanup.
   t.is(await E(clock).now(), 3000n);
+  t.is(calls, 1);
+  t.true(retained);
+  // Arming is: it needs a row, so it clears its own debts first.
+  await E(clock).arm(4000n);
   t.is(calls, 2);
   t.false(retained);
 });

@@ -87,11 +87,15 @@ const alarmDescription = (workerId, alarmId) => harden({ workerId, alarmId });
  * @param {(name: string, description?: unknown) => any} options.makeResource
  *   the daemon's, late-bound because the daemon does not exist yet when this
  *   is constructed
+ * @param {(name: string, description?: unknown) => boolean} options.retireResource
+ *   the daemon's: forget a promise resource once its outcome has been
+ *   acknowledged, so it is neither memoised for a reused id nor re-seated by
+ *   every later restart
  * @param {() => bigint} [options.now] milliseconds since the epoch
  */
 export const makeDurableAlarms = (
   { timers },
-  { storage, makeResource, now },
+  { storage, makeResource, retireResource, now },
 ) => {
   const readNow = now ?? (() => BigInt(timers.now()));
 
@@ -190,6 +194,20 @@ export const makeDurableAlarms = (
       else if (row.outcome !== undefined) kit.resolve(row.outcome);
     }
     return kit.promise;
+  };
+
+  /**
+   * Drop the per-process promise for an alarm whose row is gone: the kit, and
+   * the endpoint's memo and export record, so a reused id gets a fresh
+   * promise and a restart does not re-create a promise nobody can release.
+   *
+   * @param {string} key
+   * @param {string} workerId
+   * @param {string} alarmId
+   */
+  const forget = (key, workerId, alarmId) => {
+    kits.delete(key);
+    retireResource('alarm', alarmDescription(workerId, alarmId));
   };
 
   /** @param {string} key */
@@ -315,11 +333,48 @@ export const makeDurableAlarms = (
           const next = new Map(rows);
           next.delete(key);
           commit(next);
-          kits.delete(key);
+          forget(key, workerId, alarmId);
           rearm();
         },
         now: () => readNow(),
       });
+    },
+
+    /**
+     * A vat is being retired: nothing it armed can be delivered or released
+     * by it any more, so drop its rows and its promise resources now rather
+     * than letting them count against every other clock for the life of the
+     * state directory.
+     *
+     * @param {string} workerId
+     * @returns {number} how many rows were dropped
+     */
+    retireWorker: workerId => {
+      const next = new Map(rows);
+      /** @type {Array<string>} */
+      const dropped = [];
+      for (const [key, row] of rows) {
+        if (row.workerId === workerId) {
+          next.delete(key);
+          dropped.push(row.alarmId);
+        }
+      }
+      if (dropped.length > 0) commit(next);
+      for (const alarmId of dropped) {
+        forget(keyFor(workerId, alarmId), workerId, alarmId);
+      }
+      // A kit can outlive its row: restore materialises one for an alarm
+      // already released, and a failed row write leaves one behind. Worker
+      // ids are fixed-width, so the prefix names exactly this vat's keys.
+      const prefix = keyFor(workerId, '');
+      for (const key of [...kits.keys()]) {
+        if (key.startsWith(prefix)) {
+          forget(key, workerId, key.slice(prefix.length));
+        }
+      }
+      retireResource('alarms', harden({ workerId }));
+      rearm();
+      return dropped.length;
     },
 
     /** Re-arm the host timer from durable state. Call after sessions restore. */
