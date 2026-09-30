@@ -160,7 +160,50 @@ test('provideSession rejects locations with a short designator', async t => {
         designator: 'abcd',
         hints: { 'mock:to': 'default' },
       }),
-    { message: /designator must be a 32-byte Ed25519 key/ },
+    { message: /designator must be 64 lowercase hex chars/ },
+  );
+  network.shutdown();
+});
+
+test('provideSession rejects a non-hex designator', async t => {
+  const network = makeNetworkForTest(t, { codec: cborCodec });
+  addFreshKey(network);
+  const { transportA } = makeMockTransportPair();
+  await network.addTransport(transportA);
+  // 64 non-hex chars: the old length-only check accepted this, and
+  // `hexToBytes` turned it into 32 zero bytes (a small-order key).
+  await t.throwsAsync(
+    async () =>
+      network.provideSession({
+        type: 'ocapn-peer',
+        network: 'np',
+        transport: 'np',
+        designator: 'z'.repeat(64),
+        hints: { 'mock:to': 'default' },
+      }),
+    { message: /designator must be 64 lowercase hex chars/ },
+  );
+  network.shutdown();
+});
+
+test('provideSession rejects an uppercase spelling of a peer designator', async t => {
+  const network = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId } = addFreshKey(network);
+  const { transportA } = makeMockTransportPair();
+  await network.addTransport(transportA);
+  // The raw designator string keys `active`/`inProgress`/`waiters`, so
+  // an uppercase spelling of a peer we already hold would once open a
+  // second, duplicate session instead of reusing the first.
+  await t.throwsAsync(
+    async () =>
+      network.provideSession({
+        type: 'ocapn-peer',
+        network: 'np',
+        transport: 'np',
+        designator: keyId.toUpperCase(),
+        hints: { 'mock:to': 'default' },
+      }),
+    { message: /designator must be 64 lowercase hex chars/ },
   );
   network.shutdown();
 });
@@ -472,7 +515,12 @@ test('provideSession rejects after handshake timeout', async t => {
   addFreshKey(net);
   await net.addTransport(makeStallingTransport());
 
-  const peerKey = '11'.repeat(32);
+  // A real, strong peer key so the dial reaches the stalling transport
+  // and times out, rather than being rejected up front by the weak-key
+  // guard.
+  const peerKey = addFreshKey(
+    makeNetworkForTest(t, { codec: cborCodec }),
+  ).keyId;
   await t.throwsAsync(
     async () =>
       net.provideSession({
@@ -554,11 +602,17 @@ test('shutdown rejects pending provideSession waiters', async t => {
   const net = makeNetworkForTest(t, { codec: cborCodec });
   addFreshKey(net);
   await net.addTransport(makeStallingTransport());
+  // A real, strong peer key (a fresh keyId is a valid prime-order
+  // Ed25519 point) so the dial reaches the stalling transport rather
+  // than being rejected up front by the weak-key guard.
+  const peerKey = addFreshKey(
+    makeNetworkForTest(t, { codec: cborCodec }),
+  ).keyId;
   const pending = net.provideSession({
     type: 'ocapn-peer',
     network: 'np',
     transport: 'np',
-    designator: '22'.repeat(32),
+    designator: peerKey,
     hints: { 'stall:to': 'x' },
   });
   const rejected = t.throwsAsync(pending, { message: /network shutdown/ });

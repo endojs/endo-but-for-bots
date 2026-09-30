@@ -120,6 +120,10 @@ component, so without it the holder of A could also claim A + T for
 each torsion point T.
 The conversion drops the sign of x, so the holder of A can still claim
 -A, a second identity for the same key holder.
+`derive_remote_static_pubkey` applies the same valid/strong check to the
+responder static the initiator dials (error code 3): a weak responder
+key zeroes the `es`/`ss` DH results, forfeiting identity hiding and
+letting a keyless party complete the handshake.
 IK message 1 carries no freshness (Noise §7.7 destination property 2),
 so a captured SYN passes this check again when replayed.
 This check binds the claimed identity to the handshake; it does not make

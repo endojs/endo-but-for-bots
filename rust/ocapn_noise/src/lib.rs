@@ -119,6 +119,15 @@ unsafe fn derive_remote_static_pubkey() -> Option<<X25519 as DH>::Pubkey> {
         tmp
     };
     let vk = VerifyingKey::from_bytes(&bytes).ok()?;
+    // Reject a weak responder static. A small-order or torsion-carrying
+    // Ed25519 key converts to an X25519 point whose `es`/`ss` DH results
+    // are all zeros (noise-rust-crypto's X25519 does not reject a
+    // zero output), which destroys initiator identity hiding and lets a
+    // party holding no keys complete the handshake. This mirrors the
+    // responder-side check in `responder_read_syn`.
+    if vk.is_weak() || !vk.to_edwards().is_torsion_free() {
+        return None;
+    }
     let mont_bytes: [u8; 32] = vk.to_montgomery().to_bytes();
     Some(<X25519 as DH>::Pubkey::from_slice(&mont_bytes))
 }
@@ -208,7 +217,8 @@ fn generate_responder_keys() {
 /// Error codes:
 ///   1 = could not load initiator's Ed25519 signing key from BUFFER
 ///   2 = could not derive initiator's static X25519 keypair
-///   3 = INTENDED_RESPONDER_KEY is not a valid Ed25519 verifying key
+///   3 = INTENDED_RESPONDER_KEY is not a valid Ed25519 verifying key, or
+///       is weak (small-order or torsion-carrying)
 ///   4 = Noise handshake state initialization or write_message failed
 #[unsafe(no_mangle)]
 fn initiator_write_syn() -> i32 {
@@ -237,11 +247,15 @@ fn initiator_write_syn() -> i32 {
         if !hs.is_write_turn() {
             return 4;
         }
+        // Copy the payload out of BUFFER before calling `write_message`.
+        // The input and output ranges are disjoint, but passing two slices
+        // of the same `static mut` array would take overlapping shared and
+        // exclusive borrows; a local copy keeps this defensible under
+        // Stacked Borrows. The messages are tiny, so the copy is cheap.
+        let mut payload = [0u8; SYN_PAYLOAD_LENGTH];
+        payload.copy_from_slice(&BUFFER[SYN_PAYLOAD_OFFSET..][..SYN_PAYLOAD_LENGTH]);
         if hs
-            .write_message(
-                &BUFFER[SYN_PAYLOAD_OFFSET..][..SYN_PAYLOAD_LENGTH],
-                &mut BUFFER[SYN_OFFSET..][..SYN_LENGTH],
-            )
+            .write_message(&payload, &mut BUFFER[SYN_OFFSET..][..SYN_LENGTH])
             .is_err()
         {
             return 4;
@@ -314,9 +328,14 @@ fn responder_read_syn() -> i32 {
         if hs.is_write_turn() {
             return 4;
         }
+        // Copy the SYN out of BUFFER so `read_message` does not take
+        // overlapping shared/exclusive borrows of the same `static mut`
+        // array (see `initiator_write_syn`).
+        let mut syn = [0u8; SYN_LENGTH];
+        syn.copy_from_slice(&BUFFER[SYN_OFFSET..][..SYN_LENGTH]);
         if hs
             .read_message(
-                &BUFFER[SYN_OFFSET..][..SYN_LENGTH],
+                &syn,
                 &mut BUFFER[SYN_PAYLOAD_OFFSET..][..SYN_PAYLOAD_LENGTH],
             )
             .is_err()
@@ -384,11 +403,12 @@ fn responder_write_synack() -> i32 {
             None => return 1,
             Some(hs) => hs,
         };
+        // Copy the payload out of BUFFER before `write_message` (see
+        // `initiator_write_syn`).
+        let mut payload = [0u8; SYNACK_PAYLOAD_LENGTH];
+        payload.copy_from_slice(&BUFFER[SYNACK_PAYLOAD_OFFSET..][..SYNACK_PAYLOAD_LENGTH]);
         if hs
-            .write_message(
-                &BUFFER[SYNACK_PAYLOAD_OFFSET..][..SYNACK_PAYLOAD_LENGTH],
-                &mut BUFFER[SYNACK_OFFSET..][..SYNACK_LENGTH],
-            )
+            .write_message(&payload, &mut BUFFER[SYNACK_OFFSET..][..SYNACK_LENGTH])
             .is_err()
         {
             return 2;
@@ -431,9 +451,13 @@ fn initiator_read_synack() -> i32 {
             None => return 1,
             Some(hs) => hs,
         };
+        // Copy the SYNACK out of BUFFER before `read_message` (see
+        // `initiator_write_syn`).
+        let mut synack = [0u8; SYNACK_LENGTH];
+        synack.copy_from_slice(&BUFFER[SYNACK_OFFSET..][..SYNACK_LENGTH]);
         if hs
             .read_message(
-                &BUFFER[SYNACK_OFFSET..][..SYNACK_LENGTH],
+                &synack,
                 &mut BUFFER[SYNACK_PAYLOAD_OFFSET..][..SYNACK_PAYLOAD_LENGTH],
             )
             .is_err()

@@ -325,7 +325,7 @@ export const makeOcapnSessionCryptography = ({
       );
     } else if (code === 3) {
       throw new Error(
-        'OCapN Noise Protocol intended responder key is not a valid ed25519 verifying key',
+        'OCapN Noise Protocol intended responder key is not a valid, strong ed25519 verifying key',
       );
     } else if (code === 4) {
       throw new Error(

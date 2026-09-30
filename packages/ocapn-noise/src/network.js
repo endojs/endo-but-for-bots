@@ -1224,9 +1224,16 @@ export const makeOcapnNoiseNetwork = ({
     if (!rk) {
       throw makeError(X`ocapn-noise: unknown local keyId ${q(localKeyId)}`);
     }
-    if (remote.designator.length !== 64) {
+    // Require a canonical lowercase-hex designator. `hexToBytes` maps any
+    // non-hex character to a zero byte, so a length-only check would let
+    // `'z'.repeat(64)` through as 32 zero bytes (a small-order key); and
+    // the raw string is used as the key in `active`, `inProgress`, and
+    // `waiters`, so an uppercase spelling of a peer we already hold would
+    // open a second, duplicate session. Rejecting anything but canonical
+    // lowercase hex closes both.
+    if (!/^[0-9a-f]{64}$/.test(remote.designator)) {
       throw makeError(
-        X`ocapn-noise: peer designator must be a 32-byte Ed25519 key (got ${q(remote.designator.length)} chars)`,
+        X`ocapn-noise: peer designator must be 64 lowercase hex chars (a 32-byte Ed25519 key), got ${q(remote.designator)}`,
       );
     }
     const peerId = remote.designator;
