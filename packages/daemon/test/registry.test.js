@@ -248,11 +248,11 @@ test('resolve: keys is duplicate-free when one version spans two range-major buc
 test('fetch/lookup: idempotent and undefined before fetch', async t => {
   const { backend } = makeFakeBackend({ 'pkg@1.0.0': {} });
   const registry = makeEndoRegistry(backend);
-  t.is(await E(registry).lookup('pkg', '1.0.0'), undefined);
+  t.is(await E(registry).lookup(['pkg'], '1.0.0'), undefined);
   const first = await E(registry).fetch('pkg', '1.0.0');
   const second = await E(registry).fetch('pkg', '1.0.0');
   t.is(first, second, 'fetch is idempotent (same tree cap)');
-  const looked = await E(registry).lookup('pkg', '1.0.0');
+  const looked = await E(registry).lookup(['pkg'], '1.0.0');
   t.is(looked, first, 'lookup returns the fetched tree cap');
   t.deepEqual(await E(registry).list(), [{ name: 'pkg', version: '1.0.0' }]);
 });

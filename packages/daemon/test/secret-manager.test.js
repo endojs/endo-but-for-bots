@@ -89,7 +89,7 @@ const makeHarness = () => {
 test('secret facets remain separated and durable across manager restart', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   const summary = await E(importer).createBase64(
     'github-release',
     'Publish GitHub releases',
@@ -103,7 +103,7 @@ test('secret facets remain separated and durable across manager restart', async 
   );
   const [{ grantId }] = harness.bindings;
 
-  const catalog = await E(directory).lookup('catalog');
+  const catalog = await E(directory).lookup(['catalog']);
   const [entry] = await E(catalog).list();
   t.is(entry.secretId, summary.secretId);
   t.deepEqual(entry.petNamePaths, [['secrets', 'github-release']]);
@@ -179,7 +179,7 @@ test('secret facets remain separated and durable across manager restart', async 
 test('a revoke racing a backend read fails the read closed', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   await E(importer).createBase64(
     'race',
     'Exercise the revocation fence',
@@ -220,7 +220,7 @@ test('a revoke racing a backend read fails the read closed', async t => {
   const blob = await E(racingDirectory).lookup(['use', grantId]);
   const read = E(blob).readBase64();
   await readStarted.promise;
-  const catalog = await E(racingDirectory).lookup('catalog');
+  const catalog = await E(racingDirectory).lookup(['catalog']);
   const [entry] = await E(catalog).list();
   await E(entry.admin).revoke();
   releaseRead.resolve(undefined);
@@ -230,7 +230,7 @@ test('a revoke racing a backend read fails the read closed', async t => {
 test('fixed failures do not reflect secret input', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   const error = await t.throwsAsync(() =>
     E(importer).createBase64('bad', 'Valid description', canary),
   );
@@ -249,13 +249,13 @@ test('delete retries failed backend revocation before forgetting metadata', asyn
     },
   });
   const directory = harness.makeDirectory(harness.makeManager(backend));
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   const summary = await E(importer).createBase64(
     'retry-cleanup',
     'Retry backend cleanup',
     encodeBase64(new TextEncoder().encode(canary)),
   );
-  const catalog = await E(directory).lookup('catalog');
+  const catalog = await E(directory).lookup(['catalog']);
   const [entry] = await E(catalog).list();
 
   await t.throwsAsync(() => E(entry.admin).revoke(), {
@@ -273,7 +273,7 @@ test('delete retries failed backend revocation before forgetting metadata', asyn
 test('replace cannot race revocation into resurrecting a secret', async t => {
   const harness = makeHarness();
   const initialDirectory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(initialDirectory).lookup('create');
+  const importer = await E(initialDirectory).lookup(['create']);
   await E(importer).createBase64(
     'serialized',
     'Serialize lifecycle mutations',
@@ -311,7 +311,7 @@ test('replace cannot race revocation into resurrecting a secret', async t => {
     randomHex256: async () => `${(serial += 1)}`.padStart(64, '0'),
   });
   const directory = harness.makeDirectory(manager);
-  const catalog = await E(directory).lookup('catalog');
+  const catalog = await E(directory).lookup(['catalog']);
   const [entry] = await E(catalog).list();
   const replacing = E(entry.admin).replaceBase64(
     encodeBase64(new TextEncoder().encode('replacement')),
@@ -366,7 +366,7 @@ const makeRacingManager = (
 test('a read racing an uncommitted replacement fails closed', async t => {
   const harness = makeHarness();
   const seedDirectory = harness.makeDirectory(harness.makeManager());
-  await E(await E(seedDirectory).lookup('create')).createBase64(
+  await E(await E(seedDirectory).lookup(['create'])).createBase64(
     'racing',
     'Fence reads against uncommitted replacements',
     encodeBase64(new TextEncoder().encode(canary)),
@@ -391,7 +391,7 @@ test('a read racing an uncommitted replacement fails closed', async t => {
   const directory = harness.makeDirectory(
     makeRacingManager(harness, { backend }),
   );
-  const [entry] = await E(await E(directory).lookup('catalog')).list();
+  const [entry] = await E(await E(directory).lookup(['catalog'])).list();
   const blob = await E(directory).lookup(['use', grantId]);
 
   const replacing = E(entry.admin).replaceBase64(
@@ -419,7 +419,7 @@ test('a read racing an uncommitted replacement fails closed', async t => {
 test('a read starting after a committed replacement still succeeds', async t => {
   const harness = makeHarness();
   const seedDirectory = harness.makeDirectory(harness.makeManager());
-  await E(await E(seedDirectory).lookup('create')).createBase64(
+  await E(await E(seedDirectory).lookup(['create'])).createBase64(
     'committed',
     'Do not fail reads that follow a commit',
     encodeBase64(new TextEncoder().encode(canary)),
@@ -456,7 +456,7 @@ test('a read starting after a committed replacement still succeeds', async t => 
     },
   });
   const directory = harness.makeDirectory(manager);
-  const [entry] = await E(await E(directory).lookup('catalog')).list();
+  const [entry] = await E(await E(directory).lookup(['catalog'])).list();
   const blob = await E(directory).lookup(['use', grantId]);
 
   const replacing = E(entry.admin).replaceBase64(
@@ -486,7 +486,7 @@ test('a read starting after a committed replacement still succeeds', async t => 
 test('a secret at the size limit is accepted and an oversize one is rejected without echoing it', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   const { maxSecretBytes } = secretManagerLimits;
 
   // The documented ceiling must actually be reachable. It is far above the
@@ -514,7 +514,7 @@ test('a secret at the size limit is accepted and an oversize one is rejected wit
 test('a description at the length limit is accepted and one past it is not', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   const { maxDescriptionLength } = secretManagerLimits;
   const bytes = encodeBase64(new TextEncoder().encode(canary));
 
@@ -543,7 +543,7 @@ test('a description at the length limit is accepted and one past it is not', asy
     { message: /Secret operation failed/ },
   );
 
-  const [entry] = await E(await E(directory).lookup('catalog')).list();
+  const [entry] = await E(await E(directory).lookup(['catalog'])).list();
   await t.throwsAsync(
     () => E(entry.admin).setDescription('d'.repeat(maxDescriptionLength + 1)),
     { message: /Secret operation failed/ },
@@ -555,13 +555,13 @@ test('a description at the length limit is accepted and one past it is not', asy
 test('the audit limit guard admits its range and refuses outside it', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   await E(importer).createBase64(
     'audited',
     'Exercise the audit limit',
     encodeBase64(new TextEncoder().encode(canary)),
   );
-  const audit = await E(directory).lookup('audit');
+  const audit = await E(directory).lookup(['audit']);
 
   /** @param {bigint} [limit] */
   const countEvents = async limit => {
@@ -589,7 +589,7 @@ test('the audit limit guard admits its range and refuses outside it', async t =>
 test('re-creating a secret under a taken pet name is the binder decision', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   const bytes = encodeBase64(new TextEncoder().encode(canary));
 
   const first = await E(importer).createBase64('dup', 'First', bytes);
@@ -602,7 +602,7 @@ test('re-creating a secret under a taken pet name is the binder decision', async
   t.is(harness.records.size, 2);
   t.is(new Set([...harness.grants.keys()]).size, 2);
   t.deepEqual(
-    (await E(await E(directory).lookup('catalog')).list()).map(
+    (await E(await E(directory).lookup(['catalog'])).list()).map(
       entry => entry.summary.description,
     ),
     ['First', 'Second'],
@@ -612,7 +612,7 @@ test('re-creating a secret under a taken pet name is the binder decision', async
 test('a read reports the generation its bytes came from', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   await E(importer).createBase64(
     'oauth-state',
     'Refreshing OAuth state',
@@ -620,7 +620,7 @@ test('a read reports the generation its bytes came from', async t => {
   );
   const [{ grantId }] = harness.bindings;
   const blob = await E(directory).lookup(['use', grantId]);
-  const catalog = await E(directory).lookup('catalog');
+  const catalog = await E(directory).lookup(['catalog']);
   const [entry] = await E(catalog).list();
 
   const first = await E(blob).readBase64WithGeneration();
@@ -641,7 +641,7 @@ test('a read reports the generation its bytes came from', async t => {
 test('a conditional replacement refuses a generation that moved', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   await E(importer).createBase64(
     'oauth-state',
     'Refreshing OAuth state',
@@ -649,7 +649,7 @@ test('a conditional replacement refuses a generation that moved', async t => {
   );
   const [{ grantId }] = harness.bindings;
   const blob = await E(directory).lookup(['use', grantId]);
-  const catalog = await E(directory).lookup('catalog');
+  const catalog = await E(directory).lookup(['catalog']);
   const [entry] = await E(catalog).list();
 
   const { generation } = await E(blob).readBase64WithGeneration();
@@ -691,13 +691,13 @@ test('a replacement reports the generation it committed', async t => {
   // pin exists to close, so the write says what it committed.
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   await E(importer).createBase64(
     'oauth-state',
     'Refreshing OAuth state',
     encodeBase64(new TextEncoder().encode(canary)),
   );
-  const catalog = await E(directory).lookup('catalog');
+  const catalog = await E(directory).lookup(['catalog']);
   const [entry] = await E(catalog).list();
   const [{ grantId }] = harness.bindings;
   const blob = await E(directory).lookup(['use', grantId]);
@@ -733,13 +733,13 @@ test('concurrent conditional replacements cannot both win', async t => {
   // let both of these read generation 1 and both commit.
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   await E(importer).createBase64(
     'oauth-state',
     'Refreshing OAuth state',
     encodeBase64(new TextEncoder().encode(canary)),
   );
-  const catalog = await E(directory).lookup('catalog');
+  const catalog = await E(directory).lookup(['catalog']);
   const [entry] = await E(catalog).list();
   const [{ grantId }] = harness.bindings;
   const blob = await E(directory).lookup(['use', grantId]);
@@ -783,13 +783,13 @@ test('a read parked mid-flight reports the generation of the bytes it got', asyn
     },
   });
   const directory = harness.makeDirectory(harness.makeManager(backend));
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   await E(importer).createBase64(
     'oauth-state',
     'Refreshing OAuth state',
     encodeBase64(new TextEncoder().encode('v1')),
   );
-  const catalog = await E(directory).lookup('catalog');
+  const catalog = await E(directory).lookup(['catalog']);
   const [entry] = await E(catalog).list();
   const [{ grantId }] = harness.bindings;
   const blob = await E(directory).lookup(['use', grantId]);
@@ -817,13 +817,13 @@ test('a read parked mid-flight reports the generation of the bytes it got', asyn
 test('a malformed generation precondition is refused rather than ignored', async t => {
   const harness = makeHarness();
   const directory = harness.makeDirectory(harness.makeManager());
-  const importer = await E(directory).lookup('create');
+  const importer = await E(directory).lookup(['create']);
   await E(importer).createBase64(
     'oauth-state',
     'Refreshing OAuth state',
     encodeBase64(new TextEncoder().encode(canary)),
   );
-  const catalog = await E(directory).lookup('catalog');
+  const catalog = await E(directory).lookup(['catalog']);
   const [entry] = await E(catalog).list();
   const [{ grantId }] = harness.bindings;
   const blob = await E(directory).lookup(['use', grantId]);

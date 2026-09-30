@@ -379,7 +379,7 @@ test('NativeGitBackend.tree exposes historical blobs and subtrees', async t => {
   t.true(await E(tree).has('src', 'config.json'));
   t.false(await E(tree).has('src', 'missing.json'));
 
-  const readme = await E(tree).lookup('README.md');
+  const readme = await E(tree).lookup(['README.md']);
   t.is(await E(readme).text(), 'old\n');
 
   const reader = iterateBytesReader(readme);
@@ -387,7 +387,7 @@ test('NativeGitBackend.tree exposes historical blobs and subtrees', async t => {
   t.false(chunk.done);
   t.is(new TextDecoder().decode(chunk.value), 'old\n');
 
-  const src = await E(tree).lookup('src');
+  const src = await E(tree).lookup(['src']);
   t.deepEqual(await E(src).list(), ['config.json']);
   const config = await E(tree).lookup(['src', 'config.json']);
   t.deepEqual(await E(config).json(), { ok: true });
@@ -408,7 +408,7 @@ test('NativeGitBackend GitBlob byteRange / textRange attenuate to derived blobs'
 
   const backend = makeNativeGitBackend({ repoRoot });
   const tree = /** @type {any} */ (await backend.tree('HEAD'));
-  const blob = await E(tree).lookup('data.txt');
+  const blob = await E(tree).lookup(['data.txt']);
 
   // byteRange(start, end) → a derived GitBlob over [start, end), composing and
   // clamping at EOF; start === end selects an empty blob.
@@ -423,7 +423,7 @@ test('NativeGitBackend GitBlob byteRange / textRange attenuate to derived blobs'
   await t.throwsAsync(() => E(blob).byteRange(5n, 2n), { message: /EINVAL/ });
 
   // textRange(startLine, endLine) → a derived GitBlob over the line slice.
-  const lines = await E(tree).lookup('lines.txt');
+  const lines = await E(tree).lookup(['lines.txt']);
   t.is(await E(await E(lines).textRange(0, 2)).text(), 'a\nb');
   t.is(await E(await E(lines).textRange(0, 100)).text(), 'a\nb\nc\n');
   t.is(await E(await E(lines).textRange(1, 1)).text(), '');
@@ -495,7 +495,7 @@ test('NativeGitBackend.tree streams blobs larger than the exec buffer cap', asyn
 
   const backend = makeNativeGitBackend({ repoRoot });
   const tree = /** @type {any} */ (await backend.tree('HEAD'));
-  const blob = await E(tree).lookup('large.bin');
+  const blob = await E(tree).lookup(['large.bin']);
 
   let bytesRead = 0;
   for await (const chunk of iterateBytesReader(blob)) {
@@ -623,7 +623,7 @@ test('Git.readOnly allows immutable tree reads', async t => {
 
   const readOnlyGit = await E(git).readOnly();
   const tree = /** @type {any} */ (await E(readOnlyGit).tree('HEAD'));
-  const blob = await E(tree).lookup('audit.txt');
+  const blob = await E(tree).lookup(['audit.txt']);
   t.is(await E(blob).text(), 'audit\n');
 });
 
@@ -3875,7 +3875,7 @@ test('Git.filesystemAt: lookup returns a File', async t => {
   const gitFs = /** @type {any} */ (await E(git).filesystemAt('HEAD'));
   const root = /** @type {any} */ (await E(gitFs).root());
 
-  const readme = /** @type {any} */ (await E(root).lookup('README.md'));
+  const readme = /** @type {any} */ (await E(root).lookup(['README.md']));
   const qid = await E(readme).getQid();
   t.is(qid.type, 'file');
 });
@@ -3893,7 +3893,7 @@ test('Git.filesystemAt: OpenFile.read returns blob bytes; range reads slice', as
   const git = makeGit({ mount, backend, lineageOf });
   const gitFs = /** @type {any} */ (await E(git).filesystemAt('HEAD'));
   const root = /** @type {any} */ (await E(gitFs).root());
-  const file = /** @type {any} */ (await E(root).lookup('data.txt'));
+  const file = /** @type {any} */ (await E(root).lookup(['data.txt']));
   const opener = /** @type {any} */ (await E(file).open({ read: true }));
 
   // Read the full blob.  The OpenFile.read interface requires both
@@ -3938,7 +3938,7 @@ test('Git.filesystemAt: range reads at a high offset discard the prefix', async 
   const git = makeGit({ mount, backend, lineageOf });
   const gitFs = /** @type {any} */ (await E(git).filesystemAt('HEAD'));
   const root = /** @type {any} */ (await E(gitFs).root());
-  const file = /** @type {any} */ (await E(root).lookup('data.txt'));
+  const file = /** @type {any} */ (await E(root).lookup(['data.txt']));
   const opener = /** @type {any} */ (await E(file).open({ read: true }));
 
   // Window straddles a likely chunk boundary; correctness here is the
@@ -3962,7 +3962,7 @@ test('Git.filesystemAt: range reads reject negative / unsafe-integer bounds', as
   const git = makeGit({ mount, backend, lineageOf });
   const gitFs = /** @type {any} */ (await E(git).filesystemAt('HEAD'));
   const root = /** @type {any} */ (await E(gitFs).root());
-  const file = /** @type {any} */ (await E(root).lookup('README.md'));
+  const file = /** @type {any} */ (await E(root).lookup(['README.md']));
   const opener = /** @type {any} */ (await E(file).open({ read: true }));
 
   // Negative offset is rejected at the boundary instead of flowing
@@ -4013,12 +4013,12 @@ test('Git.filesystemAt: lsTree cache evicts on rejection so a transient failure 
   const root = /** @type {any} */ (await E(gitFs).root());
 
   // First lookup hits the simulated failure.
-  await t.throwsAsync(E(root).lookup('README.md'), {
+  await t.throwsAsync(E(root).lookup(['README.md']), {
     message: /transient ls-tree/,
   });
   // Second lookup must NOT replay the cached rejection — it should
   // retry through the cleared cache and succeed.
-  const file = await E(root).lookup('README.md');
+  const file = await E(root).lookup(['README.md']);
   t.truthy(file);
 });
 
@@ -4034,7 +4034,7 @@ test('Git.filesystemAt: File.snapshot returns a BlobRef over the blob bytes', as
   const git = makeGit({ mount, backend, lineageOf });
   const gitFs = /** @type {any} */ (await E(git).filesystemAt('HEAD'));
   const root = /** @type {any} */ (await E(gitFs).root());
-  const file = /** @type {any} */ (await E(root).lookup('README.md'));
+  const file = /** @type {any} */ (await E(root).lookup(['README.md']));
 
   const blobRef = /** @type {any} */ (await E(file).snapshot());
   const hash = await E(blobRef).sha256();
@@ -4070,7 +4070,7 @@ test('Git.filesystemAt: QID pathId is the git object OID (directory + file)', as
   t.is(rootQid.version, 0n);
 
   // File QID `pathId` is the blob OID as a BigInt.
-  const readme = /** @type {any} */ (await E(root).lookup('README.md'));
+  const readme = /** @type {any} */ (await E(root).lookup(['README.md']));
   const fileQid = await E(readme).getQid();
   t.is(fileQid.type, 'file');
   t.is(fileQid.pathId, BigInt(`0x${blobOid}`));
@@ -4112,7 +4112,7 @@ test('Git.filesystemAt: same blob at two paths reports one QID and one hash', as
   const gitFs = /** @type {any} */ (await E(git).filesystemAt('HEAD'));
   const root = /** @type {any} */ (await E(gitFs).root());
 
-  const a = /** @type {any} */ (await E(root).lookup('a.txt'));
+  const a = /** @type {any} */ (await E(root).lookup(['a.txt']));
   const b = /** @type {any} */ (await E(root).lookup(['nested', 'b.txt']));
 
   const aQid = await E(a).getQid();
@@ -4171,10 +4171,10 @@ test('Git.filesystemAt: same blob across two refs reports one QID and one hash',
   t.not(fs1, fs2);
 
   const file1 = /** @type {any} */ (
-    await E(await E(fs1).root()).lookup('shared.txt')
+    await E(await E(fs1).root()).lookup(['shared.txt'])
   );
   const file2 = /** @type {any} */ (
-    await E(await E(fs2).root()).lookup('shared.txt')
+    await E(await E(fs2).root()).lookup(['shared.txt'])
   );
 
   const qid1 = await E(file1).getQid();
@@ -4231,7 +4231,7 @@ test('Git.filesystemAt: Directory.list yields entries in tree order', async t =>
   const aOid = aOidRaw.trim();
   const listedA = collected.find(e => e.name === 'a.txt');
   t.is(listedA.qid.pathId, BigInt(`0x${aOid}`));
-  const walkedA = /** @type {any} */ (await E(root).lookup('a.txt'));
+  const walkedA = /** @type {any} */ (await E(root).lookup(['a.txt']));
   t.is((await E(walkedA).getQid()).pathId, listedA.qid.pathId);
 });
 
@@ -4260,7 +4260,7 @@ test('Git.filesystemAt: mutating verbs all throw EACCES', async t => {
     await t.throwsAsync(call(), { message: /EACCES/ });
   }
 
-  const file = /** @type {any} */ (await E(root).lookup('README.md'));
+  const file = /** @type {any} */ (await E(root).lookup(['README.md']));
   await t.throwsAsync(E(file).setAttrs({}), { message: /EACCES/ });
 
   const opener = /** @type {any} */ (await E(file).open({ read: true }));
@@ -4285,7 +4285,7 @@ test('Git.filesystemAt: open({ write: true }) rejects', async t => {
   const git = makeGit({ mount, backend, lineageOf });
   const gitFs = /** @type {any} */ (await E(git).filesystemAt('HEAD'));
   const root = /** @type {any} */ (await E(gitFs).root());
-  const file = /** @type {any} */ (await E(root).lookup('README.md'));
+  const file = /** @type {any} */ (await E(root).lookup(['README.md']));
   await t.throwsAsync(E(file).open({ write: true }), { message: /EACCES/ });
 });
 
@@ -4356,7 +4356,7 @@ test('Git.filesystemAt: submodule entries are hidden from the tree view', async 
   // the base endo-fs vocabulary only knows files and directories.
   // Callers that need submodule traversal should obtain a separate
   // Git capability for the submodule's repository.
-  await t.throwsAsync(E(root).lookup('sub'), { message: /ENOENT/ });
+  await t.throwsAsync(E(root).lookup(['sub']), { message: /ENOENT/ });
 });
 
 test('Git.filesystemAt: an empty tree exposes an empty root', async t => {
@@ -4383,7 +4383,7 @@ test('Git.filesystemAt: an empty tree exposes an empty root', async t => {
   t.deepEqual(collected, []);
 
   // `lookup` on any name throws ENOENT.
-  await t.throwsAsync(E(root).lookup('anything'), { message: /ENOENT/ });
+  await t.throwsAsync(E(root).lookup(['anything']), { message: /ENOENT/ });
 });
 
 test('Git.filesystemAt: directories report size 0n via getStat', async t => {
@@ -4404,7 +4404,7 @@ test('Git.filesystemAt: directories report size 0n via getStat', async t => {
   const git = makeGit({ mount, backend, lineageOf });
   const gitFs = /** @type {any} */ (await E(git).filesystemAt('HEAD'));
   const root = /** @type {any} */ (await E(gitFs).root());
-  const subdir = /** @type {any} */ (await E(root).lookup('subdir'));
+  const subdir = /** @type {any} */ (await E(root).lookup(['subdir']));
   const stat = await E(subdir).getStat();
   t.is(stat.size, 0n);
 });
@@ -4437,10 +4437,10 @@ test('Git.filesystemAt: lsTree and resolvePath are cached per Filesystem', async
   const root = /** @type {any} */ (await E(gitFs).root());
 
   // First lookup populates the cache.
-  await E(root).lookup('README.md');
+  await E(root).lookup(['README.md']);
   const afterFirst = lsTreeCalls;
   // Second lookup of the same path must not re-call lsTree.
-  await E(root).lookup('README.md');
+  await E(root).lookup(['README.md']);
   t.is(lsTreeCalls, afterFirst, 'lsTree should be cached per tree OID');
 });
 

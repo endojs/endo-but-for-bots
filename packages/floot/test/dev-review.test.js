@@ -82,9 +82,9 @@ test('design handoff pins candidates, repeats review, and durably notifies readi
       },
     }),
   );
-  await E(powers).storeValue(h1.service, 'service');
-  await E(powers).storeValue(fid, 'factory-id');
-  await E(powers).storeValue(await makeConnection(powers), 'dev-review');
+  await E(powers).storeValue(h1.service, ['service']);
+  await E(powers).storeValue(fid, ['factory-id']);
+  await E(powers).storeValue(await makeConnection(powers), ['dev-review']);
   const tools = makeWorkflowTools(powers);
   const design =
     'Add a search box. Acceptance: keyboard navigation and a regression test.';
@@ -139,12 +139,12 @@ test('design handoff pins candidates, repeats review, and durably notifies readi
   h1.stop();
   const h2 = await makeWorkflowService({ powers: controls.restart(), clock });
   t.teardown(h2.stop);
-  await E(powers).storeValue(h2.service, 'service');
-  await E(powers).storeValue(await makeConnection(powers), 'dev-review');
+  await E(powers).storeValue(h2.service, ['service']);
+  await E(powers).storeValue(await makeConnection(powers), ['dev-review']);
   await settle(200);
   t.is(controls.messageCount('request', 'Your design'), 1);
   await t.throwsAsync(
-    E(await E(powers).lookup('dev-review')).setRemaining(runId, 9n),
+    E(await E(powers).lookup(['dev-review'])).setRemaining(runId, 9n),
     { message: /Budget update was not applied/ },
   );
   await controls.resolveRequest(notice, harden({ acknowledged: true }));
@@ -161,7 +161,7 @@ test('design handoff pins candidates, repeats review, and durably notifies readi
       states: { wait: {} },
     }),
   );
-  const connection = await E(powers).lookup('dev-review');
+  const connection = await E(powers).lookup(['dev-review']);
   await t.throwsAsync(E(connection).status(foreign.runId), {
     message: /another factory/,
   });

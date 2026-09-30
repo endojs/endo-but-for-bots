@@ -11,7 +11,7 @@
  */
 
 import { M } from '@endo/patterns';
-import { NamePathShape, NameOrPathShape } from '@endo/daemon/type-guards.js';
+import { NamePathShape, NamePathArgumentShape } from '@endo/daemon/type-guards.js';
 
 /** @import { LalToolDef } from './index.js' */
 
@@ -34,14 +34,14 @@ export const petnamesToolDefs = harden([
       'With no arguments, lists pet names in your root directory. ' +
       'With a name, looks up that capability and calls list() on it. ' +
       'Optional argument: name (string or string[]).',
-    params: M.splitRecord({}, { name: NameOrPathShape }),
+    params: M.splitRecord({}, { name: NamePathArgumentShape }),
   },
   {
     name: 'lookup',
     summary:
       'Resolve a pet name or path to its value. Returns the value stored under that name. ' +
       'Argument: petNameOrPath (string or string[]).',
-    params: M.splitRecord({ petNameOrPath: NameOrPathShape }),
+    params: M.splitRecord({ petNameOrPath: NamePathArgumentShape }),
   },
   {
     name: 'remove',
@@ -71,8 +71,8 @@ export const petnamesToolDefs = harden([
       'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), edgeName, petName.',
     params: M.splitRecord({
       messageNumber: MessageNumberShape,
-      edgeName: NameOrPathShape,
-      petName: NameOrPathShape,
+      edgeName: NamePathArgumentShape,
+      petName: NamePathArgumentShape,
     }),
   },
 ]);

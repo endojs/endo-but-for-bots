@@ -333,8 +333,8 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   const seenFormReplies = new Set();
 
   const runFactory = async () => {
-    await E(powers).form('@host', FORM_DESCRIPTION, FORM_FIELDS);
-    const hostAgent = await E(powers).lookup('host-agent');
+    await E(powers).form(['@host'], FORM_DESCRIPTION, FORM_FIELDS);
+    const hostAgent = await E(powers).lookup(['host-agent']);
     const selfId = await E(powers).locate('@self');
 
     /** @type {string | undefined} */
@@ -395,10 +395,10 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
             // reincarnation.
             const credentialsFile = await persistKeyToSidecar(name, apiKey);
             await E(hostAgent).makeUnconfined(
-              '@main',
+              ['@main'],
               CREDENTIALS_MODULE_SPECIFIER,
               {
-                powersName: '@none',
+                powersName: ['@none'],
                 resultName: name,
                 env: harden({
                   CREDENTIALS_FILE: credentialsFile,

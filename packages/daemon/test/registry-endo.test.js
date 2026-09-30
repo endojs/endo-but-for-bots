@@ -3,7 +3,7 @@
 /** @import { DaemonDatabase } from '../src/manager-database.js' */
 
 // Integration test: the `@registry` special name is populated on every host
-// (mirroring `@node`), so `E(host).lookup('@registry')` returns the host's
+// (mirroring `@node`), so `E(host).lookup(['@registry'])` returns the host's
 // EndoRegistry capability without the caller branching on its presence.  See
 // designs/registry-capability.md § Host special name.
 //
@@ -77,9 +77,9 @@ const prepare = async t => {
   return { host, cancelled };
 };
 
-test.serial('E(host).lookup("@registry") resolves an EndoRegistry', async t => {
+test.serial('E(host).lookup(["@registry"]) resolves an EndoRegistry', async t => {
   const { host } = await prepare(t);
-  const registry = await E(host).lookup('@registry');
+  const registry = await E(host).lookup(['@registry']);
   t.truthy(registry, '@registry is populated on the host');
   const help = await E(registry).help();
   t.true(
@@ -92,8 +92,8 @@ test.serial(
   '@registry lookup(name, version) is undefined before any fetch',
   async t => {
     const { host } = await prepare(t);
-    const registry = await E(host).lookup('@registry');
-    const missing = await E(registry).lookup('ses', '1.0.0');
+    const registry = await E(host).lookup(['@registry']);
+    const missing = await E(registry).lookup(['ses'], '1.0.0');
     t.is(missing, undefined, 'an unfetched package is absent from the table');
     const listed = await E(registry).list();
     t.deepEqual(listed, [], 'the registry table starts empty');
@@ -104,7 +104,7 @@ test.serial(
   '@registry survives a fresh client connection (formula is persisted)',
   async t => {
     const { host, cancelled } = await prepare(t);
-    const first = await E(host).lookup('@registry');
+    const first = await E(host).lookup(['@registry']);
     t.truthy(first);
     // A second client over the same daemon still sees the slot; the host
     // formula carries the required registry field.
@@ -115,7 +115,7 @@ test.serial(
     );
     closed.catch(() => {});
     const host2 = E(getBootstrap()).host();
-    const again = await E(host2).lookup('@registry');
+    const again = await E(host2).lookup(['@registry']);
     t.truthy(again, '@registry resolves for a second client');
   },
 );
@@ -199,7 +199,7 @@ test.serial(
       }
     }
 
-    const registryAfter = await E(hostAfter).lookup('@registry');
+    const registryAfter = await E(hostAfter).lookup(['@registry']);
     t.truthy(registryAfter, '@registry resolves for the migrated host');
     t.is(
       await E(hostAfter).identify('@registry'),
@@ -241,7 +241,7 @@ test.serial(
 
     // A second, child host under the same daemon, so startup discovers more
     // than one host formula to migrate.
-    await E(host).provideHost('child-host');
+    await E(host).provideHost(['child-host']);
 
     await stop(config);
 
@@ -310,7 +310,7 @@ test.serial(
       }
     }
 
-    const registryAfter = await E(hostAfter).lookup('@registry');
+    const registryAfter = await E(hostAfter).lookup(['@registry']);
     t.truthy(
       registryAfter,
       '@registry resolves after a concurrent multi-host migration',

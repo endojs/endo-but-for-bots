@@ -2,11 +2,10 @@ import type {
   Name,
   EndoGuest,
   NamePath,
-  NameOrPath,
   StampedMessage,
 } from '@endo/daemon';
 
-export type { NameOrPath };
+export type { NamePath };
 
 /**
  * Arguments passed into the tool dispatcher in `agent.js`. pi-agent-core
@@ -20,25 +19,25 @@ export type ToolCallArgs = {
   methodName?: string;
   // `name` is the optional argument to the `list` tool when called against a
   // capability other than the guest's own root directory.
-  name?: NameOrPath;
+  name?: NamePath;
   petNamePath?: NamePath;
-  petNameOrPath?: NameOrPath;
+  petNameOrPath?: NamePath;
   fromPath?: NamePath;
   toPath?: NamePath;
   messageNumber?: number | bigint;
   reason?: string;
-  edgeName?: NameOrPath;
-  petName?: NameOrPath;
-  recipientName?: NameOrPath;
+  edgeName?: NamePath;
+  petName?: NamePath;
+  recipientName?: NamePath;
   description?: string;
-  responseName?: NameOrPath;
+  responseName?: NamePath;
   strings?: string[];
   edgeNames?: Name[];
-  petNames?: NameOrPath[];
+  petNames?: NamePath[];
   workerName?: string;
   source?: string;
   codeNames?: string[];
-  resultName?: NameOrPath;
+  resultName?: NamePath;
   fileName?: string;
   content?: string;
   // Arguments to the `glob`/`grep` search tools: a glob or regexp `pattern`,

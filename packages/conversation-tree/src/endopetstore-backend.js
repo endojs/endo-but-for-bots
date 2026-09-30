@@ -120,7 +120,7 @@ export const makeEndoPetstoreBackend = powers => {
       // Fall back to a direct lookup and cache the result.
       try {
         const node = /** @type {ConversationNode} */ (
-          await E(powers).lookup(`${CT_PREFIX}${id}`)
+          await E(powers).lookup([`${CT_PREFIX}${id}`])
         );
         if (node && typeof node.id === 'string') {
           map.set(node.id, node);

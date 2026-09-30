@@ -15,7 +15,7 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
 
-/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NamePath, NodeNumber, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
 import { guestHelp, makeHelp } from './help-text.js';
 
@@ -213,7 +213,7 @@ export const makeGuestMaker = ({
     } = mailbox;
 
     /**
-     * @param {NameOrPath | undefined} workerName
+     * @param {NamePath | undefined} workerName
      * @param {DeferredTasks<WorkerDeferredTaskParams>['push']} deferTask
      */
     const prepareWorkerFormulation = async (workerName, deferTask) => {
@@ -243,11 +243,11 @@ export const makeGuestMaker = ({
     /**
      * Evaluate code directly in a worker, constrained only by reachable
      * capabilities in the guest's namespace.
-     * @param {NameOrPath | undefined} workerName
+     * @param {NamePath | undefined} workerName
      * @param {string} source
      * @param {Array<string>} codeNames
-     * @param {NamesOrPaths} petNamesOrPaths
-     * @param {NameOrPath} [resultName]
+     * @param {NamePath[]} petNamesOrPaths
+     * @param {NamePath} [resultName]
      * @returns {Promise<unknown>}
      */
     const evaluate = async (
@@ -377,7 +377,7 @@ export const makeGuestMaker = ({
      * addresses even with an empty `@nets`. That disclosure is inherent to
      * issuing a redeemable invitation and grants no authority to act on the
      * addresses.
-     * @param {NameOrPath} correspondentName
+     * @param {NamePath} correspondentName
      */
     const invite = async correspondentName => {
       const { namePath, petName: correspondentPetName } =
@@ -425,7 +425,7 @@ export const makeGuestMaker = ({
      * empty `@nets` (the default) still accepts same-daemon peers but leaves the
      * guest undialable across daemons (the anonymizing-persona default).
      * @param {string} invitationLocator
-     * @param {NameOrPath} correspondentName
+     * @param {NamePath} correspondentName
      */
     const accept = async (invitationLocator, correspondentName) => {
       const { namePath } = petNamePathFrom(correspondentName);

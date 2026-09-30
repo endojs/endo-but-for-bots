@@ -16,8 +16,8 @@ const ocapnSpecifier = new URL('ocapn.js', import.meta.url).href;
  */
 export const main = async powers => {
   await E(powers).makeUnconfined(undefined, ocapnSpecifier, {
-    powersName: '@agent',
-    resultName: 'network-service-ocapn',
+    powersName: ['@agent'],
+    resultName: ['network-service-ocapn'],
   });
 
   await E(powers).move(['network-service-ocapn'], ['@nets', 'ocapn']);

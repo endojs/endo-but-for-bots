@@ -95,7 +95,7 @@ export const makeEndoProvisionGrants = async (guest, persistence) => {
     if (policy.mounts[name].guestBinding) {
       const capability = /** @type {CodeModePower} */ (
         // eslint-disable-next-line no-await-in-loop
-        await E(guest).lookup(name)
+        await E(guest).lookup([name])
       );
       grants.push(
         minter.provisionedFilesystem({
@@ -111,7 +111,7 @@ export const makeEndoProvisionGrants = async (guest, persistence) => {
     const grant = gits[name];
     const capability = /** @type {CodeModePower} */ (
       // eslint-disable-next-line no-await-in-loop
-      await E(guest).lookup(name)
+      await E(guest).lookup([name])
     );
     grants.push(
       minter.provisionedGit({
@@ -125,7 +125,7 @@ export const makeEndoProvisionGrants = async (guest, persistence) => {
   for (const name of Object.keys(policy.gitRemotes ?? {}).sort()) {
     const capability = /** @type {CodeModePower} */ (
       // eslint-disable-next-line no-await-in-loop
-      await E(guest).lookup(name)
+      await E(guest).lookup([name])
     );
     // A remote capability has no local interface recognizer in this package.
     // Keep the compatibility binding truthful by withholding an interface
@@ -137,7 +137,7 @@ export const makeEndoProvisionGrants = async (guest, persistence) => {
   )) {
     const capability = /** @type {CodeModePower} */ (
       // eslint-disable-next-line no-await-in-loop
-      await E(guest).lookup(name)
+      await E(guest).lookup([name])
     );
     grants.push(
       minter.opaque({

@@ -1,7 +1,7 @@
 import os from 'os';
 import { E } from '@endo/eventual-send';
 import { withEndoAgent } from '../context.js';
-import { parseOptionalPetNamePath } from '../pet-name.js';
+import { parsePetNamePath, parseOptionalPetNamePath } from '../pet-name.js';
 
 export const request = async ({
   description,
@@ -11,7 +11,7 @@ export const request = async ({
 }) => {
   await withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
     const result = await E(agent).request(
-      toName,
+      parsePetNamePath(toName),
       description,
       parseOptionalPetNamePath(resultName),
     );

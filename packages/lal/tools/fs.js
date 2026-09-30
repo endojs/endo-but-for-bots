@@ -8,7 +8,7 @@
  */
 
 import { M } from '@endo/patterns';
-import { NamePathShape, NameOrPathShape } from '@endo/daemon/type-guards.js';
+import { NamePathShape, NamePathArgumentShape } from '@endo/daemon/type-guards.js';
 
 /** @import { LalToolDef } from './index.js' */
 
@@ -27,7 +27,7 @@ export const fsToolDefs = harden([
       'Read text content from a capability (ReadableTree, WritableTree, etc.). ' +
       'Arguments: petNameOrPath, fileName (string).',
     params: M.splitRecord({
-      petNameOrPath: NameOrPathShape,
+      petNameOrPath: NamePathArgumentShape,
       fileName: M.string(),
     }),
   },
@@ -37,7 +37,7 @@ export const fsToolDefs = harden([
       'Write text content to a capability (WritableTree, etc.). ' +
       'Arguments: petNameOrPath, fileName (string), content (string).',
     params: M.splitRecord({
-      petNameOrPath: NameOrPathShape,
+      petNameOrPath: NamePathArgumentShape,
       fileName: M.string(),
       content: M.string(),
     }),
@@ -53,7 +53,7 @@ export const fsToolDefs = harden([
       'Arguments: petNameOrPath, fileName (string), edits (array of ' +
       '{ oldText, newText }).',
     params: M.splitRecord({
-      petNameOrPath: NameOrPathShape,
+      petNameOrPath: NamePathArgumentShape,
       fileName: M.string(),
       edits: M.arrayOf(
         M.splitRecord({
@@ -80,7 +80,7 @@ export const fsToolDefs = harden([
       'followSymlinks (optional boolean).',
     params: M.splitRecord(
       {
-        petNameOrPath: NameOrPathShape,
+        petNameOrPath: NamePathArgumentShape,
         pattern: M.string(),
       },
       {
@@ -100,7 +100,7 @@ export const fsToolDefs = harden([
       'followSymlinks (optional boolean).',
     params: M.splitRecord(
       {
-        petNameOrPath: NameOrPathShape,
+        petNameOrPath: NamePathArgumentShape,
         pattern: M.string(),
       },
       {

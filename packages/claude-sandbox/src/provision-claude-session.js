@@ -275,7 +275,7 @@ export const provisionClaudeSession = async (
     ];
 
     await E(hostAgent).evaluate(
-      '@main',
+      ['@main'],
       buildSessionPowersSource(
         mountList,
         Boolean(credentialsName),
@@ -319,7 +319,7 @@ export const provisionClaudeSession = async (
       options.resultName = resultName;
     }
     const client = await E(hostAgent).makeUnconfined(
-      '@main',
+      ['@main'],
       clientModuleSpecifier,
       harden(options),
     );

@@ -23,44 +23,44 @@ export const main = async agent => {
   const grepUrl = new URL('tools/grep.js', import.meta.url).href;
   const runCommandUrl = new URL('tools/run-command.js', import.meta.url).href;
 
-  await E(agent).makeUnconfined('@main', readFileUrl, {
-    resultName: 'read-file',
+  await E(agent).makeUnconfined(['@main'], readFileUrl, {
+    resultName: ['read-file'],
     env,
   });
   console.log('[setup-fs-tools] Created read-file (root:', cwd, ')');
 
-  await E(agent).makeUnconfined('@main', writeFileUrl, {
-    resultName: 'write-file',
+  await E(agent).makeUnconfined(['@main'], writeFileUrl, {
+    resultName: ['write-file'],
     env,
   });
   console.log('[setup-fs-tools] Created write-file');
 
-  await E(agent).makeUnconfined('@main', editUrl, {
-    resultName: 'edit',
+  await E(agent).makeUnconfined(['@main'], editUrl, {
+    resultName: ['edit'],
     env,
   });
   console.log('[setup-fs-tools] Created edit');
 
-  await E(agent).makeUnconfined('@main', listDirUrl, {
-    resultName: 'list-dir',
+  await E(agent).makeUnconfined(['@main'], listDirUrl, {
+    resultName: ['list-dir'],
     env,
   });
   console.log('[setup-fs-tools] Created list-dir');
 
-  await E(agent).makeUnconfined('@main', globUrl, {
-    resultName: 'glob',
+  await E(agent).makeUnconfined(['@main'], globUrl, {
+    resultName: ['glob'],
     env,
   });
   console.log('[setup-fs-tools] Created glob');
 
-  await E(agent).makeUnconfined('@main', grepUrl, {
-    resultName: 'grep',
+  await E(agent).makeUnconfined(['@main'], grepUrl, {
+    resultName: ['grep'],
     env,
   });
   console.log('[setup-fs-tools] Created grep');
 
-  await E(agent).makeUnconfined('@main', runCommandUrl, {
-    resultName: 'run-command',
+  await E(agent).makeUnconfined(['@main'], runCommandUrl, {
+    resultName: ['run-command'],
     env,
   });
   console.log('[setup-fs-tools] Created run-command');

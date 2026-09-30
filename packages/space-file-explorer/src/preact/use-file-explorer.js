@@ -1264,7 +1264,7 @@ export function useFileExplorer(powers, profilePath = []) {
         await E(resolveProfileHost()).makeUnconfined(
           '@node',
           ENDO_FS_IN_MEMORY_MODULE_URL,
-          { powersName: '@agent', resultName: petName },
+          { powersName, resultName: petName },
         )
       );
       const source = addSource({
@@ -1486,7 +1486,7 @@ export function useFileExplorer(powers, profilePath = []) {
         '@node',
         ENDO_FS_READONLY_MODULE_URL,
         {
-          powersName: '@agent',
+          powersName: ['@agent'],
           resultName: petName,
           env: { SOURCE_NAME: source.petName },
         },
@@ -1557,7 +1557,7 @@ export function useFileExplorer(powers, profilePath = []) {
       const host = resolveProfileHost();
       const layer = /** @type {Cap} */ (
         await E(host).makeUnconfined('@node', ENDO_FS_LAYER_MODULE_URL, {
-          powersName: '@agent',
+          powersName: ['@agent'],
           resultName: layerName,
           env: { BACKING_NAME: source.petName },
         })

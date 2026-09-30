@@ -141,21 +141,31 @@ export const assertPetNamePath = path => {
 };
 
 /**
- * Normalizes a name or path to a path and validates it.
- * @param {string | string[]} nameOrPath
+ * Validates a pet-name path argument: an array of path components.
+ *
+ * A bare string is refused rather than treated as a one-segment path, so
+ * that a caller (typically an agent) that passed a delimited string such as
+ * `'dir/name'` learns that the invocation was invalid and retries with an
+ * array of path components such as `['dir', 'name']`.
+ *
+ * @param {unknown} namePath
  * @returns {NamePath}
  */
-export const namePathFrom = nameOrPath => {
-  const path = typeof nameOrPath === 'string' ? [nameOrPath] : nameOrPath;
-  assertNamePath(path);
-  return /** @type {NamePath} */ (path);
+export const namePathFrom = namePath => {
+  if (typeof namePath === 'string') {
+    throw new TypeError(
+      `Invalid pet-name path ${q(namePath)}: a string is not a pet-name path and is never split on a delimiter; try again with an array of path components, for example ${q([namePath])} or ${q(['directory', 'name'])}`,
+    );
+  }
+  assertNamePath(/** @type {string[]} */ (namePath));
+  return /** @type {NamePath} */ (namePath);
 };
 
 /**
- * Coerces a name or path to a validated **pet-name path**: a name path
+ * Validates a **pet-name path**: a name path
  * whose final segment is a pet name (the others may be any name). This is
  * the canonical validator for a store target — a place a new value is
- * named — combining {@link namePathFrom} (coerce + validate each segment)
+ * named — combining {@link namePathFrom} (refuse a string, validate each segment)
  * with {@link assertPetNamePath} (require a pet-name leaf). Returns the
  * full path, the prefix path (all but the last segment), and the final
  * pet name.
@@ -163,8 +173,8 @@ export const namePathFrom = nameOrPath => {
  * Use {@link namePathFrom} instead when the leaf may be a special name
  * (e.g. resolving an existing `@main` worker or `@agent` powers).
  *
- * @param {string | string[]} nameOrPath
+ * @param {unknown} namePath
  * @returns {{ namePath: NamePath, prefixPath: NamePath, petName: PetName }}
  */
-export const petNamePathFrom = nameOrPath =>
-  assertPetNamePath(namePathFrom(nameOrPath));
+export const petNamePathFrom = namePath =>
+  assertPetNamePath(namePathFrom(namePath));

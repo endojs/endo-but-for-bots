@@ -138,7 +138,7 @@ export const main = async (agent, dirName = DEFAULT_FACTORY_NAME) => {
   }
 
   if (!(await E(agent).has(dirName, 'service'))) {
-    await E(agent).makeUnconfined('@main', factoryCapletSpecifier, {
+    await E(agent).makeUnconfined(['@main'], factoryCapletSpecifier, {
       powersName: agentTmp,
       resultName: [dirName, 'service'],
       // Tell the caplet where its infra caplets live so the per-session powers

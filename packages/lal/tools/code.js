@@ -8,7 +8,7 @@
  */
 
 import { M } from '@endo/patterns';
-import { NameOrPathShape } from '@endo/daemon/type-guards.js';
+import { NamePathArgumentShape } from '@endo/daemon/type-guards.js';
 
 /** @import { LalToolDef } from './index.js' */
 
@@ -25,7 +25,7 @@ export const codeToolDefs = harden([
     // "#undefined" SmallCaps sentinel). Allow either undefined or the
     // expected primitive shape.
     params: M.splitRecord(
-      { source: M.string(), resultName: NameOrPathShape },
+      { source: M.string(), resultName: NamePathArgumentShape },
       {
         workerName: M.or(M.string(), M.undefined()),
         codeNames: M.arrayOf(M.string()),

@@ -135,8 +135,8 @@ const provisionCredentials = async (
     await E(hostAgent).remove(name);
   }
   const credentialsFile = await persistKeyToSidecar(name, apiKey);
-  await E(hostAgent).makeUnconfined('@main', credentialsModuleSpecifier, {
-    powersName: '@none',
+  await E(hostAgent).makeUnconfined(['@main'], credentialsModuleSpecifier, {
+    powersName: ['@none'],
     resultName: name,
     env: harden({
       CREDENTIALS_FILE: credentialsFile,
@@ -224,8 +224,8 @@ export const main = async hostAgent => {
   if (await E(hostAgent).has(...backendPath)) {
     await E(hostAgent).remove(...backendPath);
   }
-  await E(hostAgent).makeUnconfined('@main', backendModuleSpecifier, {
-    powersName: '@agent',
+  await E(hostAgent).makeUnconfined(['@main'], backendModuleSpecifier, {
+    powersName: ['@agent'],
     resultName: backendPath,
     env: harden({
       CLAUDE_CLIENT_NAME: clientName,

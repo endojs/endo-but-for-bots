@@ -134,7 +134,7 @@ import { getUnredactedStackString } from './unredacted-stack.js';
 /** @import { PromiseKit } from '@endo/promise-kit' */
 /** @import { ReadableBlobRange, SnapshotTree } from '@endo/platform/fs/lite/types' */
 /** @import { ArchiveTreeMethods } from './tar-checkin.js' */
-/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NameOrPath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
+/** @import { AgentDeferredTaskParams, Builtins, CapTpConnectionRegistrar, Context, Controller, DaemonCore, DaemonCoreExternal, DaemonicPowers, DeferredTasks, DirectoryFormula, EndoAgent, EndoBootstrap, EndoDirectory, EndoFormula, EndoGateway, EndoGreeter, EndoGuest, EndoHost, EndoInspector, EndoMount, EndoNetwork, EndoPeer, EndoReadable, EndoReadableTree, EndoWorker, EvalFormula, FarContext, Formula, FormulaIdentifier, FormulaNumber, FormulaMakerTable, FormulateResult, GuestFormula, HandleFormula, HostFormula, Invitation, InvitationDeferredTaskParams, InvitationFormula, KnownEndoInspectors, KnownPeersStore, LogChunk, LookupFormula, LoopbackNetworkFormula, MailboxStoreFormula, MailHubFormula, MakeArchiveFormula, MakeCapletDeferredTaskParams, MakeFromTreeFormula, MakeUnconfinedFormula, MarshalDeferredTaskParams, MessageFormula, Name, NameHub, NamePath, NodeNumber, PetName, PeerFormula, PeerInfo, PetInspectorFormula, PetStore, PetStoreFormula, PromiseFormula, Provide, ReadableBlobDeferredTaskParams, ReadableBlobFormula, ReadableNameHub, ReadableTreeDeferredTaskParams, ResolverFormula, Sha256, Specials, MarshalFormula, WeakMultimap, WorkerDaemonFacet, WorkerFormula, TimerFormula } from './types.js' */
 
 /**
  * @typedef {{ kind: 'bearer', token: string } | { kind: 'basic', username: string, password: string }} GitCredentialMaterial
@@ -318,18 +318,12 @@ const makeInspector = (type, number, record) =>
     `Inspector (${type} ${number})`,
     InspectorInterface,
     /** @type {any} */ ({
-      lookup: async petNameOrPath => {
-        /** @type {string} */
-        let petName;
-        if (Array.isArray(petNameOrPath)) {
-          if (petNameOrPath.length !== 1) {
-            throw Error('Inspector.lookup(path) requires path length of 1');
-          }
-          petName = petNameOrPath[0];
-        } else {
-          petName = petNameOrPath;
+      lookup: async petNamePath => {
+        const namePath = namePathFrom(petNamePath);
+        if (namePath.length !== 1) {
+          throw Error('Inspector.lookup(path) requires path length of 1');
         }
-        assertName(petName);
+        const [petName] = namePath;
         if (!Object.hasOwn(record, petName)) {
           return undefined;
         }
@@ -2386,7 +2380,7 @@ const makeDaemonCore = async (
    */
   const packTreeIntoArchiveBytes = async treeP => {
     const mapBlob = await E(/** @type {any} */ (treeP)).lookup(
-      'compartment-map.json',
+      ['compartment-map.json'],
     );
     const mapText = await E(/** @type {any} */ (mapBlob)).text();
     let compartmentMap;
@@ -2799,7 +2793,7 @@ const makeDaemonCore = async (
         return provide(/** @type {FormulaIdentifier} */ (id), 'message');
       }
       return tailNames.reduce(
-        (directory, petName) => E(directory).lookup(petName),
+        (directory, petName) => E(directory).lookup([petName]),
         lookup(headName),
       );
     };
@@ -2815,7 +2809,7 @@ const makeDaemonCore = async (
       return tailNames.reduce(
         (directory, petName) =>
           /** @type {Promise<NameHub>} */ (
-            /** @type {unknown} */ (E(directory).lookup(petName))
+            /** @type {unknown} */ (E(directory).lookup([petName]))
           ),
         /** @type {Promise<NameHub>} */ (/** @type {unknown} */ (value)),
       );
@@ -2901,7 +2895,7 @@ const makeDaemonCore = async (
     };
 
     const listValues = async () => {
-      const values = listMessageNames().map(name => lookup(name));
+      const values = listMessageNames().map(name => lookup([name]));
       return harden(values);
     };
 
@@ -3239,7 +3233,7 @@ const makeDaemonCore = async (
         throw new TypeError(`Unknown message name: ${q(headName)}`);
       }
       return tailNames.reduce(
-        (directory, petName) => E(directory).lookup(petName),
+        (directory, petName) => E(directory).lookup([petName]),
         lookup(headName),
       );
     };
@@ -3340,7 +3334,7 @@ const makeDaemonCore = async (
     };
 
     const listValues = async () => {
-      const values = orderedNames.map(name => lookup(name));
+      const values = orderedNames.map(name => lookup([name]));
       return harden(values);
     };
 
@@ -4565,7 +4559,7 @@ const makeDaemonCore = async (
         /** @type {FormulaIdentifier} */ (
           invitingHandleId ?? legacyInvitingHandleId
         ),
-        /** @type {import('./types.js').NameOrPath} */ (guestName),
+        /** @type {import('./types.js').NamePath} */ (guestName),
       ),
     timer: async ({ intervalMs, label: timerLabel }, context) => {
       const interval = Number(intervalMs) || 60_000;
@@ -5295,7 +5289,7 @@ const makeDaemonCore = async (
    * guest inviter gains no network authority.
    * @param {FormulaIdentifier} invitingAgentId
    * @param {FormulaIdentifier} invitingHandleId
-   * @param {NameOrPath} guestName
+   * @param {NamePath} guestName
    * @param {DeferredTasks<InvitationDeferredTaskParams>} deferredTasks
    */
   const formulateInvitation = async (
@@ -6648,7 +6642,7 @@ const makeDaemonCore = async (
     const entries = await Promise.all(
       names.map(async name => ({
         name,
-        share: await E(planesDirectory).lookup(name),
+        share: await E(planesDirectory).lookup([name]),
       })),
     );
     return contentDataPlaneRegistry.getAllContentSources(entries, identity);
@@ -7487,7 +7481,7 @@ const makeDaemonCore = async (
    *   `EndoHost` (`EndoHost.invite`, source-compatible) or an `EndoGuest`.
    * @param {FormulaIdentifier} invitingHandleId - the inviting agent's handle,
    *   which the locator's `from` names, so an acceptor binds that agent.
-   * @param {import('./types.js').NameOrPath} guestName
+   * @param {import('./types.js').NamePath} guestName
    */
   const makeInvitation = async (
     id,

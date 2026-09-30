@@ -11,7 +11,7 @@
  */
 
 import { M } from '@endo/patterns';
-import { NameOrPathShape } from '@endo/daemon/type-guards.js';
+import { NamePathArgumentShape } from '@endo/daemon/type-guards.js';
 
 /** @import { LalToolDef } from './index.js' */
 
@@ -34,7 +34,7 @@ export const mailToolDefs = harden([
       'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), petNameOrPath.',
     params: M.splitRecord({
       messageNumber: MessageNumberShape,
-      petNameOrPath: NameOrPathShape,
+      petNameOrPath: NamePathArgumentShape,
     }),
   },
   {
@@ -60,8 +60,8 @@ export const mailToolDefs = harden([
       'Send a request to another agent asking for a capability. ' +
       'Arguments: recipientName, description (string), optional responseName.',
     params: M.splitRecord(
-      { recipientName: NameOrPathShape, description: M.string() },
-      { responseName: NameOrPathShape },
+      { recipientName: NamePathArgumentShape, description: M.string() },
+      { responseName: NamePathArgumentShape },
     ),
   },
   {
@@ -71,10 +71,10 @@ export const mailToolDefs = harden([
       'Arguments: recipientName, strings (string[]), edgeNames (string[]), petNames. ' +
       'For text-only messages: send("@host", ["text"], [], []).',
     params: M.splitRecord({
-      recipientName: NameOrPathShape,
+      recipientName: NamePathArgumentShape,
       strings: M.arrayOf(M.string()),
       edgeNames: M.arrayOf(M.string()),
-      petNames: M.arrayOf(NameOrPathShape),
+      petNames: M.arrayOf(NamePathArgumentShape),
     }),
   },
   {
@@ -87,7 +87,7 @@ export const mailToolDefs = harden([
       messageNumber: MessageNumberShape,
       strings: M.arrayOf(M.string()),
       edgeNames: M.arrayOf(M.string()),
-      petNames: M.arrayOf(NameOrPathShape),
+      petNames: M.arrayOf(NamePathArgumentShape),
     }),
   },
 

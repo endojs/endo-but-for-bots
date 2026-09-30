@@ -57,7 +57,7 @@ export const MgmtView = ({ powers }) => {
 
   const getController = () => {
     if (!controllerRef.current) {
-      const presence = E(powers).lookup('controller-for-endo-mgmt');
+      const presence = E(powers).lookup(['controller-for-endo-mgmt']);
       // Never memoize a failed lookup. Restarting the daemon is this Space's
       // own headline action, and the controller is re-provisioned a moment
       // after the daemon starts accepting connections again, so the first

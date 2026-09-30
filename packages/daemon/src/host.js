@@ -5,7 +5,7 @@
 
 /** @import { ERef } from '@endo/eventual-send' */
 /** @import { PassableBytesReader } from '@endo/exo-stream' */
-/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { AgentDeferredTaskParams, ChannelDeferredTaskParams, Context, ContentLoadable, DaemonCore, DeferredTasks, EndoDiagnostics, EndoDirectory, EndoGuest, EndoHost, EndoMount, EnvRecord, EvalDeferredTaskParams, FormulaIdentifier, FormulaNumber, FormulaRecord, GitCredentialDeferredTaskParams, GitDeferredTaskParams, GitProvisionOptions, GitRemoteDeferredTaskParams, HostToolPowers, HttpClientDeferredTaskParams, InvitationDeferredTaskParams, MakeAgentOptions, MakeCapletDeferredTaskParams, MakeCapletOptions, MakeDirectoryNode, MakeMailbox, MountDeferredTaskParams, Name, NamePath, NodeNumber, PeerInfo, PetName, ReadableBlobDeferredTaskParams, ReadableTreeDeferredTaskParams, MarshalDeferredTaskParams, ScratchMountDeferredTaskParams, ShellDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 /** @import { makeSecretManager } from './secret-manager.js' */
 /** @import { makeTraceAggregator } from './trace-aggregator.js' */
 
@@ -71,10 +71,10 @@ const assertPowersNameOrPath = nameOrPath => {
  * Normalizes options for provisioning either a host or a guest, filling in
  * default values.
  * @param {MakeAgentOptions | undefined} opts
- * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NameOrPath, pins?: EndoDirectory, networks?: EndoDirectory }}
+ * @returns {{ introducedNames: Record<Name, PetName>, agentName?: NamePath, pins?: EndoDirectory, networks?: EndoDirectory }}
  */
 const normalizeHostOrGuestOptions = opts => {
-  const agentName = /** @type {NameOrPath | undefined} */ (opts?.agentName);
+  const agentName = /** @type {NamePath | undefined} */ (opts?.agentName);
   const pins = opts?.pins;
   const networks = opts?.networks;
   return {
@@ -492,7 +492,7 @@ export const makeHostMaker = ({
     //
     // Withholding `@endo` from a non-root (child) host IS a trust boundary:
     // the `endo` facet's `host()` returns the root principal, so an ambient
-    // `@endo` on a child let `E(child).lookup('@endo')` then `E(endo).host()`
+    // `@endo` on a child let `E(child).lookup(['@endo'])` then `E(endo).host()`
     // act as the root — making `provideHost` children full-authority peers
     // rather than lower-trust principals (issue #1128). Because `specialNames`
     // is recomputed from the formula at every host realization and never
@@ -631,7 +631,7 @@ export const makeHostMaker = ({
 
     /**
      * @param {ERef<PassableBytesReader>} readerRef
-     * @param {NameOrPath} petName
+     * @param {NamePath} petName
      */
     const storeBlob = async (readerRef, petName) => {
       const { namePath } = petNamePathFrom(petName);
@@ -649,7 +649,7 @@ export const makeHostMaker = ({
     /**
      * Check in a remote readable-tree Exo, storing it content-addressed.
      * @param {unknown} remoteTree - Remote Exo providing the readable-tree interface.
-     * @param {NameOrPath} petName
+     * @param {NamePath} petName
      */
     const storeTree = async (remoteTree, petName) => {
       const { namePath } = petNamePathFrom(petName);
@@ -668,7 +668,7 @@ export const makeHostMaker = ({
      * Mount an external filesystem directory.
      *
      * @param {string} mountPath - Absolute path to the directory.
-     * @param {NameOrPath} petName
+     * @param {NamePath} petName
      * @param {object} [options]
      * @param {boolean} [options.readOnly]
      * @param {string[]} [options.deniedSegments] - Restricted-segment set that
@@ -738,7 +738,7 @@ export const makeHostMaker = ({
     /**
      * Create a daemon-managed scratch mount.
      *
-     * @param {NameOrPath} petName
+     * @param {NamePath} petName
      * @param {object} [options]
      * @param {boolean} [options.readOnly]
      * @param {string[]} [options.deniedSegments] - Restricted-segment set that
@@ -782,9 +782,9 @@ export const makeHostMaker = ({
      * race.  The deferred task names the child under `newName` in the
      * same critical section that formulates it.
      *
-     * @param {NameOrPath} mountName - Pet name of the parent mount.
+     * @param {NamePath} mountName - Pet name of the parent mount.
      * @param {string[]} subpath - Segments beneath the parent root.
-     * @param {NameOrPath} newName - Pet name for the new sub-mount.
+     * @param {NamePath} newName - Pet name for the new sub-mount.
      * @param {object} [options]
      * @param {boolean} [options.readOnly]
      */
@@ -1357,7 +1357,7 @@ export const makeHostMaker = ({
     };
 
     /**
-     * @param {NameOrPath} workerNamePath
+     * @param {NamePath} workerNamePath
      */
     const provideWorker = async workerNamePath => {
       const namePath = namePathFrom(workerNamePath);
@@ -1378,7 +1378,7 @@ export const makeHostMaker = ({
     };
 
     /**
-     * @param {NameOrPath | undefined} workerName
+     * @param {NamePath | undefined} workerName
      * @param {DeferredTasks<WorkerDeferredTaskParams>['push']} deferTask
      * @returns {Promise<{ workerId: FormulaIdentifier | undefined, workerLabel: string | undefined }>}
      */
@@ -1412,11 +1412,11 @@ export const makeHostMaker = ({
 
     /**
      * Evaluate code directly in a worker.
-     * @param {NameOrPath | undefined} workerName
+     * @param {NamePath | undefined} workerName
      * @param {string} source
      * @param {Array<string>} codeNames
      * @param {(string | string[])[]} petNamePaths
-     * @param {NameOrPath | undefined} resultName
+     * @param {NamePath | undefined} resultName
      */
     const evaluate = async (
       workerName,
@@ -1493,7 +1493,7 @@ export const makeHostMaker = ({
 
     /**
      * Helper function for makeUnconfined and makeArchive.
-     * @param {NameOrPath | undefined} workerName
+     * @param {NamePath | undefined} workerName
      * @param {MakeCapletOptions} [options]
      */
     const prepareMakeCaplet = async (workerName, options = {}) => {
@@ -1574,7 +1574,7 @@ export const makeHostMaker = ({
         env,
         workerTrustedShims,
       } = await prepareMakeCaplet(
-        /** @type {NameOrPath | undefined} */ (effectiveWorkerName),
+        /** @type {NamePath | undefined} */ (effectiveWorkerName),
         options,
       );
       const workerLabel =
@@ -1619,7 +1619,7 @@ export const makeHostMaker = ({
         env,
         workerTrustedShims,
       } = await prepareMakeCaplet(
-        /** @type {NameOrPath | undefined} */ (workerName),
+        /** @type {NamePath | undefined} */ (workerName),
         options,
       );
       const workerLabel =
@@ -1722,13 +1722,13 @@ export const makeHostMaker = ({
      * surface exposes only the mount capability.
      *
      * @param {string | string[]} treeName
-     * @param {NameOrPath} scratchPetName
+     * @param {NamePath} scratchPetName
      */
     const stageTreeInternal = async (treeName, scratchPetName) => {
       // provideScratchMount validates the scratch name/path and stores it
       // through the directory, so a path nests the scratch mount.
       const scratchNamePath = namePathFrom(scratchPetName);
-      const treeNamePath = namePathFrom(/** @type {NameOrPath} */ (treeName));
+      const treeNamePath = namePathFrom(/** @type {NamePath} */ (treeName));
       // Use identify + provide instead of a lookup chain to keep the
       // source invariant (so Mount sub-node wrapping doesn't confuse
       // the materialise walk).
@@ -1771,7 +1771,7 @@ export const makeHostMaker = ({
     const stageTree = async (treeName, scratchPetName) => {
       const { scratchMount } = await stageTreeInternal(
         treeName,
-        /** @type {NameOrPath} */ (scratchPetName),
+        /** @type {NamePath} */ (scratchPetName),
       );
       return scratchMount;
     };
@@ -1781,7 +1781,7 @@ export const makeHostMaker = ({
       const entry = options?.entry ?? 'index.js';
       const resultLabel =
         options?.resultName !== undefined
-          ? `${options.resultName}`
+          ? namePathFrom(options.resultName).join('-')
           : `tree-unconfined-${await (async () => {
               // eslint-disable-next-line no-bitwise
               const r = Math.floor(Math.random() * 0xff_ffff);
@@ -1792,7 +1792,7 @@ export const makeHostMaker = ({
       const scratchPetName = `scratch-${resultLabel}`;
       const { scratchId } = await stageTreeInternal(
         treeName,
-        /** @type {NameOrPath} */ (scratchPetName),
+        /** @type {NamePath} */ ([scratchPetName]),
       );
       const scratchPath = getScratchMountPath(scratchId);
       const entryPath = `${scratchPath}/${entry}`;
@@ -1828,7 +1828,7 @@ export const makeHostMaker = ({
         env,
         workerTrustedShims,
       } = await prepareMakeCaplet(
-        /** @type {NameOrPath | undefined} */ (workerName),
+        /** @type {NamePath | undefined} */ (workerName),
         options,
       );
       const workerLabel =
@@ -1900,7 +1900,7 @@ export const makeHostMaker = ({
 
     /**
      * @template {'host' | 'guest' | 'agent'} T
-     * @param {NameOrPath} [nameOrPath] - The agent's potential pet name or
+     * @param {NamePath} [nameOrPath] - The agent's potential pet name or
      * directory path.
      * @param {T} [type]
      */
@@ -1926,9 +1926,9 @@ export const makeHostMaker = ({
     };
 
     /**
-     * @param {NameOrPath} [handleName] - The pet name or directory path of
+     * @param {NamePath} [handleName] - The pet name or directory path of
      * the handle.
-     * @param {NameOrPath} [agentName] - The pet name or directory path of
+     * @param {NamePath} [agentName] - The pet name or directory path of
      * the agent.
      */
     const getDeferredTasksForAgent = (handleName, agentName) => {
@@ -1956,7 +1956,7 @@ export const makeHostMaker = ({
     };
 
     /**
-     * @param {NameOrPath} [petName]
+     * @param {NamePath} [petName]
      * @param {MakeAgentOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoHost>}>}
      */
@@ -1994,7 +1994,7 @@ export const makeHostMaker = ({
             selectedPinsDirectoryId ?? pinsDirectoryId,
             getDeferredTasksForAgent(
               petName,
-              /** @type {NameOrPath | undefined} */ (agentName),
+              /** @type {NamePath | undefined} */ (agentName),
             ),
             undefined,
             handleId,
@@ -2021,14 +2021,14 @@ export const makeHostMaker = ({
       }
       const normalizedOpts = normalizeHostOrGuestOptions(opts);
       const { value } = await makeChildHost(
-        /** @type {NameOrPath | undefined} */ (petName),
+        /** @type {NamePath | undefined} */ (petName),
         normalizedOpts,
       );
       return value;
     };
 
     /**
-     * @param {NameOrPath} [handleName]
+     * @param {NamePath} [handleName]
      * @param {MakeAgentOptions} [opts]
      * @returns {Promise<{id: FormulaIdentifier, value: Promise<EndoGuest>}>}
      */
@@ -2065,7 +2065,7 @@ export const makeHostMaker = ({
             handleId,
             getDeferredTasksForAgent(
               handleName,
-              /** @type {NameOrPath | undefined} */ (agentName),
+              /** @type {NamePath | undefined} */ (agentName),
             ),
             guestLabel,
             guestPinsDirectoryId,
@@ -2092,7 +2092,7 @@ export const makeHostMaker = ({
       }
       const normalizedOpts = normalizeHostOrGuestOptions(opts);
       const { value } = await makeGuest(
-        /** @type {NameOrPath | undefined} */ (petName),
+        /** @type {NamePath | undefined} */ (petName),
         normalizedOpts,
       );
       return value;
@@ -2101,7 +2101,7 @@ export const makeHostMaker = ({
     /**
      * Create a timer that fires at a specified interval.
      *
-     * @param {NameOrPath} petName - Pet name or path to store the timer under
+     * @param {NamePath} petName - Pet name or path to store the timer under
      * @param {number} intervalMs - Interval in milliseconds
      * @param {string} [label] - Optional label for the timer
      */
@@ -2124,7 +2124,7 @@ export const makeHostMaker = ({
 
     /**
      * Create a new channel and store it under the given pet name.
-     * @param {NameOrPath} petName - Pet name or path to store the channel under.
+     * @param {NamePath} petName - Pet name or path to store the channel under.
      * @param {string} channelProposedName - Display name for the channel creator.
      */
     const makeChannelCmd = async (petName, channelProposedName) => {
@@ -2146,7 +2146,7 @@ export const makeHostMaker = ({
     };
 
     /**
-     * @param {NameOrPath} correspondentName
+     * @param {NamePath} correspondentName
      */
     const invite = async correspondentName => {
       const { namePath, petName: correspondentPetName } =
@@ -2188,7 +2188,7 @@ export const makeHostMaker = ({
      * register-peer / record-agent-key / bind sequence so the contract does not
      * fork by facet.
      * @param {string} invitationLocator
-     * @param {NameOrPath} correspondentName
+     * @param {NamePath} correspondentName
      */
     const accept = async (invitationLocator, correspondentName) => {
       // A path nests the accepted connection inside a directory; the parent
@@ -2506,7 +2506,7 @@ export const makeHostMaker = ({
       /** @type {DeferredTasks<EvalDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
       const { workerId } = await prepareWorkerFormulation(
-        /** @type {NameOrPath | undefined} */ (workerName),
+        /** @type {NamePath | undefined} */ (workerName),
         tasks.push,
       );
 

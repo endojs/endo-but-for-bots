@@ -72,8 +72,8 @@ test('the read-only view forwards its reads to the backing hub', async t => {
 
   t.is(await E(view).has('one'), true);
   t.deepEqual([...(await E(view).list())], ['a', 'b']);
-  t.is(await E(view).lookup('one'), 'looked-up');
-  t.is(await E(view).maybeLookup('two'), 'maybe');
+  t.is(await E(view).lookup(['one']), 'looked-up');
+  t.is(await E(view).maybeLookup(['two']), 'maybe');
 
   t.deepEqual(calls, [
     ['has', ['one']],
@@ -152,7 +152,7 @@ test('empty and multi-segment path arguments forward verbatim to the backing hub
   // for `has`/`list`. None are rejected at THIS boundary (they are value, not
   // type, confusion — `assertNamePath`/`assertName` reject them downstream at
   // the backing hub), so each must forward through unchanged.
-  t.is(await E(view).lookup(''), 'looked-up');
+  t.is(await E(view).lookup(['']), 'looked-up');
   t.is(await E(view).lookup([]), 'looked-up');
   t.is(await E(view).maybeLookup(['a', 'b']), 'maybe');
   await E(view).has();
@@ -187,8 +187,8 @@ test('the liveness gate severs every read once the backing capability is cancele
   const callsAfterCancel = calls.length;
   await t.throwsAsync(E(view).has('one'), { message: /revoked/ });
   await t.throwsAsync(E(view).list(), { message: /revoked/ });
-  await t.throwsAsync(E(view).lookup('one'), { message: /revoked/ });
-  await t.throwsAsync(E(view).maybeLookup('one'), { message: /revoked/ });
+  await t.throwsAsync(E(view).lookup(['one']), { message: /revoked/ });
+  await t.throwsAsync(E(view).maybeLookup(['one']), { message: /revoked/ });
   t.is(
     calls.length,
     callsAfterCancel,

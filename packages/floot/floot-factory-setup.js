@@ -130,12 +130,12 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
         (await E(agent).has(...powersPath)) ? powersPath : powersName,
       );
       await E(oraclePowers).storeLocator(
-        'account-profile',
+        ['account-profile'],
         await E(agent).locate(...profileNamePath),
       );
     }
     await E(factoryHost).storeLocator(
-      'account-oracle',
+      ['account-oracle'],
       await E(agent).locate(...oraclePath),
     );
     // Finish the moves a run that died after the launch left undone — only
@@ -182,10 +182,10 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
   }
   const oracleGuest = await E(agent).lookup(powersName);
   await E(oracleGuest).storeLocator(
-    'account-profile',
+    ['account-profile'],
     await E(agent).locate(...profileNamePath),
   );
-  await E(agent).makeUnconfined('@main', accountOracleSpecifier, {
+  await E(agent).makeUnconfined(['@main'], accountOracleSpecifier, {
     powersName,
     resultName: oraclePath,
     env: harden({ ACCOUNT_PROVIDER_ID: provider }),
@@ -193,7 +193,7 @@ const provideAccountOracle = async (agent, { dir, provider, factoryHost }) => {
   await E(agent).move([handleName], [dir, 'account-oracle-handle']);
   await E(agent).move([powersName], powersPath);
   await E(factoryHost).storeLocator(
-    'account-oracle',
+    ['account-oracle'],
     await E(agent).locate(...oraclePath),
   );
   console.log(`Floot account oracle created at "${dir}/account-oracle".`);
@@ -359,7 +359,7 @@ export const main = async agent => {
     [dir, 'llm-provider'],
   );
   const providerLocator = await E(agent).locate(dir, 'llm-provider');
-  await E(factoryHost).storeLocator('llm-provider', providerLocator);
+  await E(factoryHost).storeLocator(['llm-provider'], providerLocator);
   if (authSecretLocator) {
     await E(factoryHost).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
   } else if (await E(factoryHost).has(AUTH_SECRET_PETNAME)) {
@@ -388,7 +388,7 @@ export const main = async agent => {
   if (await E(agent).has(...pinPath)) {
     await E(agent).remove(...pinPath);
   }
-  await E(agent).makeUnconfined('@main', flootFactorySpecifier, {
+  await E(agent).makeUnconfined(['@main'], flootFactorySpecifier, {
     powersName: revived ? controllerProfilePath : agentName,
     resultName: controllerPath,
     env: factoryEnv,

@@ -36,7 +36,7 @@ export const main = async agent => {
     });
   }
 
-  await E(agent).makeUnconfined('@main', llmProviderFactorySpecifier, {
+  await E(agent).makeUnconfined(['@main'], llmProviderFactorySpecifier, {
     powersName: agentName,
     resultName: `controller-for-${name}`,
   });

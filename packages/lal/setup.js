@@ -32,15 +32,15 @@ export const main = async agent => {
 
   const hasLal = await E(agent).has('setup-lal');
   if (!hasLal) {
-    await E(agent).provideGuest('setup-lal', {
+    await E(agent).provideGuest(['setup-lal'], {
       introducedNames: harden({ '@agent': 'host-agent' }),
       agentName: 'profile-for-lal',
     });
   }
 
-  await E(agent).makeUnconfined('@main', lalSpecifier, {
-    powersName: 'profile-for-lal',
-    resultName: 'controller-for-lal',
+  await E(agent).makeUnconfined(['@main'], lalSpecifier, {
+    powersName: ['profile-for-lal'],
+    resultName: ['controller-for-lal'],
   });
 
   const { env } = process;

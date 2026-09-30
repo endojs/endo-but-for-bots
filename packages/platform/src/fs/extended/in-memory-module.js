@@ -16,7 +16,7 @@
  *     import.meta.url,
  *   ).href;
  *   const fs = await E(host).makeUnconfined('@main', moduleUrl, {
- *     resultName: 'workspace-fs',
+ *     resultName,
  *   });
  *   // `fs` is now a endo-fs Filesystem cap, addressable as a
  *   // formula on @host. Populate via E(fs).root() etc.

@@ -33,8 +33,8 @@
  * Usage from a host:
  *
  *   await E(host).makeUnconfined('@node', moduleUrl, {
- *     powersName: '@agent',
- *     resultName: 'tmp-layer',
+ *     powersName,
+ *     resultName,
  *     env: { BACKING_NAME: 'tmp' },          // or 'a/b/c'
  *   });
  */

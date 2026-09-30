@@ -75,12 +75,6 @@ export type Name = PetName | SpecialName;
 /** A validated path of names (array of at least one name) */
 export type NamePath = Name[];
 
-/** Either a single name or a path of names */
-export type NameOrPath = Name | NamePath;
-
-/** An array of names or paths */
-export type NamesOrPaths = NameOrPath[];
-
 export type SomehowAsyncIterable<T> =
   AsyncIterable<T> | Iterable<T> | { next: () => IteratorResult<T> };
 
@@ -674,7 +668,7 @@ export type InvitationFormula = {
    * persisted on-disk field, so renaming it would be a stored-record schema
    * change. The concept it names is the correspondent's pet name.
    */
-  guestName: NameOrPath;
+  guestName: NamePath;
   /**
    * @deprecated Legacy field name for {@link invitingAgent}, persisted by
    * records minted before the `hostAgent`/`hostHandle` ->
@@ -1018,11 +1012,11 @@ export interface NameHub {
   followNameChanges(
     ...petNamePath: string[]
   ): AsyncGenerator<PetStoreNameChange, undefined, undefined>;
-  lookup(petNamePath: string | string[]): Promise<unknown>;
-  maybeLookup(petNamePath: string | string[]): unknown;
+  lookup(petNamePath: string[]): Promise<unknown>;
+  maybeLookup(petNamePath: string[]): unknown;
   reverseLookup(value: unknown): Array<Name>;
-  storeIdentifier(petNamePath: string | string[], id: string): Promise<void>;
-  storeLocator(petNamePath: string | string[], locator: string): Promise<void>;
+  storeIdentifier(petNamePath: string[], id: string): Promise<void>;
+  storeLocator(petNamePath: string[], locator: string): Promise<void>;
   remove(...petNamePath: string[]): Promise<void>;
   move(fromPetName: string[], toPetName: string[]): Promise<void>;
   copy(fromPetName: string[], toPetName: string[]): Promise<void>;
@@ -1059,10 +1053,10 @@ export interface ReadableNameHub {
 }
 
 export interface EndoDirectory extends NameHub {
-  makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
-  readText(petNamePath: string | string[]): Promise<string>;
-  maybeReadText(petNamePath: string | string[]): Promise<string | undefined>;
-  writeText(petNamePath: string | string[], content: string): Promise<void>;
+  makeDirectory(petNamePath: string[]): Promise<EndoDirectory>;
+  readText(petNamePath: string[]): Promise<string>;
+  maybeReadText(petNamePath: string[]): Promise<string | undefined>;
+  writeText(petNamePath: string[], content: string): Promise<void>;
   /**
    * Mint a read-only view of this directory as a {@link ReadableNameHub}. The
    * attenuation is SHALLOW — it withholds this directory's mutators but does
@@ -1244,18 +1238,18 @@ export interface Mail {
     messageNumber: bigint,
     strings: Array<string>,
     edgeNames: Array<string>,
-    petNamesOrPaths: Array<string | string[]>,
+    petNamesOrPaths: string[][],
   ): Promise<void>;
   request(
-    recipientNameOrPath: string | string[],
+    recipientNameOrPath: string[],
     what: string,
-    responseNameOrPath?: string | string[],
+    responseNameOrPath?: string[],
   ): Promise<unknown>;
   send(
-    recipientNameOrPath: string | string[],
+    recipientNameOrPath: string[],
     strings: Array<string>,
     edgeNames: Array<string>,
-    petNamesOrPaths: Array<string | string[]>,
+    petNamesOrPaths: string[][],
     replyToMessageNumber?: bigint,
   ): Promise<void>;
   deliver(message: EnvelopedMessage): Promise<void>;
@@ -1264,7 +1258,7 @@ export interface Mail {
     slots: Record<string, { label: string; pattern?: unknown }>,
   ): Promise<void>;
   form(
-    recipientNameOrPath: string | string[],
+    recipientNameOrPath: string[],
     description: string,
     fields: FormField[],
   ): Promise<void>;
@@ -1283,7 +1277,7 @@ export interface Mail {
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue(
     messageNumber: bigint,
-    petNameOrPath: string | string[],
+    petNameOrPath: string[],
   ): Promise<void>;
   /**
    * Deliver a value message to the local inbox only, bypassing the remote
@@ -1310,7 +1304,7 @@ export interface Mail {
     messageNumber: bigint,
     strings: Array<string>,
     edgeNames: Array<string>,
-    petNamesOrPaths: Array<string | string[]>,
+    petNamesOrPaths: string[][],
     options?: { done?: boolean },
   ): Promise<void>;
   /**
@@ -1623,7 +1617,7 @@ export interface EndoMountControl {
 export interface EndoWorker {}
 
 export type MakeAgentOptions = {
-  agentName?: string | string[];
+  agentName?: string[];
   introducedNames?: Record<string, string>;
   /** A caller-selected directory to expose to the new agent as `@pins`. */
   pins?: EndoDirectory;
@@ -1632,8 +1626,8 @@ export type MakeAgentOptions = {
 };
 
 export type MakeCapletOptions = {
-  powersName?: string | string[];
-  resultName?: string | string[];
+  powersName?: string[];
+  resultName?: string[];
   env?: Record<string, string>;
   workerTrustedShims?: string[];
 };
@@ -1714,28 +1708,28 @@ export interface EndoAgent
 export interface EndoGuest extends EndoAgent {
   /** Evaluate code directly in a worker, constrained by reachable capabilities. */
   evaluate(
-    workerPetName: string | string[] | undefined,
+    workerPetName: string[] | undefined,
     source: string,
     codeNames: Array<string>,
-    petNamesOrPaths: Array<string | string[]>,
-    resultNameOrPath?: string | string[],
+    petNamesOrPaths: string[][],
+    resultNameOrPath?: string[],
   ): Promise<unknown>;
   define(
     source: string,
     slots: Record<string, { label: string; pattern?: unknown }>,
   ): Promise<void>;
   form(
-    recipientNameOrPath: string | string[],
+    recipientNameOrPath: string[],
     description: string,
     fields: FormField[],
   ): Promise<void>;
   storeBlob(
     readerRef: ERef<PassableBytesReader>,
-    petName?: string | string[],
+    petName?: string[],
   ): Promise<unknown>;
   storeValue<T extends Passable>(
     value: T,
-    petName: string | string[],
+    petName: string[],
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
@@ -1748,7 +1742,7 @@ export interface EndoGuest extends EndoAgent {
    * peer enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
    * implementation.
    */
-  invite(correspondentName: string | string[]): Promise<Invitation>;
+  invite(correspondentName: string[]): Promise<Invitation>;
   /**
    * Redeem an invitation locator into THIS guest, binding the relationship to
    * the calling guest — no replacement guest is minted on the acceptor side.
@@ -1765,7 +1759,7 @@ export interface EndoGuest extends EndoAgent {
    */
   accept(
     invitationLocator: string,
-    correspondentName: string | string[],
+    correspondentName: string[],
   ): Promise<void>;
 }
 
@@ -1865,33 +1859,33 @@ export interface SecretManagerDirectory {
   help(): string;
   has(name: string): Promise<boolean>;
   list(): Promise<string[]>;
-  lookup(path: string | string[]): Promise<unknown>;
+  lookup(path: string[]): Promise<unknown>;
 }
 
 export type FarEndoGuest = FarRef<EndoGuest>;
 
 export interface EndoHost extends EndoAgent {
   form(
-    recipientNameOrPath: string | string[],
+    recipientNameOrPath: string[],
     description: string,
     fields: FormField[],
   ): Promise<void>;
   storeBlob(
     readerRef: ERef<PassableBytesReader>,
-    petName: string | string[],
+    petName: string[],
   ): Promise<FarRef<EndoReadable>>;
   storeValue<T extends Passable>(
     value: T,
-    petName: string | string[],
+    petName: string[],
   ): Promise<void>;
-  storeTree(remoteTree: unknown, petName: string | string[]): Promise<unknown>;
+  storeTree(remoteTree: unknown, petName: string[]): Promise<unknown>;
   provideMount(
     path: string,
-    petName: string | string[],
+    petName: string[],
     opts?: { readOnly?: boolean; deniedSegments?: string[] },
   ): Promise<EndoMount>;
   provideScratchMount(
-    petName: string | string[],
+    petName: string[],
     opts?: { readOnly?: boolean; deniedSegments?: string[] },
   ): Promise<EndoMount>;
   /**
@@ -1908,29 +1902,29 @@ export interface EndoHost extends EndoAgent {
    * read-write parent may still be narrowed to a read-only child.
    */
   provideSubMount(
-    mountName: string | string[],
+    mountName: string[],
     subpath: string[],
-    newName: string | string[],
+    newName: string[],
     opts?: { readOnly?: boolean },
   ): Promise<EndoMount>;
   provideGit(
     mountCap: EndoMount,
-    petName: string | string[],
+    petName: string[],
     options: GitProvisionOptions & { allowHistoryRewrite: true },
   ): Promise<HistoryRewriteEndoGit>;
   provideGit(
     mountCap: EndoMount,
-    petName: string | string[],
+    petName: string[],
     options?: GitProvisionOptions & { allowHistoryRewrite?: false },
   ): Promise<ReadWriteEndoGit>;
   provideGit(
     mountCap: EndoMount,
-    petName: string | string[],
+    petName: string[],
     options: GitProvisionOptions & { allowHistoryRewrite: boolean },
   ): Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>;
   provideGit(
     mountCap: EndoMount,
-    petName: string | string[],
+    petName: string[],
     options?: GitProvisionOptions,
   ): Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>;
   /**
@@ -1943,7 +1937,7 @@ export interface EndoHost extends EndoAgent {
    */
   provideShell(
     mountCap: EndoMount,
-    petName: string | string[],
+    petName: string[],
     policy: ShellPolicy,
   ): Promise<EndoShell>;
   /**
@@ -1954,7 +1948,7 @@ export interface EndoHost extends EndoAgent {
    * host-side, reachable via `getHttpClientControl`.
    */
   provideHttpClient(
-    petName: string | string[],
+    petName: string[],
     policy: HttpClientPolicy,
   ): Promise<HttpClient>;
   /**
@@ -1974,7 +1968,7 @@ export interface EndoHost extends EndoAgent {
    */
   provideGitRemote(
     gitCap: unknown,
-    petName: string | string[],
+    petName: string[],
     opts: {
       name: string;
       url: string;
@@ -2020,7 +2014,7 @@ export interface EndoHost extends EndoAgent {
    * receive only the `audience()` view of the resulting capability.
    */
   provideBearerCredential(
-    petName: string | string[],
+    petName: string[],
     options: { audience: string; token: string },
   ): Promise<unknown>;
   /**
@@ -2030,7 +2024,7 @@ export interface EndoHost extends EndoAgent {
    * material, audience-gated transport use.
    */
   provideBasicCredential(
-    petName: string | string[],
+    petName: string[],
     options: { audience: string; username: string; password: string },
   ): Promise<unknown>;
   /**
@@ -2060,35 +2054,35 @@ export interface EndoHost extends EndoAgent {
    */
   provideHostPath(cap: unknown): Promise<string>;
   provideGuest(
-    petName?: string | string[],
+    petName?: string[],
     opts?: MakeAgentOptions,
   ): Promise<EndoGuest>;
   provideHost(
-    petName?: string | string[],
+    petName?: string[],
     opts?: MakeAgentOptions,
   ): Promise<EndoHost>;
-  makeDirectory(petNamePath: string | string[]): Promise<EndoDirectory>;
-  provideWorker(petNamePath: string | string[]): Promise<EndoWorker>;
+  makeDirectory(petNamePath: string[]): Promise<EndoDirectory>;
+  provideWorker(petNamePath: string[]): Promise<EndoWorker>;
   evaluate(
-    workerPetName: string | string[] | undefined,
+    workerPetName: string[] | undefined,
     source: string,
     codeNames: Array<string>,
-    petNamesOrPaths: Array<string | string[]>,
-    resultName?: string | string[],
+    petNamesOrPaths: string[][],
+    resultName?: string[],
   ): Promise<unknown>;
   makeUnconfined(
-    workerName: string | string[] | undefined,
+    workerName: string[] | undefined,
     specifier: string,
     options?: MakeCapletOptions,
   ): Promise<unknown>;
   makeArchive(
-    workerPetName: string | string[] | undefined,
-    archiveName: string | string[],
+    workerPetName: string[] | undefined,
+    archiveName: string[],
     options?: MakeCapletOptions,
   ): Promise<unknown>;
   makeFromTree(
-    workerPetName: string | string[] | undefined,
-    treeName: string | string[],
+    workerPetName: string[] | undefined,
+    treeName: string[],
     options?: MakeCapletOptions,
   ): Promise<unknown>;
   /**
@@ -2098,8 +2092,8 @@ export interface EndoHost extends EndoAgent {
    * removes it.
    */
   stageTree(
-    treeName: string | string[],
-    scratchPetName: string | string[],
+    treeName: string[],
+    scratchPetName: string[],
   ): Promise<unknown>;
   /**
    * Stage a readable tree (ReadableTree or Mount) into an internal
@@ -2108,11 +2102,11 @@ export interface EndoHost extends EndoAgent {
    * Supports native Node modules (unlike {@link makeFromTree}).
    */
   makeUnconfinedFromTree(
-    workerPetName: string | string[] | undefined,
-    treeName: string | string[],
+    workerPetName: string[] | undefined,
+    treeName: string[],
     options?: MakeCapletOptions & { entry?: string },
   ): Promise<unknown>;
-  cancel(petNameOrPath: string | string[], reason?: Error): Promise<void>;
+  cancel(petNameOrPath: string[], reason?: Error): Promise<void>;
   greeter(): Promise<EndoGreeter>;
   gateway(): Promise<EndoGateway>;
   sign(hexBytes: string): Promise<string>;
@@ -2121,11 +2115,11 @@ export interface EndoHost extends EndoAgent {
   listKnownPeers(): Promise<PeerInfo[]>;
   followPeerChanges(): AsyncGenerator<PetStoreNameChange, undefined, undefined>;
   makeChannel(
-    petName: string | string[],
+    petName: string[],
     proposedName: string,
   ): Promise<EndoChannel>;
   makeTimer(
-    petName: string | string[],
+    petName: string[],
     intervalMs: number,
     label?: string,
   ): Promise<unknown>;
@@ -2134,18 +2128,18 @@ export interface EndoHost extends EndoAgent {
   /** Adopt a value from a locator that includes connection hints. */
   adoptFromLocator(
     locator: string,
-    petNameOrPath: string | string[],
+    petNameOrPath: string[],
   ): Promise<void>;
-  invite(correspondentName: string | string[]): Promise<Invitation>;
+  invite(correspondentName: string[]): Promise<Invitation>;
   accept(
     invitationLocator: string,
-    correspondentName: string | string[],
+    correspondentName: string[],
   ): Promise<void>;
   endow(
     messageNumber: bigint,
-    bindings: Record<string, string | string[]>,
-    workerName?: string | string[],
-    resultName?: string | string[],
+    bindings: Record<string, string[]>,
+    workerName?: string[],
+    resultName?: string[],
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
@@ -2265,7 +2259,7 @@ export interface EndoChannel {
   post(
     strings: string[],
     names: string[],
-    petNamesOrPaths: (string | string[])[],
+    petNamesOrPaths: string[][],
     replyTo?: string,
   ): Promise<void>;
   followMessages(): AsyncGenerator<ChannelMessage, undefined, undefined>;
@@ -2351,7 +2345,7 @@ export interface EndoChannelMember {
   post(
     strings: string[],
     names: string[],
-    petNamesOrPaths: (string | string[])[],
+    petNamesOrPaths: string[][],
     replyTo?: string,
   ): Promise<void>;
   followMessages(): AsyncGenerator<ChannelMessage, undefined, undefined>;
@@ -2401,7 +2395,7 @@ export interface EndoChannelMember {
  *   earlier than `@endo/daemon@4.0.0`.
  */
 export type EndoInspector<RecordT = string> = {
-  lookup(petNameOrPath: RecordT | Name | readonly Name[]): Promise<unknown>;
+  lookup(petNameOrPath: RecordT | readonly Name[]): Promise<unknown>;
   list(): RecordT[];
 };
 
@@ -3090,7 +3084,7 @@ export interface DaemonCore {
   formulateInvitation: (
     invitingAgentId: FormulaIdentifier,
     invitingHandleId: FormulaIdentifier,
-    guestName: NameOrPath,
+    guestName: NamePath,
     deferredTasks: DeferredTasks<InvitationDeferredTaskParams>,
   ) => FormulateResult<Invitation>;
 

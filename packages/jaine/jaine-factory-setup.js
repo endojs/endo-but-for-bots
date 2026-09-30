@@ -58,9 +58,9 @@ export const main = async agent => {
   }
 
   const factoryPowers = await E(agent).lookup(agentName);
-  await E(factoryPowers).storeIdentifier('llm-provider', providerId);
+  await E(factoryPowers).storeIdentifier(['llm-provider'], providerId);
 
-  await E(agent).makeUnconfined('@main', jaineFactorySpecifier, {
+  await E(agent).makeUnconfined(['@main'], jaineFactorySpecifier, {
     powersName: agentName,
     resultName: factoryName,
   });

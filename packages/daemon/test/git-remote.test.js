@@ -983,7 +983,7 @@ test.serial(
     const remoteUrl = pathToFileURL(remoteRoot).href;
     const { host } = await provisionHostContext(t);
 
-    const destMount = await E(host).provideScratchMount('clone-destination');
+    const destMount = await E(host).provideScratchMount(['clone-destination']);
     await t.throwsAsync(
       E(host).provideGitClone({
         destMount: Far('NotMount', {}),
@@ -1059,7 +1059,7 @@ test.serial(
     const { host } = await provisionHostContext(t);
 
     const destMount = await E(host).provideScratchMount(
-      'clone-identity-destination',
+      ['clone-identity-destination'],
     );
     const { git, remote } = await E(host).provideGitClone({
       destMount,
@@ -1105,7 +1105,7 @@ test.serial(
     const { host } = await provisionHostContext(t);
 
     const destMount = await E(host).provideScratchMount(
-      'read-only-clone-destination',
+      ['read-only-clone-destination'],
       { readOnly: true },
     );
     const destPath = await E(host).provideHostPath(destMount);

@@ -308,14 +308,14 @@ const prepareHostWithTestNetwork = async t => {
   const { host } = await prepareHost(t);
 
   // Store the listen address before the network service starts.
-  await E(host).storeValue('127.0.0.1:0', 'tcp-listen-addr');
+  await E(host).storeValue('127.0.0.1:0', ['tcp-listen-addr']);
 
   // Install test network
   const servicePath = path.join(dirname, 'src', 'networks', 'tcp-netstring.js');
   const serviceLocation = url.pathToFileURL(servicePath).href;
-  const network = await E(host).makeUnconfined('@main', serviceLocation, {
-    powersName: '@agent',
-    resultName: 'test-network',
+  const network = await E(host).makeUnconfined(['@main'], serviceLocation, {
+    powersName: ['@agent'],
+    resultName: ['test-network'],
   });
 
   // Ensure the network module initialized successfully before moving it.
@@ -410,7 +410,7 @@ const doMakeFromTreeViaMount = async (host, config, packageDir, callback) => {
 
   const treePetName = `tmp-tree-${treeFixtureId}`;
   treeFixtureId += 1;
-  await E(host).provideMount(treeDir, treePetName, { readOnly: true });
+  await E(host).provideMount(treeDir, [treePetName], { readOnly: true });
 
   const result = await callback(treePetName);
   await E(host).remove(treePetName);
@@ -510,7 +510,7 @@ test('lifecycle', async t => {
   const bootstrap = getBootstrap();
   const host = E(bootstrap).host();
   await E(host).provideWorker(['worker']);
-  await E(host).cancel('worker');
+  await E(host).cancel(['worker']);
   cancel(new Error('Cancelled'));
   await closed.catch(() => {});
 
@@ -566,7 +566,7 @@ test('store pass-copy values', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    await E(host).storeValue(storedValue, 'value');
+    await E(host).storeValue(storedValue, ['value']);
   }
 
   await restart(config);
@@ -585,7 +585,7 @@ test('store formula values', async t => {
     const { host } = await makeHost(config, cancelled);
     await E(host).provideWorker(['w1']);
     const counter = await E(host).evaluate(
-      'w1',
+      ['w1'],
       `
         (() => {
           let value = 0;
@@ -603,7 +603,7 @@ test('store formula values', async t => {
       [],
       ['temporary-retainer'],
     );
-    await E(host).storeValue(counter, 'counter');
+    await E(host).storeValue(counter, ['counter']);
     await E(host).remove('temporary-retainer');
   }
 
@@ -630,7 +630,7 @@ test('fail to store non-formula exos', async t => {
   const noFormulaExo = makeExo('Exo', M.interface('Exo', {}), {});
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
-  await t.throwsAsync(() => E(host).storeValue(noFormulaExo, 'exo'), {
+  await t.throwsAsync(() => E(host).storeValue(noFormulaExo, ['exo']), {
     message: /^No corresponding formula for/,
   });
 });
@@ -639,26 +639,26 @@ test('spawn and evaluate', async t => {
   const { host } = await prepareHost(t);
 
   await E(host).provideWorker(['w1']);
-  const ten = await E(host).evaluate('w1', '10', [], []);
+  const ten = await E(host).evaluate(['w1'], '10', [], []);
   t.is(ten, 10);
 });
 
 test('anonymous spawn and evaluate', async t => {
   const { host } = await prepareHost(t);
 
-  const ten = await E(host).evaluate('@main', '10', [], []);
+  const ten = await E(host).evaluate(['@main'], '10', [], []);
   t.is(ten, 10);
 });
 
 test('evaluate allows mixed-case code names', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(5, 'five');
+  await E(host).storeValue(5, ['five']);
   const six = await E(host).evaluate(
-    '@main',
+    ['@main'],
     'fooBar + 1',
     ['fooBar'],
-    ['five'],
+    [['five']],
   );
   t.is(six, 6);
 });
@@ -667,12 +667,12 @@ test('evaluate allows mixed-case code names', async t => {
 test('spawning a worker does not overwrite existing non-worker name', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'foo');
+  await E(host).storeValue(10, ['foo']);
 
   // This resolves with the existing value of 'foo' rather than overwriting it
   // with a new worker.
   await E(host).provideWorker(['foo']);
-  await t.throwsAsync(() => E(host).evaluate('foo', '20', [], [], ['bar']), {
+  await t.throwsAsync(() => E(host).evaluate(['foo'], '20', [], [], ['bar']), {
     message: 'Cannot evaluate using non-worker',
   });
 });
@@ -685,13 +685,13 @@ test('persist spawn and evaluation', async t => {
 
     await E(host).provideWorker(['w1']);
 
-    const ten = await E(host).evaluate('w1', '10', [], [], ['ten']);
+    const ten = await E(host).evaluate(['w1'], '10', [], [], ['ten']);
     t.is(ten, 10);
     const twenty = await E(host).evaluate(
-      'w1',
+      ['w1'],
       'number * 2',
       ['number'],
-      ['ten'],
+      [['ten']],
       ['twenty'],
     );
 
@@ -728,7 +728,7 @@ test('store with name', async t => {
   {
     const { host } = await makeHost(config, cancelled);
     const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
-    const readable = await E(host).storeBlob(readerRef, 'hello-text');
+    const readable = await E(host).storeBlob(readerRef, ['hello-text']);
     const actualText = await E(readable).text();
     t.is(actualText, 'hello\n');
   }
@@ -747,7 +747,7 @@ test('stored blob exposes named digest, size, and byte reads', async t => {
 
   const payload = encodeUtf8('hello world\n'); // 12 bytes
   const readerRef = bytesReaderFromIterator([payload]);
-  const blob = await E(host).storeBlob(readerRef, 'rich-blob');
+  const blob = await E(host).storeBlob(readerRef, ['rich-blob']);
 
   /** @param {any} reader */
   const collect = async reader => {
@@ -781,7 +781,7 @@ test('stored blob range attenuation: byteRange / textRange return derived readab
 
   const payload = encodeUtf8('hello world\n'); // 12 bytes
   const readerRef = bytesReaderFromIterator([payload]);
-  const blob = await E(host).storeBlob(readerRef, 'range-blob');
+  const blob = await E(host).storeBlob(readerRef, ['range-blob']);
 
   const b64 = bytes => encodeBase64(sha256(bytes));
 
@@ -827,7 +827,7 @@ test('stored blob textRange: line boundaries, terminal-LF, CRLF, byte/text compo
     const readerRef = bytesReaderFromIterator([encodeUtf8(text)]);
     return E(host).storeBlob(
       readerRef,
-      `tr-${Math.random().toString(36).slice(2)}`,
+      [`tr-${Math.random().toString(36).slice(2)}`],
     );
   };
 
@@ -864,7 +864,7 @@ test('store blob in subdirectory', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    await E(host).makeDirectory('subdir');
+    await E(host).makeDirectory(['subdir']);
     const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
     const readable = await E(host).storeBlob(readerRef, [
       'subdir',
@@ -894,7 +894,7 @@ test('store blob requires a name', async t => {
 test('move renames value', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
   t.true(await E(host).has('ten'));
   t.false(await E(host).has('zehn'));
@@ -908,8 +908,8 @@ test('move renames value', async t => {
 test('move renames value, overwriting the "to" name', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
-  await E(host).storeValue('"X"', 'decimus');
+  await E(host).storeValue(10, ['ten']);
+  await E(host).storeValue('"X"', ['decimus']);
 
   t.true(await E(host).has('ten'));
   t.true(await E(host).has('decimus'));
@@ -927,7 +927,7 @@ test('move moves value, from the host to a different name hub', async t => {
   const { host } = await prepareHost(t);
   const directory = await E(host).makeDirectory(['directory']);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
   t.true(await E(host).has('ten'));
   t.false(await E(directory).has('ten'));
@@ -941,11 +941,11 @@ test('move moves value, from the host to a different name hub', async t => {
 test('move renames value, for a single guest', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest', {
+  const guest = await E(host).provideGuest(['guest'], {
     agentName: 'guest-agent',
   });
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
   await E(host).move(['ten'], ['guest-agent', 'ten']);
 
   t.true(await E(guest).has('ten'));
@@ -974,13 +974,13 @@ const agentKinds = harden([
 for (const { kind, provideAgent, pinsProperty } of agentKinds) {
   test(`provideAgent gives ${kind} a caller-selected pins directory`, async t => {
     const { host } = await prepareHost(t);
-    const pins = await E(host).makeDirectory(`retained-${kind}-pins`);
+    const pins = await E(host).makeDirectory([`retained-${kind}-pins`]);
     const agent = await provideAgent(host, kind, {
       agentName: `${kind}-agent`,
       pins,
     });
 
-    await E(host).storeValue(10, 'ten');
+    await E(host).storeValue(10, ['ten']);
     const tenId = await E(host).identify('ten');
     await E(agent).storeIdentifier(['@pins', 'ten'], tenId);
 
@@ -995,13 +995,13 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
 
   test(`provideAgent gives ${kind} a caller-selected networks directory`, async t => {
     const { host } = await prepareHost(t);
-    const networks = await E(host).makeDirectory(`delegated-${kind}-nets`);
+    const networks = await E(host).makeDirectory([`delegated-${kind}-nets`]);
     const agent = await provideAgent(host, kind, {
       agentName: `${kind}-agent`,
       networks,
     });
 
-    await E(host).storeValue(10, 'network-marker');
+    await E(host).storeValue(10, ['network-marker']);
     const markerId = await E(host).identify('network-marker');
     await E(networks).storeIdentifier(['loopback'], markerId);
 
@@ -1015,7 +1015,7 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
 
   test(`provideAgent introduces ordinary and special names to ${kind}`, async t => {
     const { host } = await prepareHost(t);
-    await E(host).storeValue(10, 'ten');
+    await E(host).storeValue(10, ['ten']);
     const agent = await provideAgent(host, kind, {
       introducedNames: {
         ten: 'dix',
@@ -1024,7 +1024,7 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
       },
     });
 
-    t.is(await E(agent).lookup('dix'), 10);
+    t.is(await E(agent).lookup(['dix']), 10);
     t.is(await E(agent).identify('retained'), await E(host).identify('@pins'));
     t.is(
       await E(agent).identify('connections'),
@@ -1036,14 +1036,14 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
 test('move moves value, between different guests', async t => {
   const { host } = await prepareHost(t);
 
-  const guest1 = await E(host).provideGuest('guest1', {
+  const guest1 = await E(host).provideGuest(['guest1'], {
     agentName: 'guest1-agent',
   });
-  const guest2 = await E(host).provideGuest('guest2', {
+  const guest2 = await E(host).provideGuest(['guest2'], {
     agentName: 'guest2-agent',
   });
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
   await E(host).move(['ten'], ['guest1-agent', 'ten']);
 
   t.true(await E(guest1).has('ten'));
@@ -1060,12 +1060,12 @@ testNeedsNodeWorker(
     const { host } = await prepareHost(t);
 
     const nameHubPath = path.join(dirname, 'test', 'move-hub.js');
-    const nameHub = await E(host).makeUnconfined('@main', nameHubPath, {
-      powersName: '@none',
-      resultName: 'name-hub',
+    const nameHub = await E(host).makeUnconfined(['@main'], nameHubPath, {
+      powersName: ['@none'],
+      resultName: ['name-hub'],
     });
 
-    await E(host).storeValue(10, 'ten');
+    await E(host).storeValue(10, ['ten']);
     const tenLocator = await E(host).locate('ten');
     await E(nameHub).storeLocator(['ten'], tenLocator);
 
@@ -1084,16 +1084,16 @@ testNeedsNodeWorker(
     const { host } = await prepareHost(t);
 
     const nameHubPath = path.join(dirname, 'test', 'move-hub.js');
-    const nameHub1 = await E(host).makeUnconfined('@main', nameHubPath, {
-      powersName: '@none',
-      resultName: 'name-hub1',
+    const nameHub1 = await E(host).makeUnconfined(['@main'], nameHubPath, {
+      powersName: ['@none'],
+      resultName: ['name-hub1'],
     });
-    const nameHub2 = await E(host).makeUnconfined('@main', nameHubPath, {
-      powersName: '@none',
-      resultName: 'name-hub2',
+    const nameHub2 = await E(host).makeUnconfined(['@main'], nameHubPath, {
+      powersName: ['@none'],
+      resultName: ['name-hub2'],
     });
 
-    await E(host).storeValue(10, 'ten');
+    await E(host).storeValue(10, ['ten']);
     const tenLocator = await E(host).locate('ten');
     await E(nameHub1).storeLocator(['ten'], tenLocator);
 
@@ -1111,14 +1111,14 @@ testNeedsNodeWorker(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).storeValue(10, 'ten');
+    await E(host).storeValue(10, ['ten']);
 
     t.true(await E(host).has('ten'));
 
     const failedHubPath = path.join(dirname, 'test', 'failed-hub.js');
-    await E(host).makeUnconfined('@main', failedHubPath, {
-      powersName: '@none',
-      resultName: 'failed-hub',
+    await E(host).makeUnconfined(['@main'], failedHubPath, {
+      powersName: ['@none'],
+      resultName: ['failed-hub'],
     });
 
     await t.throwsAsync(E(host).move(['ten'], ['failed-hub', 'ten']), {
@@ -1138,7 +1138,7 @@ test('closure state lost by restart', async t => {
     await E(host).provideWorker(['w1']);
 
     await E(host).evaluate(
-      'w1',
+      ['w1'],
       `
       makeExo(
         'Counter Maker',
@@ -1160,29 +1160,29 @@ test('closure state lost by restart', async t => {
       ['counter-maker'],
     );
     await E(host).evaluate(
-      'w1',
+      ['w1'],
       `E(cm).makeCounter() `,
       ['cm'],
-      ['counter-maker'],
+      [['counter-maker']],
       ['counter'],
     );
     const one = await E(host).evaluate(
-      'w1',
+      ['w1'],
       `E(counter).incr()`,
       ['counter'],
-      ['counter'],
+      [['counter']],
     );
     const two = await E(host).evaluate(
-      'w1',
+      ['w1'],
       `E(counter).incr()`,
       ['counter'],
-      ['counter'],
+      [['counter']],
     );
     const three = await E(host).evaluate(
-      'w1',
+      ['w1'],
       `E(counter).incr()`,
       ['counter'],
-      ['counter'],
+      [['counter']],
     );
     t.is(one, 1);
     t.is(two, 2);
@@ -1195,22 +1195,22 @@ test('closure state lost by restart', async t => {
     const { host } = await makeHost(config, cancelled);
     await E(host).lookup(['w1']);
     const one = await E(host).evaluate(
-      'w1',
+      ['w1'],
       `E(counter).incr()`,
       ['counter'],
-      ['counter'],
+      [['counter']],
     );
     const two = await E(host).evaluate(
-      'w1',
+      ['w1'],
       `E(counter).incr()`,
       ['counter'],
-      ['counter'],
+      [['counter']],
     );
     const three = await E(host).evaluate(
-      'w1',
+      ['w1'],
       `E(counter).incr()`,
       ['counter'],
-      ['counter'],
+      [['counter']],
     );
     t.is(one, 1);
     t.is(two, 2);
@@ -1229,7 +1229,7 @@ testNeedsNodeWorker(
       await E(host).provideWorker(['user-worker']);
 
       await E(host).evaluate(
-        'user-worker',
+        ['user-worker'],
         `
       makeExo('Answer', M.interface('Answer', {}, { defaultGuards: 'passable' }), {
         value: () => 42,
@@ -1244,29 +1244,29 @@ testNeedsNodeWorker(
       const { number, from: fromId } = E.get(message);
       const [fromName] = await E(host).reverseLocate(await fromId);
       t.is(await fromName, 'h1');
-      await E(host).resolve(await number, 'grant');
+      await E(host).resolve(await number, ['grant']);
     })();
 
     const requesterFinished = (async () => {
       const { host } = await makeHost(config, cancelled);
       await E(host).provideWorker(['w1']);
-      await E(host).provideGuest('h1', {
+      await E(host).provideGuest(['h1'], {
         agentName: 'a1',
       });
 
       const servicePath = path.join(dirname, 'test', 'service.js');
       const serviceLocation = url.pathToFileURL(servicePath).href;
-      await E(host).makeUnconfined('w1', serviceLocation, {
-        powersName: 'a1',
-        resultName: 's1',
+      await E(host).makeUnconfined(['w1'], serviceLocation, {
+        powersName: ['a1'],
+        resultName: ['s1'],
       });
 
       await E(host).provideWorker(['w2']);
       const answer = await E(host).evaluate(
-        'w2',
+        ['w2'],
         'E(service).ask()',
         ['service'],
-        ['s1'],
+        [['s1']],
         ['answer'],
       );
       const number = await E(answer).value();
@@ -1295,7 +1295,7 @@ testNeedsNodeWorker('persist confined services and their requests', async t => {
     await E(host).provideWorker(['user-worker']);
 
     await E(host).evaluate(
-      'user-worker',
+      ['user-worker'],
       `
       makeExo('Answer', M.interface('Answer', {}, { defaultGuards: 'passable' }), {
         value: () => 42,
@@ -1310,13 +1310,13 @@ testNeedsNodeWorker('persist confined services and their requests', async t => {
     const { number, from: fromId } = E.get(message);
     const [fromName] = await E(host).reverseLocate(await fromId);
     t.is(await fromName, 'h1');
-    await E(host).resolve(await number, 'grant');
+    await E(host).resolve(await number, ['grant']);
   })();
 
   const requesterFinished = (async () => {
     const { host } = await makeHost(config, cancelled);
     await E(host).provideWorker(['w1']);
-    await E(host).provideGuest('h1', { agentName: 'a1' });
+    await E(host).provideGuest(['h1'], { agentName: 'a1' });
 
     const servicePath = path.join(
       dirname,
@@ -1325,18 +1325,18 @@ testNeedsNodeWorker('persist confined services and their requests', async t => {
       'archive-service',
     );
     await doMakeArchive(host, servicePath, archiveName =>
-      E(host).makeArchive('w1', archiveName, {
-        powersName: 'a1',
-        resultName: 's1',
+      E(host).makeArchive(['w1'], [archiveName], {
+        powersName: ['a1'],
+        resultName: ['s1'],
       }),
     );
 
     await E(host).provideWorker(['w2']);
     const answer = await E(host).evaluate(
-      'w2',
+      ['w2'],
       'E(service).ask()',
       ['service'],
-      ['s1'],
+      [['s1']],
       ['answer'],
     );
     const number = await E(answer).value();
@@ -1388,14 +1388,14 @@ const pinGuestResponder = async host => {
   await E(host).provideWorker(['responder-worker']);
   // A caller-selected pin directory for the guest, so the test can retain the
   // responder in the very directory reincarnateMailboxPins walks.
-  const pins = await E(host).makeDirectory('responder-pins');
-  const guest = await E(host).provideGuest('responder', {
+  const pins = await E(host).makeDirectory(['responder-pins']);
+  const guest = await E(host).provideGuest(['responder'], {
     agentName: 'responder-agent',
     pins,
   });
-  await E(host).makeUnconfined('responder-worker', autoResponderLocation, {
-    powersName: 'responder-agent',
-    resultName: 'auto-responder',
+  await E(host).makeUnconfined(['responder-worker'], autoResponderLocation, {
+    powersName: ['responder-agent'],
+    resultName: ['auto-responder'],
   });
   // Pin the responder into the guest's pin directory. This is the retention
   // edge reincarnateMailboxPins follows on delivery: without it, a canceled or
@@ -1416,7 +1416,7 @@ const pinGuestResponder = async host => {
  * @param {string} prompt
  */
 const sendAndAwaitAcknowledgement = async (host, hostMessages, prompt) => {
-  await E(host).send('responder', [prompt], [], []);
+  await E(host).send(['responder'], [prompt], [], []);
   for (;;) {
     // eslint-disable-next-line no-await-in-loop
     const { value: message } = await hostMessages.next();
@@ -1477,7 +1477,7 @@ testNeedsNodeWorker(
     await assertDismissed(t, guest, 'ping-0');
 
     // Cancel the worker containing the agent; its follow loop stops with it.
-    await E(host).cancel('responder-worker');
+    await E(host).cancel(['responder-worker']);
 
     // Do NOT look the responder up: an explicit lookup would itself
     // re-incarnate it and mask the feature under test. Instead, send another
@@ -1496,7 +1496,7 @@ testNeedsNodeWorker(
     // The revived responder is a fresh incarnation: its counter restarted at
     // zero and now reads one, proving a new incarnation (not a survivor)
     // answered the post-cancel message.
-    const responder = await E(host).lookup('auto-responder');
+    const responder = await E(host).lookup(['auto-responder']);
     t.is(await E(responder).respondedCount(), 1);
   },
 );
@@ -1532,12 +1532,12 @@ testNeedsNodeWorker(
     );
     t.deepEqual(acknowledgement1.strings, ['acknowledged:ping-1']);
 
-    const guestAfter = await E(hostAfter).lookup('responder-agent');
+    const guestAfter = await E(hostAfter).lookup(['responder-agent']);
     await assertDismissed(t, guestAfter, 'ping-1');
 
     // The counter reads one on the post-restart incarnation, proving a new
     // incarnation (not a surviving process) answered.
-    const responder = await E(hostAfter).lookup('auto-responder');
+    const responder = await E(hostAfter).lookup(['auto-responder']);
     t.is(await E(responder).respondedCount(), 1);
   },
 );
@@ -1545,18 +1545,18 @@ testNeedsNodeWorker(
 test('guest facet receives a message for host', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = E(host).provideGuest('guest', { agentName: 'guest-agent' });
+  const guest = E(host).provideGuest(['guest'], { agentName: 'guest-agent' });
   await E(host).provideWorker(['worker']);
-  await E(host).evaluate('worker', '10', [], [], ['ten1']);
+  await E(host).evaluate(['worker'], '10', [], [], ['ten1']);
 
   const iterator = iterateReader(E(host).followMessages());
-  const numberP = E(guest).request('@host', 'a number', 'number');
+  const numberP = E(guest).request(['@host'], 'a number', ['number']);
   const { value: message0 } = await iterator.next();
   t.is(message0.number, 0n);
-  await E(host).resolve(message0.number, 'ten1');
+  await E(host).resolve(message0.number, ['ten1']);
   await numberP;
 
-  await E(guest).send('@host', ['Hello, World!'], ['gift'], ['number']);
+  await E(guest).send(['@host'], ['Hello, World!'], ['gift'], [['number']]);
 
   const { value: message1 } = await iterator.next();
   t.is(message1.number, 1n);
@@ -1609,11 +1609,11 @@ test('guest facet receives a message for host', async t => {
 test('reply links to parent message', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
   const hostMessages = iterateReader(E(host).followMessages());
   const guestMessages = iterateReader(E(guest).followMessages());
 
-  await E(guest).send('@host', ['hello'], [], []);
+  await E(guest).send(['@host'], ['hello'], [], []);
 
   const [{ value: hostMessage }, { value: sentMessage }] = await Promise.all([
     hostMessages.next(),
@@ -1634,11 +1634,11 @@ test('reply links to parent message', async t => {
 test('editMessage replaces payload and preserves history', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
   const hostMessages = iterateReader(E(host).followMessages());
   const guestMessages = iterateReader(E(guest).followMessages());
 
-  await E(guest).send('@host', ['Thinking...'], [], []);
+  await E(guest).send(['@host'], ['Thinking...'], [], []);
 
   const [{ value: initialHost }, { value: initialGuest }] = await Promise.all([
     hostMessages.next(),
@@ -1706,10 +1706,10 @@ test('editMessage replaces payload and preserves history', async t => {
 test('editMessage rejects edits from non-senders', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
   const hostMessages = iterateReader(E(host).followMessages());
 
-  await E(guest).send('@host', ['hello'], [], []);
+  await E(guest).send(['@host'], ['hello'], [], []);
   const { value: hostMessage } = await hostMessages.next();
 
   await t.throwsAsync(
@@ -1721,11 +1721,11 @@ test('editMessage rejects edits from non-senders', async t => {
 test('editMessage accepts edits after done and records them', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
   const hostMessages = iterateReader(E(host).followMessages());
   const guestMessages = iterateReader(E(guest).followMessages());
 
-  await E(guest).send('@host', ['original'], [], []);
+  await E(guest).send(['@host'], ['original'], [], []);
   const [{ value: initialGuest }] = await Promise.all([
     guestMessages.next(),
     hostMessages.next(),
@@ -1753,10 +1753,10 @@ test('editMessage accepts edits after done and records them', async t => {
 test('message hub avoids kebab-case reply metadata names', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
   const hostMessages = iterateReader(E(host).followMessages());
 
-  await E(guest).send('@host', ['hello'], [], []);
+  await E(guest).send(['@host'], ['hello'], [], []);
   const { value: hostMessage } = await hostMessages.next();
   await E(host).reply(hostMessage.number, ['hi'], [], []);
   const { value: replyMessage } = await hostMessages.next();
@@ -1776,14 +1776,14 @@ test('message hub avoids kebab-case reply metadata names', async t => {
 test('mailboxes persist messages across restart', async t => {
   const { cancelled, config, host } = await prepareHost(t);
 
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
   const iterator = iterateReader(E(host).followMessages());
 
   // Await delivery of the first message before sending the second to
   // guarantee deterministic message numbering.
-  E.sendOnly(guest).request('@host', 'first request', 'response0');
+  E.sendOnly(guest).request(['@host'], 'first request', ['response0']);
   const { value: message0 } = await iterator.next();
-  E.sendOnly(guest).request('@host', 'second request', 'response1');
+  E.sendOnly(guest).request(['@host'], 'second request', ['response1']);
   const { value: message1 } = await iterator.next();
   t.is(message0.number, 0n);
   t.is(message1.number, 1n);
@@ -1805,8 +1805,8 @@ test('mailboxes persist messages across restart', async t => {
     [{ number: 1n, description: 'second request' }],
   );
 
-  const guestAfter = await E(hostAfter).provideGuest('guest-after-restart');
-  await E(guestAfter).send('@host', ['hello'], [], []);
+  const guestAfter = await E(hostAfter).provideGuest(['guest-after-restart']);
+  await E(guestAfter).send(['@host'], ['hello'], [], []);
 
   const inboxAfterDelivery = await E(hostAfter).listMessages();
   t.deepEqual(
@@ -1861,16 +1861,16 @@ testNeedsNodeManager(
     t.is(await E(blobAfter).getDescription(), 'Publish release artifacts');
     t.is(decodeUtf8(decodeBase64(await E(blobAfter).readBase64())), canary);
 
-    const guest = await E(hostAfter).provideGuest('secret-recipient');
+    const guest = await E(hostAfter).provideGuest(['secret-recipient']);
     await E(hostAfter).send(
-      'secret-recipient',
+      ['secret-recipient'],
       ['Use ', ' without reading it in the agent session.'],
       ['credential'],
       [['secrets', 'release']],
     );
     const [message] = await E(guest).listMessages();
-    await E(guest).adopt(message.number, 'credential', 'release-credential');
-    const delegated = await E(guest).lookup('release-credential');
+    await E(guest).adopt(message.number, 'credential', ['release-credential']);
+    const delegated = await E(guest).lookup(['release-credential']);
     t.is(decodeUtf8(decodeBase64(await E(delegated).readBase64())), canary);
 
     const sqlite = await fsp.readFile(
@@ -1917,7 +1917,7 @@ testNeedsNodeManager(
 
 testNeedsNodeManager('only the root host manages secrets', async t => {
   const { host } = await prepareHost(t);
-  const child = await E(host).provideHost('space-a');
+  const child = await E(host).provideHost(['space-a']);
 
   t.true((await E(host).list()).includes('@secrets'));
   t.truthy(await E(host).lookup(['@secrets', 'catalog']));
@@ -1939,7 +1939,7 @@ testNeedsNodeManager('only the root host manages secrets', async t => {
   // `@endo` is now withheld from non-root hosts too, so the child can no longer
   // resolve it — the root is unreachable through the child. This is the actual
   // trust boundary; see the `@endo`-specific tests below and #1128.
-  await t.throwsAsync(() => E(child).lookup('@endo'), {
+  await t.throwsAsync(() => E(child).lookup(['@endo']), {
     message: /Invalid pet name "@endo"/,
   });
 });
@@ -1947,12 +1947,12 @@ testNeedsNodeManager('only the root host manages secrets', async t => {
 test('rehydrated requests can be resolved after restart', async t => {
   const { cancelled, config, host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
   const guestMessages = iterateReader(E(guest).followMessages());
 
-  E.sendOnly(guest).request('@host', 'need a number');
+  E.sendOnly(guest).request(['@host'], 'need a number');
 
   const { value: guestMessage } = await guestMessages.next();
   const { promiseId: promiseLocatorP } = E.get(guestMessage);
@@ -1965,7 +1965,7 @@ test('rehydrated requests can be resolved after restart', async t => {
   const inboxAfter = await E(hostAfter).listMessages();
   const requestMessage = inboxAfter.find(message => message.type === 'request');
   t.truthy(requestMessage);
-  await E(hostAfter).resolve(requestMessage.number, 'ten');
+  await E(hostAfter).resolve(requestMessage.number, ['ten']);
 
   // The promise formula resolves to a formula identifier.
   // Verify the resolution by checking the identifier matches 'ten'.
@@ -1989,7 +1989,7 @@ test('followNameChanges publishes new names', async t => {
 
   const changesIterator = await prepareFollowNameChangesIterator(host);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
   const { value } = await changesIterator.next();
   t.is(value.add, 'ten');
@@ -2000,7 +2000,7 @@ test('followNameChanges publishes removed names', async t => {
 
   const changesIterator = await prepareFollowNameChangesIterator(host);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
   await changesIterator.next();
 
   await E(host).remove('ten');
@@ -2013,7 +2013,7 @@ test('followNameChanges publishes renamed names', async t => {
 
   const changesIterator = await prepareFollowNameChangesIterator(host);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
   await changesIterator.next();
 
   await E(host).move(['ten'], ['zehn']);
@@ -2029,9 +2029,9 @@ test('followNameChanges publishes renamed names (existing mappings for both name
 
   const changesIterator = await prepareFollowNameChangesIterator(host);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
   await changesIterator.next();
-  await E(host).storeValue('"X"', 'decimus');
+  await E(host).storeValue('"X"', ['decimus']);
   await changesIterator.next();
 
   await E(host).move(['ten'], ['decimus']);
@@ -2049,7 +2049,7 @@ test('followNameChanges does not notify of redundant pet store writes', async t 
 
   const changesIterator = await prepareFollowNameChangesIterator(host);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
   await changesIterator.next();
 
   const tenLocator = await E(host).locate('ten');
@@ -2057,7 +2057,7 @@ test('followNameChanges does not notify of redundant pet store writes', async t 
 
   // Create a new value and observe its publication, proving that nothing was
   // published as as result of the redundant write.
-  await E(host).storeValue(11, 'eleven');
+  await E(host).storeValue(11, ['eleven']);
   const { value } = await changesIterator.next();
   t.is(value.add, 'eleven');
 });
@@ -2068,7 +2068,7 @@ test('followNameChanges includes formula type on add events', async t => {
   const changesIterator = await prepareFollowNameChangesIterator(host);
 
   // storeValue formulates a `marshal` typed formula.
-  await E(host).storeValue(42, 'meaning');
+  await E(host).storeValue(42, ['meaning']);
   const { value } = await changesIterator.next();
   t.is(value.add, 'meaning');
   t.is(value.type, 'marshal', 'type field is plumbed through to followers');
@@ -2080,7 +2080,7 @@ test('followNameChanges includes type for worker formulas', async t => {
   const changesIterator = await prepareFollowNameChangesIterator(host);
 
   // Workers have formula type `worker`; the type travels with the add event.
-  await E(host).provideWorker('w1');
+  await E(host).provideWorker(['w1']);
   const { value } = await changesIterator.next();
   t.is(value.add, 'w1');
   t.is(value.type, 'worker');
@@ -2090,7 +2090,7 @@ test('followNameChanges existing names carry type', async t => {
   const { host } = await prepareHost(t);
 
   // Store before subscribing so the value is in the "existing names" batch.
-  await E(host).storeValue('first', 'one');
+  await E(host).storeValue('first', ['one']);
 
   // Size the initial batch from the host itself rather than a literal: the
   // special-name set grows over time, and 'one' sorts after every '@' name.
@@ -2125,7 +2125,7 @@ test('followNameChanges omits type on remove events', async t => {
 
   const changesIterator = await prepareFollowNameChangesIterator(host);
 
-  await E(host).storeValue('whatever', 'temp');
+  await E(host).storeValue('whatever', ['temp']);
   await changesIterator.next();
 
   await E(host).remove('temp');
@@ -2137,7 +2137,7 @@ test('followNameChanges omits type on remove events', async t => {
 test('followLocatorNameChanges first publishes existing pet name', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
   const tenLocator = await E(host).locate('ten');
   const tenLocatorSub = iterateReader(
@@ -2175,7 +2175,7 @@ test('followLocatorNameChanges first publishes existing pet and special names', 
 test('followLocatorNameChanges publishes added names', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
   const tenLocator = await E(host).locate('ten');
   const changesIterator = await prepareFollowLocatorNameChangesIterator(
@@ -2192,7 +2192,7 @@ test('followLocatorNameChanges publishes added names', async t => {
 test('followLocatorNameChanges publishes removed names', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
   const tenLocator = await E(host).locate('ten');
   await E(host).storeLocator(['zehn'], tenLocator);
@@ -2210,7 +2210,7 @@ test('followLocatorNameChanges publishes removed names', async t => {
 test('followLocatorNameChanges publishes renamed names', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
   const tenLocator = await E(host).locate('ten');
   const changesIterator = await prepareFollowLocatorNameChangesIterator(
@@ -2229,8 +2229,8 @@ test('followLocatorNameChanges publishes renamed names', async t => {
 test('followLocatorNameChanges publishes renamed names (existing mappings for both names)', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
-  await E(host).storeValue('"X"', 'decimus');
+  await E(host).storeValue(10, ['ten']);
+  await E(host).storeValue('"X"', ['decimus']);
 
   const tenLocator = await E(host).locate('ten');
   const decimusLocator = await E(host).locate('decimus');
@@ -2259,7 +2259,7 @@ test('followLocatorNameChanges publishes renamed names (existing mappings for bo
 test('followLocatorNameChanges does not notify of redundant pet store writes', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
   const tenLocator = await E(host).locate('ten');
   const changesIterator = await prepareFollowLocatorNameChangesIterator(
@@ -2283,7 +2283,7 @@ test('pins restored on restart', async t => {
   {
     const { host } = await makeHost(config, cancelled);
     await E(host).evaluate(
-      '@main',
+      ['@main'],
       `
       let value = 0;
       makeExo(
@@ -2301,14 +2301,14 @@ test('pins restored on restart', async t => {
     );
 
     await E(host).evaluate(
-      '@main',
+      ['@main'],
       `E(counter).incr()`,
       ['counter'],
-      ['counter'],
+      [['counter']],
       ['incr'],
     );
 
-    const counter = E(host).lookup('counter');
+    const counter = E(host).lookup(['counter']);
     t.is(await E(counter).get(), 1);
 
     await restart(config);
@@ -2316,7 +2316,7 @@ test('pins restored on restart', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    const counter = E(host).lookup('counter');
+    const counter = E(host).lookup(['counter']);
     t.is(await E(counter).get(), 0);
 
     await E(host).move(['incr'], ['@pins', 'incr']);
@@ -2327,7 +2327,7 @@ test('pins restored on restart', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    const counter = E(host).lookup('counter');
+    const counter = E(host).lookup(['counter']);
     // indicates that @pins/incr side-effect applied on restart
     t.is(await E(counter).get(), 1);
   }
@@ -2337,7 +2337,7 @@ testNeedsNodeWorker('collects formulas after pet name removal', async t => {
   const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
   const { host } = await makeHost(config, cancelled);
 
-  await E(host).storeValue({ ok: true }, 'temp-value');
+  await E(host).storeValue({ ok: true }, ['temp-value']);
   const locator = await E(host).locate('temp-value');
   const id = idFromLocator(locator);
 
@@ -2358,7 +2358,7 @@ testWorkerTermination(
     const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
     const { host } = await makeHost(config, cancelled);
 
-    await E(host).provideWorker('worker');
+    await E(host).provideWorker(['worker']);
     const workerId = await E(host).identify('worker');
     const { number: workerNumber } = parseId(workerId);
     const workerStoppedPattern = new RegExp(
@@ -2366,7 +2366,7 @@ testWorkerTermination(
     );
     const endoLogPath = path.join(config.statePath, 'endo.log');
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       `
       E(host).provideHost('retained-host').then(retained => {
         globalThis.retained = retained;
@@ -2374,12 +2374,12 @@ testWorkerTermination(
       })
     `,
       ['host'],
-      ['@agent'],
+      [['@agent']],
     );
 
     await E(host).remove('retained-host');
 
-    await t.throwsAsync(E(host).evaluate('worker', '1', [], []), {
+    await t.throwsAsync(E(host).evaluate(['worker'], '1', [], []), {
       message: /became unreachable by any pet name path and was collected/,
     });
     await waitForText(endoLogPath, workerStoppedPattern);
@@ -2400,21 +2400,21 @@ testWorkerTermination(
     const counterLocation = url.pathToFileURL(counterPath).href;
     const counterLocationLiteral = JSON.stringify(counterLocation);
 
-    await E(host).provideWorker('worker-a');
-    await E(host).provideWorker('worker-b');
+    await E(host).provideWorker(['worker-a']);
+    await E(host).provideWorker(['worker-b']);
 
     await E(host).evaluate(
-      'worker-a',
+      ['worker-a'],
       `
       E(host)
-        .makeUnconfined('worker-a', ${counterLocationLiteral}, { powersName: 'powers', resultName: 'caplet' })
+        .makeUnconfined('worker-a', ${counterLocationLiteral}, { powersName: ['powers'], resultName: ['caplet'] })
         .then(caplet => {
           globalThis.caplet = caplet;
           return 'ok';
         })
     `,
       ['host'],
-      ['@agent'],
+      [['@agent']],
     );
     const powersId = await E(host).identify('powers');
     const capletId = await E(host).identify('caplet');
@@ -2426,13 +2426,13 @@ testWorkerTermination(
     const endoLogPath = path.join(config.statePath, 'endo.log');
 
     await E(host).evaluate(
-      'worker-b',
+      ['worker-b'],
       `
       globalThis.caplet = caplet;
       'ok';
     `,
       ['caplet'],
-      ['caplet'],
+      [['caplet']],
     );
 
     await E(host).remove('powers');
@@ -2445,7 +2445,7 @@ testWorkerTermination(
       return !capletExists && !powersExists;
     });
 
-    await t.throwsAsync(E(host).evaluate('worker-b', '1', [], []), {
+    await t.throwsAsync(E(host).evaluate(['worker-b'], '1', [], []), {
       message: /became unreachable by any pet name path and was collected/,
     });
     await waitForText(endoLogPath, workerBStoppedPattern);
@@ -2458,8 +2458,8 @@ testNeedsNodeWorker(
     const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
     const { host } = await makeHost(config, cancelled);
 
-    await E(host).provideWorker('worker-a');
-    await E(host).provideWorker('worker-b');
+    await E(host).provideWorker(['worker-a']);
+    await E(host).provideWorker(['worker-b']);
 
     const counterPath = path.join(dirname, 'test', 'counter.js');
     const counterLocation = url.pathToFileURL(counterPath).href;
@@ -2469,77 +2469,77 @@ testNeedsNodeWorker(
     const retainerLocationLiteral = JSON.stringify(retainerLocation);
 
     await E(host).evaluate(
-      'worker-a',
+      ['worker-a'],
       `
       E(host)
-        .makeUnconfined('worker-a', ${counterLocationLiteral}, { powersName: '@none', resultName: 'counter' })
+        .makeUnconfined('worker-a', ${counterLocationLiteral}, { powersName: ['@none'], resultName: ['counter'] })
         .then(() => 'ok')
     `,
       ['host'],
-      ['@agent'],
+      [['@agent']],
     );
     t.is(
       1,
       await E(host).evaluate(
-        'worker-b',
+        ['worker-b'],
         'E(counter).incr()',
         ['counter'],
-        ['counter'],
+        [['counter']],
       ),
     );
     t.is(
       2,
       await E(host).evaluate(
-        'worker-b',
+        ['worker-b'],
         'E(counter).incr()',
         ['counter'],
-        ['counter'],
+        [['counter']],
       ),
     );
 
     await E(host).evaluate(
-      'worker-b',
+      ['worker-b'],
       `
       E(host)
-        .makeUnconfined('worker-b', ${retainerLocationLiteral}, { powersName: '@none', resultName: 'retainer' })
+        .makeUnconfined('worker-b', ${retainerLocationLiteral}, { powersName: ['@none'], resultName: ['retainer'] })
         .then(() => 'ok')
     `,
       ['host'],
-      ['@agent'],
+      [['@agent']],
     );
 
     await E(host).evaluate(
-      'worker-b',
+      ['worker-b'],
       `
       E(retainer).retain(counter);
       'ok';
     `,
       ['retainer', 'counter'],
-      ['retainer', 'counter'],
+      [['retainer'], ['counter']],
     );
 
     await E(host).remove('counter');
-    await t.throwsAsync(E(host).evaluate('worker-b', '1', [], []), {
+    await t.throwsAsync(E(host).evaluate(['worker-b'], '1', [], []), {
       message: /became unreachable by any pet name path and was collected/,
     });
 
     await E(host).evaluate(
-      'worker-a',
+      ['worker-a'],
       `
       E(host)
-        .makeUnconfined('worker-a', ${counterLocationLiteral}, { powersName: '@none', resultName: 'counter' })
+        .makeUnconfined('worker-a', ${counterLocationLiteral}, { powersName: ['@none'], resultName: ['counter'] })
         .then(() => 'ok')
     `,
       ['host'],
-      ['@agent'],
+      [['@agent']],
     );
     t.is(
       1,
       await E(host).evaluate(
-        'worker-c',
+        ['worker-c'],
         'E(counter).incr()',
         ['counter'],
-        ['counter'],
+        [['counter']],
       ),
     );
   },
@@ -2551,7 +2551,7 @@ testNeedsNodeWorker('@pins values survive collection', async t => {
 
   // Create a counter via eval in @main
   await E(host).evaluate(
-    '@main',
+    ['@main'],
     `
       (() => {
         let value = 0;
@@ -2600,37 +2600,37 @@ testNeedsNodeWorker('@pins values reincarnate after cancellation', async t => {
   // Create a counter caplet
   const counterPath = path.join(dirname, 'test', 'counter.js');
   const counterLocation = url.pathToFileURL(counterPath).href;
-  await E(host).makeUnconfined('@main', counterLocation, {
-    powersName: '@none',
-    resultName: 'counter',
+  await E(host).makeUnconfined(['@main'], counterLocation, {
+    powersName: ['@none'],
+    resultName: ['counter'],
   });
 
   // Increment counter to build up state
   t.is(
     1,
     await E(host).evaluate(
-      '@main',
+      ['@main'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     2,
     await E(host).evaluate(
-      '@main',
+      ['@main'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     3,
     await E(host).evaluate(
-      '@main',
+      ['@main'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
 
@@ -2640,7 +2640,7 @@ testNeedsNodeWorker('@pins values reincarnate after cancellation', async t => {
   await E(host).move(['counter-pin'], ['@pins', 'my-counter']);
 
   // Cancel the counter — forces deincarnation even though retained by @pins
-  await E(host).cancel('counter');
+  await E(host).cancel(['counter']);
 
   // Remove the host pet name — now only @pins references the formula
   await E(host).remove('counter');
@@ -2659,7 +2659,7 @@ test('facet group (agent + handle) collects atomically', async t => {
   const { host } = await makeHost(config, cancelled);
 
   // Create a guest with both handle and agent names
-  await E(host).provideGuest('guest-handle', { agentName: 'guest-agent' });
+  await E(host).provideGuest(['guest-handle'], { agentName: 'guest-agent' });
 
   // Get IDs for guest and handle
   const guestId = await E(host).identify('guest-agent');
@@ -2720,7 +2720,7 @@ test('unnamed eval results are collected', async t => {
   const { host } = await makeHost(config, cancelled);
 
   // Create a named eval to establish a baseline (ensures @main worker exists)
-  await E(host).evaluate('@main', '10', [], [], ['named']);
+  await E(host).evaluate(['@main'], '10', [], [], ['named']);
   const namedId = await E(host).identify('named');
   t.true(formulaExistsInDb(config.statePath, namedId));
 
@@ -2731,7 +2731,7 @@ test('unnamed eval results are collected', async t => {
   const countBefore = countFormulas();
 
   // Run an unnamed eval — returns 42 but has no pet name
-  const result = await E(host).evaluate('@main', '42', [], []);
+  const result = await E(host).evaluate(['@main'], '42', [], []);
   t.is(result, 42);
 
   // Count formulas again
@@ -2751,64 +2751,64 @@ testNeedsNodeWorker('direct cancellation', async t => {
 
   const counterPath = path.join(dirname, 'test', 'counter.js');
   const counterLocation = url.pathToFileURL(counterPath).href;
-  await E(host).makeUnconfined('worker', counterLocation, {
-    powersName: '@none',
-    resultName: 'counter',
+  await E(host).makeUnconfined(['worker'], counterLocation, {
+    powersName: ['@none'],
+    resultName: ['counter'],
   });
   t.is(
     1,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     2,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     3,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
 
-  await E(host).cancel('counter');
+  await E(host).cancel(['counter']);
   t.is(
     1,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     2,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     3,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
 });
@@ -2821,65 +2821,65 @@ testNeedsNodeWorker('indirect cancellation via worker', async t => {
 
   const counterPath = path.join(dirname, 'test', 'counter.js');
   const counterLocation = url.pathToFileURL(counterPath).href;
-  await E(host).makeUnconfined('worker', counterLocation, {
-    powersName: '@agent',
-    resultName: 'counter',
+  await E(host).makeUnconfined(['worker'], counterLocation, {
+    powersName: ['@agent'],
+    resultName: ['counter'],
   });
   t.is(
     1,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     2,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     3,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
 
-  await E(host).cancel('worker');
+  await E(host).cancel(['worker']);
 
   t.is(
     1,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     2,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     3,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
 });
@@ -2892,48 +2892,48 @@ testNeedsNodeWorker('indirect cancellation via caplet', async t => {
   await E(host).provideWorker(['w1']);
   const counterPath = path.join(dirname, 'test', 'counter.js');
   const counterLocation = url.pathToFileURL(counterPath).href;
-  await E(host).makeUnconfined('w1', counterLocation, {
-    powersName: '@agent',
-    resultName: 'counter',
+  await E(host).makeUnconfined(['w1'], counterLocation, {
+    powersName: ['@agent'],
+    resultName: ['counter'],
   });
 
   await E(host).provideWorker(['w2']);
-  await E(host).provideGuest('guest', { agentName: 'guest-agent' });
+  await E(host).provideGuest(['guest'], { agentName: 'guest-agent' });
   const doublerPath = path.join(dirname, 'test', 'doubler.js');
   const doublerLocation = url.pathToFileURL(doublerPath).href;
-  await E(host).makeUnconfined('w2', doublerLocation, {
-    powersName: 'guest-agent',
-    resultName: 'doubler',
+  await E(host).makeUnconfined(['w2'], doublerLocation, {
+    powersName: ['guest-agent'],
+    resultName: ['doubler'],
   });
   {
     const { value: message } = await messages.next();
     t.is(message.type, 'request');
     t.is(message.description, 'a counter, suitable for doubling');
-    await E(host).resolve(message.number, 'counter');
+    await E(host).resolve(message.number, ['counter']);
   }
 
   t.is(
     1,
-    await E(host).evaluate('w1', 'E(counter).incr()', ['counter'], ['counter']),
+    await E(host).evaluate(['w1'], 'E(counter).incr()', ['counter'], [['counter']]),
   );
   t.is(
     4,
-    await E(host).evaluate('w2', 'E(doubler).incr()', ['doubler'], ['doubler']),
+    await E(host).evaluate(['w2'], 'E(doubler).incr()', ['doubler'], [['doubler']]),
   );
   t.is(
     6,
-    await E(host).evaluate('w2', 'E(doubler).incr()', ['doubler'], ['doubler']),
+    await E(host).evaluate(['w2'], 'E(doubler).incr()', ['doubler'], [['doubler']]),
   );
 
-  await E(host).cancel('counter');
+  await E(host).cancel(['counter']);
 
   t.is(
     1,
-    await E(host).evaluate('w1', 'E(counter).incr()', ['counter'], ['counter']),
+    await E(host).evaluate(['w1'], 'E(counter).incr()', ['counter'], [['counter']]),
   );
   t.is(
     4,
-    await E(host).evaluate('w2', 'E(doubler).incr()', ['doubler'], ['doubler']),
+    await E(host).evaluate(['w2'], 'E(doubler).incr()', ['doubler'], [['doubler']]),
   );
 });
 
@@ -2943,7 +2943,7 @@ testNeedsNodeWorker(
     const { host } = await prepareHost(t);
 
     // The factory's controller directory.
-    await E(host).makeDirectory('factory');
+    await E(host).makeDirectory(['factory']);
 
     // The guest handle and its agent are born *inside* the directory —
     // no top-level pet names, no relocate-after-makeUnconfined dance.
@@ -2960,7 +2960,7 @@ testNeedsNodeWorker(
     // A value the host will grant when the caplet asks its powers.
     await E(host).provideWorker(['worker']);
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       `
       makeExo('Answer', M.interface('Answer', {}, { defaultGuards: 'passable' }), {
         value: () => 42,
@@ -2975,7 +2975,7 @@ testNeedsNodeWorker(
     // result is stored at a directory path too.
     const servicePath = path.join(dirname, 'test', 'service.js');
     const serviceLocation = url.pathToFileURL(servicePath).href;
-    await E(host).makeUnconfined('worker', serviceLocation, {
+    await E(host).makeUnconfined(['worker'], serviceLocation, {
       powersName: ['factory', 'agent'],
       resultName: ['factory', 'service'],
     });
@@ -2985,7 +2985,7 @@ testNeedsNodeWorker(
     // agent.  The endowment is supplied by path as well.
     const iterator = iterateReader(E(host).followMessages());
     const answer = E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(service).ask()',
       ['service'],
       [['factory', 'service']],
@@ -2996,7 +2996,7 @@ testNeedsNodeWorker(
     // `from` is a locator; compare against the in-directory handle's
     // locator to prove the request came from the path-named handle.
     t.is(await fromId, await E(host).locate('factory', 'handle'));
-    await E(host).resolve(await number, 'grant');
+    await E(host).resolve(await number, ['grant']);
     t.is(await E(await answer).value(), 42);
 
     // Native path idempotency: re-providing the same guest at the same
@@ -3035,9 +3035,9 @@ testNeedsNodeWorker(
     const counterPath = path.join(dirname, 'test', 'counter.js');
     const counterLocation = url.pathToFileURL(counterPath).href;
     await t.throwsAsync(
-      E(host).makeUnconfined('worker', counterLocation, {
+      E(host).makeUnconfined(['worker'], counterLocation, {
         powersName: ['nope', 'agent'],
-        resultName: 'counter',
+        resultName: ['counter'],
       }),
       { message: /Unknown pet name/ },
     );
@@ -3046,7 +3046,7 @@ testNeedsNodeWorker(
 
 test('makeTimer and makeChannel accept directory paths', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeDirectory('infra');
+  await E(host).makeDirectory(['infra']);
 
   await E(host).makeTimer(['infra', 'tick'], 1000);
   t.true(await E(host).has('infra', 'tick'));
@@ -3058,7 +3058,7 @@ test('makeTimer and makeChannel accept directory paths', async t => {
 
 test('invite nests the invitation at a directory path', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeDirectory('peers');
+  await E(host).makeDirectory(['peers']);
   const invitation = await E(host).invite(['peers', 'bob']);
   t.truthy(await E(invitation).locate());
   t.true(await E(host).has('peers', 'bob'));
@@ -3069,7 +3069,7 @@ testNeedsNodeWorker(
   'evaluate and makeUnconfined accept a worker at a directory path',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeDirectory('workers');
+    await E(host).makeDirectory(['workers']);
 
     // provideWorker already accepts a path; reference that same worker
     // by path from evaluate and makeUnconfined.
@@ -3089,7 +3089,7 @@ testNeedsNodeWorker(
     const service = await E(host).makeUnconfined(
       ['workers', 'w'],
       serviceLocation,
-      { powersName: '@none', resultName: ['workers', 'svc'] },
+      { powersName: ['@none'], resultName: ['workers', 'svc'] },
     );
     t.truthy(service);
     t.is(await E(host).identify('workers', 'w'), workerId);
@@ -3109,7 +3109,7 @@ testNeedsNodeWorker(
   async t => {
     const { host } = await prepareHost(t);
     await E(host).provideWorker(['w1']);
-    await E(host).makeDirectory('archives');
+    await E(host).makeDirectory(['archives']);
 
     // Store the source archive blob at a directory path.
     const servicePath = path.join(
@@ -3130,8 +3130,8 @@ testNeedsNodeWorker(
 
     // makeArchive resolves the source by path and stores its result by
     // path too.
-    const service = await E(host).makeArchive('w1', ['archives', 'svc'], {
-      powersName: '@none',
+    const service = await E(host).makeArchive(['w1'], ['archives', 'svc'], {
+      powersName: ['@none'],
       resultName: ['archives', 's1'],
     });
     t.truthy(service);
@@ -3143,77 +3143,77 @@ testNeedsNodeWorker('cancel because of requested capability', async t => {
   const { host } = await prepareHost(t);
 
   await E(host).provideWorker(['worker']);
-  await E(host).provideGuest('guest', { agentName: 'guest-agent' });
+  await E(host).provideGuest(['guest'], { agentName: 'guest-agent' });
 
   const messages = iterateReader(E(host).followMessages());
 
   const counterPath = path.join(dirname, 'test', 'counter-agent.js');
   const counterLocation = url.pathToFileURL(counterPath).href;
-  E(host).makeUnconfined('worker', counterLocation, {
-    powersName: 'guest-agent',
-    resultName: 'counter',
+  E(host).makeUnconfined(['worker'], counterLocation, {
+    powersName: ['guest-agent'],
+    resultName: ['counter'],
   });
 
-  await E(host).evaluate('worker', '0', [], [], ['zero']);
+  await E(host).evaluate(['worker'], '0', [], [], ['zero']);
   const { value: message } = await messages.next();
   t.is(message.type, 'request');
-  await E(host).resolve(message.number, 'zero');
+  await E(host).resolve(message.number, ['zero']);
 
   t.is(
     1,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     2,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     3,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
 
-  await E(host).cancel('guest-agent');
+  await E(host).cancel(['guest-agent']);
 
   t.is(
     1,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     2,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
   t.is(
     3,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
-      ['counter'],
+      [['counter']],
     ),
   );
 });
@@ -3227,18 +3227,18 @@ testNeedsNodeWorker(
 
     const capletPath = path.join(dirname, 'test', 'context-consumer.js');
     const capletLocation = url.pathToFileURL(capletPath).href;
-    await E(host).makeUnconfined('worker', capletLocation, {
-      powersName: '@none',
-      resultName: 'context-consumer',
+    await E(host).makeUnconfined(['worker'], capletLocation, {
+      powersName: ['@none'],
+      resultName: ['context-consumer'],
     });
 
     const result = E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(caplet).awaitCancellation()',
       ['caplet'],
-      ['context-consumer'],
+      [['context-consumer']],
     );
-    await E(host).cancel('context-consumer');
+    await E(host).cancel(['context-consumer']);
     t.is(await result, 'cancelled');
   },
 );
@@ -3255,28 +3255,28 @@ testNeedsNodeWorker('confined service can respond to cancellation', async t => {
     'archive-context-consumer',
   );
   await doMakeArchive(host, capletPath, archiveName =>
-    E(host).makeArchive('worker', archiveName, {
-      powersName: '@none',
-      resultName: 'context-consumer',
+    E(host).makeArchive(['worker'], [archiveName], {
+      powersName: ['@none'],
+      resultName: ['context-consumer'],
     }),
   );
 
   const result = E(host).evaluate(
-    'worker',
+    ['worker'],
     'E(caplet).awaitCancellation()',
     ['caplet'],
-    ['context-consumer'],
+    [['context-consumer']],
   );
-  await E(host).cancel('context-consumer');
+  await E(host).cancel(['context-consumer']);
   t.is(await result, 'cancelled');
 });
 
 test('make a host', async t => {
   const { host } = await prepareHost(t);
 
-  const host2 = E(host).provideHost('fellow-host');
+  const host2 = E(host).provideHost(['fellow-host']);
   await E(host2).provideWorker(['w1']);
-  const ten = await E(host2).evaluate('w1', '10', [], []);
+  const ten = await E(host2).evaluate(['w1'], '10', [], []);
   t.is(ten, 10);
 });
 
@@ -3288,9 +3288,9 @@ testNeedsNodeWorker(
     await E(host).provideWorker(['worker']);
 
     const counterPath = path.join(dirname, 'test', 'counter.js');
-    await E(host).makeUnconfined('worker', counterPath, {
-      powersName: '@none',
-      resultName: 'counter',
+    await E(host).makeUnconfined(['worker'], counterPath, {
+      powersName: ['@none'],
+      resultName: ['counter'],
     });
 
     const counterId = await E(host).identify('counter');
@@ -3313,17 +3313,17 @@ testNeedsNodeWorker(
     await E(host).provideWorker(['worker']);
 
     const counterPath = path.join(dirname, 'test', 'counter.js');
-    await E(host).makeUnconfined('worker', counterPath, {
-      powersName: '@none',
-      resultName: 'counter',
+    await E(host).makeUnconfined(['worker'], counterPath, {
+      powersName: ['@none'],
+      resultName: ['counter'],
     });
 
     t.is(
       await E(host).evaluate(
-        'worker',
+        ['worker'],
         'E(counter).incr()',
         ['counter'],
-        ['counter'],
+        [['counter']],
       ),
       1,
     );
@@ -3341,10 +3341,10 @@ testNeedsNodeWorker(
     await E(host).storeIdentifier(['counter-worker'], workerId);
     t.is(
       await E(host).evaluate(
-        'counter-worker',
+        ['counter-worker'],
         'E(counter).incr()',
         ['counter'],
-        ['counter'],
+        [['counter']],
       ),
       2,
     );
@@ -3354,14 +3354,14 @@ testNeedsNodeWorker(
 test('lookup with single petname', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).provideGuest('guest');
-  await E(host).storeValue(10, 'ten');
+  await E(host).provideGuest(['guest']);
+  await E(host).storeValue(10, ['ten']);
 
   const resolvedValue = await E(host).evaluate(
-    '@main',
+    ['@main'],
     'E(AGENT).lookup(["ten"])',
     ['AGENT'],
-    ['@agent'],
+    [['@agent']],
   );
   t.is(resolvedValue, 10);
 });
@@ -3369,7 +3369,7 @@ test('lookup with single petname', async t => {
 test('getFormula returns per-type formula record (eval)', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).evaluate('@main', '10', [], [], ['ten']);
+  await E(host).evaluate(['@main'], '10', [], [], ['ten']);
 
   const tenId = await E(host).identify('ten');
   t.truthy(tenId, 'ten has a formula identifier');
@@ -3387,16 +3387,16 @@ testNeedsNodeWorker(
     const { host } = await prepareHost(t);
 
     const lookupPath = path.join(dirname, 'test', 'lookup.js');
-    await E(host).makeUnconfined('@main', lookupPath, {
-      powersName: '@none',
-      resultName: 'lookup',
+    await E(host).makeUnconfined(['@main'], lookupPath, {
+      powersName: ['@none'],
+      resultName: ['lookup'],
     });
 
     const resolvedValue = await E(host).evaluate(
-      '@main',
+      ['@main'],
       'E(AGENT).lookup(["lookup", "name"])',
       ['AGENT'],
-      ['@agent'],
+      [['@agent']],
     );
     t.is(resolvedValue, 'Looked up: name');
   },
@@ -3405,13 +3405,13 @@ testNeedsNodeWorker(
 test('lookup with petname path (value has no lookup method)', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
   await t.throwsAsync(
     E(host).evaluate(
-      '@main',
+      ['@main'],
       'E(AGENT).lookup(["ten", "some-name"])',
       ['AGENT'],
-      ['@agent'],
+      [['@agent']],
     ),
     { message: 'target has no method "lookup", has []' },
   );
@@ -3420,16 +3420,16 @@ test('lookup with petname path (value has no lookup method)', async t => {
 test('evaluate name resolved by lookup path', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).evaluate('@main', '10', [], [], ['ten']);
+  await E(host).evaluate(['@main'], '10', [], [], ['ten']);
 
   // The legacy `@info`-mediated endowment path
   // (`['INFO', 'ten', 'source']`) is retired with `@info`. Lookup-path
   // endowments still resolve through regular pet-name traversal.
   const resolvedValue = await E(host).evaluate(
-    '@main',
+    ['@main'],
     'foo',
     ['foo'],
-    ['ten'],
+    [['ten']],
   );
   t.is(resolvedValue, 10);
 });
@@ -3438,7 +3438,7 @@ test('list special names', async t => {
   const { host } = await prepareHost(t);
 
   const readerRef = bytesReaderFromIterator([encodeUtf8('hello\n')]);
-  await E(host).storeBlob(readerRef, 'hello-text');
+  await E(host).storeBlob(readerRef, ['hello-text']);
 
   /** @type {string[]} */
   const names = await E(host).list();
@@ -3465,7 +3465,7 @@ test('child host @host points at parent handle', async t => {
   const { host } = await prepareHost(t);
 
   const parentHandleId = await E(host).identify('@self');
-  const childHost = await E(host).provideHost('child-host');
+  const childHost = await E(host).provideHost(['child-host']);
   const childHostId = await E(childHost).identify('@host');
 
   t.is(childHostId, parentHandleId);
@@ -3473,14 +3473,14 @@ test('child host @host points at parent handle', async t => {
 });
 
 // Issue #1128: the ambient `@endo` special name made every `provideHost`
-// child a full-authority peer of the root — `E(child).lookup('@endo')` then
+// child a full-authority peer of the root — `E(child).lookup(['@endo'])` then
 // `E(endo).host()` returns the root principal. `@endo` is now withheld from
 // non-root hosts, so a delegated child cannot reach the root through it.
 test('root host exposes a working @endo', async t => {
   const { host } = await prepareHost(t);
 
   t.true(await E(host).has('@endo'));
-  const endo = await E(host).lookup('@endo');
+  const endo = await E(host).lookup(['@endo']);
   // The endo facet's `host()` returns the root principal itself.
   const rootViaEndo = await E(endo).host();
   const rootSelf = await E(host).identify('@self');
@@ -3494,7 +3494,7 @@ test('child host does not expose @endo, so the root is unreachable through it', 
   // it. `specialNames` is recomputed from that formula at realization and
   // gated on `isRootHost`, so a child — new here, and identically any
   // already-persisted "old" child — realizes without `@endo`, no migration.
-  const childHost = await E(host).provideHost('child-host');
+  const childHost = await E(host).provideHost(['child-host']);
 
   // A non-root host has no `@endo` in its special names, so the name is
   // rejected outright by every name-hub method — the child cannot reach the
@@ -3502,7 +3502,7 @@ test('child host does not expose @endo, so the root is unreachable through it', 
   await t.throwsAsync(() => E(childHost).has('@endo'), {
     message: /Invalid pet name "@endo"/u,
   });
-  await t.throwsAsync(() => E(childHost).lookup('@endo'), {
+  await t.throwsAsync(() => E(childHost).lookup(['@endo']), {
     message: /Invalid pet name "@endo"/u,
   });
   await t.throwsAsync(() => E(childHost).identify('@endo'), {
@@ -3516,14 +3516,14 @@ test('child host does not expose @endo, so the root is unreachable through it', 
 
 test('a guest still does not expose @endo, unchanged by the #1128 fix', async t => {
   const { host } = await prepareHost(t);
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
 
   // Guests never carried `@endo`; withholding it from child hosts leaves the
   // guest surface exactly as before — the name is still rejected here.
   await t.throwsAsync(() => E(guest).has('@endo'), {
     message: /Invalid pet name "@endo"/u,
   });
-  await t.throwsAsync(() => E(guest).lookup('@endo'), {
+  await t.throwsAsync(() => E(guest).lookup(['@endo']), {
     message: /Invalid pet name "@endo"/u,
   });
 });
@@ -3531,7 +3531,7 @@ test('a guest still does not expose @endo, unchanged by the #1128 fix', async t 
 test('guest cannot access host methods', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
   const guestsHost = E(guest).lookup(['@host']);
   await t.throwsAsync(() => E(guestsHost).lookup([]), {
     message: /target has no method "lookup"/u,
@@ -3548,8 +3548,8 @@ test('the diagnostics facet is absent on the guest facet', async t => {
   // facet. A guest must expose neither the facet nor the legacy
   // top-level getFormula edge (per
   // `designs/formula-inspector.md` § Why host-only).
-  const guest = await E(host).provideGuest('guest');
-  await E(host).evaluate('MAIN', '10', [], [], ['ten']);
+  const guest = await E(host).provideGuest(['guest']);
+  await E(host).evaluate(['MAIN'], '10', [], [], ['ten']);
   const tenId = await E(host).identify('ten');
   await t.throwsAsync(() => E(guest).diagnostics(), {
     message: /target has no method "diagnostics"/u,
@@ -3593,7 +3593,7 @@ test('getFormula resolves the agent’s own identity formulas', async t => {
   // guard was too strict and only `isLocalKey(node)` is correct.
 
   // A daemon-level stored value carries the daemon's `localNodeNumber`.
-  await E(host).storeValue(42, 'answer');
+  await E(host).storeValue(42, ['answer']);
   const { node: daemonNode } = parseId(await E(host).identify('answer'));
 
   const selfId = await E(host).identify('@self');
@@ -3617,7 +3617,7 @@ test('getFormula normalizes unknown-identifier-on-local-node error', async t => 
   // Resolve a real local identifier to discover the local node-part,
   // then construct a same-node identifier whose formula number is
   // random and almost certainly does not exist on disk.
-  await E(host).evaluate('MAIN', '10', [], [], ['ten']);
+  await E(host).evaluate(['MAIN'], '10', [], [], ['ten']);
   const tenId = await E(host).identify('ten');
   const { node: localNode } = parseId(tenId);
   const bogusNumber = /** @type {FormulaNumber} */ (
@@ -3660,7 +3660,7 @@ testNeedsNodeWorker('read remote value', async t => {
   await E(hostA).addPeerInfo(await E(hostB).getPeerInfo());
 
   // create value to share
-  await E(hostB).evaluate('@main', '"hello, world!"', [], [], ['salutations']);
+  await E(hostB).evaluate(['@main'], '"hello, world!"', [], [], ['salutations']);
   const hostBValueLocator = await E(hostB).locate('salutations');
 
   // insert in hostA out of band
@@ -3679,7 +3679,7 @@ testNeedsNodeWorker('round-trip remotable identity', async t => {
   await E(hostA).addPeerInfo(await E(hostB).getPeerInfo());
 
   await E(hostB).evaluate(
-    '@main',
+    ['@main'],
     'Far("Echoer", { echo: value => value })',
     [],
     [],
@@ -3688,7 +3688,7 @@ testNeedsNodeWorker('round-trip remotable identity', async t => {
   const echoerLocator = await E(hostB).locate('echoer');
   await E(hostA).storeLocator(['echoer'], echoerLocator);
   const survivedEcho = await E(hostA).evaluate(
-    '@main',
+    ['@main'],
     `
       const token = Far('Token', {});
       E(echoer).echo(token).then(allegedlyIdenticalToken =>
@@ -3696,7 +3696,7 @@ testNeedsNodeWorker('round-trip remotable identity', async t => {
       );
     `,
     ['echoer'],
-    ['echoer'],
+    [['echoer']],
   );
   t.assert(survivedEcho);
 });
@@ -3711,14 +3711,14 @@ testNeedsNodeWorker('hello from afar', async t => {
   await E(hostA).addPeerInfo(await E(hostB).getPeerInfo());
 
   // Induce B to connect to A
-  await E(hostA).evaluate('@main', '42', [], [], ['ft']);
+  await E(hostA).evaluate(['@main'], '42', [], [], ['ft']);
   const ftLocator = await E(hostA).locate('ft');
   await E(hostB).storeLocator(['ft'], ftLocator);
   const ft = await E(hostB).lookup(['ft']);
   t.is(ft, 42);
 
   await E(hostB).evaluate(
-    '@main',
+    ['@main'],
     'Far("Echoer", { echo: value => value })',
     [],
     [],
@@ -3727,7 +3727,7 @@ testNeedsNodeWorker('hello from afar', async t => {
   const echoerLocator = await E(hostB).locate('echoer');
   await E(hostA).storeLocator(['echoer'], echoerLocator);
   const survivedEcho = await E(hostA).evaluate(
-    '@main',
+    ['@main'],
     `
       const token = Far('Token', {});
       E(echoer).echo(token).then(allegedlyIdenticalToken =>
@@ -3735,7 +3735,7 @@ testNeedsNodeWorker('hello from afar', async t => {
       );
     `,
     ['echoer'],
-    ['echoer'],
+    [['echoer']],
   );
   t.assert(survivedEcho);
 });
@@ -3743,7 +3743,7 @@ testNeedsNodeWorker('hello from afar', async t => {
 test('locate local value', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
   const tenLocator = await E(host).locate('ten');
   const parsedLocator = parseLocator(tenLocator);
@@ -3755,7 +3755,7 @@ test('locate local persisted value', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    await E(host).storeValue(10, 'ten');
+    await E(host).storeValue(10, ['ten']);
   }
 
   await restart(config);
@@ -3771,10 +3771,10 @@ test('locate local persisted value', async t => {
 test('host and guest present different locators for the same value', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
 
   // Store a value reachable by both agents.
-  await E(host).storeValue(42, 'answer');
+  await E(host).storeValue(42, ['answer']);
 
   // Give the guest access to the same value.
   const hostLocator = await E(host).locate('answer');
@@ -3803,7 +3803,7 @@ test('host and guest present different locators for the same value', async t => 
 test('guest has its own @nets special name', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
 
   // The guest should be able to look up @nets — it resolves to a directory.
   const guestNetsNames = await E(guest).list('@nets');
@@ -3825,7 +3825,7 @@ test('guest has its own @nets special name', async t => {
 
 test('agents have distinct empty @planes directories', async t => {
   const { host } = await prepareHost(t);
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
 
   t.deepEqual(await E(host).list('@planes'), []);
   t.deepEqual(await E(guest).list('@planes'), []);
@@ -3867,7 +3867,7 @@ test('content data plane registry resolves hints from registered shares', async 
 test('locate produces locators with connection hints from agent NETS', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(42, 'answer');
+  await E(host).storeValue(42, ['answer']);
 
   // Host NETS contains only loopback (empty addresses).
   const hostLocator = await E(host).locate('answer');
@@ -3877,7 +3877,7 @@ test('locate produces locators with connection hints from agent NETS', async t =
   t.is(hostAddresses.length, 0, 'loopback-only NETS yields no at= params');
 
   // Create a guest — its NETS starts empty.
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   await E(guest).storeLocator(['answer'], hostLocator);
 
   // Guest has empty NETS, so its locator should also have no at= params.
@@ -3906,7 +3906,7 @@ testNeedsNodeWorker('locate remote value', async t => {
   await E(hostB).addPeerInfo(await E(hostA).getPeerInfo());
 
   // create value to share
-  await E(hostB).evaluate('@main', '"hello, world!"', [], [], ['salutations']);
+  await E(hostB).evaluate(['@main'], '"hello, world!"', [], [], ['salutations']);
   const hostBValueLocator = await E(hostB).locate('salutations');
 
   // insert in hostA out of band
@@ -3921,9 +3921,9 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   const hostA = await prepareHostWithTestNetwork(t);
   const hostB = await prepareHostWithTestNetwork(t);
 
-  const invitation = await E(hostA).invite('bob');
+  const invitation = await E(hostA).invite(['bob']);
   const invitationLocator = await E(invitation).locate();
-  await E(hostB).accept(invitationLocator, 'alice');
+  await E(hostB).accept(invitationLocator, ['alice']);
 
   // Acceptance replaces each invitation-side result name with the remote
   // handle. It does not need a second, synthetic local guest under @pins.
@@ -3933,10 +3933,10 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   t.is(await E(hostB).identify('@pins', 'guest-alice'), undefined);
 
   // create value to share
-  await E(hostA).evaluate('@main', '"hello, world!"', [], [], ['salutations']);
+  await E(hostA).evaluate(['@main'], '"hello, world!"', [], [], ['salutations']);
   const expectedSalutationsLocator = await E(hostA).locate('salutations');
 
-  await E(hostA).send('bob', ['Hello'], ['salutations'], ['salutations']);
+  await E(hostA).send(['bob'], ['Hello'], ['salutations'], [['salutations']]);
 
   const messages = await E(hostB).listMessages();
   const packageMsg = messages.find(
@@ -3962,12 +3962,12 @@ testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
   const hostA = await prepareHostWithTestNetwork(t);
   const hostB = await prepareHostWithTestNetwork(t);
 
-  const guestA = await E(hostA).provideGuest('guest-a-handle', {
+  const guestA = await E(hostA).provideGuest(['guest-a-handle'], {
     agentName: 'guest-a',
   });
-  const invitation = await E(guestA).invite('guest-b');
+  const invitation = await E(guestA).invite(['guest-b']);
   const invitationLocator = await E(invitation).locate();
-  await E(hostB).accept(invitationLocator, 'guest-a');
+  await E(hostB).accept(invitationLocator, ['guest-a']);
 
   // The invitation's result name is the durable connection edge. Acceptance
   // replaces the invitation with the remote accepter handle without minting
@@ -3988,8 +3988,8 @@ testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
   const hostPins = await E(hostA).lookupById(hostPinsId);
   t.is(await E(hostPins).identify('guest-guest-b'), undefined);
 
-  await E(guestA).send('guest-b', ['Hello from guest A'], [], []);
-  await E(hostB).send('guest-a', ['Hello from guest B'], [], []);
+  await E(guestA).send(['guest-b'], ['Hello from guest A'], [], []);
+  await E(hostB).send(['guest-a'], ['Hello from guest B'], [], []);
 
   const messagesForGuestB = await E(hostB).listMessages();
   t.true(
@@ -4012,10 +4012,10 @@ testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
 
 test('EndoGuest.invite nests the invitation at a directory path', async t => {
   const { host } = await prepareHost(t);
-  const guest = await E(host).provideGuest('guest-handle', {
+  const guest = await E(host).provideGuest(['guest-handle'], {
     agentName: 'guest-agent',
   });
-  await E(guest).makeDirectory('peers');
+  await E(guest).makeDirectory(['peers']);
   const invitation = await E(guest).invite(['peers', 'bob']);
   t.truthy(await E(invitation).locate());
   t.true(await E(guest).has('peers', 'bob'));
@@ -4029,17 +4029,17 @@ testNeedsNodeWorker(
     // minion.town shape, where the app's inviter and invitee guests are
     // siblings under a single daemon. No network is required.
     const { host } = await prepareHost(t);
-    const guestA = await E(host).provideGuest('guest-a-handle', {
+    const guestA = await E(host).provideGuest(['guest-a-handle'], {
       agentName: 'guest-a',
     });
-    const guestB = await E(host).provideGuest('guest-b-handle', {
+    const guestB = await E(host).provideGuest(['guest-b-handle'], {
       agentName: 'guest-b',
     });
 
-    const invitation = await E(guestA).invite('to-b');
+    const invitation = await E(guestA).invite(['to-b']);
     const invitationLocator = await E(invitation).locate();
     // The invitee redeems into ITSELF via the guest facet, not through a host.
-    await E(guestB).accept(invitationLocator, 'to-a');
+    await E(guestB).accept(invitationLocator, ['to-a']);
 
     // Reciprocal binding, each under its own independently chosen pet name.
     t.truthy(await E(guestA).identify('to-b'));
@@ -4080,8 +4080,8 @@ testNeedsNodeWorker(
     );
 
     // Mail flows both directions over the shared daemon's mailbox substrate.
-    await E(guestA).send('to-b', ['Hello from A'], [], []);
-    await E(guestB).send('to-a', ['Hello from B'], [], []);
+    await E(guestA).send(['to-b'], ['Hello from A'], [], []);
+    await E(guestB).send(['to-a'], ['Hello from B'], [], []);
 
     const messagesForB = await E(guestB).listMessages();
     t.true(
@@ -4102,7 +4102,7 @@ testNeedsNodeWorker(
 
     // Single-use: a replay of the spent invitation is rejected.
     await t.throwsAsync(
-      () => E(guestB).accept(invitationLocator, 'to-a-again'),
+      () => E(guestB).accept(invitationLocator, ['to-a-again']),
       undefined,
       'replayed invitation is rejected',
     );
@@ -4119,19 +4119,19 @@ testNeedsNodeWorker(
     // pointing at the unverified handle; least of all may it silently clobber a
     // pre-existing correspondent already bound under that name.
     const { host } = await prepareHost(t);
-    const guestA = await E(host).provideGuest('guest-a-handle', {
+    const guestA = await E(host).provideGuest(['guest-a-handle'], {
       agentName: 'guest-a',
     });
-    const guestB = await E(host).provideGuest('guest-b-handle', {
+    const guestB = await E(host).provideGuest(['guest-b-handle'], {
       agentName: 'guest-b',
     });
-    const guestC = await E(host).provideGuest('guest-c-handle', {
+    const guestC = await E(host).provideGuest(['guest-c-handle'], {
       agentName: 'guest-c',
     });
 
     // B binds a genuine correspondent (A's handle) under 'contact'.
-    const invAB = await E(guestA).invite('to-b');
-    await E(guestB).accept(await E(invAB).locate(), 'contact');
+    const invAB = await E(guestA).invite(['to-b']);
+    await E(guestB).accept(await E(invAB).locate(), ['contact']);
     const guestAHandleId = await E(host).identify('guest-a-handle');
     t.is(
       parseLocator(await E(guestB).locate('contact')).number,
@@ -4141,14 +4141,14 @@ testNeedsNodeWorker(
 
     // Produce a spent invitation from a DIFFERENT correspondent (C), so a
     // successful clobber would be observable as C's handle replacing A's.
-    const invCB = await E(guestC).invite('to-b-2');
+    const invCB = await E(guestC).invite(['to-b-2']);
     const spentCLocator = await E(invCB).locate();
-    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
+    await E(guestB).accept(spentCLocator, ['temp']); // consumes invCB
 
     // Redeeming the now-spent invitation from C, reusing the name that already
     // holds A, must reject AND leave 'contact' bound to A (not C, not stray).
     await t.throwsAsync(
-      () => E(guestB).accept(spentCLocator, 'contact'),
+      () => E(guestB).accept(spentCLocator, ['contact']),
       undefined,
       'a spent invitation is rejected',
     );
@@ -4171,17 +4171,17 @@ testNeedsNodeWorker(
     // the `priorLocator === undefined ? remove() : storeLocator()` split's
     // remove() arm reddens here.
     const { host } = await prepareHost(t);
-    const guestB = await E(host).provideGuest('guest-b-handle', {
+    const guestB = await E(host).provideGuest(['guest-b-handle'], {
       agentName: 'guest-b',
     });
-    const guestC = await E(host).provideGuest('guest-c-handle', {
+    const guestC = await E(host).provideGuest(['guest-c-handle'], {
       agentName: 'guest-c',
     });
 
     // Produce a spent invitation from C.
-    const invCB = await E(guestC).invite('to-b');
+    const invCB = await E(guestC).invite(['to-b']);
     const spentCLocator = await E(invCB).locate();
-    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
+    await E(guestB).accept(spentCLocator, ['temp']); // consumes invCB
 
     // 'fresh-contact' has never been bound. Redeeming the now-spent invitation
     // under it must reject AND leave 'fresh-contact' unbound — the speculative
@@ -4192,7 +4192,7 @@ testNeedsNodeWorker(
       'the fresh name is unbound before the rejected accept',
     );
     await t.throwsAsync(
-      () => E(guestB).accept(spentCLocator, 'fresh-contact'),
+      () => E(guestB).accept(spentCLocator, ['fresh-contact']),
       undefined,
       'a spent invitation is rejected',
     );
@@ -4225,19 +4225,19 @@ testNeedsNodeWorker(
     // — which this same-daemon shape cannot exercise. This test remains a useful
     // guard on the duplicate-accept outcome; it does not claim to pin the queue.
     const { host } = await prepareHost(t);
-    const guestA = await E(host).provideGuest('guest-a-handle', {
+    const guestA = await E(host).provideGuest(['guest-a-handle'], {
       agentName: 'guest-a',
     });
-    const guestB = await E(host).provideGuest('guest-b-handle', {
+    const guestB = await E(host).provideGuest(['guest-b-handle'], {
       agentName: 'guest-b',
     });
 
-    const invitation = await E(guestA).invite('to-b');
+    const invitation = await E(guestA).invite(['to-b']);
     const invitationLocator = await E(invitation).locate();
 
     const results = await Promise.allSettled([
-      E(guestB).accept(invitationLocator, 'contact'),
-      E(guestB).accept(invitationLocator, 'contact'),
+      E(guestB).accept(invitationLocator, ['contact']),
+      E(guestB).accept(invitationLocator, ['contact']),
     ]);
     const fulfilled = results.filter(r => r.status === 'fulfilled');
     t.is(fulfilled.length, 1, 'exactly one duplicate accept succeeds');
@@ -4264,16 +4264,16 @@ testNeedsNodeWorker(
     // A guest that has accepted an invitation can itself invite and accept
     // further guests: "a guest may invite more guests, transitively."
     const { host } = await prepareHost(t);
-    const guestI = await E(host).provideGuest('i-handle', { agentName: 'i' });
-    const guestJ = await E(host).provideGuest('j-handle', { agentName: 'j' });
-    const guestK = await E(host).provideGuest('k-handle', { agentName: 'k' });
+    const guestI = await E(host).provideGuest(['i-handle'], { agentName: 'i' });
+    const guestJ = await E(host).provideGuest(['j-handle'], { agentName: 'j' });
+    const guestK = await E(host).provideGuest(['k-handle'], { agentName: 'k' });
 
-    const invIJ = await E(guestI).invite('j');
-    await E(guestJ).accept(await E(invIJ).locate(), 'i');
+    const invIJ = await E(guestI).invite(['j']);
+    await E(guestJ).accept(await E(invIJ).locate(), ['i']);
 
     // J, an accepted guest, now extends its OWN invitation to K.
-    const invJK = await E(guestJ).invite('k');
-    await E(guestK).accept(await E(invJK).locate(), 'j');
+    const invJK = await E(guestJ).invite(['k']);
+    await E(guestK).accept(await E(invJK).locate(), ['j']);
 
     t.truthy(await E(guestI).identify('j'));
     t.truthy(await E(guestJ).identify('i'));
@@ -4281,8 +4281,8 @@ testNeedsNodeWorker(
     t.truthy(await E(guestK).identify('j'));
 
     // Mail flows along each hop of the chain.
-    await E(guestI).send('j', ['I to J'], [], []);
-    await E(guestJ).send('k', ['J to K'], [], []);
+    await E(guestI).send(['j'], ['I to J'], [], []);
+    await E(guestJ).send(['k'], ['J to K'], [], []);
 
     const messagesForJ = await E(guestJ).listMessages();
     t.true(
@@ -4312,14 +4312,14 @@ testNeedsNodeWorker(
     // `['team-a', 'bob']` and `['team', 'a-bob']` flatten to the same string
     // under a bare `path.join('-')`. Acceptance retains each connection at its
     // actual directory path, without deriving a second flattened pin key.
-    await E(hostA).makeDirectory('team-a');
-    await E(hostA).makeDirectory('team');
+    await E(hostA).makeDirectory(['team-a']);
+    await E(hostA).makeDirectory(['team']);
 
     const invitation1 = await E(hostA).invite(['team-a', 'bob']);
     const invitation2 = await E(hostA).invite(['team', 'a-bob']);
 
-    await E(hostB).accept(await E(invitation1).locate(), 'peer-1');
-    await E(hostB).accept(await E(invitation2).locate(), 'peer-2');
+    await E(hostB).accept(await E(invitation1).locate(), ['peer-1']);
+    await E(hostB).accept(await E(invitation2).locate(), ['peer-2']);
 
     const firstId = await E(hostA).identify('team-a', 'bob');
     const secondId = await E(hostA).identify('team', 'a-bob');
@@ -4340,7 +4340,7 @@ testNeedsNodeWorker(
 test('reverse locate local value', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
 
   const tenLocator = await E(host).locate('ten');
   const [reverseLocatedName] = await E(host).reverseLocate(tenLocator);
@@ -4352,7 +4352,7 @@ test('reverse locate local persisted value', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    await E(host).storeValue(10, 'ten');
+    await E(host).storeValue(10, ['ten']);
   }
 
   await restart(config);
@@ -4374,7 +4374,7 @@ testNeedsNodeWorker('reverse locate remote value', async t => {
   await E(hostB).addPeerInfo(await E(hostA).getPeerInfo());
 
   // create value to share
-  await E(hostB).evaluate('@main', '"hello, world!"', [], [], ['salutations']);
+  await E(hostB).evaluate(['@main'], '"hello, world!"', [], [], ['salutations']);
   const hostBValueLocator = await E(hostB).locate('salutations');
 
   // insert in hostA out of band
@@ -4389,17 +4389,17 @@ testNeedsNodeWorker('bidirectional mail across nodes', async t => {
   const hostA = await prepareHostWithTestNetwork(t);
   const hostB = await prepareHostWithTestNetwork(t);
 
-  const invitation = await E(hostA).invite('bob');
+  const invitation = await E(hostA).invite(['bob']);
   const invitationLocator = await E(invitation).locate();
-  await E(hostB).accept(invitationLocator, 'alice');
+  await E(hostB).accept(invitationLocator, ['alice']);
 
   // A sends mail to B
-  await E(hostA).evaluate('@main', '"value-from-a"', [], [], ['val-a']);
-  await E(hostA).send('bob', ['Hi from A'], ['val-a'], ['val-a']);
+  await E(hostA).evaluate(['@main'], '"value-from-a"', [], [], ['val-a']);
+  await E(hostA).send(['bob'], ['Hi from A'], ['val-a'], [['val-a']]);
 
   // B sends mail to A
-  await E(hostB).evaluate('@main', '"value-from-b"', [], [], ['val-b']);
-  await E(hostB).send('alice', ['Hi from B'], ['val-b'], ['val-b']);
+  await E(hostB).evaluate(['@main'], '"value-from-b"', [], [], ['val-b']);
+  await E(hostB).send(['alice'], ['Hi from B'], ['val-b'], [['val-b']]);
 
   const messagesB = await E(hostB).listMessages();
   const fromA = messagesB.find(
@@ -4420,13 +4420,13 @@ testNeedsNodeWorker('adopt from remote message', async t => {
   const hostA = await prepareHostWithTestNetwork(t);
   const hostB = await prepareHostWithTestNetwork(t);
 
-  const invitation = await E(hostA).invite('bob');
+  const invitation = await E(hostA).invite(['bob']);
   const invitationLocator = await E(invitation).locate();
-  await E(hostB).accept(invitationLocator, 'alice');
+  await E(hostB).accept(invitationLocator, ['alice']);
 
-  await E(hostA).evaluate('@main', '"shared-value"', [], [], ['shared']);
+  await E(hostA).evaluate(['@main'], '"shared-value"', [], [], ['shared']);
   const expectedId = await E(hostA).identify('shared');
-  await E(hostA).send('bob', ['Take this'], ['shared'], ['shared']);
+  await E(hostA).send(['bob'], ['Take this'], ['shared'], [['shared']]);
 
   const messages = await E(hostB).listMessages();
   const msg = messages.find(
@@ -4448,9 +4448,9 @@ testNeedsNodeWorker('follow messages across nodes', async t => {
   const hostA = await prepareHostWithTestNetwork(t);
   const hostB = await prepareHostWithTestNetwork(t);
 
-  const invitation = await E(hostA).invite('bob');
+  const invitation = await E(hostA).invite(['bob']);
   const invitationLocator = await E(invitation).locate();
-  await E(hostB).accept(invitationLocator, 'alice');
+  await E(hostB).accept(invitationLocator, ['alice']);
 
   const iterator = iterateReader(E(hostB).followMessages());
   const existingMessages = /** @type {unknown[]} */ (
@@ -4458,8 +4458,8 @@ testNeedsNodeWorker('follow messages across nodes', async t => {
   );
   await drainIterator(iterator, existingMessages.length);
 
-  await E(hostA).evaluate('@main', '"streamed"', [], [], ['stream-val']);
-  await E(hostA).send('bob', ['Stream test'], ['stream-val'], ['stream-val']);
+  await E(hostA).evaluate(['@main'], '"streamed"', [], [], ['stream-val']);
+  await E(hostA).send(['bob'], ['Stream test'], ['stream-val'], [['stream-val']]);
 
   const { value: msg } = await iterator.next();
   t.is(msg.type, 'package');
@@ -4470,9 +4470,9 @@ testNeedsNodeWorker('reply across nodes', async t => {
   const hostA = await prepareHostWithTestNetwork(t);
   const hostB = await prepareHostWithTestNetwork(t);
 
-  const invitation = await E(hostA).invite('bob');
+  const invitation = await E(hostA).invite(['bob']);
   const invitationLocator = await E(invitation).locate();
-  await E(hostB).accept(invitationLocator, 'alice');
+  await E(hostB).accept(invitationLocator, ['alice']);
 
   const iteratorA = iterateReader(E(hostA).followMessages());
   const iteratorB = iterateReader(E(hostB).followMessages());
@@ -4481,7 +4481,7 @@ testNeedsNodeWorker('reply across nodes', async t => {
   const existingB = /** @type {unknown[]} */ (await E(hostB).listMessages());
   await drainIterator(iteratorB, existingB.length);
 
-  await E(hostA).send('bob', ['Hello Bob'], [], []);
+  await E(hostA).send(['bob'], ['Hello Bob'], [], []);
 
   // A's outgoing message appears in A's own iterator
   const { value: sentMsg } = await iteratorA.next();
@@ -4504,22 +4504,22 @@ testNeedsNodeWorker('request and resolve across nodes', async t => {
   const hostA = await prepareHostWithTestNetwork(t);
   const hostB = await prepareHostWithTestNetwork(t);
 
-  const invitation = await E(hostA).invite('bob');
+  const invitation = await E(hostA).invite(['bob']);
   const invitationLocator = await E(invitation).locate();
-  await E(hostB).accept(invitationLocator, 'alice');
+  await E(hostB).accept(invitationLocator, ['alice']);
 
-  await E(hostB).evaluate('@main', '42', [], [], ['answer']);
+  await E(hostB).evaluate(['@main'], '42', [], [], ['answer']);
 
   const iteratorB = iterateReader(E(hostB).followMessages());
   const existingB = /** @type {unknown[]} */ (await E(hostB).listMessages());
   await drainIterator(iteratorB, existingB.length);
 
-  const resultP = E(hostA).request('bob', 'need a number', 'result');
+  const resultP = E(hostA).request(['bob'], 'need a number', ['result']);
 
   const { value: requestMsg } = await iteratorB.next();
   t.is(requestMsg.type, 'request');
 
-  await E(hostB).resolve(requestMsg.number, 'answer');
+  await E(hostB).resolve(requestMsg.number, ['answer']);
 
   await resultP;
   const result = await E(hostA).lookup(['result']);
@@ -4537,8 +4537,8 @@ testNeedsNodeWorker('cancel with pet name path', async t => {
 
   const counterPath = path.join(dirname, 'test', 'counter.js');
   const counterLocation = url.pathToFileURL(counterPath).href;
-  await E(host).makeUnconfined('worker', counterLocation, {
-    powersName: '@none',
+  await E(host).makeUnconfined(['worker'], counterLocation, {
+    powersName: ['@none'],
     resultName: ['subdir', 'counter'],
   });
 
@@ -4546,7 +4546,7 @@ testNeedsNodeWorker('cancel with pet name path', async t => {
   t.is(
     1,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
       [['subdir', 'counter']],
@@ -4555,7 +4555,7 @@ testNeedsNodeWorker('cancel with pet name path', async t => {
   t.is(
     2,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
       [['subdir', 'counter']],
@@ -4569,7 +4569,7 @@ testNeedsNodeWorker('cancel with pet name path', async t => {
   t.is(
     1,
     await E(host).evaluate(
-      'worker',
+      ['worker'],
       'E(counter).incr()',
       ['counter'],
       [['subdir', 'counter']],
@@ -4583,10 +4583,10 @@ test('send with pet name path for recipient and values', async t => {
   // Create a directory structure in the host
   await E(host).makeDirectory(['values']);
   await E(host).provideWorker(['worker']);
-  await E(host).evaluate('worker', '42', [], [], ['values', 'the-answer']);
+  await E(host).evaluate(['worker'], '42', [], [], ['values', 'the-answer']);
 
   // Create a guest and set up its directory with a values subdirectory
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
 
   // Create a directory in the guest's namespace and put a value in it
   await E(guest).makeDirectory(['my-values']);
@@ -4596,7 +4596,7 @@ test('send with pet name path for recipient and values', async t => {
 
   // Guest sends to @host using a path for the value
   await E(guest).send(
-    '@host',
+    ['@host'],
     ['Here is the answer: '],
     ['gift'],
     [['my-values', 'answer']],
@@ -4618,7 +4618,7 @@ test('resolve with pet name path', async t => {
   await E(host).makeDirectory(['responses']);
   await E(host).provideWorker(['worker']);
   await E(host).evaluate(
-    'worker',
+    ['worker'],
     '"the response"',
     [],
     [],
@@ -4626,10 +4626,10 @@ test('resolve with pet name path', async t => {
   );
 
   // Create a guest and have it make a request
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
 
   const iterator = iterateReader(E(host).followMessages());
-  E.sendOnly(guest).request('@host', 'a response');
+  E.sendOnly(guest).request(['@host'], 'a response');
   const { value: message } = await iterator.next();
   t.is(message.number, 0n);
 
@@ -4646,12 +4646,12 @@ test('request with pet name path for response storage', async t => {
   const { host } = await prepareHost(t);
 
   // Create a directory for responses in the guest's namespace
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   await E(guest).makeDirectory(['responses']);
 
   // Have the guest make a request, storing response in a path within guest's directory
   const iterator = iterateReader(E(host).followMessages());
-  const requestP = E(guest).request('@host', 'give me something', [
+  const requestP = E(guest).request(['@host'], 'give me something', [
     'responses',
     'result',
   ]);
@@ -4662,8 +4662,8 @@ test('request with pet name path for response storage', async t => {
 
   // Create something to respond with
   await E(host).provideWorker(['worker']);
-  await E(host).evaluate('worker', '"here you go"', [], [], ['gift']);
-  await E(host).resolve(message.number, 'gift');
+  await E(host).evaluate(['worker'], '"here you go"', [], [], ['gift']);
+  await E(host).resolve(message.number, ['gift']);
 
   // Wait for the request to complete (including directory write)
   await requestP;
@@ -4685,9 +4685,9 @@ testNeedsNodeWorker(
     const envEchoPath = path.join(dirname, 'test', 'env-echo.js');
     const envEchoLocation = url.pathToFileURL(envEchoPath).href;
 
-    const envEcho = await E(host).makeUnconfined('worker', envEchoLocation, {
-      powersName: '@none',
-      resultName: 'env-echo',
+    const envEcho = await E(host).makeUnconfined(['worker'], envEchoLocation, {
+      powersName: ['@none'],
+      resultName: ['env-echo'],
       env: {
         API_KEY: 'secret123',
         DEBUG: 'true',
@@ -4724,9 +4724,9 @@ testNeedsNodeWorker('makeUnconfined with empty env object', async t => {
   const envEchoPath = path.join(dirname, 'test', 'env-echo.js');
   const envEchoLocation = url.pathToFileURL(envEchoPath).href;
 
-  const envEcho = await E(host).makeUnconfined('worker', envEchoLocation, {
-    powersName: '@none',
-    resultName: 'env-echo',
+  const envEcho = await E(host).makeUnconfined(['worker'], envEchoLocation, {
+    powersName: ['@none'],
+    resultName: ['env-echo'],
     env: {},
   });
 
@@ -4744,9 +4744,9 @@ testNeedsNodeWorker(
     const envEchoPath = path.join(dirname, 'test', 'env-echo.js');
     const envEchoLocation = url.pathToFileURL(envEchoPath).href;
 
-    const envEcho = await E(host).makeUnconfined('worker', envEchoLocation, {
-      powersName: '@none',
-      resultName: 'env-echo',
+    const envEcho = await E(host).makeUnconfined(['worker'], envEchoLocation, {
+      powersName: ['@none'],
+      resultName: ['env-echo'],
     });
 
     const allEnv = await E(envEcho).getEnv();
@@ -4766,9 +4766,9 @@ test('makeArchive runs a source-only ZIP and passes env to caplet', async t => {
     'archive-env-echo',
   );
   const envEcho = await doMakeArchive(host, archivePath, archiveName =>
-    E(host).makeArchive('worker', archiveName, {
-      powersName: '@none',
-      resultName: 'env-echo-from-archive',
+    E(host).makeArchive(['worker'], [archiveName], {
+      powersName: ['@none'],
+      resultName: ['env-echo-from-archive'],
       env: {
         CONFIG_PATH: '/etc/app/config.json',
         LOG_LEVEL: 'verbose',
@@ -4796,9 +4796,9 @@ test('makeArchive with empty env object', async t => {
     'archive-env-echo',
   );
   const envEcho = await doMakeArchive(host, archivePath, archiveName =>
-    E(host).makeArchive('worker', archiveName, {
-      powersName: '@none',
-      resultName: 'env-echo-empty',
+    E(host).makeArchive(['worker'], [archiveName], {
+      powersName: ['@none'],
+      resultName: ['env-echo-empty'],
       env: {},
     }),
   );
@@ -4815,9 +4815,9 @@ test('makeArchive without env option defaults to empty env', async t => {
     'archive-env-echo',
   );
   const envEcho = await doMakeArchive(host, archivePath, archiveName =>
-    E(host).makeArchive('worker', archiveName, {
-      powersName: '@none',
-      resultName: 'env-echo-default',
+    E(host).makeArchive(['worker'], [archiveName], {
+      powersName: ['@none'],
+      resultName: ['env-echo-default'],
     }),
   );
   t.deepEqual(await E(envEcho).getEnv(), {});
@@ -4827,9 +4827,9 @@ test('makeArchive rejects an unknown archive pet name', async t => {
   const { host } = await prepareHost(t);
   await E(host).provideWorker(['worker']);
   await t.throwsAsync(
-    E(host).makeArchive('worker', 'no-such-archive', {
-      powersName: '@none',
-      resultName: 'oops',
+    E(host).makeArchive(['worker'], ['no-such-archive'], {
+      powersName: ['@none'],
+      resultName: ['oops'],
     }),
     { message: /Unknown pet name for archive/ },
   );
@@ -4840,22 +4840,22 @@ test('makeArchive rejects an unknown archive pet name', async t => {
 test('guest evaluate executes code directly', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   await E(host).provideWorker(['worker']);
-  await E(host).storeValue(5, 'five');
+  await E(host).storeValue(5, ['five']);
 
   // Share 'five' with the guest
-  await E(host).send('guest', ['Here is a value:'], ['n'], ['five']);
+  await E(host).send(['guest'], ['Here is a value:'], ['n'], [['five']]);
   const guestMessages = await E(guest).listMessages();
   const pkg = guestMessages.find(m => m.type === 'package');
   await E(guest).adopt(pkg.number, 'n', ['five']);
 
   // Guest evaluates directly — no proposal, no host approval needed
   const result = await E(guest).evaluate(
-    'worker',
+    ['worker'],
     'n * 2',
     ['n'],
-    ['five'],
+    [['five']],
     ['doubled'],
   );
 
@@ -4872,17 +4872,17 @@ test('guest evaluate executes code directly', async t => {
 test('guest evaluate ephemeral (no resultName)', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
-  await E(host).storeValue(7, 'seven');
+  const guest = await E(host).provideGuest(['guest']);
+  await E(host).storeValue(7, ['seven']);
 
   // Share with guest
-  await E(host).send('guest', ['value:'], ['x'], ['seven']);
+  await E(host).send(['guest'], ['value:'], ['x'], [['seven']]);
   const guestMessages = await E(guest).listMessages();
   const pkg = guestMessages.find(m => m.type === 'package');
   await E(guest).adopt(pkg.number, 'x', ['seven']);
 
   // Ephemeral eval, no result name, value returned directly.
-  const result = await E(guest).evaluate(undefined, 'x + 3', ['x'], ['seven']);
+  const result = await E(guest).evaluate(undefined, 'x + 3', ['x'], [['seven']]);
 
   t.is(result, 10);
 });
@@ -4890,11 +4890,11 @@ test('guest evaluate ephemeral (no resultName)', async t => {
 test('guest evaluate posts no message to host or guest mailbox', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   await E(host).provideWorker(['worker']);
-  await E(host).storeValue(11, 'eleven');
+  await E(host).storeValue(11, ['eleven']);
 
-  await E(host).send('guest', ['value:'], ['n'], ['eleven']);
+  await E(host).send(['guest'], ['value:'], ['n'], [['eleven']]);
   const initialGuestMessages = await E(guest).listMessages();
   const pkg = initialGuestMessages.find(m => m.type === 'package');
   await E(guest).adopt(pkg.number, 'n', ['eleven']);
@@ -4903,10 +4903,10 @@ test('guest evaluate posts no message to host or guest mailbox', async t => {
   const guestMessagesBefore = await E(guest).listMessages();
 
   const result = await E(guest).evaluate(
-    'worker',
+    ['worker'],
     'n + 1',
     ['n'],
-    ['eleven'],
+    [['eleven']],
     ['twelve'],
   );
   t.is(result, 12);
@@ -4937,8 +4937,8 @@ testShim(
       const { host } = await makeHost(config, cancelled);
 
       const checker = await E(host).makeUnconfined(undefined, checkerLocation, {
-        powersName: '@none',
-        resultName: 'shim-checker',
+        powersName: ['@none'],
+        resultName: ['shim-checker'],
         workerTrustedShims: [shimLocation],
       });
 
@@ -4953,7 +4953,7 @@ testShim(
     {
       const { host } = await makeHost(config, cancelled);
 
-      const checker = await E(host).lookup('shim-checker');
+      const checker = await E(host).lookup(['shim-checker']);
       t.true(
         await E(checker).wasShimmed(),
         'shim should persist and re-execute after daemon restart',
@@ -4966,7 +4966,7 @@ testShim(
 test('form happy path: guest sends form, host submits', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
 
   // Follow messages on both sides
   const hostIterator = iterateReader(E(host).followMessages());
@@ -4974,7 +4974,7 @@ test('form happy path: guest sends form, host submits', async t => {
 
   // Guest sends a form to the host (fire-and-forget)
   await E(guest).form(
-    '@host',
+    ['@host'],
     'Please configure',
     harden([
       { name: 'name', label: 'Your name' },
@@ -5006,11 +5006,11 @@ test('form happy path: guest sends form, host submits', async t => {
 test('form submit rejects when a field is missing', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   const hostIterator = iterateReader(E(host).followMessages());
 
   await E(guest).form(
-    '@host',
+    ['@host'],
     'Need info',
     harden([
       { name: 'name', label: 'Name' },
@@ -5031,11 +5031,11 @@ test('form submit rejects when a field is missing', async t => {
 test('form submit with pattern validation rejects non-matching value', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   const hostIterator = iterateReader(E(host).followMessages());
 
   await E(guest).form(
-    '@host',
+    ['@host'],
     'Typed form',
     harden([{ name: 'count', label: 'Count', pattern: M.number() }]),
   );
@@ -5053,11 +5053,11 @@ test('form submit with pattern validation rejects non-matching value', async t =
 test('form submit with pattern validation accepts matching value', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   const hostIterator = iterateReader(E(host).followMessages());
 
   await E(guest).form(
-    '@host',
+    ['@host'],
     'Typed form',
     harden([{ name: 'count', label: 'Count', pattern: M.number() }]),
   );
@@ -5073,11 +5073,11 @@ test('form submit with pattern validation accepts matching value', async t => {
 test('form default pattern is M.string() — rejects non-string', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   const hostIterator = iterateReader(E(host).followMessages());
 
   await E(guest).form(
-    '@host',
+    ['@host'],
     'String form',
     harden([{ name: 'name', label: 'Name' }]),
   );
@@ -5095,12 +5095,12 @@ test('form default pattern is M.string() — rejects non-string', async t => {
 test('form multi-submission: same form submitted twice produces two value messages', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   const hostIterator = iterateReader(E(host).followMessages());
   const guestIterator = iterateReader(E(guest).followMessages());
 
   await E(guest).form(
-    '@host',
+    ['@host'],
     'Multi-submit',
     harden([{ name: 'answer', label: 'Answer' }]),
   );
@@ -5132,11 +5132,11 @@ test('form field patterns survive a daemon restart', async t => {
   let formNumber;
   {
     const { host } = await makeHost(config, cancelled);
-    const guest = await E(host).provideGuest('guest');
+    const guest = await E(host).provideGuest(['guest']);
     const hostIterator = iterateReader(E(host).followMessages());
 
     await E(guest).form(
-      '@host',
+      ['@host'],
       'Approve?',
       harden([
         { name: 'approved', label: 'Approved', pattern: M.boolean() },
@@ -5173,11 +5173,11 @@ test('a restored form still enforces its patterns', async t => {
   let formNumber;
   {
     const { host } = await makeHost(config, cancelled);
-    const guest = await E(host).provideGuest('guest');
+    const guest = await E(host).provideGuest(['guest']);
     const hostIterator = iterateReader(E(host).followMessages());
 
     await E(guest).form(
-      '@host',
+      ['@host'],
       'Approve?',
       harden([{ name: 'approved', label: 'Approved', pattern: M.boolean() }]),
     );
@@ -5207,11 +5207,11 @@ test('a form persisted before fields were encoded still loads', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    const guest = await E(host).provideGuest('guest');
+    const guest = await E(host).provideGuest(['guest']);
     const hostIterator = iterateReader(E(host).followMessages());
 
     await E(guest).form(
-      '@host',
+      ['@host'],
       'Approve?',
       harden([{ name: 'approved', label: 'Approved', pattern: M.boolean() }]),
     );
@@ -5274,10 +5274,10 @@ test('a form persisted before fields were encoded still loads', async t => {
 test('form returns void (fire-and-forget)', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
 
   const result = await E(guest).form(
-    '@host',
+    ['@host'],
     'Fire and forget',
     harden([{ name: 'field', label: 'Field' }]),
   );
@@ -5288,7 +5288,7 @@ test('form returns void (fire-and-forget)', async t => {
 test('form reverse: host sends form to guest, guest submits', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('alice');
+  const guest = await E(host).provideGuest(['alice']);
 
   // Follow guest messages
   const guestIterator = iterateReader(E(guest).followMessages());
@@ -5323,10 +5323,10 @@ test('form reverse: host sends form to guest, guest submits', async t => {
 test('sendValue replies to a message with a retained value', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
 
   // Host sends a package to the guest
-  await E(host).send('guest', ['Here is a question'], [], []);
+  await E(host).send(['guest'], ['Here is a question'], [], []);
 
   // Guest receives the package
   const guestIterator = iterateReader(E(guest).followMessages());
@@ -5341,8 +5341,8 @@ test('sendValue replies to a message with a retained value', async t => {
   await drainIterator(hostIterator, existingMessages.length);
 
   // Guest stores a value and sends it back as a reply
-  await E(guest).storeValue(99, 'my-reply');
-  await E(guest).sendValue(pkgMsg.number, 'my-reply');
+  await E(guest).storeValue(99, ['my-reply']);
+  await E(guest).sendValue(pkgMsg.number, ['my-reply']);
 
   // Host receives the value message via the iterator
   const { value: valueMsg } = await hostIterator.next();
@@ -5361,16 +5361,16 @@ test('sendValue replies to a message with a retained value', async t => {
 test('sendValue rejects unknown pet name', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
 
   // Send a message to the guest so there's something to reply to
-  await E(host).send('guest', ['Hello'], [], []);
+  await E(host).send(['guest'], ['Hello'], [], []);
 
   const guestIterator = iterateReader(E(guest).followMessages());
   const { value: pkgMsg } = await guestIterator.next();
 
   // Attempt to sendValue with a nonexistent pet name
-  await t.throwsAsync(() => E(guest).sendValue(pkgMsg.number, 'nonexistent'), {
+  await t.throwsAsync(() => E(guest).sendValue(pkgMsg.number, ['nonexistent']), {
     message: /Unknown pet name/,
   });
 });
@@ -5378,12 +5378,12 @@ test('sendValue rejects unknown pet name', async t => {
 test('sendValue rejects invalid message number', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
 
-  await E(guest).storeValue(10, 'ten');
+  await E(guest).storeValue(10, ['ten']);
 
   // No message 999 exists
-  await t.throwsAsync(() => E(guest).sendValue(999n, 'ten'), {
+  await t.throwsAsync(() => E(guest).sendValue(999n, ['ten']), {
     message: /No such message/,
   });
 });
@@ -5391,12 +5391,12 @@ test('sendValue rejects invalid message number', async t => {
 test('form value message @value is addressable via @mail/N/@value', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   const hostIterator = iterateReader(E(host).followMessages());
   const guestIterator = iterateReader(E(guest).followMessages());
 
   await E(guest).form(
-    '@host',
+    ['@host'],
     'Profile',
     harden([{ name: 'displayName', label: 'Display Name' }]),
   );
@@ -5472,7 +5472,7 @@ test('locateContent resolves a readable-blob to an xt-only magnet URN', async t 
   const { host } = await prepareHost(t);
   const payload = 'content-locator payload\n';
   const readerRef = bytesReaderFromIterator([encodeUtf8(payload)]);
-  await E(host).storeBlob(readerRef, 'payload-blob');
+  await E(host).storeBlob(readerRef, ['payload-blob']);
 
   const contentLocator = await E(host).locateContent('payload-blob');
   // The `xt` hash is the same SHA-256 content address the CAS keys on.
@@ -5491,7 +5491,7 @@ test('locateContent resolves a readable-blob to an xt-only magnet URN', async t 
 
 test('locateContent rejects a non-content formula', async t => {
   const { host } = await prepareHost(t);
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
   await t.throwsAsync(E(host).locateContent('ten'), {
     message: /not a content-bearing formula/,
   });
@@ -5505,7 +5505,7 @@ test('locateContent returns undefined for an unknown name', async t => {
 test('storeContent returns the same xt-only locator as locateContent', async t => {
   const { host } = await prepareHost(t);
   const readerRef = bytesReaderFromIterator([encodeUtf8('publish me\n')]);
-  await E(host).storeBlob(readerRef, 'to-publish');
+  await E(host).storeBlob(readerRef, ['to-publish']);
   const located = await E(host).locateContent('to-publish');
   const stored = await E(host).storeContent('to-publish');
   t.is(stored, located);
@@ -5518,7 +5518,7 @@ test('storeContent returns undefined for an unknown name', async t => {
 
 test('storeContent rejects a non-content formula', async t => {
   const { host } = await prepareHost(t);
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
   await t.throwsAsync(E(host).storeContent('ten'), {
     message: /not a content-bearing formula/,
   });
@@ -5527,7 +5527,7 @@ test('storeContent rejects a non-content formula', async t => {
 test('reverseLocateContent finds the pet names for a content locator', async t => {
   const { host } = await prepareHost(t);
   const readerRef = bytesReaderFromIterator([encodeUtf8('reverse me\n')]);
-  await E(host).storeBlob(readerRef, 'reverse-blob');
+  await E(host).storeBlob(readerRef, ['reverse-blob']);
   const contentLocator = await E(host).locateContent('reverse-blob');
   const names = await E(host).reverseLocateContent(contentLocator);
   t.deepEqual(names, ['reverse-blob']);
@@ -5536,7 +5536,7 @@ test('reverseLocateContent finds the pet names for a content locator', async t =
 test('reverseLocateContent returns all matching names, deduped and sorted', async t => {
   const { host } = await prepareHost(t);
   const readerRef = bytesReaderFromIterator([encodeUtf8('shared content\n')]);
-  await E(host).storeBlob(readerRef, 'zeta-name');
+  await E(host).storeBlob(readerRef, ['zeta-name']);
   // A second pet name for the same content formula (same content identity).
   await E(host).copy(['zeta-name'], ['alpha-name']);
   const contentLocator = await E(host).locateContent('zeta-name');
@@ -5547,7 +5547,7 @@ test('reverseLocateContent returns all matching names, deduped and sorted', asyn
 test('reverseLocateContent returns an empty array when no content matches', async t => {
   const { host } = await prepareHost(t);
   const readerRef = bytesReaderFromIterator([encodeUtf8('lonely\n')]);
-  await E(host).storeBlob(readerRef, 'lonely-blob');
+  await E(host).storeBlob(readerRef, ['lonely-blob']);
   const contentLocator = await E(host).locateContent('lonely-blob');
   await E(host).remove('lonely-blob');
   t.deepEqual(await E(host).reverseLocateContent(contentLocator), []);
@@ -5565,9 +5565,9 @@ test('internalizeContentLocator rejects a malformed content locator', async t =>
 
 test('listContent lists only content-bearing entries', async t => {
   const { host } = await prepareHost(t);
-  await E(host).storeValue(10, 'ten');
+  await E(host).storeValue(10, ['ten']);
   const readerRef = bytesReaderFromIterator([encodeUtf8('listed\n')]);
-  await E(host).storeBlob(readerRef, 'listed-blob');
+  await E(host).storeBlob(readerRef, ['listed-blob']);
   const record = await E(host).listContent();
   t.true('listed-blob' in record);
   t.false('ten' in record);
@@ -5577,7 +5577,7 @@ test('listContent lists only content-bearing entries', async t => {
 test('internalizeContentLocator parses a content locator', async t => {
   const { host } = await prepareHost(t);
   const readerRef = bytesReaderFromIterator([encodeUtf8('parse me\n')]);
-  await E(host).storeBlob(readerRef, 'parse-blob');
+  await E(host).storeBlob(readerRef, ['parse-blob']);
   const contentLocator = await E(host).locateContent('parse-blob');
   const internalized = await E(host).internalizeContentLocator(contentLocator);
   const { hash } = parseContentLocator(contentLocator);
@@ -5592,7 +5592,7 @@ test('locateContent resolves a readable-tree to an xt-only magnet URN', async t 
     'a.txt': makeFarBlob('alpha'),
     'b.txt': makeFarBlob('beta'),
   });
-  await E(host).storeTree(remoteTree, 'a-tree');
+  await E(host).storeTree(remoteTree, ['a-tree']);
   const contentLocator = await E(host).locateContent('a-tree');
   t.regex(contentLocator, /^magnet:\?xt=urn:endo-tree:[0-9a-f]{64}$/);
   const parsed = parseContentLocator(contentLocator);
@@ -5604,11 +5604,11 @@ test('locateContent resolves a readable-tree to an xt-only magnet URN', async t 
 
 test('a guest carries the content-locate family', async t => {
   const { host } = await prepareHost(t);
-  const guest = await E(host).provideGuest('guest', {
+  const guest = await E(host).provideGuest(['guest'], {
     agentName: 'guest-agent',
   });
   const readerRef = bytesReaderFromIterator([encodeUtf8('guest blob\n')]);
-  await E(host).storeBlob(readerRef, 'guest-blob');
+  await E(host).storeBlob(readerRef, ['guest-blob']);
   await E(host).move(['guest-blob'], ['guest-agent', 'guest-blob']);
   const contentLocator = await E(guest).locateContent('guest-blob');
   t.regex(contentLocator, /^magnet:\?xt=urn:endo-blob:[0-9a-f]{64}$/);
@@ -5617,7 +5617,7 @@ test('a guest carries the content-locate family', async t => {
 test('HTTP web-seed loads and verifies a readable blob', async t => {
   const { host, config } = await prepareHost(t);
   const originalBytes = encodeUtf8('web-seed payload\n');
-  await E(host).storeBlob(bytesReaderFromIterator([originalBytes]), 'original');
+  await E(host).storeBlob(bytesReaderFromIterator([originalBytes]), ['original']);
   const originalLocator = await E(host).locateContent('original');
   const { hash } = parseContentLocator(originalLocator);
   const gatewayAddress = fs
@@ -5628,16 +5628,16 @@ test('HTTP web-seed loads and verifies a readable blob', async t => {
   // must reject it on the xt mismatch and continue to the second web seed.
   await E(host).storeBlob(
     bytesReaderFromIterator([encodeUtf8('wrong payload\n')]),
-    'wrong',
+    ['wrong'],
   );
   const wrongLocator = await E(host).locateContent('wrong');
   const { hash: wrongHash } = parseContentLocator(wrongLocator);
   const shareLocation = url.pathToFileURL(
     path.join(dirname, 'test', 'http-content-share.js'),
   ).href;
-  await E(host).makeUnconfined('@main', shareLocation, {
-    powersName: '@none',
-    resultName: 'http-share',
+  await E(host).makeUnconfined(['@main'], shareLocation, {
+    powersName: ['@none'],
+    resultName: ['http-share'],
     env: {
       GATEWAY_ADDRESS: gatewayAddress,
       WRONG_HASH: wrongHash,
@@ -5654,7 +5654,7 @@ test('HTTP web-seed loads and verifies a readable blob', async t => {
   t.is(await E(loaded).text(), 'web-seed payload\n');
   t.deepEqual(await E(host).reverseLookup(loaded), []);
 
-  const original = await E(host).lookup('original');
+  const original = await E(host).lookup(['original']);
   const copiedInBand = await E(host).loadContent(originalLocator, original);
   t.is(await E(copiedInBand).text(), 'web-seed payload\n');
   t.deepEqual(await E(host).reverseLookup(copiedInBand), []);
@@ -5667,7 +5667,7 @@ test('HTTP web-seed loads a tar tree only after its assembled hash matches xt', 
       'alpha.txt': makeFarBlob('alpha'),
       nested: makeFarTree({ 'beta.txt': makeFarBlob('beta') }),
     }),
-    'tree',
+    ['tree'],
   );
   const gatewayAddress = fs
     .readFileSync(path.join(config.statePath, 'gateway'), 'utf8')
@@ -5675,9 +5675,9 @@ test('HTTP web-seed loads a tar tree only after its assembled hash matches xt', 
   const shareLocation = url.pathToFileURL(
     path.join(dirname, 'test', 'http-content-share.js'),
   ).href;
-  await E(host).makeUnconfined('@main', shareLocation, {
-    powersName: '@none',
-    resultName: 'http-share',
+  await E(host).makeUnconfined(['@main'], shareLocation, {
+    powersName: ['@none'],
+    resultName: ['http-share'],
     env: { GATEWAY_ADDRESS: gatewayAddress },
   });
   await E(host).move(['http-share'], ['@planes', 'http']);
@@ -5685,8 +5685,8 @@ test('HTTP web-seed loads a tar tree only after its assembled hash matches xt', 
   const locator = await E(host).storeContent('tree');
   const tree = await E(host).loadContent(locator);
   t.deepEqual(await E(tree).list(), ['alpha.txt', 'nested']);
-  const nested = await E(tree).lookup('nested');
-  const beta = await E(nested).lookup('beta.txt');
+  const nested = await E(tree).lookup(['nested']);
+  const beta = await E(nested).lookup(['beta.txt']);
   t.is(await E(beta).text(), 'beta');
 });
 
@@ -5699,7 +5699,7 @@ test('store readable tree with blobs', async t => {
     'world.txt': makeFarBlob('world'),
   });
 
-  await E(host).storeTree(remoteTree, 'my-tree');
+  await E(host).storeTree(remoteTree, ['my-tree']);
 
   // Verify the tree.
   const tree = await E(host).lookup(['my-tree']);
@@ -5712,11 +5712,11 @@ test('store readable tree with blobs', async t => {
   t.false(await E(tree).has('missing.txt'));
 
   // Verify lookup() returns readable blobs.
-  const blob1 = await E(tree).lookup('hello.txt');
+  const blob1 = await E(tree).lookup(['hello.txt']);
   const text1 = await E(blob1).text();
   t.is(text1, 'hello');
 
-  const blob2 = await E(tree).lookup('world.txt');
+  const blob2 = await E(tree).lookup(['world.txt']);
   const text2 = await E(blob2).text();
   t.is(text2, 'world');
 });
@@ -5731,7 +5731,7 @@ test('readable tree lookup with array path', async t => {
     }),
   });
 
-  await E(host).storeTree(remoteTree, 'root-tree');
+  await E(host).storeTree(remoteTree, ['root-tree']);
 
   // Navigate with array path.
   const tree = await E(host).lookup(['root-tree']);
@@ -5752,7 +5752,7 @@ test('readable tree persists across restart', async t => {
     const remoteTree = makeFarTree({
       'data.txt': makeFarBlob('persisted'),
     });
-    await E(host).storeTree(remoteTree, 'persist-tree');
+    await E(host).storeTree(remoteTree, ['persist-tree']);
   }
 
   await restart(config);
@@ -5762,7 +5762,7 @@ test('readable tree persists across restart', async t => {
     const tree = await E(host).lookup(['persist-tree']);
     const names = await E(tree).list();
     t.deepEqual(names, ['data.txt']);
-    const blob = await E(tree).lookup('data.txt');
+    const blob = await E(tree).lookup(['data.txt']);
     const text = await E(blob).text();
     t.is(text, 'persisted');
   }
@@ -5772,7 +5772,7 @@ test('readable tree empty entries', async t => {
   const { host } = await prepareHost(t);
 
   const remoteTree = makeFarTree({});
-  await E(host).storeTree(remoteTree, 'empty-tree');
+  await E(host).storeTree(remoteTree, ['empty-tree']);
   const tree = await E(host).lookup(['empty-tree']);
   const names = await E(tree).list();
   t.deepEqual(names, []);
@@ -5782,9 +5782,9 @@ test('readable tree lookup unknown name throws', async t => {
   const { host } = await prepareHost(t);
 
   const remoteTree = makeFarTree({});
-  await E(host).storeTree(remoteTree, 'empty-tree2');
+  await E(host).storeTree(remoteTree, ['empty-tree2']);
   const tree = await E(host).lookup(['empty-tree2']);
-  await t.throwsAsync(E(tree).lookup('missing'), {
+  await t.throwsAsync(E(tree).lookup(['missing']), {
     message: /Unknown name/,
   });
 });
@@ -5929,7 +5929,7 @@ testNeedsNodeWorker(
       'history rewrite target',
     ]);
 
-    const mount = await E(host).provideMount(repoPath, 'git-history-worktree');
+    const mount = await E(host).provideMount(repoPath, ['git-history-worktree']);
     const ordinaryGit = await E(host).provideGit(mount, 'git-ordinary');
     const gitHistory = await E(host).provideGit(mount, 'git-history', {
       allowHistoryRewrite: true,
@@ -5954,8 +5954,8 @@ testNeedsNodeWorker(
     });
     t.is(amended.summary, 'amended before cancel');
 
-    await E(host).cancel('git-history');
-    const reincarnated = await E(host).lookup('git-history');
+    await E(host).cancel(['git-history']);
+    const reincarnated = await E(host).lookup(['git-history']);
     const reworded = await E(reincarnated).reword(
       'HEAD',
       'reworded after reification',
@@ -5971,7 +5971,7 @@ testNeedsNodeWorker(
     const repoPath = path.join(config.statePath, '..', 'git-identity-repo');
     await createGitFixture(repoPath);
 
-    const mount = await E(host).provideMount(repoPath, 'git-identity-worktree');
+    const mount = await E(host).provideMount(repoPath, ['git-identity-worktree']);
     const gitCap = await E(host).provideGit(mount, 'git-identity', {
       identity: { authorName: 'Ada Agent', authorEmail: 'ada@example.test' },
     });
@@ -5999,8 +5999,8 @@ testNeedsNodeWorker(
 
     // The identity is formula-owned, so it survives deincarnation: cancel the
     // cap and reincarnate it from the persisted formula, then commit again.
-    await E(host).cancel('git-identity');
-    const reincarnated = await E(host).lookup('git-identity');
+    await E(host).cancel(['git-identity']);
+    const reincarnated = await E(host).lookup(['git-identity']);
     await fs.promises.writeFile(
       path.join(repoPath, 'identity.txt'),
       'identity again\n',
@@ -6033,7 +6033,7 @@ testNeedsNodeWorker(
 
     const readOnlyMount = await E(host).provideMount(
       repoPath,
-      'git-readonly-worktree',
+      ['git-readonly-worktree'],
       { readOnly: true },
     );
     await t.throwsAsync(
@@ -6062,7 +6062,7 @@ testNeedsNodeWorker(
 
     const readOnlyMount = await E(host).provideMount(
       repoPath,
-      'git-readonly-declared-worktree',
+      ['git-readonly-declared-worktree'],
       { readOnly: true },
     );
     const gitCap = await E(host).provideGit(
@@ -6091,7 +6091,7 @@ testNeedsNodeWorker(
 
     const writableMount = await E(host).provideMount(
       repoPath,
-      'git-writable-worktree',
+      ['git-writable-worktree'],
     );
     const gitCap = await E(host).provideGit(writableMount, 'git-writable');
     await fs.promises.writeFile(
@@ -6115,7 +6115,7 @@ test('provideGit rejects a malformed commit identity at the host boundary', asyn
   await createGitFixture(repoPath);
   const mount = await E(host).provideMount(
     repoPath,
-    'git-identity-reject-worktree',
+    ['git-identity-reject-worktree'],
   );
 
   // These identities all satisfy the interface guard (both fields are strings)
@@ -6170,7 +6170,7 @@ test('provideGit tree exposes immutable commit contents', async t => {
     'add source',
   ]);
 
-  const mount = await E(host).provideMount(repoPath, 'git-tree-worktree');
+  const mount = await E(host).provideMount(repoPath, ['git-tree-worktree']);
   const gitCap = await E(host).provideGit(mount, 'git-tree-cap');
   const tree = await E(gitCap).tree('HEAD');
   // eslint-disable-next-line no-underscore-dangle
@@ -6179,7 +6179,7 @@ test('provideGit tree exposes immutable commit contents', async t => {
 
   const names = await E(tree).list();
   t.deepEqual(names, ['README.md', 'src']);
-  const src = await E(tree).lookup('src');
+  const src = await E(tree).lookup(['src']);
   t.deepEqual(await E(src).list(), ['alias.js', 'main.js']);
 
   const main = await E(tree).lookup(['src', 'main.js']);
@@ -6212,8 +6212,8 @@ test('provideGit tree exposes immutable commit contents', async t => {
   );
   t.is(await E(main).text(), 'export default 1;\n');
 
-  await E(host).storeTree(tree, 'git-tree-snapshot');
-  const storedTree = await E(host).lookup('git-tree-snapshot');
+  await E(host).storeTree(tree, ['git-tree-snapshot']);
+  const storedTree = await E(host).lookup(['git-tree-snapshot']);
   const storedMain = await E(storedTree).lookup(['src', 'main.js']);
   t.is(await E(storedMain).text(), 'export default 1;\n');
   // The symlink is checked in as a blob whose contents are the link
@@ -6241,8 +6241,8 @@ test('storeTree honors pax extended headers for long paths', async t => {
   ]);
 
   const archiveTree = makeArchiveTree(archive);
-  await E(host).storeTree(archiveTree, 'pax-snapshot');
-  const storedTree = await E(host).lookup('pax-snapshot');
+  await E(host).storeTree(archiveTree, ['pax-snapshot']);
+  const storedTree = await E(host).lookup(['pax-snapshot']);
   // Fail-closed: the unfixed parser rejects the typeflag-`x` header as
   // an "Unsupported tar entry type", so storeTree never reaches here.
   const storedFile = await E(storedTree).lookup(longName);
@@ -6264,9 +6264,9 @@ test('storeTree honors pax linkpath for long symlink targets', async t => {
   ]);
 
   const archiveTree = makeArchiveTree(archive);
-  await E(host).storeTree(archiveTree, 'pax-linkpath-snapshot');
-  const storedTree = await E(host).lookup('pax-linkpath-snapshot');
-  const storedLink = await E(storedTree).lookup('long-link');
+  await E(host).storeTree(archiveTree, ['pax-linkpath-snapshot']);
+  const storedTree = await E(host).lookup(['pax-linkpath-snapshot']);
+  const storedLink = await E(storedTree).lookup(['long-link']);
   t.is(await E(storedLink).text(), longTarget);
 });
 
@@ -6299,7 +6299,7 @@ test('storeTree falls back for export-ignore trees the archive would drop', asyn
     'add export-ignored file',
   ]);
 
-  const mount = await E(host).provideMount(repoPath, 'export-ignore-worktree');
+  const mount = await E(host).provideMount(repoPath, ['export-ignore-worktree']);
   const gitCap = await E(host).provideGit(mount, 'export-ignore-cap');
   const tree = await E(gitCap).tree('HEAD');
 
@@ -6307,11 +6307,11 @@ test('storeTree falls back for export-ignore trees the archive would drop', asyn
   // to the per-entry walk instead of the lossy fast path.
   t.is(await E(tree).archiveLossless(), false);
 
-  await E(host).storeTree(tree, 'export-ignore-snapshot');
-  const storedTree = await E(host).lookup('export-ignore-snapshot');
+  await E(host).storeTree(tree, ['export-ignore-snapshot']);
+  const storedTree = await E(host).lookup(['export-ignore-snapshot']);
   // Fail-closed: the unfixed fast path takes `git archive`, which drops
   // `secret.txt`, so this lookup would reject. The fallback preserves it.
-  const storedSecret = await E(storedTree).lookup('secret.txt');
+  const storedSecret = await E(storedTree).lookup(['secret.txt']);
   t.is(await E(storedSecret).text(), 'keep me\n');
 });
 
@@ -6341,15 +6341,15 @@ test('storeTree falls back for export-subst trees the archive would rewrite', as
     'add export-subst file',
   ]);
 
-  const mount = await E(host).provideMount(repoPath, 'export-subst-worktree');
+  const mount = await E(host).provideMount(repoPath, ['export-subst-worktree']);
   const gitCap = await E(host).provideGit(mount, 'export-subst-cap');
   const tree = await E(gitCap).tree('HEAD');
 
   t.is(await E(tree).archiveLossless(), false);
 
-  await E(host).storeTree(tree, 'export-subst-snapshot');
-  const storedTree = await E(host).lookup('export-subst-snapshot');
-  const storedTemplate = await E(storedTree).lookup('template.txt');
+  await E(host).storeTree(tree, ['export-subst-snapshot']);
+  const storedTree = await E(host).lookup(['export-subst-snapshot']);
+  const storedTemplate = await E(storedTree).lookup(['template.txt']);
   t.is(await E(storedTemplate).text(), '$Format:%H$\n');
 });
 
@@ -6379,15 +6379,15 @@ test('storeTree falls back for info attributes the archive would honor', async t
     'utf-8',
   );
 
-  const mount = await E(host).provideMount(repoPath, 'info-attrs-worktree');
+  const mount = await E(host).provideMount(repoPath, ['info-attrs-worktree']);
   const gitCap = await E(host).provideGit(mount, 'info-attrs-cap');
   const tree = await E(gitCap).tree('HEAD');
 
   t.is(await E(tree).archiveLossless(), false);
 
-  await E(host).storeTree(tree, 'info-attrs-snapshot');
-  const storedTree = await E(host).lookup('info-attrs-snapshot');
-  const storedSecret = await E(storedTree).lookup('secret.txt');
+  await E(host).storeTree(tree, ['info-attrs-snapshot']);
+  const storedTree = await E(host).lookup(['info-attrs-snapshot']);
+  const storedSecret = await E(storedTree).lookup(['secret.txt']);
   t.is(await E(storedSecret).text(), 'keep me\n');
 });
 
@@ -6417,7 +6417,7 @@ test('git tree reports a gitlink as not archive-lossless', async t => {
     'add gitlink',
   ]);
 
-  const mount = await E(host).provideMount(repoPath, 'gitlink-worktree');
+  const mount = await E(host).provideMount(repoPath, ['gitlink-worktree']);
   const gitCap = await E(host).provideGit(mount, 'gitlink-cap');
   const tree = await E(gitCap).tree('HEAD');
 
@@ -6493,7 +6493,7 @@ test('storeTree rejects malformed archiveTar streams', async t => {
   for (const { name, bytes, message } of cases) {
     const archiveTree = makeArchiveTree(bytes);
     // eslint-disable-next-line no-await-in-loop
-    await t.throwsAsync(E(host).storeTree(archiveTree, `bad-${name}`), {
+    await t.throwsAsync(E(host).storeTree(archiveTree, [`bad-${name}`]), {
       message,
     });
   }
@@ -6509,7 +6509,7 @@ testNeedsNodeWorker(
     const { host } = await prepareHost(t);
 
     // Create a value that will appear in the formula store.
-    await E(host).evaluate('@main', '"hello"', [], [], ['val']);
+    await E(host).evaluate(['@main'], '"hello"', [], [], ['val']);
     const locator = await E(host).locate('val');
     const { number: valNumber } = parseId(idFromLocator(locator));
 
@@ -6568,7 +6568,7 @@ test('mount external directory - list and has', async t => {
     'data.json': '{"key": "value"}',
   });
 
-  await E(host).provideMount(mountPath, 'test-mount');
+  await E(host).provideMount(mountPath, ['test-mount']);
   const mount = await E(host).lookup(['test-mount']);
 
   // has() returns true for root.
@@ -6595,10 +6595,10 @@ test('mount external directory - lookup file', async t => {
     'greeting.txt': 'hello from mount',
   });
 
-  await E(host).provideMount(mountPath, 'test-mount-lookup');
+  await E(host).provideMount(mountPath, ['test-mount-lookup']);
   const mount = await E(host).lookup(['test-mount-lookup']);
 
-  const file = await E(mount).lookup('greeting.txt');
+  const file = await E(mount).lookup(['greeting.txt']);
   const text = await E(file).text();
   t.is(text, 'hello from mount');
 
@@ -6619,14 +6619,14 @@ test('mount external directory - lookup subdirectory', async t => {
     'src/utils.js': 'export default {}',
   });
 
-  await E(host).provideMount(mountPath, 'test-mount-subdir');
+  await E(host).provideMount(mountPath, ['test-mount-subdir']);
   const mount = await E(host).lookup(['test-mount-subdir']);
 
-  const srcDir = await E(mount).lookup('src');
+  const srcDir = await E(mount).lookup(['src']);
   const srcEntries = await E(srcDir).list();
   t.deepEqual(srcEntries, ['index.js', 'utils.js']);
 
-  const indexFile = await E(srcDir).lookup('index.js');
+  const indexFile = await E(srcDir).lookup(['index.js']);
   const indexText = await E(indexFile).text();
   t.is(indexText, 'console.log("hi")');
 });
@@ -6637,14 +6637,14 @@ test('mount external directory - write and remove', async t => {
   const mountPath = path.join(config.statePath, '..', 'mount-test-write');
   await createMountFixture(mountPath, {});
 
-  await E(host).provideMount(mountPath, 'test-mount-write');
+  await E(host).provideMount(mountPath, ['test-mount-write']);
   const mount = await E(host).lookup(['test-mount-write']);
 
   // Write a file.
   await E(mount).writeText(['new-file.txt'], 'new content');
   t.true(await E(mount).has('new-file.txt'));
 
-  const file = await E(mount).lookup('new-file.txt');
+  const file = await E(mount).lookup(['new-file.txt']);
   const text = await E(file).text();
   t.is(text, 'new content');
 
@@ -6669,7 +6669,7 @@ test('mount external directory - write creates parent directories', async t => {
   const mountPath = path.join(config.statePath, '..', 'mount-test-mkparents');
   await createMountFixture(mountPath, {});
 
-  await E(host).provideMount(mountPath, 'test-mount-mkparents');
+  await E(host).provideMount(mountPath, ['test-mount-mkparents']);
   const mount = await E(host).lookup(['test-mount-mkparents']);
 
   await E(mount).writeText(['a', 'b', 'c.txt'], 'deep content');
@@ -6703,14 +6703,14 @@ test('mount external directory - move', async t => {
     'original.txt': 'move me',
   });
 
-  await E(host).provideMount(mountPath, 'test-mount-move');
+  await E(host).provideMount(mountPath, ['test-mount-move']);
   const mount = await E(host).lookup(['test-mount-move']);
 
   await E(mount).move(['original.txt'], ['renamed.txt']);
   t.false(await E(mount).has('original.txt'));
   t.true(await E(mount).has('renamed.txt'));
 
-  const file = await E(mount).lookup('renamed.txt');
+  const file = await E(mount).lookup(['renamed.txt']);
   const text = await E(file).text();
   t.is(text, 'move me');
 
@@ -6729,7 +6729,7 @@ test('mount external directory - makeDirectory', async t => {
   const mountPath = path.join(config.statePath, '..', 'mount-test-mkdir');
   await createMountFixture(mountPath, {});
 
-  await E(host).provideMount(mountPath, 'test-mount-mkdir');
+  await E(host).provideMount(mountPath, ['test-mount-mkdir']);
   const mount = await E(host).lookup(['test-mount-mkdir']);
 
   await E(mount).makeDirectory(['sub', 'deep']);
@@ -6751,7 +6751,7 @@ test('mount read-only rejects writes', async t => {
     'existing.txt': 'do not modify',
   });
 
-  await E(host).provideMount(mountPath, 'test-mount-ro', { readOnly: true });
+  await E(host).provideMount(mountPath, ['test-mount-ro'], { readOnly: true });
   const mount = await E(host).lookup(['test-mount-ro']);
 
   // Reading should work.
@@ -6782,7 +6782,7 @@ test('mount readOnly() attenuation', async t => {
     'file.txt': 'content',
   });
 
-  await E(host).provideMount(mountPath, 'test-mount-attenuate');
+  await E(host).provideMount(mountPath, ['test-mount-attenuate']);
   const mount = await E(host).lookup(['test-mount-attenuate']);
 
   const roTree = await E(mount).readOnly();
@@ -6818,7 +6818,7 @@ test('mount dot-dot navigation clamped at root', async t => {
     'inside.txt': 'safe',
   });
 
-  await E(host).provideMount(mountPath, 'test-mount-dotdot');
+  await E(host).provideMount(mountPath, ['test-mount-dotdot']);
   const mount = await E(host).lookup(['test-mount-dotdot']);
 
   // Navigating with .. should be clamped at root.
@@ -6840,7 +6840,7 @@ test('provideSubMount read-only attenuation confines writes', async t => {
 
   // Parent mount is read-WRITE; the sub-mount asks for read-only, so
   // attenuation is an independent per-formula property, not inherited.
-  await E(host).provideMount(mountPath, 'submount-ro-parent');
+  await E(host).provideMount(mountPath, ['submount-ro-parent']);
   await E(host).provideSubMount(
     'submount-ro-parent',
     ['src'],
@@ -6852,7 +6852,7 @@ test('provideSubMount read-only attenuation confines writes', async t => {
   // Reading through the sub-mount works and is rooted at src/.
   t.deepEqual(await E(child).list(), ['main.js']);
   t.true(await E(child).has('main.js'));
-  const file = await E(child).lookup('main.js');
+  const file = await E(child).lookup(['main.js']);
   t.is(await E(file).text(), 'export default 1;\n');
 
   // Every mutation is rejected.
@@ -6885,7 +6885,7 @@ test('provideSubMount isolates the child from parent siblings', async t => {
     'secret.txt': 'SECRET=xyz\n',
   });
 
-  await E(host).provideMount(mountPath, 'submount-iso-parent');
+  await E(host).provideMount(mountPath, ['submount-iso-parent']);
   await E(host).provideSubMount(
     'submount-iso-parent',
     ['src'],
@@ -6918,7 +6918,7 @@ test('provideSubMount clamps a .. subpath at the parent root', async t => {
   });
 
   // Mount only the nested `proj` directory as the parent.
-  await E(host).provideMount(path.join(rootPath, 'proj'), 'clamp-parent');
+  await E(host).provideMount(path.join(rootPath, 'proj'), ['clamp-parent']);
 
   // A `..` subpath would lexically point at `submount-clamp` (which holds
   // topsecret.txt), but formulateSubMount clamps it at the parent root,
@@ -6945,7 +6945,7 @@ test('provideSubMount cannot widen a read-only parent to read-write', async t =>
   // read-only child regardless of the requested flag.  (Design
   // daemon-mount.md § Read-only attenuation: a read-only mount "cannot be
   // upgraded to read-write through any API path".)
-  await E(host).provideMount(mountPath, 'monotonic-parent', {
+  await E(host).provideMount(mountPath, ['monotonic-parent'], {
     readOnly: true,
   });
   await E(host).provideSubMount(
@@ -6990,7 +6990,7 @@ test('provideSubMount rejects a symlinked subpath that escapes the parent', asyn
     'dir',
   );
 
-  await E(host).provideMount(path.join(rootPath, 'proj'), 'symlink-parent');
+  await E(host).provideMount(path.join(rootPath, 'proj'), ['symlink-parent']);
 
   // A sub-mount rooted at the symlink would resolve (via realpath) to
   // `outside/`, escaping the parent — formulateSubMount must throw.
@@ -7003,7 +7003,7 @@ test('provideSubMount rejects a symlinked subpath that escapes the parent', asyn
 test('scratch mount - create and use', async t => {
   const { host, config } = await prepareHost(t);
 
-  await E(host).provideScratchMount('test-scratch');
+  await E(host).provideScratchMount(['test-scratch']);
   const scratch = await E(host).lookup(['test-scratch']);
 
   // Initially empty.
@@ -7014,7 +7014,7 @@ test('scratch mount - create and use', async t => {
   await E(scratch).writeText(['notes.txt'], 'scratch content');
   t.true(await E(scratch).has('notes.txt'));
 
-  const file = await E(scratch).lookup('notes.txt');
+  const file = await E(scratch).lookup(['notes.txt']);
   const text = await E(file).text();
   t.is(text, 'scratch content');
 
@@ -7029,7 +7029,7 @@ test('scratch mount persists across restart', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    await E(host).provideScratchMount('persist-scratch');
+    await E(host).provideScratchMount(['persist-scratch']);
     const scratch = await E(host).lookup(['persist-scratch']);
     await E(scratch).writeText(['data.txt'], 'survives restart');
   }
@@ -7041,7 +7041,7 @@ test('scratch mount persists across restart', async t => {
     const scratch = await E(host).lookup(['persist-scratch']);
     const entries = await E(scratch).list();
     t.deepEqual(entries, ['data.txt']);
-    const file = await E(scratch).lookup('data.txt');
+    const file = await E(scratch).lookup(['data.txt']);
     const text = await E(file).text();
     t.is(text, 'survives restart');
   }
@@ -7093,7 +7093,7 @@ test('mount followNameChanges yields snapshot in alphabetical order', async t =>
     'gamma.txt': 'g',
   });
 
-  await E(host).provideMount(mountPath, 'follow-snapshot-mount');
+  await E(host).provideMount(mountPath, ['follow-snapshot-mount']);
   const mount = await E(host).lookup(['follow-snapshot-mount']);
 
   const iter = iterateReader(await E(mount).followNameChanges());
@@ -7121,7 +7121,7 @@ test('mount followNameChanges yields directory type for subdirectories', async t
     'subdir/nested.txt': 'nested',
   });
 
-  await E(host).provideMount(mountPath, 'follow-types-mount');
+  await E(host).provideMount(mountPath, ['follow-types-mount']);
   const mount = await E(host).lookup(['follow-types-mount']);
 
   const iter = iterateReader(await E(mount).followNameChanges());
@@ -7141,7 +7141,7 @@ test('mount followNameChanges reports a live file addition', async t => {
   const mountPath = path.join(config.statePath, '..', 'mount-follow-add');
   await createMountFixture(mountPath, {});
 
-  await E(host).provideMount(mountPath, 'follow-add-mount');
+  await E(host).provideMount(mountPath, ['follow-add-mount']);
   const mount = await E(host).lookup(['follow-add-mount']);
 
   const iter = iterateReader(await E(mount).followNameChanges());
@@ -7170,7 +7170,7 @@ test('mount followNameChanges reports a live file removal', async t => {
   const mountPath = path.join(config.statePath, '..', 'mount-follow-rm');
   await createMountFixture(mountPath, { 'doomed.txt': 'goodbye' });
 
-  await E(host).provideMount(mountPath, 'follow-rm-mount');
+  await E(host).provideMount(mountPath, ['follow-rm-mount']);
   const mount = await E(host).lookup(['follow-rm-mount']);
 
   const iter = iterateReader(await E(mount).followNameChanges());
@@ -7201,7 +7201,7 @@ test('mount followNameChanges on a subdirectory does not see siblings', async t 
     'sub/inner.txt': 'inner',
   });
 
-  await E(host).provideMount(mountPath, 'follow-subdir-mount');
+  await E(host).provideMount(mountPath, ['follow-subdir-mount']);
   const mount = await E(host).lookup(['follow-subdir-mount']);
 
   const subIter = iterateReader(await E(mount).followNameChanges('sub'));
@@ -7256,7 +7256,7 @@ test('mount followNameChanges filters confinement-escaping symlinks from snapsho
   await fs.promises.writeFile(path.join(mountRoot, 'inside.txt'), 'inside');
   await fs.promises.symlink(outsidePath, path.join(mountRoot, 'escape'));
 
-  await E(host).provideMount(mountRoot, 'follow-confined-mount');
+  await E(host).provideMount(mountRoot, ['follow-confined-mount']);
   const mount = await E(host).lookup(['follow-confined-mount']);
 
   const iter = iterateReader(await E(mount).followNameChanges());
@@ -7274,7 +7274,7 @@ test('mount followNameChanges scratch-mount parity: snapshot + live add', async 
   t.timeout(30_000);
   const { host } = await prepareHost(t);
 
-  await E(host).provideScratchMount('follow-scratch');
+  await E(host).provideScratchMount(['follow-scratch']);
   const scratch = await E(host).lookup(['follow-scratch']);
   await E(scratch).writeText(['seed.txt'], 'seeded');
 
@@ -7303,7 +7303,7 @@ test('mount followNameChanges releases watcher when iterator is returned', async
   const mountPath = path.join(config.statePath, '..', 'mount-follow-cleanup');
   await createMountFixture(mountPath, {});
 
-  await E(host).provideMount(mountPath, 'follow-cleanup-mount');
+  await E(host).provideMount(mountPath, ['follow-cleanup-mount']);
   const mount = await E(host).lookup(['follow-cleanup-mount']);
 
   const iter = iterateReader(await E(mount).followNameChanges());
@@ -7329,14 +7329,14 @@ test('provideHostPath resolves Mount caps to host paths', async t => {
   //    the path we originally supplied.
   const mountPath = path.join(config.statePath, '..', 'host-path-mount');
   await createMountFixture(mountPath, { 'sentinel.txt': 'present' });
-  await E(host).provideMount(mountPath, 'host-path-mount');
+  await E(host).provideMount(mountPath, ['host-path-mount']);
   const mount = await E(host).lookup(['host-path-mount']);
   const resolved = await E(host).provideHostPath(mount);
   t.is(resolved, mountPath);
 
   // 2. Mint a daemon-managed scratch mount and verify its host path
   //    lives under <statePath>/mounts/.
-  await E(host).provideScratchMount('host-path-scratch');
+  await E(host).provideScratchMount(['host-path-scratch']);
   const scratch = await E(host).lookup(['host-path-scratch']);
   const scratchPath = await E(host).provideHostPath(scratch);
   const expectedScratchRoot = path.join(config.statePath, 'mounts');
@@ -7349,7 +7349,7 @@ test('provideHostPath resolves Mount caps to host paths', async t => {
   //    that the daemon does not register against a formula identifier.
   //    provideHostPath must reject them with a structured error rather
   //    than silently returning the parent mount's path.
-  const subdir = await E(mount).lookup('sentinel.txt'); // a Mount file
+  const subdir = await E(mount).lookup(['sentinel.txt']); // a Mount file
   await t.throwsAsync(() => E(host).provideHostPath(subdir), {
     message: /not a daemon-minted mount/,
   });
@@ -7374,7 +7374,7 @@ test('provideHostPath is an EndoHost-only capability not reachable through an En
 
   const mountPath = path.join(config.statePath, '..', 'host-path-danger-mount');
   await createMountFixture(mountPath, { 'sentinel.txt': 'present' });
-  await E(host).provideMount(mountPath, 'host-path-danger-mount');
+  await E(host).provideMount(mountPath, ['host-path-danger-mount']);
 
   // The host can resolve the cap to its real path: that *is* the
   // danger — calling code that holds an EndoHost can map any mount
@@ -7386,7 +7386,7 @@ test('provideHostPath is an EndoHost-only capability not reachable through an En
   // `provideHostPath` method on its method set.  Less-trusted code
   // that should not learn host filesystem paths receives a guest, not
   // an EndoHost; this is the attenuation the platform relies on.
-  const guest = await E(host).provideGuest('danger-guest', {
+  const guest = await E(host).provideGuest(['danger-guest'], {
     agentName: 'danger-guest-agent',
   });
   // eslint-disable-next-line no-underscore-dangle
@@ -7434,7 +7434,7 @@ test('provideHostPath rejects a spoof that passes the MountCap shape gate', asyn
   // the same session.
   const mountPath = path.join(config.statePath, '..', 'shape-gate-mount');
   await createMountFixture(mountPath, { 'sentinel.txt': 'real' });
-  await E(host).provideMount(mountPath, 'shape-gate-mount');
+  await E(host).provideMount(mountPath, ['shape-gate-mount']);
   const realMount = await E(host).lookup(['shape-gate-mount']);
   t.is(await E(host).provideHostPath(realMount), mountPath);
 
@@ -7502,16 +7502,16 @@ test('mount file writeText and json', async t => {
     'config.json': '{"version": 1}',
   });
 
-  await E(host).provideMount(mountPath, 'test-mount-fm');
+  await E(host).provideMount(mountPath, ['test-mount-fm']);
   const mount = await E(host).lookup(['test-mount-fm']);
 
   // json() method.
-  const configFile = await E(mount).lookup('config.json');
+  const configFile = await E(mount).lookup(['config.json']);
   const jsonValue = await E(configFile).json();
   t.deepEqual(jsonValue, { version: 1 });
 
   // writeText() method.
-  await E(configFile).writeText('{"version": 2}');
+  await E(configFile).writeText(['{"version": 2}']);
   const updated = await E(configFile).json();
   t.deepEqual(updated, { version: 2 });
 
@@ -7533,8 +7533,8 @@ test('mount entry descriptors support has, lookup, stat, makeFile, and provenanc
   });
   await createMountFixture(otherPath, {});
 
-  await E(host).provideMount(mountPath, 'test-mount-entry');
-  await E(host).provideMount(otherPath, 'test-mount-entry-other');
+  await E(host).provideMount(mountPath, ['test-mount-entry']);
+  await E(host).provideMount(otherPath, ['test-mount-entry-other']);
   const mount = await E(host).lookup(['test-mount-entry']);
   const otherMount = await E(host).lookup(['test-mount-entry-other']);
 
@@ -7578,24 +7578,24 @@ test('mount snapshots capture immutable tree and file views', async t => {
     'nested/file.txt': 'nested',
   });
 
-  await E(host).provideMount(mountPath, 'test-mount-snapshot');
+  await E(host).provideMount(mountPath, ['test-mount-snapshot']);
   const mount = await E(host).lookup(['test-mount-snapshot']);
 
   const snapshotTree = await E(mount).snapshot();
-  const snapshotFile = await E(snapshotTree).lookup('live.txt');
-  const liveFile = await E(mount).lookup('live.txt');
+  const snapshotFile = await E(snapshotTree).lookup(['live.txt']);
+  const liveFile = await E(mount).lookup(['live.txt']);
 
   const snapshotBlob = await E(liveFile).snapshot();
 
-  await E(liveFile).writeText('changed');
+  await E(liveFile).writeText(['changed']);
   await E(mount).writeText(['nested', 'file.txt'], 'changed nested');
 
   t.is(await E(snapshotFile).text(), 'initial');
   t.is(await E(snapshotBlob).text(), 'initial');
   t.is(await E(liveFile).text(), 'changed');
 
-  const nestedSnapshotDir = await E(snapshotTree).lookup('nested');
-  const nestedSnapshotFile = await E(nestedSnapshotDir).lookup('file.txt');
+  const nestedSnapshotDir = await E(snapshotTree).lookup(['nested']);
+  const nestedSnapshotFile = await E(nestedSnapshotDir).lookup(['file.txt']);
   t.is(await E(nestedSnapshotFile).text(), 'nested');
 });
 
@@ -7673,7 +7673,7 @@ test('mount symlink - internal absolute symlink is visible and usable', async t 
   );
   const { mountRoot } = await createSymlinkFixture(basePath);
 
-  await E(host).provideMount(mountRoot, 'sym-int-abs');
+  await E(host).provideMount(mountRoot, ['sym-int-abs']);
   const mount = await E(host).lookup(['sym-int-abs']);
 
   // Internal absolute symlink should appear in list.
@@ -7684,12 +7684,12 @@ test('mount symlink - internal absolute symlink is visible and usable', async t 
   t.true(await E(mount).has('internal-abs'));
 
   // lookup() should work — it's a directory symlink to subdir.
-  const linked = await E(mount).lookup('internal-abs');
+  const linked = await E(mount).lookup(['internal-abs']);
   const linkedEntries = await E(linked).list();
   t.deepEqual(linkedEntries, ['nested.txt']);
 
   // Reading a file through the symlinked directory should work.
-  const nestedFile = await E(linked).lookup('nested.txt');
+  const nestedFile = await E(linked).lookup(['nested.txt']);
   const text = await E(nestedFile).text();
   t.is(text, 'nested content');
 });
@@ -7704,7 +7704,7 @@ test('mount symlink - internal relative symlink is visible and usable', async t 
   );
   const { mountRoot } = await createSymlinkFixture(basePath);
 
-  await E(host).provideMount(mountRoot, 'sym-int-rel');
+  await E(host).provideMount(mountRoot, ['sym-int-rel']);
   const mount = await E(host).lookup(['sym-int-rel']);
 
   // Internal relative symlink should appear in list.
@@ -7715,12 +7715,12 @@ test('mount symlink - internal relative symlink is visible and usable', async t 
   t.true(await E(mount).has('internal-rel'));
 
   // lookup() should work.
-  const linked = await E(mount).lookup('internal-rel');
+  const linked = await E(mount).lookup(['internal-rel']);
   const linkedEntries = await E(linked).list();
   t.deepEqual(linkedEntries, ['nested.txt']);
 
   // Reading through the symlink should work.
-  const nestedFile = await E(linked).lookup('nested.txt');
+  const nestedFile = await E(linked).lookup(['nested.txt']);
   const text = await E(nestedFile).text();
   t.is(text, 'nested content');
 });
@@ -7735,7 +7735,7 @@ test('mount symlink - escaping absolute dir symlink hidden from list, rejected o
   );
   const { mountRoot } = await createSymlinkFixture(basePath);
 
-  await E(host).provideMount(mountRoot, 'sym-esc-abs');
+  await E(host).provideMount(mountRoot, ['sym-esc-abs']);
   const mount = await E(host).lookup(['sym-esc-abs']);
 
   // Escaping absolute symlink should be filtered from list().
@@ -7746,7 +7746,7 @@ test('mount symlink - escaping absolute dir symlink hidden from list, rejected o
   t.false(await E(mount).has('escape-abs'));
 
   // lookup() should reject.
-  await t.throwsAsync(E(mount).lookup('escape-abs'), {
+  await t.throwsAsync(E(mount).lookup(['escape-abs']), {
     message: /escapes mount root/,
   });
 });
@@ -7761,7 +7761,7 @@ test('mount symlink - escaping relative dir symlink hidden from list, rejected o
   );
   const { mountRoot } = await createSymlinkFixture(basePath);
 
-  await E(host).provideMount(mountRoot, 'sym-esc-rel');
+  await E(host).provideMount(mountRoot, ['sym-esc-rel']);
   const mount = await E(host).lookup(['sym-esc-rel']);
 
   // Escaping relative symlink should be filtered from list().
@@ -7772,7 +7772,7 @@ test('mount symlink - escaping relative dir symlink hidden from list, rejected o
   t.false(await E(mount).has('escape-rel'));
 
   // lookup() should reject.
-  await t.throwsAsync(E(mount).lookup('escape-rel'), {
+  await t.throwsAsync(E(mount).lookup(['escape-rel']), {
     message: /escapes mount root/,
   });
 });
@@ -7787,7 +7787,7 @@ test('mount symlink - escaping absolute file symlink hidden and rejected', async
   );
   const { mountRoot } = await createSymlinkFixture(basePath);
 
-  await E(host).provideMount(mountRoot, 'sym-esc-file-abs');
+  await E(host).provideMount(mountRoot, ['sym-esc-file-abs']);
   const mount = await E(host).lookup(['sym-esc-file-abs']);
 
   // Escaping file symlink should be filtered from list().
@@ -7798,7 +7798,7 @@ test('mount symlink - escaping absolute file symlink hidden and rejected', async
   t.false(await E(mount).has('escape-file-abs'));
 
   // lookup() should reject.
-  await t.throwsAsync(E(mount).lookup('escape-file-abs'), {
+  await t.throwsAsync(E(mount).lookup(['escape-file-abs']), {
     message: /escapes mount root/,
   });
 });
@@ -7813,7 +7813,7 @@ test('mount symlink - escaping relative file symlink hidden and rejected', async
   );
   const { mountRoot } = await createSymlinkFixture(basePath);
 
-  await E(host).provideMount(mountRoot, 'sym-esc-file-rel');
+  await E(host).provideMount(mountRoot, ['sym-esc-file-rel']);
   const mount = await E(host).lookup(['sym-esc-file-rel']);
 
   // Escaping file symlink should be filtered from list().
@@ -7824,7 +7824,7 @@ test('mount symlink - escaping relative file symlink hidden and rejected', async
   t.false(await E(mount).has('escape-file-rel'));
 
   // lookup() should reject.
-  await t.throwsAsync(E(mount).lookup('escape-file-rel'), {
+  await t.throwsAsync(E(mount).lookup(['escape-file-rel']), {
     message: /escapes mount root/,
   });
 });
@@ -7839,7 +7839,7 @@ test('Phase 7: makeFromTree runs a caplet from a mounted source tree', async t =
     packageDir,
     async treeName =>
       E(host).makeFromTree(undefined, treeName, {
-        powersName: '@none',
+        powersName: ['@none'],
         env: { HELLO: 'from-tree' },
       }),
   );
@@ -7860,8 +7860,8 @@ test('Phase 7: makeFromTree persists and reincarnates the caplet', async t => {
     );
     await doMakeFromTreeViaMount(host, config, packageDir, async treeName =>
       E(host).makeFromTree(undefined, treeName, {
-        powersName: '@none',
-        resultName: 'tree-caplet',
+        powersName: ['@none'],
+        resultName: ['tree-caplet'],
         env: { HELLO: 'persist' },
       }),
     );
@@ -7871,7 +7871,7 @@ test('Phase 7: makeFromTree persists and reincarnates the caplet', async t => {
 
   {
     const { host } = await makeHost(config, cancelled);
-    const caplet = await E(host).lookup('tree-caplet');
+    const caplet = await E(host).lookup(['tree-caplet']);
     // @ts-expect-error narrowed at runtime
     t.is(await E(caplet).getEnvVar('HELLO'), 'persist');
   }
@@ -7897,13 +7897,13 @@ test('Phase 8: stageTree materialises a ReadableTree into a scratch mount', asyn
     fs.mkdirSync(path.dirname(fullPath), { recursive: true });
     fs.writeFileSync(fullPath, file.content);
   }
-  await E(host).provideMount(srcDir, 'src-mount', { readOnly: true });
+  await E(host).provideMount(srcDir, ['src-mount'], { readOnly: true });
 
   // Stage it.
-  const scratch = await E(host).stageTree('src-mount', 'staged');
+  const scratch = await E(host).stageTree(['src-mount'], ['staged']);
 
   // The staged mount has the same compartment-map.json content.
-  const text = await E(scratch).readText('compartment-map.json');
+  const text = await E(scratch).readText(['compartment-map.json']);
   t.regex(text, /"entry"/);
 });
 
@@ -7914,10 +7914,10 @@ test('stageTree preserves binary blobs in a scratch mount', async t => {
   fs.mkdirSync(srcDir, { recursive: true });
   const expected = Buffer.from([0, 159, 146, 150, 255, 65, 10]);
   fs.writeFileSync(path.join(srcDir, 'bytes.bin'), expected);
-  await E(host).provideMount(srcDir, 'binary-src-mount', { readOnly: true });
+  await E(host).provideMount(srcDir, ['binary-src-mount'], { readOnly: true });
 
-  const scratch = await E(host).stageTree('binary-src-mount', 'binary-staged');
-  const file = await E(scratch).lookup('bytes.bin');
+  const scratch = await E(host).stageTree(['binary-src-mount'], ['binary-staged']);
+  const file = await E(scratch).lookup(['bytes.bin']);
   const reader = iterateBytesReader(file);
   const chunks = [];
   for await (const chunk of reader) {
@@ -7948,13 +7948,13 @@ testNeedsNodeWorker(
     `,
     );
 
-    await E(host).provideMount(srcDir, 'unconf-tree', { readOnly: true });
+    await E(host).provideMount(srcDir, ['unconf-tree'], { readOnly: true });
 
     const caplet = await E(host).makeUnconfinedFromTree(
       undefined,
-      'unconf-tree',
+      ['unconf-tree'],
       {
-        powersName: '@none',
+        powersName: ['@none'],
         env: { HELLO: 'stage' },
       },
     );
@@ -7973,11 +7973,11 @@ test('Phase 7: makeFromTree errors clearly when compartment-map.json is missing'
     path.join(srcDir, 'index.js'),
     'export const make = () => 1;',
   );
-  await E(host).provideMount(srcDir, 'no-map-tree', { readOnly: true });
+  await E(host).provideMount(srcDir, ['no-map-tree'], { readOnly: true });
 
   await t.throwsAsync(
     async () =>
-      E(host).makeFromTree(undefined, 'no-map-tree', { powersName: '@none' }),
+      E(host).makeFromTree(undefined, ['no-map-tree'], { powersName: ['@none'] }),
     { message: /compartment-map\.json|Unknown name/ },
   );
 });
@@ -7991,23 +7991,23 @@ test('Phase 7: makeFromTree errors clearly when compartment-map.json is malforme
     path.join(srcDir, 'compartment-map.json'),
     'this is not json',
   );
-  await E(host).provideMount(srcDir, 'bad-map-tree', { readOnly: true });
+  await E(host).provideMount(srcDir, ['bad-map-tree'], { readOnly: true });
 
   await t.throwsAsync(
     async () =>
-      E(host).makeFromTree(undefined, 'bad-map-tree', { powersName: '@none' }),
+      E(host).makeFromTree(undefined, ['bad-map-tree'], { powersName: ['@none'] }),
     { message: /compartment-map\.json|JSON|Unexpected/ },
   );
 });
 
-test('Phase 6: host.lookup("@node") resolves to a worker', async t => {
+test('Phase 6: host.lookup(["@node"]) resolves to a worker', async t => {
   const { host } = await prepareHost(t);
 
-  const nodeWorker = await E(host).lookup('@node');
+  const nodeWorker = await E(host).lookup(['@node']);
   t.truthy(nodeWorker);
 
   // provideWorker('@node') returns the same formula identifier.
-  const sameWorker = await E(host).provideWorker('@node');
+  const sameWorker = await E(host).provideWorker(['@node']);
   t.truthy(sameWorker);
   const nodeId = await E(host).identify('@node');
   const provideId = await E(host).identify('@node');
@@ -8053,12 +8053,12 @@ testNeedsNodeWorker(
     // Calling makeUnconfined with workerName=undefined should resolve
     // to the host's @node worker rather than spawning a fresh one.
     const hubA = await E(host).makeUnconfined(undefined, nameHubPath, {
-      powersName: '@none',
-      resultName: 'unconfined-a',
+      powersName: ['@none'],
+      resultName: ['unconfined-a'],
     });
     const hubB = await E(host).makeUnconfined(undefined, nameHubPath, {
-      powersName: '@none',
-      resultName: 'unconfined-b',
+      powersName: ['@none'],
+      resultName: ['unconfined-b'],
     });
     t.truthy(hubA);
     t.truthy(hubB);
@@ -8070,14 +8070,14 @@ testNeedsNodeWorker(
   },
 );
 
-test('Phase 6: guest.lookup("@node") rejects', async t => {
+test('Phase 6: guest.lookup(["@node"]) rejects', async t => {
   const { host } = await prepareHost(t);
 
   // provideGuest returns the EndoGuest directly (lookup returns the
   // handle, which lacks lookup/list/etc. — see daemon AGENTS.md).
-  const guest = await E(host).provideGuest('alice');
+  const guest = await E(host).provideGuest(['alice']);
 
-  await t.throwsAsync(async () => E(guest).lookup('@node'), {
+  await t.throwsAsync(async () => E(guest).lookup(['@node']), {
     message: /Invalid pet name "@node"/,
   });
 });
@@ -8088,7 +8088,7 @@ test('mount symlink - all symlink types together in one listing', async t => {
   const basePath = path.join(config.statePath, '..', 'mount-test-symlink-all');
   const { mountRoot } = await createSymlinkFixture(basePath);
 
-  await E(host).provideMount(mountRoot, 'sym-all');
+  await E(host).provideMount(mountRoot, ['sym-all']);
   const mount = await E(host).lookup(['sym-all']);
 
   const entries = await E(mount).list();
@@ -8124,7 +8124,7 @@ test('mount denies sensitive segments through the mount formula', async t => {
     'README.md': 'readme',
   });
 
-  await E(host).provideMount(mountPath, 'deny-mount');
+  await E(host).provideMount(mountPath, ['deny-mount']);
   const mount = await E(host).lookup(['deny-mount']);
 
   // The listing hides every denied name but keeps the ordinary dotfile.
@@ -8133,7 +8133,7 @@ test('mount denies sensitive segments through the mount formula', async t => {
   await t.throwsAsync(() => E(mount).readText(['.ssh', 'id_rsa']), {
     message: /restricted path/,
   });
-  await t.throwsAsync(() => E(mount).readText('.env'), {
+  await t.throwsAsync(() => E(mount).readText(['.env']), {
     message: /restricted path/,
   });
 });
@@ -8147,7 +8147,7 @@ test('cancelling the mount formula revokes live mount and file handles', async t
     'top.txt': 'top',
   });
 
-  await E(host).provideMount(mountPath, 'revoke-mount');
+  await E(host).provideMount(mountPath, ['revoke-mount']);
   const mount = await E(host).lookup(['revoke-mount']);
   // Hand out live faces before cancelling the formula.
   const subView = await E(mount).subView('src');
@@ -8155,7 +8155,7 @@ test('cancelling the mount formula revokes live mount and file handles', async t
   t.is(await E(file).text(), 'export default 1;');
 
   // Cancelling the formula runs the daemon's onCancel hook, which revokes.
-  await E(host).cancel('revoke-mount');
+  await E(host).cancel(['revoke-mount']);
 
   await t.throwsAsync(() => E(mount).list(), { message: /revoked/ });
   await t.throwsAsync(() => E(subView).list(), { message: /revoked/ });
@@ -8575,9 +8575,9 @@ test.serial(
 
 test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t => {
   const { host } = await prepareHost(t);
-  const directory = await E(host).makeDirectory('backing-dir');
-  await E(host).storeValue(1, 'one-src');
-  await E(host).storeValue(2, 'two-src');
+  const directory = await E(host).makeDirectory(['backing-dir']);
+  await E(host).storeValue(1, ['one-src']);
+  await E(host).storeValue(2, ['two-src']);
   const oneId = await E(host).identify('one-src');
   const twoId = await E(host).identify('two-src');
   await E(directory).storeIdentifier(['one'], oneId);
@@ -8590,10 +8590,10 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
   t.true(await E(readOnlyDirectory).has('one'));
   t.false(await E(readOnlyDirectory).has('absent'));
   t.is(
-    await E(readOnlyDirectory).lookup('one'),
-    await E(directory).lookup('one'),
+    await E(readOnlyDirectory).lookup(['one']),
+    await E(directory).lookup(['one']),
   );
-  t.is(await E(readOnlyDirectory).maybeLookup('absent'), undefined);
+  t.is(await E(readOnlyDirectory).maybeLookup(['absent']), undefined);
 
   // The read-only view exposes no mutators at all. The expectation pins "no
   // such method" by name, so a passing assertion cannot be a coincidental
@@ -8609,7 +8609,7 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
     'remove is not available on a read-only view',
   );
   await t.throwsAsync(
-    E(/** @type {any} */ (readOnlyDirectory)).makeDirectory('nested'),
+    E(/** @type {any} */ (readOnlyDirectory)).makeDirectory(['nested']),
     { message: /makeDirectory/ },
     'makeDirectory is not available on a read-only view',
   );
@@ -8632,7 +8632,7 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
 
   // A live write to the backing directory is observable through the view,
   // confirming it is a live attenuation rather than a snapshot.
-  await E(host).storeValue(3, 'three-src');
+  await E(host).storeValue(3, ['three-src']);
   const threeId = await E(host).identify('three-src');
   await E(directory).storeIdentifier(['three'], threeId);
   t.true(await E(readOnlyDirectory).has('three'));
@@ -8640,10 +8640,10 @@ test('EndoDirectory.readOnly() mirrors reads and rejects every mutator', async t
 
 test('EndoDirectory.readOnly() attenuation is shallow: nested directories are handed out live and writable', async t => {
   const { host } = await prepareHost(t);
-  const directory = await E(host).makeDirectory('backing-dir-shallow');
+  const directory = await E(host).makeDirectory(['backing-dir-shallow']);
   // A nested directory under the backing directory.
-  const nested = await E(directory).makeDirectory('nested');
-  await E(host).storeValue(1, 'seed-src');
+  const nested = await E(directory).makeDirectory(['nested']);
+  await E(host).storeValue(1, ['seed-src']);
   const seedId = await E(host).identify('seed-src');
   await E(nested).storeIdentifier(['seed'], seedId);
 
@@ -8653,8 +8653,8 @@ test('EndoDirectory.readOnly() attenuation is shallow: nested directories are ha
   // live, fully-writable nested directory — NOT a further read-only view. This
   // is the security-relevant half of the documented contract: attenuation is
   // shallow, so a holder of the read-only view can mutate one level down.
-  const nestedViaView = await E(readOnlyDirectory).lookup('nested');
-  await E(host).storeValue(2, 'added-src');
+  const nestedViaView = await E(readOnlyDirectory).lookup(['nested']);
+  await E(host).storeValue(2, ['added-src']);
   const addedId = await E(host).identify('added-src');
   // The write through the looked-up nested directory succeeds — proving it is
   // the live capability, not a read-only attenuation.
@@ -8669,7 +8669,7 @@ test('EndoDirectory.readOnly() attenuation is shallow: nested directories are ha
 
 test('EndoDirectory.readOnly() is memoized: repeated calls return the same view', async t => {
   const { host } = await prepareHost(t);
-  const directory = await E(host).makeDirectory('backing-dir-memo');
+  const directory = await E(host).makeDirectory(['backing-dir-memo']);
   const first = await E(directory).readOnly();
   const second = await E(directory).readOnly();
   // Memoized per directory: the same capability is returned each call, rather
@@ -8684,9 +8684,9 @@ test('mailHub.readOnly() mirrors reads and rejects every mutator', async t => {
   // capture and the guard round-trip through `makeExo` — not just the shared
   // factory the unit test exercises in isolation.
   const { host } = await prepareHost(t);
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
   const hostMessages = iterateReader(E(host).followMessages());
-  await E(guest).send('@host', ['hello'], [], []);
+  await E(guest).send(['@host'], ['hello'], [], []);
   await hostMessages.next();
 
   const mailHub = await E(host).lookup(['@mail']);
@@ -8704,7 +8704,7 @@ test('mailHub.readOnly() mirrors reads and rejects every mutator', async t => {
     'remove is not available on the mailbox read-only view',
   );
   await t.throwsAsync(
-    E(/** @type {any} */ (readOnlyMail)).makeDirectory('nested'),
+    E(/** @type {any} */ (readOnlyMail)).makeDirectory(['nested']),
     { message: /makeDirectory/ },
     'makeDirectory is not available on the mailbox read-only view',
   );
@@ -8720,9 +8720,9 @@ test('messageHub.readOnly() mirrors reads and rejects every mutator', async t =>
   // `readOnly()` call site in manager.js. Same eager-mint shape as the mailbox
   // hub, exercised here through a real daemon.
   const { host } = await prepareHost(t);
-  const guest = E(host).provideGuest('guest');
+  const guest = E(host).provideGuest(['guest']);
   const hostMessages = iterateReader(E(host).followMessages());
-  await E(guest).send('@host', ['hello'], [], []);
+  await E(guest).send(['@host'], ['hello'], [], []);
   const { value: hostMessage } = await hostMessages.next();
   await E(host).reply(hostMessage.number, ['hi'], [], []);
   const { value: replyMessage } = await hostMessages.next();
@@ -8753,7 +8753,7 @@ test('EndoHost/EndoGuest do not carry readOnly() at runtime today', async t => {
   // This pins that documented gap: a future accidental widening of the agent
   // interfaces to include `readOnly` would redden here rather than silently ship.
   const { host } = await prepareHost(t);
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest(['guest']);
   await t.throwsAsync(
     E(/** @type {any} */ (host)).readOnly(),
     { message: /readOnly/ },

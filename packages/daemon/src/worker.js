@@ -114,7 +114,7 @@ export const makeWorkerFacet = ({ cancel }) => {
         // returns a blob Exo (ReadableTree) or MountFile Exo (Mount);
         // both expose `.text()`.
         const mapBlob = await E(/** @type {any} */ (treeP)).lookup(
-          'compartment-map.json',
+          ['compartment-map.json'],
         );
         const mapText = await E(/** @type {any} */ (mapBlob)).text();
         /** @type {{ compartments: Record<string, any> }} */

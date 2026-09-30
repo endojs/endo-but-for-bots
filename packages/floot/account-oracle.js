@@ -42,13 +42,13 @@ export const make = async (powers, _context, { env } = {}) => {
   const provideDeclared = async () => {
     await null;
     if (!(await E(powers).has('account-profile'))) return undefined;
-    return E(powers).lookup('account-profile');
+    return E(powers).lookup(['account-profile']);
   };
 
   const provideObserved = async () => {
     await null;
     if (!(await E(powers).has('account-source'))) return undefined;
-    const source = await E(powers).lookup('account-source');
+    const source = await E(powers).lookup(['account-source']);
     return E(source).observe();
   };
 

@@ -31,8 +31,8 @@ export const main = async (powers, _context, { env = {} } = {}) => {
   const relayDomain = env.WS_RELAY_DOMAIN || new URL(relayUrl).hostname;
 
   await E(powers).makeUnconfined(undefined, wsRelaySpecifier, {
-    powersName: '@agent',
-    resultName: 'network-service-ws-relay',
+    powersName: ['@agent'],
+    resultName: ['network-service-ws-relay'],
     env: {
       WS_RELAY_URL: relayUrl,
       WS_RELAY_DOMAIN: relayDomain,

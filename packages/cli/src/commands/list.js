@@ -233,7 +233,7 @@ export const list = async ({
             await null;
             return {
               ...entry,
-              value: await E(agent).lookup(entry.petName),
+              value: await E(agent).lookup([entry.petName]),
             };
           }),
         );
@@ -251,7 +251,7 @@ export const list = async ({
 
     for await (const petName of petNames) {
       if (verbose) {
-        const val = await E(agent).lookup(petName);
+        const val = await E(agent).lookup([petName]);
         console.log(`${petName}${pad(petName, 20)}${prettyValue(val)}`);
       } else {
         console.log(petName);

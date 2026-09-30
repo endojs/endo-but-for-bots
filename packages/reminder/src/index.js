@@ -15,10 +15,10 @@
  * everything it needs by name through it and holds no ambient authority beyond
  * the Node worker it runs in:
  *
- * - `E(powers).lookup('reminder-store')` -> a writable virtual-file-system
+ * - `E(powers).lookup(['reminder-store'])` -> a writable virtual-file-system
  *   directory backing the durable store (`./store.js`). The backing may be a
  *   host directory, an in-memory tree, a daemon mount, or a database.
- * - `E(powers).lookup('reminder-recipient')` -> the subscriber capability the
+ * - `E(powers).lookup(['reminder-recipient'])` -> the subscriber capability the
  *   service is bound to. Phase 2 delivers each reminder message by eventual-send
  *   to `E(recipient).notify(message)`, carrying the one-shot `ReminderResponse`
  *   as an argument. Because the capability is re-resolved by name on every
@@ -100,8 +100,8 @@ const parseOptionalInteger = (value, name) => {
  * @returns {Promise<import('./types.js').ReminderServiceExo>}
  */
 export const make = async (powers, context, { env = {} } = {}) => {
-  const storeDirectory = await E(powers).lookup('reminder-store');
-  const recipient = await E(powers).lookup('reminder-recipient');
+  const storeDirectory = await E(powers).lookup(['reminder-store']);
+  const recipient = await E(powers).lookup(['reminder-recipient']);
   const store = await makeReminderStore(storeDirectory, makeRandomHexId);
 
   const maxActive = parseOptionalInteger(env.maxActive, 'maxActive');

@@ -131,7 +131,7 @@ test('reclaims an empty scratch-mount backing directory', async t => {
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
 
-  await E(host).provideScratchMount('untouched-scratch');
+  await E(host).provideScratchMount(['untouched-scratch']);
   const scratchId = await E(host).identify('untouched-scratch');
   const { number: formulaNumber } = parseId(scratchId);
   const dirPath = mountPathOf(config.statePath, formulaNumber);
@@ -157,7 +157,7 @@ test('does not throw when a scratch-mount backing directory is already missing',
   const { cancelled, config } = await prepareConfig(t);
   const { host } = await makeHost(config, cancelled);
 
-  await E(host).provideScratchMount('vanishing-scratch');
+  await E(host).provideScratchMount(['vanishing-scratch']);
   const scratchId = await E(host).identify('vanishing-scratch');
   const { number: formulaNumber } = parseId(scratchId);
   const dirPath = mountPathOf(config.statePath, formulaNumber);
@@ -173,7 +173,7 @@ test('does not throw when a scratch-mount backing directory is already missing',
   await new Promise(resolve => setTimeout(resolve, 200));
 
   // Verify the daemon is still responsive.
-  await E(host).storeValue('still-alive', 'sentinel');
+  await E(host).storeValue('still-alive', ['sentinel']);
   t.is(await E(host).lookup(['sentinel']), 'still-alive');
 });
 
@@ -187,7 +187,7 @@ test('does not throw when a content-store blob is already missing', async t => {
   const readerRef = bytesReaderFromIterator([
     new TextEncoder().encode('about-to-vanish'),
   ]);
-  const blob = await E(host).storeBlob(readerRef, 'phantom-blob');
+  const blob = await E(host).storeBlob(readerRef, ['phantom-blob']);
   const sha256 = await E(blob).sha256();
   const filePath = contentPathOf(config.statePath, sha256);
 
@@ -201,7 +201,7 @@ test('does not throw when a content-store blob is already missing', async t => {
   await new Promise(resolve => setTimeout(resolve, 200));
 
   // Daemon is still responsive.
-  await E(host).storeValue('still-alive', 'sentinel');
+  await E(host).storeValue('still-alive', ['sentinel']);
   t.is(await E(host).lookup(['sentinel']), 'still-alive');
 });
 
@@ -218,7 +218,7 @@ test('reclaims many distinct content hashes across sequential collections', asyn
     // eslint-disable-next-line no-await-in-loop
     const blob = await E(host).storeBlob(
       bytesReaderFromIterator([bytes]),
-      `batch-${i}`,
+      [`batch-${i}`],
     );
     // eslint-disable-next-line no-await-in-loop
     const sha = await E(blob).sha256();
@@ -266,7 +266,7 @@ test('retains a shared hash when one of many collected formulas references it', 
   const sharedBytes = new TextEncoder().encode('the-shared-content');
   const survivor = await E(host).storeBlob(
     bytesReaderFromIterator([sharedBytes]),
-    'keepsake',
+    ['keepsake'],
   );
   const sharedSha = await E(survivor).sha256();
 
@@ -277,7 +277,7 @@ test('retains a shared hash when one of many collected formulas references it', 
     // eslint-disable-next-line no-await-in-loop
     const blob = await E(host).storeBlob(
       bytesReaderFromIterator([new TextEncoder().encode(`distractor-${i}`)]),
-      `distractor-${i}`,
+      [`distractor-${i}`],
     );
     // eslint-disable-next-line no-await-in-loop
     distractorShas.push(await E(blob).sha256());
@@ -285,7 +285,7 @@ test('retains a shared hash when one of many collected formulas references it', 
   // The dedupe-against-survivor blob.
   const twin = await E(host).storeBlob(
     bytesReaderFromIterator([sharedBytes]),
-    'doomed-twin',
+    ['doomed-twin'],
   );
   t.is(await E(twin).sha256(), sharedSha);
 

@@ -17,8 +17,8 @@ const ConnectionInterface = M.interface('DevReviewConnection', {
  * @param {any} powers - guest with service and factory-id in its pet store
  */
 export const make = async powers => {
-  const service = await E(powers).lookup('service');
-  const fid = await E(powers).lookup('factory-id');
+  const service = await E(powers).lookup(['service']);
+  const fid = await E(powers).lookup(['factory-id']);
   const ownRun = async runId => {
     const run = await E(service).run(runId);
     if ((await E(run).status()).factory !== fid)

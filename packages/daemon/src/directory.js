@@ -158,7 +158,7 @@ export const makeDirectoryMaker = ({
       /** @type {any} */
       let directory = value;
       for (const petName of tailNames) {
-        directory = E(directory).lookup(petName);
+        directory = E(directory).lookup([petName]);
       }
       return /** @type {Promise<unknown>} */ (directory);
     };
@@ -176,7 +176,7 @@ export const makeDirectoryMaker = ({
       return tailNames.reduce(
         (directory, petName) =>
           /** @type {Promise<NameHub>} */ (
-            /** @type {unknown} */ (E(directory).lookup(petName))
+            /** @type {unknown} */ (E(directory).lookup([petName]))
           ),
         /** @type {Promise<NameHub>} */ (/** @type {unknown} */ (value)),
       );
@@ -297,7 +297,7 @@ export const makeDirectoryMaker = ({
       const names = controller.list();
       const values = names.map(name => {
         try {
-          return lookup(name);
+          return lookup([name]);
         } catch (error) {
           return Promise.reject(error);
         }

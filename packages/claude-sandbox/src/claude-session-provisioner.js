@@ -87,8 +87,8 @@ export const makeClaudeSessionProvisioner = (
     powers.makeFilesystem ||
     (async (name, directory) => {
       await mkdir(directory, { recursive: true });
-      await E(hostAgent).makeUnconfined('@main', nodeFsModuleSpecifier, {
-        powersName: '@none',
+      await E(hostAgent).makeUnconfined(['@main'], nodeFsModuleSpecifier, {
+        powersName: ['@none'],
         resultName: name,
         env: harden({ ENDO_FS_ROOT: directory }),
       });

@@ -465,7 +465,7 @@ test('a crash between minting the powers guest and tucking it away heals on the 
   const orphanedGuest = root.get(
     'profile-for-floot-deploy-endo-factory-handle',
   );
-  const fidsBefore = await E(orphanedGuest).lookup('factory-ids');
+  const fidsBefore = await E(orphanedGuest).lookup(['factory-ids']);
   t.is(fidsBefore.length, 1);
 
   // The next run adopts the existing guest by its agent name rather than
@@ -481,7 +481,7 @@ test('a crash between minting the powers guest and tucking it away heals on the 
     factoryHost.grants.get('deploy-endo-factory'),
   );
   t.is((await E(connection).describe()).fid, fidsBefore[0]);
-  t.deepEqual(await E(orphanedGuest).lookup('factory-ids'), fidsBefore);
+  t.deepEqual(await E(orphanedGuest).lookup(['factory-ids']), fidsBefore);
 });
 
 test('stray names from a crash inside guest provisioning are cleared before minting', async t => {
@@ -555,7 +555,7 @@ test('a transient service failure skips the grant for one boot instead of mintin
   // no second factory is minted behind the same connection.
   hiccup = true;
   await provision(root, factoryHost);
-  t.deepEqual(await E(guest).lookup('factory-ids'), [fid]);
+  t.deepEqual(await E(guest).lookup(['factory-ids']), [fid]);
   t.is(
     root.resolveLocator(factoryHost.grants.get('deploy-endo-factory')),
     connection,
@@ -563,7 +563,7 @@ test('a transient service failure skips the grant for one boot instead of mintin
 
   // The next boot re-binds as usual, still over the one factory.
   await provision(root, factoryHost);
-  t.deepEqual(await E(guest).lookup('factory-ids'), [fid]);
+  t.deepEqual(await E(guest).lookup(['factory-ids']), [fid]);
   t.not(
     root.resolveLocator(factoryHost.grants.get('deploy-endo-factory')),
     connection,

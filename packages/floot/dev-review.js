@@ -252,14 +252,14 @@ export const provisionDevReview = async ({
   const resolverName = `review-resolver-${projectName}`;
   await E(host).storeValue(project, projectPowersName);
   await E(host).makeUnconfined(
-    '@main',
+    ['@main'],
     new URL('./review-reader.js', import.meta.url).href,
     { powersName: projectPowersName, resultName: readerName },
   );
   const reader = await E(host).lookup(readerName);
   await E(developer).storeValue(project, projectName);
   await E(host).makeUnconfined(
-    '@main',
+    ['@main'],
     new URL('./review-project.js', import.meta.url).href,
     { powersName: readerName, resultName: resolverName },
   );
@@ -288,14 +288,14 @@ export const provisionDevReview = async ({
   );
   const connectionPowersName = `review-connection-powers-${projectName}`;
   const connectionName = `review-connection-${projectName}`;
-  await E(host).provideGuest(`review-connection-handle-${projectName}`, {
+  await E(host).provideGuest([`review-connection-handle-${projectName}`], {
     agentName: connectionPowersName,
   });
   const connectionPowers = await E(host).lookup(connectionPowersName);
-  await E(connectionPowers).storeValue(service, 'service');
-  await E(connectionPowers).storeValue(result.fid, 'factory-id');
+  await E(connectionPowers).storeValue(service, ['service']);
+  await E(connectionPowers).storeValue(result.fid, ['factory-id']);
   await E(host).makeUnconfined(
-    '@main',
+    ['@main'],
     new URL('./review-connection.js', import.meta.url).href,
     { powersName: connectionPowersName, resultName: connectionName },
   );

@@ -64,12 +64,12 @@ every object returned from an E() call (channels, members, etc.).
 
 Common patterns:
   const names = await E(powers).list();
-  const ch    = await E(powers).lookup("my-channel");
+  const ch    = await E(powers).lookup(["my-channel"]);
   const member = await E(ch).join("jaine");
   const msgs  = await E(member).listMessages();
   await E(member).post(["Hello!"], [], []);
-  await E(powers).adopt(42n, "edgeName", "petName");
-  await E(powers).send("recipient", ["message text"], [], []);
+  await E(powers).adopt(42n, "edgeName", ["petName"]);
+  await E(powers).send(["recipient"], ["message text"], [], []);
 
 SES environment restrictions:
 - new Date() throws. Use Date.now() for timestamps.
@@ -315,7 +315,7 @@ const makeRequestPermissionTool = powers => {
             ];
 
       await E(powers).form(
-        '@host',
+        ['@host'],
         `Jaine permission request: ${description}`,
         harden(formFields),
       );

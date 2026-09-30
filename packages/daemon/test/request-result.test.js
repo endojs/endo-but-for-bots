@@ -41,12 +41,12 @@ test.serial(
     });
     await start(config);
     const host = await connect();
-    await E(host).storeValue(10, 'ten');
-    const guest = await E(host).provideGuest('guest', {
+    await E(host).storeValue(10, ['ten']);
+    const guest = await E(host).provideGuest(['guest'], {
       agentName: 'guest-powers',
     });
     const messages = iterateReader(E(guest).followMessages());
-    E.sendOnly(guest).request('@host', 'need a number');
+    E.sendOnly(guest).request(['@host'], 'need a number');
     await messages.next();
     await stop(config);
     await start(config);
@@ -61,7 +61,7 @@ test.serial(
       '@result',
     ]);
     resultP.catch(() => {});
-    await E(recovered).resolve(request.number, 'ten');
+    await E(recovered).resolve(request.number, ['ten']);
     t.is(await resultP, 10);
   },
 );

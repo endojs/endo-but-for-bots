@@ -105,7 +105,7 @@ test.serial(
     // Store a passable value under a pet name; this writes a
     // pet-store edge from @self's pet store to the marshal formula
     // that holds the value.
-    await E(host).storeValue('marker-value', 'marker');
+    await E(host).storeValue('marker-value', ['marker']);
     const markerLocator = await E(host).locate('marker');
     t.truthy(markerLocator);
 
@@ -165,7 +165,7 @@ test.serial(
     // the same store. Both names refer to the same marshal
     // formula, so its retention-path set must include `pet:` edges
     // for each.
-    await E(host).storeValue('shared-value', 'first-name');
+    await E(host).storeValue('shared-value', ['first-name']);
     await E(host).copy(['first-name'], ['second-name']);
     const locator = await E(host).locate('first-name');
     t.truthy(locator);

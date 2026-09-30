@@ -29,8 +29,8 @@ export const main = async powers => {
   }
   await E(powers).provideWorker(irohWorker);
   await E(powers).makeUnconfined(irohWorker, irohSpecifier, {
-    powersName: '@agent',
-    resultName: 'network-service-iroh',
+    powersName: ['@agent'],
+    resultName: ['network-service-iroh'],
   });
 
   await E(powers).move(['network-service-iroh'], ['@nets', 'iroh']);

@@ -8,7 +8,7 @@ export const helpTextEntries = harden([
   [
     'EndoDirectory',
     {
-      '': 'EndoDirectory - A naming hub for managing pet names and references.\n\nA directory maps pet names to formula identifiers (internal references).\nPet names are strings like "my-worker", "counter", or "index.html".\nSpecial names are @-prefixed like "@self", "@host", or "@agent".\n\nUse lookup() to get a value by name, list() to see available names,\nand storeIdentifier() or storeLocator() to store new references.',
+      '': 'EndoDirectory - A naming hub for managing pet names and references.\n\nA directory maps pet names to formula identifiers (internal references).\nPet names are strings like "my-worker", "counter", or "index.html".\nSpecial names are @-prefixed like "@self", "@host", or "@agent".\nA pet-name path is an array of path components, like ["counter"] or\n["subdir", "value"]. Methods that take a pet-name path reject a bare string:\na string is never split on a delimiter, so pass ["subdir", "value"], not\n"subdir/value".\n\nUse lookup() to get a value by name, list() to see available names,\nand storeIdentifier() or storeLocator() to store new references.',
       help: 'help(methodName?) -> string\nGet documentation for this interface or a specific method.\n- help() returns an overview of the interface\n- help("lookup") returns documentation for the lookup method',
       has: 'has(...petNamePath) -> Promise<boolean>\nCheck if a pet name exists in this directory.\n- has("counter") checks if "counter" exists\n- has("subdir", "value") checks if "value" exists in subdirectory "subdir"',
       identify:
@@ -25,13 +25,13 @@ export const helpTextEntries = harden([
       followNameChanges:
         'followNameChanges() -> AsyncIterator\nSubscribe to all name changes in this directory.\nFirst yields existing names, then yields diffs as names change.\nUse with for-await-of to receive updates.',
       lookup:
-        'lookup(petNameOrPath) -> Promise<any>\nResolve a pet name or path to its value.\n- lookup("counter") gets the value named "counter"\n- lookup(["subdir", "value"]) gets "value" from subdirectory "subdir"\nThrows if the name doesn\'t exist.',
+        'lookup(petNamePath) -> Promise<any>\nResolve a pet-name path (an array of path components) to its value.\n- lookup(["counter"]) gets the value named "counter"\n- lookup(["subdir", "value"]) gets "value" from subdirectory "subdir"\nThrows if the name doesn\'t exist.',
       reverseLookup:
         'reverseLookup(value) -> Promise<string[]>\nFind all pet names that refer to a given value.\nUseful for discovering what names exist for an object you have.',
       storeIdentifier:
-        'storeIdentifier(petNameOrPath, formulaId) -> Promise<void>\nStore a formula identifier with a pet name.\n- storeIdentifier("my-name", id) stores id as "my-name"\n- storeIdentifier(["subdir", "name"], id) stores in a subdirectory\nOverwrites any existing value at that name.',
+        'storeIdentifier(petNamePath, formulaId) -> Promise<void>\nStore a formula identifier with a pet name.\n- storeIdentifier(["my-name"], id) stores id as "my-name"\n- storeIdentifier(["subdir", "name"], id) stores in a subdirectory\nOverwrites any existing value at that name.',
       storeLocator:
-        'storeLocator(petNameOrPath, locator) -> Promise<void>\nStore an endo:// locator with a pet name.\n- storeLocator("my-name", locator) stores locator as "my-name"\n- storeLocator(["subdir", "name"], locator) stores in a subdirectory\nThe locator must be an endo:// URL. Overwrites any existing value.',
+        'storeLocator(petNamePath, locator) -> Promise<void>\nStore an endo:// locator with a pet name.\n- storeLocator(["my-name"], locator) stores locator as "my-name"\n- storeLocator(["subdir", "name"], locator) stores in a subdirectory\nThe locator must be an endo:// URL. Overwrites any existing value.',
       remove:
         'remove(...petNamePath) -> Promise<void>\nRemove a pet name from this directory.\nThe underlying value is not deleted, just the name mapping.',
       move: 'move(fromPath, toPath) -> Promise<void>\nMove/rename a reference from one name to another.\n- move(["old-name"], ["new-name"]) renames within this directory\n- move(["a"], ["subdir", "b"]) moves to a subdirectory\nThe original name is removed after the move.',
@@ -39,11 +39,11 @@ export const helpTextEntries = harden([
       makeDirectory:
         'makeDirectory(petNamePath) -> Promise<EndoDirectory>\nCreate a new subdirectory at the given path.\nReturns the new directory object.',
       readText:
-        'readText(petNameOrPath) -> Promise<string>\nRead text content by pet name or path.\nFor a single name, reads the blob\'s text content.\nFor a multi-segment path, reads through the mount.\nExample: readText(["my-blob"])\nExample: readText(["my-mount", "config.json"])',
+        'readText(petNamePath) -> Promise<string>\nRead text content by pet-name path.\nFor a single name, reads the blob\'s text content.\nFor a multi-segment path, reads through the mount.\nExample: readText(["my-blob"])\nExample: readText(["my-mount", "config.json"])',
       maybeReadText:
-        'maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
+        'maybeReadText(petNamePath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
       writeText:
-        'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
+        'writeText(petNamePath, content) -> Promise<void>\nWrite text content by pet-name path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
       readOnly:
         "readOnly() -> Promise<ReadableNameHub>\nMint a read-only ReadableNameHub view of this directory.\nThe view exposes only the readable surface (help, has, list, lookup, maybeLookup) and withholds every mutator.\nAttenuation is shallow: only this directory's own mutators are withheld. A looked-up value is returned live, so a nested directory (or any name bound back to a writable capability, including one naming this directory itself or an ancestor) comes back fully writable; the narrowing reaches only one hop, not the transitively reachable name graph. A holder needing a recursively read-only surface must re-attenuate results itself.\nThe view is transient: it lives only within the running daemon, carries no formula identity, and cannot be named, stored, or re-reached after a restart. After the backing directory is revoked the view forwards no further reads; but a capability already returned by an earlier lookup is unaffected (and, per the shallow-attenuation caveat above, may itself remain fully writable).",
     },
@@ -72,22 +72,22 @@ export const helpTextEntries = harden([
       followMessages:
         'followMessages() -> AsyncIterator<Message>\nSubscribe to incoming messages.\nFirst yields existing messages, then yields new ones as they arrive.\nUse with for-await-of:\n  for await (const message of E(guest).followMessages()) { ... }',
       resolve:
-        'resolve(messageNumber, petNameOrPath) -> Promise<void>\nRespond to a request message by providing a named value.\n- resolve(0, "my-counter") responds to message 0 with the value named "my-counter"\nThe requester receives the resolved value.',
+        'resolve(messageNumber, petNamePath) -> Promise<void>\nRespond to a request message by providing a named value.\n- resolve(0, ["my-counter"]) responds to message 0 with the value named "my-counter"\nThe requester receives the resolved value.',
       reject:
         'reject(messageNumber, reason?) -> Promise<void>\nDecline a request message.\n- reject(0) declines message 0\n- reject(0, "Not available") declines with a reason\nThe requester receives an error.',
       adopt:
-        'adopt(messageNumber, edgeName, petName) -> Promise<void>\nAdopt a value from an incoming package message, giving it a pet name.\n- adopt(0, "gift", "my-new-thing") takes "gift" from message 0, names it "my-new-thing"\nEdge names are the labels the sender attached to values in the package.',
+        'adopt(messageNumber, edgeName, petName) -> Promise<void>\nAdopt a value from an incoming package message, giving it a pet name.\n- adopt(0, "gift", ["my-new-thing"]) takes "gift" from message 0, names it "my-new-thing"\nEdge names are the labels the sender attached to values in the package.',
       dismiss:
         "dismiss(messageNumber) -> Promise<void>\nRemove a message from the inbox.\nUse after you've processed a message.",
       dismissAll:
         'dismissAll() -> Promise<void>\nRemove all messages from the inbox.',
       request:
-        'request(recipientName, description, responseName?) -> Promise<any>\nSend a request to another agent asking for a capability.\n- request("@host", "a counter") asks @host for "a counter"\n- request("@host", "a counter", "my-counter") also stores the response as "my-counter"\nThe recipient sees your request and can resolve or reject it.',
-      send: 'send(recipientName, strings, edgeNames, petNames) -> Promise<void>\nSend a package message with values to another agent.\n- strings: Text fragments that form the message\n- edgeNames: Labels for the values being sent\n- petNames: Names of values to include\n\nExample: send("@host", ["Here is ", " for you"], ["gift"], ["my-counter"])\n  Sends: "Here is @gift for you" where @gift refers to "my-counter"',
+        'request(recipientName, description, responseName?) -> Promise<any>\nSend a request to another agent asking for a capability.\n- request(["@host"], "a counter") asks @host for "a counter"\n- request(["@host"], "a counter", ["my-counter"]) also stores the response as "my-counter"\nThe recipient sees your request and can resolve or reject it.',
+      send: 'send(recipientName, strings, edgeNames, petNames) -> Promise<void>\nSend a package message with values to another agent.\n- strings: Text fragments that form the message\n- edgeNames: Labels for the values being sent\n- petNames: Names of values to include\n\nExample: send(["@host"], ["Here is ", " for you"], ["gift"], [["my-counter"]])\n  Sends: "Here is @gift for you" where @gift refers to "my-counter"',
       storeValue:
-        "storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value in the agent's directory.\nValues must be passable (numbers, strings, arrays, records, etc.).",
+        "storeValue(value, petNamePath) -> Promise<void>\nStore a passable value in the agent's directory.\nValues must be passable (numbers, strings, arrays, records, etc.).",
       sendValue:
-        'sendValue(messageNumber, petNameOrPath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNameOrPath: Pet name (or path) of the value to send\n\nExample: sendValue(0, "my-counter")',
+        'sendValue(messageNumber, petNamePath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNamePath: Pet-name path (an array of path components) of the value to send\n\nExample: sendValue(0, ["my-counter"])',
       deliver:
         'deliver(message) -> void\nInternal method to deliver a message to this mailbox.\nTypically not called directly by users.',
     },
@@ -101,25 +101,25 @@ export const helpTextEntries = harden([
         'reverseIdentify(formulaId) -> string[]\nFind all pet names that refer to a given formula identifier.\nSynchronous version of reverse lookup by identifier.',
       define:
         'define(source, slots) -> Promise<any>\nPropose code with named capability slots for the host to endow.\nThe guest specifies code and named slots with descriptions.\nThe host sees the code and slot descriptions, then decides which capabilities\nto provide for each slot using the endow() command.\n\n- source: JavaScript code to evaluate\n- slots: Record of slot descriptions, e.g. { counter: { label: "A counter to increment" } }\n\nThe host reviews the code and slots, then calls endow() to bind capabilities\nand trigger evaluation. This separates code proposal from capability binding.\n\nExample: define("E(counter).incr()", { counter: { label: "A counter capability" } })',
-      form: 'form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient\'s inbox. They can submit values using submit().\n\n- recipientName: Pet name of the recipient (e.g., "@host")\n- description: Human-readable description of the form\n- fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]\n\nExample: form("@host", "Configure settings", [{ name: "name", label: "Your name" }])',
+      form: 'form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient\'s inbox. They can submit values using submit().\n\n- recipientName: Pet name of the recipient (e.g., "@host")\n- description: Human-readable description of the form\n- fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]\n\nExample: form(["@host"], "Configure settings", [{ name: "name", label: "Your name" }])',
       storeBlob:
         'storeBlob(readerRef, petName?) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: An async iterator yielding base64-encoded strings\n- petName: Name to store the blob under\nReturns a readable blob reference.',
       storeValue:
-        'storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) in your directory.\n- storeValue(42, "answer") stores the number 42 as "answer"\n- storeValue({x: 1, y: 2}, "point") stores a record as "point"\n- storeValue(["a", "b"], ["subdir", "items"]) stores in a subdirectory\nValues must be passable (no functions or non-transferable objects).',
+        'storeValue(value, petNamePath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) in your directory.\n- storeValue(42, ["answer"]) stores the number 42 as "answer"\n- storeValue({x: 1, y: 2}, ["point"]) stores a record as "point"\n- storeValue(["a", "b"], ["subdir", "items"]) stores in a subdirectory\nValues must be passable (no functions or non-transferable objects).',
       submit:
         'submit(messageNumber, values) -> Promise<void>\nSubmit values for a form message. Each call creates a new value message\nin reply to the form, allowing multiple submissions.\n\n- messageNumber: The inbox message number of the form\n- values: A record with keys matching the form\'s field definitions\n\nExample: submit(0, { name: "Alice", age: 30 })',
       sendValue:
-        'sendValue(messageNumber, petNameOrPath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNameOrPath: Pet name (or path) of the value to send\n\nExample: sendValue(0, "my-counter")',
+        'sendValue(messageNumber, petNamePath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNamePath: Pet-name path (an array of path components) of the value to send\n\nExample: sendValue(0, ["my-counter"])',
       readText:
-        'readText(petNameOrPath) -> Promise<string>\nRead text content by pet name or path.\nFor a single name, reads the blob\'s text content.\nFor a multi-segment path, reads through the mount.\nExample: readText(["my-blob"])\nExample: readText(["my-mount", "config.json"])',
+        'readText(petNamePath) -> Promise<string>\nRead text content by pet-name path.\nFor a single name, reads the blob\'s text content.\nFor a multi-segment path, reads through the mount.\nExample: readText(["my-blob"])\nExample: readText(["my-mount", "config.json"])',
       maybeReadText:
-        'maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
+        'maybeReadText(petNamePath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
       writeText:
-        'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
+        'writeText(petNamePath, content) -> Promise<void>\nWrite text content by pet-name path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
       invite:
-        'invite(correspondentName) -> Promise<Invitation>\nMint a single-use invitation whose locator names this guest\'s own handle, so an\nacceptor becomes a peer of this guest (not of the top host). Bind the acceptor\nunder correspondentName once they accept. Hand the returned invitation\'s\nlocate() string to the invitee out of band.\nExample: invite("new-neighbor")',
+        'invite(correspondentName) -> Promise<Invitation>\nMint a single-use invitation whose locator names this guest\'s own handle, so an\nacceptor becomes a peer of this guest (not of the top host). Bind the acceptor\nunder correspondentName once they accept. Hand the returned invitation\'s\nlocate() string to the invitee out of band.\nExample: invite(["new-neighbor"])',
       accept:
-        'accept(invitationLocator, correspondentName) -> Promise<void>\nRedeem an invitation locator into this guest, binding the relationship to the\ncalling guest — no replacement guest is minted. This guest accepts as itself;\nthe inviter\'s handle is bound under correspondentName, a pet name this guest\nchooses (the inviter chooses its own independently, so they may differ).\nExample: accept(invitationLocator, "my-neighbor")',
+        'accept(invitationLocator, correspondentName) -> Promise<void>\nRedeem an invitation locator into this guest, binding the relationship to the\ncalling guest — no replacement guest is minted. This guest accepts as itself;\nthe inviter\'s handle is bound under correspondentName, a pet name this guest\nchooses (the inviter chooses its own independently, so they may differ).\nExample: accept(invitationLocator, ["my-neighbor"])',
     },
   ],
   [
@@ -130,21 +130,21 @@ export const helpTextEntries = harden([
       storeBlob:
         'storeBlob(readerRef, petName) -> Promise<EndoReadable>\nStore binary data as a blob with a pet name.\n- readerRef: An async iterator yielding base64-encoded strings\n- petName: Name to store the blob under\nReturns a readable blob reference.',
       storeValue:
-        'storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) with a name.\n- storeValue(42, "answer") stores the number 42\n- storeValue({x: 1, y: 2}, "point") stores a record',
+        'storeValue(value, petNamePath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) with a name.\n- storeValue(42, ["answer"]) stores the number 42\n- storeValue({x: 1, y: 2}, ["point"]) stores a record',
       provideGuest:
-        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest("my-guest") creates/retrieves a named guest\nOptions: { agentName, introducedNames, pins, networks }',
+        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest(["my-guest"]) creates/retrieves a named guest\nOptions: { agentName, introducedNames, pins, networks }',
       provideHost:
-        'provideHost(petName?, options?) -> Promise<EndoHost>\nCreate or retrieve another host agent.\n- provideHost() creates an anonymous host\n- provideHost("my-host") creates/retrieves a named host\nOptions: { agentName, introducedNames, pins, networks }',
+        'provideHost(petName?, options?) -> Promise<EndoHost>\nCreate or retrieve another host agent.\n- provideHost() creates an anonymous host\n- provideHost(["my-host"]) creates/retrieves a named host\nOptions: { agentName, introducedNames, pins, networks }',
       provideWorker:
         'provideWorker(petNamePath) -> Promise<EndoWorker>\nCreate or retrieve a worker for running code.\nWorkers are isolated JavaScript environments.',
       evaluate:
-        'evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>\nEvaluate JavaScript code in a worker with named endowments.\n- workerName: Worker to use (undefined for new worker)\n- source: JavaScript code string\n- codeNames: Names visible in the code\n- petNames: Pet names providing values for those names\n- resultName: Optional name to store the result\n\nExample: evaluate(undefined, "x + y", ["x", "y"], ["a", "b"], ["result"])\n  Runs "x + y" where x=lookup("a"), y=lookup("b"), stores result as "result"',
+        'evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>\nEvaluate JavaScript code in a worker with named endowments.\n- workerName: Worker to use (undefined for new worker)\n- source: JavaScript code string\n- codeNames: Names visible in the code\n- petNames: Pet names providing values for those names\n- resultName: Optional name to store the result\n\nExample: evaluate(undefined, "x + y", ["x", "y"], [["a"], ["b"]], ["result"])\n  Runs "x + y" where x=lookup(["a"]), y=lookup(["b"]), stores result as "result"',
       makeUnconfined:
         "makeUnconfined(workerName, specifier, options?) -> Promise<any>\nLoad and instantiate an unconfined module (has access to Node.js APIs).\n- workerName: Worker to use (undefined for new worker)\n- specifier: Module path or URL\n- options: Optional object with:\n  - powersName: Pet name of the powers to grant (default: '@none')\n  - resultName: Pet name or path to store the result\n  - env: Environment variables as { KEY: \"value\" } record\n\nThe module's make(powers, context, { env }) function is called.",
       makeArchive:
         "makeArchive(workerName, archiveName, options?) -> Promise<any>\nInstantiate a module from a source-only ZIP archive (a\n`compartment-map.json` plus modules in their original mjs/cjs\nsources, with no precompiled module formats).\n- workerName: Worker to use (undefined for new worker)\n- archiveName: Pet name of the readable blob holding the archive\n- options: Optional object with:\n  - powersName: Pet name of the powers to grant (default: '@none')\n  - resultName: Pet name or path to store the result\n  - env: Environment variables as { KEY: \"value\" } record\n\nThe module's make(powers, context, { env }) function is called.\nThe archive bytes are streamed to the worker and parsed via\n`@endo/compartment-mapper`'s `parseArchive`.  The Rust supervisor's\nworkers read the same archive content directly from the CAS.",
       cancel:
-        'cancel(petNameOrPath, reason?) -> Promise<void>\nCancel a value, triggering cleanup and releasing resources.\nCancellation propagates to dependent values.',
+        'cancel(petNamePath, reason?) -> Promise<void>\nCancel a value, triggering cleanup and releasing resources.\nCancellation propagates to dependent values.',
       greeter:
         'greeter() -> Promise<EndoGreeter>\nGet the greeter for accepting network connections.',
       gateway:
@@ -156,18 +156,18 @@ export const helpTextEntries = harden([
       locateWithHints:
         'locateWithHints(...petNamePath) -> Promise<string | undefined>\nLocate a formula and return a locator URL with connection hints.\nThe returned locator includes network addresses from all registered netlayers,\nallowing remote peers to connect and access the value.\nExample: locateWithHints("my-channel") returns a shareable locator URL.',
       adoptFromLocator:
-        'adoptFromLocator(locator, petNameOrPath) -> Promise<void>\nAdopt a value from a locator that includes connection hints.\nParses the locator to extract peer info, establishes a connection if needed,\nand writes the formula ID into the local pet store.\nExample: adoptFromLocator("endo://node.../formula@hint?type=channel", "remote-channel")',
+        'adoptFromLocator(locator, petNamePath) -> Promise<void>\nAdopt a value from a locator that includes connection hints.\nParses the locator to extract peer info, establishes a connection if needed,\nand writes the formula ID into the local pet store.\nExample: adoptFromLocator("endo://node.../formula@hint?type=channel", ["remote-channel"])',
       invite:
         "invite(correspondentName) -> Promise<Invitation>\nMint a single-use invitation and bind the correspondent under correspondentName\nonce they accept. Hand the returned invitation's locate() string to the invitee\nout of band.",
       accept:
         "accept(invitationLocator, correspondentName) -> Promise<void>\nRedeem an invitation locator, binding the inviter's handle reciprocally under\ncorrespondentName — no synthetic local guest is minted.",
       endow:
         'endow(messageNumber, bindings, workerName?, resultName?) -> Promise<void>\nBind capabilities to a guest\'s code definition and evaluate it.\nThis is the host-side counterpart to the guest\'s define() method.\n\n- messageNumber: The definition message number\n- bindings: Record mapping slot names to pet names, e.g. { counter: "my-counter" }\n- workerName: Optional worker to use for evaluation\n- resultName: Optional pet name to store the result\n\nThe host decides which capabilities to provide for each slot.\nThe code proposed by the guest runs with these host-chosen bindings.\n\nExample: endow(0, { counter: "my-counter" })',
-      form: 'form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient\'s inbox. They can submit values using submit().\n\n- recipientName: Pet name or path of the recipient\n- description: Human-readable description of what the form is for\n- fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]\n\nExample: form("@host", "Configure settings", [{ name: "name", label: "Name" }, { name: "email", label: "Email" }])',
+      form: 'form(recipientName, description, fields) -> Promise<void>\nSend a structured form to another agent.\nThe form appears in the recipient\'s inbox. They can submit values using submit().\n\n- recipientName: Pet name or path of the recipient\n- description: Human-readable description of what the form is for\n- fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]\n\nExample: form(["@host"], "Configure settings", [{ name: "name", label: "Name" }, { name: "email", label: "Email" }])',
       submit:
         'submit(messageNumber, values) -> Promise<void>\nSubmit values for a form message. Each call creates a new value message\nin reply to the form, allowing multiple submissions.\n\n- messageNumber: The form message number\n- values: Record mapping field names to values, e.g. { name: "Alice" }\n\nEach value must match the pattern specified by the form field (if any).\nFields without explicit patterns default to M.string().\n\nExample: submit(0, { name: "Alice", age: 30 })',
       sendValue:
-        'sendValue(messageNumber, petNameOrPath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNameOrPath: Pet name (or path) of the value to send\n\nExample: sendValue(0, "my-counter")',
+        'sendValue(messageNumber, petNamePath) -> Promise<void>\nReply to any message with a retained value from your pet store.\n\n- messageNumber: The inbox message number to reply to\n- petNamePath: Pet-name path (an array of path components) of the value to send\n\nExample: sendValue(0, ["my-counter"])',
       getFormulaGraph:
         "getFormulaGraph() -> Promise<{ nodes, edges }>\nReturns a snapshot of the formula dependency graph reachable from\nthis agent's pet store.\n\n- nodes: Array of { id, type } for each formula\n- edges: Array of { sourceId, targetId, label } for each dependency\n\nUsed by the Chat inventory graph space to visualize formula relationships.",
       listRetentionPaths:
@@ -175,11 +175,11 @@ export const helpTextEntries = harden([
       followRetentionPaths:
         'followRetentionPaths(locator) -> AsyncIterator<RetentionPathDelta>\nSubscribe to retention-path changes for the target locator.\n\nThe first delta is always a full `{ snapshot: RetentionPath[] }`.\nSubsequent deltas are `{ added, removed }` diffs over a\nmicrotask-coalesced batch window, so a single `provideGuest`\nyields one delta rather than many.\n\nDrop the returned reference to release the subscription, exactly\nas with `followNameChanges` and `followLocatorNameChanges`.\n\nUse with `for-await-of` to receive updates.',
       readText:
-        'readText(petNameOrPath) -> Promise<string>\nRead text content by pet name or path.\nFor a single name, reads the blob\'s text content.\nFor a multi-segment path, reads through the mount.\nExample: readText(["my-blob"])\nExample: readText(["my-mount", "config.json"])',
+        'readText(petNamePath) -> Promise<string>\nRead text content by pet-name path.\nFor a single name, reads the blob\'s text content.\nFor a multi-segment path, reads through the mount.\nExample: readText(["my-blob"])\nExample: readText(["my-mount", "config.json"])',
       maybeReadText:
-        'maybeReadText(petNameOrPath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
+        'maybeReadText(petNamePath) -> Promise<string | undefined>\nRead text content, returning undefined if not found.\nSame as readText but returns undefined instead of throwing.',
       writeText:
-        'writeText(petNameOrPath, content) -> Promise<void>\nWrite text content by pet name or path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
+        'writeText(petNamePath, content) -> Promise<void>\nWrite text content by pet-name path.\nFor a single name, creates a ReadableBlob and binds the name.\nFor a multi-segment path, writes through the mount.\nExample: writeText(["my-blob"], "hello")\nExample: writeText(["my-mount", "output.txt"], "hello")',
     },
   ],
   [
@@ -239,7 +239,7 @@ export const helpTextEntries = harden([
       has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") -> true\nExample: has("assets", "style.css") -> true',
       list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() -> ["index.html", "app.js", "assets"]\nExample: list("assets") -> ["style.css", "logo.png"]',
       lookup:
-        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
+        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup(["index.html"]) -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
     },
   ],
   [

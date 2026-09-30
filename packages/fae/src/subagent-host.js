@@ -182,15 +182,15 @@ export const provisionFaeAgent = async ({
       const spawnerGuest = await E(hostAgent).provideGuest(spawnerHandleName, {
         agentName: spawnerProfileName,
       });
-      await E(spawnerGuest).storeLocator('llm-provider', providerLocator);
-      await E(spawnerGuest).storeLocator('host-agent', hostAgentLocator);
+      await E(spawnerGuest).storeLocator(['llm-provider'], providerLocator);
+      await E(spawnerGuest).storeLocator(['host-agent'], hostAgentLocator);
       if (authSecretLocator !== undefined) {
         await E(spawnerGuest).storeLocator(
           AUTH_SECRET_PETNAME,
           authSecretLocator,
         );
       }
-      await E(hostAgent).makeUnconfined('@main', spawnerSpecifier, {
+      await E(hostAgent).makeUnconfined(['@main'], spawnerSpecifier, {
         powersName: spawnerProfileName,
         resultName: spawnerResultName,
         env: harden({
@@ -214,19 +214,19 @@ export const provisionFaeAgent = async ({
     const driverGuest = await E(hostAgent).provideGuest(driverHandleName, {
       agentName: driverProfileName,
     });
-    await E(driverGuest).storeLocator('llm-provider', providerLocator);
+    await E(driverGuest).storeLocator(['llm-provider'], providerLocator);
     await E(driverGuest).storeLocator(
-      'agent',
+      ['agent'],
       /** @type {string} */ (await E(hostAgent).locate(profileName)),
     );
     if (spawnerLocator !== undefined) {
-      await E(driverGuest).storeLocator('subagent-spawner', spawnerLocator);
+      await E(driverGuest).storeLocator(['subagent-spawner'], spawnerLocator);
     }
     if (authSecretLocator !== undefined) {
       await E(driverGuest).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
     }
 
-    await E(hostAgent).makeUnconfined('@main', driverSpecifier, {
+    await E(hostAgent).makeUnconfined(['@main'], driverSpecifier, {
       powersName: driverProfileName,
       resultName: driverResultName,
       env: harden({

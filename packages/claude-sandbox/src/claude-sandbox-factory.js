@@ -303,7 +303,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   let hostAgentP;
   const getHostAgent = () => {
     if (hostAgentP === undefined) {
-      hostAgentP = E(powers).lookup('host-agent');
+      hostAgentP = E(powers).lookup(['host-agent']);
     }
     return hostAgentP;
   };
@@ -408,7 +408,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         petNames.push(credentialsName);
       }
       await E(hostAgent).evaluate(
-        '@main',
+        ['@main'],
         buildSessionPowersSource(
           hostMountPoint,
           workspacePetName,
@@ -440,7 +440,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         options.resultName = resultName;
       }
       const client = await E(hostAgent).makeUnconfined(
-        '@main',
+        ['@main'],
         clientModuleSpecifier,
         harden(options),
       );
@@ -671,7 +671,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   const seenFormReplies = new Set();
 
   const runFactory = async () => {
-    await E(powers).form('@host', FORM_DESCRIPTION, FORM_FIELDS);
+    await E(powers).form(['@host'], FORM_DESCRIPTION, FORM_FIELDS);
 
     const selfId = await E(powers).locate('@self');
 

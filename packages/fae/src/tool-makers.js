@@ -1483,8 +1483,8 @@ export const makeExecTool = powers => {
         'it came. A remote capability is described by its method names.\n\n' +
         'Example — adopt a channel, join it, and post a reply:\n' +
         '```\n' +
-        'await E(powers).adopt(13n, "danzone", "my-channel");\n' +
-        'const channel = await E(powers).lookup("my-channel");\n' +
+        'await E(powers).adopt(13n, "danzone", ["my-channel"]);\n' +
+        'const channel = await E(powers).lookup(["my-channel"]);\n' +
         'const member = await E(channel).join("fae");\n' +
         'await E(member).post(["Hello from fae!"], [], []);\n' +
         'return "Posted to channel";\n' +

@@ -36,15 +36,15 @@ test('terminate raises the flag the Rust main loop polls', async t => {
 
 test('evaluate returns the compartment result', async t => {
   const { facet } = makeFacet();
-  t.is(await E(facet).evaluate('1 + 1', [], [], 'id-1', neverSettles()), 2);
+  t.is(await E(facet).evaluate(['1 + 1'], [], [], 'id-1', neverSettles()), 2);
 });
 
 test('evaluate exposes $id and $cancelled', async t => {
   const { facet } = makeFacet();
-  t.is(await E(facet).evaluate('$id', [], [], 'id-2', neverSettles()), 'id-2');
+  t.is(await E(facet).evaluate(['$id'], [], [], 'id-2', neverSettles()), 'id-2');
   t.is(
     await E(facet).evaluate(
-      'typeof $cancelled.then',
+      ['typeof $cancelled.then'],
       [],
       [],
       'id-2',
@@ -57,11 +57,11 @@ test('evaluate exposes $id and $cancelled', async t => {
 test('evaluate exposes the standard endowments', async t => {
   const { facet } = makeFacet();
   t.is(
-    await E(facet).evaluate('typeof M.string', [], [], 'id-3', neverSettles()),
+    await E(facet).evaluate(['typeof M.string'], [], [], 'id-3', neverSettles()),
     'function',
   );
   t.is(
-    await E(facet).evaluate('typeof E', [], [], 'id-3', neverSettles()),
+    await E(facet).evaluate(['typeof E'], [], [], 'id-3', neverSettles()),
     'function',
   );
 });
@@ -72,7 +72,7 @@ test('a named endowment shadows $id, as in the Node worker', async t => {
   const { facet } = makeFacet();
   t.is(
     await E(facet).evaluate(
-      '$id',
+      ['$id'],
       ['$id'],
       ['shadow'],
       'real-id',
@@ -86,7 +86,7 @@ test('a named endowment shadows a standard endowment', async t => {
   const { facet } = makeFacet();
   t.is(
     await E(facet).evaluate(
-      'M',
+      ['M'],
       ['M'],
       ['not-patterns'],
       'id-4',

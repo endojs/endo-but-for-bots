@@ -1,6 +1,7 @@
 import os from 'os';
 import { E } from '@endo/eventual-send';
 import { withEndoAgent } from '../context.js';
+import { parsePetNamePath } from '../pet-name.js';
 
 /**
  * Parse --field arguments into a fields array.
@@ -34,5 +35,5 @@ export const formCommand = async ({
 }) =>
   withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
     const fields = parseFields(fieldArgs);
-    await E(agent).form(toName, description, fields);
+    await E(agent).form(parsePetNamePath(toName), description, fields);
   });

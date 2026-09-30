@@ -728,11 +728,11 @@ export const createCommandExecutor = ({
             };
           }
 
-          await E(powers).storeValue(effectiveHostPort, 'tcp-listen-addr');
+          await E(powers).storeValue(effectiveHostPort, ['tcp-listen-addr']);
           console.log(`[Chat] /network: loading module ${effectiveModulePath}`);
-          await E(powers).makeUnconfined('@main', effectiveModulePath, {
-            powersName: '@agent',
-            resultName: 'network-service',
+          await E(powers).makeUnconfined(['@main'], effectiveModulePath, {
+            powersName: ['@agent'],
+            resultName: ['network-service'],
           });
           console.log(`[Chat] /network: moving to NETS.tcp`);
           await E(powers).move(['network-service'], ['@nets', 'tcp']);
@@ -765,13 +765,13 @@ export const createCommandExecutor = ({
           // OS pick an ephemeral port; the transport persists the
           // resolved `host:port` back to `ocapn-listen-addr` so it
           // stays stable across restarts.
-          await E(powers).storeValue(effectiveHostPort, 'ocapn-listen-addr');
+          await E(powers).storeValue(effectiveHostPort, ['ocapn-listen-addr']);
           console.log(
             `[Chat] /network-ocapn: loading module ${effectiveModulePath}`,
           );
-          await E(powers).makeUnconfined('@main', effectiveModulePath, {
-            powersName: '@agent',
-            resultName: 'network-service-ocapn',
+          await E(powers).makeUnconfined(['@main'], effectiveModulePath, {
+            powersName: ['@agent'],
+            resultName: ['network-service-ocapn'],
           });
           console.log(`[Chat] /network-ocapn: moving to @nets/ocapn`);
           await E(powers).move(['network-service-ocapn'], ['@nets', 'ocapn']);
@@ -803,8 +803,8 @@ export const createCommandExecutor = ({
           // resolves peers through iroh discovery and relays) so there is no
           // request/resolve step like the TCP network.
           await E(powers).makeUnconfined(undefined, effectiveModulePath, {
-            powersName: '@agent',
-            resultName: 'network-service-iroh',
+            powersName: ['@agent'],
+            resultName: ['network-service-iroh'],
           });
           console.log(`[Chat] /network-iroh: moving to @nets/iroh`);
           await E(powers).move(['network-service-iroh'], ['@nets', 'iroh']);
@@ -843,8 +843,8 @@ export const createCommandExecutor = ({
             `[Chat] /network-ws-relay: connecting to relay ${relayUrl} (domain=${relayDomain})`,
           );
           await E(powers).makeUnconfined(undefined, effectiveModulePath, {
-            powersName: '@agent',
-            resultName: 'network-service-ws-relay',
+            powersName: ['@agent'],
+            resultName: ['network-service-ws-relay'],
             env: {
               WS_RELAY_URL: relayUrl,
               WS_RELAY_DOMAIN: relayDomain,

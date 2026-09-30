@@ -66,7 +66,7 @@ test.serial(
       }),
     );
     const oldRemote = /** @type {GitRemote} */ (
-      await E(credentialSession.powers).lookup('upstream')
+      await E(credentialSession.powers).lookup(['upstream'])
     );
     const oldRemoteId = await E(credentialSession.powers).identify('upstream');
 
@@ -88,7 +88,7 @@ test.serial(
     await t.throwsAsync(E(oldRemote).inspect(), {
       message: /has been revoked/,
     });
-    t.truthy(await E(reprovisioned.powers).lookup('upstream'));
+    t.truthy(await E(reprovisioned.powers).lookup(['upstream']));
 
     await t.throwsAsync(
       () =>

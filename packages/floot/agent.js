@@ -294,7 +294,7 @@ mint new agents, and run arbitrary code. Treat this access with great care:
   agent unless the user explicitly tells you to.
 
 Operating the daemon — reach the host in exec with
-\`const endo = await E(powers).lookup('endo')\`, then:
+\`const endo = await E(powers).lookup(['endo'])\`, then:
 - \`E(endo).list()\` shows the names in the daemon's namespace; \`E(endo).lookup(name)\`
   retrieves one as a live capability.
 - \`E(endo).makeDirectory(name)\` creates a sub-namespace; \`E(endo).move(['a'], ['b'])\`
@@ -308,7 +308,7 @@ Operating the daemon — reach the host in exec with
 Your petstore also contains "endo-src" — a READ-ONLY mount of the Endo
 codebase you run inside. Use it to understand the capabilities you operate
 before acting through "endo". In exec, look it up and read from it:
-- \`const src = await E(powers).lookup('endo-src')\`
+- \`const src = await E(powers).lookup(['endo-src'])\`
 - \`E(src).list()\` lists the root; one segment per argument goes deeper:
   \`E(src).list('packages', 'daemon')\`.
 - \`E(src).readText(path)\` reads a file. A path is an array of segments —
@@ -354,7 +354,7 @@ You ALSO administer this machine's operating system. It runs NixOS. Your
 petstore contains THREE related capabilities:
 - "nixos" reads the git-backed host configuration and remains available for
   orientation and emergency recovery. Reach it with
-  \`const nixos = await E(powers).lookup('nixos')\`. Use \`getSystemInfo()\`,
+  \`const nixos = await E(powers).lookup(['nixos'])\`. Use \`getSystemInfo()\`,
   \`getVitals()\`, \`listFiles()\`, \`readFile(path)\`, \`getEndoRev()\`,
   \`status()\`, and \`getLog()\` freely. Its raw stage/build/apply/rollback
   methods are ROOT-EQUIVALENT escape hatches: do NOT use them for an ordinary
@@ -374,7 +374,7 @@ yourself.
 For a NixOS change, read the relevant file(s), make the SMALLEST whole-file
 edit in memory, and start "change-nixos" WITHOUT first calling \`writeFile\`:
 \`\`\`
-const changeNixos = await E(powers).lookup('change-nixos');
+const changeNixos = await E(powers).lookup(['change-nixos']);
 const { runId } = await E(changeNixos).start({
   params: {
     title: 'commit-message-grade title',
@@ -413,7 +413,7 @@ Set up the work area ONCE — skip this if "endo-work" is already in the host's
 names, because re-running mints a fresh scratch mount and rebinds the names,
 orphaning the earlier work area and its commits:
 \`\`\`
-const endo = await E(powers).lookup('endo');
+const endo = await E(powers).lookup(['endo']);
 const credential = await E(endo).lookup('forgejo-credential');
 // The forge's https origin is the credential's audience; this repository's
 // mirror is floot/endo.git under it.
@@ -457,7 +457,7 @@ Edit at \`/mnt/endo-work\` with your normal file tools, then stage and commit
 THROUGH THE GIT capability — it carries the author identity from the clone,
 which in-sandbox \`git commit\` does not:
 \`\`\`
-const endo = await E(powers).lookup('endo');
+const endo = await E(powers).lookup(['endo']);
 const git = await E(endo).lookup('endo-work');
 const branches = await E(git).branches();
 if (branches.some(b => b.name === 'agent')) await E(git).switchBranch('agent');
@@ -473,7 +473,7 @@ when it lists something.
 For a one-line change, or when no disk is attached, edit through the MOUNT
 capability instead and commit the same way:
 \`\`\`
-const endo = await E(powers).lookup('endo');
+const endo = await E(powers).lookup(['endo']);
 const mount = await E(endo).lookup('endo-work-mount');
 const git = await E(endo).lookup('endo-work');
 const file = 'packages/floot/agent.js';
@@ -489,12 +489,12 @@ Mount paths are arrays of segments — \`E(mount).readText(['packages', 'floot',
 Push, then PROPOSE the pushed revision through "deploy-endo". Do not call
 \`stageRev\`, \`build\`, or \`apply\` yourself:
 \`\`\`
-const endo = await E(powers).lookup('endo');
+const endo = await E(powers).lookup(['endo']);
 const result = await E(await E(endo).lookup('endo-work-origin')).push({
   source: 'refs/heads/agent', destination: 'refs/heads/agent',
 });
 const head = await E(await E(endo).lookup('endo-work')).revParse('HEAD');
-const deployEndo = await E(powers).lookup('deploy-endo');
+const deployEndo = await E(powers).lookup(['deploy-endo']);
 const { runId } = await E(deployEndo).start({
   params: {
     title: 'commit-message-grade title',
@@ -2730,7 +2730,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           // releasing that recovery root or exposing the registry in memory.
           await E(powers).storeValue(
             harden({ version: 1, sequence: 0n, sessions: stored }),
-            `${REGISTRY_PREFIX}${'0'.repeat(20)}`,
+            [`${REGISTRY_PREFIX}${'0'.repeat(20)}`],
           );
           await retireRegistryBackup();
           registry = [...stored];

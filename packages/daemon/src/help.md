@@ -3,6 +3,10 @@
 A directory maps pet names to formula identifiers (internal references).
 Pet names are strings like "my-worker", "counter", or "index.html".
 Special names are @-prefixed like "@self", "@host", or "@agent".
+A pet-name path is an array of path components, like ["counter"] or
+["subdir", "value"]. Methods that take a pet-name path reject a bare string:
+a string is never split on a delimiter, so pass ["subdir", "value"], not
+"subdir/value".
 
 Use lookup() to get a value by name, list() to see available names,
 and storeIdentifier() or storeLocator() to store new references.
@@ -58,10 +62,10 @@ Subscribe to all name changes in this directory.
 First yields existing names, then yields diffs as names change.
 Use with for-await-of to receive updates.
 
-## lookup(petNameOrPath) -> Promise<any>
+## lookup(petNamePath) -> Promise<any>
 
-Resolve a pet name or path to its value.
-- lookup("counter") gets the value named "counter"
+Resolve a pet-name path (an array of path components) to its value.
+- lookup(["counter"]) gets the value named "counter"
 - lookup(["subdir", "value"]) gets "value" from subdirectory "subdir"
 Throws if the name doesn't exist.
 
@@ -70,17 +74,17 @@ Throws if the name doesn't exist.
 Find all pet names that refer to a given value.
 Useful for discovering what names exist for an object you have.
 
-## storeIdentifier(petNameOrPath, formulaId) -> Promise<void>
+## storeIdentifier(petNamePath, formulaId) -> Promise<void>
 
 Store a formula identifier with a pet name.
-- storeIdentifier("my-name", id) stores id as "my-name"
+- storeIdentifier(["my-name"], id) stores id as "my-name"
 - storeIdentifier(["subdir", "name"], id) stores in a subdirectory
 Overwrites any existing value at that name.
 
-## storeLocator(petNameOrPath, locator) -> Promise<void>
+## storeLocator(petNamePath, locator) -> Promise<void>
 
 Store an endo:// locator with a pet name.
-- storeLocator("my-name", locator) stores locator as "my-name"
+- storeLocator(["my-name"], locator) stores locator as "my-name"
 - storeLocator(["subdir", "name"], locator) stores in a subdirectory
 The locator must be an endo:// URL. Overwrites any existing value.
 
@@ -106,22 +110,22 @@ Both names will refer to the same underlying value.
 Create a new subdirectory at the given path.
 Returns the new directory object.
 
-## readText(petNameOrPath) -> Promise<string>
+## readText(petNamePath) -> Promise<string>
 
-Read text content by pet name or path.
+Read text content by pet-name path.
 For a single name, reads the blob's text content.
 For a multi-segment path, reads through the mount.
 Example: readText(["my-blob"])
 Example: readText(["my-mount", "config.json"])
 
-## maybeReadText(petNameOrPath) -> Promise<string | undefined>
+## maybeReadText(petNamePath) -> Promise<string | undefined>
 
 Read text content, returning undefined if not found.
 Same as readText but returns undefined instead of throwing.
 
-## writeText(petNameOrPath, content) -> Promise<void>
+## writeText(petNamePath, content) -> Promise<void>
 
-Write text content by pet name or path.
+Write text content by pet-name path.
 For a single name, creates a ReadableBlob and binds the name.
 For a multi-segment path, writes through the mount.
 Example: writeText(["my-blob"], "hello")
@@ -187,10 +191,10 @@ First yields existing messages, then yields new ones as they arrive.
 Use with for-await-of:
   for await (const message of E(guest).followMessages()) { ... }
 
-## resolve(messageNumber, petNameOrPath) -> Promise<void>
+## resolve(messageNumber, petNamePath) -> Promise<void>
 
 Respond to a request message by providing a named value.
-- resolve(0, "my-counter") responds to message 0 with the value named "my-counter"
+- resolve(0, ["my-counter"]) responds to message 0 with the value named "my-counter"
 The requester receives the resolved value.
 
 ## reject(messageNumber, reason?) -> Promise<void>
@@ -203,7 +207,7 @@ The requester receives an error.
 ## adopt(messageNumber, edgeName, petName) -> Promise<void>
 
 Adopt a value from an incoming package message, giving it a pet name.
-- adopt(0, "gift", "my-new-thing") takes "gift" from message 0, names it "my-new-thing"
+- adopt(0, "gift", ["my-new-thing"]) takes "gift" from message 0, names it "my-new-thing"
 Edge names are the labels the sender attached to values in the package.
 
 ## dismiss(messageNumber) -> Promise<void>
@@ -218,8 +222,8 @@ Remove all messages from the inbox.
 ## request(recipientName, description, responseName?) -> Promise<any>
 
 Send a request to another agent asking for a capability.
-- request("@host", "a counter") asks @host for "a counter"
-- request("@host", "a counter", "my-counter") also stores the response as "my-counter"
+- request(["@host"], "a counter") asks @host for "a counter"
+- request(["@host"], "a counter", ["my-counter"]) also stores the response as "my-counter"
 The recipient sees your request and can resolve or reject it.
 
 ## send(recipientName, strings, edgeNames, petNames) -> Promise<void>
@@ -229,22 +233,22 @@ Send a package message with values to another agent.
 - edgeNames: Labels for the values being sent
 - petNames: Names of values to include
 
-Example: send("@host", ["Here is ", " for you"], ["gift"], ["my-counter"])
+Example: send(["@host"], ["Here is ", " for you"], ["gift"], [["my-counter"]])
   Sends: "Here is @gift for you" where @gift refers to "my-counter"
 
-## storeValue(value, petNameOrPath) -> Promise<void>
+## storeValue(value, petNamePath) -> Promise<void>
 
 Store a passable value in the agent's directory.
 Values must be passable (numbers, strings, arrays, records, etc.).
 
-## sendValue(messageNumber, petNameOrPath) -> Promise<void>
+## sendValue(messageNumber, petNamePath) -> Promise<void>
 
 Reply to any message with a retained value from your pet store.
 
 - messageNumber: The inbox message number to reply to
-- petNameOrPath: Pet name (or path) of the value to send
+- petNamePath: Pet-name path (an array of path components) of the value to send
 
-Example: sendValue(0, "my-counter")
+Example: sendValue(0, ["my-counter"])
 
 ## deliver(message) -> void
 
@@ -301,7 +305,7 @@ The form appears in the recipient's inbox. They can submit values using submit()
 - description: Human-readable description of the form
 - fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]
 
-Example: form("@host", "Configure settings", [{ name: "name", label: "Your name" }])
+Example: form(["@host"], "Configure settings", [{ name: "name", label: "Your name" }])
 
 ## storeBlob(readerRef, petName?) -> Promise<EndoReadable>
 
@@ -310,11 +314,11 @@ Store binary data as a blob with a pet name.
 - petName: Name to store the blob under
 Returns a readable blob reference.
 
-## storeValue(value, petNameOrPath) -> Promise<void>
+## storeValue(value, petNamePath) -> Promise<void>
 
 Store a passable value (number, string, array, record, etc.) in your directory.
-- storeValue(42, "answer") stores the number 42 as "answer"
-- storeValue({x: 1, y: 2}, "point") stores a record as "point"
+- storeValue(42, ["answer"]) stores the number 42 as "answer"
+- storeValue({x: 1, y: 2}, ["point"]) stores a record as "point"
 - storeValue(["a", "b"], ["subdir", "items"]) stores in a subdirectory
 Values must be passable (no functions or non-transferable objects).
 
@@ -328,31 +332,31 @@ in reply to the form, allowing multiple submissions.
 
 Example: submit(0, { name: "Alice", age: 30 })
 
-## sendValue(messageNumber, petNameOrPath) -> Promise<void>
+## sendValue(messageNumber, petNamePath) -> Promise<void>
 
 Reply to any message with a retained value from your pet store.
 
 - messageNumber: The inbox message number to reply to
-- petNameOrPath: Pet name (or path) of the value to send
+- petNamePath: Pet-name path (an array of path components) of the value to send
 
-Example: sendValue(0, "my-counter")
+Example: sendValue(0, ["my-counter"])
 
-## readText(petNameOrPath) -> Promise<string>
+## readText(petNamePath) -> Promise<string>
 
-Read text content by pet name or path.
+Read text content by pet-name path.
 For a single name, reads the blob's text content.
 For a multi-segment path, reads through the mount.
 Example: readText(["my-blob"])
 Example: readText(["my-mount", "config.json"])
 
-## maybeReadText(petNameOrPath) -> Promise<string | undefined>
+## maybeReadText(petNamePath) -> Promise<string | undefined>
 
 Read text content, returning undefined if not found.
 Same as readText but returns undefined instead of throwing.
 
-## writeText(petNameOrPath, content) -> Promise<void>
+## writeText(petNamePath, content) -> Promise<void>
 
-Write text content by pet name or path.
+Write text content by pet-name path.
 For a single name, creates a ReadableBlob and binds the name.
 For a multi-segment path, writes through the mount.
 Example: writeText(["my-blob"], "hello")
@@ -364,7 +368,7 @@ Mint a single-use invitation whose locator names this guest's own handle, so an
 acceptor becomes a peer of this guest (not of the top host). Bind the acceptor
 under correspondentName once they accept. Hand the returned invitation's
 locate() string to the invitee out of band.
-Example: invite("new-neighbor")
+Example: invite(["new-neighbor"])
 
 ## accept(invitationLocator, correspondentName) -> Promise<void>
 
@@ -372,7 +376,7 @@ Redeem an invitation locator into this guest, binding the relationship to the
 calling guest — no replacement guest is minted. This guest accepts as itself;
 the inviter's handle is bound under correspondentName, a pet name this guest
 chooses (the inviter chooses its own independently, so they may differ).
-Example: accept(invitationLocator, "my-neighbor")
+Example: accept(invitationLocator, ["my-neighbor"])
 
 # EndoHost - A privileged agent with full Endo capabilities.
 
@@ -407,24 +411,24 @@ Store binary data as a blob with a pet name.
 - petName: Name to store the blob under
 Returns a readable blob reference.
 
-## storeValue(value, petNameOrPath) -> Promise<void>
+## storeValue(value, petNamePath) -> Promise<void>
 
 Store a passable value (number, string, array, record, etc.) with a name.
-- storeValue(42, "answer") stores the number 42
-- storeValue({x: 1, y: 2}, "point") stores a record
+- storeValue(42, ["answer"]) stores the number 42
+- storeValue({x: 1, y: 2}, ["point"]) stores a record
 
 ## provideGuest(petName?, options?) -> Promise<EndoGuest>
 
 Create or retrieve a confined guest agent.
 - provideGuest() creates an anonymous guest
-- provideGuest("my-guest") creates/retrieves a named guest
+- provideGuest(["my-guest"]) creates/retrieves a named guest
 Options: { agentName, introducedNames, pins, networks }
 
 ## provideHost(petName?, options?) -> Promise<EndoHost>
 
 Create or retrieve another host agent.
 - provideHost() creates an anonymous host
-- provideHost("my-host") creates/retrieves a named host
+- provideHost(["my-host"]) creates/retrieves a named host
 Options: { agentName, introducedNames, pins, networks }
 
 ## provideWorker(petNamePath) -> Promise<EndoWorker>
@@ -441,8 +445,8 @@ Evaluate JavaScript code in a worker with named endowments.
 - petNames: Pet names providing values for those names
 - resultName: Optional name to store the result
 
-Example: evaluate(undefined, "x + y", ["x", "y"], ["a", "b"], ["result"])
-  Runs "x + y" where x=lookup("a"), y=lookup("b"), stores result as "result"
+Example: evaluate(undefined, "x + y", ["x", "y"], [["a"], ["b"]], ["result"])
+  Runs "x + y" where x=lookup(["a"]), y=lookup(["b"]), stores result as "result"
 
 ## makeUnconfined(workerName, specifier, options?) -> Promise<any>
 
@@ -473,7 +477,7 @@ The archive bytes are streamed to the worker and parsed via
 `@endo/compartment-mapper`'s `parseArchive`.  The Rust supervisor's
 workers read the same archive content directly from the CAS.
 
-## cancel(petNameOrPath, reason?) -> Promise<void>
+## cancel(petNamePath, reason?) -> Promise<void>
 
 Cancel a value, triggering cleanup and releasing resources.
 Cancellation propagates to dependent values.
@@ -502,12 +506,12 @@ The returned locator includes network addresses from all registered netlayers,
 allowing remote peers to connect and access the value.
 Example: locateWithHints("my-channel") returns a shareable locator URL.
 
-## adoptFromLocator(locator, petNameOrPath) -> Promise<void>
+## adoptFromLocator(locator, petNamePath) -> Promise<void>
 
 Adopt a value from a locator that includes connection hints.
 Parses the locator to extract peer info, establishes a connection if needed,
 and writes the formula ID into the local pet store.
-Example: adoptFromLocator("endo://node.../formula@hint?type=channel", "remote-channel")
+Example: adoptFromLocator("endo://node.../formula@hint?type=channel", ["remote-channel"])
 
 ## invite(correspondentName) -> Promise<Invitation>
 
@@ -544,7 +548,7 @@ The form appears in the recipient's inbox. They can submit values using submit()
 - description: Human-readable description of what the form is for
 - fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]
 
-Example: form("@host", "Configure settings", [{ name: "name", label: "Name" }, { name: "email", label: "Email" }])
+Example: form(["@host"], "Configure settings", [{ name: "name", label: "Name" }, { name: "email", label: "Email" }])
 
 ## submit(messageNumber, values) -> Promise<void>
 
@@ -559,14 +563,14 @@ Fields without explicit patterns default to M.string().
 
 Example: submit(0, { name: "Alice", age: 30 })
 
-## sendValue(messageNumber, petNameOrPath) -> Promise<void>
+## sendValue(messageNumber, petNamePath) -> Promise<void>
 
 Reply to any message with a retained value from your pet store.
 
 - messageNumber: The inbox message number to reply to
-- petNameOrPath: Pet name (or path) of the value to send
+- petNamePath: Pet-name path (an array of path components) of the value to send
 
-Example: sendValue(0, "my-counter")
+Example: sendValue(0, ["my-counter"])
 
 ## getFormulaGraph() -> Promise<{ nodes, edges }>
 
@@ -610,22 +614,22 @@ as with `followNameChanges` and `followLocatorNameChanges`.
 
 Use with `for-await-of` to receive updates.
 
-## readText(petNameOrPath) -> Promise<string>
+## readText(petNamePath) -> Promise<string>
 
-Read text content by pet name or path.
+Read text content by pet-name path.
 For a single name, reads the blob's text content.
 For a multi-segment path, reads through the mount.
 Example: readText(["my-blob"])
 Example: readText(["my-mount", "config.json"])
 
-## maybeReadText(petNameOrPath) -> Promise<string | undefined>
+## maybeReadText(petNamePath) -> Promise<string | undefined>
 
 Read text content, returning undefined if not found.
 Same as readText but returns undefined instead of throwing.
 
-## writeText(petNameOrPath, content) -> Promise<void>
+## writeText(petNamePath, content) -> Promise<void>
 
-Write text content by pet name or path.
+Write text content by pet-name path.
 For a single name, creates a ReadableBlob and binds the name.
 For a multi-segment path, writes through the mount.
 Example: writeText(["my-blob"], "hello")
@@ -788,7 +792,7 @@ Example: list("assets") -> ["style.css", "logo.png"]
 Get the value at a name or path.
 nameOrPath: string | string[] - Name or path segments.
 Returns EndoReadable for files, ReadableTree for subdirectories.
-Example: lookup("index.html") -> EndoReadable
+Example: lookup(["index.html"]) -> EndoReadable
 Example: lookup(["assets", "style.css"]) -> EndoReadable
 
 # EndoMount - Live mutable access to a filesystem directory.

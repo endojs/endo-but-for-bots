@@ -9,9 +9,9 @@ export const make = agent => {
     {
       async ask() {
         return E(agent).request(
-          '@host',
+          ['@host'],
           'the meaning of life, the universe, everything',
-          'answer',
+          ['answer'],
         );
       },
     },

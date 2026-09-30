@@ -642,10 +642,10 @@ export const createSpacesGutter = ({
     // Ensure 'spaces' directory exists
     await null; // safe-await-separator
     try {
-      await E(powers).lookup('spaces');
+      await E(powers).lookup(['spaces']);
     } catch {
       // Directory doesn't exist, create it
-      await E(powers).makeDirectory('spaces');
+      await E(powers).makeDirectory(['spaces']);
     }
 
     // Store as passable object (not JSON)
@@ -760,9 +760,9 @@ export const createSpacesGutter = ({
       await null; // safe-await-separator
       // Ensure 'spaces' directory exists
       try {
-        await E(powers).lookup('spaces');
+        await E(powers).lookup(['spaces']);
       } catch {
-        await E(powers).makeDirectory('spaces');
+        await E(powers).makeDirectory(['spaces']);
       }
       await E(powers).storeValue(updated, ['spaces', '0']);
 
@@ -1341,14 +1341,14 @@ export const createSpacesGutter = ({
     try {
       // Ensure spaces directory exists
       try {
-        await E(powers).lookup('spaces');
+        await E(powers).lookup(['spaces']);
       } catch {
         // Directory doesn't exist yet, create it
-        await E(powers).makeDirectory('spaces');
+        await E(powers).makeDirectory(['spaces']);
       }
 
       // Get the spaces directory and watch for changes
-      const spacesDir = await E(powers).lookup('spaces');
+      const spacesDir = await E(powers).lookup(['spaces']);
       const changesRef = E(
         /** @type {ERef<EndoHost>} */ (spacesDir),
       ).followNameChanges();

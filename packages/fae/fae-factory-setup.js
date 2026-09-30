@@ -68,7 +68,7 @@ export const main = async agent => {
   // E(agent).identify(...) returns a bare formula id, so use
   // storeIdentifier rather than storeLocator (which requires endo://).
   const factoryPowers = await E(agent).lookup(agentName);
-  await E(factoryPowers).storeIdentifier('llm-provider', providerId);
+  await E(factoryPowers).storeIdentifier(['llm-provider'], providerId);
 
   // The provider config names the pet name its token was bound to under
   // `secrets/`. A name means nothing to the factory — it has no `secrets`
@@ -93,7 +93,7 @@ export const main = async agent => {
   }
 
   // Launch the fae-factory caplet.
-  await E(agent).makeUnconfined('@main', faeFactorySpecifier, {
+  await E(agent).makeUnconfined(['@main'], faeFactorySpecifier, {
     powersName: agentName,
     resultName: factoryName,
   });

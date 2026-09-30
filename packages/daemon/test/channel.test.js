@@ -170,12 +170,12 @@ test.serial(
     // 1. Create a persona (like the UI does when creating a channel space)
     const spaceName = 'smoke-space';
     const agentName = `persona-for-${spaceName}`;
-    await E(host).provideHost(spaceName, { agentName });
-    const personaPowers = await E(host).lookup(agentName);
+    await E(host).provideHost([spaceName], { agentName });
+    const personaPowers = await E(host).lookup([agentName]);
 
     // 2. Create a channel within the persona
-    await E(personaPowers).makeChannel('general', 'Alice');
-    const channel = await E(personaPowers).lookup('general');
+    await E(personaPowers).makeChannel(['general'], 'Alice');
+    const channel = await E(personaPowers).lookup(['general']);
     t.truthy(channel, 'channel exists');
 
     // 3. Admin can post and see the message
@@ -241,10 +241,10 @@ test.serial('channel - create and post message as admin', async t => {
   const { host } = await prepareHost(t);
 
   // Create a channel with the admin's display name
-  await E(host).makeChannel('my-channel', 'Alice');
+  await E(host).makeChannel(['my-channel'], 'Alice');
 
   // Look up the channel
-  const channel = await E(host).lookup('my-channel');
+  const channel = await E(host).lookup(['my-channel']);
   t.truthy(channel, 'channel should exist');
 
   // Post a message
@@ -269,8 +269,8 @@ test.serial('channel - create and post message as admin', async t => {
 test.serial('channel - admin can invite a member', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   // Invite a member — returns [invitation, attenuator]
   const inviteResult = await E(channel).createInvitation('Bob');
@@ -304,8 +304,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Admin posts
     await E(channel).post(['Admin message'], [], []);
@@ -336,8 +336,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Admin posts first
     await E(channel).post(['First message'], [], []);
@@ -370,8 +370,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Start following before any messages
     const adminIteratorRef = await E(channel).followMessages();
@@ -399,8 +399,8 @@ test.serial(
 test.serial('channel - sub-invitations carry full pedigree chain', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   // Alice invites Bob
   const [bobInvite] = await E(channel).createInvitation('Bob');
@@ -427,8 +427,8 @@ test.serial('channel - sub-invitations carry full pedigree chain', async t => {
 test.serial('channel - implicit threading with replyTo', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   // First message (no replyTo)
   await E(channel).post(['First'], [], []);
@@ -449,8 +449,8 @@ test.serial('channel - implicit threading with replyTo', async t => {
 test.serial('channel - disabled member cannot post', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
   const bobMember = await E(bobInvite).join('Bob');
@@ -472,8 +472,8 @@ test.serial('channel - disabled member cannot post', async t => {
 test.serial('channel - disabled member cannot follow messages', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
   const bobMember = await E(bobInvite).join('Bob');
@@ -489,8 +489,8 @@ test.serial('channel - disabled member cannot follow messages', async t => {
 test.serial('channel - attenuator disables the correct member', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
   const bobMember = await E(bobInvite).join('Bob');
@@ -518,8 +518,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     const result = await E(channel).createInvitation('Bob');
     t.is(result.length, 2, 'createInvitation returns a pair');
@@ -541,8 +541,8 @@ test.serial(
 test.serial('channel - disabled proxy throws on all operations', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite, attenuator] = await E(channel).createInvitation('Bob');
   const proxy = await E(bobInvite).join('Bob');
@@ -570,8 +570,8 @@ test.serial('channel - disabled proxy throws on all operations', async t => {
 test.serial('channel - delegation chain cascades disabling', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   // Alice invites Bob
   const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
@@ -608,8 +608,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
     const bobProxy = await E(bobInvite).join('Bob');
@@ -641,8 +641,8 @@ test.serial(
 test.serial('channel - disabled proxy: listMessages throws', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
   const bobProxy = await E(bobInvite).join('Bob');
@@ -666,8 +666,8 @@ test.serial('channel - disabled proxy: listMessages throws', async t => {
 test.serial('channel - disabled proxy: post throws', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
   const bobProxy = await E(bobInvite).join('Bob');
@@ -691,8 +691,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Alice invites Bob, Bob invites Carol
     const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
@@ -734,18 +734,18 @@ test.serial(
 
     // 1. Admin creates a channel (like creating a channel space in the UI)
     const adminAgentName = 'persona-admin-ui';
-    await E(host).provideHost('admin-space', { agentName: adminAgentName });
-    const adminPowers = await E(host).lookup(adminAgentName);
-    await E(adminPowers).makeChannel('general', 'AdminAlice');
-    await E(adminPowers).lookup('general');
+    await E(host).provideHost(['admin-space'], { agentName: adminAgentName });
+    const adminPowers = await E(host).lookup([adminAgentName]);
+    await E(adminPowers).makeChannel(['general'], 'AdminAlice');
+    await E(adminPowers).lookup(['general']);
 
     // 2. Non-admin persona connects to the channel (like the UI's channel switch flow)
     const bobAgentName = 'persona-bob-ui';
-    await E(host).provideHost('bob-space', { agentName: bobAgentName });
-    const bobPowers = await E(host).lookup(bobAgentName);
+    await E(host).provideHost(['bob-space'], { agentName: bobAgentName });
+    const bobPowers = await E(host).lookup([bobAgentName]);
     const channelId = await E(host).identify(adminAgentName, 'general');
-    await E(bobPowers).storeIdentifier('channel', channelId);
-    const bobChannelRef = await E(bobPowers).lookup('channel');
+    await E(bobPowers).storeIdentifier(['channel'], channelId);
+    const bobChannelRef = await E(bobPowers).lookup(['channel']);
 
     // 3. Bob joins the channel (this is what chat.js does for non-admin users)
     await E(bobChannelRef).createInvitation('Bob');
@@ -791,10 +791,10 @@ test.serial(
 
     // Admin flow: channel ref used directly (not via join)
     const agentName = 'persona-admin-direct';
-    await E(host).provideHost('admin-space', { agentName });
-    const powers = await E(host).lookup(agentName);
-    await E(powers).makeChannel('general', 'Alice');
-    const channel = await E(powers).lookup('general');
+    await E(host).provideHost(['admin-space'], { agentName });
+    const powers = await E(host).lookup([agentName]);
+    await E(powers).makeChannel(['general'], 'Alice');
+    const channel = await E(powers).lookup(['general']);
 
     // This is the channel-header.js flow for admin users
     const inviteResult = await E(channel).createInvitation('Bob');
@@ -836,12 +836,12 @@ test.serial(
 
     // --- Admin creates a channel inside a persona ---
     const adminAgentName = 'persona-for-admin-space';
-    await E(host).provideHost('admin-space', { agentName: adminAgentName });
-    const adminPowers = await E(host).lookup(adminAgentName);
+    await E(host).provideHost(['admin-space'], { agentName: adminAgentName });
+    const adminPowers = await E(host).lookup([adminAgentName]);
 
     // Create channel inside admin's persona
-    await E(adminPowers).makeChannel('channel', 'AdminAlice');
-    const adminChannel = await E(adminPowers).lookup('channel');
+    await E(adminPowers).makeChannel(['channel'], 'AdminAlice');
+    const adminChannel = await E(adminPowers).lookup(['channel']);
 
     // Admin posts a greeting
     await E(adminChannel).post(['Welcome to the channel!'], [], []);
@@ -890,8 +890,8 @@ test.serial(
 test.serial('channel - join creates a member with own identity', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   // Alice posts as admin
   await E(channel).post(['Hello from admin'], [], []);
@@ -931,25 +931,25 @@ test.serial(
 
     // --- Admin persona creates a channel ---
     const adminAgentName = 'persona-for-admin';
-    await E(host).provideHost('admin-space', { agentName: adminAgentName });
-    const adminPowers = await E(host).lookup(adminAgentName);
+    await E(host).provideHost(['admin-space'], { agentName: adminAgentName });
+    const adminPowers = await E(host).lookup([adminAgentName]);
 
-    await E(adminPowers).makeChannel('channel', 'AdminAlice');
-    const adminChannel = await E(adminPowers).lookup('channel');
+    await E(adminPowers).makeChannel(['channel'], 'AdminAlice');
+    const adminChannel = await E(adminPowers).lookup(['channel']);
     await E(adminChannel).post(['Welcome to the channel!'], [], []);
 
     // --- Bob's persona receives the channel formula ID ---
     const bobAgentName = 'persona-for-bob';
-    await E(host).provideHost('bob-space', { agentName: bobAgentName });
-    const bobPowers = await E(host).lookup(bobAgentName);
+    await E(host).provideHost(['bob-space'], { agentName: bobAgentName });
+    const bobPowers = await E(host).lookup([bobAgentName]);
 
     // Write the channel formula ID into Bob's pet store
     // (simulates the "Connect to Channel" locator flow)
     const channelId = await E(host).identify(adminAgentName, 'channel');
-    await E(bobPowers).storeIdentifier('channel', channelId);
+    await E(bobPowers).storeIdentifier(['channel'], channelId);
 
     // Bob looks up the channel
-    const bobChannel = await E(bobPowers).lookup('channel');
+    const bobChannel = await E(bobPowers).lookup(['channel']);
 
     // Bob calls join() with his own display name to get a member ref
     await E(adminChannel).createInvitation('BobJoiner');
@@ -1000,8 +1000,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Bob joins and starts following
     await E(channel).createInvitation('Bob');
@@ -1033,8 +1033,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'AliceDisplay');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'AliceDisplay');
+    const channel = await E(host).lookup(['my-channel']);
 
     const proposedName = await E(channel).getProposedName();
     t.is(proposedName, 'AliceDisplay');
@@ -1044,8 +1044,8 @@ test.serial(
 test.serial('channel - message numbers increment correctly', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   await E(channel).post(['msg 0'], [], []);
   await E(channel).post(['msg 1'], [], []);
@@ -1063,8 +1063,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     const [bobInvite] = await E(channel).createInvitation('Bob');
     const bobMember = await E(bobInvite).join('Bob');
@@ -1097,8 +1097,8 @@ test.serial(
     const { host } = await prepareHost(t);
 
     // Alice creates a channel called "friends", nicknames herself "Alice"
-    await E(host).makeChannel('friends', 'Alice');
-    const channel = await E(host).lookup('friends');
+    await E(host).makeChannel(['friends'], 'Alice');
+    const channel = await E(host).lookup(['friends']);
 
     // Alice invites her friend, naming the invitation "Bob"
     const [bobInvite] = await E(channel).createInvitation('Bob');
@@ -1141,8 +1141,8 @@ test.serial('channel - per-viewer name resolution with memberId', async t => {
   const { host } = await prepareHost(t);
 
   // Alice creates a channel and names herself "Alice"
-  await E(host).makeChannel('friends', 'Alice');
-  const channel = await E(host).lookup('friends');
+  await E(host).makeChannel(['friends'], 'Alice');
+  const channel = await E(host).lookup(['friends']);
 
   // Alice invites "Bob"
   const [bobInvite] = await E(channel).createInvitation('Bob');
@@ -1226,8 +1226,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     const [bobInvite] = await E(channel).createInvitation('Bob');
     const bobMember = await E(bobInvite).join('Bob');
@@ -1270,8 +1270,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     await E(channel).post(['admin msg'], [], []);
 
@@ -1299,15 +1299,15 @@ test.serial(
 
     // Create a persona host
     const agentName = 'persona-multi';
-    await E(host).provideHost('multi-space', { agentName });
-    const personaPowers = await E(host).lookup(agentName);
+    await E(host).provideHost(['multi-space'], { agentName });
+    const personaPowers = await E(host).lookup([agentName]);
 
     // Create two channels inside the persona
-    await E(personaPowers).makeChannel('channel-a', 'Alice');
-    await E(personaPowers).makeChannel('channel-b', 'Alice');
+    await E(personaPowers).makeChannel(['channel-a'], 'Alice');
+    await E(personaPowers).makeChannel(['channel-b'], 'Alice');
 
-    const channelA = await E(personaPowers).lookup('channel-a');
-    const channelB = await E(personaPowers).lookup('channel-b');
+    const channelA = await E(personaPowers).lookup(['channel-a']);
+    const channelB = await E(personaPowers).lookup(['channel-b']);
 
     // Post to each independently
     await E(channelA).post(['Hello from A'], [], []);
@@ -1333,29 +1333,29 @@ test.serial(
 
     // Admin creates a channel
     const adminAgentName = 'persona-admin';
-    await E(host).provideHost('admin-space', { agentName: adminAgentName });
-    const adminPowers = await E(host).lookup(adminAgentName);
-    await E(adminPowers).makeChannel('channel', 'AdminAlice');
-    const adminChannel = await E(adminPowers).lookup('channel');
+    await E(host).provideHost(['admin-space'], { agentName: adminAgentName });
+    const adminPowers = await E(host).lookup([adminAgentName]);
+    await E(adminPowers).makeChannel(['channel'], 'AdminAlice');
+    const adminChannel = await E(adminPowers).lookup(['channel']);
 
     // Persona A creates a host, writes channel formula ID, joins as "Alice"
     const aliceAgentName = 'persona-alice';
-    await E(host).provideHost('alice-space', { agentName: aliceAgentName });
-    const alicePowers = await E(host).lookup(aliceAgentName);
+    await E(host).provideHost(['alice-space'], { agentName: aliceAgentName });
+    const alicePowers = await E(host).lookup([aliceAgentName]);
 
     const channelId = await E(host).identify(adminAgentName, 'channel');
-    await E(alicePowers).storeIdentifier('channel', channelId);
-    const aliceChannel = await E(alicePowers).lookup('channel');
+    await E(alicePowers).storeIdentifier(['channel'], channelId);
+    const aliceChannel = await E(alicePowers).lookup(['channel']);
     await E(adminChannel).createInvitation('Alice');
     const aliceMember = await E(aliceChannel).join('Alice');
 
     // Persona B creates a separate host, writes same formula ID, joins as "Bob"
     const bobAgentName = 'persona-bob';
-    await E(host).provideHost('bob-space', { agentName: bobAgentName });
-    const bobPowers = await E(host).lookup(bobAgentName);
+    await E(host).provideHost(['bob-space'], { agentName: bobAgentName });
+    const bobPowers = await E(host).lookup([bobAgentName]);
 
-    await E(bobPowers).storeIdentifier('channel', channelId);
-    const bobChannel = await E(bobPowers).lookup('channel');
+    await E(bobPowers).storeIdentifier(['channel'], channelId);
+    const bobChannel = await E(bobPowers).lookup(['channel']);
     await E(adminChannel).createInvitation('Bob');
     const bobMember = await E(bobChannel).join('Bob');
 
@@ -1391,13 +1391,13 @@ test.serial('channel - channel enumeration within a persona', async t => {
 
   // Create persona host, create 3 channels
   const agentName = 'persona-enum';
-  await E(host).provideHost('enum-space', { agentName });
+  await E(host).provideHost(['enum-space'], { agentName });
   /** @type {ERef<EndoHost>} */
-  const personaPowers = await E(host).lookup(agentName);
+  const personaPowers = await E(host).lookup([agentName]);
 
-  await E(personaPowers).makeChannel('general', 'Alice');
-  await E(personaPowers).makeChannel('random', 'Alice');
-  await E(personaPowers).makeChannel('help', 'Alice');
+  await E(personaPowers).makeChannel(['general'], 'Alice');
+  await E(personaPowers).makeChannel(['random'], 'Alice');
+  await E(personaPowers).makeChannel(['help'], 'Alice');
 
   // Enumerate pet names
   const petNames = await E(personaPowers).list();
@@ -1435,8 +1435,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('room', 'Alice');
-    const channel = await E(host).lookup('room');
+    await E(host).makeChannel(['room'], 'Alice');
+    const channel = await E(host).lookup(['room']);
 
     // Admin invites Bob and Carol
     const [bobInvite] = await E(channel).createInvitation('Bob');
@@ -1476,8 +1476,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('room', 'Alice');
-    const channel = await E(host).lookup('room');
+    await E(host).makeChannel(['room'], 'Alice');
+    const channel = await E(host).lookup(['room']);
 
     // Admin invites Bob
     const [bobInvite] = await E(channel).createInvitation('Bob');
@@ -1516,8 +1516,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('room', 'Alice');
-    const channel = await E(host).lookup('room');
+    await E(host).makeChannel(['room'], 'Alice');
+    const channel = await E(host).lookup(['room']);
 
     // Admin invites Bob and Carol
     const [bobInvite] = await E(channel).createInvitation('Bob');
@@ -1535,8 +1535,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('room', 'Alice');
-    const channel = await E(host).lookup('room');
+    await E(host).makeChannel(['room'], 'Alice');
+    const channel = await E(host).lookup(['room']);
 
     // Someone joins the channel (requires a prior createInvitation)
     await E(channel).createInvitation('Bob');
@@ -1558,8 +1558,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('room', 'Alice');
-    const channel = await E(host).lookup('room');
+    await E(host).makeChannel(['room'], 'Alice');
+    const channel = await E(host).lookup(['room']);
 
     // Admin creates 3 invitations
     await E(channel).createInvitation('Bob');
@@ -1582,8 +1582,8 @@ test.serial(
     const { host } = await prepareHost(t);
 
     // Alice creates a channel
-    await E(host).makeChannel('room', 'Alice');
-    const channel = await E(host).lookup('room');
+    await E(host).makeChannel(['room'], 'Alice');
+    const channel = await E(host).lookup(['room']);
 
     // Alice invites "Bob" and "Carol"
     const [bobInvite] = await E(channel).createInvitation('Bob');
@@ -1661,8 +1661,8 @@ test.serial('channel - sub-invitations auto-assign correctly', async t => {
   const { host } = await prepareHost(t);
 
   // Alice creates a channel
-  await E(host).makeChannel('room', 'Alice');
-  const channel = await E(host).lookup('room');
+  await E(host).makeChannel(['room'], 'Alice');
+  const channel = await E(host).lookup(['room']);
 
   // Alice invites Bob
   const [bobInvite] = await E(channel).createInvitation('Bob');
@@ -1729,22 +1729,22 @@ test.serial(
     const displayNameA = 'Alice';
 
     // Step 1: Create persona (host)
-    await E(host).provideHost(spaceNameA, { agentName: agentNameA });
+    await E(host).provideHost([spaceNameA], { agentName: agentNameA });
 
     // Step 2: Get the persona's powers (what the UI navigates into)
-    const personaPowersA = await E(host).lookup(agentNameA);
+    const personaPowersA = await E(host).lookup([agentNameA]);
 
     // Step 3: Create channel inside persona's store (named 'general' per UI convention)
-    await E(personaPowersA).makeChannel('general', displayNameA);
+    await E(personaPowersA).makeChannel(['general'], displayNameA);
 
     // === Space B: "New Channel" flow (different space name) ===
     const spaceNameB = 'random';
     const agentNameB = `persona-for-${spaceNameB}`;
     const displayNameB = 'Bob';
 
-    await E(host).provideHost(spaceNameB, { agentName: agentNameB });
-    const personaPowersB = await E(host).lookup(agentNameB);
-    await E(personaPowersB).makeChannel('general', displayNameB);
+    await E(host).provideHost([spaceNameB], { agentName: agentNameB });
+    const personaPowersB = await E(host).lookup([agentNameB]);
+    await E(personaPowersB).makeChannel(['general'], displayNameB);
 
     // === Verify agents are DISTINCT ===
     const agentIdA = await E(host).identify(agentNameA);
@@ -1773,8 +1773,8 @@ test.serial(
     );
 
     // === Verify messages are isolated ===
-    const channelA = await E(personaPowersA).lookup('general');
-    const channelB = await E(personaPowersB).lookup('general');
+    const channelA = await E(personaPowersA).lookup(['general']);
+    const channelB = await E(personaPowersB).lookup(['general']);
 
     await E(channelA).post(['Hello from Alice in Space A'], [], []);
     await E(channelB).post(['Hello from Bob in Space B'], [], []);
@@ -1801,10 +1801,10 @@ test.serial(
     const adminAgentName = `persona-for-${adminSpaceName}`;
     const adminDisplayName = 'AdminAlice';
 
-    await E(host).provideHost(adminSpaceName, { agentName: adminAgentName });
-    const adminPowers = await E(host).lookup(adminAgentName);
-    await E(adminPowers).makeChannel('general', adminDisplayName);
-    const adminChannel = await E(adminPowers).lookup('general');
+    await E(host).provideHost([adminSpaceName], { agentName: adminAgentName });
+    const adminPowers = await E(host).lookup([adminAgentName]);
+    await E(adminPowers).makeChannel(['general'], adminDisplayName);
+    const adminChannel = await E(adminPowers).lookup(['general']);
 
     // Admin posts a welcome message
     await E(adminChannel).post(['Welcome to the room!'], [], []);
@@ -1816,19 +1816,19 @@ test.serial(
     const joinerDisplayName = 'BobJoiner';
 
     // Step 1: Create new persona for the joiner
-    await E(host).provideHost(joinerSpaceName, { agentName: joinerAgentName });
-    const joinerPowers = await E(host).lookup(joinerAgentName);
+    await E(host).provideHost([joinerSpaceName], { agentName: joinerAgentName });
+    const joinerPowers = await E(host).lookup([joinerAgentName]);
 
     // Step 2: Get the channel's formula ID (what the locator encodes)
     const channelFormulaId = await E(host).identify(adminAgentName, 'general');
 
     // Step 3: Write channel formula ID into joiner's pet store
-    await E(joinerPowers).storeIdentifier('general', channelFormulaId);
+    await E(joinerPowers).storeIdentifier(['general'], channelFormulaId);
 
     // === Simulate what bodyComponent does when navigating to the joiner space ===
-    // resolvePowers: E(rootPowers).lookup(joinerAgentName) → joinerPowers
-    // then: E(joinerPowers).lookup('general') → the shared channel ref
-    const joinerChannelRef = await E(joinerPowers).lookup('general');
+    // resolvePowers: E(rootPowers).lookup([joinerAgentName]) → joinerPowers
+    // then: E(joinerPowers).lookup(['general']) → the shared channel ref
+    const joinerChannelRef = await E(joinerPowers).lookup(['general']);
 
     // Check if we're admin or joiner by comparing proposed names
     const channelCreatorName = await E(joinerChannelRef).getProposedName();
@@ -1899,22 +1899,22 @@ test.serial(
     const agentName = `persona-for-${spaceName}`;
 
     // First call: creates the agent
-    await E(host).provideHost(spaceName, { agentName });
-    const powersFirst = await E(host).lookup(agentName);
+    await E(host).provideHost([spaceName], { agentName });
+    const powersFirst = await E(host).lookup([agentName]);
     const agentIdFirst = await E(host).identify(agentName);
 
     // Create a channel inside the agent
-    await E(powersFirst).makeChannel('general', 'Alice');
+    await E(powersFirst).makeChannel(['general'], 'Alice');
 
     // Second call with same spaceName: should return SAME agent (not create new)
-    await E(host).provideHost(spaceName, { agentName });
-    const powersSecond = await E(host).lookup(agentName);
+    await E(host).provideHost([spaceName], { agentName });
+    const powersSecond = await E(host).lookup([agentName]);
     const agentIdSecond = await E(host).identify(agentName);
 
     t.is(agentIdFirst, agentIdSecond, 'provideHost is idempotent on same name');
 
     // The channel from the first call should still be there
-    const channel = await E(powersSecond).lookup('general');
+    const channel = await E(powersSecond).lookup(['general']);
     const messages = await E(channel).listMessages();
     t.is(messages.length, 0, 'channel exists and has no messages');
 
@@ -1936,16 +1936,16 @@ test.serial(
     const agentName = `persona-for-${spaceName}`;
     const displayName = 'Alice';
 
-    await E(host).provideHost(spaceName, { agentName });
-    const personaPowers = await E(host).lookup(agentName);
-    await E(personaPowers).makeChannel('general', displayName);
+    await E(host).provideHost([spaceName], { agentName });
+    const personaPowers = await E(host).lookup([agentName]);
+    await E(personaPowers).makeChannel(['general'], displayName);
 
     // Create extra channels inside the agent
-    await E(personaPowers).makeChannel('random', displayName);
-    await E(personaPowers).makeChannel('help', displayName);
+    await E(personaPowers).makeChannel(['random'], displayName);
+    await E(personaPowers).makeChannel(['help'], displayName);
 
     // Post a message to prove it has data
-    const channel = await E(personaPowers).lookup('general');
+    const channel = await E(personaPowers).lookup(['general']);
     await E(channel).post(['Hello from Alice'], [], []);
 
     // Verify channels exist
@@ -1966,8 +1966,8 @@ test.serial(
     await E(host).remove(agentName);
 
     // === Step 3: Recreate with the same name ===
-    await E(host).provideHost(spaceName, { agentName });
-    const newPowers = await E(host).lookup(agentName);
+    await E(host).provideHost([spaceName], { agentName });
+    const newPowers = await E(host).lookup([agentName]);
     const agentIdAfter = await E(host).identify(agentName);
 
     // The new agent should be a DIFFERENT formula (fresh)
@@ -2008,10 +2008,10 @@ test.serial(
     const agentName = `persona-for-${spaceName}`;
 
     // === Create first space, invite a member, post messages ===
-    await E(host).provideHost(spaceName, { agentName });
-    const powers1 = await E(host).lookup(agentName);
-    await E(powers1).makeChannel('general', 'Alice');
-    const channel1 = await E(powers1).lookup('general');
+    await E(host).provideHost([spaceName], { agentName });
+    const powers1 = await E(host).lookup([agentName]);
+    await E(powers1).makeChannel(['general'], 'Alice');
+    const channel1 = await E(powers1).lookup(['general']);
 
     // Alice invites Bob
     const [bobInvite] = await E(channel1).createInvitation('Bob');
@@ -2029,8 +2029,8 @@ test.serial(
     await E(host).remove(agentName);
 
     // === Recreate with the same name ===
-    await E(host).provideHost(spaceName, { agentName });
-    const powers2 = await E(host).lookup(agentName);
+    await E(host).provideHost([spaceName], { agentName });
+    const powers2 = await E(host).lookup([agentName]);
     const petStore2Id = await E(host).identify(agentName);
 
     // Must be a different agent
@@ -2041,8 +2041,8 @@ test.serial(
     t.false(pets2.includes('general'), 'no "general" channel in fresh agent');
 
     // Create a new channel with the same name
-    await E(powers2).makeChannel('general', 'Alice');
-    const channel2 = await E(powers2).lookup('general');
+    await E(powers2).makeChannel(['general'], 'Alice');
+    const channel2 = await E(powers2).lookup(['general']);
 
     // The new channel should have no invitations
     const members2 = await E(channel2).getMembers();
@@ -2065,11 +2065,11 @@ test.serial(
     const spaceName = 'general';
     const agentName = `persona-for-${spaceName}`;
 
-    await E(host).provideHost(spaceName, { agentName });
-    const personaPowers = await E(host).lookup(agentName);
-    await E(personaPowers).makeChannel('general', 'Alice');
+    await E(host).provideHost([spaceName], { agentName });
+    const personaPowers = await E(host).lookup([agentName]);
+    await E(personaPowers).makeChannel(['general'], 'Alice');
 
-    const channel = await E(personaPowers).lookup('general');
+    const channel = await E(personaPowers).lookup(['general']);
     await E(channel).post(['Old message'], [], []);
 
     const agentIdBefore = await E(host).identify(agentName);
@@ -2080,7 +2080,7 @@ test.serial(
     // since we're testing the root pet store behavior.)
 
     // === Recreate WITHOUT cleaning up handle/agent ===
-    await E(host).provideHost(spaceName, { agentName });
+    await E(host).provideHost([spaceName], { agentName });
     const sameAgentId = await E(host).identify(agentName);
 
     // BUG: Same agent, same channels, same messages
@@ -2090,11 +2090,11 @@ test.serial(
       'BUG: provideHost returns the same agent because handle still exists',
     );
 
-    const samePowers = await E(host).lookup(agentName);
+    const samePowers = await E(host).lookup([agentName]);
     const pets = await E(samePowers).list();
     t.true(pets.includes('general'), 'BUG: old channel is still present');
 
-    const oldChannel = await E(samePowers).lookup('general');
+    const oldChannel = await E(samePowers).lookup(['general']);
     const messages = await E(oldChannel).listMessages();
     t.is(messages.length, 1, 'BUG: old messages are still there');
     t.deepEqual(messages[0].strings, ['Old message']);
@@ -2107,8 +2107,8 @@ test.serial(
   'join() is idempotent - returns same member on repeated calls',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('idem-chan', 'Admin');
-    const channel = await E(host).lookup('idem-chan');
+    await E(host).makeChannel(['idem-chan'], 'Admin');
+    const channel = await E(host).lookup(['idem-chan']);
 
     // Join twice with the same name
     await E(channel).createInvitation('Alice');
@@ -2129,8 +2129,8 @@ test.serial(
   'join() idempotency - messages use stable memberId across visits',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('stable-chan', 'Admin');
-    const channel = await E(host).lookup('stable-chan');
+    await E(host).makeChannel(['stable-chan'], 'Admin');
+    const channel = await E(host).lookup(['stable-chan']);
 
     // Simulate first visit: join and post
     await E(channel).createInvitation('Bob');
@@ -2156,8 +2156,8 @@ test.serial(
   'join() with different names creates different members',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('diff-chan', 'Admin');
-    const channel = await E(host).lookup('diff-chan');
+    await E(host).makeChannel(['diff-chan'], 'Admin');
+    const channel = await E(host).lookup(['diff-chan']);
 
     await E(channel).createInvitation('Alice');
     const alice = await E(channel).join('Alice');
@@ -2176,8 +2176,8 @@ test.serial(
 
 test.serial('getMemberId() returns admin ID for channel', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('mid-chan', 'Admin');
-  const channel = await E(host).lookup('mid-chan');
+  await E(host).makeChannel(['mid-chan'], 'Admin');
+  const channel = await E(host).lookup(['mid-chan']);
 
   const adminId = await E(channel).getMemberId();
   t.is(adminId, '0', 'channel admin memberId is "0"');
@@ -2185,8 +2185,8 @@ test.serial('getMemberId() returns admin ID for channel', async t => {
 
 test.serial('getMemberId() returns stable ID for member', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('mid2-chan', 'Admin');
-  const channel = await E(host).lookup('mid2-chan');
+  await E(host).makeChannel(['mid2-chan'], 'Admin');
+  const channel = await E(host).lookup(['mid2-chan']);
 
   await E(channel).createInvitation('Alice');
   const member = await E(channel).join('Alice');
@@ -2206,8 +2206,8 @@ test.serial('getMemberId() returns stable ID for member', async t => {
 
 test.serial('getMemberId() is consistent across multiple calls', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('mid3-chan', 'Admin');
-  const channel = await E(host).lookup('mid3-chan');
+  await E(host).makeChannel(['mid3-chan'], 'Admin');
+  const channel = await E(host).lookup(['mid3-chan']);
 
   await E(channel).createInvitation('Alice');
   const member = await E(channel).join('Alice');
@@ -2222,8 +2222,8 @@ test.serial(
   'getMembers excludes join-created members from invitations list',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('dup-chan', 'Alice');
-    const channel = await E(host).lookup('dup-chan');
+    await E(host).makeChannel(['dup-chan'], 'Alice');
+    const channel = await E(host).lookup(['dup-chan']);
 
     // Admin invites Bob explicitly
     await E(channel).createInvitation('Bob');
@@ -2246,8 +2246,8 @@ test.serial(
   'getMembers shows only invite-created members even with multiple joiners',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('multi-join-chan', 'Alice');
-    const channel = await E(host).lookup('multi-join-chan');
+    await E(host).makeChannel(['multi-join-chan'], 'Alice');
+    const channel = await E(host).lookup(['multi-join-chan']);
 
     // Admin invites Bob and Carol
     await E(channel).createInvitation('Bob');
@@ -2271,8 +2271,8 @@ test.serial(
 
 test.serial('join-only member does not appear in admin getMembers', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('join-only-chan', 'Alice');
-  const channel = await E(host).lookup('join-only-chan');
+  await E(host).makeChannel(['join-only-chan'], 'Alice');
+  const channel = await E(host).lookup(['join-only-chan']);
 
   // Someone joins after being invited
   await E(channel).createInvitation('Eve');
@@ -2293,8 +2293,8 @@ test.serial(
   'channel - attenuator causes getMembers() to show active: false',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
     const bobProxy = await E(bobInvite).join('Bob');
@@ -2325,8 +2325,8 @@ test.serial(
   'channel - re-enabling via setInvitationValidity(true)',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
     const bobProxy = await E(bobInvite).join('Bob');
@@ -2352,8 +2352,8 @@ test.serial(
   'channel - heat config: burst limit blocks rapid posts',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
     const bobProxy = await E(bobInvite).join('Bob');
@@ -2387,8 +2387,8 @@ test.serial(
 
 test.serial('channel - temporary ban blocks access', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
   const bobProxy = await E(bobInvite).join('Bob');
@@ -2407,8 +2407,8 @@ test.serial('channel - temporary ban blocks access', async t => {
 
 test.serial('channel - getAttenuator returns a working attenuator', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite] = await E(channel).createInvitation('Bob');
   const bobProxy = await E(bobInvite).join('Bob');
@@ -2431,8 +2431,8 @@ test.serial('channel - getAttenuator returns a working attenuator', async t => {
 
 test.serial('channel - duplicate invitation names are rejected', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   await E(channel).createInvitation('Bob');
 
@@ -2448,8 +2448,8 @@ test.serial('channel - duplicate invitation names are rejected', async t => {
 
 test.serial('channel - cascading heat config from parent', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
   const bobProxy = await E(bobInvite).join('Bob');
@@ -2486,8 +2486,8 @@ test.serial(
   'channel - disabling invite blocks join-created member',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Alice invites Bob (creates the invite entry + attenuator)
     await E(channel).createInvitation('Bob');
@@ -2520,8 +2520,8 @@ test.serial(
   'channel - re-enabling invite unblocks join-created member',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     await E(channel).createInvitation('Bob');
     const bobMember = await E(channel).join('Bob');
@@ -2546,8 +2546,8 @@ test.serial(
   'channel - disabling invite stops existing follow stream for join-created member',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     await E(channel).createInvitation('Bob');
     const bobMember = await E(channel).join('Bob');
@@ -2582,8 +2582,8 @@ test.serial(
   async t => {
     t.timeout(60_000);
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Alice invites Bob, Bob joins
     await E(channel).createInvitation('Bob');
@@ -2623,8 +2623,8 @@ test.serial(
   async t => {
     t.timeout(60_000);
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Alice invites Bob — Bob uses the proxy directly
     const [bobInvite] = await E(channel).createInvitation('Bob');
@@ -2662,8 +2662,8 @@ test.serial(
   'channel - temporary ban on invite blocks join-created member',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     await E(channel).createInvitation('Bob');
     const bobMember = await E(channel).join('Bob');
@@ -2685,8 +2685,8 @@ test.serial(
   'channel - disabling Bob cascades to Carol invited by Bob (via join)',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Alice invites Bob
     await E(channel).createInvitation('Bob');
@@ -2718,8 +2718,8 @@ test.serial(
   'channel - disabling Bob cascades to Carol invited by Bob (via proxy)',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Alice invites Bob, gets proxy
     const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
@@ -2748,8 +2748,8 @@ test.serial(
   'channel - re-enabling Bob re-enables Carol (cascading)',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     await E(channel).createInvitation('Bob');
     const bobMember = await E(channel).join('Bob');
@@ -2776,8 +2776,8 @@ test.serial(
   'channel - getHeatConfig returns null when no config set',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     // Admin always returns null
     const adminConfig = await E(channel).getHeatConfig();
@@ -2798,8 +2798,8 @@ test.serial(
 
 test.serial('channel - getHeatConfig returns set config', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
   const bobProxy = await E(bobInvite).join('Bob');
@@ -2825,8 +2825,8 @@ test.serial(
   'channel - heat config: posts within sustained rate succeed',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     const [bobInvite, bobAttenuator] = await E(channel).createInvitation('Bob');
     const bobProxy = await E(bobInvite).join('Bob');
@@ -2861,8 +2861,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('hop-chan', 'Admin');
-    const channel = await E(host).lookup('hop-chan');
+    await E(host).makeChannel(['hop-chan'], 'Admin');
+    const channel = await E(host).lookup(['hop-chan']);
 
     // Create admin → A → B chain
     const [inviteA, attA] = await E(channel).createInvitation('A');
@@ -2909,8 +2909,8 @@ test.serial(
 test.serial('channel - getHopInfo omits hops without heatConfig', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('hop-no-cfg', 'Admin');
-  const channel = await E(host).lookup('hop-no-cfg');
+  await E(host).makeChannel(['hop-no-cfg'], 'Admin');
+  const channel = await E(host).lookup(['hop-no-cfg']);
 
   // admin → A (no config) → B (has config)
   const [inviteA] = await E(channel).createInvitation('A');
@@ -2933,8 +2933,8 @@ test.serial('channel - getHopInfo omits hops without heatConfig', async t => {
 test.serial('channel - admin getHopInfo returns empty', async t => {
   const { host } = await prepareHost(t);
 
-  await E(host).makeChannel('hop-admin', 'Admin');
-  const channel = await E(host).lookup('hop-admin');
+  await E(host).makeChannel(['hop-admin'], 'Admin');
+  const channel = await E(host).lookup(['hop-admin']);
 
   const hopInfo = await E(channel).getHopInfo();
   t.is(hopInfo.policies.length, 0, 'admin has no hops');
@@ -2946,8 +2946,8 @@ test.serial(
   async t => {
     const { host } = await prepareHost(t);
 
-    await E(host).makeChannel('heat-evt', 'Admin');
-    const channel = await E(host).lookup('heat-evt');
+    await E(host).makeChannel(['heat-evt'], 'Admin');
+    const channel = await E(host).lookup(['heat-evt']);
 
     // Create admin → A with heat config
     const [inviteA, attA] = await E(channel).createInvitation('A');
@@ -3000,8 +3000,8 @@ test.serial(
   'channel - downstream tight limit does not inflate parent heat',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('iso-chan', 'Alice');
-    const channel = await E(host).lookup('iso-chan');
+    await E(host).makeChannel(['iso-chan'], 'Alice');
+    const channel = await E(host).lookup(['iso-chan']);
 
     // Alice → Bob with generous burst limit (10 messages)
     const [bobInvite, bobAtt] = await E(channel).createInvitation('Bob');
@@ -3053,8 +3053,8 @@ test.serial(
   'channel - getHopInfo returns each hop policy independently',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('iso-hop', 'Alice');
-    const channel = await E(host).lookup('iso-hop');
+    await E(host).makeChannel(['iso-hop'], 'Alice');
+    const channel = await E(host).lookup(['iso-hop']);
 
     // Alice → Bob (generous)
     const [bobInvite, bobAtt] = await E(channel).createInvitation('Bob');
@@ -3102,8 +3102,8 @@ test.serial(
   'channel - parent heat accumulates at parent rate from child posts',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('rate-chan', 'Alice');
-    const channel = await E(host).lookup('rate-chan');
+    await E(host).makeChannel(['rate-chan'], 'Alice');
+    const channel = await E(host).lookup(['rate-chan']);
 
     // Alice → Bob with burstLimit 10 (heatPerMessage = 9)
     const [bobInvite, bobAtt] = await E(channel).createInvitation('Bob');
@@ -3153,8 +3153,8 @@ test.serial(
 
 test.serial('channel messages have type:"package" field', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   await E(channel).post(['Hello'], [], []);
   const messages = await E(channel).listMessages();
@@ -3163,8 +3163,8 @@ test.serial('channel messages have type:"package" field', async t => {
 
 test.serial('channel messages use "names" not "edgeNames"', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   await E(channel).post(['Hello ', ''], ['attachment'], []);
   const messages = await E(channel).listMessages();
@@ -3182,8 +3182,8 @@ test.serial('channel messages use "names" not "edgeNames"', async t => {
 
 test.serial('channel messages have a messageId', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   await E(channel).post(['Hello'], [], []);
   const messages = await E(channel).listMessages();
@@ -3195,8 +3195,8 @@ test.serial(
   'channel messages do NOT carry author/pedigree/pedigreeMemberIds',
   async t => {
     const { host } = await prepareHost(t);
-    await E(host).makeChannel('my-channel', 'Alice');
-    const channel = await E(host).lookup('my-channel');
+    await E(host).makeChannel(['my-channel'], 'Alice');
+    const channel = await E(host).lookup(['my-channel']);
 
     const [bobInvite] = await E(channel).createInvitation('Bob');
     const bobMember = await E(bobInvite).join('Bob');
@@ -3216,8 +3216,8 @@ test.serial(
 
 test.serial('getMember(memberId) returns member info', async t => {
   const { host } = await prepareHost(t);
-  await E(host).makeChannel('my-channel', 'Alice');
-  const channel = await E(host).lookup('my-channel');
+  await E(host).makeChannel(['my-channel'], 'Alice');
+  const channel = await E(host).lookup(['my-channel']);
 
   const [bobInvite] = await E(channel).createInvitation('Bob');
   const bobMember = await E(bobInvite).join('Bob');

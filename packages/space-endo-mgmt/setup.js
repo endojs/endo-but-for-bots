@@ -27,8 +27,8 @@ export const main = async agent => {
   }
 
   const { env } = process;
-  await E(agent).makeUnconfined('@main', capletSpecifier, {
-    resultName: 'controller-for-endo-mgmt',
+  await E(agent).makeUnconfined(['@main'], capletSpecifier, {
+    resultName: ['controller-for-endo-mgmt'],
     env: {
       ENDO_DEPLOY_DIR: env.ENDO_DEPLOY_DIR || '',
       ENDO_MGMT_REPO_URL: env.ENDO_MGMT_REPO_URL || '',

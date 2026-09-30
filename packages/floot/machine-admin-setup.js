@@ -298,11 +298,11 @@ export const grantDeployFactory = async (
 
   // The service binding heals every boot; the workflow setup keeps the
   // service's formula identity, so this is normally a same-id no-op.
-  await E(connectionPowers).storeValue(service, 'service');
+  await E(connectionPowers).storeValue(service, ['service']);
 
   /** @type {string[]} */
   let factoryIds = (await E(connectionPowers).has('factory-ids'))
-    ? [...(await E(connectionPowers).lookup('factory-ids'))]
+    ? [...(await E(connectionPowers).lookup(['factory-ids']))]
     : [];
   const newest =
     factoryIds.length > 0 ? factoryIds[factoryIds.length - 1] : undefined;
@@ -314,7 +314,7 @@ export const grantDeployFactory = async (
       harden({ chart: chartKey, endowments }),
     );
     factoryIds = [...factoryIds, fid];
-    await E(connectionPowers).storeValue(harden(factoryIds), 'factory-ids');
+    await E(connectionPowers).storeValue(harden(factoryIds), ['factory-ids']);
     console.error(`Floot: minted ${grantName} (${chartKey}) as ${fid}.`);
   }
 
@@ -324,7 +324,7 @@ export const grantDeployFactory = async (
   if (await E(agent).has(...connectionPath)) {
     await E(agent).remove(...connectionPath);
   }
-  await E(agent).makeUnconfined('@main', specifier, {
+  await E(agent).makeUnconfined(['@main'], specifier, {
     powersName: powersRef,
     resultName: connectionPath,
   });
@@ -385,7 +385,7 @@ export const grantDeployFactories = async (agent, { dir, factoryHost }) => {
     service = await E(agent).lookup(WORKFLOW_SERVICE_NAME);
     endowments = harden({
       performer: await E(agent).lookup(NIXOS_CONTROLLER_NAME),
-      operator: await E(agent).lookup('@self'),
+      operator: await E(agent).lookup(['@self']),
     });
   } catch (err) {
     console.error(

@@ -44,10 +44,10 @@ const ConnectionInterface = M.interface('DeployConnection', {
  *   store
  */
 export const make = async powers => {
-  const service = await E(powers).lookup('service');
+  const service = await E(powers).lookup(['service']);
   const factoryIds = async () => {
     /** @type {string[]} */
-    const ids = await E(powers).lookup('factory-ids');
+    const ids = await E(powers).lookup(['factory-ids']);
     if (!Array.isArray(ids) || ids.length === 0) {
       throw Error('No deploy factory is bound to this connection');
     }

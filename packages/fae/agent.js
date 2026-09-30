@@ -511,7 +511,7 @@ export const spawnWorkerLoop = async (
   const runAgent = async () => {
     await initializeIntroducedTools();
 
-    await E(powers).send('@host', ['Fae agent ready.'], [], []);
+    await E(powers).send(['@host'], ['Fae agent ready.'], [], []);
 
     /** @type {string | undefined} */
     const selfLocator = await E(powers).locate('@self');
@@ -891,7 +891,7 @@ export const make = async (guestPowers, _context) => {
   /** @type {any} */
   const powers = guestPowers;
 
-  const hostAgent = await E(powers).lookup('host-agent');
+  const hostAgent = await E(powers).lookup(['host-agent']);
 
   return makeExo('FaeFactory', FaeFactoryInterface, {
     /**

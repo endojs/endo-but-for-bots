@@ -15,8 +15,8 @@
  * Usage from a host:
  *
  *   await E(host).makeUnconfined('@node', moduleUrl, {
- *     powersName: '@agent',
- *     resultName: 'tmp-ro',
+ *     powersName,
+ *     resultName,
  *     env: { SOURCE_NAME: 'tmp' },          // or 'a/b/c'
  *   });
  *

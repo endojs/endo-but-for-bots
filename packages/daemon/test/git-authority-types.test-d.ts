@@ -8,14 +8,14 @@ declare const mount: EndoMount;
 declare const allowHistoryRewrite: boolean;
 declare const optionsSelectedAtRuntime: GitProvisionOptions;
 
-const ordinary = host.provideGit(mount, 'ordinary');
-const explicitOrdinary = host.provideGit(mount, 'explicit-ordinary', {
+const ordinary = host.provideGit(mount, ['ordinary']);
+const explicitOrdinary = host.provideGit(mount, ['explicit-ordinary'], {
   allowHistoryRewrite: false,
 });
-const historyRewrite = host.provideGit(mount, 'history-rewrite', {
+const historyRewrite = host.provideGit(mount, ['history-rewrite'], {
   allowHistoryRewrite: true,
 });
-const selectedAtRuntime = host.provideGit(mount, 'selected-at-runtime', {
+const selectedAtRuntime = host.provideGit(mount, ['selected-at-runtime'], {
   allowHistoryRewrite,
 });
 const optionsSelectedAtRuntimeResult = host.provideGit(
