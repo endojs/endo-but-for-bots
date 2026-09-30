@@ -32,7 +32,7 @@ endo-host `ops/explicit-journal-deployment-20260924.md`.
 
 | Item | Status | Evidence |
 |---|---|---|
-| RA-01 simplification | Removals done; target regressed | Every removal named below is in source. The four backend/shared packages measure 42,185 lines (was 39,713 at the snapshot), and the vendor packages 19,028 (was 16,718), mostly new native-context capture/restore code (Claude coverage and helpers, Codex context transport) that the retained-mechanism inventory does not yet cover. The attachment allowlist exists twice, in `claude-context-coverage.js` and `oci/capture-compaction.mjs`, synchronized by hand |
+| RA-01 simplification | Removals done; target regressed | Every removal named below is in source. The four backend/shared packages measure 42,185 lines (was 39,713 at the snapshot), and the vendor packages 19,028 (was 16,718), mostly new native-context capture/restore code (Claude coverage and helpers, Codex context transport) that the retained-mechanism inventory does not yet cover. The attachment allowlist, the record identity pattern and the transport limit that were repeated across the Claude helpers and validator are written once since `d2effd167` (2026-09-30, below) |
 | RA-02 bounded context | Open | No whole-context bound, no Fae compaction producer, no policy. The portable fallback (`88f9deb23`) and non-fatal capture (`adf25f948`) reverse RA-02's "refuse rather than fall back" for Claude (the transcript-continuity backend with native checkpoints; OpenCode has none to refuse on): a failed, stopped or uncaptured turn now projects the checkpoint's portable context plus everything after it, so bounding relies on the CLI's own compaction until the next Claude checkpoint. Codex still refuses |
 | RA-03 account identity | Done in source; in the deployed code | Explicit bindings, exact-authority merging, reset pairing; not separately accepted live |
 | RA-04 admission conformance | Partial | The shared harness covers cancellation before/during preparation and during restoration on all three adapters. Cancel at the write, after dispatch, and failure-then-next-turn are per-adapter only; Codex's successor disposition deliberately differs |
@@ -53,6 +53,26 @@ reopens what was closed, and turning public egress off stops live public
 listeners. Each backend now has the same host option (`maxSessions`, default
 16). Owner, directory, account, images and pool mode still require a
 retirement.
+
+**Duplicate implementations: the Claude native-context shape — merged
+2026-09-30.** The attachment allowlist existed twice (the host validator
+`claude-context-coverage.js` and the in-image helper
+`oci/capture-compaction.mjs`), and the record identity pattern and the 16 MiB
+transport limit five times each, across `claude-client.js`, the validator and
+the three `oci/` helpers, all synchronized by hand. `d2effd167` writes them
+once in `oci/native-context-shape.mjs`, a module that depends on nothing but
+the language, so the image carries it beside the helpers and the daemon
+imports it through the existing `src` → `oci` path (`claude-native-controller.js`
+already imported the projection that way). Behavior is unchanged at every call
+site; the pre-commit review checked both old predicates against the new one
+differentially. New tests fix the contract, prove the Containerfile copies
+every module a helper reaches by a relative reference, and fail if a shape
+token reappears in a second source file. Runtime source shrinks by 21 lines
+(143 removed, 122 added, 87 of them the module with its comments); the point is
+one definition, not the count. Deploying it is an image change: the
+Containerfile moves the Claude image digest, and images remain broker
+identity, so it rides the next Claude image redeploy (retire the broker name
+and the Claude sessions, as on September 25), not a daemon-only release.
 
 ## Requirements and current evidence
 
