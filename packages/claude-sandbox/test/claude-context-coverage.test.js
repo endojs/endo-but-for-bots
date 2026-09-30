@@ -669,6 +669,142 @@ test('thinking/signature and tool JSON deltas must match complete frames', t => 
   t.notThrows(() => f.assert());
 });
 
+const parallelToolCase = async (separateMessages = false) => {
+  const f = JSON.parse(
+    await readFile(
+      new URL('./fixtures/parallel-tool-turn.json', import.meta.url),
+      'utf8',
+    ),
+  );
+  const rows = f.rows.map(row => ({ ...row, sessionId: f.sessionId }));
+  if (separateMessages) rows[4].message.id = 'other-message';
+  const coverage = makeCoverage();
+  const observe = event =>
+    coverage.observe({ ...event, session_id: f.sessionId });
+  const stream = event => observe({ type: 'stream_event', event });
+  let messageId;
+  let index = 0;
+  const stop = () => {
+    if (messageId !== undefined) stream({ type: 'message_stop' });
+    messageId = undefined;
+  };
+  observe({ type: 'system', subtype: 'init' });
+  for (const row of rows.slice(1)) {
+    if (row.type === 'assistant') {
+      if (row.message.id !== messageId) {
+        stop();
+        messageId = row.message.id;
+        index = 0;
+        stream({
+          type: 'message_start',
+          message: { ...row.message, content: [] },
+        });
+      }
+      const block = row.message.content[0];
+      let start = block;
+      const deltas = [];
+      if (block.type === 'thinking') {
+        start = { type: 'thinking', thinking: '' };
+        deltas.push(
+          { type: 'thinking_delta', thinking: block.thinking },
+          { type: 'signature_delta', signature: block.signature },
+        );
+      } else if (block.type === 'tool_use') {
+        start = { ...block, input: {} };
+        deltas.push({
+          type: 'input_json_delta',
+          partial_json: JSON.stringify(block.input),
+        });
+      } else if (block.type === 'text') {
+        start = { type: 'text', text: '' };
+        deltas.push({ type: 'text_delta', text: block.text });
+      }
+      stream({ type: 'content_block_start', index, content_block: start });
+      for (const delta of deltas)
+        stream({ type: 'content_block_delta', index, delta });
+      observe({ type: 'assistant', uuid: row.uuid, message: row.message });
+      stream({ type: 'content_block_stop', index });
+      index += 1;
+    } else if (row.type === 'user') {
+      stop();
+      observe({ type: 'user', uuid: row.uuid, message: row.message });
+    }
+  }
+  stop();
+  observe({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    result: 'cats; policy off',
+  });
+  return {
+    rows,
+    assert: (captured = rows) =>
+      coverage.assertCaptured(
+        `${captured.map(row => JSON.stringify(row)).join('\n')}\n`,
+        {
+          sessionId: f.sessionId,
+          beforeUuid: null,
+          beforePayload: '',
+          prefixSha256: emptyPrefix,
+          prompt: f.prompt,
+          outcome: 'success',
+        },
+      ),
+  };
+};
+
+test('covered parallel tools retain signed and opaque native context without reparenting', async t => {
+  const f = await parallelToolCase();
+  t.notThrows(() => f.assert());
+});
+
+test('fully observed results from different assistant message groups cannot certify sibling ancestry', async t => {
+  const f = await parallelToolCase(true);
+  t.throws(() => f.assert(), {
+    message: /native context coverage unavailable/,
+  });
+});
+
+for (const scenario of [
+  'wrong-source',
+  'wrong-tool-parent',
+  'missing-source',
+  'future-parent',
+  'repeated-tool',
+  'signature',
+  'opaque-data',
+  'extra-dialogue',
+]) {
+  test(`parallel native coverage refuses ${scenario}`, async t => {
+    const f = await parallelToolCase();
+    const rows = structuredClone(f.rows);
+    const first = rows[5];
+    const second = rows[6];
+    if (scenario === 'wrong-source')
+      first.sourceToolAssistantUUID = rows[4].uuid;
+    else if (scenario === 'wrong-tool-parent') {
+      first.parentUuid = rows[4].uuid;
+      first.sourceToolAssistantUUID = rows[4].uuid;
+    } else if (scenario === 'missing-source')
+      delete first.sourceToolAssistantUUID;
+    else if (scenario === 'future-parent') {
+      first.parentUuid = rows[8].uuid;
+      first.sourceToolAssistantUUID = rows[8].uuid;
+    } else if (scenario === 'repeated-tool')
+      second.message.content[0].tool_use_id = 'native-shell';
+    else if (scenario === 'signature')
+      rows[2].message.content[0].signature = 'changed-signature';
+    else if (scenario === 'opaque-data')
+      rows[8].message.content[0].data = 'changed-opaque-context';
+    else if (scenario === 'extra-dialogue')
+      first.message.content.push({ type: 'text', text: 'unstated dialogue' });
+    t.throws(() => f.assert(rows), {
+      message: /native context coverage unavailable/,
+    });
+  });
+}
+
 // Observed live on 2026-09-25: the pinned CLI writes its agent and skill
 // catalogs to the transcript but not to the public stream. They are preserved
 // as native context only; they never stand in for dialogue or tool evidence.

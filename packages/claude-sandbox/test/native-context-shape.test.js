@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import {
   NATIVE_CONTEXT_LIMIT,
   isNativeAttachment,
+  isNativeToolResultParent,
   isUuid,
 } from '../oci/native-context-shape.mjs';
 
@@ -45,6 +46,60 @@ test('the shape accepts each attachment the pinned CLI writes', t => {
     { ...skillListing, names: [], skillCount: 0, content: '' },
   ]) {
     t.true(isNativeAttachment(attachment), JSON.stringify(attachment));
+  }
+});
+
+test('parallel result ancestry names its own tool in the current assistant message group', t => {
+  const parent = {
+    uuid: '00000000-0000-4000-8000-000000000001',
+    type: 'assistant',
+    message: {
+      role: 'assistant',
+      id: 'group',
+      content: [{ type: 'tool_use', id: 'tool' }],
+    },
+  };
+  const row = {
+    type: 'user',
+    parentUuid: parent.uuid,
+    sourceToolAssistantUUID: parent.uuid,
+    message: {
+      role: 'user',
+      content: [{ type: 'tool_result', tool_use_id: 'tool' }],
+    },
+  };
+  t.true(isNativeToolResultParent(row, parent, 'group'));
+  for (const [candidate, owner, group] of [
+    [row, parent, 'other-group'],
+    [row, parent, undefined],
+    [row, undefined, 'group'],
+    [null, parent, 'group'],
+    [{ ...row, sourceToolAssistantUUID: undefined }, parent, 'group'],
+    [{ ...row, parentUuid: 'other-parent' }, parent, 'group'],
+    [
+      { ...row, message: { role: 'user', content: 'dialogue' } },
+      parent,
+      'group',
+    ],
+    [{ ...row, message: { role: 'user', content: [null] } }, parent, 'group'],
+    [
+      {
+        ...row,
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: 'other-tool' }],
+        },
+      },
+      parent,
+      'group',
+    ],
+    [
+      row,
+      { ...parent, message: { ...parent.message, content: [null] } },
+      'group',
+    ],
+  ]) {
+    t.false(isNativeToolResultParent(candidate, owner, group));
   }
 });
 

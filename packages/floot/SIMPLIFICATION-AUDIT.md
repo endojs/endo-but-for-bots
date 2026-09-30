@@ -31,6 +31,15 @@ The requested post-fix source-bulk audit will quantify the retained code and
 trace remaining duplication and dead-code candidates rather than assuming these
 correctness changes prove a smaller implementation.
 
+The Claude checkpoint slice also removes the separate ordinary host-coverage
+chain walker by using its existing validator.
+One predicate in the existing native-shape module describes the pinned CLI's
+parallel tool-result ancestry for both capture and host coverage.
+It does not merge the filesystem/parser boundary with host authority validation,
+add a context owner, or relax signed/opaque byte and prior-prefix checks.
+The realistic regression and byte-exact capture/import/recapture tests pass;
+live verification requires the rebuilt Claude image, not only the host source.
+
 ## Native-context mechanism inventory, 2026-09-30
 
 Current-source follow-up at `59fe1a5bd`; this supplements the earlier inventory,

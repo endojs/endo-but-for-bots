@@ -20,6 +20,38 @@ export const isUuid = value =>
   typeof value === 'string' &&
   /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value);
 
+/**
+ * The pinned CLI parents each parallel result to its own assistant tool block.
+ * Its loader rejoins those siblings through the assistant API message ID.
+ * This one exception is not permission to import an arbitrary earlier branch.
+ *
+ * @param {any} row Candidate result row.
+ * @param {any} parent An already retained native row.
+ * @param {string|undefined} messageId The current assistant API message group.
+ * @returns {boolean}
+ */
+export const isNativeToolResultParent = (row, parent, messageId) =>
+  typeof messageId === 'string' &&
+  messageId.length > 0 &&
+  row?.type === 'user' &&
+  row.message?.role === 'user' &&
+  isUuid(row.parentUuid) &&
+  row.sourceToolAssistantUUID === row.parentUuid &&
+  parent?.type === 'assistant' &&
+  parent.uuid === row.parentUuid &&
+  parent.message?.role === 'assistant' &&
+  parent.message.id === messageId &&
+  Array.isArray(parent.message.content) &&
+  parent.message.content.length === 1 &&
+  parent.message.content[0]?.type === 'tool_use' &&
+  typeof parent.message.content[0].id === 'string' &&
+  parent.message.content[0].id.length > 0 &&
+  Array.isArray(row.message.content) &&
+  row.message.content.length === 1 &&
+  row.message.content[0]?.type === 'tool_result' &&
+  row.message.content[0].tool_use_id === parent.message.content[0].id;
+if (typeof harden === 'function') harden(isNativeToolResultParent);
+
 /** @param {unknown} value */
 const strings = value =>
   Array.isArray(value) && value.every(item => typeof item === 'string');

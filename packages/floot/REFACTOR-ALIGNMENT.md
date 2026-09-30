@@ -35,7 +35,15 @@ Native explicit status and actual host rejection retain the canonical optional
 Event replay, snapshots, archives, late results and checkpoint classification
 enrichment are covered without another durable owner or replay policy.
 Tokyo still runs generation 189 below; deployment verification is pending.
-The initial Claude tool-seed capture fix is a separate reviewed slice.
+The initial Claude tool-seed capture fix is implemented and independently reviewed
+as a separate slice; image rebuild and live restart-recall verification are pending.
+The pinned CLI parents parallel results to individual assistant tool UUIDs within
+one API message group, rather than a strictly linear physical-row frontier.
+Capture and host coverage share one exact owner/source/tool/message predicate;
+ordinary coverage reuses the existing chain validator.
+The full Claude suite passes 540 tests, with 209 independently rerun.
+Signed/opaque bytes, prefix receipts, observed-frame coverage and restore/recapture
+validation remain enforced; arbitrary or cross-message branches remain refused.
 After both fixes, the next requested audit measures the current four-package
 source bulk and traces duplication/dead-code candidates to their callers.
 

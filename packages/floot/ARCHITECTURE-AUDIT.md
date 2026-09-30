@@ -4593,6 +4593,31 @@ No new journal, storage format, effect owner or automatic replay policy is added
 Full Floot, space-floot and chat tests pass, alongside native mapping and archival
 regressions; the independent review also checks the actual provider wire conversion.
 
+### Initial Claude tool-heavy checkpoint omission — 2026-10-01
+
+A fresh generation-189 diagnostic session reproduces the static capture warning
+`Divergent or missing suffix ancestry` after successful native and Endo tool use.
+Sanitized row metadata and the pinned CLI 2.1.233 loader establish that parallel
+tool results parent to their individual assistant tool UUIDs; the loader restores
+these siblings through their shared assistant API message ID.
+Our capture/helper and host coverage instead required a strictly linear frontier.
+This is native format handling, not another host-effects journal or runtime owner.
+
+Source fix and independent review pass; deployment verification is pending.
+Capture and host coverage reuse one predicate for a previously retained exact
+tool owner, matching source UUID and tool ID in the current message group.
+Declared ownership is checked even on the linear path, and arbitrary, future,
+repeated tool outcomes or cross-message branches are refused.
+Ordinary coverage reuses the existing chain validator rather than another walker.
+Prior-prefix receipts, complete observed frames, exact signed/redacted thinking
+and opaque records, ordering and importer recapture remain enforced.
+A realistic synthetic fixture fails with the exact warning before the fix;
+capture/import/recapture is byte-exact after it.
+All 540 Claude tests pass; the independent reviewer reruns 209 changed-suite
+tests and package lint reports no errors.
+Both in-image helpers and the trusted host consume the existing shape module,
+so the Claude image must be rebuilt before a live claim is made.
+
 ## Preserve these boundaries
 
 Do not mechanically merge protocol-specific code:
