@@ -3,6 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-09-29 |
+| **Updated** | 2026-09-30 |
 | **Author** | Kris Kowal (prompted) |
 | **Status** | Proposed |
 
@@ -75,8 +76,8 @@ unreachable over the socket and has no pid file.
 ### Single-instance guard (`daemon/src/socket-lock.js`, and `servePath` in `manager-node-powers.js`)
 
 A symlink marker `<sock>.lock` records the owner's pid. It is claimed with an
-exclusive `symlink`, is refused while its owner is alive and serving, and is
-reclaimed when the owner is dead or never binds. This is sound, but it has
+exclusive `symlink`. A second claimant cannot take it while its owner is
+alive and serving, and can reclaim it when the owner is dead or never binds. This is sound, but it has
 two limits:
 
 - **It is taken late.** `manager-node.js` `main()` runs
@@ -163,9 +164,10 @@ value; section 6 (below) takes this as its first step.
 
 Issue #137 states its own diagnosis: systemd's cgroup teardown during a
 stop or restart of the supervised unit can leave a worker reparented to
-PID 1 (adopted by init after its parent died, so nothing watching the
-original parent notices it), still holding `:8920`. PR #130 describes a different incident: an
-auto-starting health probe racing a supervised start. This design does not
+pid 1, still holding `:8920`. Such a worker has been adopted by init after
+its parent died, so nothing watching the original parent notices it.
+PR #130 describes a different incident: an auto-starting health probe
+racing a supervised start. This design does not
 merge them. It keeps two candidate mechanisms and says which proposal
 addresses each; the proposals themselves follow under
 "Proposed Changes, Ranked" below.
@@ -179,11 +181,14 @@ addresses each; the proposals themselves follow under
   `sudo -u endo-daemon` lives in the deploy session's cgroup, detached.
   `systemctl stop` never touches it, it keeps `:8920`, and the next
   supervised start crash-loops with `EADDRINUSE`. This also presents as an
-  orphan reparented to PID 1. Sections 2 and 3 address this.
+  orphan reparented to pid 1. Sections 2 and 3 address this.
 
 Checking the orphan's cgroup (`/proc/<pid>/cgroup`) the next time it
 happens distinguishes the two: (A) shows the unit's cgroup, (B) shows a
-session scope.
+session scope. The check has a concrete owner: minion.town's existing
+`ExecStartPre` reaper should log `/proc/<pid>/cgroup` for whatever holds
+`:8920` before it kills that process, so the next occurrence records the
+mechanism without anyone having to catch it live.
 
 ## Proposed Changes, Ranked
 
@@ -191,9 +196,11 @@ Ranked by how much supervisor-visible damage each prevents per line of code.
 
 ### 1. `start` is a no-op when a healthy daemon owns the socket
 
-Before `clean()`, ask the classifier defined in section 2 (claim marker
-first, then `probeSocket`, which already exists in `manager-node-powers.js`).
-`start` handles every value the classifier can return:
+Before `clean()`, ask the classifier. Section 2 defines it fully, under
+"One owner record": it reads the claim marker first, then probes the socket
+with `probeSocket`, which already exists in `manager-node-powers.js`, and
+returns one of five values. This section says only what each value means for
+`start`, which handles every one of them:
 
 - `live`: print `Endo daemon already running (pid N)` and exit 0 without
   touching anything.
@@ -204,17 +211,23 @@ first, then `probeSocket`, which already exists in `manager-node-powers.js`).
   fresh start that misses its readiness timeout. `start` never falls through
   to `clean()` or a spawn while a live claimant holds the state directory.
 - `elsewhere`, a live owner serving a different socket path than this
-  `start` was asked for: exit 69 (`EX_UNAVAILABLE`) with
-  `another Endo daemon (pid N) owns <state> and serves <socket>`. The
-  requested socket is not reachable, so this is not "desired state reached".
+  `start` was asked for: exit 69 (`EX_UNAVAILABLE`) with the section 6
+  refusal message. The requested socket is not reachable, so this is not
+  "desired state reached".
 - `stale` or `absent`: `clean()` and spawn, as today.
 
 Change the `clean()` helper so it removes the socket, marker, and pid file
 only when the classifier says `stale` or `absent`, which is the same
 predicate the lock already applies. The standalone `endo clean` command
 calls the same helper, so it gets the same guard: against a live or booting
-daemon it refuses with exit 69 and names the owner. Both `endo start` and
-`endo clean` take `--force` for today's unconditional removal.
+daemon it refuses with exit 69 and the section 6 refusal message.
+`endo clean --force` keeps today's unconditional removal. `endo start`
+gets the same escape hatch under the name `--force-clean`, not `--force`,
+because its effect is to skip the classifier and unlink a possibly live
+daemon's socket, marker, and pid file before spawning beside it. That is
+the double-daemon failure this design closes, so the flag names what it
+does rather than suggesting "try harder to start". Both flags print a
+warning naming the owner they are about to orphan, when there is one.
 
 *Fixes:* running `endo start` twice, and every auto-start race that today
 unlinks a booting daemon's socket.
@@ -227,24 +240,29 @@ Key it on the **ephemeral state directory** (`<ephemeral>/endo.lock`) rather
 than only on the socket pathname, because the state directory is what two
 daemons actually corrupt when they share it. A daemon that loses the claim
 exits **before** it kills workers or opens the database, with a dedicated
-exit code (section 6) and the message `another Endo daemon (pid N) owns
-<state>`. Write `endo.pid` right after a successful claim instead of after
-ready, so `stop` can find a daemon that is still booting.
+exit code (section 6) and the section 6 refusal message. Write `endo.pid`
+right after a successful claim instead of after ready, so `stop` can find a
+daemon that is still booting.
 `updateRecordedPid()` then no longer needs to kill the pid it replaces.
-
-This paragraph states the claim. The two subsections after it refine it, and
-the last one, "One owner record", is authoritative where they differ: the
-first says which process writes the claim on each path, the second fixes
-its on-disk format and what the older records become.
 
 Because the whole single-instance guarantee now rests on this one check, a
 bare pid is not enough identity. A recycled pid could make a dead owner
 look alive, which is a false decline: safe, but it blocks startup. A
 carelessly written check could also let a second claim through. The claim
 therefore records the owner's process start time alongside its pid and
-treats the marker as live only when both match. Where the platform supports
-it, an advisory `flock` held on the lock file for the life of the process is
-stronger still, because the kernel releases it when the owner dies.
+treats the marker as live only when both match.
+
+The start time is not equally precise everywhere. On Linux it is in clock
+ticks (about 10ms). On the `ps -o lstart=` fallback it is in whole seconds,
+so a pid recycled within the same second as the original owner's start
+reproduces the same record. The design accepts that residual gap rather
+than closing it with an advisory `flock`: Node has no `flock` binding
+without a native addon, and the claim must be implementable in both
+languages. The gap needs pid-space wraparound inside one second, and its
+only effect is a false `live` or `booting` for a dead owner. That is a false
+decline (exit 69 or 75), never a second claim, and `--force-clean` recovers
+from it. `flock` remains a possible later hardening for the Go side and for
+a Node native helper, not part of Phase 1.
 
 The existing `socket-lock.js` primitives do **not** implement this check.
 `claimSocketLock` records a bare pid as a symlink target, and
@@ -254,22 +272,30 @@ new primitive (or an extension of that module) that writes and compares the
 full owner record below. It may reuse the exclusive-create pattern, but not
 the liveness check.
 
-**Windows.** `clean()` and the socket lock skip win32 today
+#### Windows
+
+`clean()` and the socket lock skip win32 today
 (`daemon/index.js`, the `process.platform !== 'win32'` guard in `clean`).
 This design keeps that: on win32 the state-directory claim is not taken,
 the classifier falls back to the socket probe alone, and `start`, `stop`,
 and `clean` keep today's unguarded behavior there. A Windows identity check
 (for example a named mutex) is future work, not part of Phase 1.
 
-**One claim protocol, two implementations.** The claim is owned by the
+#### One claim protocol, two implementations
+
+The claim is owned by the
 process that is the root of the daemon's process tree: `manager-node.js` on
 the Node path, and the `engo` supervisor (not the `manager-go.js` it runs)
 on the Go path. The marker's on-disk format (location, pid, start time) is
-the contract, specified once in this design, so a Node daemon and an `engo`
-daemon started against the same state directory see and honor each other's
-claims.
+the contract, specified once in this design (under "One owner record"
+below), so a Node daemon and an `engo` daemon started against the same state
+directory see and honor each other's claims. The contract has a second
+half: a claimant that loses exits with code 69 on both paths, which is how
+`start()` learns of a lost race (section 6).
 
-**One owner record.** The section 2 claim marker, `<ephemeral>/endo.lock`,
+#### One owner record
+
+The section 2 claim marker, `<ephemeral>/endo.lock`,
 is the single durable record of which process owns this daemon instance. It
 is written once, by the claimant, and names the root of the process tree:
 `manager-node.js` on the Node path and `engo` on the Go path. Its content is
@@ -300,36 +326,57 @@ Every other record is derived from it or retired:
   and the same socket path do not both bind it. It no longer answers "which
   daemon owns this state"; nothing reads its pid for that purpose.
 - Deciding whether the daemon is running has one owner too: a single
-  classifier that reads the claim marker first and then probes the socket
-  the marker names. It returns exactly one of five values:
-  - `absent`: no claim marker, and nothing answers on the requested socket;
-  - `stale`: the claim names a dead owner (pid gone, or start time differs);
-  - `booting`: the claim is held by a live owner, and its socket is not yet
-    serving;
+  classifier. It reads the claim marker first. When there is no marker, it
+  reads the two legacy records an older binary may have left, the socket
+  `.lock` marker and `endo.pid`, as a compatibility fallback (see
+  "Upgrading across this change"). It then probes the socket. It returns
+  exactly one of five values:
+  - `absent`: no claim marker, no legacy record naming a live process, and
+    nothing answers on the requested socket;
+  - `stale`: the claim names a dead owner (pid gone, or start time differs),
+    or, with no claim marker, the legacy records name only dead processes
+    and nothing answers on the requested socket;
+  - `booting`: the claim is held by a live owner whose socket is not yet
+    serving, or, with no claim marker, a legacy record names a live process
+    and nothing answers on the requested socket yet;
   - `live`: the claim is held by a live owner that serves the requested
-    socket;
+    socket, or, with no claim marker, the requested socket answers (a daemon
+    from an older binary; the pid reported is the one in `endo.pid`, if
+    present);
   - `elsewhere`: the claim is held by a live owner that serves a
     **different** socket path from the one the caller asked about.
 
-  `start`, `stop`, `status`, `ping`, `clean`, and the client's auto-start
-  all use it, so they cannot disagree about a daemon that is still booting.
-  Section 6 states every command's exit code as a function of this value.
+  `start`, the child's claim step, `run-daemon`, `stop`, `status`, `ping`,
+  `clean`, and the client's auto-start all use it, so they cannot disagree
+  about a daemon that is still booting, and the parent's destructive step
+  and the child's claim share one predicate. Section 6 states every
+  command's exit code as a function of this value.
 
-**Upgrading across this change.** A daemon started by a binary from before
-this design never wrote `<ephemeral>/endo.lock`. When a new binary's
-`start` runs against that state directory, the classifier finds no marker
-and falls back to probing the requested socket. A live old daemon answers
-there, so the classifier returns `live` (reported with the pid from
-`endo.pid`, if present), and `start` exits 0 without touching it. This
-fallback is the mechanism that makes a mid-upgrade `start` safe; it is not
-incidental. It stays until `endo.pid` is retired. If the old daemon is still
-booting and not yet answering, the socket probe cannot see it. To close
-that window, the new claim step also reads the legacy socket `.lock` marker
-(which old binaries do write, though late) and `endo.pid`: if either names a
-live process, the new daemon declines as if the claim were held, before
-`killStaleWorkers()`. The residual gap is an old daemon so early in boot
-that it has written neither; that gap exists today and this design does not
-widen it.
+A daemon instance is keyed by its **state directory**; the socket path is an
+attribute of the instance, not part of its identity. That is why the
+commands treat `elsewhere` asymmetrically. `start`, `clean`, and
+`run-daemon` refuse (69), because they were asked for a daemon at a socket
+that this instance does not serve, and acting would disturb the instance
+that owns the state. `stop` stops it, because `stop` is asked to leave the
+state directory with no daemon, and the instance that owns it is the one to
+stop.
+
+#### Upgrading across this change
+
+A daemon started by a binary from before this design never wrote
+`<ephemeral>/endo.lock`. The classifier's no-marker cases above exist for
+it, and they live in the one classifier rather than only in the child's
+claim step, so that the parent's `clean()` cannot delete the legacy records
+before the child reads them. A live old daemon answers on the requested
+socket, so the classifier returns `live` and `start` exits 0 without
+touching it. An old daemon that is still booting has not bound its socket
+yet, but it has written the socket `.lock` marker (old binaries do, though
+late) or `endo.pid`, so the classifier returns `booting`, and neither
+`start`'s `clean()` nor the child's claim step proceeds. This fallback is
+the mechanism that makes a mid-upgrade `start` safe; it is not incidental.
+It stays until `endo.pid` is retired. The residual gap is an old daemon so
+early in boot that it has written neither record; that gap exists today and
+this design does not widen it.
 
 Section 1's pre-spawn probe lives in `daemon/index.js` `start()`,
 before the `ENDO_BIN` branch, so both paths share it as code rather than
@@ -343,9 +390,9 @@ duplicate does not crash-loop.
 
 ### 3. A client mode that never auto-starts
 
-Add `ENDO_NO_AUTOSTART=1`, and an equivalent global `--no-autostart` option, that
-`provideEndoClient` honors. When the connection fails, the command exits with
-the "not running" code (section 6) and a one-line message, and does not call
+Add `ENDO_NO_AUTOSTART=1` and an equivalent global `--no-autostart` option,
+each of which `provideEndoClient` honors. When the connection fails, the
+command exits with the "not running" code (section 6) and a one-line message, and does not call
 `start()`. This mode should also be the default when the CLI detects it is
 running under a service manager (`INVOCATION_ID` or `NOTIFY_SOCKET` in the
 environment). That default is left as an open question.
@@ -377,8 +424,8 @@ non-systemd supervisors, and under container init processes.
 
 ### 5. `stop` is complete and reports what it did
 
-Keep today's ordering (CapTP `terminate`, then pid, then workers, then clean), and add
-the following:
+`stop` keeps today's ordering (CapTP `terminate`, then pid, then workers,
+then clean) and adds the following:
 
 - find the daemon through the section 2 claim marker, the one owner
   record, and fall back to `endo.pid` only while that file still exists as
@@ -410,6 +457,19 @@ The codes, by value:
 | 75 (`EX_TEMPFAIL`) | The daemon did not become ready within the timeout |
 | 1 | Any other failure |
 
+Every command that exits 69 prints the same refusal message, built from
+the classifier's owner record, so no command invents its own phrasing for
+one condition:
+
+```text
+another Endo daemon (pid N) owns <state> and serves <socket>
+another Endo daemon (pid N) owns <state> and is still starting
+```
+
+The first form is for `live` and `elsewhere`, the second for `booting`.
+`start`, `clean`, `run-daemon`, and a claimant that loses the section 2
+claim all use it.
+
 Every lifecycle command's exit code is a total function of the section 2
 classifier's value, so no command can report a state the classifier does
 not name. For the **query commands**:
@@ -423,8 +483,10 @@ not name. For the **query commands**:
 | `absent` | 3 | 3 | 3 |
 
 `endo status` derives this from the classifier, not from the pid file, and
-prints the value itself as a machine-readable first line, `state: <value>`,
-followed by the owner's pid and socket path when there is an owner. A
+prints the value itself as a machine-readable first line, with the owner's
+pid and socket path on that same line when there is an owner
+(`state: elsewhere pid=N socket=<socket>`), so a consumer that reads only
+the first line still learns why `elsewhere` is not reachable. A
 supervisor that needs to tell `booting` from `stale` reads that line; the
 exit code only answers "can I talk to it now". This is the answer to Open
 Question 3: the codes stay few, and the finer distinction is data.
@@ -447,16 +509,31 @@ For the **action commands**:
 **`start` and `run-daemon` report a lost race differently, on purpose.**
 Section 1's pre-spawn classifier makes the race rare, but two starts in the
 same instant can both classify `absent` and spawn. The losing child then
-declines the section 2 claim. `start()` keeps an IPC channel open to its
-child until a `ready` or `error` message arrives (the `waitForMessage`
-branch in `daemon/index.js`); today a child that exits without either
-surfaces as a thrown `Daemon failed to spawn` error, which would make the
-CLI exit 1. So a declining child instead sends `{ type: 'declined', pid,
-socketPath }` naming the owner before it exits, and `start` treats that
-message as a fresh classification: `already running (pid N)` and exit 0 when
-the owner serves the requested socket, 69 when it serves another. Only
-`run-daemon`, which is itself the claimant a supervisor watches, exits 69
-for a duplicate, so that a unit can set `RestartPreventExitStatus=69`.
+declines the section 2 claim and exits 69.
+
+The signal is the child's **exit status**, because it is the only channel
+both spawn paths have. `runEndo` spawns `manager-node.js` with an IPC
+channel and waits for a `ready` or `error` message (the `waitForMessage`
+branch in `daemon/index.js`). `runEngo` has no IPC channel: it spawns
+`engo` with inherited or file stdio and waits for the socket and the `root`
+file to appear, and `manager-go.js` says as much ("No IPC to parent like
+daemon-node.js"). Today a child that exits early surfaces on the Node path
+as a thrown `Daemon failed to spawn` error, and on the Go path the socket
+wait simply runs to its timeout. Both would make the CLI exit 1.
+
+So both waits also race against the child's `exit` event. On the Go path
+the claimant is `engo` itself (section 2), so the exit status `runEngo`
+sees is the claimant's own, with no forwarding through `manager-go.js`. When
+the child exits 69, `start()` does not throw. It runs the classifier again
+and reports that result: `already running (pid N)` and exit 0 when the
+owner serves the requested socket, 69 with the refusal message when it
+serves another, and 75 if the owner is still booting when the readiness
+window elapses. Any other early exit stays exit 1. No new message type is
+needed, and the owner's identity comes from the one classifier rather than
+from the losing child.
+
+Only `run-daemon`, which is itself the claimant a supervisor watches, exits
+69 for a duplicate, so that a unit can set `RestartPreventExitStatus=69`.
 
 ### 7. (Lower priority) Readiness for `Type=notify`
 
@@ -492,8 +569,9 @@ shelling out to `systemd-notify`. It is not needed once sections 1 through 3 lan
      window (exit 0) and when it does not (exit 75, nothing unlinked);
    - `start` against the same state directory with a different socket path
      (exit 69);
-   - two `start`s racing, where the losing child's `declined` message turns
-     into exit 0;
+   - two `start`s racing, where the losing child exits 69 and its `start`
+     re-classifies and exits 0, on both the Node path and the `ENDO_BIN`
+     (`engo`) path;
    - a second `run-daemon` against the same state directory (exit 69);
    - a Node daemon and an `engo` daemon contending for the same state
      directory, in both orders;
@@ -502,7 +580,11 @@ shelling out to `systemd-notify`. It is not needed once sections 1 through 3 lan
    - an upgrade: a live daemon with no claim marker (as an old binary leaves
      it), against which a new `start` exits 0 and a new `run-daemon`
      declines before killing any worker;
-   - `endo clean` against a live daemon (exit 69, nothing removed);
+   - `endo clean` against a live daemon and against a booting claimant
+     (exit 69, nothing removed, in both cases);
+   - an old binary's daemon that is still booting (legacy `.lock` or
+     `endo.pid` naming a live process, socket not yet bound), which must
+     classify as `booting` so that `start` does not `clean()`;
    - `stop` against a daemon that holds the claim but is not yet serving.
 2. **Client and probe:** section 3 and the exit-code contract in section 6, with the
    `status`/`ping` changes.
@@ -515,7 +597,13 @@ shelling out to `systemd-notify`. It is not needed once sections 1 through 3 lan
 1. Should the CLI stop auto-starting by default when it detects a service
    manager (section 3), or should auto-start stay the default everywhere with
    `ENDO_NO_AUTOSTART` as an explicit opt-out? Auto-start is a convenience
-   for interactive use and a hazard under supervision.
+   for interactive use and a hazard under supervision. Detection by
+   `INVOCATION_ID` or `NOTIFY_SOCKET` has false positives: an interactive
+   shell nested inside a unit (`systemd-run --pty bash`, or a tmux or ttyd
+   session started from one) inherits those variables. If the default is
+   adopted, the command must say why it declined
+   (`not auto-starting: running under a service manager; set
+   ENDO_NO_AUTOSTART=0 to override`) rather than failing silently.
 2. Should `run-daemon` run the manager in-process (section 4)? That removes one
    process but changes what `ENDO_BIN`/engo selection means for the
    foreground path.
@@ -524,3 +612,12 @@ shelling out to `systemd-notify`. It is not needed once sections 1 through 3 lan
    of codes derived from the classifier, and the `state:` line for the
    finer distinctions. The remaining question is whether the codes are
    worth keeping at all.
+
+## Prompt
+
+From kriskowal's approving review of kriscendobot/minion.town#130
+(2026-09-29), which added the `[ -S endo.sock ]` probe guard and the
+post-stop `endo stop` reap to minion.town's deploy script:
+
+> @kriscendobot Let's conduct and also investigate ways to make the daemon
+> controls more idempotent upstream
