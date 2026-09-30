@@ -17,12 +17,10 @@ import { makeHostedMcpSocketServer } from '@endo/hosted-agent/mcp-server.js';
 
 export const DEFAULT_SOCKET_NAME = 'mcp.sock';
 export const STDIO_BRIDGE_NAME = 'mcp-stdio-bridge.mjs';
-export const CONFIG_NAME = 'mcp.json';
 export const DEFAULT_INNER_DIR = '/endo-mcp';
 export const DEFAULT_SERVER_NAME = 'endo';
 harden(DEFAULT_SOCKET_NAME);
 harden(STDIO_BRIDGE_NAME);
-harden(CONFIG_NAME);
 harden(DEFAULT_INNER_DIR);
 harden(DEFAULT_SERVER_NAME);
 

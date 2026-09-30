@@ -25,6 +25,23 @@ storage policy and native process-loss recovery retain their explicit deferrals.
 Consult the alignment document before treating historical introductions or
 chronological progress entries below as current implementation status.
 
+Priority reaffirmed by the operator: reduce duplicated code, remove dead code,
+and clearly separate ontological responsibilities. Validation is a gate, not an
+independent refactor objective. The current simplification slice removes Codex's
+second hosted model-list authority in favor of the same account catalog used by
+admission, deletes its native-descriptor normalization API, removes OpenCode's
+redundant storage wrapper, and deletes unused MCP constants.
+The [simplification inventory](SIMPLIFICATION-AUDIT.md#account-model-authority-and-adapter-deletions-2026-09-30)
+records the ownership decisions, remaining native-query plumbing, and next concrete
+deletion candidates. Existing formula identities and durable owners are unchanged;
+deployment is pending.
+Validation: 430 Codex tests and 53 focused storage/controller/MCP tests pass.
+The catalog regression uses the same declared subscriptions for the factory and
+catalog, proves automatic exclusion and explicit pinned-account selection, and
+cannot fall back to a native model query. Codex types, scoped lint, formatting,
+the clean root type build, all 14 type-contract tasks, and documentation pass
+(documentation: zero errors, 180 warnings). Independent adversarial review approves.
+
 Current durability evidence includes a generation-186 retirement correction:
 removing broker/source pet names does not withdraw capabilities already stored
 in the profile's account-discovery record. Those capabilities revived the old

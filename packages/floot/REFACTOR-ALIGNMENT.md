@@ -14,8 +14,8 @@ The main structural unification is implemented, but the refactor is not complete
 The three native backends actually use common provisioning, lifecycle, grants,
 and execution-envelope code. Reimplementing those abstractions is not the next
 step. Simplicity and bounded context still need evidence or work.
-Protocol admission conformance is covered; generation 185 acceptance passed and
-the Codex-only generation 186 image change passes renewed Luna acceptance.
+Protocol admission conformance is covered; generation 187 passes fresh lifecycle
+and ordinary restart acceptance with the generation-186 image pins.
 Neither gate settles the remaining design questions.
 
 This audit evaluates the retained implementation against the design's
@@ -102,11 +102,14 @@ Failed guest construction now has bounded key retirement for newly allocated,
 uninstantiated and unpublished identities after fully checked rollback.
 Instantiated/published identities, surviving state and uncertain cleanup retain
 their keys. This is also deployed in generation 187; it is not general identity collection.
-Fresh scoped type checks at `a4c97588a` identify current fixture/declaration drift:
-Codex reports 25 diagnostics, Floot 82 and Claude 81, all in test files.
-Hosted-agent's source-only gate passes; OpenCode has no package typecheck config.
-The parent audit records these scopes and next interface corrections.
-Do not substitute a green runtime suite or docs build for test-inclusive typing.
+Fixture/declaration reconciliation through `f30317a6c` closes the recorded Codex,
+Floot and Claude type diagnostics. The clean root type build, 14 opted-in type
+contract tasks and documentation pass; repeat incremental builds still encounter
+generated-declaration collisions. OpenCode has no package typecheck config.
+These gates validate work; they are not the refactor's primary purpose.
+Operator priority reaffirmed: reduce duplicated code, remove dead code and make
+ontological boundaries clear. The next slices target competing model authorities
+and redundant adapter wrappers, not additional generic type/build machinery.
 RA-01's size target remains unproven; RA-03 is implemented, and direct-Fae
 compaction remains on hold.
 The older chronological entries and final sequence below are historical evidence,

@@ -13,8 +13,11 @@ import {
 import os from 'node:os';
 import path from 'node:path';
 
-import { makeOpencodeSessionStorage } from '../src/opencode-session-storage.js';
-import { makeSandboxSessionId } from '../src/opencode-session-plan.js';
+import { makeSessionStorage } from '@endo/hosted-agent/session-storage.js';
+import {
+  makeSandboxSessionId,
+  readSessionPlan,
+} from '../src/opencode-session-plan.js';
 
 /** @param {import('ava').ExecutionContext} t */
 const fixture = async t => {
@@ -64,7 +67,11 @@ const fixture = async t => {
       () => true,
       () => false,
     );
-  const storage = makeOpencodeSessionStorage({ stateStorage, roots });
+  const storage = makeSessionStorage({
+    stateStorage,
+    roots,
+    readPlan: readSessionPlan,
+  });
   return {
     base,
     roots,
@@ -104,7 +111,8 @@ test('removal is repeatable after native state removal fails', async t => {
   });
   t.false(await f.exists(f.plan.workspaceDir));
   // Directories already gone; a retry reaches state removal again.
-  const retry = makeOpencodeSessionStorage({
+  const retry = makeSessionStorage({
+    readPlan: readSessionPlan,
     stateStorage: harden({
       async removeSessionDirectory(sessionId) {
         f.removedState.push(sessionId);
@@ -207,7 +215,8 @@ test('storage roots must be normalized absolute paths', t => {
   for (const bad of ['relative', '/', '/root/', '/root/../x']) {
     t.throws(
       () =>
-        makeOpencodeSessionStorage({
+        makeSessionStorage({
+          readPlan: readSessionPlan,
           stateStorage,
           roots: { workspaceDir: bad, mcpDir: '/private' },
         }),

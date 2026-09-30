@@ -121,6 +121,44 @@ deployed; generation 186 contains the preceding native-context cleanup.
 
 ## Decisions on remaining parallel mechanisms
 
+### Account model authority and adapter deletions, 2026-09-30
+
+Codex's hosted `run.models()` used the native app-server catalog, while creation
+and admission used the provider/account catalog. Claude and OpenCode already use
+the latter for their hosted lists. Native descriptors were reduced to the same
+shared shape; no hosted consumer needed distinct native capability metadata.
+Codex now calls the existing `catalog.offered(subscription)` too: automatic pools
+exclude pinned-only members, and an explicitly pinned session lists only its
+account's models. The native-model normalization module and export are deleted.
+The low-level native query and its supervisor/daemon proxies remain a follow-up
+deletion; transport tests currently use that query to trigger initialization, so
+their failure/cancellation coverage must be preserved when it goes.
+No credential owner, model admission rule or persisted plan changes.
+
+OpenCode's sole-caller storage parser-injection wrapper is also deleted.
+Its durable `make` module now calls the same shared storage constructor with the
+same roots and parser; the formula entrypoint is retained unchanged.
+Unused adapter MCP constants are removed without changing socket/config paths.
+These changes are not yet deployed.
+
+Next verified simplification candidates: remove shared setup's redundant
+remove-before-copy publication step (with failed-copy retention coverage), reuse
+its existing Floot binding helper in Codex, and remove OpenCode's diagnostic-only
+MCP configuration file while retaining its actual `OPENCODE_CONFIG_CONTENT`.
+The generic MCP transport should own sockets and relay lifetime; adapters should
+own only the configuration their native runtime actually consumes.
+
+The context review also reproduced a distinct intent/execution conflation:
+an `onBegun` cancellation before any native send leaves a cancelled turn carrying
+`nativeContextFormat`; a later Codex turn refuses it as unsafe native evidence.
+This remains open. A declared context format is not evidence of native dispatch,
+and an empty observed stream is not proof that no dispatch happened.
+Do not repair this by silently treating all empty cancelled turns as safe or by
+overloading transcript completeness with an undocumented dispatch guarantee.
+The journal/context projection also contains Claude-specific argument round-trip
+normalization; ownership of that conversion should move to an explicit adapter
+boundary before consolidating its duplicate in the native writer.
+
 | Mechanisms | Different responsibilities | Decision |
 |---|---|---|
 | Floot lifecycle registry; daemon session record | The registry stores application identity, captured configuration and references. The daemon record stores the execution plan, dependency identities and incarnation lifecycle. | Retain. Neither is a second conversation store; runtime removal and conversation deletion are different operations. |

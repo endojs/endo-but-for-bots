@@ -17,7 +17,6 @@ import { join } from 'node:path';
 import { assertHostedBackendDescriptor } from '@endo/hosted-agent';
 import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js';
 import { makeCodexBackendFactory } from '../src/codex-backend-factory.js';
-import { normalizeCodexModelDescriptor } from '../src/codex-models.js';
 import { adaptEndoTools } from '../src/endo-tools.js';
 import {
   make as makeBackend,
@@ -26,14 +25,11 @@ import {
 
 const model = harden({
   id: 'model-a',
-  displayName: 'Model A',
+  title: 'Model A',
   description: '',
-  isDefault: true,
+  default: true,
   defaultReasoningEffort: 'low',
-  supportedReasoningEfforts: [
-    { reasoningEffort: 'low' },
-    { reasoningEffort: 'high' },
-  ],
+  reasoningEfforts: ['low', 'high'],
 });
 /**
  * What the broker's account lists, as its discovery reads it. `answer` can
@@ -51,7 +47,7 @@ const scriptedCatalog = () => {
             subscriptionId: 'default',
             state: 'current',
             observedAt: 1,
-            models: [normalizeCodexModelDescriptor(model)],
+            models: [model],
           },
         ],
       });
@@ -103,7 +99,7 @@ test('Codex factory delegates checkpoint operations and retains failed native st
   let stopFails = true;
   const client = Far('Client', {
     async models() {
-      return harden([model]);
+      throw Error('Native transport is not a model catalog');
     },
     async acknowledge(checkpoint) {
       calls.push(['ack', checkpoint]);
@@ -154,6 +150,51 @@ test('Codex factory delegates checkpoint operations and retains failed native st
       E(factory).create(harden({ sessionId: 'b', ...bad }), tools),
     );
   }
+});
+
+test('Codex session models use the account catalog and respect pinned-only pool members', async t => {
+  const accounts = [
+    {
+      subscriptionId: 'first',
+      state: 'current',
+      observedAt: 1,
+      models: [model],
+    },
+    {
+      subscriptionId: 'second',
+      pinnedOnly: true,
+      state: 'current',
+      observedAt: 1,
+      models: [harden({ ...model, id: 'model-b', title: 'Model B' })],
+    },
+  ];
+  const listSubscriptions = async () => [
+    { id: 'first', label: 'First' },
+    { id: 'second', label: 'Second', pinnedOnly: true },
+  ];
+  const catalog = makeBackendCatalog({
+    label: 'Codex',
+    listSubscriptions,
+    readCatalog: async () => harden({ accounts }),
+  });
+  const factory = makeCodexBackendFactory({
+    catalog,
+    listSubscriptions,
+    provisionSession: async () => Far('No native catalog', {}),
+    stopSession: async () => {},
+    removeSession: async () => {},
+  });
+  const tools = Far('Tools', {});
+  const automatic = await E(factory).create(
+    harden({ sessionId: 'automatic' }),
+    tools,
+  );
+  const pinned = await E(factory).create(
+    harden({ sessionId: 'pinned', subscription: 'second' }),
+    tools,
+  );
+  t.deepEqual(await E(automatic.run).models(), [model]);
+  t.deepEqual(await E(pinned.run).models(), accounts[1].models);
 });
 
 test('Codex factory stop reaches absent and failed owners without removing state', async t => {
