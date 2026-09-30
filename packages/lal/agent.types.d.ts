@@ -21,7 +21,7 @@ export type ToolCallArgs = {
   toPath?: NamePath;
   messageNumber?: number | bigint;
   reason?: string;
-  edgeName?: NamePath;
+  edgeName?: string;
   petName?: NamePath;
   recipientName?: NamePath;
   description?: string;

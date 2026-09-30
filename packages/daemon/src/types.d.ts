@@ -2367,7 +2367,7 @@ export interface EndoChannelMember {
  *   earlier than `@endo/daemon@4.0.0`.
  */
 export type EndoInspector<RecordT = string> = {
-  lookup(petNameOrPath: RecordT | readonly Name[]): Promise<unknown>;
+  lookup(petNamePath: readonly Name[]): Promise<unknown>;
   list(): RecordT[];
 };
 
