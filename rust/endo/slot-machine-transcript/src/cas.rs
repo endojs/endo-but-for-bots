@@ -36,7 +36,7 @@ pub struct ContentAddressedStore {
 /// A CAS read failure. Any of these is a storage fault: recovery must stop,
 /// not fall back to an older or arbitrary snapshot.
 #[derive(Debug)]
-pub enum CasError {
+pub enum ContentAddressedStoreError {
     /// The blob could not be read.
     Io(io::Error),
     /// The blob's bytes do not hash to its name.
@@ -45,24 +45,24 @@ pub enum CasError {
     InvalidName(String),
 }
 
-impl std::fmt::Display for CasError {
+impl std::fmt::Display for ContentAddressedStoreError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CasError::Io(e) => write!(f, "snapshot blob unreadable: {e}"),
-            CasError::Corrupt { expected, actual } => {
+            ContentAddressedStoreError::Io(e) => write!(f, "snapshot blob unreadable: {e}"),
+            ContentAddressedStoreError::Corrupt { expected, actual } => {
                 write!(
                     f,
                     "snapshot blob {expected} is corrupt (hashes to {actual})"
                 )
             }
-            CasError::InvalidName(name) => {
+            ContentAddressedStoreError::InvalidName(name) => {
                 write!(f, "snapshot blob name {name:?} is not a SHA-256 digest")
             }
         }
     }
 }
 
-impl std::error::Error for CasError {}
+impl std::error::Error for ContentAddressedStoreError {}
 
 /// Numbers this process's temporaries. `xsnap::Machine::suspend_to_cas`
 /// keeps its own counter under a `.snapshot.` prefix, so the transcript's
@@ -133,7 +133,7 @@ impl ContentAddressedStore {
             f.write_all(&bytes[..bytes.len() / 2])
         };
         self.op(
-            "cas:write-blob",
+            "blob-store:write-blob",
             false,
             || {
                 let mut f = File::create(temporary)?;
@@ -142,20 +142,20 @@ impl ContentAddressedStore {
             Some(&mut half),
         )?;
         self.op(
-            "cas:sync-blob",
+            "blob-store:sync-blob",
             true,
             || File::open(temporary)?.sync_all(),
             None,
         )?;
         let dest = self.directory.join(hash);
         self.op(
-            "cas:rename-blob",
+            "blob-store:rename-blob",
             false,
             || fs::rename(temporary, &dest),
             None,
         )?;
         self.op(
-            "cas:sync-directory",
+            "blob-store:sync-directory",
             true,
             || sync_directory(&self.directory),
             None,
@@ -165,14 +165,14 @@ impl ContentAddressedStore {
     /// Read and verify the blob named `hash`.
     /// The name must be 64 lowercase hexadecimal digits: it comes from the
     /// durable transcript, and anything else could leave the directory.
-    pub fn read_blob(&self, hash: &str) -> Result<Vec<u8>, CasError> {
+    pub fn read_blob(&self, hash: &str) -> Result<Vec<u8>, ContentAddressedStoreError> {
         if !is_blob_name(hash) {
-            return Err(CasError::InvalidName(hash.to_string()));
+            return Err(ContentAddressedStoreError::InvalidName(hash.to_string()));
         }
-        let bytes = fs::read(self.directory.join(hash)).map_err(CasError::Io)?;
+        let bytes = fs::read(self.directory.join(hash)).map_err(ContentAddressedStoreError::Io)?;
         let actual = blob_hash(&bytes);
         if actual != hash {
-            return Err(CasError::Corrupt {
+            return Err(ContentAddressedStoreError::Corrupt {
                 expected: hash.to_string(),
                 actual,
             });

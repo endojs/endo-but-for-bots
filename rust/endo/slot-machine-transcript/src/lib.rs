@@ -79,7 +79,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
-pub use cas::{blob_hash, sync_directory, CasError, ContentAddressedStore};
+pub use cas::{blob_hash, sync_directory, ContentAddressedStore, ContentAddressedStoreError};
 pub use embargo::{CrankVerdict, DuplicateSuppressor, Embargo, FrameSink, Received, Settlement};
 pub use fault::{FaultMode, FaultPlan};
 pub use host::{
@@ -352,7 +352,7 @@ pub struct TranscriptStats {
     /// Compaction transactions committed.
     pub compactions: u64,
     /// Standalone acknowledgment flushes committed.
-    pub ack_flushes: u64,
+    pub acknowledgment_flushes: u64,
 }
 
 struct ActiveCrank {
@@ -677,10 +677,10 @@ impl Transcript {
                     .into(),
             ));
         };
-        let acks = std::mem::take(&mut self.pending_acks);
-        let acks_for_retry = acks.clone();
+        let acknowledgments = std::mem::take(&mut self.pending_acks);
+        let acknowledgments_for_retry = acknowledgments.clone();
         let result = self.transact(Operation::Admit, None, |transaction| {
-            flush_acks(transaction, &acks)?;
+            flush_acknowledgments(transaction, &acknowledgments)?;
             transaction.execute(
                 "INSERT INTO crank (start_epoch, state) VALUES (?1, 'started')",
                 [snapshot.epoch as i64],
@@ -709,7 +709,7 @@ impl Transcript {
                 Ok(crank)
             }
             Err(e) => {
-                self.pending_acks = acks_for_retry;
+                self.pending_acks = acknowledgments_for_retry;
                 Err(e)
             }
         }
@@ -750,6 +750,18 @@ impl Transcript {
     /// the outcome is unknown, only a reopen can tell whether it committed.
     pub fn commit_crank(&mut self) -> Result<Vec<ReleasableFrame>, TranscriptError> {
         self.check_healthy()?;
+        if let Some(active) = &self.active {
+            if active
+                .host
+                .iter()
+                .any(|s| matches!(s, host::Staged::RefusedBarrier))
+            {
+                return Err(TranscriptError::Protocol(format!(
+                    "crank {} refused a barrier's reply and must abort",
+                    active.crank
+                )));
+            }
+        }
         let Some(active) = self.active.take() else {
             return Err(TranscriptError::Protocol("no active crank".into()));
         };
@@ -808,7 +820,7 @@ impl Transcript {
     }
 
     /// Note that frames were handed to the transport. The acknowledgment is
-    /// made durable by the next transaction (or [`Transcript::flush_acks`]);
+    /// made durable by the next transaction (or [`Transcript::flush_acknowledgments`]);
     /// a crash first merely re-releases them, and receivers drop the
     /// duplicates by sequence.
     pub fn mark_released(&mut self, seqs: impl IntoIterator<Item = Sequence>) {
@@ -816,16 +828,16 @@ impl Transcript {
     }
 
     /// Make pending release acknowledgments durable now.
-    pub fn flush_acks(&mut self) -> Result<(), TranscriptError> {
+    pub fn flush_acknowledgments(&mut self) -> Result<(), TranscriptError> {
         self.check_healthy()?;
         if self.pending_acks.is_empty() {
             return Ok(());
         }
-        let acks = std::mem::take(&mut self.pending_acks);
+        let acknowledgments = std::mem::take(&mut self.pending_acks);
         self.transact(Operation::AcknowledgeRelease, None, |transaction| {
-            flush_acks(transaction, &acks)
+            flush_acknowledgments(transaction, &acknowledgments)
         })?;
-        self.stats.ack_flushes += 1;
+        self.stats.acknowledgment_flushes += 1;
         Ok(())
     }
 
@@ -861,7 +873,7 @@ impl Transcript {
     /// directory, then record its hash with the committed watermark.
     pub fn publish_snapshot(
         &mut self,
-        cas: &ContentAddressedStore,
+        blob_store: &ContentAddressedStore,
         blob: &[u8],
         meta: SnapshotMeta,
     ) -> Result<SnapshotRecord, TranscriptError> {
@@ -886,7 +898,7 @@ impl Transcript {
             .map_err(|e| self.read_error(&e))?;
         let watermark_crank = live_crank.max(previous.as_ref().map_or(0, |s| s.watermark_crank));
         let watermark_seq = live_seq.max(previous.as_ref().map_or(0, |s| s.watermark_seq));
-        let hash = match cas.write_blob(blob) {
+        let hash = match blob_store.write_blob(blob) {
             Ok(hash) => hash,
             Err(e) => {
                 return Err(self.poison(TranscriptFault {
@@ -901,11 +913,11 @@ impl Transcript {
                 }))
             }
         };
-        let acks = std::mem::take(&mut self.pending_acks);
+        let acknowledgments = std::mem::take(&mut self.pending_acks);
         let record_hash = hash.clone();
         let record_meta = meta.clone();
         let epoch = self.transact(Operation::PublishSnapshot, None, |transaction| {
-            flush_acks(transaction, &acks)?;
+            flush_acknowledgments(transaction, &acknowledgments)?;
             transaction.execute(
                 "INSERT INTO snapshot (hash, engine_signature, panic_on_reference_error, watermark_crank, watermark_seq)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -939,15 +951,15 @@ impl Transcript {
         let Some(snapshot) = self.latest_snapshot()? else {
             return Ok(Vec::new());
         };
-        let acks = std::mem::take(&mut self.pending_acks);
+        let acknowledgments = std::mem::take(&mut self.pending_acks);
         let superseded = self.transact(Operation::Compact, None, |transaction| {
-            flush_acks(transaction, &acks)?;
-            let wm = snapshot.watermark_crank as i64;
+            flush_acknowledgments(transaction, &acknowledgments)?;
+            let watermark = snapshot.watermark_crank as i64;
             transaction.execute(
                 "DELETE FROM event WHERE crank_id <= ?1
                    AND crank_id IN (SELECT crank_id FROM crank WHERE state = 'committed')
                    AND (kind NOT IN ('outbound', 'host-effect') OR released = 1)",
-                [wm],
+                [watermark],
             )?;
             transaction.execute(
                 "DELETE FROM host_call WHERE NOT EXISTS
@@ -957,7 +969,7 @@ impl Transcript {
             transaction.execute(
                 "DELETE FROM crank WHERE crank_id <= ?1 AND state = 'committed'
                    AND NOT EXISTS (SELECT 1 FROM event e WHERE e.crank_id = crank.crank_id)",
-                [wm],
+                [watermark],
             )?;
             let superseded = {
                 let mut statement = transaction
@@ -999,11 +1011,14 @@ impl Transcript {
     /// The latest published snapshot, verified, and the committed cranks
     /// after its watermark. A missing or corrupt blob is a storage fault:
     /// recovery stops rather than falling back to another snapshot.
-    pub fn replay_plan(&self, cas: &ContentAddressedStore) -> Result<ReplayPlan, TranscriptError> {
+    pub fn replay_plan(
+        &self,
+        blob_store: &ContentAddressedStore,
+    ) -> Result<ReplayPlan, TranscriptError> {
         let Some(snapshot) = self.latest_snapshot()? else {
             return Err(TranscriptError::Protocol("no published snapshot".into()));
         };
-        let snapshot_bytes = cas.read_blob(&snapshot.hash).map_err(|e| {
+        let snapshot_bytes = blob_store.read_blob(&snapshot.hash).map_err(|e| {
             TranscriptError::Fault(TranscriptFault {
                 worker: self.worker.clone(),
                 crank: None,
@@ -1086,14 +1101,17 @@ impl Transcript {
     }
 }
 
-fn flush_acks(transaction: &rusqlite::Transaction<'_>, acks: &[Sequence]) -> rusqlite::Result<()> {
-    if acks.is_empty() {
+fn flush_acknowledgments(
+    transaction: &rusqlite::Transaction<'_>,
+    acknowledgments: &[Sequence],
+) -> rusqlite::Result<()> {
+    if acknowledgments.is_empty() {
         return Ok(());
     }
     let mut statement = transaction.prepare(
         "UPDATE event SET released = 1 WHERE seq = ?1 AND kind IN ('outbound', 'host-effect')",
     )?;
-    for seq in acks {
+    for seq in acknowledgments {
         statement.execute([*seq as i64])?;
     }
     Ok(())

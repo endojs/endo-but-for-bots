@@ -61,13 +61,14 @@ fn open(
     peer: &Rc<RefCell<Peer>>,
     crash_after: Option<usize>,
 ) -> (Embargo<Link>, ContentAddressedStore) {
-    let cas = ContentAddressedStore::open(files.cas_directory()).expect("cas directory");
+    let blob_store =
+        ContentAddressedStore::open(files.cas_directory()).expect("blob_store directory");
     let (mut transcript, _recovery) =
         Transcript::open(files.transcript(), TranscriptConfig::new(&files.worker))
             .expect("open transcript");
     if transcript.latest_snapshot().expect("read").is_none() {
         transcript
-            .publish_snapshot(&cas, &snapshot_bytes(0), meta())
+            .publish_snapshot(&blob_store, &snapshot_bytes(0), meta())
             .expect("initial snapshot");
     }
     let link = Link {
@@ -75,7 +76,7 @@ fn open(
         handoffs: 0,
         crash_after,
     };
-    (Embargo::new(transcript, link).expect("embargo"), cas)
+    (Embargo::new(transcript, link).expect("embargo"), blob_store)
 }
 
 fn frames(crank: usize, n: usize) -> Vec<Vec<u8>> {
@@ -298,7 +299,7 @@ fn a_crash_after_send_before_ack_is_observed_exactly_once_at_every_point() {
             }
             embargo.settle(CrankVerdict::Quiesced).unwrap();
         }
-        embargo.flush_acks().unwrap();
+        embargo.flush_acknowledgments().unwrap();
 
         let peer = peer.borrow();
         assert_eq!(peer.delivered, expected, "crash at hand-off {crash_at}");

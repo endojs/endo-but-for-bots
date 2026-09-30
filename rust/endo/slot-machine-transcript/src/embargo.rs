@@ -213,7 +213,7 @@ impl<S: FrameSink> Embargo<S> {
     /// Hand queued committed frames to the sink in sequence order, stopping
     /// at the first sink error. Returns the sequences handed off and the
     /// error, if any. Their acknowledgment rides the transcript's next
-    /// transaction (or [`Embargo::flush_acks`]).
+    /// transaction (or [`Embargo::flush_acknowledgments`]).
     pub fn pump(&mut self) -> (Vec<Sequence>, Option<S::Error>) {
         let mut released = Vec::new();
         let mut blocked = None;
@@ -234,8 +234,8 @@ impl<S: FrameSink> Embargo<S> {
     }
 
     /// Make release acknowledgments durable now.
-    pub fn flush_acks(&mut self) -> Result<(), TranscriptError> {
-        self.transcript.flush_acks()
+    pub fn flush_acknowledgments(&mut self) -> Result<(), TranscriptError> {
+        self.transcript.flush_acknowledgments()
     }
 
     /// Give back the transcript and sink, dropping any queued frames. The

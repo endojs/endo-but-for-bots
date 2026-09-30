@@ -43,11 +43,16 @@
 //!   the crank's other staged calls, so its event sequence can precede
 //!   calls the guest made first.
 //!
-//! The event log is authoritative for handle state. The `host_handle.open`
-//! column is a cache refreshed in the same transaction that appends the
-//! event that opens or closes the handle.
+//! The event log is authoritative for handle state until compaction. The
+//! `host_handle.open` column is a cache refreshed in the same transaction
+//! that appends the event that opens or closes the handle. Compaction
+//! deletes committed `host-request` and `host-reply` events at or below the
+//! snapshot watermark, so afterward `host_handle` alone is authoritative and
+//! a [`HandleRecord::created_by`] may name a sequence no event backs.
 
 use std::collections::{BTreeMap, VecDeque};
+
+use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
 
 use rusqlite::{params, OptionalExtension};
 
@@ -207,6 +212,12 @@ pub struct HostOutcome {
 /// A transactional callback's local effect, applied inside the crank's
 /// commit transaction on the worker's transcript database. An aborted
 /// crank never runs it, so a retry cannot apply the effect twice.
+///
+/// The write runs under an SQLite authorizer that confines it to the
+/// adapter's own tables: it may not read or write the transcript's tables
+/// (`meta`, `snapshot`, `crank`, `event`, `host_call`, `host_handle`), end or
+/// nest the transaction, attach a database, or change a pragma. A denied
+/// statement fails the write, which fails the crank's commit.
 pub type TransactionalWrite = Box<dyn Fn(&rusqlite::Transaction<'_>) -> rusqlite::Result<()>>;
 
 /// What the guest gets back from a host call.
@@ -312,6 +323,60 @@ pub enum ReplayStop {
 }
 
 /// One call staged in the active crank.
+/// The transcript's own tables, which a [`TransactionalWrite`] may not touch.
+const TRANSCRIPT_TABLES: [&str; 6] = [
+    "meta",
+    "snapshot",
+    "crank",
+    "event",
+    "host_call",
+    "host_handle",
+];
+
+fn confine_transactional_write(context: AuthContext<'_>) -> Authorization {
+    let table = match context.action {
+        AuthAction::Transaction { .. }
+        | AuthAction::Savepoint { .. }
+        | AuthAction::Attach { .. }
+        | AuthAction::Detach { .. }
+        | AuthAction::Pragma { .. } => return Authorization::Deny,
+        AuthAction::CreateIndex { table_name, .. }
+        | AuthAction::CreateTable { table_name }
+        | AuthAction::CreateTrigger { table_name, .. }
+        | AuthAction::CreateTempTrigger { table_name, .. }
+        | AuthAction::Delete { table_name }
+        | AuthAction::DropIndex { table_name, .. }
+        | AuthAction::DropTable { table_name }
+        | AuthAction::DropTrigger { table_name, .. }
+        | AuthAction::Insert { table_name }
+        | AuthAction::Read { table_name, .. }
+        | AuthAction::Update { table_name, .. }
+        | AuthAction::AlterTable { table_name, .. }
+        | AuthAction::Analyze { table_name } => table_name,
+        _ => return Authorization::Allow,
+    };
+    if TRANSCRIPT_TABLES.contains(&table) {
+        Authorization::Deny
+    } else {
+        Authorization::Allow
+    }
+}
+
+/// Run a transactional write confined by [`confine_transactional_write`].
+/// The statement cache is flushed first so the write cannot reuse a
+/// statement the transcript prepared without the authorizer.
+fn run_transactional_write(
+    transaction: &rusqlite::Transaction<'_>,
+    write: &TransactionalWrite,
+) -> rusqlite::Result<()> {
+    transaction.flush_prepared_statement_cache();
+    transaction.authorizer(Some(confine_transactional_write));
+    let result = write(transaction);
+    transaction.authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+    transaction.flush_prepared_statement_cache();
+    result
+}
+
 pub(crate) enum Staged {
     Call {
         /// The call's position among the crank's recorded calls.
@@ -337,6 +402,12 @@ pub(crate) enum Staged {
     Loss {
         handle: HandleId,
     },
+    /// A barrier whose durable request row was written and whose effect
+    /// ran, but whose reply the crank refused. It counts toward the
+    /// crank's call ordinals so no later call reuses the barrier's, and
+    /// bars the crank from committing: the crank must abort, which leaves
+    /// the barrier escaped for [`Transcript::recovery_gate`].
+    RefusedBarrier,
 }
 
 /// A committed outbound effect awaiting release to its provider.
@@ -411,7 +482,7 @@ pub(crate) fn commit_staged(
                 write,
             } => {
                 if let Some(write) = write {
-                    write(transaction)?;
+                    run_transactional_write(transaction, write)?;
                 }
                 let request_seq = match request_seq {
                     Some(seq) => *seq,
@@ -476,6 +547,7 @@ pub(crate) fn commit_staged(
                     [*handle as i64],
                 )?;
             }
+            Staged::RefusedBarrier => {}
         }
     }
     Ok(())
@@ -540,7 +612,12 @@ impl Transcript {
         self.active.as_ref().map_or(0, |a| {
             a.host
                 .iter()
-                .filter(|s| matches!(s, Staged::Call { .. } | Staged::Effect { .. }))
+                .filter(|s| {
+                    matches!(
+                        s,
+                        Staged::Call { .. } | Staged::Effect { .. } | Staged::RefusedBarrier
+                    )
+                })
                 .count() as u64
         })
     }
@@ -570,7 +647,7 @@ impl Transcript {
                     calls += 1;
                     bytes = bytes.saturating_add(request.len());
                 }
-                Staged::Loss { .. } => {}
+                Staged::Loss { .. } | Staged::RefusedBarrier => {}
             }
         }
         if calls >= limits.max_host_calls {
@@ -728,12 +805,25 @@ impl Transcript {
                 opened: None,
             });
         }
-        // The effect has run, so a reply past the bound cannot be taken
-        // back: refuse it, recording any handle the effect opened or closed.
-        // A transactional write has not run and is dropped with the reply.
+        // Refuse a reply past the bound. A read or barrier effect has run
+        // and cannot be taken back, so any handle it opened or closed is
+        // recorded. A transactional write has not run and is dropped with
+        // the reply, so it leaves nothing to record. A barrier's request
+        // row is already durable: its ordinal stays reserved and the crank
+        // may no longer commit, so aborting it leaves the barrier escaped
+        // for recovery to stop at.
         if let Err(e) = self.check_host_call_bounds(request.len(), outcome.reply.len()) {
-            if outcome.opens.is_some() || (outcome.closes && handle.is_some()) {
+            if class != HostClass::Transactional
+                && (outcome.opens.is_some() || (outcome.closes && handle.is_some()))
+            {
                 self.record_escape(crank, callback, handle, request, outcome)?;
+            }
+            if class == HostClass::Barrier {
+                self.active
+                    .as_mut()
+                    .expect("active crank")
+                    .host
+                    .push(Staged::RefusedBarrier);
             }
             return Err(e.into());
         }

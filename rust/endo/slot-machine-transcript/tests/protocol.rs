@@ -36,8 +36,8 @@ fn admission_requires_a_published_snapshot() {
         t.begin_crank(b"x"),
         Err(TranscriptError::Protocol(_))
     ));
-    let cas = ContentAddressedStore::open(root.path().join("cas")).unwrap();
-    t.publish_snapshot(&cas, &snapshot_bytes(0), meta())
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
+    t.publish_snapshot(&blob_store, &snapshot_bytes(0), meta())
         .unwrap();
     t.begin_crank(b"x").unwrap();
 }
@@ -77,7 +77,7 @@ fn committed_frames_release_in_sequence_with_stable_keys() {
     }
     assert_eq!(t.releasable().unwrap(), frames);
     t.mark_released(frames.iter().map(|f| f.seq));
-    t.flush_acks().unwrap();
+    t.flush_acknowledgments().unwrap();
     assert!(t.releasable().unwrap().is_empty());
 }
 
@@ -108,7 +108,11 @@ fn one_admission_and_one_release_sync_per_crank_regardless_of_frame_count() {
     assert_eq!(many, one, "outbound frames must not add syncs");
     let stats = t.stats();
     assert_eq!(
-        (stats.admissions, stats.releases, stats.ack_flushes),
+        (
+            stats.admissions,
+            stats.releases,
+            stats.acknowledgment_flushes
+        ),
         (3, 3, 0)
     );
 }
@@ -125,8 +129,8 @@ fn staging_past_the_per_crank_bound_is_refused_not_truncated() {
         ..TranscriptLimits::default()
     };
     let (mut t, _) = Transcript::open(&path, config).unwrap();
-    let cas = ContentAddressedStore::open(root.path().join("cas")).unwrap();
-    t.publish_snapshot(&cas, &snapshot_bytes(0), meta())
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
+    t.publish_snapshot(&blob_store, &snapshot_bytes(0), meta())
         .unwrap();
     assert!(matches!(
         t.begin_crank(b"too-big"),
@@ -208,7 +212,10 @@ fn a_write_fault_poisons_the_worker_and_spares_its_sibling() {
         a.begin_crank(b"next"),
         Err(TranscriptError::Poisoned(_))
     ));
-    assert!(matches!(a.flush_acks(), Err(TranscriptError::Poisoned(_))));
+    assert!(matches!(
+        a.flush_acknowledgments(),
+        Err(TranscriptError::Poisoned(_))
+    ));
 
     // The sibling keeps serving.
     b.crank(b"one", &mut wire_b).unwrap();
@@ -282,7 +289,7 @@ fn compaction_keeps_aborted_cranks_and_never_reuses_ids() {
     let root = tempfile::tempdir().unwrap();
     let (_files, mut supervisor, mut wire) = fresh(root.path(), "w");
     supervisor.crank(b"one", &mut wire).unwrap();
-    supervisor.transcript.flush_acks().unwrap();
+    supervisor.transcript.flush_acknowledgments().unwrap();
     let t = &mut supervisor.transcript;
     t.begin_crank(b"doomed").unwrap();
     t.abort_crank().unwrap();
@@ -319,10 +326,10 @@ fn compaction_retains_unreleased_frames() {
     t.stage_outbound(b"held".to_vec()).unwrap();
     t.commit_crank().unwrap();
     // Never handed to the transport, so never acknowledged.
-    let cas = supervisor.cas.clone();
+    let blob_store = supervisor.blob_store.clone();
     supervisor
         .transcript
-        .publish_snapshot(&cas, &snapshot_bytes(7), meta())
+        .publish_snapshot(&blob_store, &snapshot_bytes(7), meta())
         .unwrap();
     supervisor.transcript.compact().unwrap();
     let held = supervisor.transcript.releasable().unwrap();
@@ -330,7 +337,7 @@ fn compaction_retains_unreleased_frames() {
     assert_eq!(held[0].payload, b"held");
     assert!(supervisor
         .transcript
-        .replay_plan(&cas)
+        .replay_plan(&blob_store)
         .unwrap()
         .cranks
         .is_empty());
@@ -401,20 +408,21 @@ fn a_blob_write_fault_poisons_before_anything_is_published() {
     drop(Supervisor::start(&files, None, &mut wire).unwrap());
     let plan = FaultPlan::counting();
     let (mut t, _) = Transcript::open(files.transcript(), TranscriptConfig::new("w")).unwrap();
-    let cas = ContentAddressedStore::open(files.cas_directory())
+    let blob_store = ContentAddressedStore::open(files.cas_directory())
         .unwrap()
         .with_fault_plan(plan.clone());
     let before = t.latest_snapshot().unwrap();
     // Aim at the directory sync, the step xsnap's suspend_to_cas omitted.
     let plan2 = FaultPlan::fail_at(4, FaultMode::FailOnce);
-    let cas2 = ContentAddressedStore::open(files.cas_directory())
+    let blob_store2 = ContentAddressedStore::open(files.cas_directory())
         .unwrap()
         .with_fault_plan(plan2.clone());
-    let Err(TranscriptError::Fault(fault)) = t.publish_snapshot(&cas2, &snapshot_bytes(1), meta())
+    let Err(TranscriptError::Fault(fault)) =
+        t.publish_snapshot(&blob_store2, &snapshot_bytes(1), meta())
     else {
         panic!("expected a fault");
     };
-    assert_eq!(plan2.log()[3], "cas:sync-directory");
+    assert_eq!(plan2.log()[3], "blob-store:sync-directory");
     assert_eq!(fault.operation, Operation::WriteSnapshotBlob);
     assert_eq!(
         t.latest_snapshot().unwrap(),
@@ -422,7 +430,7 @@ fn a_blob_write_fault_poisons_before_anything_is_published() {
         "nothing was published"
     );
     assert!(matches!(
-        t.publish_snapshot(&cas, &snapshot_bytes(1), meta()),
+        t.publish_snapshot(&blob_store, &snapshot_bytes(1), meta()),
         Err(TranscriptError::Poisoned(_))
     ));
 }
@@ -430,7 +438,7 @@ fn a_blob_write_fault_poisons_before_anything_is_published() {
 #[test]
 fn blob_names_that_are_not_digests_are_refused() {
     let root = tempfile::tempdir().unwrap();
-    let cas = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
     for name in [
         "../t.sqlite",
         "/etc/passwd",
@@ -440,8 +448,8 @@ fn blob_names_that_are_not_digests_are_refused() {
     ] {
         assert!(
             matches!(
-                cas.read_blob(name),
-                Err(slot_machine_transcript::CasError::InvalidName(_))
+                blob_store.read_blob(name),
+                Err(slot_machine_transcript::ContentAddressedStoreError::InvalidName(_))
             ),
             "{name:?} must be refused"
         );

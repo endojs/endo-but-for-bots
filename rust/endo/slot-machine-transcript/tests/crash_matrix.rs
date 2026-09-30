@@ -193,10 +193,10 @@ fn crash_matrix_xs_cas_watermark_ordering() {
     // sequence, or the matrix is not covering them.
     for needle in [
         "sqlite:sync:wal",
-        "cas:write-blob",
-        "cas:sync-blob",
-        "cas:rename-blob",
-        "cas:sync-directory",
+        "blob-store:write-blob",
+        "blob-store:sync-blob",
+        "blob-store:rename-blob",
+        "blob-store:sync-directory",
     ] {
         assert!(
             ops.iter().any(|op| op.starts_with(needle)),

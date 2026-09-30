@@ -36,12 +36,12 @@ fn callbacks() -> AdmittedCallbacks {
 
 /// Open a transcript with an initial snapshot published.
 fn open(root: &Path) -> (Transcript, ContentAddressedStore) {
-    let cas = ContentAddressedStore::open(root.join("cas")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.join("blob_store")).unwrap();
     let (mut t, _) = Transcript::open(root.join("t.sqlite"), TranscriptConfig::new("w")).unwrap();
     if t.latest_snapshot().unwrap().is_none() {
-        t.publish_snapshot(&cas, b"heap-0", meta()).unwrap();
+        t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
     }
-    (t, cas)
+    (t, blob_store)
 }
 
 fn reopen(root: &Path) -> Transcript {
@@ -307,7 +307,7 @@ fn outbound_effect_runs_only_after_commit_with_a_stable_idempotency_key() {
     let again = t.releasable_effects().unwrap();
     assert_eq!(again, effects);
     t.mark_released([again[0].seq]);
-    t.flush_acks().unwrap();
+    t.flush_acknowledgments().unwrap();
     assert!(t.releasable_effects().unwrap().is_empty());
 }
 
@@ -317,17 +317,17 @@ fn outbound_effect_runs_only_after_commit_with_a_stable_idempotency_key() {
 fn handle_without_descriptor_is_reseated_broken_and_never_silently_succeeds() {
     let root = tempfile::tempdir().unwrap();
     let callbacks = callbacks();
-    let sock;
+    let socket;
     {
         let (mut t, _) = open(root.path());
         t.begin_crank(b"d1").unwrap();
-        sock = opened(
+        socket = opened(
             t.host_call(&callbacks, "connect", None, b"peer:80", |_| {
                 opens(b"ok", None)
             })
             .unwrap(),
         );
-        t.host_call(&callbacks, "send-socket", Some(sock), b"ping", |_| {
+        t.host_call(&callbacks, "send-socket", Some(socket), b"ping", |_| {
             reply(b"sent")
         })
         .unwrap();
@@ -339,27 +339,27 @@ fn handle_without_descriptor_is_reseated_broken_and_never_silently_succeeds() {
         .unwrap();
     assert!(report.reseated.is_empty());
     assert_eq!(report.broken.len(), 1);
-    assert_eq!(report.broken[0].0, sock);
+    assert_eq!(report.broken[0].0, socket);
     assert_eq!(
         t.recovery_gate().unwrap(),
-        Err(RecoveryStop::BrokenHandles(vec![sock]))
+        Err(RecoveryStop::BrokenHandles(vec![socket]))
     );
     // Replay of a use of the broken handle stops rather than answering.
     let mut replay = t.host_replay().unwrap();
     replay.begin_crank(1);
     replay.call("connect", None, b"peer:80").unwrap();
     assert_eq!(
-        replay.call("send-socket", Some(sock), b"ping"),
-        Err(ReplayStop::BrokenHandle(sock))
+        replay.call("send-socket", Some(socket), b"ping"),
+        Err(ReplayStop::BrokenHandle(socket))
     );
     // A live use is refused without invoking the adapter.
     t.begin_crank(b"d2").unwrap();
     let err = t
-        .host_call(&callbacks, "send-socket", Some(sock), b"ping", |_| {
+        .host_call(&callbacks, "send-socket", Some(socket), b"ping", |_| {
             panic!("a broken handle must not reach a fabricated resource")
         })
         .unwrap_err();
-    assert_eq!(err, HostCallError::BrokenHandle(sock));
+    assert_eq!(err, HostCallError::BrokenHandle(socket));
     t.abort_crank().unwrap();
     // Still stopped across a restart.
     drop(t);
@@ -373,7 +373,7 @@ fn broken_handle_resumes_once_the_adapter_supplies_a_replacement_under_the_same_
     let callbacks = callbacks();
     let (mut t, _) = open(root.path());
     t.begin_crank(b"d1").unwrap();
-    let sock = opened(
+    let socket = opened(
         t.host_call(&callbacks, "connect", None, b"peer:80", |_| {
             opens(b"ok", None)
         })
@@ -384,20 +384,20 @@ fn broken_handle_resumes_once_the_adapter_supplies_a_replacement_under_the_same_
     assert!(t.recovery_gate().unwrap().is_err());
     // A replacement that fails to rebuild is refused and changes nothing.
     assert!(t
-        .supply_replacement(sock, b"peer:80#2".to_vec(), |_| Err("refused".into()))
+        .supply_replacement(socket, b"peer:80#2".to_vec(), |_| Err("refused".into()))
         .is_err());
     assert!(t.recovery_gate().unwrap().is_err());
     let rebuilt = Cell::new(None);
-    t.supply_replacement(sock, b"peer:80#2".to_vec(), |r| {
+    t.supply_replacement(socket, b"peer:80#2".to_vec(), |r| {
         rebuilt.set(Some((r.handle, r.descriptor.clone())));
         Ok(())
     })
     .unwrap();
-    assert_eq!(rebuilt.take(), Some((sock, Some(b"peer:80#2".to_vec()))));
+    assert_eq!(rebuilt.take(), Some((socket, Some(b"peer:80#2".to_vec()))));
     assert_eq!(t.recovery_gate().unwrap(), Ok(()));
     t.begin_crank(b"d2").unwrap();
     let r = t
-        .host_call(&callbacks, "send-socket", Some(sock), b"ping", |_| {
+        .host_call(&callbacks, "send-socket", Some(socket), b"ping", |_| {
             reply(b"sent")
         })
         .unwrap();
@@ -413,7 +413,7 @@ fn broken_handle_resumes_once_the_adapter_supplies_a_replacement_under_the_same_
     drop(t);
     let mut t = reopen(root.path());
     let report = t.reseat_handles(|_| Ok(())).unwrap();
-    assert_eq!(report.reseated, vec![sock]);
+    assert_eq!(report.reseated, vec![socket]);
 }
 
 #[test]
@@ -422,7 +422,7 @@ fn broken_handle_resumes_once_the_application_handles_a_delivery_reporting_the_l
     let callbacks = callbacks();
     let (mut t, _) = open(root.path());
     t.begin_crank(b"d1").unwrap();
-    let sock = opened(
+    let socket = opened(
         t.host_call(&callbacks, "connect", None, b"peer:80", |_| {
             opens(b"ok", None)
         })
@@ -432,11 +432,11 @@ fn broken_handle_resumes_once_the_application_handles_a_delivery_reporting_the_l
     t.reseat_handles(|_| Ok(())).unwrap();
     // A loss acknowledged by a crank that then aborts is not recorded.
     t.begin_crank(b"lost:1").unwrap();
-    t.acknowledge_loss(sock).unwrap();
+    t.acknowledge_loss(socket).unwrap();
     t.abort_crank().unwrap();
     assert!(t.recovery_gate().unwrap().is_err());
     t.begin_crank(b"lost:1").unwrap();
-    t.acknowledge_loss(sock).unwrap();
+    t.acknowledge_loss(socket).unwrap();
     t.commit_crank().unwrap();
     assert_eq!(t.recovery_gate().unwrap(), Ok(()));
     // The handle is closed: a later use is refused, not fabricated.
@@ -445,12 +445,12 @@ fn broken_handle_resumes_once_the_application_handles_a_delivery_reporting_the_l
         t.host_call(
             &callbacks,
             "send-socket",
-            Some(sock),
+            Some(socket),
             b"ping",
             |_| unreachable!()
         )
         .unwrap_err(),
-        HostCallError::UnknownHandle(sock)
+        HostCallError::UnknownHandle(socket)
     );
     t.abort_crank().unwrap();
 }
@@ -563,7 +563,7 @@ fn aborted_crank_records_no_host_events_or_handles() {
 fn compaction_keeps_open_handles_and_unreleased_effects() {
     let root = tempfile::tempdir().unwrap();
     let callbacks = callbacks();
-    let (mut t, cas) = open(root.path());
+    let (mut t, blob_store) = open(root.path());
     t.begin_crank(b"d1").unwrap();
     let file = opened(
         t.host_call(&callbacks, "open-file", None, b"/a.txt", |_| {
@@ -580,7 +580,7 @@ fn compaction_keeps_open_handles_and_unreleased_effects() {
     )
     .unwrap();
     t.commit_crank().unwrap();
-    t.publish_snapshot(&cas, b"heap-1", meta()).unwrap();
+    t.publish_snapshot(&blob_store, b"heap-1", meta()).unwrap();
     t.compact().unwrap();
     assert_eq!(t.open_handles().unwrap()[0].handle, file);
     assert_eq!(t.releasable_effects().unwrap().len(), 1);
@@ -837,13 +837,13 @@ fn recovery_operations_refuse_targets_in_the_wrong_state() {
         })
         .unwrap(),
     );
-    let sock = opened(
+    let socket = opened(
         t.host_call(&callbacks, "connect", None, b"peer:80", |_| {
             opens(b"ok", None)
         })
         .unwrap(),
     );
-    assert_ne!(file, sock);
+    assert_ne!(file, socket);
     t.commit_crank().unwrap();
     t.reseat_handles(|_| Ok(())).unwrap();
     // A healthy handle has no loss to report and needs no replacement.
@@ -853,14 +853,14 @@ fn recovery_operations_refuse_targets_in_the_wrong_state() {
         Err(TranscriptError::Protocol(_))
     ));
     // A loss already acknowledged in this crank is not acknowledged twice.
-    t.acknowledge_loss(sock).unwrap();
-    assert!(t.acknowledge_loss(sock).is_err());
+    t.acknowledge_loss(socket).unwrap();
+    assert!(t.acknowledge_loss(socket).is_err());
     t.abort_crank().unwrap();
     assert!(t
         .supply_replacement(file, b"cap:/a.txt@0".to_vec(), |_| unreachable!())
         .is_err());
     // A loss is acknowledged only by the crank that delivers it.
-    assert!(t.acknowledge_loss(sock).is_err());
+    assert!(t.acknowledge_loss(socket).is_err());
     // Clearing a barrier that was never recorded is refused.
     assert!(t.clear_barrier(12345).is_err());
     // A replayed call before any crank begins is a mismatch.
@@ -910,9 +910,9 @@ fn a_reply_past_the_byte_bound_is_refused_and_its_handle_recorded_broken() {
     let callbacks = callbacks();
     let mut config = TranscriptConfig::new("w");
     config.limits.max_host_bytes = 8;
-    let cas = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
     let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
-    t.publish_snapshot(&cas, b"heap-0", meta()).unwrap();
+    t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
     t.begin_crank(b"d1").unwrap();
     // The only call in the crank: its request fits, its reply does not.
     assert!(matches!(
@@ -935,6 +935,78 @@ fn a_reply_past_the_byte_bound_is_refused_and_its_handle_recorded_broken() {
 }
 
 #[test]
+fn a_transactional_write_cannot_touch_the_transcript_tables() {
+    let root = tempfile::tempdir().unwrap();
+    let callbacks = callbacks();
+    let (mut t, _) = open(root.path());
+    t.begin_crank(b"d1").unwrap();
+    t.host_call_transactional(&callbacks, "put-row", None, b"k=v", |_| {
+        let write: TransactionalWrite = Box::new(|transaction| {
+            transaction.execute("UPDATE crank SET state = 'committed'", [])?;
+            Ok(())
+        });
+        (reply(b"ok"), write)
+    })
+    .unwrap();
+    assert!(t.commit_crank().is_err());
+}
+
+#[test]
+fn a_transactional_reply_past_the_byte_bound_records_no_escape() {
+    let root = tempfile::tempdir().unwrap();
+    let callbacks = callbacks();
+    let mut config = TranscriptConfig::new("w");
+    config.limits.max_host_bytes = 8;
+    let blob_store = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
+    t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
+    t.begin_crank(b"d1").unwrap();
+    // The write never runs, so the handle it would open never exists.
+    assert!(matches!(
+        t.host_call_transactional(&callbacks, "put-row", None, b"k=v", |r| {
+            (opens(&[0; 8], Some(b"cap:/row")), put_row(r))
+        }),
+        Err(HostCallError::Transcript(TranscriptError::Backpressure(_)))
+    ));
+    t.commit_crank().unwrap();
+    assert!(t.open_handles().unwrap().is_empty());
+    assert_eq!(t.recovery_gate().unwrap(), Ok(()));
+    drop(t);
+    assert_eq!(applied(root.path()), 0);
+}
+
+#[test]
+fn a_barrier_reply_past_the_byte_bound_forces_abort_and_stops_recovery() {
+    let root = tempfile::tempdir().unwrap();
+    let callbacks = callbacks();
+    let mut config = TranscriptConfig::new("w");
+    config.limits.max_host_bytes = 8;
+    let blob_store = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
+    t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
+    t.begin_crank(b"d1").unwrap();
+    // The barrier's effect has run, but its reply does not fit.
+    assert!(matches!(
+        t.host_call(&callbacks, "launch-missile", None, b"a", |_| reply(&[0; 8])),
+        Err(HostCallError::Transcript(TranscriptError::Backpressure(_)))
+    ));
+    // A later call does not reuse the barrier's durable ordinal.
+    t.host_call(&callbacks, "now", None, b"b", |_| reply(b"1"))
+        .unwrap();
+    // The crank may not commit past the refused barrier.
+    assert!(matches!(
+        t.commit_crank(),
+        Err(TranscriptError::Protocol(_))
+    ));
+    t.abort_crank().unwrap();
+    let stop = t.recovery_gate().unwrap().unwrap_err();
+    assert!(
+        matches!(&stop, RecoveryStop::EscapedBarrier { crank: 1, callback, .. } if callback == "launch-missile"),
+        "expected an escaped barrier, got {stop:?}"
+    );
+}
+
+#[test]
 fn registering_a_callback_again_replaces_its_classification() {
     let callbacks = CallbackRegistry::new()
         .classify("now", HostClass::Pure)
@@ -951,9 +1023,9 @@ fn recorded_host_calls_per_crank_are_bounded() {
     let mut config = TranscriptConfig::new("w");
     config.limits.max_host_calls = 2;
     config.limits.max_host_bytes = 16;
-    let cas = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    let blob_store = ContentAddressedStore::open(root.path().join("blob_store")).unwrap();
     let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
-    t.publish_snapshot(&cas, b"heap-0", meta()).unwrap();
+    t.publish_snapshot(&blob_store, b"heap-0", meta()).unwrap();
     t.begin_crank(b"d1").unwrap();
     t.host_call(&callbacks, "now", None, b"a", |_| reply(b"1"))
         .unwrap();

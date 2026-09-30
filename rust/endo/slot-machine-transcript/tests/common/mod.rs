@@ -111,7 +111,7 @@ impl WorkerFiles {
 /// The Slot Machine supervisor loop, reduced to what the transcript sees.
 pub struct Supervisor {
     pub transcript: Transcript,
-    pub cas: ContentAddressedStore,
+    pub blob_store: ContentAddressedStore,
     pub state: VatState,
     pub recovery: Recovery,
     pub replayed: usize,
@@ -129,15 +129,16 @@ impl Supervisor {
         wire: &mut Wire,
     ) -> Result<Supervisor, TranscriptError> {
         let mut config = TranscriptConfig::new(&files.worker);
-        let mut cas = ContentAddressedStore::open(files.cas_directory()).expect("cas directory");
+        let mut blob_store =
+            ContentAddressedStore::open(files.cas_directory()).expect("blob_store directory");
         if let Some(plan) = &plan {
             config = config.with_fault_plan(plan.clone());
-            cas = cas.with_fault_plan(plan.clone());
+            blob_store = blob_store.with_fault_plan(plan.clone());
         }
         let (transcript, recovery) = Transcript::open(files.transcript(), config)?;
         let mut supervisor = Supervisor {
             transcript,
-            cas,
+            blob_store,
             state: 0,
             recovery,
             replayed: 0,
@@ -148,7 +149,7 @@ impl Supervisor {
             // first retryable delivery.
             supervisor.publish()?;
         } else {
-            let plan = supervisor.transcript.replay_plan(&supervisor.cas)?;
+            let plan = supervisor.transcript.replay_plan(&supervisor.blob_store)?;
             let mut state = restore(&plan.snapshot_bytes);
             for crank in &plan.cranks {
                 let (next, out) = deliver(state, &crank.inbound);
@@ -204,7 +205,7 @@ impl Supervisor {
     /// Publish a snapshot of the current state.
     pub fn publish(&mut self) -> Result<SnapshotRecord, TranscriptError> {
         self.transcript
-            .publish_snapshot(&self.cas, &snapshot_bytes(self.state), meta())
+            .publish_snapshot(&self.blob_store, &snapshot_bytes(self.state), meta())
     }
 
     /// Compact, then reclaim superseded blobs (unless the process is dead).
@@ -216,7 +217,7 @@ impl Supervisor {
                 keep.push(s.hash);
             }
             let _ = superseded;
-            self.cas.reclaim(&keep).expect("reclaim");
+            self.blob_store.reclaim(&keep).expect("reclaim");
         }
         Ok(())
     }
