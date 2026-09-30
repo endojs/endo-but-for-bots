@@ -50,25 +50,26 @@
 // Idempotent: the credential and the session base directories are reused; the
 // backend caplet — the one formula whose module path is tied to a release
 // checkout — is re-created on every run and re-bound into the Floot profile.
-
-import { createHash } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+//
+// The sequence itself is `@endo/hosted-agent/hosted-backend-setup.js`, shared
+// with the Claude adapter; what is OpenCode's own (the OpenRouter API key, the
+// storage owner minted over null powers) is the code between its steps here.
 
 import { E } from '@endo/eventual-send';
 import {
-  assertRetainedBrokerImages,
-  configureBroker,
-  forgetBrokerSettings,
-  mintWithPowersPath,
-  providePrivateDirectory,
-  publishAccountOracle,
-  publishBrokerSubscription,
-  readAccountAuthority,
-  readBrokerSettings,
-} from '@endo/hosted-agent/hosted-setup.js';
-import { Fail, q } from '@endo/errors';
+  assertGuestRootsDisjoint,
+  bindFlootBackend,
+  provideBackendCaplet,
+  provideBrokerService,
+  provideSessionRoots,
+  publishHostedAccount,
+  readHostedBackendEnvironment,
+  readRetainedBroker,
+  requireProvisioned,
+  resolveMintedBrokerIdentity,
+  resolveSessionStorageRoots,
+} from '@endo/hosted-agent/hosted-backend-setup.js';
+import { assertRetainedBrokerImages } from '@endo/hosted-agent/hosted-setup.js';
 
 import {
   assertCurrentSpecifier,
@@ -76,37 +77,29 @@ import {
 } from '@endo/hosted-agent/current-specifier.js';
 import { provideManagedCredentials } from './src/managed-credentials.js';
 import {
+  SANDBOX_DIR,
   assertRuntimePlacement,
   brokerServiceSpecifier,
   getHostedStorageRoots,
   readBrokerService,
   readNativeSandbox,
   readSessionStorage,
-  readSliceImageReference,
-  resolveFuturePath,
-  resolvePinnedImageRef,
   sessionStorageSpecifier,
 } from './src/hosted-runtime-setup.js';
-import { BROKER_OWNER_PATTERN } from './src/opencode-broker.js';
 import { readOpencodeBrokerConfig } from './src/opencode-broker-service-agent.js';
-import {
-  containsPath,
-  isNormalizedAbsolutePath,
-  readMounterEnv,
-} from './src/opencode-session-plan.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
+
+const LABEL = 'OpenCode';
+const PREFIX = 'ENDO_OPENCODE';
 
 const backendModuleSpecifier = toCurrentSpecifier(
   new URL('./src/opencode-backend-module.js', import.meta.url).href,
 );
 
-// Kept in sync with setup-host.js and the backend's session records directory.
-const SANDBOX_DIR = 'opencode-sandbox';
-
 /**
  * @param {EndoHost} hostAgent
- * @param {{ exec?: Parameters<typeof resolvePinnedImageRef>[1] }} [powers]
+ * @param {{ exec?: (file: string, args: string[]) => Promise<{ stdout: string }> }} [powers]
  */
 export const main = async (hostAgent, { exec = undefined } = {}) => {
   await null;
@@ -115,135 +108,76 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   const credsName = env.ENDO_OPENCODE_CREDS_NAME || 'openrouter-auth';
   // The account authority this broker serves, the OpenRouter account's id
   // as the operator declared it. Every plan records it.
-  const accountAuthority = readAccountAuthority(
-    env,
-    'ENDO_OPENCODE_ACCOUNT_AUTHORITY',
-    'OpenCode',
-  );
-  const backendName = env.ENDO_OPENCODE_BACKEND_NAME || 'opencode-backend';
-  if (backendName !== 'opencode-backend') {
-    console.warn(
-      `OpenCode backend name is "${backendName}"; Floot's factory only discovers "opencode-backend" unless its own configuration is changed to match.`,
-    );
-  }
+  const {
+    accountAuthority,
+    backendName,
+    rootfs,
+    listenerImageRef,
+    brokerDir,
+    brokerOwnerId: requestedOwnerId,
+    brokerSettings,
+    mounterEnvText,
+    flootDir,
+  } = readHostedBackendEnvironment(env, {
+    label: LABEL,
+    prefix: PREFIX,
+    defaultBackendName: 'opencode-backend',
+    defaultRootfs: 'oci:localhost/opencode-sandbox:latest',
+    brokerDirName: 'opencode-broker',
+  });
   const requestedRoots = getHostedStorageRoots(env);
-  const rootfs =
-    env.ENDO_OPENCODE_SANDBOX_IMAGE || 'oci:localhost/opencode-sandbox:latest';
-  // Daemon-owned sessions require the provider broker, so the listener image
-  // is required whenever one is minted; there is no session path without one.
-  const listenerImageRef = env.ENDO_OPENCODE_BROKER_LISTENER_IMAGE || '';
-  const brokerDir =
-    env.ENDO_OPENCODE_BROKER_DIR || path.join(os.homedir(), 'opencode-broker');
-  // Session capacity, public egress and the admission trail: the broker's
-  // operator settings, applied at every start (see configureBroker below).
-  // The admission trail is a line per request (admitted, completed, revoked)
-  // in the broker worker's log. Off by default, because it is volume, not
-  // because it is sensitive. Failures are not behind this switch: an
-  // upstream or listener failure is always logged there, since the slice is
-  // only ever told 502.
-  const brokerSettings = readBrokerSettings(env, 'ENDO_OPENCODE');
-  // The rootless mount settings a session's own 9P mounter needs, recorded
-  // into every plan through the backend. A hosted daemon forwards only
-  // ENDO_-prefixed variables to its ENDO_EXTRA subprocesses, so the mounter's
-  // own names are also accepted under their ENDO_ spelling.
-  /** @type {Record<string, string>} */
-  const mounterSettings = {};
-  for (const name of [
-    'NINEP_SUDO',
-    'NINEP_MOUNT_PROGRAM',
-    'NINEP_UMOUNT_PROGRAM',
-  ]) {
-    const value = env[`ENDO_${name}`] || env[name];
-    if (value) mounterSettings[name] = value;
-  }
-  const mounterEnvText =
-    Object.keys(mounterSettings).length === 0
-      ? undefined
-      : JSON.stringify(readMounterEnv(mounterSettings));
-
   // A seed value is used only on first setup, when the secrets catalog has no
   // entry for `credsName`; provideManagedCredentials never overwrites an
   // existing secret from a possibly stale environment variable.
   const seedApiKey = env.ENDO_OPENROUTER_API_KEY || '';
 
   // The native sandbox service is what session controllers acquire scopes from.
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox'))) {
-    throw Fail`${q(`${SANDBOX_DIR}/native-sandbox`)} is missing — run setup-host.js first.`;
-  }
+  await requireProvisioned(hostAgent, SANDBOX_DIR, ['native-sandbox']);
   const runtime = await readNativeSandbox(hostAgent);
-  // A retained storage owner's roots are the effective
-  // ones: the backend must record sessions where that owner can remove them.
-  // The current environment's roots apply only when the owner is minted now.
-  const existingStorage = await E(hostAgent).has(
-    SANDBOX_DIR,
-    'session-storage',
-  );
-  const { workspaceDir, mcpDir } = existingStorage
-    ? (await readSessionStorage(hostAgent)).roots
-    : requestedRoots;
-  // Refuse before any mint what the storage owner would refuse at
-  // construction; a formula that cannot construct is still bound and would be
-  // retained by every later run.
-  isNormalizedAbsolutePath(workspaceDir) ||
-    Fail`ENDO_OPENCODE_WORKSPACE_DIR (or the retained storage owner's root) must be a normalized absolute path: ${q(workspaceDir)}`;
-  isNormalizedAbsolutePath(mcpDir) ||
-    Fail`ENDO_OPENCODE_MCP_DIR (or the retained storage owner's root) must be a normalized absolute path: ${q(mcpDir)}`;
+  const { existingStorage, workspaceDir, mcpDir } =
+    await resolveSessionStorageRoots(hostAgent, {
+      prefix: PREFIX,
+      sandboxDir: SANDBOX_DIR,
+      requestedRoots,
+      readSessionStorage: () => readSessionStorage(hostAgent),
+    });
   await assertRuntimePlacement(runtime.config.directory, {
     workspaceDir,
     mcpDir,
   });
-  // Provider broker service — an owned native service whose one exact powers
-  // dependency is the managed credential's SecretBlob. Its operator profile is
-  // persisted in the formula environment; sessions never resolve a mutable
-  // credential name. An existing service is retained with its configuration
-  // (its entrypoint and persisted shape are verified here, not the kit's
-  // predicates); otherwise everything the broker kit would refuse of the
-  // operator's configuration is refused here, before any mint or directory
-  // creation, for the same reason as the storage roots above. Only asking Podman for an unpinned slice image's digest and
-  // creating the broker directory wait for the mint.
-  const existingBroker = await E(hostAgent).has(SANDBOX_DIR, 'broker-service');
+
+  // A retained broker keeps its pins; a changed image is refused, not
+  // silently discarded (a live broker cannot be re-pinned in place).
+  const retained = await readRetainedBroker(hostAgent, {
+    sandboxDir: SANDBOX_DIR,
+    accountAuthority,
+    readBrokerService: () => readBrokerService(hostAgent),
+  });
   let brokerOwnerId = '';
-  // The broker's directory, like the runtime directory, is protected storage
-  // the backend refuses to let any guest root resolve into at every
-  // provision; a retained broker's persisted directory is the effective one.
-  let effectiveBrokerDir = brokerDir;
-  if (existingBroker) {
-    // A retained broker keeps its pins; a changed image is refused here, not
-    // silently discarded (a live broker cannot be re-pinned in place).
-    const broker = await readBrokerService(hostAgent);
-    effectiveBrokerDir = broker.config.directory;
-    broker.config.accountAuthority === accountAuthority ||
-      Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} serves account authority ${q(broker.config.accountAuthority)} but the configuration now names ${q(accountAuthority)}; retire it deliberately`;
+  if (retained) {
     await assertRetainedBrokerImages({
-      label: 'OpenCode',
+      label: LABEL,
       serviceName: `${SANDBOX_DIR}/broker-service`,
-      retained: broker.config,
+      retained,
       rootfs,
       listenerImageRef,
       exec,
     });
   } else {
-    if (listenerImageRef === '') {
-      throw Fail`ENDO_OPENCODE_BROKER_LISTENER_IMAGE is required: the backend records the broker service into every session plan`;
-    }
-    isNormalizedAbsolutePath(brokerDir) ||
-      Fail`ENDO_OPENCODE_BROKER_DIR must be a normalized absolute path: ${q(brokerDir)}`;
-    brokerOwnerId = env.ENDO_OPENCODE_BROKER_OWNER_ID || '';
-    if (brokerOwnerId === '') {
-      const hostId = await E(hostAgent).identify('@agent');
-      if (typeof hostId !== 'string' || hostId.length === 0) {
-        throw Fail`Cannot identify the OpenCode broker host`;
-      }
-      brokerOwnerId = `opencode-${createHash('sha256').update(hostId).digest('hex').slice(0, 48)}`;
-    }
-    BROKER_OWNER_PATTERN.test(brokerOwnerId) ||
-      Fail`ENDO_OPENCODE_BROKER_OWNER_ID must match ${q(BROKER_OWNER_PATTERN)}: ${q(brokerOwnerId)}`;
-    // Mirrors the listener runtime's identity check; setup pins the slice
-    // image itself but never rewrites the listener reference.
-    /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(listenerImageRef) ||
-      Fail`ENDO_OPENCODE_BROKER_LISTENER_IMAGE must be a lowercase, digest-pinned image reference: ${q(listenerImageRef)}`;
-    readSliceImageReference(rootfs);
+    brokerOwnerId = await resolveMintedBrokerIdentity(hostAgent, {
+      label: LABEL,
+      prefix: PREFIX,
+      ownerPrefix: 'opencode',
+      brokerDir,
+      brokerOwnerId: requestedOwnerId,
+      rootfs,
+      listenerImageRef,
+    });
   }
+  // The broker's directory, like the runtime directory, is protected storage
+  // the backend refuses to let any guest root resolve into at every
+  // provision; a retained broker's persisted directory is the effective one.
+  const effectiveBrokerDir = retained ? retained.directory : brokerDir;
 
   // Assert before the first mint so a failure cannot leave a half-bound
   // profile behind (the credential mint would otherwise commit first).
@@ -254,61 +188,37 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     kind: 'apiKey',
   });
 
-  await mkdir(workspaceDir, { recursive: true, mode: 0o700 });
-  // The MCP socket base must be private and symlink-free: a planted link here
-  // would redirect the per-session sockets another process can then squat.
-  await providePrivateDirectory('ENDO_OPENCODE_MCP_DIR', mcpDir);
+  await provideSessionRoots({ prefix: PREFIX, workspaceDir, mcpDir });
+  await assertGuestRootsDisjoint({
+    label: LABEL,
+    prefix: PREFIX,
+    workspaceDir,
+    mcpDir,
+    effectiveBrokerDir,
+    protectedRoots: [effectiveBrokerDir, runtime.config.directory],
+    protectedDescription: 'the broker directory and the runtime directory',
+  });
 
-  isNormalizedAbsolutePath(effectiveBrokerDir) ||
-    Fail`ENDO_OPENCODE_BROKER_DIR (or the retained broker's directory) must be a normalized absolute path: ${q(effectiveBrokerDir)}`;
-  // Resolve even roots not created yet: the backend refuses a guest root
-  // that resolves into protected storage on every provision, so refuse the
-  // layout here rather than at the first session.
-  const roots = await Promise.all(
-    [workspaceDir, mcpDir, effectiveBrokerDir, runtime.config.directory].map(
-      resolveFuturePath,
-    ),
-  );
-  for (const [index, root] of roots.slice(0, 2).entries()) {
-    for (const other of roots.slice(index + 1)) {
-      (!containsPath(root, other) && !containsPath(other, root)) ||
-        Fail`OpenCode guest roots overlap protected storage: the workspace and MCP roots must be disjoint from each other, the broker directory and the runtime directory`;
-    }
-  }
-
-  if (existingBroker) {
-    console.log(
-      'Retaining OpenCode broker service with its persisted configuration; its slice and listener images match the current pins.',
-    );
-  } else {
-    const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs, exec);
-    await providePrivateDirectory('ENDO_OPENCODE_BROKER_DIR', brokerDir);
-    await forgetBrokerSettings(brokerDir);
-    const brokerConfig = JSON.stringify({
-      ownerId: brokerOwnerId,
-      directory: brokerDir,
-      imageRef,
-      imageDigest,
-      listenerImageRef,
-      accountAuthority,
-      ...brokerSettings,
-    });
-    readOpencodeBrokerConfig({ OPENCODE_BROKER_CONFIG: brokerConfig });
-    await mintWithPowersPath(hostAgent, {
-      powersPath: ['secrets', credsName],
-      temporary: `${credsName}.broker-read`,
-      specifier: brokerServiceSpecifier,
-      resultName: [SANDBOX_DIR, 'broker-service'],
-      env: { OPENCODE_BROKER_CONFIG: brokerConfig },
-    });
-    console.log(`Minted ${SANDBOX_DIR}/broker-service`);
-  }
-  await configureBroker(
-    hostAgent,
-    [SANDBOX_DIR, 'broker-service'],
+  // The broker's one exact powers dependency is the managed credential's
+  // SecretBlob.
+  await provideBrokerService(hostAgent, {
+    label: LABEL,
+    prefix: PREFIX,
+    sandboxDir: SANDBOX_DIR,
+    existingBroker: retained !== undefined,
+    rootfs,
+    exec,
+    brokerDir,
+    brokerOwnerId,
+    listenerImageRef,
+    identity: { accountAuthority },
     brokerSettings,
-    'OpenCode',
-  );
+    configEnvName: 'OPENCODE_BROKER_CONFIG',
+    readBrokerConfig: readOpencodeBrokerConfig,
+    specifier: brokerServiceSpecifier,
+    powersPath: ['secrets', credsName],
+    temporary: `${credsName}.broker-read`,
+  });
 
   // Session storage owner — the `storage` role the daemon owner records with
   // each session and invokes inside record removal. It has null powers:
@@ -337,78 +247,25 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     console.log(`Minted ${SANDBOX_DIR}/session-storage`);
   }
 
-  // The hosted backend factory. It runs with `@agent` host powers (it records
-  // sessions with the daemon session owner and reprovides that owner), but
-  // Floot only ever receives the guarded factory facet. Re-created on every
-  // run: it is a pinned unconfined caplet whose module path is tied to a
-  // release checkout, and it holds no durable state of its own — sessions are
-  // records under `opencode-sandbox/session-records`, owned by the daemon.
-  //
-  // Mint the replacement under a temporary name *before* touching the live
-  // one: if the mint fails, the existing backend (and the Floot binding to
-  // it) keeps working. Minting is the step that can fail on a bad specifier,
-  // a pruned release, or a missing dependency.
-  const backendPath = [SANDBOX_DIR, 'backend'];
-  const backendNextPath = [SANDBOX_DIR, 'backend-next'];
-  if (await E(hostAgent).has(...backendNextPath)) {
-    await E(hostAgent).remove(...backendNextPath);
-  }
-  await E(hostAgent).makeUnconfined('@main', backendModuleSpecifier, {
-    powersName: '@agent',
-    resultName: backendNextPath,
-    env: harden({
-      OPENCODE_WORKSPACE_BASE_DIR: workspaceDir,
-      OPENCODE_MCP_DIR: mcpDir,
-      ...(mounterEnvText === undefined
-        ? {}
-        : { OPENCODE_MOUNTER_ENV: mounterEnvText }),
-    }),
+  // Sessions are records under `opencode-sandbox/session-records`, owned by
+  // the daemon; the factory itself holds nothing durable.
+  const backendPath = await provideBackendCaplet(hostAgent, {
+    label: LABEL,
+    sandboxDir: SANDBOX_DIR,
+    specifier: backendModuleSpecifier,
+    envPrefix: 'OPENCODE',
+    workspaceDir,
+    mcpDir,
+    mounterEnvText,
   });
-  if (await E(hostAgent).has(...backendPath)) {
-    await E(hostAgent).remove(...backendPath);
-  }
-  await E(hostAgent).copy(backendNextPath, backendPath);
-  await E(hostAgent).remove(...backendNextPath);
-  console.log(
-    `Minted the OpenCode hosted backend at "${backendPath.join('/')}".`,
-  );
-
-  const flootDir = env.ENDO_FLOOT_DIR || env.FLOOT_DIR || 'floot';
-  if (await E(hostAgent).has(flootDir, 'controller-profile')) {
-    // Floot's factory discovers hosted backends by name in its own profile
-    // (controller-profile), not at the host root, so the factory facet must be
-    // copied in. Re-copying (remove + copy) keeps it pointed at the backend
-    // minted above across restarts and release pruning.
-    // copy overwrites an existing binding, so no remove is needed here — and
-    // removing first would open a window in which Floot cannot discover the
-    // backend if the copy fails.
-    const flootBackendPath = [flootDir, 'controller-profile', backendName];
-    await E(hostAgent).copy(backendPath, flootBackendPath);
-    console.log(
-      `Bound "${backendName}" into "${flootDir}/controller-profile".`,
-    );
-  } else {
-    console.warn(
-      `Floot controller profile "${flootDir}/controller-profile" is absent; skipping the "${backendName}" binding.`,
-    );
-  }
-  await publishAccountOracle(hostAgent, {
-    label: 'OpenCode',
-    dir: SANDBOX_DIR,
+  await bindFlootBackend(hostAgent, { flootDir, backendName, backendPath });
+  await publishHostedAccount(hostAgent, {
+    label: LABEL,
+    sandboxDir: SANDBOX_DIR,
     providerId: 'openrouter',
     flootDir,
     backendId: 'opencode',
     accountAuthority,
   });
-  // The broker as a Subscription, which shares are made over
-  // (`provideSubscriptionShare`); re-minted here so they follow a new broker.
-  await publishBrokerSubscription(hostAgent, {
-    label: 'OpenCode',
-    dir: SANDBOX_DIR,
-  });
-
-  console.log(
-    `Hosted OpenCode sandbox ready. Floot sessions on backend "opencode" are recorded under "${SANDBOX_DIR}/session-records" and owned by the daemon.`,
-  );
 };
 harden(main);

@@ -63,32 +63,31 @@
 // construction is refused before the first mint: the daemon binds a formula
 // before evaluating it, and a formula that cannot construct is still bound
 // and retained.
-
-import { createHash } from 'node:crypto';
-import { mkdir } from 'node:fs/promises';
-import os from 'node:os';
-import path from 'node:path';
+//
+// The sequence itself is `@endo/hosted-agent/hosted-backend-setup.js`, shared
+// with the OpenCode adapter; what is Claude's own (the credential kinds and
+// pool, the `anthropic-beta` profile, the state provider the storage owner is
+// minted over) is the code between its steps here.
 
 import { Fail, q } from '@endo/errors';
-import { E } from '@endo/eventual-send';
+import {
+  assertGuestRootsDisjoint,
+  bindFlootBackend,
+  provideBackendCaplet,
+  provideBrokerService,
+  provideSessionRoots,
+  publishHostedAccount,
+  readHostedBackendEnvironment,
+  readRetainedBroker,
+  requireProvisioned,
+  resolveMintedBrokerIdentity,
+  resolveSessionStorageRoots,
+} from '@endo/hosted-agent/hosted-backend-setup.js';
 import {
   assertRetainedBrokerImages,
-  configureBroker,
-  forgetBrokerSettings,
   mintWithPowersPath,
-  providePrivateDirectory,
-  publishAccountOracle,
-  publishBrokerSubscription,
-  readAccountAuthority,
-  readBrokerSettings,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { provideManagedCredentials } from '@endo/hosted-agent/managed-credentials.js';
-import { BROKER_OWNER_PATTERN } from '@endo/hosted-agent/provider-broker-service.js';
-import {
-  containsPath,
-  isNormalizedAbsolutePath,
-  readMounterEnv,
-} from '@endo/hosted-agent/session-plan.js';
 
 import {
   assertCurrentSpecifier,
@@ -106,15 +105,15 @@ import {
   readBrokerService,
   readNativeSandbox,
   readSessionStorage,
-  readSliceImageReference,
   readStateProvider,
-  resolveFuturePath,
-  resolvePinnedImageRef,
   sessionStorageSpecifier,
 } from './src/hosted-runtime-setup.js';
 
 /** @import { EndoHost } from '@endo/daemon' */
 /** @import { CredentialKind } from './src/claude-credential-kinds.js' */
+
+const LABEL = 'Claude';
+const PREFIX = 'ENDO_CLAUDE';
 
 const backendModuleSpecifier = toCurrentSpecifier(
   new URL('./src/claude-backend-module.js', import.meta.url).href,
@@ -138,7 +137,7 @@ harden(inferCredentialKind);
 
 /**
  * @param {EndoHost} hostAgent
- * @param {{ exec?: Parameters<typeof resolvePinnedImageRef>[1] }} [powers]
+ * @param {{ exec?: (file: string, args: string[]) => Promise<{ stdout: string }> }} [powers]
  */
 export const main = async (hostAgent, { exec = undefined } = {}) => {
   await null;
@@ -146,55 +145,27 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // The account authority this broker serves: the pool's id, or the single
   // account's, as the operator declared it. Every plan records it, and a
   // pool's set carries it as its id.
-  const accountAuthority = readAccountAuthority(
-    env,
-    'ENDO_CLAUDE_ACCOUNT_AUTHORITY',
-    'Claude',
-  );
+  const {
+    accountAuthority,
+    backendName,
+    rootfs,
+    listenerImageRef,
+    brokerDir,
+    brokerOwnerId: requestedOwnerId,
+    brokerSettings,
+    mounterEnvText,
+    flootDir,
+  } = readHostedBackendEnvironment(env, {
+    label: LABEL,
+    prefix: PREFIX,
+    defaultBackendName: 'claude-backend',
+    defaultRootfs: 'oci:localhost/claude-sandbox:latest',
+    brokerDirName: 'claude-broker',
+  });
   const pool = readClaudePool(env);
-
   const credsName = env.ENDO_CLAUDE_CREDS_NAME || 'claude-creds';
-  const backendName = env.ENDO_CLAUDE_BACKEND_NAME || 'claude-backend';
-  if (backendName !== 'claude-backend') {
-    console.warn(
-      `Claude backend name is "${backendName}"; Floot's factory only discovers "claude-backend" unless its own configuration is changed to match.`,
-    );
-  }
   const requestedRoots = getHostedStorageRoots(env);
-  const rootfs =
-    env.ENDO_CLAUDE_SANDBOX_IMAGE || 'oci:localhost/claude-sandbox:latest';
-  // Daemon-owned sessions require the provider broker, so the listener image
-  // is required whenever one is minted; there is no session path without one.
-  const listenerImageRef = env.ENDO_CLAUDE_BROKER_LISTENER_IMAGE || '';
-  const brokerDir =
-    env.ENDO_CLAUDE_BROKER_DIR || path.join(os.homedir(), 'claude-broker');
-  // Session capacity, public egress and the admission trail: the broker's
-  // operator settings, applied at every start (see configureBroker below).
-  // The admission trail is a line per request (admitted, completed, revoked)
-  // in the broker worker's log. Off by default, because it is volume, not
-  // because it is sensitive. Failures are not behind this switch: an
-  // upstream or listener failure is always logged there, since the slice is
-  // only ever told 502.
-  const brokerSettings = readBrokerSettings(env, 'ENDO_CLAUDE');
   const anthropicBeta = env.ENDO_CLAUDE_ANTHROPIC_BETA || '';
-  // The rootless mount settings a session's own 9P mounter needs, recorded
-  // into every plan through the backend. A hosted daemon forwards only
-  // ENDO_-prefixed variables to its ENDO_EXTRA subprocesses, so the mounter's
-  // own names are also accepted under their ENDO_ spelling.
-  /** @type {Record<string, string>} */
-  const mounterSettings = {};
-  for (const name of [
-    'NINEP_SUDO',
-    'NINEP_MOUNT_PROGRAM',
-    'NINEP_UMOUNT_PROGRAM',
-  ]) {
-    const value = env[`ENDO_${name}`] || env[name];
-    if (value) mounterSettings[name] = value;
-  }
-  const mounterEnvText =
-    Object.keys(mounterSettings).length === 0
-      ? undefined
-      : JSON.stringify(readMounterEnv(mounterSettings));
 
   // A subscription token wins over an API key: the CLI runtime then bills
   // against the Pro/Max plan rather than API credits. ENDO_FLOOT_AUTH_TOKEN is
@@ -216,78 +187,60 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
   // Every session's persistent config directory comes from this provider and
   // every session's slice from this runtime; a backend minted without either
   // would fail on first provision.
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'state-provider'))) {
-    throw Fail`${q(`${SANDBOX_DIR}/state-provider`)} is missing — run setup-host.js first.`;
-  }
-  if (!(await E(hostAgent).has(SANDBOX_DIR, 'native-sandbox'))) {
-    throw Fail`${q(`${SANDBOX_DIR}/native-sandbox`)} is missing — run setup-host.js first.`;
-  }
+  await requireProvisioned(hostAgent, SANDBOX_DIR, [
+    'state-provider',
+    'native-sandbox',
+  ]);
   const runtime = await readNativeSandbox(hostAgent);
   const state = await readStateProvider(hostAgent);
   // Like the state root, a retained storage owner's roots are the effective
-  // ones: the backend must record sessions where that owner can remove them.
-  // The current environment's roots apply only when the owner is minted now.
-  const existingStorage = await E(hostAgent).has(
-    SANDBOX_DIR,
-    'session-storage',
-  );
-  const { workspaceDir, mcpDir } = existingStorage
-    ? (await readSessionStorage(hostAgent, state.identifier)).roots
-    : requestedRoots;
-  // Refuse before any mint what the storage owner would refuse at
-  // construction; a formula that cannot construct is still bound and would be
-  // retained by every later run.
-  isNormalizedAbsolutePath(workspaceDir) ||
-    Fail`ENDO_CLAUDE_WORKSPACE_DIR (or the retained storage owner's root) must be a normalized absolute path: ${q(workspaceDir)}`;
-  isNormalizedAbsolutePath(mcpDir) ||
-    Fail`ENDO_CLAUDE_MCP_DIR (or the retained storage owner's root) must be a normalized absolute path: ${q(mcpDir)}`;
+  // ones; the current environment's roots apply only when the owner is
+  // minted now.
+  const { existingStorage, workspaceDir, mcpDir } =
+    await resolveSessionStorageRoots(hostAgent, {
+      prefix: PREFIX,
+      sandboxDir: SANDBOX_DIR,
+      requestedRoots,
+      readSessionStorage: () => readSessionStorage(hostAgent, state.identifier),
+    });
   await assertRuntimePlacement(runtime.config.directory, {
     stateDir: state.stateDir,
     workspaceDir,
     mcpDir,
   });
 
-  // Provider broker service — an owned native service whose one exact powers
-  // dependency is the managed credential's SecretBlob. Its operator profile
-  // (the pinned slice image, the credential kind, the models it admits) is
-  // persisted in the formula environment; sessions never resolve a mutable
-  // credential name. An existing service is retained with its configuration
-  // and its credential: the kind is then the persisted one, and a run naming
-  // another kind is refused rather than silently re-credentialed (switching
-  // means removing the broker and the credential caplet and rotating the
-  // secret, since the caplet reports its minted kind and the secret's bytes
-  // are never re-seeded). A minted broker needs the kind named: a token whose
-  // prefix says nothing, or a secret created in Secrets with no seed here,
-  // must not default to a header the credential may not accept. Otherwise
-  // everything the broker kit would refuse of the operator's values is
-  // refused here first; only asking Podman for an unpinned slice image's
-  // digest and creating the broker directory wait for the mint.
-  const existingBroker = await E(hostAgent).has(SANDBOX_DIR, 'broker-service');
+  // The broker's operator profile (the pinned slice image, the credential
+  // kind, the models it admits) is persisted in the formula environment;
+  // sessions never resolve a mutable credential name. An existing service is
+  // retained with its configuration and its credential: the kind is then the
+  // persisted one, and a run naming another kind is refused rather than
+  // silently re-credentialed (switching means removing the broker and the
+  // credential caplet and rotating the secret, since the caplet reports its
+  // minted kind and the secret's bytes are never re-seeded). A minted broker
+  // needs the kind named: a token whose prefix says nothing, or a secret
+  // created in Secrets with no seed here, must not default to a header the
+  // credential may not accept.
+  const retained = await readRetainedBroker(hostAgent, {
+    sandboxDir: SANDBOX_DIR,
+    accountAuthority,
+    readBrokerService: () => readBrokerService(hostAgent),
+  });
   /** @type {CredentialKind} */
-  let credsKind;
+  let credentialKind;
   let brokerOwnerId = '';
-  // The broker's directory, like the state and runtime directories, is
-  // protected storage the backend refuses to let any guest root resolve into
-  // at every provision; a retained broker's persisted directory is the
-  // effective one.
-  let effectiveBrokerDir = brokerDir;
-  if (existingBroker) {
-    const broker = await readBrokerService(hostAgent);
-    effectiveBrokerDir = broker.config.directory;
-    (broker.config.pool === true) === (pool !== undefined) ||
+  if (retained) {
+    (retained.pool === true) === (pool !== undefined) ||
       Fail`Changing Claude pool mode requires retiring the broker and its sessions first`;
-    broker.config.accountAuthority === accountAuthority ||
-      Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} serves account authority ${q(broker.config.accountAuthority)} but the configuration now names ${q(accountAuthority)}; retire it deliberately`;
-    credsKind = broker.config.credentialKind;
-    if (requestedKind !== undefined && requestedKind !== credsKind) {
-      throw Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} reads a ${q(credsKind)} credential and cannot switch to ${q(requestedKind)}: remove it, then either remove the ${q(credsName)} credential and rotate or delete its secret in Secrets, or configure a new ENDO_CLAUDE_CREDS_NAME; then rerun setup`;
+    credentialKind = retained.credentialKind;
+    if (requestedKind !== undefined && requestedKind !== credentialKind) {
+      throw Fail`The retained ${q(`${SANDBOX_DIR}/broker-service`)} reads a ${q(credentialKind)} credential and cannot switch to ${q(requestedKind)}: remove it, then either remove the ${q(credsName)} credential and rotate or delete its secret in Secrets, or configure a new ENDO_CLAUDE_CREDS_NAME; then rerun setup`;
     }
     // Likewise its pins: a changed image is refused here, not silently
     // discarded (a live broker cannot be re-pinned in place).
     await assertRetainedBrokerImages({
-      label: 'Claude',
+      label: LABEL,
       serviceName: `${SANDBOX_DIR}/broker-service`,
-      retained: broker.config,
+      retained,
       rootfs,
       listenerImageRef,
       exec,
@@ -298,39 +251,33 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
         ? Fail`ENDO_CLAUDE_CREDS_KIND is required: the seed token's prefix does not name a credential kind`
         : Fail`ENDO_CLAUDE_CREDS_KIND is required when no seed token names the kind of a secret created in Secrets`;
     }
-    credsKind = requestedKind;
-    if (listenerImageRef === '') {
-      throw Fail`ENDO_CLAUDE_BROKER_LISTENER_IMAGE is required: the backend records the broker service into every session plan`;
-    }
-    isNormalizedAbsolutePath(brokerDir) ||
-      Fail`ENDO_CLAUDE_BROKER_DIR must be a normalized absolute path: ${q(brokerDir)}`;
+    credentialKind = requestedKind;
     // The broker grant checks this list at every admission; a bad value must
     // not reach a persisted profile every session would then fail against.
     anthropicBeta === '' ||
       ANTHROPIC_BETA_PATTERN.test(anthropicBeta) ||
       Fail`ENDO_CLAUDE_ANTHROPIC_BETA must be a comma-separated capability list: ${q(anthropicBeta)}`;
-    brokerOwnerId = env.ENDO_CLAUDE_BROKER_OWNER_ID || '';
-    if (brokerOwnerId === '') {
-      const hostId = await E(hostAgent).identify('@agent');
-      if (typeof hostId !== 'string' || hostId.length === 0) {
-        throw Fail`Cannot identify the Claude broker host`;
-      }
-      brokerOwnerId = `claude-${createHash('sha256').update(hostId).digest('hex').slice(0, 48)}`;
-    }
-    BROKER_OWNER_PATTERN.test(brokerOwnerId) ||
-      Fail`ENDO_CLAUDE_BROKER_OWNER_ID must match ${q(BROKER_OWNER_PATTERN)}: ${q(brokerOwnerId)}`;
-    // Mirrors the listener runtime's identity check; setup pins the slice
-    // image itself but never rewrites the listener reference.
-    /^[a-z0-9][a-z0-9._:/-]*@sha256:[a-f0-9]{64}$/.test(listenerImageRef) ||
-      Fail`ENDO_CLAUDE_BROKER_LISTENER_IMAGE must be a lowercase, digest-pinned image reference: ${q(listenerImageRef)}`;
-    readSliceImageReference(rootfs);
+    brokerOwnerId = await resolveMintedBrokerIdentity(hostAgent, {
+      label: LABEL,
+      prefix: PREFIX,
+      ownerPrefix: 'claude',
+      brokerDir,
+      brokerOwnerId: requestedOwnerId,
+      rootfs,
+      listenerImageRef,
+    });
   }
+  // The broker's directory, like the state and runtime directories, is
+  // protected storage the backend refuses to let any guest root resolve into
+  // at every provision; a retained broker's persisted directory is the
+  // effective one.
+  const effectiveBrokerDir = retained ? retained.directory : brokerDir;
 
   // Assert before the first mint so a failure cannot leave a half-bound
   // profile behind (the credential mint would otherwise commit first).
   assertCurrentSpecifier(backendModuleSpecifier, 'claude-backend');
   if (pool) {
-    credsKind === 'oauthToken' ||
+    credentialKind === 'oauthToken' ||
       Fail`Claude pools require oauthToken credentials`;
     const prepared = await prepareClaudePool(hostAgent, pool);
     await prepared.publish();
@@ -338,75 +285,52 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     await provideManagedCredentials(hostAgent, {
       name: credsName,
       ...(seedApiKey ? { apiKey: seedApiKey } : {}),
-      kind: credsKind,
+      kind: credentialKind,
       label: 'Anthropic',
     });
   }
 
-  await mkdir(workspaceDir, { recursive: true, mode: 0o700 });
-  // The MCP socket base must be private and symlink-free: a planted link here
-  // would redirect the per-session sockets another process can then squat.
-  await providePrivateDirectory('ENDO_CLAUDE_MCP_DIR', mcpDir);
-
-  isNormalizedAbsolutePath(effectiveBrokerDir) ||
-    Fail`ENDO_CLAUDE_BROKER_DIR (or the retained broker's directory) must be a normalized absolute path: ${q(effectiveBrokerDir)}`;
-  // Resolve even roots not created yet: the backend refuses a guest root
-  // that resolves into protected storage on every provision, so refuse the
-  // layout here rather than at the first session.
-  const roots = await Promise.all(
-    [
-      workspaceDir,
-      mcpDir,
+  await provideSessionRoots({ prefix: PREFIX, workspaceDir, mcpDir });
+  await assertGuestRootsDisjoint({
+    label: LABEL,
+    prefix: PREFIX,
+    workspaceDir,
+    mcpDir,
+    effectiveBrokerDir,
+    protectedRoots: [
       state.stateDir,
       effectiveBrokerDir,
       runtime.config.directory,
-    ].map(resolveFuturePath),
-  );
-  for (const [index, root] of roots.slice(0, 2).entries()) {
-    for (const other of roots.slice(index + 1)) {
-      (!containsPath(root, other) && !containsPath(other, root)) ||
-        Fail`Claude guest roots overlap protected storage: the workspace and MCP roots must be disjoint from each other, the state directory, the broker directory and the runtime directory`;
-    }
-  }
+    ],
+    protectedDescription:
+      'the state directory, the broker directory and the runtime directory',
+  });
 
-  if (existingBroker) {
-    console.log(
-      'Retaining Claude broker service with its persisted configuration; its slice and listener images match the current pins.',
-    );
-  } else {
-    const { imageRef, imageDigest } = await resolvePinnedImageRef(rootfs, exec);
-    await providePrivateDirectory('ENDO_CLAUDE_BROKER_DIR', brokerDir);
-    await forgetBrokerSettings(brokerDir);
-    const brokerConfig = JSON.stringify({
-      ownerId: brokerOwnerId,
-      directory: brokerDir,
-      imageRef,
-      imageDigest,
-      listenerImageRef,
-      credentialKind: credsKind,
+  // The broker's one exact powers dependency is the managed credential's
+  // SecretBlob, or the pool's namespace powers.
+  await provideBrokerService(hostAgent, {
+    label: LABEL,
+    prefix: PREFIX,
+    sandboxDir: SANDBOX_DIR,
+    existingBroker: retained !== undefined,
+    rootfs,
+    exec,
+    brokerDir,
+    brokerOwnerId,
+    listenerImageRef,
+    identity: {
+      credentialKind,
       accountAuthority,
       ...(pool ? { pool: true } : {}),
       ...(anthropicBeta ? { anthropicBeta } : {}),
-      ...brokerSettings,
-    });
-    readClaudeBrokerConfig({ CLAUDE_BROKER_CONFIG: brokerConfig });
-    await mintWithPowersPath(hostAgent, {
-      powersPath: pool
-        ? [SANDBOX_DIR, 'broker-powers']
-        : ['secrets', credsName],
-      temporary: `${credsName}.broker-read`,
-      specifier: brokerServiceSpecifier,
-      resultName: [SANDBOX_DIR, 'broker-service'],
-      env: { CLAUDE_BROKER_CONFIG: brokerConfig },
-    });
-    console.log(`Minted ${SANDBOX_DIR}/broker-service`);
-  }
-  await configureBroker(
-    hostAgent,
-    [SANDBOX_DIR, 'broker-service'],
+    },
     brokerSettings,
-    'Claude',
-  );
+    configEnvName: 'CLAUDE_BROKER_CONFIG',
+    readBrokerConfig: readClaudeBrokerConfig,
+    specifier: brokerServiceSpecifier,
+    powersPath: pool ? [SANDBOX_DIR, 'broker-powers'] : ['secrets', credsName],
+    temporary: `${credsName}.broker-read`,
+  });
 
   // Session storage owner — the `storage` role the daemon owner records with
   // each session and invokes inside record removal. Its powers is the state
@@ -430,81 +354,28 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
     console.log(`Minted ${SANDBOX_DIR}/session-storage`);
   }
 
-  // The hosted backend factory. It runs with `@agent` host powers (it records
-  // sessions with the daemon session owner and reprovides that owner), but
-  // Floot only ever receives the guarded factory facet. Re-created on every
-  // run: it is a pinned unconfined caplet whose module path is tied to a
-  // release checkout, and it holds no durable state of its own — sessions are
-  // records under `claude-sandbox/session-records`, owned by the daemon.
-  //
-  // Mint the replacement under a temporary name *before* touching the live
-  // one: if the mint fails, the existing backend (and the Floot binding to
-  // it) keeps working.
-  const backendPath = [SANDBOX_DIR, 'backend'];
-  const backendNextPath = [SANDBOX_DIR, 'backend-next'];
-  if (await E(hostAgent).has(...backendNextPath)) {
-    await E(hostAgent).remove(...backendNextPath);
-  }
-  await E(hostAgent).makeUnconfined('@main', backendModuleSpecifier, {
-    powersName: '@agent',
-    resultName: backendNextPath,
-    env: harden({
-      CLAUDE_WORKSPACE_BASE_DIR: workspaceDir,
-      CLAUDE_MCP_DIR: mcpDir,
-      ...(mounterEnvText === undefined
-        ? {}
-        : { CLAUDE_MOUNTER_ENV: mounterEnvText }),
-    }),
+  // Sessions are records under `claude-sandbox/session-records`, owned by
+  // the daemon; the factory itself holds nothing durable.
+  const backendPath = await provideBackendCaplet(hostAgent, {
+    label: LABEL,
+    sandboxDir: SANDBOX_DIR,
+    specifier: backendModuleSpecifier,
+    envPrefix: 'CLAUDE',
+    workspaceDir,
+    mcpDir,
+    mounterEnvText,
   });
-  if (await E(hostAgent).has(...backendPath)) {
-    await E(hostAgent).remove(...backendPath);
-  }
-  await E(hostAgent).copy(backendNextPath, backendPath);
-  await E(hostAgent).remove(...backendNextPath);
-  console.log(
-    `Minted the Claude hosted backend at "${backendPath.join('/')}".`,
-  );
-
-  const flootDir = env.ENDO_FLOOT_DIR || env.FLOOT_DIR || 'floot';
-  if (await E(hostAgent).has(flootDir, 'controller-profile')) {
-    // Floot's factory discovers hosted backends by name in its own profile
-    // (controller-profile), not at the host root, so the factory facet must be
-    // copied in. Re-copying keeps it pointed at the backend minted above
-    // across restarts and release pruning; copy overwrites an existing
-    // binding, so no remove is needed — and removing first would open a
-    // window in which Floot cannot discover the backend if the copy fails.
-    const flootBackendPath = [flootDir, 'controller-profile', backendName];
-    await E(hostAgent).copy(backendPath, flootBackendPath);
-    console.log(
-      `Bound "${backendName}" into "${flootDir}/controller-profile".`,
-    );
-
-    // Bind the host-global static asset server into the factory's own profile
-    // so its bounded per-session `publishWorkspace` tool can serve new-project
-    // workspaces. Like the backend above, the factory resolves it from its own
-    // powers. We run after the asset server's setup in ENDO_EXTRA, which
-    // re-mints `asset-server` against the current release each start, so
-    // re-copying here keeps the factory pointed at the fresh capability.
-    const assetServerName = env.ENDO_FLOOT_ASSET_SERVER || 'asset-server';
-    if (await E(hostAgent).has(assetServerName)) {
-      const flootAssetPath = [flootDir, 'controller-profile', assetServerName];
-      await E(hostAgent).copy([assetServerName], flootAssetPath);
-      console.log(
-        `Bound "${assetServerName}" into "${flootDir}/controller-profile".`,
-      );
-    } else {
-      console.log(
-        `Asset server "${assetServerName}" is absent; new-project publishing stays disabled.`,
-      );
-    }
-  } else {
-    console.warn(
-      `Floot controller profile "${flootDir}/controller-profile" is absent; skipping the "${backendName}" binding.`,
-    );
-  }
-  await publishAccountOracle(hostAgent, {
-    label: 'Claude',
-    dir: SANDBOX_DIR,
+  // The factory's bounded per-session `publishWorkspace` tool serves
+  // new-project workspaces through the host-global static asset server.
+  await bindFlootBackend(hostAgent, {
+    flootDir,
+    backendName,
+    backendPath,
+    assetServerName: env.ENDO_FLOOT_ASSET_SERVER || 'asset-server',
+  });
+  await publishHostedAccount(hostAgent, {
+    label: LABEL,
+    sandboxDir: SANDBOX_DIR,
     providerId: 'anthropic',
     flootDir,
     backendId: 'claude',
@@ -513,15 +384,5 @@ export const main = async (hostAgent, { exec = undefined } = {}) => {
       ? { subscriptionIds: pool.set.members.map(member => member.id) }
       : {}),
   });
-  // The broker as a Subscription, which shares are made over
-  // (`provideSubscriptionShare`); re-minted here so they follow a new broker.
-  await publishBrokerSubscription(hostAgent, {
-    label: 'Claude',
-    dir: SANDBOX_DIR,
-  });
-
-  console.log(
-    `Hosted Claude sandbox ready. Floot sessions on backend "claude" are recorded under "${SANDBOX_DIR}/session-records" and owned by the daemon.`,
-  );
 };
 harden(main);
