@@ -21,6 +21,16 @@ The architecture audit records exact coverage and the outstanding initial Claude
 tool-seed capture omission and FA-14's dropped tool error classification;
 no universal capture or process-loss claim is made.
 
+October 1 source follow-up: FA-14 retains explicit tool failure classification
+through the existing reducer, evidence reconciler, projections and UI folds.
+It closes a missing fact in those contracts, not a reason to create another
+outcome store or infer failures from text.
+Local replay/archive/provider-wire tests and independent review pass;
+the deployed generation-189 evidence above predates this fix.
+The requested post-fix source-bulk audit will quantify the retained code and
+trace remaining duplication and dead-code candidates rather than assuming these
+correctness changes prove a smaller implementation.
+
 ## Native-context mechanism inventory, 2026-09-30
 
 Current-source follow-up at `59fe1a5bd`; this supplements the earlier inventory,

@@ -26,7 +26,18 @@ Older dated design/audit paragraphs are evidence of earlier states, not reliable
 descriptions of today's source. This summary takes precedence for current status;
 the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
-## Current work, 2026-09-30
+## Current work, 2026-10-01
+
+FA-14 is fixed in source and locally validated through the existing journal,
+evidence reconciliation, provider context, stream fold and history presentation.
+Native explicit status and actual host rejection retain the canonical optional
+`failed` flag; unknown outcomes stay unknown and no text heuristic is used.
+Event replay, snapshots, archives, late results and checkpoint classification
+enrichment are covered without another durable owner or replay policy.
+Tokyo still runs generation 189 below; deployment verification is pending.
+The initial Claude tool-seed capture fix is a separate reviewed slice.
+After both fixes, the next requested audit measures the current four-package
+source bulk and traces duplication/dead-code candidates to their callers.
 
 Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
 and the rebuilt byte-only provider listener `cc639390…` on all three brokers.
@@ -1514,15 +1525,15 @@ journaling and archived context across cold restart. They exercise the committed
 cleanup on the local daemon; they do not validate the pending account-binding
 draft or replace Tokyo acceptance.
 
-Current sequence (2026-09-30; the test counts above are historical evidence):
+Current sequence (2026-10-01; the test counts above are historical evidence):
 
 1. Continue RA-01 against current callers: delete unused/compatibility paths and
    justify remaining parallel mechanisms without creating another framework.
 2. Keep RA-02's bounded-context gap explicit; Fae compaction and evidence paging
    remain deferred by the operator, not silently completed.
-3. Address FA-14 in the existing shared outcome/journal/projection paths, retaining
-   explicit failure classification without text heuristics or another journal.
-4. Investigate the initial Claude tool-heavy seed's missing native checkpoint;
+3. Deploy and verify FA-14's reviewed shared outcome/journal/projection fix,
+   retaining explicit failure classification without another journal.
+4. Finish the initial Claude tool-heavy seed's native checkpoint fix;
    successful ordinary restart recall does not prove universal capture fidelity.
 5. Generation 189 deploys the reviewed source cleanups and passes the affected
    acceptance scopes. Preserve Secrets, renewal owners, host and workspaces on

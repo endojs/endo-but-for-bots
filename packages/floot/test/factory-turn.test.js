@@ -209,6 +209,7 @@ test('factory facets retain disconnected turns, commit history, and provision de
         rounds: '2',
       }),
       result: `[Recovered evidence; ordering relative to the reply is unknown.]\n${handoff}`,
+      failed: false,
       meta: { recoveredEvidence: true, orderUnknown: true },
     },
   ]);

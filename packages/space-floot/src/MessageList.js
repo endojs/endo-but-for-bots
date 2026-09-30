@@ -427,6 +427,9 @@ const ActionEntry = ({ msg }) => {
       ),
       h('span', { class: 'floot-action-name' }, name),
       h('span', { class: 'floot-action-preview' }, preview),
+      msg.failed === true
+        ? h('span', { class: 'floot-action-running' }, 'failed')
+        : null,
       hasResult
         ? null
         : h('span', { class: 'floot-action-running' }, 'running…'),

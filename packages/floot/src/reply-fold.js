@@ -29,7 +29,7 @@ import harden from '@endo/harden';
 /**
  * @typedef {{ role: 'assistant' | 'tool' | 'thinking', text?: string, id?: string,
  *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
- *   name?: string, args?: string, result?: string | null }} FoldedMessage
+ *   name?: string, args?: string, result?: string | null, failed?: boolean }} FoldedMessage
  */
 
 /**
@@ -143,6 +143,7 @@ export const makeReplyFold = ({ projectUsage = reported => reported } = {}) => {
         const toolMessage = pendingTools.get(event.id);
         if (toolMessage) {
           toolMessage.result = event.result;
+          if (event.failed !== undefined) toolMessage.failed = event.failed;
           pendingTools.delete(event.id);
         }
         return undefined;

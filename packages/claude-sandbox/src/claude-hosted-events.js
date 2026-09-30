@@ -27,7 +27,7 @@ import { assertTranscriptRecord } from '@endo/hosted-agent/transcript-records.js
  *   | { type: 'phase', phase: string }
  *   | { type: 'text-delta', text: string }
  *   | { type: 'tool-call', id: string, name: string, args: string }
- *   | { type: 'tool-result', id: string, name: string, result: string }
+ *   | { type: 'tool-result', id: string, name: string, result: string, ok?: boolean }
  *   | { type: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[] }
  *   | { type: 'native-context', checkpoint: TranscriptNativeContext }
  *   | ({ type: 'usage' } & Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage>)
@@ -331,6 +331,9 @@ export const makeClaudeHostedTranslator = () => {
               id,
               name: toolNames.get(id) || 'tool',
               result: renderToolResultText(block.content),
+              ...(typeof block.is_error === 'boolean'
+                ? { ok: !block.is_error }
+                : {}),
             });
           }
         }

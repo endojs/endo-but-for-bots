@@ -88,6 +88,7 @@ harden(isUnansweredResult);
  *   call, or what the tree recorded, which may be a placeholder that
  *   `settled` says is not a result.
  * @property {boolean} settled
+ * @property {boolean} [failed] Explicit outcome classification, not error-text inference.
  * @property {TextCuts} cut
  * @property {'guest' | 'host' | undefined} settledBy What settled the row's
  *   result when evidence did: a backend observation or a host execution,
@@ -102,7 +103,7 @@ harden(isUnansweredResult);
 /**
  * @param {object} turn
  * @param {string} turn.turnId
- * @param {ReadonlyArray<{ id: string, name: string, args: string, result?: string | null, cut?: TextCuts }>} turn.known
+ * @param {ReadonlyArray<{ id: string, name: string, args: string, result?: string | null, failed?: boolean, cut?: TextCuts }>} turn.known
  *   The calls the tree mirrors, in order.
  * @param {readonly any[]} [turn.activity] What the backend reported, as the
  *   turn journal records it: `callId`, `name`, `settled`, and `args` and
@@ -128,6 +129,9 @@ export const reconcileTurnEvidence = async ({
     args: call.args,
     result: call.result ?? undefined,
     settled: !isUnansweredResult(call.result),
+    ...(isUnansweredResult(call.result) || call.failed === undefined
+      ? {}
+      : { failed: call.failed }),
     cut: call.cut ?? {},
     settledBy: undefined,
     observed: false,
@@ -142,7 +146,7 @@ export const reconcileTurnEvidence = async ({
     [tools, false],
   ])) {
     const unmatched = [...rows];
-    /** @type {Array<{ callId: string, name: string, settled: boolean, args: string, result: string | undefined, cut: TextCuts, sequence?: string, resultSequence?: string }>} */
+    /** @type {Array<{ callId: string, name: string, settled: boolean, args: string, result: string | undefined, failed?: boolean, cut: TextCuts, sequence?: string, resultSequence?: string }>} */
     const entries = [];
     for (const raw of source) {
       // Journal reads are serialized; retain source order for matching.
@@ -159,6 +163,9 @@ export const reconcileTurnEvidence = async ({
         settled: Boolean(raw.settled),
         args: texts.args,
         result: raw.settled ? texts.result : undefined,
+        ...(raw.settled && raw.failed !== undefined
+          ? { failed: raw.failed }
+          : {}),
         cut: texts.cut ?? {},
         ...(raw.sequence === undefined ? {} : { sequence: raw.sequence }),
         ...(raw.resultSequence === undefined
@@ -176,6 +183,9 @@ export const reconcileTurnEvidence = async ({
       );
     /** @type {(row: EvidenceRow, tool: Entry) => boolean} */
     const sameResult = (row, tool) =>
+      (row.failed === undefined ||
+        tool.failed === undefined ||
+        row.failed === tool.failed) &&
       sameToolResult(
         { text: row.result, cut: row.cut.result },
         { text: tool.result, cut: tool.cut.result },
@@ -193,6 +203,14 @@ export const reconcileTurnEvidence = async ({
       const row = unmatched[at];
       if (observed) row.observed = true;
       else row.executed = true;
+      if (tool.settled && tool.failed !== undefined) {
+        row.failed === undefined ||
+          row.failed === tool.failed ||
+          Fail`Conflicting observed tool outcome classification`;
+        if (row.failed === undefined && tool.resultSequence !== undefined)
+          row.resultSequence = tool.resultSequence;
+        row.failed = tool.failed;
+      }
       if (tool.settled && isUnansweredResult(row.result)) {
         row.result = tool.result;
         row.settled = true;
@@ -252,6 +270,7 @@ export const reconcileTurnEvidence = async ({
         args: tool.args,
         result: tool.settled ? tool.result : undefined,
         settled: tool.settled,
+        ...(tool.failed === undefined ? {} : { failed: tool.failed }),
         cut: tool.cut,
         settledBy: undefined,
         observed,

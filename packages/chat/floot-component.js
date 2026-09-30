@@ -570,7 +570,7 @@ export const flootComponent = (
    * @typedef {{ role: 'user' | 'assistant' | 'tool' | 'thinking', text?: string,
    *   thinking?: { startedAt: number, endedAt?: number, truncated: boolean },
    *   meta?: { mail?: { from?: string } },
-   *   name?: string, args?: string, result?: string | null }} HistoryMessage
+   *   name?: string, args?: string, result?: string | null, failed?: boolean }} HistoryMessage
    * @typedef {{ id: string, title: string, createdAt: number, presetId: string,
    *   model: string, backendId?: string, modelId?: string,
    *   effectiveModelId?: string, reasoningEffort?: string, subscription?: string,
@@ -732,7 +732,13 @@ export const flootComponent = (
   const historyMessages = history => {
     return history.map((/** @type {any} */ m) =>
       m.role === 'tool'
-        ? { role: 'tool', name: m.name, args: m.args, result: m.result }
+        ? {
+            role: 'tool',
+            name: m.name,
+            args: m.args,
+            result: m.result,
+            ...(m.failed === undefined ? {} : { failed: m.failed }),
+          }
         : {
             role:
               m.role === 'user'
@@ -845,6 +851,7 @@ export const flootComponent = (
           name: m.name,
           args: m.args,
           result: m.result == null ? null : m.result,
+          ...(m.failed === undefined ? {} : { failed: m.failed }),
         }
       : {
           role: /** @type {'user' | 'assistant' | 'thinking'} */ (m.role),

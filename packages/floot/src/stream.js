@@ -24,7 +24,7 @@ import { projectUsage } from '@endo/hosted-agent/token-usage.js';
  *   | { type: 'final', text: string }
  *   | { type: 'thinking', id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean }
  *   | { type: 'tool_call', id: string, name: string, args: string }
- *   | { type: 'tool_result', id: string, name: string, result: string }
+ *   | { type: 'tool_result', id: string, name: string, result: string, failed?: boolean }
  *   | ({ type: 'usage', turns: number, incompleteTurns: number } & import('@endo/hosted-agent/token-usage.js').TokenUsage)
  *   | { type: 'end' }
  *   | { type: 'abort', reason: string }
@@ -63,13 +63,14 @@ export const makeReplyChannel = (onClose = null) => {
         name: `${name}`,
         args: `${args}`,
       }),
-    /** @param {{ id: string, name: string, result: string }} result */
-    toolResult: ({ id, name, result }) =>
+    /** @param {{ id: string, name: string, result: string, failed?: boolean }} result */
+    toolResult: ({ id, name, result, failed }) =>
       push({
         type: 'tool_result',
         id: `${id}`,
         name: `${name}`,
         result: `${result}`,
+        ...(failed === undefined ? {} : { failed }),
       }),
     /** @param {Partial<import('@endo/hosted-agent/token-usage.js').TokenUsage> & { turns: number, incompleteTurns?: number }} u */
     usage: u =>

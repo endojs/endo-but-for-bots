@@ -17,6 +17,28 @@ const drain = async reader => {
   return events;
 };
 
+test('native tool error flags are mapped without classifying literal error text', t => {
+  for (const isError of [true, false, undefined]) {
+    const translator = makeClaudeHostedTranslator();
+    const events = translator.handle({
+      type: 'user',
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tool',
+            content: 'Error: literal',
+            ...(isError === undefined ? {} : { is_error: isError }),
+          },
+        ],
+      },
+    });
+    const result = events.find(event => event.type === 'tool-result');
+    t.is(result?.ok, isError === undefined ? undefined : !isError);
+    t.is(result?.result, 'Error: literal');
+  }
+});
+
 test('completed-turn capture follows native result and precedes terminal delivery', async t => {
   const raw = makeBufferedReader();
   const retainedTail = [

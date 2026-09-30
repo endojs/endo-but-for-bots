@@ -48,7 +48,7 @@ harden(UNSETTLED_TOOL_RESULT);
  *
  * @typedef {{ type: 'text', text: string }
  *   | { type: 'thinking', id: string, text: string, startedAt: number, endedAt?: number, truncated: boolean, beforeTranscriptOrdinal: string }
- *   | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null }> }
+ *   | { type: 'tools', calls: Array<{ id: string, name: string, args: string, result: string | null, failed?: boolean }> }
  *   | { type: 'compaction', summary: string, retainedTail?: readonly TranscriptContextRecord[] }} HostedTurnSegment
  */
 
@@ -60,7 +60,7 @@ harden(UNSETTLED_TOOL_RESULT);
  * @property {boolean} [outcomeUnknown] - transport failure may hide external effects.
  * @property {string} finalContent - the reply text that streamed.
  * @property {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} usage
- * @property {Array<{ id: string, name: string, args: string, result: string | null }>} toolCalls
+ * @property {Array<{ id: string, name: string, args: string, result: string | null, failed?: boolean }>} toolCalls
  *   - the tool activity that streamed (`result` is null for a call the turn
  *   ended before settling).
  * @property {HostedTurnSegment[]} [segments] - `finalContent` and `toolCalls`
@@ -290,7 +290,7 @@ export const runHostedTurn = async ({
   let commentaryTail = '';
   /** @type {import('@endo/hosted-agent/token-usage.js').TokenUsage | undefined} */
   let usage;
-  /** @type {Array<{ id: string, name: string, args: string, result: string | null }>} */
+  /** @type {Array<{ id: string, name: string, args: string, result: string | null, failed?: boolean }>} */
   const toolCalls = [];
   const callsById = new Map();
   // What this turn holds in memory until it is committed: the answer text and
@@ -477,22 +477,27 @@ export const runHostedTurn = async ({
           if (!call || call.result !== null)
             throw Error('Hosted tool result has no unsettled matching call');
           retain(result);
-          if (call) call.result = result;
-          if (call)
-            await recordObservedTool({
-              type: 'observed-tool-result',
-              callId: call.id,
-              result,
-            });
+          const toolOutcome =
+            typeof event.ok === 'boolean' ? { failed: !event.ok } : {};
+          call.result = result;
+          Object.assign(call, toolOutcome);
+          await recordObservedTool({
+            type: 'observed-tool-result',
+            callId: call.id,
+            result,
+            ...toolOutcome,
+          });
           await recordContext({
             kind: 'tool-result',
             id: call.id,
             content: result,
+            ...toolOutcome,
           });
           writer.toolResult({
             id: `${event.id || ''}`,
             name: `${event.name || 'tool'}`,
             result,
+            ...toolOutcome,
           });
           break;
         }

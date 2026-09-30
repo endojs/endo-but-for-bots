@@ -794,6 +794,56 @@ test('failed provider tool loops revive their known tool effects', async t => {
   t.is((await revived.getTurns())[0].tools[0].settled, true);
 });
 
+test('provider validation rejection is failed in live output, durable effects and revived context', async t => {
+  const powers = makeFakePowers();
+  const journalPowers = makeFakePowers();
+  let round = 0;
+  const provider = harden({
+    chatStream: async () => {
+      round += 1;
+      return harden({
+        message:
+          round === 1
+            ? {
+                role: 'assistant',
+                content: '',
+                tool_calls: [
+                  {
+                    id: 'reject',
+                    type: 'function',
+                    function: {
+                      name: 'exec',
+                      arguments: '{"code":"return 1","timeout":30}',
+                    },
+                  },
+                ],
+              }
+            : { role: 'assistant', content: 'Handled refusal.' },
+      });
+    },
+  });
+  const config = { kind: 'provider', provideProvider: () => provider };
+  const first = await makeStreamingAgent(powers, undefined, config, 'test', {
+    journalPowers,
+  });
+  t.teardown(() => first.shutdown());
+  const channel = makeReplyChannel();
+  await first.converse('invalid tool', channel.writer);
+  const events = [];
+  for await (const event of iterateReader(channel.reader)) events.push(event);
+  t.true(events.find(event => event.type === 'tool_result').failed);
+  t.true((await first.getTurns())[0].tools[0].failed);
+  const revived = await makeStreamingAgent(powers, undefined, config, 'test', {
+    journalPowers,
+  });
+  t.teardown(() => revived.shutdown());
+  t.true((await revived.getHistory()).find(row => row.role === 'tool').failed);
+  t.true(
+    (await revived.getTranscript()).find(row => row.kind === 'tool-result')
+      .failed,
+  );
+});
+
 test('hosted provisioning receives the session delegation and account catalog', async t => {
   const powers = makeFakePowers();
   /** @type {{ names: string[], execute: (name: string, args: object) => Promise<unknown> } | undefined} */

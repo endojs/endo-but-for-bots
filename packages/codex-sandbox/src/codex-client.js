@@ -1178,6 +1178,7 @@ export const makeCodexClient = ({
             itemId: tool.id,
             tool: tool.name,
             result: auditProjection(tool.result),
+            ...('ok' in tool ? { ok: tool.ok } : {}),
           });
           pushTurn({
             type: 'tool-result',
@@ -1186,6 +1187,7 @@ export const makeCodexClient = ({
             // The journal above keeps the provider's envelope; the transcript
             // gets the text the model saw.
             result: brief(renderToolResult(tool.result), maxToolResultChars),
+            ...('ok' in tool ? { ok: tool.ok } : {}),
           });
         } else if (
           item?.type === 'agentMessage' &&

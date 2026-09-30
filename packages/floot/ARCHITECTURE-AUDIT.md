@@ -1586,7 +1586,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 159 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed; deployed since generation 159; the 2026-09-22 inventory finds only shared entrypoints in the host-root-reachable graph; two dormant direct-provider formulas pinned to a pruned release remain for a decision |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
-| FA-14 | High | Explicit tool failure status is lost from durable evidence | Source-proven ontology gap; live error-text observation | Open; preserve classification in the existing shared journal/projection path, not another store or error-text heuristic |
+| FA-14 | High | Explicit tool failure status is lost from durable evidence | Source-proven ontology gap; live error-text observation | Source fix and local durability regressions pass; Tokyo deployment verification pending |
 
 ## FA-01 — Archived failures are missing from normal history
 
@@ -4578,7 +4578,20 @@ response, not proof of undone effects, automatic whole-turn failure, or permissi
 to replay. Cover successful and failed native/mediated tools, journal revival,
 archival and recovered/late results; keep unknown outcomes distinct.
 The acceptance helper must inspect canonical `failed`, not the MCP wire property.
-Implementation and durability validation are pending.
+Source implementation, 2026-10-01; Tokyo verification pending:
+native explicit status maps to the canonical optional boolean `failed` at the
+adapter/hosted-turn boundary, and actual host rejection records it before rethrow.
+The existing journal reducer validates and retains classification through event
+replay, snapshots, archives, recovered/late evidence, provider context and UI folds.
+An absent flag remains unknown; result text is never used to classify failure.
+Contradictory authoritative evidence is not merged, and classification enriched
+after a native checkpoint remains context evidence rather than being hidden by it.
+Anthropic replay maps it to `is_error`; the OpenAI-compatible converter keeps its
+existing wire shape and does not send the internal field.
+The conversation shows an explicit failed action, including after history restoration.
+No new journal, storage format, effect owner or automatic replay policy is added.
+Full Floot, space-floot and chat tests pass, alongside native mapping and archival
+regressions; the independent review also checks the actual provider wire conversion.
 
 ## Preserve these boundaries
 
