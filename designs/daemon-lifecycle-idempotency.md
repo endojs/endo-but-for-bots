@@ -23,7 +23,8 @@ PR #130 and issue #137) works around the gaps from outside:
   because `endo list` **auto-starts** a daemon when it cannot connect. If the
   probe races a systemd-supervised start, it spawns a second, unmanaged daemon
   that then fails with `EADDRINUSE` on the loopback listener at `:8920`.
-- After `systemctl stop`, it runs `endo stop` to reap workers still recorded in
+- After `systemctl stop`, it runs `endo stop` to reap workers (the child
+  processes the daemon's manager forks to run guest code) still recorded in
   Endo's pid files.
 - It runs an `ExecStartPre` reaper that kills whatever process still holds
   `:8920` before each start (#137).
@@ -31,7 +32,7 @@ PR #130 and issue #137) works around the gaps from outside:
 This note surveys the lifecycle surfaces as they exist on `llm` and proposes
 changes, ranked, that would let a supervisor delete those workarounds.
 
-## Survey of the current lifecycle surfaces
+## Survey of the Current Lifecycle Surfaces
 
 File references are relative to `packages/`.
 
@@ -51,7 +52,9 @@ auto-start: `endo ping` (`cli/src/commands/ping.js`) and `endo log --follow`.
 ### `start` (`daemon/index.js`)
 
 `start()` calls `clean()` **unconditionally** and then spawns a detached
-`manager-node.js` (or `engo` when `ENDO_BIN` is set). `clean()` unlinks the
+`manager-node.js`, or, when `ENDO_BIN` is set, `engo` (the Go supervisor in
+`go/engo`, which runs `manager-go.js` under it; see
+[daemon-engo-supervisor](daemon-engo-supervisor.md)). `clean()` unlinks the
 socket, its `.lock` marker, and `endo.pid`. It does not check whether a daemon
 is serving the socket. So running `endo start`, or any auto-starting command
 that failed to connect, against a daemon that is still booting or merely slow
@@ -105,7 +108,7 @@ supervised.
 
 1. `terminate()` over CapTP, with errors ignored;
 2. `killDaemonProcess()` by `endo.pid`, waiting 5s before escalating
-   SIGTERM → SIGKILL;
+   SIGTERM to SIGKILL;
 3. `killWorkersByPidFiles()`;
 4. `clean()`.
 
@@ -135,22 +138,33 @@ the only liveness check that talks to the daemon.
 `cli/bin/endo.cjs` discards the value `main()` returns. It sets
 `exitCode = 1` only when `main` throws. As a result, the codes `main`
 computes for `CommanderError` and for terminal errors never reach the shell.
-The exit-code contract in § 6 must start by propagating that return value.
+The exit-code contract in section 6 must start by propagating that return value.
 
-### A likely explanation for the `:8920` orphan (minion.town#137)
+### Two candidate explanations for the `:8920` orphan (minion.town#137)
 
-systemd sends SIGKILL to everything left in the unit's cgroup on stop. So a
-**cgroup member** should not survive `systemctl stop` holding `:8920`. A
-daemon spawned by an **auto-starting CLI probe** that the deploy script runs
-through `sudo -u endo-daemon` is different: it lives in the deploy session's
-cgroup, detached. `systemctl stop` never touches it, it keeps `:8920`, and the
-next supervised start crash-loops with `EADDRINUSE`. That matches the
-reported symptom (an orphan reparented to PID 1) and the PR #130 race. If this
-is right, both workarounds treat one root cause: a CLI command started a
-daemon the supervisor does not own. This should be confirmed by checking the
-orphan's cgroup (`/proc/<pid>/cgroup`) the next time it happens.
+Issue #137 states its own diagnosis: systemd's cgroup teardown during a
+stop or restart of the supervised unit can leave a worker reparented to
+PID 1, still holding `:8920`. PR #130 describes a different incident: an
+auto-starting health probe racing a supervised start. This note does not
+merge them. It keeps two candidate mechanisms and says which proposal
+addresses each.
 
-## Proposed changes, ranked
+- **(A) A supervised process escapes teardown**, as #137 reports. A worker
+  or manager that is a member of the unit's cgroup outlives its parent and
+  keeps `:8920`. Section 4 (workers and managers exit when their parent
+  dies, and `run-daemon` forwards signals) addresses this.
+- **(B) An unsupervised daemon was never in the unit's cgroup.** A daemon
+  spawned by an auto-starting CLI probe that the deploy script runs through
+  `sudo -u endo-daemon` lives in the deploy session's cgroup, detached.
+  `systemctl stop` never touches it, it keeps `:8920`, and the next
+  supervised start crash-loops with `EADDRINUSE`. This also presents as an
+  orphan reparented to PID 1. Sections 2 and 3 address this.
+
+Checking the orphan's cgroup (`/proc/<pid>/cgroup`) the next time it
+happens distinguishes the two: (A) shows the unit's cgroup, (B) shows a
+session scope.
+
+## Proposed Changes, Ranked
 
 Ranked by how much supervisor-visible damage each prevents per line of code.
 
@@ -158,7 +172,7 @@ Ranked by how much supervisor-visible damage each prevents per line of code.
 
 Before `clean()`, probe the socket (`probeSocket` already exists in
 `manager-node-powers.js`). If it is `live`, print `endo daemon already
-running` and exit 0 without touching anything. If the lock marker names a
+running (pid N)` and exit 0 without touching anything. If the lock marker names a
 live pid that is not serving yet, wait for the same bounded window
 `socket-lock.js` already uses, and probe again. Change `clean()` so it
 removes the socket, marker, and pid file only when their owner is dead,
@@ -177,10 +191,31 @@ Key it on the **ephemeral state directory** (for example
 only on the socket pathname, because the state directory is what two daemons
 actually corrupt when they share it. A daemon that loses the claim exits
 **before** it kills workers or opens the database, with a dedicated exit code
-(§ 6) and the message `another Endo daemon (pid N) owns <state>`. Write
+(section 6) and the message `another Endo daemon (pid N) owns <state>`. Write
 `endo.pid` right after a successful claim instead of after ready, so `stop`
 can find a daemon that is still booting. `updateRecordedPid()` then no longer
 needs to kill the pid it replaces.
+
+Because the whole single-instance guarantee now rests on this one check, a
+bare pid is not enough identity. A recycled pid could make a dead owner look
+alive (a false decline, which is safe but blocks startup) or, if the check
+is written carelessly, let a second claim through. The claim should record
+the owner's process start time alongside its pid (from `/proc/<pid>/stat` on
+Linux, `ps -o lstart` elsewhere) and treat the marker as live only when both
+match. Where the platform supports it, an advisory `flock` held on the lock
+file for the life of the process is stronger still, because the kernel
+releases it when the owner dies.
+
+**One claim protocol, two implementations.** The claim is owned by the
+process that is the root of the daemon's process tree: `manager-node.js` on
+the Node path, and the `engo` supervisor (not the `manager-go.js` it runs)
+on the Go path. The marker's on-disk format (location, pid, start time) is
+the contract, specified once in this design, so a Node daemon and an `engo`
+daemon started against the same state directory see and honor each other's
+claims. Section 1's pre-spawn probe lives in `daemon/index.js` `start()`,
+before the `ENDO_BIN` branch, so both paths share it as code rather than
+reimplementing it. The claim in section 2 has to exist in both languages;
+Phase 1 includes a cross-implementation test for it.
 
 *Fixes:* a second daemon SIGKILLing the first daemon's workers, and the
 `EADDRINUSE` crash on the TCP listeners. The loser never reaches `listen`.
@@ -189,9 +224,9 @@ duplicate does not crash-loop.
 
 ### 3. A client mode that never auto-starts
 
-Add `ENDO_NO_AUTOSTART=1`, and an equivalent global `--no-start` option, that
+Add `ENDO_NO_AUTOSTART=1`, and an equivalent global `--no-autostart` option, that
 `provideEndoClient` honors. When the connection fails, the command exits with
-the "not running" code (§ 6) and a one-line message, and does not call
+the "not running" code (section 6) and a one-line message, and does not call
 `start()`. This mode should also be the default when the CLI detects it is
 running under a service manager (`INVOCATION_ID` or `NOTIFY_SOCKET` in the
 environment). That default is left as an open question.
@@ -216,16 +251,17 @@ non-systemd supervisors, and under container init processes.
 
 ### 5. `stop` is complete and reports what it did
 
-Keep today's ordering (CapTP `terminate` → pid → workers → clean), and add
+Keep today's ordering (CapTP `terminate`, then pid, then workers, then clean), and add
 the following:
 
 - also find the daemon through the lock marker's pid when `endo.pid` is
-  missing (§ 2 makes that the same pid);
+  missing (section 2 makes that the same pid);
 - exit 0 both when it stopped something and when nothing was running, and
   print which case applied (`stopped pid N`, `not running`), because
   "nothing to stop" is success for a supervisor;
-- exit with a distinct non-zero code only when a recorded process survives
-  SIGKILL.
+- exit with a dedicated non-zero code (70, see section 6) only when a
+  recorded process survives SIGKILL, so a supervisor can tell "needs operator
+  attention" apart from any other failure.
 
 ### 6. An exit-code contract for lifecycle commands
 
@@ -237,8 +273,9 @@ Document the codes and test them. Proposed values, borrowing from
 | 0 | Desired state reached (already running counts for `start`; already stopped counts for `stop`) | `start`, `stop`, `restart`, `ping`, `status` |
 | 3 | Daemon not running (LSB `status` convention) | `status`, `ping`, any client command under `ENDO_NO_AUTOSTART` |
 | 69 (`EX_UNAVAILABLE`) | Another live daemon owns this state directory; startup declined | `run-daemon`, `start --foreground` |
+| 70 (`EX_SOFTWARE`) | A recorded daemon or worker process survived SIGKILL | `stop`, `restart`, `purge` |
 | 75 (`EX_TEMPFAIL`) | Started but not ready within the timeout | `start` |
-| 1 | Any other failure, including a process that survived SIGKILL | all |
+| 1 | Any other failure | all |
 
 `endo status` should derive `running` from a socket probe, not from the pid
 file alone, and exit 3 when the daemon is not running.
@@ -250,43 +287,45 @@ where it already sends the `ready` IPC message. A supervisor could then let
 `systemctl start` block until the daemon is ready, and the deploy script's
 polling loop would become unnecessary. Node has no built-in client for
 Unix-domain datagram sockets, so this needs either a small native helper or
-shelling out to `systemd-notify`. It is not needed once §§ 1 through 3 land.
+shelling out to `systemd-notify`. It is not needed once sections 1 through 3 land.
 
-## What minion.town could delete
+## What minion.town Could Delete
 
 | Workaround | Removable after |
 |---|---|
-| `[ -S endo.sock ] &&` guard before `endo list` probes (PR #130) | Now, by probing with `endo ping`; or § 3 |
-| `stop_endo_daemon` running `endo stop` after `systemctl stop` (PR #130) | § 4, plus § 5 for the exit-code check |
-| `ExecStartPre` `:8920` orphan reaper (#137) | § 2 (a duplicate never binds) together with § 3 (no out-of-cgroup daemon is ever spawned), if the cgroup explanation above holds |
-| `sudo systemctl start` + poll loop instead of `restart` | § 7, optionally; §§ 1–2 already make `restart` safe |
+| `[ -S endo.sock ] &&` guard before `endo list` probes (PR #130) | Now, by probing with `endo ping`; or section 3 |
+| `stop_endo_daemon` running `endo stop` after `systemctl stop` (PR #130) | Section 4, plus section 5 for the exit-code check |
+| `ExecStartPre` `:8920` orphan reaper (#137) | Section 4 if the orphan is mechanism (A), a cgroup member escaping teardown, as #137 reports; section 2 (a duplicate never binds) together with section 3 (no out-of-cgroup daemon is ever spawned) if it is mechanism (B). Confirm the mechanism first. |
+| `sudo systemctl start` + poll loop instead of `restart` | Section 7, optionally; sections 1 and 2 already make `restart` safe |
 
 ## Dependencies
 
 | Design | Relationship |
 |---|---|
-| [daemon-engo-supervisor](daemon-engo-supervisor.md) | `runEngo` shares `start()`'s `clean()`-first path. § 1 and § 2 must also apply to the Go supervisor, or be implemented in shared code. |
-| [daemon-sqlite-shutdown-checkpoint](daemon-sqlite-shutdown-checkpoint.md) | § 2 opens the database only after the single-instance claim. That is a precondition for "one last-connection close" being meaningful. |
-| [daemon-docker-selfhost](daemon-docker-selfhost.md) | Container init is another supervisor that benefits from § 4 and § 6. |
+| [daemon-engo-supervisor](daemon-engo-supervisor.md) | `runEngo` shares `start()`'s `clean()`-first path, so section 1 applies to it as shared code. The `engo` supervisor implements section 2's claim in Go against the same marker format (see section 2, "One claim protocol, two implementations"). |
+| [daemon-sqlite-shutdown-checkpoint](daemon-sqlite-shutdown-checkpoint.md) | Section 2 opens the database only after the single-instance claim. That is a precondition for "one last-connection close" being meaningful. |
+| [daemon-docker-selfhost](daemon-docker-selfhost.md) | Container init is another supervisor that benefits from section 4 and section 6. |
 
-## Phased implementation
+## Phased Implementation
 
-1. **Start safety:** §§ 1–2, with tests for `start` twice, `start` while
-   booting, and a second `run-daemon` against the same state directory.
-2. **Client and probe:** § 3 and the exit-code contract in § 6, with the
+1. **Start safety:** sections 1 and 2, with tests for `start` twice, `start` while
+   booting, a second `run-daemon` against the same state directory, and a
+   Node daemon and an `engo` daemon contending for the same state directory
+   in both orders.
+2. **Client and probe:** section 3 and the exit-code contract in section 6, with the
    `status`/`ping` changes.
-3. **Shutdown completeness:** §§ 4–5, with tests that SIGKILL the manager and
+3. **Shutdown completeness:** sections 4 and 5, with tests that SIGKILL the manager and
    assert that its workers exit, and that `stop` run twice exits 0 both times.
-4. Optionally, § 7.
+4. Optionally, section 7.
 
-## Open questions
+## Open Questions
 
 1. Should the CLI stop auto-starting by default when it detects a service
-   manager (§ 3), or should auto-start stay the default everywhere with
+   manager (section 3), or should auto-start stay the default everywhere with
    `ENDO_NO_AUTOSTART` as an explicit opt-out? Auto-start is a convenience
    for interactive use and a hazard under supervision.
-2. Should `run-daemon` run the manager in-process (§ 4)? That removes one
+2. Should `run-daemon` run the manager in-process (section 4)? That removes one
    process but changes what `ENDO_BIN`/engo selection means for the
    foreground path.
-3. Are the exit codes in § 6 acceptable, or should Endo use only 0/1 plus a
+3. Are the exit codes in section 6 acceptable, or should Endo use only 0/1 plus a
    machine-readable status line?
