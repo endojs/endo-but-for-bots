@@ -230,6 +230,28 @@ The next review should list current owners and remaining parallel mechanisms,
 identify removable code, and justify retained complexity by the stated goals.
 Do not add another broad framework to satisfy a line-count target.
 
+Current-source follow-up at `2b8df7d23` (2026-09-30): the retained native-context
+and lifecycle mechanisms now have documented live callers and distinct ownership.
+The identified unused hash and selector wrapper are removed; this review found
+no further concrete deletion in that inspected scope.
+This does not demonstrate the original implementation-size target:
+
+| Package | Design baseline `4e2644c` | `2b8df7d23` |
+|---|---:|---:|
+| hosted-agent | 4,298 | 24,227 |
+| claude-sandbox | 6,484 | 7,074 |
+| codex-sandbox | 7,901 | 6,945 |
+| opencode-sandbox | 6,780 | 4,763 |
+| Total | 25,463 | 43,009 |
+
+Method: enumerate committed paths with `git ls-tree -r --name-only REV`, include
+`.js`, `.mjs` and `.ts`, exclude `.d.ts`, test/tests/fixtures/test-types/test-fixtures
+directories and `.test.*`/`.test-d.*`, and count newlines in committed contents.
+These figures include comments and types, not generated files or uncommitted work.
+RA-01 remains open for a like-for-like scope analysis of the growth or an explicit
+design decision; green tests and the absence of another deletion candidate do not
+waive the size requirement.
+
 Current simplification pass (2026-09-24): the
 [mechanism inventory and decisions](SIMPLIFICATION-AUDIT.md) distinguish owners,
 record safe deletions and enumerate the remaining non-minimal contracts.
