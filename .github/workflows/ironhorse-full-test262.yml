@@ -226,6 +226,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 rust/engine/benches/run.py --reference-baseline --check-baseline --output benchmark-report.json 2>&1 | tee benchmark.log
+      - name: Check native stack height
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          python3 rust/engine/benches/stack_height.py --check --output stack-height-report.json 2>&1 | tee stack-height.log
       - name: Check elapsed time and computron scaling
         if: ${{ !cancelled() }}
         run: |
@@ -270,6 +275,8 @@ jobs:
           path: |
             benchmark-report.json
             benchmark.log
+            stack-height-report.json
+            stack-height.log
             scaling.log
             compiler-scaling.log
             compiler-phases.log
