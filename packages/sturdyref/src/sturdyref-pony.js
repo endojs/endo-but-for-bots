@@ -2,42 +2,52 @@
  *
  * A ponyfill exposes a feature as importable functions instead of installing a
  * global. This ponyfill's functions delegate to the realm's single shared
- * `SturdyRef` namespace, which the first-wins shim installs at
+ * `SturdyRef` constructor, which the first-wins shim installs at
  * `globalThis.SturdyRef` (see `./sturdyref-shim.js`). Because the ponyfill
- * imports the shim and defers to the shared global, an eval twin of ocapn or
- * captp that imports this ponyfill converges on the SAME sturdyref-to-locator
- * mapping as every other twin in the realm — that is what lets sturdyrefs
- * transport between twins.
+ * defers to the shared global, an eval twin of ocapn or captp that imports
+ * this ponyfill recognizes and enlivens the refs minted by every other twin.
  *
  * Importing this module is safe before `lockdown`: it installs nothing until a
- * function is first called, and installation/hardening therefore happens after
- * `lockdown` in normal use.
+ * function is first called, and installation and hardening therefore happen
+ * after `lockdown` in normal use.
  */
 
 import { provideSturdyRef } from './sturdyref-shim.js';
 
-/** @import { Locator, SturdyRef } from './sturdyref-shim.js' */
+/** @import { SturdyRef, SturdyRefHandler } from './sturdyref-shim.js' */
 
 export {
   provideSturdyRef,
   selectSturdyRef,
-  makeSturdyRefNamespace,
+  makeSturdyRefConstructor,
 } from './sturdyref-shim.js';
 
 /**
- * Mint a fresh opaque sturdyref for a locator record, retaining the mapping in
- * the realm's shared, globally-retained WeakMap.
+ * Construct a SturdyRef with the realm's shared constructor. Equivalent to
+ * `new SturdyRef(handler)`.
  *
- * @param {Locator} locator
+ * @param {SturdyRefHandler} handler
  * @returns {SturdyRef}
  */
-export const fromLocation = locator => provideSturdyRef().fromLocation(locator);
+export const makeSturdyRef = handler => {
+  const SturdyRef = provideSturdyRef();
+  return new SturdyRef(handler);
+};
 
 /**
- * Recover the locator record a sturdyref was minted for, from the realm's
- * shared mapping. Throws if the sturdyref is unknown to this realm.
+ * Send `enliven` to a SturdyRef: in a later turn, invoke its handler's hook
+ * and settle with the result.
  *
- * @param {SturdyRef} sturdyRef
- * @returns {Locator}
+ * @param {SturdyRef} ref
+ * @returns {Promise<unknown>}
  */
-export const toLocation = sturdyRef => provideSturdyRef().toLocation(sturdyRef);
+export const enliven = ref => provideSturdyRef().enliven(ref);
+
+/**
+ * Brand check: whether `value` was constructed by the realm's shared
+ * `SturdyRef` constructor. Reveals nothing about what the ref captures.
+ *
+ * @param {unknown} value
+ * @returns {value is SturdyRef}
+ */
+export const isSturdyRef = value => provideSturdyRef().isSturdyRef(value);

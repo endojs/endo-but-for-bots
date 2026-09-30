@@ -1,180 +1,198 @@
 /* This module provides the first-wins mechanism that races to install the
- * `SturdyRef` namespace — `SturdyRef`, `SturdyRef.fromLocation`, and
- * `SturdyRef.toLocation` — at `globalThis.SturdyRef`.
+ * `SturdyRef` constructor at `globalThis.SturdyRef`.
+ *
+ * A SturdyRef is constructed the way a `Proxy` or `HandledPromise` is, with a
+ * handler: `new SturdyRef(handler)`. The handler's `enliven` hook defines both
+ * what the ref captures (whatever the handler closes over) and how the ref is
+ * revived. `SturdyRef.enliven(ref)` sends `enliven` to the ref, dispatching to
+ * its handler's hook in a later turn. `SturdyRef.isSturdyRef(value)` is a brand
+ * check that confers no authority.
  *
  * The point of first-wins is convergence: many independently evaluated
  * copies (eval twins) of a ponyfill, ocapn, or captp that share a realm all
- * race to install this namespace, but only the first installation takes; every
- * later importer senses the existing global and adopts it. Because the whole
- * realm then shares ONE `SturdyRef` namespace — and therefore ONE closely-held
- * WeakMap from a sturdyref to its locator record — a sturdyref minted by one
- * twin resolves to the same locator through any other twin.
+ * race to install this constructor, but only the first installation takes;
+ * every later importer senses the existing global and adopts it. The realm
+ * then shares ONE `SturdyRef` constructor, and therefore ONE closely held
+ * WeakMap from a ref to its handler, so a ref minted by one twin is recognized
+ * and enlivened by any other twin.
  *
- * The installed globals deliberately have NO SES permits, so `lockdown` does
- * not know about them and a child `Compartment` never receives them: the
- * `SturdyRef` namespace is withheld from confined guests by construction (a
- * child compartment's global is built from permits and endowments, never from
- * this — the parent's — global object).
+ * The global confers no authority: construction only wraps a handler the
+ * caller already has, the brand check reveals nothing, and `enliven` only runs
+ * the hook of a ref the caller already holds. The shim therefore takes no
+ * position on whether child compartments see it; that is SES's decision.
  *
- * The namespace and every sturdyref it mints are hardened by `@endo/harden`.
- * Because hardening must happen after `lockdown` when `lockdown` will be
- * called, installation is LAZY: nothing is installed or hardened at import
- * time. The first call to `provideSturdyRef()` (typically the first time
- * something mints or resolves a sturdyref, well after `lockdown`) performs the
- * race-to-install. The eager `@endo/sturdyref/shim.js` entry, meant to be
- * imported in a lockdown bootstrap AFTER `lockdown()`, simply forces that first
- * call.
+ * The constructor, its prototype, and every ref are hardened by
+ * `@endo/harden`. Because hardening must happen after `lockdown` when
+ * `lockdown` will be called, installation is LAZY: nothing is installed or
+ * hardened at import time. The first call to `provideSturdyRef()` performs
+ * the race-to-install. The eager `@endo/sturdyref/shim.js` entry, meant to be
+ * imported in a lockdown bootstrap AFTER `lockdown()`, simply forces that
+ * first call.
  */
 
 import harden from '@endo/harden';
-import { Far } from '@endo/pass-style';
 
-/** @import { RemotableObject } from '@endo/pass-style' */
-
-const { defineProperty } = Object;
+const { defineProperty, freeze } = Object;
+const { apply } = Reflect;
 
 /**
- * A locator record is an opaque OBJECT (never a string, never coupled to any
- * URL/URN scheme) that names where a capability may be enlivened. The shim
- * treats it opaquely: it only stores and returns it.
+ * An opaque, frozen object with no own properties. What it captures is
+ * defined entirely by the handler it was constructed with, which is never
+ * reachable from the ref.
  *
- * @typedef {Record<PropertyKey, unknown>} Locator
+ * @typedef {Readonly<Record<never, never>>} SturdyRef
  */
 
 /**
- * A SturdyRef is an opaque, passable object with no own properties leaking the
- * locator. Its locator lives only behind the closely-held, globally-retained
- * WeakMap of the shared `SturdyRef` namespace. Guests that hold a sturdyref but
- * not the namespace can neither read its locator (no location) nor correlate
- * two sturdyrefs of the same locator (no identification — each mint is fresh).
+ * @typedef {object} SturdyRefHandler
+ * @property {(ref: SturdyRef) => unknown} enliven Revive the ref into a live
+ *   reference (or a promise for one). Called with the handler as `this` and
+ *   the ref as its argument.
+ */
+
+/**
+ * @typedef {object} SturdyRefStatics
+ * @property {(ref: SturdyRef) => Promise<unknown>} enliven Send `enliven` to
+ *   the ref: in a later turn, invoke its handler's hook and settle with the
+ *   result. Rejects for a non-SturdyRef.
+ * @property {(value: unknown) => value is SturdyRef} isSturdyRef Brand check.
+ */
+
+/**
+ * @typedef {(new (handler: SturdyRefHandler) => SturdyRef) &
+ *   SturdyRefStatics} SturdyRefConstructor
+ */
+
+/**
+ * Make a fresh `SturdyRef` constructor closing over its own private WeakMap
+ * from ref to handler. Only the first constructor to reach `globalThis` (see
+ * `selectSturdyRef`) is retained by the realm; the rest are discarded.
+ * Exported for tests that need an un-installed control instance.
  *
- * @typedef {RemotableObject} SturdyRef
+ * @returns {SturdyRefConstructor}
  */
-
-/**
- * @typedef {object} SturdyRefNamespace
- * @property {(locator: Locator) => SturdyRef} fromLocation Mint a fresh opaque
- *   sturdyref for a locator record, retaining the mapping in the shared,
- *   globally-retained WeakMap.
- * @property {(sturdyRef: SturdyRef) => Locator} toLocation Recover the locator
- *   record a sturdyref was minted for. Throws if the sturdyref is unknown to
- *   this realm's shared mapping.
- */
-
-/**
- * Construct a fresh `SturdyRef` namespace closing over its own private WeakMap
- * from sturdyref to locator record. Only the first namespace to reach
- * `globalThis` (see `selectSturdyRef`) is retained by the realm; the rest are
- * discarded. Exported for tests that need an un-installed control instance.
- *
- * @returns {SturdyRefNamespace}
- */
-export const makeSturdyRefNamespace = () => {
+export const makeSturdyRefConstructor = () => {
   /**
-   * The mapping the shim exists to provide: from an opaque sturdyref to its
-   * locator record. Retained by the namespace, which is retained by
-   * `globalThis`, hence retained globally for the life of the realm.
+   * From each ref to the handler and the `enliven` hook read from it at
+   * construction. Never reachable from a ref.
    *
-   * @type {WeakMap<SturdyRef, Locator>}
+   * @type {WeakMap<SturdyRef, { handler: SturdyRefHandler, enliven: (ref: SturdyRef) => unknown }>}
    */
-  const locators = new WeakMap();
+  const handlers = new WeakMap();
 
-  /** @type {(locator: Locator) => SturdyRef} */
-  const fromLocation = locator => {
-    if (
-      locator === null ||
-      (typeof locator !== 'object' && typeof locator !== 'function')
-    ) {
-      throw TypeError(
-        'SturdyRef.fromLocation expects a locator record (an object), not a primitive',
-      );
+  class SturdyRef {
+    /**
+     * @param {SturdyRefHandler} handler
+     */
+    constructor(handler) {
+      if (
+        handler === null ||
+        (typeof handler !== 'object' && typeof handler !== 'function')
+      ) {
+        throw TypeError('SturdyRef handler must be an object');
+      }
+      // Read once, at construction, so later mutation of the handler cannot
+      // redirect enlivening.
+      const { enliven } = handler;
+      if (typeof enliven !== 'function') {
+        throw TypeError('SturdyRef handler must have an enliven method');
+      }
+      freeze(this);
+      // Safe because this WeakMap owns its set method.
+      handlers.set(this, { handler, enliven });
     }
-    // The locator record is closely held; harden it so the value behind the
-    // WeakMap cannot be mutated by a later holder of the same record.
-    harden(locator);
-    // A fresh opaque remotable: passStyleOf-opaque, no own property carries the
-    // locator, and two sturdyrefs of the same locator are distinct (no
-    // identification). It never crosses the wire in this form.
-    const sturdyRef = /** @type {SturdyRef} */ (Far('SturdyRef', {}));
-    // Safe because this WeakMap owns its set method.
-    locators.set(sturdyRef, locator);
-    return sturdyRef;
-  };
 
-  /** @type {(sturdyRef: SturdyRef) => Locator} */
-  const toLocation = sturdyRef => {
-    // Safe because this WeakMap owns its get method.
-    const locator = locators.get(sturdyRef);
-    if (locator === undefined) {
-      throw TypeError(
-        'Not a SturdyRef known to this realm, or its locator is not retained here',
-      );
+    /**
+     * @param {unknown} value
+     * @returns {value is SturdyRef}
+     */
+    static isSturdyRef(value) {
+      // Safe because this WeakMap owns its has method.
+      return handlers.has(/** @type {SturdyRef} */ (value));
     }
-    return locator;
-  };
 
-  return harden({ fromLocation, toLocation });
+    /**
+     * @param {SturdyRef} ref
+     * @returns {Promise<unknown>}
+     */
+    static enliven(ref) {
+      return Promise.resolve().then(() => {
+        // Safe because this WeakMap owns its get method.
+        const entry = handlers.get(ref);
+        if (entry === undefined) {
+          throw TypeError('SturdyRef.enliven expects a SturdyRef');
+        }
+        return apply(entry.enliven, entry.handler, [ref]);
+      });
+    }
+  }
+
+  defineProperty(SturdyRef.prototype, Symbol.toStringTag, {
+    value: 'SturdyRef',
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
+
+  return /** @type {SturdyRefConstructor} */ (
+    /** @type {unknown} */ (harden(SturdyRef))
+  );
 };
 
 /**
  * @param {unknown} candidate
- * @returns {candidate is SturdyRefNamespace}
+ * @returns {candidate is SturdyRefConstructor}
  */
-const isSturdyRefNamespace = candidate => {
-  if (
-    (typeof candidate !== 'object' && typeof candidate !== 'function') ||
-    candidate === null
-  ) {
+const isSturdyRefConstructor = candidate => {
+  if (typeof candidate !== 'function') {
     return false;
   }
-  const { fromLocation, toLocation } =
-    /** @type {{ fromLocation?: unknown, toLocation?: unknown }} */ (candidate);
-  return typeof fromLocation === 'function' && typeof toLocation === 'function';
+  const { enliven, isSturdyRef } =
+    /** @type {{ enliven?: unknown, isSturdyRef?: unknown }} */ (
+      /** @type {unknown} */ (candidate)
+    );
+  return typeof enliven === 'function' && typeof isSturdyRef === 'function';
 };
 
 /**
- * Race to install the `SturdyRef` namespace at `globalThis.SturdyRef`,
- * first-wins. If a valid namespace is already installed (an eval twin got there
- * first), adopt it unchanged. Otherwise mint, harden, and install ours
- * non-configurably and non-writably so that no later code — twin or attacker —
- * can replace the realm's shared mapping.
+ * Race to install the `SturdyRef` constructor at `globalThis.SturdyRef`,
+ * first-wins. If a valid constructor is already installed (an eval twin got
+ * there first), adopt it unchanged. Otherwise make, harden, and install ours
+ * non-configurably and non-writably so that no later code, twin or attacker,
+ * can replace the realm's shared constructor.
  *
- * @returns {SturdyRefNamespace}
+ * @returns {SturdyRefConstructor}
  */
 export const selectSturdyRef = () => {
-  const { SturdyRef: existing } = globalThis;
+  const { SturdyRef: existing } = /** @type {any} */ (globalThis);
   if (existing !== undefined) {
-    if (!isSturdyRefNamespace(existing)) {
-      throw new Error(
-        '@endo/sturdyref expected globalThis.SturdyRef to be a { fromLocation, toLocation } namespace',
+    if (!isSturdyRefConstructor(existing)) {
+      throw TypeError(
+        '@endo/sturdyref expected globalThis.SturdyRef to be a constructor with enliven and isSturdyRef statics',
       );
     }
     return existing;
   }
 
-  const namespace = makeSturdyRefNamespace();
-  // No SES permit corresponds to this global, so `lockdown` does not propagate
-  // it to child compartments. Non-enumerable, non-writable, non-configurable so
-  // the realm's shared mapping is stable and closely held.
+  const SturdyRef = makeSturdyRefConstructor();
   defineProperty(globalThis, 'SturdyRef', {
-    value: namespace,
+    value: SturdyRef,
     enumerable: false,
     writable: false,
     configurable: false,
   });
-  return namespace;
+  return SturdyRef;
 };
 
+/** @type {SturdyRefConstructor | undefined} */
 let selected;
 
 /**
- * Lazily and idempotently obtain the realm's shared `SturdyRef` namespace,
- * installing it first-wins on the first call. Safe to import before `lockdown`
- * because it does nothing until called; ponyfills, ocapn, and captp call it
- * only when they actually mint or resolve a sturdyref, which is after
- * `lockdown`.
+ * Lazily and idempotently obtain the realm's shared `SturdyRef` constructor,
+ * installing it first-wins on the first call. Safe to import before
+ * `lockdown` because it does nothing until called.
  *
- * @returns {SturdyRefNamespace}
+ * @returns {SturdyRefConstructor}
  */
 export const provideSturdyRef = () => {
   if (selected === undefined) {

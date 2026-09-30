@@ -1,115 +1,174 @@
 // @ts-nocheck
 // Exercises the shim as used in a real HardenedJS realm: lockdown FIRST, then
-// the shim installs and hardens after lockdown. Each test pins one distributed
-// confinement property from the shim's spec.
+// the shim installs and hardens after lockdown. Each test pins one property
+// of the layer-1 SturdyRef contract (designs/sturdyref-shim-contract.md).
 
 import '@endo/init';
 import test from 'ava';
-import { passStyleOf } from '@endo/pass-style';
 import harden from '@endo/harden';
+import { passStyleOf } from '@endo/pass-style';
 import {
-  fromLocation,
-  toLocation,
+  makeSturdyRef,
+  enliven,
+  isSturdyRef,
   provideSturdyRef,
   selectSturdyRef,
-  makeSturdyRefNamespace,
+  makeSturdyRefConstructor,
 } from '../src/sturdyref-pony.js';
 
-const { isFrozen } = Object;
+const { isFrozen, getPrototypeOf } = Object;
 
-// Property (d): the shim initialized after lockdown yields hardened, functioning
-// surfaces.
-test('installed after lockdown: hardened and functioning', t => {
+const makeHandler = live => ({ enliven: () => live });
+
+test('installed after lockdown: hardened and functioning', async t => {
   const SturdyRef = provideSturdyRef();
   t.is(globalThis.SturdyRef, SturdyRef, 'installed at globalThis.SturdyRef');
-  t.true(isFrozen(SturdyRef), 'namespace is hardened');
-  t.true(isFrozen(SturdyRef.fromLocation), 'fromLocation is hardened');
-  t.true(isFrozen(SturdyRef.toLocation), 'toLocation is hardened');
+  t.true(isFrozen(SturdyRef), 'constructor is hardened');
+  t.true(isFrozen(SturdyRef.prototype), 'prototype is hardened');
+  t.true(isFrozen(SturdyRef.enliven), 'enliven is hardened');
+  t.true(isFrozen(SturdyRef.isSturdyRef), 'isSturdyRef is hardened');
+  t.deepEqual(
+    Reflect.ownKeys(SturdyRef.prototype),
+    ['constructor', Symbol.toStringTag],
+    'prototype carries only constructor and toStringTag',
+  );
 
+  const live = harden({ live: true });
+  const ref = new SturdyRef(makeHandler(live));
+  t.true(isFrozen(ref), 'ref is frozen');
+  t.is(getPrototypeOf(ref), SturdyRef.prototype);
+  t.is(Object.prototype.toString.call(ref), '[object SturdyRef]');
+  t.true(SturdyRef.isSturdyRef(ref));
+  t.is(await SturdyRef.enliven(ref), live, 'enlivens through the handler');
+});
+
+test('capture is handler-defined', async t => {
   const locator = harden({ kind: 'test-locator', endpoint: 'wormhole:abc' });
-  const sturdyRef = fromLocation(locator);
-  t.true(isFrozen(sturdyRef), 'minted sturdyref is hardened');
-  t.is(
-    toLocation(sturdyRef),
-    locator,
-    'round-trips to the same locator record',
+  const handler = {
+    enliven(ref) {
+      return harden({ locator, self: this, ref });
+    },
+  };
+  const ref = makeSturdyRef(handler);
+  const result = await enliven(ref);
+  t.is(result.locator, locator, 'the handler closes over what it captures');
+  t.is(result.self, handler, 'the hook is called with the handler as this');
+  t.is(result.ref, ref, 'the hook receives the ref');
+});
+
+test('no location: opaque, no own keys, handler unreachable', t => {
+  const handler = makeHandler('secret');
+  const ref = makeSturdyRef(handler);
+  t.deepEqual(Reflect.ownKeys(ref), [], 'no own keys');
+  for (const key of Reflect.ownKeys(getPrototypeOf(ref))) {
+    t.not(Reflect.get(getPrototypeOf(ref), key), handler);
+  }
+  t.throws(
+    () => passStyleOf(ref),
+    undefined,
+    'passStyleOf rejects a SturdyRef',
   );
 });
 
-// Locators are OBJECTS, not strings.
-test('locators are objects, not strings', t => {
-  t.throws(() => fromLocation('wormhole:abc'), {
-    message: /locator record/,
+test('no identification: the same handler mints distinct refs', async t => {
+  const handler = makeHandler('same');
+  const a = makeSturdyRef(handler);
+  const b = makeSturdyRef(handler);
+  t.not(a, b, 'distinct refs');
+  t.is(await enliven(a), 'same');
+  t.is(await enliven(b), 'same');
+});
+
+test('enliven dispatches to the hook in a later turn', async t => {
+  let called = false;
+  const ref = makeSturdyRef({
+    enliven: () => {
+      called = true;
+      return 'later';
+    },
   });
-  t.throws(() => fromLocation(42), { message: /locator record/ });
-  t.throws(() => fromLocation(null), { message: /locator record/ });
+  const p = enliven(ref);
+  t.false(called, 'the hook has not run synchronously');
+  t.is(await p, 'later');
+  t.true(called);
 });
 
-// Property (b) — NO LOCATION: a guest holding a sturdyref cannot read a locator
-// from it. It is passStyleOf-opaque with no own property leaking locator data;
-// only the closely-held namespace can recover the locator.
-test('no location: sturdyref is passStyleOf-opaque and leaks no locator', t => {
-  const locator = harden({ kind: 'secret-locator', endpoint: 'wormhole:xyz' });
-  const sturdyRef = fromLocation(locator);
-
-  t.is(passStyleOf(sturdyRef), 'remotable', 'opaque passable, not a record');
-
-  // No own property (string or symbol) exposes the locator.
-  for (const key of Reflect.ownKeys(sturdyRef)) {
-    t.not(
-      Reflect.get(sturdyRef, key),
-      locator,
-      `own key ${String(key)} leaks locator`,
-    );
-  }
-  t.deepEqual(Object.keys(sturdyRef), [], 'no enumerable own keys');
-
-  // The locator is recoverable ONLY through the closely-held namespace.
-  t.is(toLocation(sturdyRef), locator);
+test('enliven: a throwing hook rejects', async t => {
+  const ref = makeSturdyRef({
+    enliven: () => {
+      throw Error('revoked');
+    },
+  });
+  await t.throwsAsync(() => enliven(ref), { message: 'revoked' });
 });
 
-// Property — NO IDENTIFICATION: two sturdyrefs minted for the same locator are
-// distinct objects, so a guest cannot correlate or recover stable identity.
-test('no identification: same locator mints distinct sturdyrefs', t => {
-  const locator = harden({ kind: 'shared-locator' });
-  const a = fromLocation(locator);
-  const b = fromLocation(locator);
-  t.not(a, b, 'distinct sturdyref objects');
-  t.is(toLocation(a), locator);
-  t.is(toLocation(b), locator);
+test('enliven: a non-SturdyRef rejects rather than throwing', async t => {
+  let p;
+  t.notThrows(() => {
+    p = enliven(harden({}));
+  });
+  await t.throwsAsync(() => p, { message: /expects a SturdyRef/ });
+  await t.throwsAsync(() => enliven(undefined), {
+    message: /expects a SturdyRef/,
+  });
 });
 
-// Property (a) — WITHHELD FROM CHILD COMPARTMENTS: the SturdyRef global has no
-// SES permit, so a child compartment does not see it.
-test('withheld: a child compartment does not see the SturdyRef global', t => {
-  provideSturdyRef(); // ensure installed on the start-compartment global
+test('enliven is read once, at construction', async t => {
+  const handler = { enliven: () => 'original' };
+  const ref = makeSturdyRef(handler);
+  handler.enliven = () => 'replaced';
+  t.is(await enliven(ref), 'original');
+});
+
+test('construction: a handler without enliven throws', t => {
+  const SturdyRef = provideSturdyRef();
+  t.throws(() => new SturdyRef({}), { message: /enliven/ });
+  t.throws(() => new SturdyRef({ enliven: 'nope' }), { message: /enliven/ });
+  t.throws(() => new SturdyRef(undefined), { message: /handler/ });
+  t.throws(() => new SturdyRef('handler'), { message: /handler/ });
+});
+
+test('construction: calling without new throws', t => {
+  const SturdyRef = provideSturdyRef();
+  t.throws(() => SturdyRef(makeHandler(1)), { instanceOf: TypeError });
+});
+
+test('isSturdyRef is a brand check', t => {
+  t.true(isSturdyRef(makeSturdyRef(makeHandler(1))));
+  t.false(isSturdyRef(harden({})));
+  t.false(isSturdyRef(undefined));
+  t.false(isSturdyRef('SturdyRef'));
+  t.false(isSturdyRef(Object.create(provideSturdyRef().prototype)));
+});
+
+// Layer 2 (SES) owns the permit and propagation of `SturdyRef` to child
+// compartments. Until then, this pins the observed default rather than a
+// confinement property: installed after lockdown without a SES permit, the
+// global is not present in a child compartment.
+test('default: installed after lockdown without a SES permit, a child compartment does not see SturdyRef', t => {
+  provideSturdyRef();
   t.not(globalThis.SturdyRef, undefined, 'present on the start compartment');
 
   const child = new Compartment();
-  t.is(
-    child.evaluate('typeof SturdyRef'),
-    'undefined',
-    'absent from the child compartment global',
-  );
+  t.is(child.evaluate('typeof SturdyRef'), 'undefined');
 });
 
-// Property (c) — FIRST-WINS CONVERGENCE: independent selections in one realm
-// converge on the same namespace and therefore the same mapping.
-test('first-wins: selections converge on one shared mapping', t => {
-  const first = selectSturdyRef();
-  const second = selectSturdyRef();
-  t.is(first, second, 'both selections yield the one installed namespace');
-  t.is(globalThis.SturdyRef, first);
+test('first-wins: selections converge on one constructor', async t => {
+  const First = selectSturdyRef();
+  const Second = selectSturdyRef();
+  t.is(First, Second, 'both selections yield the one installed constructor');
+  t.is(globalThis.SturdyRef, First);
 
-  const locator = harden({ kind: 'converged-locator' });
-  const sturdyRef = first.fromLocation(locator);
-  t.is(second.toLocation(sturdyRef), locator, 'resolves through either handle');
+  const ref = new First(makeHandler('converged'));
+  t.true(Second.isSturdyRef(ref));
+  t.is(await Second.enliven(ref), 'converged');
 
-  // Control: an un-installed namespace has its OWN private mapping, proving the
-  // convergence above is real and not an artifact of a single shared closure.
-  const isolated = makeSturdyRefNamespace();
-  t.not(isolated, first);
-  t.throws(() => isolated.toLocation(sturdyRef), {
-    message: /Not a SturdyRef known to this realm/,
+  // Control: an un-installed constructor has its OWN private WeakMap, proving
+  // the convergence above is real and not an artifact of one shared closure.
+  const isolated = makeSturdyRefConstructor();
+  t.not(isolated, First);
+  t.false(isolated.isSturdyRef(ref));
+  await t.throwsAsync(() => isolated.enliven(ref), {
+    message: /expects a SturdyRef/,
   });
 });

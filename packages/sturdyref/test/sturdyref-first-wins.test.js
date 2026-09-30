@@ -1,45 +1,35 @@
 // @ts-nocheck
-// The other direction of first-wins: when a namespace is ALREADY installed at
-// globalThis.SturdyRef (an eval twin got there first), the shim ADOPTS it rather
-// than overwriting it. Isolated in its own file (its own process) so its
-// pre-seeded global does not perturb the real-install tests.
+// The other direction of first-wins: when a constructor is ALREADY installed at
+// globalThis.SturdyRef (an eval twin got there first), the shim ADOPTS it
+// rather than overwriting it, and refs minted by the twin work through this
+// copy. Isolated in its own file (its own process) so its pre-seeded global
+// does not perturb the real-install tests.
 
 import '@endo/init';
 import test from 'ava';
-import harden from '@endo/harden';
-import { provideSturdyRef, selectSturdyRef } from '../src/sturdyref-pony.js';
+import {
+  makeSturdyRefConstructor,
+  provideSturdyRef,
+  selectSturdyRef,
+  enliven,
+  isSturdyRef,
+} from '../src/sturdyref-pony.js';
 
-test('first-wins: an already-installed namespace is adopted, not overwritten', t => {
-  const preExisting = harden({
-    fromLocation: () => {
-      throw new Error('should not be called');
-    },
-    toLocation: () => {
-      throw new Error('should not be called');
-    },
-    sentinel: 'the twin that won the race',
-  });
+test('first-wins: an already-installed constructor is adopted, not overwritten', async t => {
   // A prior eval twin installed first.
+  const TwinSturdyRef = makeSturdyRefConstructor();
   Object.defineProperty(globalThis, 'SturdyRef', {
-    value: preExisting,
+    value: TwinSturdyRef,
     enumerable: false,
     writable: false,
     configurable: true,
   });
 
-  t.is(
-    selectSturdyRef(),
-    preExisting,
-    'selectSturdyRef adopts the existing one',
-  );
-  t.is(
-    provideSturdyRef(),
-    preExisting,
-    'provideSturdyRef adopts the existing one',
-  );
-  t.is(
-    globalThis.SturdyRef,
-    preExisting,
-    'the pre-existing install is untouched',
-  );
+  t.is(selectSturdyRef(), TwinSturdyRef, 'selectSturdyRef adopts the twin');
+  t.is(provideSturdyRef(), TwinSturdyRef, 'provideSturdyRef adopts the twin');
+  t.is(globalThis.SturdyRef, TwinSturdyRef, 'the twin install is untouched');
+
+  const ref = new TwinSturdyRef({ enliven: () => 'from the twin' });
+  t.true(isSturdyRef(ref), "the twin's ref passes this copy's brand check");
+  t.is(await enliven(ref), 'from the twin', 'and enlivens through this copy');
 });

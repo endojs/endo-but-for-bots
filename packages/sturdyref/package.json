@@ -1,12 +1,12 @@
 {
   "name": "@endo/sturdyref",
   "version": "0.1.0",
-  "description": "First-wins SturdyRef shim: a realm-shared, closely-held mapping from opaque passable sturdyrefs to locator records",
+  "description": "First-wins SturdyRef shim: a realm-shared constructor for opaque sturdy references whose handler's enliven hook defines what they capture and how they revive",
   "keywords": [
     "sturdyref",
     "ocapn",
     "captp",
-    "locator",
+    "enliven",
     "shim",
     "ponyfill"
   ],
@@ -43,11 +43,11 @@
     "test:xs": "exit 0"
   },
   "dependencies": {
-    "@endo/harden": "workspace:^",
-    "@endo/pass-style": "workspace:^"
+    "@endo/harden": "workspace:^"
   },
   "devDependencies": {
     "@endo/init": "workspace:^",
+    "@endo/pass-style": "workspace:^",
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
