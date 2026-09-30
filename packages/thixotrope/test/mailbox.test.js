@@ -1,18 +1,101 @@
 // @ts-check
 import { E, Far } from '@endo/far';
+import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
 import { setImmediate } from 'node:timers/promises';
 
+import { makeMailIntroductions } from '../src/mail/introductions.js';
 import { makeMailbox as makeProtocolMailbox } from '../src/mail/mailbox.js';
 import { makeMailContact } from '../src/mail/mail-contact.js';
 import { makeMailAddressBook } from '../src/mail/mail-address-book.js';
 import { makeObservableMap } from '../src/observable-map.js';
 
-const makeMailbox = () =>
+const location = harden({
+  type: 'ocapn-peer',
+  network: 'thix-unix',
+  transport: 'thix-unix',
+  designator: '/tmp/peers.sock',
+  hints: {},
+});
+
+/** @param {string} text */
+const secretOf = text => JSON.parse(text).secret;
+
+/**
+ * A stand-in for the host introductions resource. Publications are a local
+ * map, so several address books in one process can introduce each other and
+ * redemption is a lookup rather than a dial. `plant` publishes a hand-made
+ * invitation and returns its text.
+ */
+const makeFakeIntroductions = () => {
+  /** @type {Map<string, any>} */
+  const publications = new Map();
+  /** @type {string[]} */
+  const unpublished = [];
+  let count = 0;
+  let failNextPublish = false;
+  /**
+   * @param {any} invitation
+   * @param {string} [name]
+   */
+  const plant = (invitation, name = 'planted') => {
+    count += 1;
+    const secret = count.toString(16).padStart(32, '0');
+    publications.set(secret, invitation);
+    return JSON.stringify({ version: 1, location, secret, name });
+  };
+  const introductions = Far('FakeIntroductions', {
+    help: () => 'A stand-in for the host introductions resource.',
+    /**
+     * @param {any} invitation
+     * @param {string} name
+     */
+    publish: (invitation, name) => {
+      if (failNextPublish) {
+        failNextPublish = false;
+        throw Error('publication failed');
+      }
+      return plant(invitation, name);
+    },
+    /** @param {string} secret */
+    unpublish: secret => {
+      unpublished.push(secret);
+      publications.delete(secret);
+      return true;
+    },
+    /** @param {string} text */
+    redeem: text => {
+      let secret;
+      try {
+        secret = secretOf(text);
+      } catch (error) {
+        throw Error('Invalid invitation', { cause: error });
+      }
+      const invitation = publications.get(secret);
+      if (invitation === undefined) throw Error('Unknown publication');
+      return invitation;
+    },
+  });
+  return {
+    introductions,
+    publications,
+    unpublished,
+    plant,
+    /** @param {string} text */
+    invitationOf: text => publications.get(secretOf(text)),
+    failNextPublish: () => {
+      failNextPublish = true;
+    },
+  };
+};
+
+/** @param {ReturnType<typeof makeFakeIntroductions>} [network] */
+const makeMailbox = (network = makeFakeIntroductions()) =>
   makeMailAddressBook(
-    makeProtocolMailbox(),
+    makeProtocolMailbox(makeObservableMap),
     makeObservableMap(),
     makeMailContact,
+    network.introductions,
   );
 
 const makeCounter = () => {
@@ -39,8 +122,10 @@ const deferred = () => {
 
 test('mailbox invitation is single-use and idempotent for the same receiver', async t => {
   t.timeout(10_000);
-  const mailbox = makeMailbox();
-  const invitation = await E(mailbox).invite('Bob');
+  const network = makeFakeIntroductions();
+  const mailbox = makeMailbox(network);
+  const text = await E(mailbox).invite('Bob');
+  const invitation = network.invitationOf(text);
   const receiver = Far('BobInbox', { deliver: () => true });
   const first = await E(invitation).accept(receiver);
   t.is(await E(invitation).accept(receiver), first);
@@ -48,18 +133,24 @@ test('mailbox invitation is single-use and idempotent for the same receiver', as
     message: /already redeemed/,
   });
   await t.throwsAsync(() => E(mailbox).invite('Bob'), {
-    message: /already reserved/,
+    message: /already started/,
   });
   t.deepEqual(await E(mailbox).contacts(), [
     { name: 'Bob', status: 'ready', error: undefined },
   ]);
+  // The exchange completed, so the publication is withdrawn and there is
+  // nothing left to revoke.
+  await setImmediate();
+  t.deepEqual(network.unpublished, [secretOf(text)]);
+  t.false(await E(mailbox).revokeInvitation(text));
 });
 
 test('mailbox receivers bind local sender labels and deduplicate delivery', async t => {
   t.timeout(10_000);
-  const mailbox = makeMailbox();
-  const invitation = await E(mailbox).invite('locally named Bob');
-  const receiver = await E(invitation).accept(
+  const network = makeFakeIntroductions();
+  const mailbox = makeMailbox(network);
+  const text = await E(mailbox).invite('locally named Bob');
+  const receiver = await E(network.invitationOf(text)).accept(
     Far('Untrusted claimed identity', {}),
   );
   const counter = makeCounter();
@@ -79,7 +170,8 @@ test('mailbox receivers bind local sender labels and deduplicate delivery', asyn
 
 test('mailbox validation does not consume an invitation or an inbound sequence', async t => {
   t.timeout(10_000);
-  const mailbox = makeMailbox();
+  const network = makeFakeIntroductions();
+  const mailbox = makeMailbox(network);
   /** @type {any[]} */
   const invalidNames = ['', 'x'.repeat(129), 1, undefined];
   await null;
@@ -89,8 +181,13 @@ test('mailbox validation does not consume an invitation or an inbound sequence',
     await t.throwsAsync(() => E(mailbox).invite(name), {
       message: /contact name/,
     });
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(mailbox).accept(name, 'irrelevant'), {
+      message: /contact name/,
+    });
   }
-  const invitation = await E(mailbox).invite('valid');
+  const text = await E(mailbox).invite('valid');
+  const invitation = network.invitationOf(text);
   await t.throwsAsync(() => E(invitation).accept({}), { message: /remotable/ });
   const receiver = await E(invitation).accept(Far('Receiver', {}));
   const counter = makeCounter();
@@ -112,20 +209,26 @@ test('mailbox validation does not consume an invitation or an inbound sequence',
   });
   t.true(await E(receiver).deliver(1n, 'x'.repeat(4096), counter));
   t.is((await E(mailbox).inbox()).length, 1);
-  await t.throwsAsync(() => E(mailbox).connect('still available', {}), {
-    message: /remotable/,
+  // An invitation the host refuses reserves no name.
+  await t.throwsAsync(() => E(mailbox).accept('still available', 'not json'), {
+    message: /Invalid invitation/,
   });
+  t.deepEqual(
+    (await E(mailbox).contacts()).map(({ name }) => name),
+    ['valid'],
+  );
   await E(mailbox).invite('still available');
 });
 
-test('mailbox connection tracks pending, ready and rejected introductions', async t => {
+test('mailbox acceptance tracks pending, ready and rejected introductions', async t => {
   t.timeout(10_000);
-  const mailbox = makeMailbox();
+  const network = makeFakeIntroductions();
+  const mailbox = makeMailbox(network);
   const answer = deferred();
-  const invitation = Far('DeferredInvitation', {
-    accept: () => answer.promise,
-  });
-  await E(mailbox).connect('pending', invitation);
+  const pending = network.plant(
+    Far('DeferredInvitation', { accept: () => answer.promise }),
+  );
+  t.true(await E(mailbox).accept('pending', pending));
   t.is((await E(mailbox).contacts())[0].status, 'pending');
   await t.throwsAsync(
     () => E(mailbox).send('pending', 'hello', makeCounter()),
@@ -135,9 +238,13 @@ test('mailbox connection tracks pending, ready and rejected introductions', asyn
   await setImmediate();
   t.is((await E(mailbox).contacts())[0].status, 'ready');
   const failure = deferred();
-  await E(mailbox).connect(
-    'refused',
-    Far('RefusedInvitation', { accept: () => failure.promise }),
+  t.true(
+    await E(mailbox).accept(
+      'refused',
+      network.plant(
+        Far('RefusedInvitation', { accept: () => failure.promise }),
+      ),
+    ),
   );
   failure.reject(Error('refused introduction'));
   await setImmediate();
@@ -150,12 +257,111 @@ test('mailbox connection tracks pending, ready and rejected introductions', asyn
   );
 });
 
+test('a failed acceptance can be retried under the same name with accept', async t => {
+  t.timeout(10_000);
+  const network = makeFakeIntroductions();
+  const contacts = makeObservableMap();
+  const mailbox = makeMailAddressBook(
+    makeProtocolMailbox(makeObservableMap),
+    contacts,
+    makeMailContact,
+    network.introductions,
+  );
+  const refusing = network.plant(
+    Far('RefusingInvitation', {
+      accept: () => {
+        throw Error('refused introduction');
+      },
+    }),
+  );
+  t.true(await E(mailbox).accept('bob', refusing));
+  await setImmediate();
+  const contact = contacts.get('bob');
+  t.like((await E(mailbox).contacts())[0], { status: 'failed' });
+  // The retry reuses the contact and keeps the last error visible until
+  // an attempt succeeds.
+  const answer = deferred();
+  const working = network.plant(
+    Far('WorkingInvitation', { accept: () => answer.promise }),
+  );
+  t.true(await E(mailbox).accept('bob', working));
+  t.is(contacts.get('bob'), contact);
+  const retrying = (await E(mailbox).contacts())[0];
+  t.is(retrying.status, 'pending');
+  t.regex(retrying.error, /refused introduction/);
+  // One attempt at a time.
+  await t.throwsAsync(() => E(mailbox).accept('bob', working), {
+    message: /already started/,
+  });
+  answer.resolve(Far('BobInbox', { deliver: () => true }));
+  await setImmediate();
+  t.deepEqual(await E(mailbox).contacts(), [
+    { name: 'bob', status: 'ready', error: undefined },
+  ]);
+  t.is(await E(mailbox).send('bob', 'hello', makeCounter()), '1');
+  // A ready contact is not introduced again.
+  await t.throwsAsync(() => E(mailbox).accept('bob', working), {
+    message: /already started/,
+  });
+  await t.throwsAsync(() => E(mailbox).invite('bob'), {
+    message: /already started/,
+  });
+});
+
+test('a failed acceptance can be retried under the same name with invite', async t => {
+  t.timeout(10_000);
+  const network = makeFakeIntroductions();
+  const mailbox = makeMailbox(network);
+  t.true(
+    await E(mailbox).accept(
+      'carol',
+      network.plant(
+        Far('RefusingInvitation', {
+          accept: () => {
+            throw Error('refused introduction');
+          },
+        }),
+      ),
+    ),
+  );
+  await setImmediate();
+  t.like((await E(mailbox).contacts())[0], { status: 'failed' });
+  const text = await E(mailbox).invite('carol');
+  const invited = (await E(mailbox).contacts())[0];
+  t.is(invited.status, 'pending');
+  t.regex(invited.error, /refused introduction/);
+  await E(network.invitationOf(text)).accept(
+    Far('CarolInbox', { deliver: () => true }),
+  );
+  t.deepEqual(await E(mailbox).contacts(), [
+    { name: 'carol', status: 'ready', error: undefined },
+  ]);
+});
+
+test('a failed publication closes the invitation so the name can be retried', async t => {
+  t.timeout(10_000);
+  const network = makeFakeIntroductions();
+  const mailbox = makeMailbox(network);
+  network.failNextPublish();
+  await t.throwsAsync(() => E(mailbox).invite('Bob'), {
+    message: /publication failed/,
+  });
+  t.deepEqual(await E(mailbox).contacts(), [
+    { name: 'Bob', status: 'cancelled', error: undefined },
+  ]);
+  const text = await E(mailbox).invite('Bob');
+  t.is((await E(mailbox).contacts())[0].status, 'pending');
+  await E(network.invitationOf(text)).accept(Far('BobInbox', {}));
+  t.is((await E(mailbox).contacts())[0].status, 'ready');
+});
+
 test('mailbox marks an introduction failed when its result is not a capability', async t => {
   t.timeout(10_000);
-  const mailbox = makeMailbox();
-  await E(mailbox).connect(
+  const network = makeFakeIntroductions();
+  const mailbox = makeMailbox(network);
+  await E(mailbox).accept(
     'malformed',
-    Far('MalformedInvitation', { accept: () => ({}) }),
+    network.plant(Far('MalformedInvitation', { accept: () => ({}) })),
   );
   await setImmediate();
   const contact = (await E(mailbox).contacts())[0];
@@ -165,7 +371,8 @@ test('mailbox marks an introduction failed when its result is not a capability',
 
 test('mailbox outbox distinguishes accepted invocation, delivery and rejection', async t => {
   t.timeout(10_000);
-  const mailbox = makeMailbox();
+  const network = makeFakeIntroductions();
+  const mailbox = makeMailbox(network);
   const first = deferred();
   /** @type {Array<{sequence: bigint, text: string, capability: any}>} */
   const calls = [];
@@ -181,8 +388,8 @@ test('mailbox outbox distinguishes accepted invocation, delivery and rejection',
       throw Error('receiver refused');
     },
   });
-  const invitation = await E(mailbox).invite('Bob');
-  await E(invitation).accept(receiver);
+  const text = await E(mailbox).invite('Bob');
+  await E(network.invitationOf(text)).accept(receiver);
   const counter = makeCounter();
   await t.throwsAsync(() => E(mailbox).send('Bob', 'x'.repeat(4097), counter), {
     message: /4096/,
@@ -217,11 +424,59 @@ test('mailbox outbox distinguishes accepted invocation, delivery and rejection',
   );
 });
 
-test('mailbox take preserves reference identity and discard releases only the offer', async t => {
+test('mailbox inbox and outbox notify subscribers and bound delivery errors', async t => {
   t.timeout(10_000);
-  const mailbox = makeMailbox();
-  const invitation = await E(mailbox).invite('Bob');
-  const receiver = await E(invitation).accept(Far('Remote', {}));
+  const mailbox = makeProtocolMailbox(makeObservableMap);
+  /** @type {bigint[]} */
+  const inboxRevisions = [];
+  /** @type {bigint[]} */
+  const outboxRevisions = [];
+  await E(mailbox).subscribeInbox(
+    Far('InboxObserver', {
+      changed: snapshot => {
+        inboxRevisions.push(snapshot.revision);
+      },
+    }),
+  );
+  await E(mailbox).subscribeOutbox(
+    Far('OutboxObserver', {
+      changed: snapshot => {
+        outboxRevisions.push(snapshot.revision);
+      },
+    }),
+  );
+  const contact = Far('Contact', {
+    deliver: () => {
+      throw Error('x'.repeat(10_000));
+    },
+  });
+  const counter = makeCounter();
+  t.true(await E(mailbox).receive(contact, 1n, 'hello', counter));
+  t.is(await E(mailbox).send(contact, 'text', counter), '1');
+  await setImmediate();
+  t.deepEqual(inboxRevisions, [0n, 1n]);
+  // Admission, then the delivery outcome, each replace the record.
+  t.deepEqual(outboxRevisions, [0n, 1n, 2n]);
+  const [failed] = await E(mailbox).outbox();
+  t.is(failed.status, 'failed');
+  t.is(typeof failed.error, 'string');
+  t.true(String(failed.error).length <= 512);
+  t.true(await E(mailbox).discard('1'));
+  await setImmediate();
+  t.deepEqual(inboxRevisions, [0n, 1n, 2n]);
+  await t.throwsAsync(() => E(mailbox).take(/** @type {any} */ (1)), {
+    message: /message id/,
+  });
+});
+
+test('mailbox take preserves reference identity and discard releases only the message', async t => {
+  t.timeout(10_000);
+  const network = makeFakeIntroductions();
+  const mailbox = makeMailbox(network);
+  const text = await E(mailbox).invite('Bob');
+  const receiver = await E(network.invitationOf(text)).accept(
+    Far('Remote', {}),
+  );
   const counter = makeCounter();
   await E(receiver).deliver(1n, 'counter', counter);
   const taken = await E(mailbox).take('1');
@@ -230,17 +485,20 @@ test('mailbox take preserves reference identity and discard releases only the of
   t.is(await E(taken).incr(), 1n);
   t.true(await E(mailbox).discard('1'));
   t.false(await E(mailbox).discard('1'));
-  await t.throwsAsync(() => E(mailbox).take('1'), { message: /Unknown offer/ });
+  await t.throwsAsync(() => E(mailbox).take('1'), {
+    message: /Unknown message/,
+  });
   t.deepEqual(await E(mailbox).inbox(), []);
   t.is(await E(taken).incr(), 2n);
 });
 
 test('mailbox contact names safely include object prototype property names', async t => {
   t.timeout(10_000);
-  const alice = makeMailbox();
-  const bob = makeMailbox();
-  const invitation = await E(alice).invite('__proto__');
-  await E(bob).connect('constructor', invitation);
+  const network = makeFakeIntroductions();
+  const alice = makeMailbox(network);
+  const bob = makeMailbox(network);
+  const text = await E(alice).invite('__proto__');
+  await E(bob).accept('constructor', text);
   await setImmediate();
   const counter = makeCounter();
   await E(bob).send('constructor', 'hello', counter);
@@ -256,14 +514,14 @@ test('mailbox contact names safely include object prototype property names', asy
   t.is(await E(alice).take('1'), await E(bob).take('1'));
 });
 
-test('mailbox failed admission does not poison the next offer sequence', async t => {
+test('mailbox failed admission does not poison the next message sequence', async t => {
   t.timeout(10_000);
-  const sender = makeMailbox();
-  const destination = makeMailbox();
-  const destinationInvitation = await E(destination).invite('Alice');
-  const destinationReceiver = await E(destinationInvitation).accept(
-    Far('AliceInbox', {}),
-  );
+  const network = makeFakeIntroductions();
+  const sender = makeMailbox(network);
+  const destination = makeMailbox(network);
+  const destinationReceiver = await E(
+    network.invitationOf(await E(destination).invite('Alice')),
+  ).accept(Far('AliceInbox', {}));
   const transport = Far('FailFirstAdmission', {
     /**
      * @param {bigint} sequence
@@ -275,8 +533,9 @@ test('mailbox failed admission does not poison the next offer sequence', async t
       return E(destinationReceiver).deliver(sequence, text, capability);
     },
   });
-  const invitation = await E(sender).invite('Bob');
-  await E(invitation).accept(transport);
+  await E(network.invitationOf(await E(sender).invite('Bob'))).accept(
+    transport,
+  );
   const counter = makeCounter();
   t.is(await E(sender).send('Bob', 'lost before acceptance', counter), '1');
   await setImmediate();
@@ -294,14 +553,18 @@ test('mailbox failed admission does not poison the next offer sequence', async t
   t.is(await E(destination).take('1'), counter);
 });
 
-test('mailbox cancellation prevents redemption of an already-fetched invitation', async t => {
+test('mailbox revocation prevents redemption of an already-fetched invitation', async t => {
   t.timeout(10_000);
-  const mailbox = makeMailbox();
-  const invitation = await E(mailbox).invite('Bob');
-  t.true(await E(mailbox).cancelInvitation('Bob'));
-  t.true(await E(mailbox).cancelInvitation('Bob'));
+  const network = makeFakeIntroductions();
+  const mailbox = makeMailbox(network);
+  const text = await E(mailbox).invite('Bob');
+  const invitation = network.invitationOf(text);
+  t.true(await E(mailbox).revokeInvitation(text));
+  t.false(await E(mailbox).revokeInvitation(text));
+  // Every revocation withdraws the publication, even a repeated one.
+  t.deepEqual(network.unpublished, [secretOf(text), secretOf(text)]);
   await t.throwsAsync(() => E(invitation).accept(Far('BobInbox', {})), {
-    message: /cancelled/,
+    message: /revoked/,
   });
   t.deepEqual(await E(mailbox).contacts(), [
     { name: 'Bob', status: 'cancelled', error: undefined },
@@ -309,26 +572,46 @@ test('mailbox cancellation prevents redemption of an already-fetched invitation'
   await t.throwsAsync(() => E(mailbox).send('Bob', 'hello', makeCounter()), {
     message: /not ready/,
   });
-  await t.throwsAsync(() => E(mailbox).cancelInvitation('missing'), {
-    message: /Unknown invitation/,
+  await t.throwsAsync(() => E(mailbox).revokeInvitation('not an invitation'), {
+    message: /Invalid invitation/,
   });
+  t.false(
+    await E(mailbox).revokeInvitation(
+      JSON.stringify({
+        version: 1,
+        location,
+        secret: 'f'.repeat(32),
+        name: 'x',
+      }),
+    ),
+  );
+  // A cancelled name can be invited again, on the same contact.
+  const again = await E(mailbox).invite('Bob');
+  t.not(again, text);
+  t.is((await E(mailbox).contacts())[0].status, 'pending');
+  await E(network.invitationOf(again)).accept(
+    Far('BobInbox', { deliver: () => true }),
+  );
+  t.is((await E(mailbox).contacts())[0].status, 'ready');
 });
 
-test('mailbox invitation cancellation preserves an established contact in both directions', async t => {
+test('mailbox invitation revocation preserves an established contact in both directions', async t => {
   t.timeout(10_000);
-  const alice = makeMailbox();
-  const bob = makeMailbox();
-  const invitation = await E(alice).invite('Bob');
-  await E(bob).connect('Alice', invitation);
+  const network = makeFakeIntroductions();
+  const alice = makeMailbox(network);
+  const bob = makeMailbox(network);
+  const text = await E(alice).invite('Bob');
+  const invitation = network.invitationOf(text);
+  await E(bob).accept('Alice', text);
   await setImmediate();
-  t.true(await E(alice).cancelInvitation('Bob'));
+  // Redemption already withdrew the publication; nothing remains to revoke,
+  // and the contact stays ready.
+  t.false(await E(alice).revokeInvitation(text));
   t.is((await E(alice).contacts())[0].status, 'ready');
   await t.throwsAsync(() => E(invitation).accept(Far('LaterRedeemer', {})), {
-    message: /cancelled/,
+    message: /already redeemed/,
   });
-  await t.throwsAsync(() => E(bob).cancelInvitation('Alice'), {
-    message: /Unknown invitation/,
-  });
+  t.false(await E(bob).revokeInvitation(text));
   const counter = makeCounter();
   await E(alice).send('Bob', 'to Bob', counter);
   await E(bob).send('Alice', 'to Alice', counter);
@@ -342,73 +625,83 @@ test('mailbox invitation cancellation preserves an established contact in both d
   t.is(await E(alice).take('1'), await E(bob).take('1'));
 });
 
-test('mailbox sends directly to an identity without any name registry', async t => {
+test('mailbox sends directly to a contact without any name registry', async t => {
   t.timeout(10_000);
-  const alice = makeProtocolMailbox();
-  const bob = makeProtocolMailbox();
-  const bobIdentity = makeMailContact(alice);
-  const aliceIdentity = makeMailContact(bob);
-  const invitation = await E(bobIdentity).invite();
-  await E(aliceIdentity).connect(invitation);
+  const alice = makeProtocolMailbox(makeObservableMap);
+  const bob = makeProtocolMailbox(makeObservableMap);
+  const bobContact = makeMailContact(alice);
+  const aliceContact = makeMailContact(bob);
+  const invitation = await E(bobContact).invite();
+  await E(aliceContact).accept(invitation);
   // eslint-disable-next-line no-await-in-loop
-  while ((await E(aliceIdentity).status()).status !== 'ready') {
+  while ((await E(aliceContact).status()).status !== 'ready') {
     // eslint-disable-next-line no-await-in-loop
     await setImmediate();
   }
   const counter = makeCounter();
-  t.is(await E(alice).send(bobIdentity, 'No pet name needed', counter), '1');
+  t.is(await E(alice).send(bobContact, 'No pet name needed', counter), '1');
   // eslint-disable-next-line no-await-in-loop
   while ((await E(bob).inbox()).length === 0) {
     // eslint-disable-next-line no-await-in-loop
     await setImmediate();
   }
   t.deepEqual(await E(bob).inbox(), [
-    { id: '1', from: aliceIdentity, text: 'No pet name needed' },
+    { id: '1', from: aliceContact, text: 'No pet name needed' },
   ]);
   t.is(await E(bob).take('1'), counter);
-  t.is((await E(alice).outbox())[0].to, bobIdentity);
+  t.is((await E(alice).outbox())[0].to, bobContact);
 });
 
-test('renaming a workspace contact preserves identity and pending offers', async t => {
+test('renaming a workspace contact preserves the contact and pending messages', async t => {
   t.timeout(10_000);
-  const mailbox = makeProtocolMailbox();
+  const network = makeFakeIntroductions();
+  const mailbox = makeProtocolMailbox(makeObservableMap);
   const contacts = makeObservableMap();
-  const book = makeMailAddressBook(mailbox, contacts, makeMailContact);
-  const invitation = await E(book).invite('old name');
-  const receiver = await E(invitation).accept(
+  const book = makeMailAddressBook(
+    mailbox,
+    contacts,
+    makeMailContact,
+    network.introductions,
+  );
+  const text = await E(book).invite('old name');
+  const receiver = await E(network.invitationOf(text)).accept(
     Far('RemoteInbox', {
       deliver: () => true,
     }),
   );
   const counter = makeCounter();
   await E(receiver).deliver(1n, 'Before rename', counter);
-  const identity = contacts.get('old name');
+  const contact = contacts.get('old name');
   contacts.delete('old name');
-  contacts.set('new name', identity);
+  contacts.set('new name', contact);
   t.deepEqual(await E(book).inbox(), [
     { id: '1', from: 'new name', text: 'Before rename' },
   ]);
-  t.is((await E(mailbox).inbox())[0].from, identity);
+  t.is((await E(mailbox).inbox())[0].from, contact);
   t.is(await E(book).send('new name', 'After rename', counter), '1');
-  t.is((await E(mailbox).outbox())[0].to, identity);
+  t.is((await E(mailbox).outbox())[0].to, contact);
+  contacts.delete('new name');
+  t.deepEqual(await E(book).inbox(), [
+    { id: '1', from: '<unnamed>', text: 'Before rename' },
+  ]);
 });
 
 test('two mailboxes sharing a correspondent do not reuse delivery sequences', async t => {
   t.timeout(10_000);
-  const alice = makeProtocolMailbox();
-  const secondSender = makeProtocolMailbox();
-  const bob = makeProtocolMailbox();
-  const bobIdentity = makeMailContact(alice);
-  const aliceIdentity = makeMailContact(bob);
-  await E(aliceIdentity).connect(await E(bobIdentity).invite());
+  const alice = makeProtocolMailbox(makeObservableMap);
+  const secondSender = makeProtocolMailbox(makeObservableMap);
+  const bob = makeProtocolMailbox(makeObservableMap);
+  const bobContact = makeMailContact(alice);
+  const aliceContact = makeMailContact(bob);
+  await E(aliceContact).accept(await E(bobContact).invite());
   // eslint-disable-next-line no-await-in-loop
-  while ((await E(aliceIdentity).status()).status !== 'ready') {
+  while ((await E(aliceContact).status()).status !== 'ready') {
     // eslint-disable-next-line no-await-in-loop
     await setImmediate();
   }
   const counter = makeCounter();
-  t.is(await E(alice).send(bobIdentity, 'First sender', counter), '1');
-  t.is(await E(secondSender).send(bobIdentity, 'Second sender', counter), '1');
+  t.is(await E(alice).send(bobContact, 'First sender', counter), '1');
+  t.is(await E(secondSender).send(bobContact, 'Second sender', counter), '1');
   // eslint-disable-next-line no-await-in-loop
   while ((await E(bob).inbox()).length !== 2) {
     // eslint-disable-next-line no-await-in-loop
@@ -422,19 +715,97 @@ test('two mailboxes sharing a correspondent do not reuse delivery sequences', as
 
 test('invitation ownership survives reassignment of its pet name', async t => {
   t.timeout(10_000);
-  const mailbox = makeProtocolMailbox();
+  const network = makeFakeIntroductions();
+  const mailbox = makeProtocolMailbox(makeObservableMap);
   const contacts = makeObservableMap();
-  const book = makeMailAddressBook(mailbox, contacts, makeMailContact);
-  // Invoke the local factory facet synchronously to reassign the name while
-  // it is awaiting the invitation, before the host could publish its result.
-  const pairPromise = book.inviteWithIdentity('Bob');
+  const book = makeMailAddressBook(
+    mailbox,
+    contacts,
+    makeMailContact,
+    network.introductions,
+  );
+  // Invoke the local facet synchronously to reassign the name while it is
+  // awaiting publication of the invitation.
+  const pending = book.invite('Bob');
   const original = contacts.get('Bob');
   contacts.set('Bob', makeMailContact(mailbox));
-  const { identity, invitation } = await pairPromise;
-  t.is(identity, original);
-  t.not(identity, contacts.get('Bob'));
-  await E(identity).cancelInvitation();
+  const text = await pending;
+  const invitation = network.invitationOf(text);
+  t.not(contacts.get('Bob'), original);
+  t.true(await E(book).revokeInvitation(text));
+  t.is((await E(original).status()).status, 'cancelled');
+  t.is((await E(contacts.get('Bob')).status()).status, 'pending');
   await t.throwsAsync(() => E(invitation).accept(Far('Remote', {})), {
-    message: /cancelled/,
+    message: /revoked/,
+  });
+});
+
+test('mail introductions validate invitation text before dialing', async t => {
+  t.timeout(10_000);
+  /** @type {any[][]} */
+  const calls = [];
+  const secret = 'ab'.repeat(16);
+  const introductions = makeMailIntroductions({
+    publish: value => {
+      calls.push(['publish', value]);
+      return secret;
+    },
+    unpublish: withdrawn => {
+      calls.push(['unpublish', withdrawn]);
+    },
+    importReference: async (peer, fetched) => {
+      calls.push(['import', peer, fetched]);
+      return Far('RemoteInvitation', {});
+    },
+    location: () => location,
+    assertLocation: candidate => {
+      if (/** @type {any} */ (candidate)?.designator !== location.designator)
+        throw Error('Invalid Unix peer location');
+      return location;
+    },
+  });
+  const invitation = Far('Invitation', {});
+  const text = await E(introductions).publish(invitation, 'bob');
+  t.deepEqual(JSON.parse(text), { version: 1, location, secret, name: 'bob' });
+  t.deepEqual(calls, [['publish', invitation]]);
+  await t.throwsAsync(() => E(introductions).publish(invitation, ''), {
+    message: /contact name/,
+  });
+  await t.throwsAsync(
+    () => E(introductions).publish(/** @type {any} */ ('text'), 'bob'),
+    { message: /invitation capability/ },
+  );
+  await E(introductions).redeem(text);
+  t.deepEqual(calls[1], ['import', location, secret]);
+  const parsed = JSON.parse(text);
+  const invalid = [
+    'x'.repeat(4097),
+    'not json',
+    'null',
+    JSON.stringify([]),
+    JSON.stringify({ ...parsed, version: 2 }),
+    JSON.stringify({ ...parsed, secret: 'nope' }),
+    JSON.stringify({ ...parsed, name: '' }),
+    JSON.stringify({ ...parsed, name: 'x'.repeat(129) }),
+  ];
+  for (const bad of invalid) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(introductions).redeem(bad), {
+      message: /Invalid invitation/,
+    });
+  }
+  await t.throwsAsync(
+    () =>
+      E(introductions).redeem(
+        JSON.stringify({ ...parsed, location: { designator: '/elsewhere' } }),
+      ),
+    { message: /Unix peer/ },
+  );
+  // Nothing was dialed for text the validator refused.
+  t.is(calls.length, 2);
+  t.true(await E(introductions).unpublish(secret));
+  t.deepEqual(calls[2], ['unpublish', secret]);
+  await t.throwsAsync(() => E(introductions).unpublish('short'), {
+    message: /secret/,
   });
 });

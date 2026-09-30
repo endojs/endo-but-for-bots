@@ -78,7 +78,7 @@ export const registerMailboxIntegration = (test, kind) => {
           },
         };
         await t.throwsAsync(
-          () => bob.client.call('connect', 'bad', JSON.stringify(invalid)),
+          () => bob.client.call('accept', 'bad', JSON.stringify(invalid)),
           { message: /Unix peer/ },
         );
         t.deepEqual(
@@ -86,7 +86,7 @@ export const registerMailboxIntegration = (test, kind) => {
           beforeSessions,
           'invalid invitations create no durable session obligations',
         );
-        t.true(await bob.client.call('connect', 'alice', invitation));
+        t.true(await bob.client.call('accept', 'alice', invitation));
         await until(
           async () =>
             (await bob.client.call('contacts'))[0]?.status === 'ready',
@@ -111,7 +111,7 @@ export const registerMailboxIntegration = (test, kind) => {
           { id: '1', from: 'alice', text: 'Try this counter' },
         ]);
         if (recovery) {
-          t.true(await bob.client.call('takeOffer', '1', 'shared'));
+          t.true(await bob.client.call('takeMessage', '1', 'shared'));
         } else {
           const view = spawn(
             process.execPath,
@@ -158,7 +158,7 @@ export const registerMailboxIntegration = (test, kind) => {
           await until(
             async () => (await alice.client.call('inbox')).length === 1,
           );
-          t.true(await alice.client.call('takeOffer', '1', 'returned'));
+          t.true(await alice.client.call('takeMessage', '1', 'returned'));
           t.is(
             await alice.client.call(
               'evaluate',
@@ -196,7 +196,7 @@ export const registerMailboxIntegration = (test, kind) => {
           (await bob.client.call('inbox')).map(entry => entry.text),
           ['Try this counter', 'While offline'],
         );
-        t.true(await bob.client.call('discardOffer', '1'));
+        t.true(await bob.client.call('discardMessage', '1'));
         t.is(
           await bob.client.call(
             'evaluate',
@@ -206,9 +206,11 @@ export const registerMailboxIntegration = (test, kind) => {
         );
         await alice.client.call(
           'evaluate',
-          "(() => { const contacts = inventory.get('contacts'); const identity = contacts.get('bob'); contacts.delete('bob'); contacts.set('renamed bob', identity); return true; })()",
+          "(() => { const contacts = inventory.get('contacts'); const contact = contacts.get('bob'); contacts.delete('bob'); contacts.set('renamed bob', contact); return true; })()",
         );
-        t.true(await alice.client.call('revokeInvitation', invitation));
+        // Redemption already withdrew the publication, so there is nothing
+        // left to revoke; the established contact is untouched either way.
+        t.false(await alice.client.call('revokeInvitation', invitation));
         t.is(
           await bob.client.call(
             'send',

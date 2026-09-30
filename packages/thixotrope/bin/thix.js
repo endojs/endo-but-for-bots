@@ -10,6 +10,7 @@ import { connectLocalControl } from '../src/control/local-control.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
 import { showAttach } from '../src/tui/attach-view.js';
 import { showInventory } from '../src/tui/inventory-view.js';
+import { printJson, terminalText } from '../src/tui/terminal-text.js';
 import { showMailbox } from '../src/tui/mailbox-view.js';
 
 import { makeNodePowers } from '../src/platform/node/powers.js';
@@ -45,7 +46,7 @@ try {
       'install-native',
       'revoke-invite',
       'invite',
-      'connect',
+      'accept',
       'contacts',
       'send',
       'inbox',
@@ -95,7 +96,7 @@ try {
         [
           'revoke-invite',
           'invite',
-          'connect',
+          'accept',
           'send',
           'take',
           'discard',
@@ -108,14 +109,15 @@ try {
           command === 'revoke-invite'
             ? 'revokeInvitation'
             : command === 'take'
-              ? 'takeOffer'
+              ? 'takeMessage'
               : command === 'discard'
-                ? 'discardOffer'
+                ? 'discardMessage'
                 : command;
         const result = await client.call(method, ...args);
-        logging.log(
-          command === 'invite' ? result : JSON.stringify(result, null, 2),
-        );
+        // Invitation text is JSON whose escapes survive sanitising; other
+        // results carry remote-controlled message text and labels.
+        if (command === 'invite') logging.log(terminalText(result));
+        else printJson(logging, result);
       } else if (command === 'install') {
         const [name, modulePath, ...grantArgs] = args;
         if (!name || !modulePath)
@@ -162,7 +164,7 @@ try {
     }
   } else {
     logging.log(
-      'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|connect|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|install-native|reachability|collect|status|stop [state-directory]',
+      'Usage: thix serve|attach|install|applications|inventory|invite|revoke-invite|accept|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|install-native|reachability|collect|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }

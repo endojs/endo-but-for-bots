@@ -14,12 +14,20 @@ import harden from '@endo/harden';
  * Notifications carry descriptions, never the values themselves, so an
  * observer can render the map without receiving the capabilities in it.
  *
+ * `keyOf(value)` is the reverse lookup, kept as an index rather than a scan
+ * so that labelling a row costs nothing proportional to the map. When the
+ * same value sits under several keys, the key set most recently wins, and
+ * deleting it falls back to the others in reverse order of setting.
+ *
  * This factory is self-contained: the supervisor also ships its source into
  * a guest compartment, where only E, Far, and harden are in scope.
  */
 export const makeObservableMap = () => {
   /** @type {Map<string, any>} */
   const values = new Map();
+  // Reverse index: value → the keys holding it, in the order they were set.
+  /** @type {Map<any, Set<string>>} */
+  const holders = new Map();
   /** @type {Set<any>} */
   const subscriptions = new Set();
   let revision = 0n;
@@ -76,9 +84,31 @@ export const makeObservableMap = () => {
   const assertKey = key => {
     if (typeof key !== 'string') throw Error('Keys must be strings');
   };
+  /**
+   * @param {string} key
+   * @param {any} value
+   */
+  const hold = (key, value) => {
+    let keys = holders.get(value);
+    if (keys === undefined) {
+      keys = new Set();
+      holders.set(value, keys);
+    }
+    keys.add(key);
+  };
+  /**
+   * @param {string} key
+   * @param {any} value
+   */
+  const release = (key, value) => {
+    const keys = holders.get(value);
+    if (keys === undefined) return;
+    keys.delete(key);
+    if (keys.size === 0) holders.delete(value);
+  };
   const observableMap = Far('ObservableMap', {
     help: () =>
-      'Observable Map: get, has, set, delete, clear, keys, entries, getSize; subscribe(listener, ephemeral?) sends display snapshots to listener.changed. Subscription.unsubscribe releases it.',
+      'Observable Map: get, has, set, delete, clear, keys, entries, getSize, keyOf(value); subscribe(listener, ephemeral?) sends display snapshots to listener.changed. Subscription.unsubscribe releases it.',
     /** @param {string} key */
     get: key => {
       assertKey(key);
@@ -90,13 +120,15 @@ export const makeObservableMap = () => {
       return values.has(key);
     },
     /**
-     * @param {string} key @param {any} value
-     * @param value
+     * @param {string} key
+     * @param {any} value
      */
     set: (key, value) => {
       assertKey(key);
       if (!values.has(key) || !Object.is(values.get(key), value)) {
+        if (values.has(key)) release(key, values.get(key));
         values.set(key, value);
+        hold(key, value);
         changed();
       }
       return observableMap;
@@ -104,19 +136,35 @@ export const makeObservableMap = () => {
     /** @param {string} key */
     delete: key => {
       assertKey(key);
-      const deleted = values.delete(key);
-      if (deleted) changed();
-      return deleted;
+      if (!values.has(key)) return false;
+      release(key, values.get(key));
+      values.delete(key);
+      changed();
+      return true;
     },
     clear: () => {
       if (values.size) {
         values.clear();
+        holders.clear();
         changed();
       }
     },
     keys: () => harden([...values.keys()]),
     entries: () => harden([...values]),
     getSize: () => values.size,
+    /**
+     * The key most recently set to this value, or undefined if no key holds
+     * it. Values compare as Map keys do (SameValueZero).
+     * @param {any} value
+     */
+    keyOf: value => {
+      const keys = holders.get(value);
+      if (keys === undefined) return undefined;
+      /** @type {string | undefined} */
+      let last;
+      for (const key of keys) last = key;
+      return last;
+    },
     snapshot,
     /**
      * At most one notification is outstanding per listener. While it is busy,

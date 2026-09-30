@@ -60,7 +60,7 @@ Use a new inventory name and an unchanged new directory for a new installation.
 
 Native installation introduced workspace metadata version 2 and removed the old `http-port` resource.
 The [alarm acknowledgement protocol](alarm-settlement.md) introduced workspace version 3;
-dedicated native manager vats now require version 4.
+dedicated native manager vats introduced version 4, and later guest-closure changes bump it again.
 Older workspaces and durable closures need explicit migration; no automatic migration is included.
 Use a fresh state directory for this implementation.
 The native installation itself does not change Ironhorse heap format; execution-limit changes are

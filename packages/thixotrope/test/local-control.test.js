@@ -39,7 +39,7 @@ test.serial(
             },
           },
         }),
-      { message: /dedicated native managers require version 4/ },
+      { message: /this build requires version 5/ },
     );
     t.true(released);
     t.false(started);

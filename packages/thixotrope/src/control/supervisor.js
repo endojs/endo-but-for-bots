@@ -54,6 +54,7 @@ import { makeObservableMap } from '../observable-map.js';
 import { makeMailbox } from '../mail/mailbox.js';
 import { makeMailContact } from '../mail/mail-contact.js';
 import { makeMailAddressBook } from '../mail/mail-address-book.js';
+import { makeMailIntroductions } from '../mail/introductions.js';
 import { makeFileSyncStringAtom } from '../store/file-sync-string-atom.js';
 import { makeFsStore } from '../store/store-fs.js';
 import {
@@ -63,6 +64,16 @@ import {
 
 /** @import { WorkerEngine } from '../core/worker-engine.js' */
 /** @import { SocketConnection } from '../platform/sockets.js' */
+
+// The shape of what the supervisor keeps in the workspace vat's heap. Guest
+// closures the supervisor ships (the inventory, the registries, the clock,
+// the mail address book) are frozen in the heap at first evaluation, so a
+// build whose closures differ cannot serve an older workspace and refuses
+// it rather than run new host code against old guest code.
+// 3: alarm acknowledgement; 4: dedicated native manager vats; 5: the mail
+// address book introduces contacts through the `mail-introductions` resource
+// and its inbox and outbox are observable.
+const WORKSPACE_VERSION = 5;
 
 /**
  * @param {FilePowers} files
@@ -164,9 +175,9 @@ export const serveThixotrope = async (
           if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
             throw error;
         }
-        if (config !== undefined && config.version !== 4) {
+        if (config !== undefined && config.version !== WORKSPACE_VERSION) {
           throw Error(
-            'Incompatible workspace metadata: dedicated native managers require version 4; migrate or use a fresh state directory',
+            `Incompatible workspace metadata: this build requires version ${WORKSPACE_VERSION}; migrate or use a fresh state directory`,
           );
         }
         return release;
@@ -276,6 +287,19 @@ export const serveThixotrope = async (
         resources: {
           alarm: alarms.resource,
           alarms: alarms.clockResource,
+          // Makers run while the endpoint restores, before `daemon` is
+          // assigned and before the netlayer exists, so every use of the
+          // daemon is deferred to the call.
+          'mail-introductions': () =>
+            makeMailIntroductions({
+              publish: value => daemon.publish(value),
+              unpublish: secret => daemon.unpublish(secret),
+              importReference: (location, secret) =>
+                daemon.importReference(location, secret),
+              location: () => daemon.location,
+              assertLocation: location =>
+                assertUnixPeerLocation({ syncFiles, paths }, location),
+            }),
         },
         makeNetlayer: async ({ handlers, logger, resumption }) => {
           // makeThixotropeDaemon already holds the exclusive engine lease.
@@ -320,7 +344,7 @@ export const serveThixotrope = async (
           ? candidates[0].workerId
           : (await daemon.createWorker({ debugLabel: 'workspace' })).workerId;
       config = {
-        version: 4,
+        version: WORKSPACE_VERSION,
         workerId,
         publication: `workspace-${workerId}`,
         initialized: false,
@@ -328,7 +352,7 @@ export const serveThixotrope = async (
       await save(files, configPath, config);
     }
     if (
-      config?.version !== 4 ||
+      config?.version !== WORKSPACE_VERSION ||
       !daemon.listWorkerIds().includes(config.workerId) ||
       config.publication !== `workspace-${config.workerId}` ||
       typeof config.initialized !== 'boolean'
@@ -374,23 +398,34 @@ export const serveThixotrope = async (
         `(globalThis.mailAddressBook ??= (async () => {
           globalThis.mailbox ??= E(vats).createWorker('mailbox')
             .then(worker => E(worker).getEvaluator())
-            .then(evaluator => E(evaluator).evaluate(${JSON.stringify(`(${makeMailbox.toString()})()`)}));
+            .then(evaluator => E(evaluator).evaluate(${JSON.stringify(`(${makeMailbox.toString()})((${makeObservableMap.toString()}))`)}));
           const mailbox = await globalThis.mailbox;
           if (!inventory.has('contacts')) {
             inventory.set('contacts', (${makeObservableMap.toString()})());
           }
-          return (${makeMailAddressBook.toString()})(
-            mailbox, inventory.get('contacts'), (${makeMailContact.toString()})
+          const mail = (${makeMailAddressBook.toString()})(
+            mailbox, inventory.get('contacts'), (${makeMailContact.toString()}), introductions
           );
+          if (!inventory.has('mail')) inventory.set('mail', mail);
+          return mail;
         })())`,
+        { introductions: daemon.makeResource('mail-introductions') },
       );
-      mailboxAddressBook = opening;
+      // Supervisor restart is a lifetime boundary for view subscriptions on
+      // the mailbox, as it is for the inventory's.
+      mailboxAddressBook = opening.then(async book => {
+        await workspace.evaluate(
+          'E(mailbox).disconnectEphemeral().then(() => true)',
+        );
+        return book;
+      });
       // Failed initialization can be repaired in the workspace. Do not pin a
       // rejected attempt in the host after the user repairs its durable root.
-      void opening.catch(() => {
-        if (mailboxAddressBook === opening) mailboxAddressBook = undefined;
+      const wrapped = mailboxAddressBook;
+      void wrapped.catch(() => {
+        if (mailboxAddressBook === wrapped) mailboxAddressBook = undefined;
       });
-      return opening;
+      return wrapped;
     };
     /**
      * The clock lives in the workspace vat, holding its own promises and
@@ -425,29 +460,6 @@ export const serveThixotrope = async (
       );
     }
 
-    /** @param {unknown} text */
-    const parseInvitation = text => {
-      if (typeof text !== 'string' || text.length > 4096)
-        throw Error('Invalid invitation');
-      const invitation = JSON.parse(text);
-      const name = /** @type {unknown} */ (invitation?.name);
-      if (
-        invitation?.version !== 1 ||
-        typeof invitation.secret !== 'string' ||
-        !/^[0-9a-f]{32}$/.test(invitation.secret) ||
-        typeof name !== 'string' ||
-        !name.length ||
-        name.length > 128
-      )
-        throw Error('Invalid invitation');
-      return {
-        ...invitation,
-        location: assertUnixPeerLocation(
-          { syncFiles, paths },
-          invitation.location,
-        ),
-      };
-    };
     let installingNative = Promise.resolve();
     const adminMethods = {
       help: () => 'Local supervisor: evaluate(source), status(), stop().',
@@ -579,49 +591,11 @@ export const serveThixotrope = async (
           stopped: status.stopped,
         });
       },
-      invite: async name => {
-        const { invitation, identity } =
-          await E(getMailbox()).inviteWithIdentity(name);
-        const secret = daemon.publish(invitation);
-        // The publication's cancellation authority follows its identity even
-        // if the user renames or removes the address-book entry later.
-        await workspace.evaluate(
-          '((globalThis.mailInvitations ??= new Map()).set(secret, identity), true)',
-          { secret, identity },
-        );
-        return JSON.stringify({
-          version: 1,
-          location: daemon.location,
-          secret,
-          name,
-        });
-      },
-      connect: async (name, invitationText) => {
-        const invitation = parseInvitation(invitationText);
-        const remote = await daemon.importReference(
-          invitation.location,
-          invitation.secret,
-        );
-        return E(getMailbox()).connect(name, remote);
-      },
-      revokeInvitation: async text => {
-        const invitation = parseInvitation(text);
-        if (invitation.location.designator !== peerPath)
-          throw Error('Invitation belongs to another supervisor');
-        await workspace.evaluate(
-          `(async () => {
-            const identity = globalThis.mailInvitations?.get(secret);
-            if (identity) {
-              await E(identity).cancelInvitation();
-              mailInvitations.delete(secret);
-            }
-            return true;
-          })()`,
-          { secret: invitation.secret },
-        );
-        daemon.unpublish(invitation.secret);
-        return true;
-      },
+      invite: name => E(getMailbox()).invite(name),
+      accept: (name, invitationText) =>
+        E(getMailbox()).accept(name, invitationText),
+      revokeInvitation: invitationText =>
+        E(getMailbox()).revokeInvitation(invitationText),
       contacts: () => E(getMailbox()).contacts(),
       inbox: () => E(getMailbox()).inbox(),
       outbox: () => E(getMailbox()).outbox(),
@@ -634,7 +608,7 @@ export const serveThixotrope = async (
           { name, text, key },
         );
       },
-      takeOffer: async (id, key) => {
+      takeMessage: async (id, key) => {
         if (typeof key !== 'string' || !key.length)
           throw Error('Expected inventory key');
         await getMailbox();
@@ -643,7 +617,7 @@ export const serveThixotrope = async (
           { id, key },
         );
       },
-      discardOffer: id => E(getMailbox()).discard(id),
+      discardMessage: id => E(getMailbox()).discard(id),
     };
     controlListener = await sockets.listenPath({
       path: socketPath,
