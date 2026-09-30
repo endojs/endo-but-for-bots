@@ -615,15 +615,18 @@ test.serial(
     t.is(installed.digest, digest);
     t.is(installed.status, 'ready');
     t.is(
-      await admin.call('evaluate', "E(E(apps).get('counter-app')).incr()"),
+      await admin.call('evaluate', "E(inventory.get('counter-app')).incr()"),
       '1n',
     );
     t.is(
-      await admin.call('evaluate', "E(E(apps).get('counter-app')).granted()"),
+      await admin.call('evaluate', "E(inventory.get('counter-app')).granted()"),
       '42n',
     );
     t.is(
-      await admin.call('evaluate', "E(E(apps).get('counter-app')).confined()"),
+      await admin.call(
+        'evaluate',
+        "E(inventory.get('counter-app')).confined()",
+      ),
       "'undefined:undefined'",
     );
     t.is((await admin.call('status')).workers.length, 2);
@@ -647,24 +650,24 @@ test.serial(
         admin.call('install', 'missing-grant', bundle, [['counter', 'absent']]),
       { message: /Unknown inventory grant/ },
     );
-    t.is((await admin.call('applications')).length, 1);
+    t.is((await admin.call('installations')).length, 1);
     await admin.call('stop');
     t.is((await first.exited)[0], 0);
     await rm(file);
     const second = await start(t, path);
     const restored = await connect(t, path);
     t.is(
-      await restored.call('evaluate', "E(E(apps).get('counter-app')).incr()"),
+      await restored.call('evaluate', "E(inventory.get('counter-app')).incr()"),
       '2n',
     );
     t.is(
       await restored.call(
         'evaluate',
-        "E(E(apps).get('counter-app')).granted()",
+        "E(inventory.get('counter-app')).granted()",
       ),
       '42n',
     );
-    t.is((await restored.call('applications'))[0].digest, digest);
+    t.is((await restored.call('installations'))[0].digest, digest);
     await restored.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);
@@ -707,7 +710,7 @@ test.serial(
     if (code !== 0) t.log(await check.call('status'));
     t.is(code, 0, diagnostic);
     t.is(JSON.parse(output).status, 'ready');
-    const listed = await transcript(t, path, '', 'applications');
+    const listed = await transcript(t, path, '', 'installations');
     t.is(listed.code, 0);
     t.is(JSON.parse(listed.output)[0].name, 'counter');
     const graph = await transcript(t, path, '', 'reachability');
@@ -718,7 +721,7 @@ test.serial(
     t.deepEqual(JSON.parse(collection.output), []);
     const admin = await connect(t, path);
     t.is(
-      await admin.call('evaluate', "E(E(apps).get('counter')).incr()"),
+      await admin.call('evaluate', "E(inventory.get('counter')).incr()"),
       '1n',
     );
     await admin.call('stop');
@@ -754,21 +757,38 @@ test.serial(
       }
     }
     t.true(entered);
-    t.is((await admin.call('applications'))[0].status, 'pending');
+    t.is((await admin.call('installations'))[0].status, 'pending');
     await admin.call('stop');
     t.is((await first.exited)[0], 0);
     await handled;
     const second = await start(t, path);
     const restored = await connect(t, path);
     await restored.call('evaluate', 'resolveGate(); undefined');
+    // The factory's result reaches the workspace as a guest-to-guest
+    // message; the root takes the name in the inventory when it lands.
+    let ready = false;
+    for (let attempt = 0; attempt < 100 && !ready; attempt += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const has = await restored.call('evaluate', "inventory.has('pending')");
+      ready = has === 'true';
+    }
+    t.true(ready);
     t.is(
-      await restored.call('evaluate', "E(E(apps).get('pending')).read()"),
+      await restored.call('evaluate', "E(inventory.get('pending')).read()"),
       '8n',
     );
-    t.is((await restored.call('applications'))[0].status, 'ready');
-    await t.throwsAsync(
-      () => restored.call('install', 'oversized', ' '.repeat(16 * 1024), []),
-      { message: /16 KiB/ },
+    t.is((await restored.call('installations'))[0].status, 'ready');
+    // A bundle well past the old 16 KiB request cap is staged into its vat in
+    // bounded messages rather than refused.
+    await restored.call(
+      'install',
+      'large',
+      `({ make: () => Far('Large', { read: () => 1n }) })\n// ${'x'.repeat(40_000)}`,
+      [],
+    );
+    t.is(
+      await restored.call('evaluate', "E(inventory.get('large')).read()"),
+      '1n',
     );
     await restored.call(
       'evaluate',
@@ -784,7 +804,7 @@ test.serial(
     t.is(
       await restored.call('evaluate', '2 + 2'),
       '4',
-      'oversized requests never enter the workspace',
+      'copy-data grants never enter the workspace',
     );
     await restored.call('stop');
     t.is((await second.exited)[0], 0);

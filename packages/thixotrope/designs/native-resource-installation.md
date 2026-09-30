@@ -75,7 +75,8 @@ The native child process remains ephemeral and continues to invoke application h
 This separates the manager's execution budget, heap, and failure lifetime from the workspace.
 It adds a heap and startup/snapshot costs, without routing ordinary HTTP requests through the workspace.
 
-The workspace registry reserves a name and code digest with a random allocation key before allocation.
+The workspace registry, shared with application installation, reserves a name and code digest with
+a random allocation key before allocation.
 The host records that key in the new worker's initial metadata, making allocation retryable without
 using diagnostic labels as identity.
 The registry retains the worker facade before evaluating resource code, providing an ordinary

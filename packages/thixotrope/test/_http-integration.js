@@ -94,7 +94,7 @@ export const registerHttpIntegration = (test, kind) => {
       await host.client.call('install', 'site', bundle, [['http', 'web']]);
       await host.client.call(
         'evaluate',
-        `E(E(apps).get('site')).start(${port})`,
+        `E(inventory.get('site')).start(${port})`,
       );
       // Use a fresh Node HTTP request: Node 24's fetch client cleanup assigns
       // an error message inherited as read-only under SES lockdown.
@@ -203,7 +203,7 @@ export const registerHttpIntegration = (test, kind) => {
       );
       await host.client.call(
         'evaluate',
-        `E(E(apps).get('site')).start(${port})`,
+        `E(inventory.get('site')).start(${port})`,
       );
       t.is(await request('GET', '/read'), '1\n');
       host.client.close();
@@ -212,7 +212,7 @@ export const registerHttpIntegration = (test, kind) => {
       t.is(await request('GET', '/read'), '1\n');
       t.is(await request('POST', '/incr'), '2\n');
       t.is(
-        await host.client.call('evaluate', "E(E(apps).get('site')).read()"),
+        await host.client.call('evaluate', "E(inventory.get('site')).read()"),
         '2n',
       );
       const store = makeFsStore(nodePowers, path);
@@ -223,11 +223,11 @@ export const registerHttpIntegration = (test, kind) => {
             !key.startsWith('transient:native:'),
         ),
       );
-      await host.client.call('evaluate', "E(E(apps).get('site')).close()");
+      await host.client.call('evaluate', "E(inventory.get('site')).close()");
       t.is(
         await host.client.call(
           'evaluate',
-          "E(E(apps).get('site')).status().then(s => s.status)",
+          "E(inventory.get('site')).status().then(s => s.status)",
         ),
         "'closed'",
       );
@@ -240,7 +240,7 @@ export const registerHttpIntegration = (test, kind) => {
       t.is(
         await host.client.call(
           'evaluate',
-          "E(E(apps).get('site')).status().then(s => s.status)",
+          "E(inventory.get('site')).status().then(s => s.status)",
         ),
         "'closed'",
       );
@@ -248,7 +248,7 @@ export const registerHttpIntegration = (test, kind) => {
         code: 'ECONNREFUSED',
       });
       t.is(
-        await host.client.call('evaluate', "E(E(apps).get('site')).read()"),
+        await host.client.call('evaluate', "E(inventory.get('site')).read()"),
         '2n',
       );
 
@@ -257,11 +257,11 @@ export const registerHttpIntegration = (test, kind) => {
       // stopping; the name is free for a fresh installation.
       await host.client.call(
         'evaluate',
-        `E(E(apps).get('site')).start(${port})`,
+        `E(inventory.get('site')).start(${port})`,
       );
       t.is(await request('GET', '/read'), '2\n');
       const adapter = nativeChildren.at(-1);
-      t.true(await host.client.call('removeNative', 'web'));
+      t.true(await host.client.call('remove', 'web'));
       await adapter.closed;
       await t.throwsAsync(() => request('GET', '/read'), {
         code: 'ECONNREFUSED',
