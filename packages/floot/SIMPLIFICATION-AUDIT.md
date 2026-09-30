@@ -7,6 +7,20 @@ The target is one owner per responsibility, not the smallest possible line count
 Fae compaction remains on hold.
 Process-loss recovery remains the separate investigation tracked in PR #1323.
 
+Current deployment: generation 189 runs app `604ec1a8d` and host `4a5ac8a`,
+including the September 30 setup/model/MCP deletions, admission/dispatch
+separation and four subsequent cleanup slices below.
+Those four slices remove 232 net runtime lines across the changed application
+packages: Claude conversion 3, broker constructors 89, provider selection 61,
+and public text protocol 79. No replacement framework is added.
+The four backend/shared packages total 42,712 non-test source lines versus the
+25,463 design baseline; this does not establish the overall size target.
+All four backends pass fresh lifecycle and ordinary restart
+acceptance. Earlier not-deployed notes describe the state when those slices landed.
+The architecture audit records exact coverage and the outstanding initial Claude
+tool-seed capture omission and FA-14's dropped tool error classification;
+no universal capture or process-loss claim is made.
+
 ## Native-context mechanism inventory, 2026-09-30
 
 Current-source follow-up at `59fe1a5bd`; this supplements the earlier inventory,
@@ -120,6 +134,155 @@ and the root documentation gate pass. This final wrapper/comment slice is not
 deployed; generation 186 contains the preceding native-context cleanup.
 
 ## Decisions on remaining parallel mechanisms
+
+### Account model authority and adapter deletions, 2026-09-30
+
+Codex's hosted `run.models()` used the native app-server catalog, while creation
+and admission used the provider/account catalog. Claude and OpenCode already use
+the latter for their hosted lists. Native descriptors were reduced to the same
+shared shape; no hosted consumer needed distinct native capability metadata.
+Codex now calls the existing `catalog.offered(subscription)` too: automatic pools
+exclude pinned-only members, and an explicitly pinned session lists only its
+account's models. The native-model normalization module and export are deleted.
+The low-level native query and its supervisor/daemon proxies are now deleted.
+Transport initialization tests use the existing checkpoint acknowledgement path;
+startup failure, cancellation, teardown and inherited-auth coverage remain.
+All 430 Codex tests, six supervisor tests and 16 session-owner tests pass.
+The three affected package typechecks and scoped lint pass; independent review
+approves the deletion and retained coverage.
+No credential owner, model admission rule or persisted plan changes.
+
+OpenCode's sole-caller storage parser-injection wrapper is also deleted.
+Its durable `make` module now calls the same shared storage constructor with the
+same roots and parser; the formula entrypoint is retained unchanged.
+Unused adapter MCP constants are removed without changing socket/config paths.
+These changes are not yet deployed.
+
+Setup follow-up removes the redundant remove-before-copy publication step and
+reuses `bindFlootBackend` in Codex. Directory `copy` already owns replacement;
+prepublication failure keeps the old binding, and retry remains possible.
+All 57 setup tests and both affected package typechecks pass; independent review
+approves. No persistent schema or environment names change. Not deployed.
+OpenCode's diagnostic-only MCP configuration file and adapter transport wrapper
+are now removed, retaining its actual `OPENCODE_CONFIG_CONTENT`.
+The shared MCP transport owns sockets and relay lifetime; adapters own only the
+configuration their native runtime actually consumes.
+Transport-only consumers omit the existing config builder; Claude still supplies
+its builder and receives its required config file under the same lifecycle fences.
+The seven transport tests now live in hosted-agent rather than OpenCode.
+Those tests, 22 focused Claude tests and all 299 remaining OpenCode tests pass.
+Root type build, all 14 type-contract tasks and documentation pass (zero errors,
+180 warnings); affected typechecks and scoped lint pass.
+Independent review approves. No durable owner or storage schema changes.
+Not deployed.
+
+The context review also reproduced a distinct intent/execution conflation:
+an `onBegun` cancellation before any native send leaves a cancelled turn carrying
+`nativeContextFormat`; a later Codex turn refuses it as unsafe native evidence.
+The correction separates admission (`begin`) from a write-ahead
+`dispatch-intent` acknowledged before either runtime may send.
+A declared context format is not evidence of native dispatch, and an empty
+observed stream is not proof that no dispatch happened.
+The journal explicitly records `not-dispatched` or `possibly-dispatched`.
+Only the former is omitted from model continuation; both remain in history.
+The marker is conservative across a lost acknowledgement and never claims that
+the backend executed anything or stopped safely.
+This is a journal-format replacement, not a migration: legacy admission events
+and version-2 snapshots/archives are rejected.
+Deployment must retire affected test sessions first, preserving host, Secrets,
+renewal owners and workspaces.
+All 777 Floot tests pass; Floot types and lint pass (zero errors, 286 warnings).
+Clean root type build, all 14 type-contract tasks and docs pass (zero errors,
+180 warnings). Independent adversarial review approves. Not deployed.
+Do not repair this by silently treating all empty cancelled turns as safe or by
+overloading transcript completeness with an undocumented dispatch guarantee.
+
+Context projection's duplicate Claude object/wrapper conversion
+is removed in favor of `claude-sandbox/src/claude-tool-input.js`, also used by
+the native transcript writer.
+Floot's composition boundary supplies a local comparison-key function only for
+`claude-code-jsonl-v1`; other formats compare exact argument text.
+Pairing, late-result reconciliation and collision handling remain in Floot.
+No remote API, descriptor schema, codec registry or durable state is added.
+This retains explicit Claude format knowledge in composition, not a claim of
+complete backend independence; the codec dependency is now a runtime dependency.
+All 36 projector tests and 27 Claude transcript tests pass, including real
+writer/read-back whitespace, scalar, string, array, null and malformed arguments,
+changed results, exact-default comparisons and unchanged source records.
+All 784 Floot tests pass, including reconstructed-agent coverage that fails if
+Claude's codec is omitted or incorrectly applied to another format.
+The separate 77-test integration run also checks unchanged durable arguments
+through a freshly loaded journal.
+Clean root declarations, all 14 type-contract tasks and documentation pass.
+Independent adversarial review approves the ownership split and tests.
+Not deployed; no journal schema or formula identity changes.
+
+Removed test-only vendor broker constructors: Claude's kit wrapper
+and unused service-kit wrapper, plus OpenCode's kit wrapper and transitional
+eager-start convenience entrypoint.
+Production service agents already compose `makeProviderBrokerServiceKit` directly
+with the vendor policy builder; those formula entrypoints and policies remain.
+Existing broker tests are retargeted to shared constructors, preserving admission,
+credential stripping, network and lifecycle assertions.
+This deletes 89 runtime lines without introducing replacement production wrappers.
+All 519 Claude and 299 OpenCode tests pass, including the 18 broker tests.
+Claude's package typecheck passes; OpenCode has no package TypeScript project.
+Both package lint runs have zero errors; the root documentation gate passes.
+Independent adversarial review approves the deletion and retained assertions.
+No deployment is claimed.
+
+Removed the direct-provider compatibility mismatch: Floot's constructor now takes
+explicit provider/model/key arguments instead of `FLOOT_*` and `LAL_*` aliases.
+Its sole production caller already has structured config and a resolved Secret;
+neither setup nor that caller supplied a custom host.
+The buffered Lal adapter and host inference are deleted.
+Previously, `lal` and unknown provider names silently selected default local
+Ollama, ignoring the caller's model and credential fields.
+Both runtime construction and setup now reject unsupported kinds; setup does so
+before host calls, credential access or resource acquisition.
+Anthropic/OpenRouter defaults and behavior remain; Lal's separate environment API
+is unchanged. Stale constructor fields reject rather than being ignored.
+The 787 Floot tests and package typecheck pass, including explicit selection,
+no-output-cap OpenRouter behavior, alias refusal and early setup rejection.
+Package lint has zero errors; formatting and the root documentation gate pass.
+Independent adversarial review approves; no stored schema, Secret ownership or
+rotation/cache behavior changes. Not deployed.
+
+Removed the public text-stream endpoint and HTTP fallback in
+`hosted-agent/src/provider-broker.js` and `provider-http.js`.
+HTTP now uses `requestByteStream` directly, with one reader protocol.
+The broker's legacy method, pool filter and `bytesOk` flag are deleted.
+The shared subscription interface and metered shares already expose only buffered
+`request` and `requestByteStream`, so text fallback is not the current contract.
+Byte-stream usage settlement, disconnect cancellation, size limits and response
+screening remain covered by the migrated behavioral tests.
+Do not delete the internal fetch transport's text reader: it is still the upstream
+stream implementation, not the obsolete public protocol.
+Do not classify buffered `request` as dead: it is advertised by subscriptions and
+metered shares and dynamically forwarded by the grant issuer and broker.
+This is a callable capability API even when native HTTP listeners do not use it.
+Migrated HTTP, broker, grant, worker and listener fixtures retain their security
+and lifecycle assertions; a legacy-only endpoint now refuses without invoking
+its text method.
+The EOF release regression exposed another defect: local iterator `return()`
+after EOF does not release the byte reader's source.
+HTTP now uses the byte reader's explicit `close()` for cleanup at every stage,
+including EOF; the regression waits for the source's release acknowledgement.
+All 774 shared hosted-agent tests pass (one skipped), including 137 focused
+HTTP/broker/grant tests and 29 bundled worker/listener tests.
+Independent adversarial review approves; the strengthened cancellation regression
+waits for an active upstream pull and cancellation before delivering the late chunk.
+Package types/lint, formatting and the root documentation gate pass.
+The Codex public-network operator probe now supplies a byte reader too; running
+that probe requires the rebuilt image and is part of deployment validation.
+The source change removes 79 runtime lines without adding a replacement protocol.
+Deployment must rebuild the provider-listener image (`worker-entry` imports
+`provider-http`), update all three listener pins and replace affected brokers.
+Generation 189 completes that coordinated listener/broker cutover.
+All four backends pass lifecycle and ordinary restart acceptance, with the failed
+OpenCode tool-selection attempt retained separately from its fresh passing run.
+The no-credential HTTP/HTTPS/guest-listener probe also passes and cleans up.
+Native image pins, six Secret bindings and credential/renewal/workspace roots remain.
 
 | Mechanisms | Different responsibilities | Decision |
 |---|---|---|

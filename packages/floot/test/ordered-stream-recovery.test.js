@@ -36,6 +36,7 @@ const fixture = async () => {
     backendId: 'test',
     modelId: 'test',
   });
+  await journal.dispatch(id);
   return {
     journal,
     id,

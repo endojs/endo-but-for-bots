@@ -11,7 +11,6 @@ const SupervisorInterface = M.interface('HostedSessionSupervisor', {
   activate: M.call(M.string(), M.remotable()).returns(M.promise()),
   send: M.call(M.string()).optional(M.record()).returns(M.promise()),
   interrupt: M.call().returns(M.promise()),
-  models: M.call().returns(M.promise()),
   acknowledge: M.call(M.string()).returns(M.promise()),
   status: M.call().returns(M.promise()),
   terminate: M.call(M.string(), M.remotable()).returns(M.promise()),
@@ -31,7 +30,6 @@ const SupervisorInterface = M.interface('HostedSessionSupervisor', {
  * @typedef {{send: (prompt: string, options?: any) => Promise<Reply>,
  *   interrupt: () => Promise<void>, status: () => Promise<any>,
  *   terminate: () => Promise<void>,
- *   models?: () => Promise<any>,
  *   acknowledge?: (checkpoint: string) => Promise<void>}} NativeClient
  */
 
@@ -149,7 +147,7 @@ export const makeHostedSessionSupervisor = ({
   };
   const owner = harden({ own, assertOpen });
   /**
-   * @param {'send' | 'models' | 'acknowledge' | 'interrupt'} method
+   * @param {'send' | 'acknowledge' | 'interrupt'} method
    * @param {any[]} args
    */
   const callProtocol = (method, args) => {
@@ -268,7 +266,6 @@ export const makeHostedSessionSupervisor = ({
       const client = resources.get('client')?.value;
       if (client) await callProtocol('interrupt', []);
     },
-    models: () => callProtocol('models', []),
     acknowledge: checkpoint => callProtocol('acknowledge', [checkpoint]),
     status: async () => {
       const client = resources.get('client')?.value;

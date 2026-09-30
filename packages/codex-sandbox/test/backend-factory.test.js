@@ -14,7 +14,6 @@ import {
   assertProviderGrantV1,
   assertContainerMounts,
   assertHostedAgentPolicyV1,
-  normalizeCodexModelDescriptor,
 } from '../backend-factory.js';
 
 const validPolicy = () =>
@@ -220,32 +219,6 @@ test('hosted descriptors cannot smuggle authority into Floot metadata', t => {
         }),
       ),
     { message: /invalid reasoning efforts/ },
-  );
-});
-
-test('Codex model schema is translated at the backend boundary', t => {
-  t.deepEqual(
-    normalizeCodexModelDescriptor(
-      harden({
-        id: 'gpt-test',
-        displayName: 'GPT Test',
-        description: 'Pinned schema fixture',
-        isDefault: true,
-        defaultReasoningEffort: 'medium',
-        supportedReasoningEfforts: harden([
-          harden({ reasoningEffort: 'low' }),
-          harden({ reasoningEffort: 'medium' }),
-        ]),
-      }),
-    ),
-    {
-      id: 'gpt-test',
-      title: 'GPT Test',
-      description: 'Pinned schema fixture',
-      default: true,
-      defaultReasoningEffort: 'medium',
-      reasoningEfforts: ['low', 'medium'],
-    },
   );
 });
 

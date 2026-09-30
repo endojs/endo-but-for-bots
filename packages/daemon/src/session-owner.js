@@ -54,7 +54,6 @@ const OwnerInterface = M.interface('SessionOwner', {
 const ClientInterface = M.interface('SessionClient', {
   send: M.callWhen(M.string()).optional(M.record()).returns(M.any()),
   interrupt: M.callWhen().returns(M.undefined()),
-  models: M.callWhen().returns(M.array()),
   acknowledge: M.callWhen(M.string()).returns(M.undefined()),
   status: M.callWhen().returns(M.any()),
   help: M.call().returns(M.string()),
@@ -505,22 +504,6 @@ export const makeSessionOwner = ({
         const value = await target();
         assertOpen();
         return E(value).interrupt();
-      },
-      models: async () => {
-        const value = await target();
-        assertOpen();
-        const models = await E(value).models();
-        assertOpen();
-        assertCopyData(models);
-        // The guard promises an array, and `assertCopyData` alone admits any
-        // pure data -- including `undefined`. Refuse here rather than at the
-        // exo boundary, so the message names the backend rather than a guard.
-        // Written as a statement rather than `Array.isArray(models) || Fail`
-        // because only control flow narrows the value for the return below.
-        if (!Array.isArray(models)) {
-          throw Fail`Session backend did not answer with a model list`;
-        }
-        return models;
       },
       acknowledge: async checkpoint => {
         const value = await target();

@@ -372,9 +372,7 @@ const fixture = (t, { realClient = false } = {}) => {
           socketPath: `${options.socketDir}/mcp.sock`,
           socketName: 'mcp.sock',
           stdioBridgeName: 'mcp-stdio-bridge.mjs',
-          configFileName: 'mcp.json',
           innerDir: '/endo-mcp',
-          innerConfigPath: '/endo-mcp/mcp.json',
           async start() {
             events.push('start mcp');
             if (faults.mcpStart) throw Error('mcp startup failed');
@@ -493,10 +491,11 @@ test('native controller construction is inert; activation uses copy paths and no
   t.is(options.network, 'broker-only');
   t.is(options.policy.brokerSidecar.container, `${SANDBOX_A}`);
   t.is(options.env.OPENROUTER_API_KEY, 'opencode-broker-placeholder');
-  t.is(
-    JSON.parse(options.env.OPENCODE_CONFIG_CONTENT).mcp.endo.command[2],
-    '/endo-mcp/mcp.sock',
-  );
+  t.deepEqual(JSON.parse(options.env.OPENCODE_CONFIG_CONTENT).mcp.endo, {
+    type: 'local',
+    command: ['node', '/endo-mcp/mcp-stdio-bridge.mjs', '/endo-mcp/mcp.sock'],
+    enabled: true,
+  });
   const [, mounterEnv] = f.events.find(
     event => Array.isArray(event) && event[0] === 'mounter',
   );

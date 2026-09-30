@@ -4,7 +4,10 @@ import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 import { admitsModels } from '@endo/hosted-agent/test/admits-models.js';
-import { makeProviderBrokerServiceKit } from '@endo/hosted-agent/provider-broker-service.js';
+import {
+  makeProviderBrokerKit,
+  makeProviderBrokerServiceKit,
+} from '@endo/hosted-agent/provider-broker-service.js';
 
 import {
   ANTHROPIC_MESSAGES_PATH,
@@ -12,7 +15,6 @@ import {
   ANTHROPIC_VERSION,
   DEFAULT_OAUTH_BETA,
   buildClaudeBrokerPolicy,
-  makeClaudeBrokerKit,
 } from '../src/claude-broker.js';
 import {
   makeOwnedClaudeBrokerService,
@@ -321,8 +323,13 @@ const makeFakeRuntime = () => {
 // The account authority the fixture broker serves: the id its grants report.
 const CLAUDE_BROKER_ACCOUNT = 'claude-main';
 
-const brokerOptions = (runtime, overrides = {}) => ({
-  accountAuthority: CLAUDE_BROKER_ACCOUNT,
+const brokerOptions = (
+  runtime,
+  { credentialKind = 'apiKey', anthropicBeta = undefined, ...overrides } = {},
+) => ({
+  accountRef: CLAUDE_BROKER_ACCOUNT,
+  label: 'Claude',
+  policy: buildClaudeBrokerPolicy({ credentialKind, anthropicBeta }),
   secret: Far('secret', {
     async readBase64() {
       return btoa('sk-ant-api03-key');
@@ -334,7 +341,6 @@ const brokerOptions = (runtime, overrides = {}) => ({
   imageDigest: digest,
   listenerImageRef,
   admits: admitsModels(models),
-  credentialKind: 'apiKey',
   fetch: async () => new Response('ok'),
   runtime,
   ...overrides,
@@ -342,9 +348,9 @@ const brokerOptions = (runtime, overrides = {}) => ({
 
 /** Start a broker over the fake runtime and dispose it with the test. */
 const startBroker = async (t, runtime, overrides = {}) => {
-  const kit = makeClaudeBrokerKit(brokerOptions(runtime, overrides));
-  const broker = await kit.start();
+  const kit = makeProviderBrokerKit(brokerOptions(runtime, overrides));
   t.teardown(() => kit.close());
+  const broker = await kit.start();
   return broker;
 };
 
@@ -499,7 +505,7 @@ test('the kit refuses an unpinned image, a bad operator identity, and an unknown
    * @param {RegExp} message
    */
   const refuse = (overrides, message) =>
-    t.throws(() => makeClaudeBrokerKit(brokerOptions(runtime, overrides)), {
+    t.throws(() => makeProviderBrokerKit(brokerOptions(runtime, overrides)), {
       message,
     });
   refuse({ imageDigest: 'localhost/claude' }, /digest must be pinned/);

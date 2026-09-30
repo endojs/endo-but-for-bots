@@ -26,7 +26,6 @@ const makeHarness = () => {
     },
     interrupt: async () => {},
     status: async () => 'running',
-    models: async () => harden([{ id: 'native-model' }]),
     acknowledge: async checkpoint => {
       calls.push(['acknowledge', checkpoint]);
     },
@@ -84,11 +83,10 @@ test('record inspection and client forwarding acquisition remain passive', async
   ]);
 });
 
-test('model discovery and checkpoint acknowledgement use the fenced incarnation', async t => {
+test('checkpoint acknowledgement uses the fenced incarnation', async t => {
   const h = makeHarness();
   await E(h.owner).create('a', 'approved plan', h.refs);
   const client = await E(h.owner).client('a');
-  t.deepEqual(await E(client).models(), [{ id: 'native-model' }]);
   await E(client).acknowledge('checkpoint-1');
   t.true(
     h.calls.some(
@@ -97,7 +95,6 @@ test('model discovery and checkpoint acknowledgement use the fenced incarnation'
   );
   await E(h.owner).stop('a');
   const calls = h.calls.length;
-  await t.throwsAsync(E(client).models(), { message: /stopped/ });
   await t.throwsAsync(E(client).acknowledge('checkpoint-2'), {
     message: /stopped/,
   });

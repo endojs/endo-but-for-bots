@@ -11,6 +11,49 @@ import {
 } from '../src/hosted-turn.js';
 import { usageCounts } from './helpers/usage.js';
 
+test('dispatch persistence gates hosted send and precedes cancellation observation', async t => {
+  t.timeout(5000);
+  const calls = [];
+  const client = harden({
+    async send() {
+      calls.push('send');
+      return readerFromIterator(
+        (async function* () {
+          yield { type: 'abort', reason: 'sent' };
+        })(),
+      );
+    },
+    async interrupt() {
+      calls.push('interrupt');
+    },
+  });
+  await t.throwsAsync(
+    runHostedTurn({
+      client,
+      text: 'not sent',
+      writer: {},
+      beforeSend: async () => {
+        throw Error('marker write failed');
+      },
+    }),
+    { message: 'marker write failed' },
+  );
+  t.deepEqual(calls, []);
+  const controller = new AbortController();
+  const result = await runHostedTurn({
+    client,
+    text: 'cancelled during marker write',
+    writer: {},
+    signal: controller.signal,
+    beforeSend: async () => {
+      calls.push('marker');
+      controller.abort();
+    },
+  });
+  t.false(result.delivered);
+  t.deepEqual(calls, ['marker']);
+});
+
 for (const mode of [
   'abort',
   'text',

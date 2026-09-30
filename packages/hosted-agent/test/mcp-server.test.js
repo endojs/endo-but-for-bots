@@ -18,9 +18,9 @@ import { join } from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline';
 
-import { makeMcpSocketServer } from '../src/mcp-socket-server.js';
+import { makeHostedMcpSocketServer as makeMcpSocketServer } from '../src/mcp-server.js';
 
-test('installs the shared standalone relay with OpenCode config and private permissions', async t => {
+test('transport-only server installs the relay without generating native configuration', async t => {
   t.timeout(5000);
   const directory = await mkdtemp(join(tmpdir(), 'opencode-mcp-'));
   t.teardown(() => rm(directory, { recursive: true, force: true }));
@@ -29,29 +29,19 @@ test('installs the shared standalone relay with OpenCode config and private perm
     bridge: {
       handleMessage: async message => ({ id: message.id, result: 'ok' }),
     },
+    writeConfig: async () =>
+      t.fail('Transport-only server must not write config'),
   });
   t.teardown(() => server.close());
   await server.start();
-  const configPath = join(directory, server.configFileName);
-  const config = JSON.parse(await readFile(configPath, 'utf8'));
-  t.deepEqual(config, {
-    mcp: {
-      endo: {
-        type: 'local',
-        command: [
-          'node',
-          '/endo-mcp/mcp-stdio-bridge.mjs',
-          '/endo-mcp/mcp.sock',
-        ],
-        enabled: true,
-      },
-    },
+  t.false('configFileName' in server);
+  t.false('innerConfigPath' in server);
+  await t.throwsAsync(() => stat(join(directory, 'mcp.json')), {
+    code: 'ENOENT',
   });
   // File mode bits are a bit field.
   // eslint-disable-next-line no-bitwise
   t.is((await stat(directory)).mode & 0o777, 0o700);
-  // eslint-disable-next-line no-bitwise
-  t.is((await stat(configPath)).mode & 0o777, 0o600);
   // eslint-disable-next-line no-bitwise
   t.is((await stat(server.socketPath)).mode & 0o777, 0o600);
 
@@ -149,6 +139,8 @@ test('close drains admitted relay installation and fences later startup effects'
       entered();
       await pending;
     },
+    // Exercise the optional-config path's shutdown fence too.
+    buildConfig: () => ({}),
     writeConfig: async () => {
       writes += 1;
     },

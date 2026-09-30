@@ -151,7 +151,7 @@ export const hostedTurnPartialOf = error =>
 harden(hostedTurnPartialOf);
 
 /**
- * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, transcript?: readonly any[], recordToolEvent?: (event: any) => Promise<void>, recordTranscript?: (ordinal: string, record: any) => Promise<void>, completeTranscript?: (count: string) => Promise<void>, maxRetainedChars?: number }} options
+ * @param {{ client: any, text: string, writer: any, signal?: AbortSignal, model?: string, reasoningEffort?: string, systemPrompt?: string, acknowledgedCheckpoint?: string, transcript?: readonly any[], beforeSend?: () => Promise<void>, recordToolEvent?: (event: any) => Promise<void>, recordTranscript?: (ordinal: string, record: any) => Promise<void>, completeTranscript?: (count: string) => Promise<void>, maxRetainedChars?: number }} options
  */
 export const runHostedTurn = async ({
   client,
@@ -163,6 +163,7 @@ export const runHostedTurn = async ({
   systemPrompt,
   acknowledgedCheckpoint,
   transcript,
+  beforeSend,
   recordToolEvent,
   recordTranscript,
   completeTranscript,
@@ -201,6 +202,9 @@ export const runHostedTurn = async ({
     });
     journalText = '';
   };
+  // Journal dispatch intent before granting the backend the prompt. Failure
+  // here is not a producer failure: no send or interruption has been issued.
+  if (!signal?.aborted && beforeSend) await beforeSend();
   if (signal?.aborted) {
     return harden({
       delivered: false,

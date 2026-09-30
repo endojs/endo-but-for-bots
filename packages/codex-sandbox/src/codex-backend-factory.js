@@ -9,13 +9,12 @@
 // the operator's container mounts, a working directory that is always the
 // workspace, a reasoning effort the provider declares per model, a real
 // checkpoint acknowledgement (continuity is opaque and reconciled through
-// the client), and the model list the client itself answers.
+// the client). Account catalogs, not the native transport, own model listings.
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeHostedBackendFactory } from '@endo/hosted-agent/backend-factory-kit.js';
 
-import { normalizeCodexModelDescriptor } from './codex-models.js';
 import { assertContainerMounts } from './codex-hosted-policy.js';
 import { CODEX_TOOL_NAMES, withEndoToolInstructions } from './endo-tools.js';
 
@@ -84,14 +83,13 @@ export const makeCodexBackendFactory = ({
         Fail`Codex reasoning effort must be a bounded string`;
       return effort ? { reasoningEffort: effort } : {};
     },
-    makeRun: ({ client, spec }) => ({
+    makeRun: ({ client, spec, subscription }) => ({
       send: (prompt, options) =>
         E(client).send(
           prompt,
           withEndoToolInstructions(options, spec.systemPrompt),
         ),
-      models: async () =>
-        harden((await E(client).models()).map(normalizeCodexModelDescriptor)),
+      models: () => catalog.offered(subscription),
       interrupt: () => E(client).interrupt(),
       acknowledge: checkpoint => E(client).acknowledge(checkpoint),
       status: () => E(client).status(),

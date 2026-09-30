@@ -45,7 +45,6 @@ test('checkpoint acknowledgement drains before stop completes without delaying f
         interrupt: async () => undefined,
         status: async () => harden({}),
         terminate: async () => undefined,
-        models: async () => harden([{ id: 'native-model' }]),
         acknowledge: async checkpoint => {
           t.is(checkpoint, 'checkpoint-1');
           entered.resolve(undefined);
@@ -55,7 +54,6 @@ test('checkpoint acknowledgement drains before stop completes without delaying f
     },
   });
   await E(supervisor).activate('plan', resolver);
-  t.deepEqual(await E(supervisor).models(), [{ id: 'native-model' }]);
   const acknowledging = E(supervisor).acknowledge('checkpoint-1');
   await entered.promise;
   const stopping = E(supervisor).terminate('plan', resolver);
@@ -68,7 +66,6 @@ test('checkpoint acknowledgement drains before stop completes without delaying f
   await t.throwsAsync(E(supervisor).acknowledge('late'), {
     message: /stopping/,
   });
-  await t.throwsAsync(E(supervisor).models(), { message: /stopping/ });
   committed.resolve(undefined);
   await Promise.all([acknowledging, stopping]);
   t.like(await E(supervisor).status(), { stopped: true });

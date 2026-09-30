@@ -16,14 +16,117 @@ Priority current-state review (updated 2026-09-30):
 the intended end state, rather than reviewing historical commits. It is the
 current prioritization entry point: primary ownership and explicit account identity
 are consolidated, and the native protocol-conformance matrix is complete.
-All four backends pass generation-187 acceptance on app `a4c97588a`, host `a5a4a7d`.
-The daemon cleanup changes use generation-186's unchanged image pins; fresh
+All four backends pass generation-189 acceptance on app `604ec1a8d`, host `4a5ac8a`.
+The release uses unchanged native image pins and the byte-only provider listener;
+fresh
 Claude/Codex restart recall retains native checkpoints on both completed turns.
 Simplicity is still unproven, and whole-context/unresolved-evidence memory bounds
 remain incomplete. Direct-Fae compaction, evidence paging, local-development
 storage policy and native process-loss recovery retain their explicit deferrals.
 Consult the alignment document before treating historical introductions or
 chronological progress entries below as current implementation status.
+
+Priority reaffirmed by the operator: reduce duplicated code, remove dead code,
+and clearly separate ontological responsibilities. Validation is a gate, not an
+independent refactor objective.
+Latest source cleanup shares Claude's argument encoding between its writer and
+Floot's composition boundary, deleting the duplicate conversion from context
+projection. Floot retains evidence matching; non-Claude formats compare exact
+argument text. The 784-test Floot suite and 27 Claude transcript tests pass;
+independent review approves. This cleanup is deployed in generation 189.
+The next source cleanup deletes four unused/test-only Claude/OpenCode broker
+constructors (89 runtime lines). Production already uses shared broker services;
+vendor policies and formula entrypoints remain unchanged.
+All 519 Claude and 299 OpenCode tests pass; independent review approves.
+Floot's runtime provider constructor now takes explicit provider/model/key
+configuration; environment aliases, host inference and the buffered Lal fallback
+are removed. Unsupported provider kinds reject before setup acquires resources.
+The 787 Floot tests and typecheck pass; independent review approves.
+These changes preserve stored provider config and Secrets and are deployed in generation 189.
+The legacy public text-stream endpoint and listener fallback are removed in
+newer source, with the byte-stream protocol owning HTTP delivery and cleanup.
+This also fixes byte-reader release after EOF.
+All 774 hosted-agent tests pass (one skipped); generation 189 completes the
+updated listener image and coordinated broker replacement gates.
+Fresh Claude/Codex/OpenCode lifecycle and all four ordinary restart scopes pass.
+The first OpenCode auto-free seed used Endo's JavaScript tool rather than native
+shell and failed correctly; a fresh run passes with an explicit test-prompt
+distinction, without replay or weakened evidence checks.
+All disposable test sessions are removed; private evidence remains in endo-host's
+deployment record. The missing initial Claude checkpoint repeats, and the source
+trace now records FA-14's shared tool-error classification gap below.
+The preceding simplification slice removes Codex's
+second hosted model-list authority in favor of the same account catalog used by
+admission, deletes its native-descriptor normalization API, removes OpenCode's
+redundant storage wrapper, and deletes unused MCP constants.
+The [simplification inventory](SIMPLIFICATION-AUDIT.md#account-model-authority-and-adapter-deletions-2026-09-30)
+records the ownership decisions, native-query retirement, and next concrete
+deletion candidates. Existing formula identities and durable owners are unchanged;
+these simplifications are deployed on generation 188.
+Validation: 430 Codex tests and 53 focused storage/controller/MCP tests pass.
+The catalog regression uses the same declared subscriptions for the factory and
+catalog, proves automatic exclusion and explicit pinned-account selection, and
+cannot fall back to a native model query. Codex types, scoped lint, formatting,
+the clean root type build, all 14 type-contract tasks, and documentation pass
+(documentation: zero errors, 180 warnings). Independent adversarial review approves.
+
+Setup simplification follow-up: shared backend publication no longer removes the
+live binding before overwrite-copy, and Codex reuses `bindFlootBackend` rather
+than maintaining a second profile-publication block.
+The existing daemon directory operation owns replacement; no new publication
+protocol, durable record or environment alias is introduced.
+A regression injects rejection before copy publication, preserves the live binding,
+and retries the staged replacement. It does not claim an arbitrary lost
+acknowledgement leaves the old identity in place.
+All 57 shared/Claude/Codex/OpenCode setup tests pass, shared and Codex typechecks
+pass, and scoped lint reports zero errors. Independent review approves.
+Deployed on generation 188.
+
+Native model-query retirement: the Codex client, shared supervisor and daemon
+session owner no longer expose a second discovery path.
+Provider/account catalogs own model discovery; native clients own execution and
+checkpoint acknowledgement.
+All 430 Codex tests, six supervisor tests and 16 session-owner tests pass, retaining
+initialization, cancellation and teardown coverage through existing protocol calls.
+Affected package typechecks and scoped lint pass; independent review approves.
+No persistent schema, formula entrypoint or credential ownership changes.
+Deployed on generation 188.
+
+MCP ownership cleanup: OpenCode no longer writes an unused diagnostic config or
+wraps the shared transport; its native config remains in `OPENCODE_CONFIG_CONTENT`.
+Claude retains its consumed config file and the existing startup/close fences.
+Seven transport tests move to hosted-agent, preserving lifecycle and cleanup
+coverage. They pass alongside 22 focused Claude tests and all 299 OpenCode tests.
+Affected package typechecks, scoped lint, clean root type build, all 14
+type-contract tasks and docs pass (zero errors, 180 warnings).
+Independent review approves; no durable owner or storage schema changes.
+Deployed on generation 188.
+
+Current ontology correction: turn admission is not backend dispatch.
+The reproduced pre-send cancellation defect is addressed by a `begin` record
+followed by a write-ahead `dispatch-intent` before either runtime sends.
+History retains undispatched requests; model continuation excludes only explicit
+`not-dispatched` records, never a turn inferred safe from an empty stream.
+`possibly-dispatched` remains conservative after failed or uncertain delivery.
+This replaces the journal format rather than supporting old event names;
+affected test sessions must be retired before deployment, preserving host,
+Secrets, renewal owners and workspaces.
+All 777 Floot tests pass, including pre-send cancellation and revival, failed
+marker publication/lost acknowledgement, conservative native send failures,
+and rejection of contradictory snapshot/archive records.
+Floot types and lint pass (zero lint errors, 286 warnings); clean root type build,
+all 14 type-contract tasks and docs pass (zero documentation errors, 180 warnings).
+Independent adversarial review approves. Deployed on generation 188 after
+retaining workspace roots and retiring the three old-format sessions.
+The six Secret bindings are unchanged.
+All hosted backends pass tool use, policy changes, cancellation and deletion;
+Fae auto-free passes tool use, pending cancellation and deletion.
+All four pass ordinary restart recall, with Claude/Codex native checkpoints on
+both completed turns. This does not establish native process-loss recovery.
+The host deployment record documents exact manifests and the missing native
+checkpoint on Claude's initial tool-heavy seed; later policy/restoration turns
+captured successfully. Investigate that omission rather than claiming universal
+capture fidelity.
 
 Current durability evidence includes a generation-186 retirement correction:
 removing broker/source pet names does not withdraw capabilities already stored
@@ -1483,6 +1586,7 @@ deployment, preserving Secrets, renewal credentials, and workspaces.
 | FA-11 | Medium | Floot retains migration and compatibility scaffolding | Reachable legacy branches | Positional API, usage cache, legacy registry import and private-journal migration removed; deployed since generation 159 and verified against Tokyo's inventory (2026-09-22); Tokyo's persisted one-shot helper formulas and stale state retired 2026-09-22 (see "Legacy retirement — 2026-09-22") |
 | FA-12 | Medium | Credential shims and obsolete API wrappers remain | Compatibility entrypoints | Broker wrapper and credential shims removed; deployed since generation 159; the 2026-09-22 inventory finds only shared entrypoints in the host-root-reachable graph; two dormant direct-provider formulas pinned to a pruned release remain for a decision |
 | FA-13 | High | Host image builder does not match shared-base Containerfile | Stale live integration | Shared-base images built, deployed, and restart-verified; scoped cutover matrix passed |
+| FA-14 | High | Explicit tool failure status is lost from durable evidence | Source-proven ontology gap; live error-text observation | Open; preserve classification in the existing shared journal/projection path, not another store or error-text heuristic |
 
 ## FA-01 — Archived failures are missing from normal history
 
@@ -4438,6 +4542,43 @@ activation followed later as recorded below. Later app commits only update this 
 
 Completion: replace/remove the obsolete builder in favor of the shared image pipeline;
 verify the missing-image path, pinned artifacts, storage admission, and all runner overlays.
+
+## FA-14 — Preserve explicit tool outcome classification
+
+Discovered during generation-189 acceptance on September 30.
+The first OpenCode auto-free seed calls Endo `exec` with an unsupported `timeout`
+argument. Its transcript retains the refusal text but no normalized `failed` flag.
+The MCP wire uses `isError`; the canonical transcript uses `failed`.
+These are distinct representations, not property aliases to accept interchangeably.
+No evidence attributes this problem to the provider-listener change.
+
+Two shared source paths demonstrably lose authoritative classification:
+
+- `src/hosted-turn.js`'s `tool-result` branch ignores native `event.ok`/`error`,
+  then emits context, observed journal evidence and UI results containing text only.
+  OpenCode's mapper does emit `ok: false` for native error states.
+- `agent.js`'s `journaledToolCall` catches actual host execution rejection but
+  persists only an `Error: …` string. Its caller correctly rethrows, and shared
+  `mcp-bridge.js` therefore emits MCP `isError: true`; that does not make the
+  missing journal classification durable.
+
+`turn-journal.js` settles those records with result text only.
+`turn-evidence.js` and `transcript-projection.js` recover/reconcile text without
+failure status, and the reply writer contracts only id/name/result.
+Canonical records already carrying `failed` can survive the ordinary path,
+but a one-line hosted recording fix would not repair host-only or recovered evidence.
+The live transcript alone does not prove whether the native OpenCode CLI also
+flattens MCP `isError` before mapping; isolate that boundary separately if needed.
+
+The smallest coherent follow-up uses one explicit outcome representation through
+the existing journal, reconciliation and presentation path, mapping native and
+MCP flags at their respective boundaries. Do not infer failure from an `Error:`
+prefix or add a second outcome journal. A failed tool response is a settled
+response, not proof of undone effects, automatic whole-turn failure, or permission
+to replay. Cover successful and failed native/mediated tools, journal revival,
+archival and recovered/late results; keep unknown outcomes distinct.
+The acceptance helper must inspect canonical `failed`, not the MCP wire property.
+Implementation and durability validation are pending.
 
 ## Preserve these boundaries
 

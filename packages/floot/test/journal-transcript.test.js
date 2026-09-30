@@ -46,6 +46,7 @@ test('completion seals the exact frontier and survives a snapshot', async t => {
   const { powers, values, writes } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   for (let index = 0; index < 61; index += 1) {
     // eslint-disable-next-line no-await-in-loop
     await journal.recordTranscript(id, `${index}`, message('text'));
@@ -78,6 +79,7 @@ test('ordered transcript survives snapshots and full-content duplicate compariso
   const { powers, writes } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   const large = message('a'.repeat(9000));
   await journal.recordTranscript(id, '0', large);
   await journal.append(id, {
@@ -98,8 +100,8 @@ test('ordered transcript survives snapshots and full-content duplicate compariso
   });
   await journal.append(id, { type: 'finish', state: 'completed' });
   const before = await journal.get(id);
-  t.is(before.transcript[0].sequence, '2');
-  t.is(before.transcript[1].sequence, '4');
+  t.is(before.transcript[0].sequence, '3');
+  t.is(before.transcript[1].sequence, '5');
   t.true(writes.some(name => name.startsWith('floot-turn-snapshot-')));
   const revived = makeTurnJournal(powers);
   t.deepEqual(await revived.get(id), before);
@@ -121,6 +123,7 @@ test('transcript rejects invalid input before storing content or events', async 
   const { powers, writes } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   for (const ordinal of ['1', '00', '-1', '1e0', '65536']) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(
@@ -138,18 +141,19 @@ test('transcript rejects invalid input before storing content or events', async 
     }),
     { message: /settled/ },
   );
-  t.is(writes.length, 1);
+  t.is(writes.length, 2);
   const revived = makeTurnJournal(powers);
   await t.throwsAsync(revived.recordTranscript(id, '0', message('late')), {
     message: /recovered turn/,
   });
-  t.is(writes.length, 1);
+  t.is(writes.length, 2);
 });
 
 test('transcript aggregate bound is retained across snapshot reconstruction', async t => {
   const { powers, writes } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   const large = message('x'.repeat(8 * 1024 * 1024));
   await journal.recordTranscript(id, '0', large);
   await t.throwsAsync(journal.recordTranscript(id, '1', large), {
@@ -180,10 +184,11 @@ for (const [where, after] of publicationFailures) {
     const { powers, values, fail } = fixture();
     const journal = makeTurnJournal(powers);
     const id = await journal.begin(options);
+    await journal.dispatch(id);
     const target =
       where === 'content'
-        ? 'floot-turn-content-00000000000000000002-payload'
-        : 'floot-turn-event-00000000000000000002';
+        ? 'floot-turn-content-00000000000000000003-payload'
+        : 'floot-turn-event-00000000000000000003';
     fail(target, after);
     const checkpoint = harden({
       kind: 'compaction',
@@ -203,7 +208,7 @@ for (const [where, after] of publicationFailures) {
       t.is(record.transcript, undefined);
     }
     if (where === 'event')
-      t.true(values.has('floot-turn-content-00000000000000000002-payload'));
+      t.true(values.has('floot-turn-content-00000000000000000003-payload'));
   });
 }
 
@@ -211,6 +216,7 @@ test('reconstruction rejects corrupt transcript snapshot indexes and budgets', a
   const { powers, values } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.recordTranscript(id, '0', message('a'.repeat(9000)));
   for (let index = 1; index < 63; index += 1) {
     // eslint-disable-next-line no-await-in-loop
@@ -268,6 +274,7 @@ for (const storage of ['event', 'snapshot', 'archive']) {
     const { powers, values, reads } = fixture();
     const journal = makeTurnJournal(powers);
     const id = await journal.begin(options);
+    await journal.dispatch(id);
     await journal.recordTranscript(id, '0', {
       kind: 'compaction',
       summary: 's'.repeat(9000),
@@ -278,11 +285,13 @@ for (const storage of ['event', 'snapshot', 'archive']) {
       // eslint-disable-next-line no-await-in-loop
       const next = await journal.begin(options);
       // eslint-disable-next-line no-await-in-loop
+      await journal.dispatch(next);
+      // eslint-disable-next-line no-await-in-loop
       await journal.append(next, { type: 'finish', state: 'completed' });
     }
     const name =
       storage === 'event'
-        ? 'floot-turn-event-00000000000000000002'
+        ? 'floot-turn-event-00000000000000000003'
         : [...values.keys()].find(key =>
             key.startsWith(`floot-turn-${storage}-`),
           );
@@ -319,6 +328,7 @@ test('full external payload validation is lazy and checks canonical content and 
   const { powers, values } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.recordTranscript(id, '0', message('a'.repeat(9000)));
   const entry = (await journal.get(id)).transcript[0];
   const original = values.get(entry.payloadRef.name);
@@ -336,8 +346,9 @@ test('event replay rejects noncanonical inline transcript records', async t => {
   const { powers, values } = fixture();
   const journal = makeTurnJournal(powers);
   const id = await journal.begin(options);
+  await journal.dispatch(id);
   await journal.recordTranscript(id, '0', message('small'));
-  const name = 'floot-turn-event-00000000000000000002';
+  const name = 'floot-turn-event-00000000000000000003';
   values.set(name, harden({ ...values.get(name), payload: '{}' }));
   const revived = makeTurnJournal(powers);
   await t.throwsAsync(revived.get(id));

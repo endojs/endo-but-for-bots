@@ -624,13 +624,13 @@ New package `packages/opencode-sandbox/`.
 | `setup-hosted.js` | Session dirs, credential provisioning, mint `opencode-sandbox/backend`, bind at `floot/controller-profile/opencode-backend` | `claude-sandbox/setup-hosted.js:223-256`; Tokyo `provideManagedCredentials` |
 | `src/opencode-backend-factory.js` | `HostedBackendFactoryInterface`; lifecycle ordering, live ownership, teardown barriers | `claude-backend-factory.js` |
 | `src/opencode-backend-module.js` | Records each session's plan and exact dependencies with the daemon session owner (`provideSessionOwner`) and starts the native controller; no per-session formulas | replaces the deleted per-session provisioner |
-| `src/opencode-session-plan.js`, `src/opencode-session-storage.js` | OpenCode's field list over the shared primitives in `@endo/hosted-agent/session-plan.js`; the storage owner is `@endo/hosted-agent/session-storage.js` over that parser, bound to `<root>/<sandboxSessionId>` | new; the client-formula creation module is deleted |
+| `src/opencode-session-plan.js`, `src/opencode-session-storage-module.js` | OpenCode's field list over the shared primitives in `@endo/hosted-agent/session-plan.js`; the durable formula entrypoint directly constructs `@endo/hosted-agent/session-storage.js` with that parser, bound to `<root>/<sandboxSessionId>` | the parser-injection wrapper and client-formula creation module are deleted |
 | `src/opencode-native-controller.js` | Activate the recorded plan, acquire scopes, project the workspace, configure MCP and the slice, and construct the protocol client under the shared supervisor | `@endo/hosted-agent/session-supervisor.js` |
 | `src/opencode-client.js` | Spawn/command the bridge; session-id handoff; pending-call count; terminal barrier | `codex-client.js` + `claude-client.js` |
 | `src/opencode-bridge.mjs` | In-slice: start `opencode serve`, parse listening line, subscribe SSE, nd-JSON commands/events, summary filtering, terminal derivation, turn bounds | new; baked into the image |
 | `src/opencode-protocol.js` | SSE + nd-JSON framing, event normalization, message registry | `codex-protocol.js` |
 | (no separate hosted-events module: the bridge emits the hosted vocabulary directly, `src/opencode-transcript.js` maps transcript records to and from the import route's turns) | | |
-| `@endo/hosted-agent/mcp-bridge.js`, `@endo/hosted-agent/mcp-stdio-bridge.js`, `src/mcp-socket-server.js` | Shared protocol core + relay; opencode config generator | hosted-agent |
+| `@endo/hosted-agent/mcp-bridge.js`, `@endo/hosted-agent/mcp-server.js`, `src/opencode-mcp-config.js` | Shared protocol core, socket owner and relay; OpenCode supplies only its native configuration inside `OPENCODE_CONFIG_CONTENT`, with no duplicate diagnostic file | hosted-agent |
 | `src/managed-credentials*.js` | SecretBlob-backed cap; **ported from `f13c7cbd9`** | `f13c7cbd9:…/managed-credentials.js` |
 | `src/opencode-agent-config.js` | Host-side `OPENCODE_CONFIG_CONTENT` builder: hard-coded `provider.openrouter` block (baseURL, `models`, `whitelist`), agent `prompt`/`disable:false`/`mode`, MCP, permissions | new |
 | `src/opencode-hosted-policy.js` (mount table + `assertContainerMounts`) | Adapter policy declarations; pinned rootfs parsing and current specifiers come directly from hosted-agent. The unused default-image selection parser is retired. | hosted-agent |
@@ -876,8 +876,9 @@ New package `packages/opencode-sandbox/`.
 
 ## Shared public egress integration
 
-The host-only `makeOpencodeBroker` composition accepts `publicInternet: true`
-to issue separately revocable public-egress capabilities alongside inference.
+The host-only service agent supplies the OpenRouter policy to the shared
+`makeProviderBrokerServiceKit`, accepting `publicInternet: true` to issue
+separately revocable public-egress capabilities alongside inference.
 It uses the shared hosted-agent listeners and destination filtering; the guest
 still receives no real provider credential.
 The hosted backend's public session path uses it: `makePublicNetworkEnvironment`

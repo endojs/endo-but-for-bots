@@ -954,17 +954,6 @@ export const makeProviderBrokerGrant = (
         ),
       ).returns(M.promise()),
 
-      requestStream: M.call(
-        M.splitRecord(
-          {
-            method: M.string(),
-            path: M.string(),
-            body: BodyShape,
-          },
-          { headers: M.recordOf(M.string(), M.string()) },
-        ),
-      ).returns(M.promise()),
-
       requestByteStream: M.call(
         M.splitRecord(
           {
@@ -981,23 +970,11 @@ export const makeProviderBrokerGrant = (
       async request(request) {
         return perform(request, false);
       },
-      /** @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request */
-      async requestStream(request) {
-        // The older reader, for a listener image from before the bytes
-        // stream. It is handed no settlement it would never look at.
-        const { status, reader, contentType } = await perform(
-          request,
-          true,
-          false,
-        );
-        return harden({ status, reader, contentType });
-      },
       /**
-       * The same response as `requestStream`, as a bytes exo-stream: a reader
+       * A response as a bytes exo-stream: a reader
        * that a consumer may read ahead of (`iterateBytesReader(reader, {
        * buffer })`), so a response crossing a slow link does not pay a round
-       * trip per chunk. `requestStream` stays, because the listener is an
-       * image pinned by the operator and an older one knows only that.
+       * trip per chunk.
        *
        * What the producer holds for a consumer that reads ahead is bounded by
        * the response byte limit and not by the consumer's read-ahead: in
@@ -1012,7 +989,7 @@ export const makeProviderBrokerGrant = (
        */
       async requestByteStream(request) {
         const { status, reader, contentType, usage, bytesReader } =
-          await perform(request, true, true);
+          await perform(request, true);
         return harden({
           status,
           contentType,
@@ -1102,33 +1079,19 @@ export const makeProviderBrokerGrant = (
    * @overload
    * @param {{method: string, path: string, body: string}} request
    * @param {false} streaming
-   * @param {boolean} [bytesOk]
    * @returns {Promise<{status: number, body: string}>}
    */
   /**
    * @overload
    * @param {{method: string, path: string, body: string}} request
    * @param {true} streaming
-   * @param {false} bytesOk
-   * @returns {Promise<ProviderStream & {contentType: string, usage: Promise<UsageSettlement>}>}
-   */
-  /**
-   * @overload
-   * @param {{method: string, path: string, body: string}} request
-   * @param {true} streaming
-   * @param {boolean} [bytesOk]
    * @returns {Promise<{status: number, contentType: string, reader?: ProviderStream['reader'], bytesReader?: ReturnType<typeof makeScreenedBytesReader>, usage: Promise<UsageSettlement>}>}
    */
   /**
    * @param {{method: string, path: string, body: string, headers?: Record<string, string>}} request
    * @param {boolean} streaming
-   * @param {boolean} bytesOk
    */
-  const perform = async (
-    { method, path, body, headers },
-    streaming,
-    bytesOk = !streaming,
-  ) => {
+  const perform = async ({ method, path, body, headers }, streaming) => {
     // Re-screen on this side of the seam: the listener already dropped the
     // owned headers, and the broker does not take its word for it.
     const forwarded = forwardableHeaders(headers ?? {});
@@ -1190,12 +1153,9 @@ export const makeProviderBrokerGrant = (
     /** @type {BrokerGrantMember[]} */
     let selected;
     try {
-      selected = selectOrder()
-        .map(id => membersById.get(id) ?? Fail`Unknown broker subscription`)
-        // Somebody else's subscription streams bytes only. A listener from
-        // before the bytes stream is served by the operator's own accounts,
-        // rather than have a far response started that nobody could read.
-        .filter(member => bytesOk || member.wrapped === undefined);
+      selected = selectOrder().map(
+        id => membersById.get(id) ?? Fail`Unknown broker subscription`,
+      );
       if (selected.length === 0) {
         record('subscriptions-exhausted');
         throw Fail`Provider subscriptions exhausted`;

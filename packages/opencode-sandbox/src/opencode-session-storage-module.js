@@ -15,8 +15,9 @@
  */
 
 import { Fail } from '@endo/errors';
+import { makeSessionStorage } from '@endo/hosted-agent/session-storage.js';
 
-import { makeOpencodeSessionStorage } from './opencode-session-storage.js';
+import { readSessionPlan } from './opencode-session-plan.js';
 
 /**
  * @param {null | Promise<null>} powers Slot-free constructor powers.
@@ -34,8 +35,9 @@ export const make = async (powers, _context, { env = {} } = {}) => {
     Fail`OPENCODE_WORKSPACE_BASE_DIR is required`;
   (typeof mcpDir === 'string' && mcpDir !== '') ||
     Fail`OPENCODE_MCP_DIR is required`;
-  return makeOpencodeSessionStorage({
+  return makeSessionStorage({
     roots: harden({ workspaceDir, mcpDir }),
+    readPlan: readSessionPlan,
   });
 };
 harden(make);

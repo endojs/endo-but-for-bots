@@ -16,6 +16,7 @@
   },
   "type": "module",
   "exports": {
+    "./src/claude-tool-input.js": "./src/claude-tool-input.js",
     "./setup-host.js": "./setup-host.js",
     "./setup-hosted.js": "./setup-hosted.js",
     "./src/container-mount-bridge.js": "./src/container-mount-bridge.js",

@@ -1,6 +1,5 @@
 // @ts-check
 export { makeCodexBackendFactory } from './src/codex-backend-factory.js';
-export { normalizeCodexModelDescriptor } from './src/codex-models.js';
 export { assertProviderGrantV1 } from './src/codex-provider-grant.js';
 export {
   CODEX_FIXED_MOUNTS,

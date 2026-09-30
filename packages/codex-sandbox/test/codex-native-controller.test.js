@@ -205,9 +205,6 @@ const fixture = async (
         async status() {
           return harden({});
         },
-        async models() {
-          return harden([]);
-        },
         async acknowledge() {
           events.push('acknowledge');
         },

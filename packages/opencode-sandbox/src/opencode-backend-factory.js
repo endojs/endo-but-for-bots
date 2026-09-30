@@ -21,7 +21,7 @@ import {
   makeHostedBackendFactory,
 } from '@endo/hosted-agent/backend-factory-kit.js';
 
-import { DEFAULT_SERVER_NAME } from './mcp-socket-server.js';
+import { DEFAULT_SERVER_NAME } from './opencode-mcp-config.js';
 
 /** @import { makeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js' */
 

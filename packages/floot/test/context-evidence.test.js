@@ -20,6 +20,7 @@ const result = (id, content) => ({ kind: 'tool-result', id, content });
 const checkpoint = { kind: 'compaction', summary: 'summary', retainedTail: [] };
 const record = (records, extra = {}) => ({
   turnId: '1',
+  dispatchState: 'possibly-dispatched',
   state: 'completed',
   input: 'input',
   transcriptComplete: true,
@@ -203,6 +204,7 @@ test('real archive certifies large tool payload once and skips it on later conte
     modelId: 'sol',
   });
   const old = await journal.begin(options);
+  await journal.dispatch(old);
   await journal.recordTranscript(old, '0', {
     ...call('native'),
     args: JSON.stringify({ command: 'x'.repeat(12_000) }),
@@ -214,10 +216,12 @@ test('real archive certifies large tool payload once and skips it on later conte
   );
   await journal.append(old, { type: 'finish', state: 'completed' });
   const boundary = await journal.begin(options);
+  await journal.dispatch(boundary);
   await journal.recordTranscript(boundary, '0', checkpoint);
   await journal.append(boundary, { type: 'finish', state: 'completed' });
   for (let index = 0; index < 290; index += 1) {
     const id = await journal.begin(options);
+    await journal.dispatch(id);
     await journal.append(id, { type: 'finish', state: 'completed' });
   }
   const archived = await journal.listArchived();
@@ -255,6 +259,7 @@ test('archive certification content-read failure poisons writer before archive p
     modelId: 'sol',
   });
   const old = await journal.begin(options);
+  await journal.dispatch(old);
   await journal.recordTranscript(old, '0', call('native'));
   await journal.recordTranscript(
     old,
@@ -267,6 +272,7 @@ test('archive certification content-read failure poisons writer before archive p
     async () => {
       for (let index = 0; index < 290; index += 1) {
         const id = await journal.begin(options);
+        await journal.dispatch(id);
         await journal.append(id, { type: 'finish', state: 'completed' });
       }
     },

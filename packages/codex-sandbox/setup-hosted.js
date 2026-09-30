@@ -17,6 +17,7 @@
  */
 import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { bindFlootBackend } from '@endo/hosted-agent/hosted-backend-setup.js';
 import {
   configureBroker,
   forgetBrokerSettings,
@@ -494,13 +495,11 @@ export const main = async (host, { exec } = {}) => {
   await E(host).copy(next, backend);
   await E(host).remove(...next);
   const flootDir = env.ENDO_FLOOT_DIR || env.FLOOT_DIR || 'floot';
-  if (await E(host).has(flootDir, 'controller-profile')) {
-    await E(host).copy(backend, [
-      flootDir,
-      'controller-profile',
-      env.ENDO_CODEX_BACKEND_NAME || 'codex-backend',
-    ]);
-  }
+  await bindFlootBackend(host, {
+    flootDir,
+    backendName: env.ENDO_CODEX_BACKEND_NAME || 'codex-backend',
+    backendPath: backend,
+  });
   await publishAccountOracle(host, {
     label: 'Codex',
     dir: SANDBOX_DIR,
