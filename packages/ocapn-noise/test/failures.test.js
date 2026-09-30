@@ -304,3 +304,42 @@ test('SYN intended for a different responder is rejected', async t => {
     },
   );
 });
+
+test('SYN claiming a verifying key other than its Noise static is rejected', async t => {
+  // The attacker holds its own Ed25519 seed (and so its own X25519
+  // static) but claims the victim's verifying key in the encrypted SYN
+  // payload.  The Noise handshake itself would complete, since every
+  // DH uses the attacker's real static; the responder must refuse to
+  // attribute the session to the victim.
+  const attackerKeys = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator().signingKeys;
+  const victimKeys = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+  }).asInitiator().signingKeys;
+
+  const impostor = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+    signingKeys: {
+      privateKey: attackerKeys.privateKey,
+      publicKey: victimKeys.publicKey,
+    },
+    supportedEncodings: [1, 2],
+  }).asInitiator();
+
+  const responder = makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+    supportedEncodings: [2, 3],
+  }).asResponder();
+
+  const { prefixedSyn } = performSynExchange(impostor, responder);
+
+  const synack = new Uint8Array(SYNACK_LENGTH);
+  t.throws(() => responder.responderReadSynWriteSynack(prefixedSyn, synack), {
+    message: /initiator verifying key does not match its Noise static key/,
+  });
+});

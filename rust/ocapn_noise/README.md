@@ -107,3 +107,10 @@ No per-message Ed25519 signatures appear inside the handshake.  The
 static X25519 is deterministically derived from the Ed25519 seed, so
 a successful Noise DH against the published Ed25519 identity already
 proves control of the corresponding signing key.
+The initiator's Ed25519 verifying key, however, arrives as a claim in
+the encrypted SYN payload, and Noise authenticates only the static
+X25519 key the initiator used.
+`responder_read_syn` therefore rejects the SYN (error code 5) unless
+the claimed verifying key is a valid, non-small-order point whose
+Montgomery form equals that static; otherwise an initiator holding any
+keypair could present itself as any identity.

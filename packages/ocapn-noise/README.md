@@ -36,9 +36,15 @@ first message.
      The responder verifies the prefix matches its own published key.
    - **Noise IK message 1**: ephemeral X25519 public key, encrypted
      initiator static, and an encrypted payload carrying the
-     supported encoding versions.
+     initiator's Ed25519 verifying key and the supported encoding
+     versions.
      Identity hiding (Noise §7.8 property 8): the initiator's static
      is encrypted on the wire under the responder's static.
+     The verifying key in the payload is only a claim, so the
+     responder rejects the SYN unless that key converts to the static
+     X25519 key the initiator actually used in the handshake.
+     Without this check, an initiator holding any keypair could claim
+     any identity.
 
 2. **SYNACK (responder to initiator)**:
    - **Noise IK message 2**: responder ephemeral, encrypted payload
