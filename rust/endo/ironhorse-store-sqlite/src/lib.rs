@@ -174,7 +174,23 @@ fn write_small_state(conn: &Connection, schema: u32, bytes: &[u8]) -> Result<(),
     Ok(())
 }
 
+/// Whether the database holds the small-state section table. Open does not
+/// create it (opening a legacy store must not edit it), so a store stamped at
+/// schema 28 or later without it has lost it: its sections are missing rows,
+/// not a query to retry.
+fn has_small_sections(conn: &Connection) -> Result<bool, StoreError> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'small_sections')",
+        [],
+        |r| r.get(0),
+    )
+    .map_err(sql_err)
+}
+
 fn read_section_hashes(conn: &Connection) -> Result<[[u8; 32]; SMALL_SECTION_COUNT], StoreError> {
+    if !has_small_sections(conn)? {
+        return Err(StoreError::MissingRow("small section hash", 0));
+    }
     let mut stmt = conn
         .prepare("SELECT id, hash FROM small_sections ORDER BY id")
         .map_err(sql_err)?;
@@ -225,6 +241,9 @@ fn write_section_updates(conn: &Connection, updates: &[SectionUpdate]) -> Result
 /// model the rows are the state, and the digests are change detection
 /// only (`validate_store_content` re-derives them).
 fn read_sectioned_state(conn: &Connection) -> Result<Vec<u8>, StoreError> {
+    if !has_small_sections(conn)? {
+        return Err(StoreError::MissingRow("small section", 0));
+    }
     let mut stmt = conn
         .prepare("SELECT id, bytes FROM small_sections ORDER BY id")
         .map_err(sql_err)?;
@@ -715,23 +734,31 @@ impl HeapStore for SqliteHeapStore {
         // Empty-store parity with the dense default (which fails with
         // `Empty` through `page_edges`), and contiguity, not just
         // cardinality: `{0,1,3,4,X}` has the right COUNT while page 2
-        // is missing — the dense default fails closed on that gap, so
-        // this override must too (review finding).
+        // is missing, and so does `{-1,1,2}` while page 0 is — the dense
+        // default fails closed on a gap, so this override must too
+        // (review finding). The primary key rules out a repeated page, so
+        // the rows are exactly pages `0..count` when the least is 0 and
+        // the greatest is `count - 1`.
         if Self::stored_manifest(&self.conn)?.is_none() {
             return Err(StoreError::Empty);
         }
-        let (count, extent): (i64, i64) = self
+        let (count, least, greatest): (i64, Option<i64>, Option<i64>) = self
             .conn
             .query_row(
-                "SELECT COUNT(*), COALESCE(MAX(page) + 1, 0) FROM page_edges",
+                "SELECT COUNT(*), MIN(page), MAX(page) FROM page_edges",
                 [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
             )
             .map_err(sql_err)?;
-        if count != extent {
-            // Not contiguous. The dense read names the first missing page,
-            // so both answers to this query refuse the store the same way;
-            // it runs only on this failure path.
+        let contiguous = match (least, greatest) {
+            (None, None) => true,
+            (Some(least), Some(greatest)) => least == 0 && greatest.checked_add(1) == Some(count),
+            _ => false,
+        };
+        if !contiguous {
+            // The dense read names the first missing page, so both answers
+            // to this query refuse the store the same way; it runs only on
+            // this failure path.
             self.page_edges()?;
             return Err(content_damage("sqlite: page_edges not contiguous"));
         }
@@ -1589,44 +1616,55 @@ mod tests {
         assert!(machine.run(&PROG_A).completed);
         let image = machine.snapshot_image(&sig()).unwrap();
         type Read = fn(&SqliteHeapStore) -> Result<(), StoreError>;
-        let cases: [(&str, Read, &'static str); 7] = [
+        let corrupt = |what| StoreError::Snapshot(SnapshotError::Corrupt(what));
+        let cases: [(&str, Read, StoreError); 9] = [
             (
                 "UPDATE small_sections SET bytes = 7 WHERE id = 0",
                 |s| s.read_small_state().map(drop),
-                "sqlite: stored value of the wrong type",
+                corrupt("sqlite: stored value of the wrong type"),
             ),
             (
                 "UPDATE small_sections SET hash = x'00' WHERE id = 0",
                 |s| s.small_section_hashes().map(drop),
-                "sqlite: small section hash length",
+                corrupt("sqlite: small section hash length"),
             ),
             (
                 "INSERT INTO small_sections (id, bytes, hash) VALUES (32, x'', zeroblob(32))",
                 |s| s.read_small_state().map(drop),
-                "sqlite: extra small sections",
+                corrupt("sqlite: extra small sections"),
             ),
             (
                 "INSERT INTO small_sections (id, bytes, hash) VALUES (32, x'', zeroblob(32))",
                 |s| s.small_section_hashes().map(drop),
-                "sqlite: extra small section hashes",
+                corrupt("sqlite: extra small section hashes"),
             ),
             (
                 "UPDATE page_edges SET targets = x'000000' WHERE page = 0",
                 |s| s.page_edges().map(drop),
-                "sqlite: malformed page edges",
+                corrupt("sqlite: malformed page edges"),
             ),
             (
                 "INSERT INTO edge_pairs (target, page) VALUES (0, -1)",
                 |s| s.pages_referencing(0).map(drop),
-                "sqlite: page column out of range",
+                corrupt("sqlite: page column out of range"),
             ),
             (
                 "UPDATE slot_pages SET bytes = 'text' WHERE page = 0",
                 |s| s.read_slot_page(0).map(drop),
-                "sqlite: stored value of the wrong type",
+                corrupt("sqlite: stored value of the wrong type"),
+            ),
+            (
+                "DROP TABLE small_sections",
+                |s| s.read_small_state().map(drop),
+                StoreError::MissingRow("small section", 0),
+            ),
+            (
+                "DROP TABLE small_sections",
+                |s| s.small_section_hashes().map(drop),
+                StoreError::MissingRow("small section hash", 0),
             ),
         ];
-        for (damage, read, what) in cases {
+        for (damage, read, expected) in cases {
             let mut store = SqliteHeapStore::open_in_memory().unwrap();
             store
                 .commit(&image_to_batch(&image, 1, CommitToken::ZERO))
@@ -1636,11 +1674,7 @@ mod tests {
                 .execute_batch(&format!("PRAGMA ignore_check_constraints = ON; {damage};"))
                 .unwrap();
             let error = read(&store).expect_err(damage);
-            assert_eq!(
-                error,
-                StoreError::Snapshot(SnapshotError::Corrupt(what)),
-                "{damage}"
-            );
+            assert_eq!(error, expected, "{damage}");
             assert_eq!(error.classify(), StoreFailure::Poisoned, "{damage}");
         }
 

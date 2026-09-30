@@ -368,13 +368,14 @@ fn stale_store_rebuilds_before_its_first_commit_attests_the_index() {
 #[test]
 fn summary_page_count_refuses_gapped_page_edges() {
     // The SummaryCount gate must stay STRUCTURAL on this backend
-    // (review finding): a gapped page_edges table with a spurious
-    // beyond-geometry row has the right COUNT(*) while an interior
-    // page is missing — the dense default fails closed on that shape
-    // (MissingRow), so the COUNT override must refuse it too.
+    // (review finding): a gapped page_edges table can have the right
+    // COUNT(*) while a page is missing — a spurious beyond-geometry row
+    // or a negative page standing in for it — and the dense default
+    // fails closed on each shape (MissingRow), so the COUNT override
+    // must refuse it too, the same way.
     let dir = common::TempDir::new(&format!("ironhorse-query-gc-gap-{}", std::process::id()));
-    let path = dir.join("heap.sqlite");
-    let store = Rc::new(RefCell::new(SqliteHeapStore::open(&path).unwrap()));
+    let healthy = dir.join("healthy.sqlite");
+    let store = Rc::new(RefCell::new(SqliteHeapStore::open(&healthy).unwrap()));
     build_store(store.clone());
     let pages = {
         let s = store.borrow();
@@ -386,34 +387,85 @@ fn summary_page_count_refuses_gapped_page_edges() {
         pages,
         "healthy store reports its geometry"
     );
-    Rc::try_unwrap(store)
-        .ok()
-        .expect("sole owner")
-        .into_inner()
-        .close()
-        .unwrap();
+    drop(store);
 
+    for (label, damage, first_missing) in [
+        (
+            "gap and phantom",
+            format!(
+                "DELETE FROM page_edges WHERE page = 1;
+                 INSERT INTO page_edges (page, targets) VALUES ({}, x'00000000');",
+                pages + 5
+            ),
+            1,
+        ),
+        (
+            "negative stand-in",
+            "DELETE FROM page_edges WHERE page = 0;
+             INSERT INTO page_edges (page, targets) VALUES (-1, x'');"
+                .to_string(),
+            0,
+        ),
+        (
+            "last representable page",
+            format!(
+                "INSERT INTO page_edges (page, targets) VALUES ({}, x'');",
+                i64::MAX
+            ),
+            pages,
+        ),
+    ] {
+        let path = dir.join(format!("{}.sqlite", label.replace(' ', "-")));
+        build_closed_store(&path);
+        {
+            let raw = rusqlite::Connection::open(&path).unwrap();
+            raw.execute_batch(&damage).unwrap();
+            raw.close().unwrap();
+        }
+        // The indexed count refuses the store as the dense read of the same
+        // rows does: by the first missing page, a corrupt store rather than
+        // a retryable fault.
+        let store = SqliteHeapStore::open(&path).unwrap();
+        let err = store.summary_page_count().unwrap_err();
+        assert_eq!(
+            err,
+            StoreError::MissingRow("page edges", first_missing),
+            "{label}"
+        );
+        assert_eq!(store.page_edges().unwrap_err(), err, "{label}");
+        assert_eq!(err.classify(), StoreFailure::Poisoned, "{label}");
+        store.close().unwrap();
+    }
+}
+
+/// A page-edge summary that is not a whole number of targets, met while
+/// open rebuilds an index the store does not attest, refuses the store as
+/// corrupt rather than as a retryable fault.
+#[test]
+fn open_refuses_a_malformed_summary_it_rebuilds_from() {
+    let dir = common::TempDir::new(&format!(
+        "ironhorse-query-gc-malformed-{}",
+        std::process::id()
+    ));
+    let path = dir.join("heap.sqlite");
+    build_closed_store(&path);
     {
         let raw = rusqlite::Connection::open(&path).unwrap();
-        raw.execute("DELETE FROM page_edges WHERE page = 1", [])
-            .unwrap();
-        raw.execute(
-            "INSERT INTO page_edges (page, targets) VALUES (?1, x'00000000')",
-            rusqlite::params![(pages + 5) as i64],
+        raw.execute_batch(
+            "UPDATE page_edges SET targets = x'000000' WHERE page = 0;
+             DELETE FROM meta WHERE key = 'edge_pairs_epoch';",
         )
         .unwrap();
         raw.close().unwrap();
     }
-
-    // The gap fails closed, and the indexed count refuses the store as the
-    // dense read of the same rows does: by the first missing page, a
-    // corrupt store rather than a retryable fault.
-    let store = SqliteHeapStore::open(&path).unwrap();
-    let err = store.summary_page_count().unwrap_err();
-    assert_eq!(err, StoreError::MissingRow("page edges", 1));
-    assert_eq!(store.page_edges().unwrap_err(), err);
+    let err = SqliteHeapStore::open(&path).unwrap_err();
+    assert_eq!(
+        err,
+        StoreError::Snapshot(ironhorse_snapshot::SnapshotError::Corrupt(
+            "sqlite: malformed page edges"
+        ))
+    );
     assert_eq!(err.classify(), StoreFailure::Poisoned);
-    store.close().unwrap();
 }
 
 #[test]
