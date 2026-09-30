@@ -350,6 +350,120 @@ test('impostor SYN claiming a peer identity cannot displace that peer session', 
   t.true(reply.done, 'A drops the impostor without answering its SYN');
 });
 
+test('replayed genuine SYN cannot displace the peer unclaimed session', async t => {
+  t.timeout(10_000);
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, {
+    codec: cborCodec,
+    handshakeTimeoutMs: 1000,
+  });
+  const netV = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
+  const victim = addFreshKey(netV);
+  await netA.addTransport(fabric.transportFor('A'));
+  await netV.addTransport(fabric.transportFor('V'));
+  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
+
+  // V dials A; A settles an unclaimed inbound session (nothing takes it
+  // from `inboundSessions`).
+  const sessionV = await netV.provideSession(locA);
+  const sessionA = await netA.waitForInboundSession(victim.keyId);
+  const pendingRead = sessionV.reader.next(undefined);
+
+  // A third party replays a valid SYN that claims V. IK message 1 is
+  // replayable, so a capture off the wire yields exactly these bytes;
+  // building it from V's keypair is the same thing. The replayer does
+  // not hold V's signing key, so it can never produce the
+  // op:start-session that `exchangeIdentity` demands.
+  const replaySyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+    signingKeys: {
+      privateKey: victim.privateKey,
+      publicKey: victim.publicKey,
+    },
+  })
+    .asInitiator()
+    .initiatorWriteSyn(publicKeyA, replaySyn);
+  const replayStream = await fabric.transportFor('M').connect({ to: 'A' });
+  await replayStream.writer.next(replaySyn);
+  // A answers the SYN — it cannot know the peer is stale until
+  // exchangeIdentity — but must not touch V's session before then.
+  const replyFrame = await replayStream.reader.next(undefined);
+  t.false(replyFrame.done, 'A answered the replay with a SYNACK');
+
+  // V's unclaimed session is still live.
+  await sessionA.writer.next(new TextEncoder().encode('still-here'));
+  const received = await pendingRead;
+  t.false(received.done, 'victim session survived the replay');
+  if (!received.done) {
+    t.is(new TextDecoder().decode(received.value), 'still-here');
+  }
+});
+
+test('inbound handshakes are capped per local identity, not per peer', async t => {
+  t.timeout(10_000);
+  const fabric = makeFabricForTest(t);
+  const cap = 3;
+  const netA = makeNetworkForTest(t, {
+    codec: cborCodec,
+    handshakeTimeoutMs: 2000,
+    maxInProgressPerLocalKey: cap,
+  });
+  const { publicKey: publicKeyA } = addFreshKey(netA);
+  const { publicKey: publicKeyA2 } = addFreshKey(netA);
+  await netA.addTransport(fabric.transportFor('A'));
+  const dialer = fabric.transportFor('dialer');
+
+  /**
+   * Send a SYN from a fresh (distinct) initiator to responder `pub` and
+   * return the raw stream, stalled at the post-handshake identity
+   * exchange (no op:start-session is ever sent).
+   * @param {Uint8Array} pub
+   */
+  const stalledSynTo = async pub => {
+    const syn = new Uint8Array(PREFIXED_SYN_LENGTH);
+    makeOcapnSessionCryptography({ wasmModule, getRandomValues })
+      .asInitiator()
+      .initiatorWriteSyn(pub, syn);
+    const stream = await dialer.connect({ to: 'A' });
+    await stream.writer.next(syn);
+    return stream;
+  };
+
+  // Hold `cap` inbound handshakes to keyA, each from a different peer.
+  const held = [];
+  for (let i = 0; i < cap; i += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    const stream = await stalledSynTo(publicKeyA);
+    // eslint-disable-next-line no-await-in-loop
+    const reply = await stream.reader.next(undefined);
+    t.false(reply.done, `held handshake ${i} got a SYNACK`);
+    held.push(stream);
+  }
+  t.teardown(async () => {
+    for (const stream of held) {
+      // eslint-disable-next-line no-await-in-loop
+      await stream.writer.return(undefined);
+    }
+  });
+
+  // The next inbound to keyA is dropped with no SYNACK, though it claims
+  // a fresh peer: the cap is on our identity, not on any peer.
+  const overStream = await stalledSynTo(publicKeyA);
+  const overReply = await overStream.reader.next(undefined);
+  t.true(overReply.done, 'over-cap handshake dropped without a SYNACK');
+
+  // A second local identity is unaffected by keyA being full.
+  const otherStream = await stalledSynTo(publicKeyA2);
+  t.teardown(async () => {
+    await otherStream.writer.return(undefined);
+  });
+  const otherReply = await otherStream.reader.next(undefined);
+  t.false(otherReply.done, 'a different local identity still answers');
+});
+
 test('provideSession rejects after handshake timeout', async t => {
   const net = makeNetworkForTest(t, {
     codec: cborCodec,

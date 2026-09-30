@@ -137,11 +137,18 @@ const expectFrameLength = (bytes, expected, label) => {
 const DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000;
 
 /**
- * Cap on how many simultaneous handshakes can be in flight for a given
- * peer. Combined with the handshake timeout, this bounds the work a
- * single misbehaving peer can pin in a responder.
+ * Cap on how many inbound handshakes can be mid-flight for one of our
+ * local identities before the peer has proven itself. Combined with the
+ * handshake timeout, this bounds the WASM instances and Diffie-Hellman
+ * work a flood against a single one of our identities can pin.
+ *
+ * This is deliberately keyed on the responder's own identity, not on
+ * the claimed peer: IK message 1 is replayable (Noise §7.7 destination
+ * property 2) and its payload is attacker-chosen, so a pre-auth cap
+ * keyed on the claimed peer would let a replay of one genuine peer's
+ * SYN exhaust that peer's budget and lock the peer out.
  */
-const MAX_IN_PROGRESS_PER_PEER = 8;
+const DEFAULT_MAX_IN_PROGRESS_PER_LOCAL_KEY = 256;
 
 /** Maximum number of unconsumed peer-initiated sessions to buffer. */
 const MAX_PENDING_INBOUND_SESSIONS = 256;
@@ -196,12 +203,14 @@ const withTimeout = (promise, ms, label, stream) => {
  * @param {{
  *   codec: OcapnCodec,
  *   handshakeTimeoutMs?: number,
+ *   maxInProgressPerLocalKey?: number,
  * }} options
  * @returns {OcapnNoiseNetwork}
  */
 export const makeOcapnNoiseNetwork = ({
   codec,
   handshakeTimeoutMs = DEFAULT_HANDSHAKE_TIMEOUT_MS,
+  maxInProgressPerLocalKey = DEFAULT_MAX_IN_PROGRESS_PER_LOCAL_KEY,
 }) => {
   const cryptography = makeCryptography(codec);
 
@@ -245,12 +254,21 @@ export const makeOcapnNoiseNetwork = ({
   /** @type {Map<KeyIdHex, number>} */
   const inProgress = new Map();
   /**
-   * Membership-test wrapper: returns true iff a fresh handshake to
-   * `peerId` would push us past `MAX_IN_PROGRESS_PER_PEER`.
-   * @param {KeyIdHex} peerId
+   * Pre-authentication handshake count, keyed on our own local identity
+   * (the SYN's intended responder), not on the claimed peer. Bounds the
+   * work an inbound flood can pin before `exchangeIdentity` proves the
+   * peer. Incremented before the Noise SYN-decrypt and released when the
+   * handshake attempt concludes, in `handleIncoming`'s `finally`.
+   * @type {Map<KeyIdHex, number>}
    */
-  const inProgressFull = peerId =>
-    (inProgress.get(peerId) ?? 0) >= MAX_IN_PROGRESS_PER_PEER;
+  const inFlightByLocalKey = new Map();
+  /**
+   * Returns true iff another inbound handshake to `localKeyId` would
+   * push us past `maxInProgressPerLocalKey`.
+   * @param {KeyIdHex} localKeyId
+   */
+  const localKeyInFlightFull = localKeyId =>
+    (inFlightByLocalKey.get(localKeyId) ?? 0) >= maxInProgressPerLocalKey;
   /** @type {Map<KeyIdHex, { resolve: (s: OcapnNoiseSession) => void, reject: (e: Error) => void }[]>} */
   const waiters = new Map();
   /** @type {Map<KeyIdHex, string[]>} */
@@ -277,6 +295,24 @@ export const makeOcapnNoiseNetwork = ({
   /** @param {KeyIdHex} peerId */
   const bumpInProgress = peerId => {
     inProgress.set(peerId, (inProgress.get(peerId) ?? 0) + 1);
+  };
+
+  /** @param {KeyIdHex} localKeyId */
+  const bumpLocalKeyInFlight = localKeyId => {
+    inFlightByLocalKey.set(
+      localKeyId,
+      (inFlightByLocalKey.get(localKeyId) ?? 0) + 1,
+    );
+  };
+
+  /** @param {KeyIdHex} localKeyId */
+  const releaseLocalKeyInFlight = localKeyId => {
+    const next = (inFlightByLocalKey.get(localKeyId) ?? 1) - 1;
+    if (next > 0) {
+      inFlightByLocalKey.set(localKeyId, next);
+    } else {
+      inFlightByLocalKey.delete(localKeyId);
+    }
   };
 
   /**
@@ -891,6 +927,8 @@ export const makeOcapnNoiseNetwork = ({
     await null;
     /** @type {KeyIdHex | undefined} */
     let registeredPeerId;
+    /** @type {KeyIdHex | undefined} */
+    let localKeyInFlight;
     try {
       const prefixedSyn = await withTimeout(
         readFrame(stream.reader),
@@ -906,18 +944,19 @@ export const makeOcapnNoiseNetwork = ({
         return;
       }
 
-      // Cheap-prefix gating: cap concurrent in-progress handshakes
+      // Pre-authentication DoS bound. Cap concurrent inbound handshakes
       // per local identity before paying for any Noise IK SYN-decrypt
       // (the per-handshake cost includes a `WebAssembly.Instance`
-      // construction and a Diffie-Hellman). The peer's verifying key
-      // is encrypted in the SYN payload and not visible until after
-      // the decrypt, so we have no source-IP-equivalent identifier
-      // here; the per-identity cap bounds the responder's exposure
-      // when an attacker spams one of our identities with junk SYNs.
-      if (inProgressFull(intendedKeyId)) {
+      // construction and a Diffie-Hellman). This is keyed on our own
+      // identity, never the claimed peer: the peer's verifying key is
+      // both encrypted and replayable, so it cannot bound anything
+      // before `exchangeIdentity`. The slot is released in `finally`.
+      if (localKeyInFlightFull(intendedKeyId)) {
         await stream.writer.return(undefined);
         return;
       }
+      localKeyInFlight = intendedKeyId;
+      bumpLocalKeyInFlight(intendedKeyId);
 
       const noise = makeOcapnSessionCryptography({
         wasmModule,
@@ -933,54 +972,35 @@ export const makeOcapnNoiseNetwork = ({
       // one bindings call.  No further wire message is required.
       // The bindings reject a SYN whose claimed `initiatorVerifyingKey`
       // does not match the static key Noise authenticated, so an
-      // initiator cannot reach the per-peer bookkeeping below
-      // (in-progress caps, displacing an unclaimed session) under a key
-      // it does not hold.  IK message 1 can be replayed, though: a
-      // captured SYN from a genuine peer still reaches it, and only
-      // `exchangeIdentity` proves the peer is live.
+      // initiator cannot claim a key it does not hold. But the claim is
+      // still only cryptographic, not fresh: IK message 1 is replayable
+      // (Noise §7.7 destination property 2), so a captured SYN from a
+      // genuine peer reaches here too. We therefore do NO per-peer
+      // bookkeeping (slot accounting, displacing an unclaimed session)
+      // until `exchangeIdentity` below proves the peer is live: its
+      // `op:start-session` signs the fresh handshake hash, which a
+      // replay cannot reproduce.
       const { initiatorVerifyingKey, encrypt, decrypt, handshakeHash } =
         asResp.responderReadSynWriteSynack(prefixedSyn, synack);
       const initiatorKeyHex = toHex(initiatorVerifyingKey);
-      // Re-check against the verified peer identity now that we know
-      // who they really are, in case a single peer is saturating the
-      // cap by hitting many of our identities at once.
-      if (inProgressFull(initiatorKeyHex)) {
+
+      // Late crossed hello against an ADOPTED session: refuse before we
+      // answer. `decrementAndSettle` never displaces an adopted session,
+      // so finishing this handshake would mint a session we immediately
+      // close — and the peer may have adopted it by then, tearing it out
+      // from under their CapTP layer (the two sides can even close each
+      // other's adopted sessions mutually). Refuse before SYNACK so the
+      // peer's dial fails fast and its own settlement converges on the
+      // session both sides already share. A replayed SYN that lands here
+      // is simply refused, which is harmless. An UNCLAIMED session
+      // (still in `pendingInbound`) is deliberately left alone here and
+      // handled after `exchangeIdentity`, so a replay cannot displace it.
+      const adopted = active.get(initiatorKeyHex);
+      if (adopted && pendingInbound.indexOf(adopted.session) === -1) {
         await stream.writer.return(undefined);
         return;
       }
-      // Late crossed hello: we already hold an active session with
-      // this peer. `decrementAndSettle` never displaces an adopted
-      // session, so finishing this handshake would mint a session we
-      // immediately close — and the peer may have adopted it by then,
-      // tearing it out from under their CapTP layer (the two sides
-      // can even close each other's adopted sessions mutually).
-      // Refuse before SYNACK instead: the peer's dial fails fast, and
-      // its own settlement converges on the session both sides
-      // already share.
-      //
-      // Exception: an active session still sitting unclaimed in
-      // `pendingInbound` has no consumer whose read side would ever
-      // notice the peer closing it. A fresh SYN from that same peer
-      // is evidence the peer's side of it is gone (a live peer's dial
-      // would have been answered from its own active cache), so
-      // displace the unclaimed session and let this handshake
-      // proceed.
-      const existingActive = active.get(initiatorKeyHex);
-      if (existingActive) {
-        const pendingIndex = pendingInbound.indexOf(existingActive.session);
-        if (pendingIndex === -1) {
-          await stream.writer.return(undefined);
-          return;
-        }
-        pendingInbound.splice(pendingIndex, 1);
-        // `close` fires the session's onClose, which forgets the
-        // active entry; the copy already queued on `inboundSessions`
-        // surfaces as a dead session, exactly as the
-        // MAX_PENDING_INBOUND_SESSIONS overflow path leaves one.
-        existingActive.close();
-      }
-      registeredPeerId = initiatorKeyHex;
-      bumpInProgress(initiatorKeyHex);
+
       const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
       await stream.writer.next(synack);
 
@@ -1003,6 +1023,36 @@ export const makeOcapnNoiseNetwork = ({
         'post-handshake identity exchange',
         stream,
       );
+
+      // The peer is now proven live under `initiatorKeyHex`. Only now do
+      // we touch per-peer state, and from here it is synchronous, so no
+      // competing handshake interleaves between the displacement, the
+      // bump, and the settle.
+      //
+      // An unclaimed session for this peer (still queued in
+      // `pendingInbound`) can be displaced: a fresh, live handshake from
+      // the same peer is evidence its side of the old unclaimed session
+      // is gone (a live peer's dial would have been answered from its
+      // own active cache). Deferring the displacement to here — after a
+      // proof of liveness — is what stops a replayed SYN from closing it.
+      const unclaimed = active.get(initiatorKeyHex);
+      if (unclaimed) {
+        const pendingIndex = pendingInbound.indexOf(unclaimed.session);
+        if (pendingIndex === -1) {
+          // Became adopted while we handshook; refuse in its favor
+          // rather than close a session now in use.
+          await stream.writer.return(undefined);
+          return;
+        }
+        pendingInbound.splice(pendingIndex, 1);
+        // `close` fires the session's onClose, which forgets the
+        // active entry; the copy already queued on `inboundSessions`
+        // surfaces as a dead session, exactly as the
+        // MAX_PENDING_INBOUND_SESSIONS overflow path leaves one.
+        unclaimed.close();
+      }
+      registeredPeerId = initiatorKeyHex;
+      bumpInProgress(initiatorKeyHex);
 
       /** @type {Candidate | undefined} */
       let candidate;
@@ -1043,6 +1093,10 @@ export const makeOcapnNoiseNetwork = ({
         await stream.reader.return(undefined);
       } catch (_e) {
         // ignore
+      }
+    } finally {
+      if (localKeyInFlight !== undefined) {
+        releaseLocalKeyInFlight(localKeyInFlight);
       }
     }
   };
@@ -1246,6 +1300,7 @@ export const makeOcapnNoiseNetwork = ({
     }
     waiters.clear();
     inProgress.clear();
+    inFlightByLocalKey.clear();
     // Close any candidates that recorded themselves between
     // `runInitiator` resolution and `decrementAndSettle`. After this
     // sweep, future `recordCandidate` calls short-circuit on

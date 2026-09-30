@@ -53,8 +53,12 @@ first message.
      Message 1 carries no freshness (Noise §7.7 destination property
      2), so anyone who has seen a genuine SYN can replay it.
      A replay never becomes a session, because it cannot produce the
-     channel-bound `op:start-session` below, but the responder does
-     process it until then.
+     channel-bound `op:start-session` below.
+     To keep a replay from disturbing the peer it names, the responder
+     does no per-peer bookkeeping — displacing an unclaimed session,
+     counting the peer's in-flight handshakes — until `op:start-session`
+     verifies; before that, the only bound is a cap on concurrent
+     inbound handshakes per local (responder) identity.
 
 2. **SYNACK (responder to initiator)**:
    - **Noise IK message 2**: responder ephemeral, encrypted payload
