@@ -761,6 +761,10 @@ jobs:
 
       - name: Check ironhorse engine formatting
         run: cargo +1.88.0 fmt --manifest-path rust/engine/Cargo.toml --all -- --check
+      # The stack-lanes probe is a standalone cargo root outside the workspace
+      # (rust/engine/stack-lanes/probe/Cargo.toml), so `fmt --all` never sees it.
+      - name: Check stack-lanes formatting
+        run: rustfmt +1.88.0 --edition 2021 --check rust/engine/stack-lanes/probe/src/main.rs rust/engine/stack-lanes/cases.rs
 
       - name: Check SQLite heap-store formatting
         run: cargo +1.88.0 fmt --manifest-path Cargo.toml --package ironhorse-store-sqlite -- --check

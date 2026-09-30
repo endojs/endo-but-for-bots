@@ -222,6 +222,8 @@ jobs:
           fetch-depth: 0
       - name: Test benchmark checker
         run: python3 -m unittest discover -s rust/engine/benches -p 'test_*.py'
+      - name: Test stack-lane scripts
+        run: python3 -m unittest discover -s rust/engine/stack-lanes -p 'test_*.py'
       - name: Check snapshot performance baselines
         run: |
           set -euo pipefail
