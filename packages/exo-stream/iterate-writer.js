@@ -42,6 +42,10 @@ export const iterateWriter = (writerRef, options = {}) => {
   // Call stream() - returns a promise for the acknowledge (flow-control) chain head
   /** @type {Promise<StreamNode<undefined, TWriteReturn>>} */
   let ackPromise = E(writerRef).stream(synHead);
+  // Observed only by the first pull; mark it handled so an abandoned
+  // iterator does not surface a peer disconnection as an unhandled rejection.
+  // See iterate-reader.js.
+  ackPromise.catch(() => {});
 
   /** @type {Promise<IteratorResult<undefined, TWriteReturn>> | null} */
   let terminalPromise = null;

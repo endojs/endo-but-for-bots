@@ -91,6 +91,42 @@ test.serial(
   },
 );
 
+test.serial(
+  'an iterator abandoned before its first pull does not leak a stream rejection',
+  async t => {
+    // iterateReader opens the stream eagerly but only observes the head of
+    // the acknowledgement chain on the first next().  A consumer that never
+    // pulls (or stops before its first pull) while the peer disconnects must
+    // not surface that disconnection as an unhandled rejection — in the
+    // daemon suites that failed whole test files at teardown with
+    // "Termination requested".
+    /** @type {unknown[]} */
+    const unhandledReasons = [];
+    /** @param {unknown} reason */
+    const onUnhandledRejection = reason => {
+      unhandledReasons.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    t.teardown(() => {
+      process.off('unhandledRejection', onUnhandledRejection);
+    });
+
+    const lost = harden(Error('connection lost before the first pull'));
+    const readerRef = Far('LostReader', {
+      stream: async () => {
+        await delay(0);
+        throw lost;
+      },
+    });
+    const iterator = iterateReader(/** @type {any} */ (readerRef));
+    await delay(10);
+
+    t.deepEqual(unhandledReasons, []);
+    // The rejection is still reported to a consumer that does pull.
+    await t.throwsAsync(() => iterator.next(), { is: lost });
+  },
+);
+
 test('empty passable reader', async t => {
   async function* emptyIterator() {
     // yields nothing
