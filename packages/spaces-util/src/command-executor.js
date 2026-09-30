@@ -160,7 +160,7 @@ export const createCommandExecutor = ({
           const { messageNumber, petName } = params;
           await E(powers).resolve(
             BigInt(/** @type {number} */ (messageNumber)),
-            String(petName),
+            String(petName).split('/'),
           );
           return {
             success: true,

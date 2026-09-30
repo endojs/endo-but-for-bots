@@ -278,7 +278,7 @@ test('execute resolve command', async t => {
 
   t.true(result.success);
   t.is(result.message, 'Request #10 resolved');
-  t.deepEqual(ctx.calls[0].args, [10n, 'answer']);
+  t.deepEqual(ctx.calls[0].args, [10n, ['answer']]);
 });
 
 test('execute reject command', async t => {

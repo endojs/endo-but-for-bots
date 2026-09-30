@@ -363,7 +363,7 @@ const RequestBody = ({ message, powers, setError, reportError }) => {
               onClick: () => {
                 setError('');
                 E(powers)
-                  .resolve(number, value)
+                  .resolve(number, value.split('/'))
                   .catch(error => {
                     setError(` ${/** @type {Error} */ (error).message}`);
                   });

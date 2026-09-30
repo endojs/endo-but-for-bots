@@ -314,7 +314,7 @@ export const main = async agent => {
     }
   }
   const factoryHost = await E(agent).lookup(
-    revived ? controllerProfilePath : agentName,
+    revived ? controllerProfilePath : [agentName],
   );
 
   // 2. Put the auth token in the daemon's secret manager and hand the factory

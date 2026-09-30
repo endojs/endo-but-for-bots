@@ -52,7 +52,7 @@ export const makeWorkflowTools = (powers, { settled = new Set() } = {}) => {
           throw Error('Expected a request message');
         const name = `workflow-answer-${number}`;
         await E(powers).storeValue(harden(value), [name]);
-        await E(powers).resolve(message.number, name);
+        await E(powers).resolve(message.number, [name]);
         await E(powers).storeValue(true, [`workflow-settled-${number}`]);
         settled.add(number);
         return 'Request answered.';

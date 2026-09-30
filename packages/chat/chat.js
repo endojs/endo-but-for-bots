@@ -851,7 +851,7 @@ const bodyComponent = (
 
         // Look up and connect to new channel
         E(/** @type {ERef<EndoHost>} */ (resolvedPowers))
-          .lookup(channelPetName)
+          .lookup([channelPetName])
           .then(async channelRef => {
             const channelCreatorName = await E(
               /** @type {ChannelMethods} */ (channelRef),
