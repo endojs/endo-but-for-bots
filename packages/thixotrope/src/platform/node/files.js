@@ -1,4 +1,7 @@
 // @ts-check
+/** @import { Stats } from 'node:fs' */
+/** @import * as fsp from 'node:fs/promises' */
+/** @import { Readable } from 'node:stream' */
 /** @import { FilePowers, FileStat } from '../files.js' */
 import harden from '@endo/harden';
 
@@ -7,8 +10,8 @@ import harden from '@endo/harden';
  * this module; callers receive plain data.
  *
  * @param {object} host
- * @param {import('fs/promises')} host.fsp
- * @param {(path: string) => import('stream').Readable} host.createReadStream
+ * @param {typeof fsp} host.fsp
+ * @param {(path: string) => Readable} host.createReadStream
  * @param {(...parts: string[]) => string} host.dirname
  * @param {() => string} host.randomUUID a fresh name for a scratch file
  * @param {() => number | undefined} host.getUserId the user running this
@@ -73,7 +76,7 @@ export const makeFilePowers = ({
   };
 
   /**
-   * @param {import('fs').Stats} stats
+   * @param {Stats} stats
    * @returns {FileStat}
    */
   const describe = stats => {

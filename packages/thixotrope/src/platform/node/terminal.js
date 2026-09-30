@@ -1,4 +1,6 @@
 // @ts-check
+/** @import * as process from 'node:process' */
+/** @import * as readline from 'node:readline' */
 /** @import { TerminalPowers } from '../terminal.js' */
 import harden from '@endo/harden';
 
@@ -10,8 +12,8 @@ import { makeLineReader } from './line-reader.js';
  * and SIGTERM handlers that close it.
  *
  * @param {object} host
- * @param {import('readline')} host.readline
- * @param {import('process')} host.process
+ * @param {typeof readline} host.readline
+ * @param {typeof process} host.process
  * @returns {TerminalPowers}
  */
 export const makeTerminalPowers = ({ readline, process }) => {
