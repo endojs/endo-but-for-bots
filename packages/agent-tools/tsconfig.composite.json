@@ -18,6 +18,9 @@
       "path": "../exo-http-client/tsconfig.composite.json"
     },
     {
+      "path": "../exo-package-manager/tsconfig.composite.json"
+    },
+    {
       "path": "../exo-shell/tsconfig.composite.json"
     },
     {
