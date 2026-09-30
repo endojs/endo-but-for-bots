@@ -226,6 +226,12 @@ export const makeDefaultCapTPImportExportTables = ({
  * @property {TrapHost} [trapHost] if specified, enable this CapTP (host) to serve
  * objects marked with makeTrapHandler to synchronous clients (guests)
  * @property {boolean} [gcImports] if true, aggressively garbage collect imports
+ * @property {string} [peerId] our name for the peer. If specified,
+ * `makeSturdyRefFromData` refuses data that names a different peer.
+ * @property {(objectId: string) => unknown} [locateSturdyRef] if specified,
+ * serve the peer's SturdyRefs-from-data: when the peer enlivens a SturdyRef
+ * it constructed with `objectId`, answer with this hook's result. Without it,
+ * every such enliven rejects.
  * @property {(MakeCapTPImportExportTablesOptions) => CapTPImportExportTables} [makeCapTPImportExportTables] provide external import/export tables
  * @property {(err: Error, errorId?: string) => void} [marshalSaveError]
  * forwarded to the underlying `makeMarshal` call. Invoked after the
@@ -237,6 +243,17 @@ export const makeDefaultCapTPImportExportTables = ({
  * error this CapTP decodes, with the wire-level errorId. Useful for a
  * privileged downstream layer to associate the decoded error with the
  * sender's locally captured context.
+ */
+
+/**
+ * The coordinates a SturdyRef can be reconstructed from.
+ *
+ * @typedef {object} SturdyRefData
+ * @property {string} peerId the peer that holds the referent
+ * @property {string} objectId the peer's name for the referent, such as a
+ * swiss number
+ * @property {string} [designator] the network the peer is reachable on
+ * @property {Record<string, string>} [hints] how to connect to the peer
  */
 
 /** @type {CapTPRejectionContext} */
@@ -294,6 +311,8 @@ export const makeCapTP = (
     makeCapTPImportExportTables = makeDefaultCapTPImportExportTables,
     marshalSaveError,
     marshalLoadError,
+    peerId,
+    locateSturdyRef,
   } = opts;
 
   // It's a hazard to have trapGuest and trapHost both enabled, as we may
@@ -833,6 +852,10 @@ export const makeCapTP = (
                   X`SturdyRef export ${slot} answers only enliven(), not ${q(prop)}`,
                 ),
               );
+      } else if (target === 'l-0') {
+        // The peer is enlivening a SturdyRef it constructed from data. The
+        // target is our SturdyRef locator, which answers only `locate`.
+        val = sturdyRefLocator;
       } else {
         val = unserialize({
           body: JSON.stringify({
@@ -1114,6 +1137,98 @@ export const makeCapTP = (
     return far;
   };
 
+  // The locator we serve for the peer's SturdyRefs-from-data (see
+  // `makeSturdyRefFromData`). It answers only `locate`, and only through the
+  // `locateSturdyRef` hook the creator of this CapTP chose to supply.
+  const sturdyRefLocator = harden({
+    /** @param {string} objectId */
+    locate: async objectId => {
+      typeof objectId === 'string' ||
+        Fail`SturdyRef object id must be a string, not ${objectId}`;
+      if (locateSturdyRef === undefined) {
+        throw Fail`CapTP ${ourId} does not locate SturdyRefs from data`;
+      }
+      return locateSturdyRef(objectId);
+    },
+  });
+
+  /**
+   * The data of each SturdyRef this connection constructed from data, so a
+   * persistence layer can record a ref and later reconstruct it.
+   *
+   * @type {WeakMap<object, SturdyRefData>}
+   */
+  const sturdyRefData = new WeakMap();
+
+  /**
+   * Construct a SturdyRef from its recorded coordinates. Enlivening it asks
+   * the peer's `locateSturdyRef` hook for `objectId` over this connection, so
+   * it fails once the connection is gone. `designator` and `hints` are
+   * recorded for the layer that routes connections; a single CapTP
+   * connection does not interpret them.
+   *
+   * This is a closely-held capability of whoever made this CapTP: it is not
+   * reachable from the peer, from a SturdyRef, or from the realm.
+   *
+   * @param {SturdyRefData} data
+   * @returns {import('@endo/pass-style').SturdyRef}
+   */
+  const makeSturdyRefFromData = data => {
+    const {
+      peerId: dataPeerId,
+      objectId,
+      designator = undefined,
+      hints = {},
+      ...rest
+    } = data;
+    const extra = Object.keys(rest);
+    extra.length === 0 || Fail`Unexpected SturdyRef data properties ${extra}`;
+    typeof dataPeerId === 'string' ||
+      Fail`SturdyRef peerId must be a string, not ${dataPeerId}`;
+    typeof objectId === 'string' ||
+      Fail`SturdyRef objectId must be a string, not ${objectId}`;
+    designator === undefined ||
+      typeof designator === 'string' ||
+      Fail`SturdyRef designator must be a string, not ${designator}`;
+    (typeof hints === 'object' &&
+      hints !== null &&
+      Object.values(hints).every(hint => typeof hint === 'string')) ||
+      Fail`SturdyRef hints must be a record of strings, not ${hints}`;
+    peerId === undefined ||
+      dataPeerId === peerId ||
+      Fail`SturdyRef data names peer ${dataPeerId}, but CapTP ${ourId} connects to ${peerId}`;
+    /** @type {SturdyRefData} */
+    const recorded = harden({
+      peerId: dataPeerId,
+      objectId,
+      ...(designator === undefined ? {} : { designator }),
+      hints: { ...hints },
+    });
+    const sturdyRef = /** @type {import('@endo/pass-style').SturdyRef} */ (
+      makeSturdyRef(
+        harden({
+          enliven: () => {
+            /** @type {{ promise: any }} */
+            const { promise: locator } = makeRemoteKit('l-0');
+            return E(locator).locate(objectId);
+          },
+        }),
+      )
+    );
+    sturdyRefData.set(sturdyRef, recorded);
+    return sturdyRef;
+  };
+
+  /**
+   * The recorded data of a SturdyRef this connection constructed from data,
+   * or `undefined` for any other value.
+   *
+   * @param {unknown} sturdyRef
+   * @returns {SturdyRefData | undefined}
+   */
+  const getSturdyRefData = sturdyRef =>
+    sturdyRefData.get(/** @type {object} */ (sturdyRef));
+
   // Put together our return value.
   const rets = {
     abort,
@@ -1127,6 +1242,8 @@ export const makeCapTP = (
     makeTrapHandler,
     Trap: /** @type {import('./ts-types.js').Trap | undefined} */ (undefined),
     makeRemoteKit,
+    makeSturdyRefFromData,
+    getSturdyRefData,
   };
 
   if (trapGuest) {

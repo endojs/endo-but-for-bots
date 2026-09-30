@@ -302,3 +302,89 @@ test('SturdyRef to self-location can be resolved', async t => {
 
   clientA.shutdown();
 });
+
+test('a SturdyRef reconstructed from its data enlivens like the original', async t => {
+  const testObjectTable = new Map();
+  testObjectTable.set(
+    'test-object',
+    Far('TestObject', {
+      getValue: () => 42,
+    }),
+  );
+
+  const { client: clientA } = await makeTestClient({ debugLabel: 'A' });
+  const { client: clientB, location: locationB } = await makeTestClient({
+    debugLabel: 'B',
+    makeDefaultSwissnumTable: () => testObjectTable,
+  });
+
+  const original = clientA.makeSturdyRef(locationB, 'test-object');
+  const data = clientA.getSturdyRefData(original);
+  if (!data) throw Error('expected SturdyRef data');
+  t.is(data.peerId, locationB.designator);
+  t.is(data.objectId, 'test-object');
+  t.is(data.designator, locationB.network ?? locationB.transport);
+  t.true(Object.isFrozen(data));
+
+  const reconstructed = clientA.makeSturdyRefFromData(data);
+  t.not(reconstructed, original);
+  t.is(passStyleOf(reconstructed), 'sturdyRef');
+  t.deepEqual(getSturdyRefDetails(reconstructed), {
+    location: {
+      type: 'ocapn-peer',
+      designator: locationB.designator,
+      transport: locationB.network ?? locationB.transport,
+      hints: locationB.hints,
+    },
+    secret: 'test-object',
+  });
+  const resolved = /** @type {any} */ (await SturdyRef.enliven(reconstructed));
+  t.is(await E(resolved).getValue(), 42);
+
+  clientA.shutdown();
+  clientB.shutdown();
+});
+
+test('constructing an OCapN SturdyRef from data validates the data', async t => {
+  const { client } = await makeTestClient({ debugLabel: 'A' });
+  t.throws(
+    () =>
+      client.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 'p', designator: 'tcp' }),
+      ),
+    { message: /objectId must be a string or bytes/ },
+  );
+  t.throws(
+    () =>
+      client.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 'p', objectId: 'x' }),
+      ),
+    { message: /designator must be a string/ },
+  );
+  t.throws(
+    () =>
+      client.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'p',
+          objectId: 'x',
+          designator: 'tcp',
+          extra: true,
+        }),
+      ),
+    { message: /unexpected SturdyRef data properties extra/ },
+  );
+  const bytes = Uint8Array.of(0x80, 0x81);
+  const ref = client.makeSturdyRefFromData({
+    peerId: 'p',
+    objectId: bytes,
+    designator: 'tcp',
+  });
+  t.is(getSturdyRefDetails(ref)?.secret, bytes);
+  t.deepEqual(client.getSturdyRefData(ref), {
+    peerId: 'p',
+    objectId: bytes,
+    designator: 'tcp',
+  });
+  t.is(client.getSturdyRefData(/** @type {any} */ (harden({}))), undefined);
+  client.shutdown();
+});
