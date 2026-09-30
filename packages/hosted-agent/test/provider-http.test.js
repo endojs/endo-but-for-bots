@@ -26,7 +26,7 @@ test.serial(
     const listener = await makeProviderHttpListener({
       ...options,
       endpoint: Far('must not dispatch', {
-        requestStream() {
+        requestByteStream() {
           t.fail('must not dispatch');
         },
       }),
@@ -76,25 +76,35 @@ test.serial(
     });
     let calls = 0;
     let returned = false;
+    /** @type {() => void} */
+    let acknowledgeReturn;
+    const returnAcknowledged = new Promise(resolve => {
+      acknowledgeReturn = () => resolve(undefined);
+    });
     /** @type {any} */
     let seen;
-    const reader = Far('reader', {
+    const reader = bytesReaderFromIterator({
       async next() {
         calls += 1;
         if (calls === 1)
-          return harden({ done: false, value: 'data: first\n\n' });
+          return {
+            done: false,
+            value: new TextEncoder().encode('data: first\n\n'),
+          };
         await finished;
-        return harden({ done: true });
+        return { done: true, value: undefined };
       },
       return() {
         returned = true;
         finish();
+        acknowledgeReturn();
+        return { done: true, value: undefined };
       },
     });
     const listener = await makeProviderHttpListener({
       ...options,
       endpoint: Far('endpoint', {
-        requestStream(request) {
+        requestByteStream(request) {
           seen = request;
           return harden({
             status: 200,
@@ -120,6 +130,7 @@ test.serial(
     t.is(new TextDecoder().decode(first.value), 'data: first\n\n');
     finish();
     t.true((await stream.next()).done);
+    await returnAcknowledged;
     t.true(returned);
     // The harness describes its own request, including a capability this
     // listener has never heard of. What it cannot do is authenticate that
@@ -151,7 +162,7 @@ test.serial(
     const listener = await makeProviderHttpListener({
       ...options,
       endpoint: Far('endpoint', {
-        requestStream() {
+        requestByteStream() {
           calls += 1;
           throw Error('must not run');
         },
@@ -202,7 +213,7 @@ test.serial(
   'HTTP listener refuses invalid path allowlists and authorization modes',
   async t => {
     const endpoint = Far('endpoint', {
-      requestStream() {
+      requestByteStream() {
         t.fail('must not dispatch');
       },
     });
@@ -269,14 +280,14 @@ test.serial(
       clientAuthorization: 'strip',
       allowedPaths: ['/api/v1/chat/completions'],
       endpoint: Far('endpoint', {
-        requestStream(request) {
+        requestByteStream(request) {
           paths.push(request.path);
           return harden({
             status: 200,
             contentType: 'application/json',
-            reader: Far('reader', {
+            reader: bytesReaderFromIterator({
               async next() {
-                return harden({ done: true });
+                return { done: true, value: undefined };
               },
             }),
           });
@@ -322,17 +333,23 @@ test.serial(
     const listener = await makeProviderHttpListener({
       ...options,
       endpoint: Far('endpoint', {
-        requestStream: () =>
+        requestByteStream: () =>
           harden({
             status: 200,
             contentType: 'text/event-stream',
-            reader: Far('reader', {
-              next: () => read,
-              return: () => {
-                resolveRead(harden({ done: true }));
-                cancelled();
+            reader: bytesReaderFromIterator(
+              {
+                next: () => read,
+                return: () => {
+                  cancelled();
+                  return { done: true, value: undefined };
+                },
               },
-            }),
+              {
+                cancelPending: () =>
+                  resolveRead({ done: true, value: undefined }),
+              },
+            ),
           }),
       }),
     });
@@ -384,7 +401,7 @@ test.serial(
       ...options,
       timeoutMs: 100,
       endpoint: Far('endpoint', {
-        requestStream() {
+        requestByteStream() {
           entered();
           return result;
         },
@@ -408,12 +425,13 @@ test.serial(
       harden({
         status: 200,
         contentType: 'text/event-stream',
-        reader: Far('late reader', {
+        reader: bytesReaderFromIterator({
           next() {
             throw Error('must not read');
           },
           return() {
             cancelled();
+            return { done: true, value: undefined };
           },
         }),
       }),
@@ -427,7 +445,7 @@ test.serial('HTTP masks upstream exceptions', async t => {
   const listener = await makeProviderHttpListener({
     ...options,
     endpoint: Far('endpoint', {
-      requestStream() {
+      requestByteStream() {
         throw Error('canary-secret');
       },
     }),
@@ -485,7 +503,7 @@ test.serial(
     t.is(await readHttpText(response), text.join(''));
     t.deepEqual(calls, ['requestByteStream']);
     t.is(pulls, text.length);
-    // The endpoint is asked what it offers once, not per request.
+    // Every request uses the same bytes-only endpoint contract.
     const again = await requestHttp(`${listener.url}/v1/responses`, {
       method: 'POST',
       headers,
@@ -497,29 +515,16 @@ test.serial(
 );
 
 test.serial(
-  'an endpoint from before the bytes stream is still served, one chunk per call',
+  'a text-only endpoint is refused without invoking its legacy method',
   async t => {
     t.timeout(5000);
-    const parts = ['alpha ', 'beta'];
+    let legacyCalls = 0;
     const listener = await makeProviderHttpListener({
       ...options,
       endpoint: Far('endpoint without bytes', {
         requestStream() {
-          const queue = [...parts];
-          return harden({
-            status: 200,
-            contentType: 'application/json',
-            reader: Far('reader', {
-              next: async () => {
-                const value = queue.shift();
-                return harden({
-                  done: value === undefined,
-                  value: value ?? '',
-                });
-              },
-              return() {},
-            }),
-          });
+          legacyCalls += 1;
+          throw Error('Legacy endpoint must not be invoked');
         },
       }),
     });
@@ -529,7 +534,8 @@ test.serial(
       headers,
       body,
     });
-    t.is(response.statusCode, 200);
-    t.is(await readHttpText(response), parts.join(''));
+    t.is(response.statusCode, 502);
+    t.is(await readHttpText(response), 'Inference request failed');
+    t.is(legacyCalls, 0);
   },
 );

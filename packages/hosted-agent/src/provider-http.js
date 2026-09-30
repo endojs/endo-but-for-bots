@@ -105,20 +105,6 @@ export const makeProviderHttpListener = async ({
   clientAuthorization === 'reject' ||
     clientAuthorization === 'strip' ||
     Fail`Invalid client authorization mode`;
-  // Whether the endpoint offers the bytes stream, asked once. An endpoint
-  // that cannot say is one that does not.
-  /** @type {Promise<boolean> | undefined} */
-  let byteStreams;
-  const offersByteStream = () => {
-    byteStreams ??= Promise.resolve(
-      // eslint-disable-next-line no-underscore-dangle
-      E(endpoint).__getMethodNames__(),
-    ).then(
-      names => Array.isArray(names) && names.includes('requestByteStream'),
-      () => false,
-    );
-    return byteStreams;
-  };
   /** @type {Set<Socket>} */
   const sockets = new Set();
   /** @type {Set<() => void>} */
@@ -162,7 +148,7 @@ export const makeProviderHttpListener = async ({
       return;
     }
     let stopped = false;
-    /** Close whichever kind of response reader is open. */
+    /** Release the byte reader, including after its stream reaches EOF. */
     /** @type {(() => void) | undefined} */
     let closeReader;
     const stop = () => {
@@ -213,24 +199,15 @@ export const makeProviderHttpListener = async ({
         body: parts.join(''),
         headers: forwardableHeaders(request.headers),
       });
-      // The bytes stream when the endpoint has one, read ahead of so a
-      // response over a slow link does not pay a round trip per chunk; the
-      // text reader, one call per chunk, when it does not (a broker from
-      // before it). Asked before the last look at the consumer, not after:
-      // a client that went away while this was being learned must not have a
-      // metered request dispatched for it.
-      const byBytes = await offersByteStream();
       !stopped || Fail`HTTP consumer disconnected`;
-      const result = await (byBytes
-        ? E(endpoint).requestByteStream(message)
-        : E(endpoint).requestStream(message));
+      const result = await E(endpoint).requestByteStream(message);
       // Until the response is known to be one worth streaming, closing it is
       // a call on the reader itself; the bytes stream is not opened, with its
       // read-ahead, for a response that is about to be refused.
       const { reader } = result;
       closeReader = () =>
         void E(reader)
-          [byBytes ? 'close' : 'return']()
+          .close()
           .catch(() => {});
       stage = 'response';
       if (stopped) {
@@ -247,21 +224,10 @@ export const makeProviderHttpListener = async ({
           result.contentType,
         )) ||
         Fail`Invalid inference response`;
-      /** @type {{ next: () => Promise<IteratorResult<Uint8Array | string>> }} */
-      let chunks;
-      if (byBytes) {
-        const bytesIterator = iterateBytesReader(reader, {
-          buffer: RESPONSE_READ_AHEAD,
-          stringLengthLimit: MAX_BASE64_CHUNK_CHARS,
-        });
-        chunks = bytesIterator;
-        closeReader = () =>
-          void Promise.resolve(bytesIterator.return?.(undefined)).catch(
-            () => {},
-          );
-      } else {
-        chunks = harden({ next: () => E(reader).next() });
-      }
+      const chunks = iterateBytesReader(reader, {
+        buffer: RESPONSE_READ_AHEAD,
+        stringLengthLimit: MAX_BASE64_CHUNK_CHARS,
+      });
       // The consumer may have gone while the stream was being opened.
       if (stopped) {
         closeReader();
@@ -284,13 +250,8 @@ export const makeProviderHttpListener = async ({
         !stopped || Fail`HTTP consumer disconnected`;
         if (chunk.done) break;
         const { value } = chunk;
-        (byBytes ? value instanceof Uint8Array : typeof value === 'string') ||
-          Fail`Invalid inference chunk`;
-        responseBytes += BigInt(
-          typeof value === 'string'
-            ? new TextEncoder().encode(value).length
-            : value.byteLength,
-        );
+        value instanceof Uint8Array || Fail`Invalid inference chunk`;
+        responseBytes += BigInt(value.byteLength);
         responseBytes <= maxResponseBytes || Fail`Response too large`;
         if (!response.write(value)) {
           // Stop pulling upstream while TCP applies backpressure.

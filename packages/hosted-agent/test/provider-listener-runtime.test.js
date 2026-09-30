@@ -1,6 +1,7 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import {
@@ -256,20 +257,14 @@ for (const diagnosticsEnabled of [false, true]) {
       let calls = 0;
       const listener = await runtime.start({
         endpoint: Far('inference after stderr', {
-          requestStream() {
+          requestByteStream() {
             calls += 1;
-            let done = false;
             return harden({
               status: 200,
               contentType: 'text/event-stream',
-              reader: Far('response', {
-                async next() {
-                  if (done) return harden({ done: true, value: '' });
-                  done = true;
-                  return harden({ done: false, value: 'data: healthy\n\n' });
-                },
-                return() {},
-              }),
+              reader: bytesReaderFromIterator(
+                [new TextEncoder().encode('data: healthy\n\n')].values(),
+              ),
             });
           },
         }),

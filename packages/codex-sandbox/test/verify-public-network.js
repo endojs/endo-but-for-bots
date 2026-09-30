@@ -2,6 +2,7 @@
 import '@endo/init';
 
 import { E, Far } from '@endo/far';
+import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
 import { makePublicEgress } from '@endo/hosted-agent/public-egress.js';
 import { execFile } from 'node:child_process';
@@ -90,20 +91,14 @@ try {
   });
   const listener = await runtime.start({
     endpoint: Far('No provider credentials', {
-      requestStream() {
+      requestByteStream() {
         brokerRequests += 1;
-        let sent = false;
         return harden({
           status: 200,
           contentType: 'application/json',
-          reader: Far('Synthetic inference reader', {
-            next: () => {
-              if (sent) return harden({ done: true });
-              sent = true;
-              return harden({ done: false, value: '{"synthetic":true}' });
-            },
-            return: () => harden({ done: true }),
-          }),
+          reader: bytesReaderFromIterator(
+            [new TextEncoder().encode('{"synthetic":true}')].values(),
+          ),
         });
       },
     }),

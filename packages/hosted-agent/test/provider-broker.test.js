@@ -16,6 +16,29 @@ import { admitsModels } from './admits-models.js';
 
 /** @import { BrokerPolicy, ProviderRequestAdapter } from '../src/provider-broker.js' */
 
+// Test-side decoding only: exercise the public byte stream with no read-ahead,
+// retaining the existing text-level screening and cancellation assertions.
+const readTextResponse = async (endpoint, message) => {
+  const response = await E(endpoint).requestByteStream(message);
+  const iterator = iterateBytesReader(response.reader, { buffer: 0 });
+  const decoder = new TextDecoder('utf-8', { fatal: true });
+  return {
+    ...response,
+    reader: Far('TestDecodedReader', {
+      async next() {
+        const chunk = await iterator.next();
+        return {
+          done: chunk.done,
+          value: chunk.done
+            ? decoder.decode()
+            : decoder.decode(chunk.value, { stream: true }),
+        };
+      },
+      return: () => iterator.return(undefined),
+    }),
+  };
+};
+
 const policy = harden({
   origin: 'https://api.example.test',
   routes: [{ method: 'POST', path: '/v1/responses' }],
@@ -76,7 +99,8 @@ for (const streaming of [false, true]) {
     );
     t.teardown(() => E(broker.admin).revoke());
     const result = streaming
-      ? await E(broker.endpoint).requestStream(
+      ? await readTextResponse(
+          broker.endpoint,
           harden({ ...request, body: largeBody }),
         )
       : await E(broker.endpoint).request(
@@ -101,7 +125,7 @@ for (const streaming of [false, true]) {
       // eslint-disable-next-line no-await-in-loop
       await t.throwsAsync(
         streaming
-          ? E(broker.endpoint).requestStream(excessive)
+          ? readTextResponse(broker.endpoint, excessive)
           : E(broker.endpoint).request(excessive),
       );
     }
@@ -502,12 +526,12 @@ test('open streams retain admission slots until EOF or cancellation', async t =>
       }),
   });
   t.teardown(() => E(grant.admin).revoke());
-  const first = await E(grant.endpoint).requestStream(request);
+  const first = await readTextResponse(grant.endpoint, request);
   await t.throwsAsync(E(grant.endpoint).request(request), {
     message: /concurrency limit/,
   });
   t.true((await E(first.reader).next()).done);
-  const second = await E(grant.endpoint).requestStream(request);
+  const second = await readTextResponse(grant.endpoint, request);
   await E(second.reader).return();
   t.is((await E(grant.endpoint).request(request)).status, 200);
   t.is((await E(grant.admin).getStatus()).activeRequests, 0);
@@ -541,7 +565,7 @@ test('transport deadline releases an abandoned stream without another pull', asy
     },
   );
   t.teardown(() => E(grant.admin).revoke());
-  await E(grant.endpoint).requestStream(request);
+  await readTextResponse(grant.endpoint, request);
   t.is((await E(grant.admin).getStatus()).activeRequests, 1);
   expire();
   t.is((await E(grant.admin).getStatus()).activeRequests, 0);
@@ -809,7 +833,7 @@ test('stream rejects a credential split across chunks before disclosing its pref
     `${'safe-prefix '.repeat(2)}canary-`,
     'secret',
   ]);
-  const response = await E(lease.endpoint).requestStream(request);
+  const response = await readTextResponse(lease.endpoint, request);
   const first = await E(response.reader).next();
   t.false(first.value.includes('canary'));
   await t.throwsAsync(() => E(response.reader).next(), {
@@ -821,7 +845,7 @@ test('stream rejects a credential split across chunks before disclosing its pref
 
 test('stream delivers UTF8 intact and checks revocation on every pull', async t => {
   const lease = streamingSetup([`${'a'.repeat(20)}😀`, 'z'.repeat(20)]);
-  const response = await E(lease.endpoint).requestStream(request);
+  const response = await readTextResponse(lease.endpoint, request);
   t.is(response.contentType, 'application/json');
   const first = await E(response.reader).next();
   t.false(first.done);
@@ -835,7 +859,7 @@ test('stream delivers UTF8 intact and checks revocation on every pull', async t 
 test('stream preserves buffered content and yields EOF after final held suffix', async t => {
   const input = ['hello 😀', ' world!', 'x'.repeat(25)];
   const lease = streamingSetup([...input]);
-  const response = await E(lease.endpoint).requestStream(request);
+  const response = await readTextResponse(lease.endpoint, request);
   let output = '';
   for (;;) {
     // eslint-disable-next-line no-await-in-loop
@@ -853,7 +877,7 @@ test('stream enforces response quota and rejects encoded credential across chunk
   ]) {
     const lease = streamingSetup(chunks);
     // eslint-disable-next-line no-await-in-loop
-    const response = await E(lease.endpoint).requestStream(request);
+    const response = await readTextResponse(lease.endpoint, request);
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => E(response.reader).next(), {
       message: /Provider request failed/,
@@ -864,6 +888,16 @@ test('stream enforces response quota and rejects encoded credential across chunk
 
 test('cancel suppresses a pending delivery even if upstream ignores cancellation', async t => {
   t.timeout(1000);
+  /** @type {() => void} */
+  let enter = () => {};
+  const entered = new Promise(resolve => {
+    enter = () => resolve(undefined);
+  });
+  /** @type {() => void} */
+  let cancel = () => {};
+  const cancelled = new Promise(resolve => {
+    cancel = () => resolve(undefined);
+  });
   /** @type {(chunk: {done:boolean,value:string}) => void} */
   let deliver = () => {};
   const pending = new Promise(resolve => {
@@ -885,19 +919,26 @@ test('cancel suppresses a pending delivery even if upstream ignores cancellation
           status: 200,
           reader: Far('reader', {
             async next() {
+              enter();
               return pending;
             },
-            return() {},
+            return() {
+              cancel();
+            },
           }),
         });
       },
     }),
   });
-  const response = await E(lease.endpoint).requestStream(request);
+  const response = await readTextResponse(lease.endpoint, request);
   const pull = E(response.reader).next();
-  await E(response.reader).return();
+  await entered;
+  const closing = E(response.reader).return();
+  await cancelled;
   deliver(harden({ done: false, value: 'x'.repeat(40) }));
-  await t.throwsAsync(pull, { message: /Provider request failed/ });
+  await closing;
+  // Closing a byte iterator settles its pending pull as EOF, not a delivery.
+  t.deepEqual(await pull, { done: true, value: '' });
 });
 
 for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
@@ -935,11 +976,11 @@ for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
       }),
     });
     if (termination === 'invalid status') {
-      await t.throwsAsync(() => E(lease.endpoint).requestStream(request), {
+      await t.throwsAsync(() => readTextResponse(lease.endpoint, request), {
         message: /Provider request failed/,
       });
     } else {
-      const response = await E(lease.endpoint).requestStream(request);
+      const response = await readTextResponse(lease.endpoint, request);
       if (termination === 'return') {
         await E(response.reader).return();
         await E(response.reader).return();
@@ -947,7 +988,9 @@ for (const termination of ['return', 'read failure', 'invalid status', 'EOF']) {
         await t.throwsAsync(() => E(response.reader).next(), {
           message: /Provider request failed/,
         });
-        await E(response.reader).return();
+        await t.throwsAsync(() => E(response.reader).return(), {
+          message: /Provider request failed/,
+        });
       } else {
         t.true((await E(response.reader).next()).done);
         await E(response.reader).return();
@@ -1533,7 +1576,7 @@ test('a streaming oauth turn refreshes, retries and screens both tokens', async 
       });
     },
   });
-  const response = await E(lease.endpoint).requestStream(request);
+  const response = await readTextResponse(lease.endpoint, request);
   t.is(response.status, 200);
   let text = '';
   for (;;) {
@@ -1567,7 +1610,7 @@ test('a streaming oauth turn refreshes, retries and screens both tokens', async 
         }),
       }),
   });
-  const stream = await E(leaked.endpoint).requestStream(request);
+  const stream = await readTextResponse(leaked.endpoint, request);
   await t.throwsAsync(() => E(stream.reader).next(), {
     message: /Provider request failed/,
   });
@@ -2491,7 +2534,7 @@ test('a request a drained subscription refuses is served by the next, built afre
 
 test('the handover is invisible to a streamed response too', async t => {
   const pool = poolSetup({ scripts: { first: ['exhausted'], second: [] } });
-  const response = await E(pool.endpoint).requestStream(request);
+  const response = await readTextResponse(pool.endpoint, request);
   let text = '';
   for (;;) {
     // eslint-disable-next-line no-await-in-loop
@@ -2704,11 +2747,6 @@ test('a streamed response settles what it cost when the producer has read its en
       reasoningOutputTokens: 10,
     },
   });
-  // The older reader is handed no settlement.
-  const legacy = await E(
-    streamingSetup([COMPLETED], ROOMY).endpoint,
-  ).requestStream(request);
-  t.false('usage' in legacy);
 });
 
 test('a stream that began and was abandoned settles with what it had said, or nothing', async t => {

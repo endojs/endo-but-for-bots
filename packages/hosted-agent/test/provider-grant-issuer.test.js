@@ -1313,7 +1313,7 @@ test('a far subscription that hangs or has gone costs a pause, not the session: 
   await kit.revoke();
 });
 
-test('a far endpoint that stopped working is opened again, once; the older text reader never reaches a far subscription', async t => {
+test('a far endpoint that stopped working is opened again, once; no legacy text API is exposed', async t => {
   /** @type {any[]} */
   const opened = [];
   let served = 0;
@@ -1347,18 +1347,12 @@ test('a far endpoint that stopped working is opened again, once; the older text 
   // The dead one is kept until the grant ends: another request of this
   // session might still have been streaming from it.
   t.false(opened[0].revoked);
-  // A listener from before the bytes stream is served by our own account.
-  const before = served;
-  const legacy = await E(f.endpoint()).requestStream(inference);
-  let text = '';
-  for (;;) {
-    // eslint-disable-next-line no-await-in-loop
-    const chunk = await E(legacy.reader).next();
-    text += chunk.value;
-    if (chunk.done) break;
-  }
-  t.is(text, '{"served":"own"}');
-  t.is(served, before);
+  t.is(served, 1);
+  // The endpoint no longer offers the legacy text-stream capability.
+  t.false(
+    // eslint-disable-next-line no-underscore-dangle
+    (await E(f.endpoint()).__getMethodNames__()).includes('requestStream'),
+  );
   await kit.revoke();
   await new Promise(resolve => setTimeout(resolve, 5));
   t.true(opened[0].revoked, 'the dead one is given back with the grant');

@@ -42,6 +42,11 @@ configuration; environment aliases, host inference and the buffered Lal fallback
 are removed. Unsupported provider kinds reject before setup acquires resources.
 The 787 Floot tests and typecheck pass; independent review approves.
 These source-only changes preserve stored provider config and Secrets.
+The legacy public text-stream endpoint and listener fallback are removed in
+newer source, with the byte-stream protocol owning HTTP delivery and cleanup.
+This also fixes byte-reader release after EOF.
+All 774 hosted-agent tests pass (one skipped); the updated listener image and
+coordinated broker replacement remain deployment gates.
 The preceding simplification slice removes Codex's
 second hosted model-list authority in favor of the same account catalog used by
 admission, deletes its native-descriptor normalization API, removes OpenCode's

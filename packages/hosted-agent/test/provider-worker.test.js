@@ -74,22 +74,16 @@ for (const diagnosticsEnabled of [false, true]) {
       });
       let calls = 0;
       const endpoint = Far('host-only inference', {
-        requestStream(request) {
+        requestByteStream(request) {
           calls += 1;
           t.is(request.path, '/v1/responses');
           if (calls === 2) throw Fail`Inference quota exhausted`;
-          let done = false;
           return harden({
             status: 200,
             contentType: 'text/event-stream',
-            reader: Far('host-only reader', {
-              async next() {
-                if (done) return harden({ done: true, value: '' });
-                done = true;
-                return harden({ done: false, value: 'data: hello\n\n' });
-              },
-              return() {},
-            }),
+            reader: bytesReaderFromIterator(
+              [new TextEncoder().encode('data: hello\n\n')].values(),
+            ),
           });
         },
       });
@@ -221,7 +215,7 @@ test.serial(
       output: worker.stdin,
       bootstrap: harden({
         endpoint: Far('unused inference', {
-          requestStream() {
+          requestByteStream() {
             throw Error('unused');
           },
         }),

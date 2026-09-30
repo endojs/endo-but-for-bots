@@ -241,34 +241,37 @@ Package lint has zero errors; formatting and the root documentation gate pass.
 Independent adversarial review approves; no stored schema, Secret ownership or
 rotation/cache behavior changes. Not deployed.
 
-Next compatibility retirement candidate: the public text-stream endpoint and
-HTTP fallback in `hosted-agent/src/provider-broker.js` and `provider-http.js`.
-HTTP currently introspects for `requestByteStream`, otherwise calls the old
-`requestStream`, and carries two reader/close protocols.
-The broker explicitly retains that public method for older pinned listeners.
+Removed the public text-stream endpoint and HTTP fallback in
+`hosted-agent/src/provider-broker.js` and `provider-http.js`.
+HTTP now uses `requestByteStream` directly, with one reader protocol.
+The broker's legacy method, pool filter and `bytesOk` flag are deleted.
 The shared subscription interface and metered shares already expose only buffered
 `request` and `requestByteStream`, so text fallback is not the current contract.
-Retirement must preserve byte-stream usage settlement, disconnect cancellation,
-size limits and response screening, with coordinated listener-image validation.
+Byte-stream usage settlement, disconnect cancellation, size limits and response
+screening remain covered by the migrated behavioral tests.
 Do not delete the internal fetch transport's text reader: it is still the upstream
 stream implementation, not the obsolete public protocol.
 Do not classify buffered `request` as dead: it is advertised by subscriptions and
 metered shares and dynamically forwarded by the grant issuer and broker.
 This is a callable capability API even when native HTTP listeners do not use it.
-Source/test inventory identifies the bounded implementation:
-
-- Delete the broker's public text method and its `perform` `bytesOk` flag;
-  that flag's pool filter exists only for the retired text path.
-- Delete HTTP feature negotiation, text-reader cancellation and text-chunk
-  branches, keeping byte-reader limits, screening and disconnect checks.
-- Retarget legacy HTTP and broker fixtures to byte readers without deleting their
-  behavioral assertions; retain internal transport `requestStream` fixtures.
-- Rebuild the provider-listener image (`worker-entry` imports `provider-http`),
-  update the three host listener pins, and retire/replace affected broker bindings
-  before claiming deployed acceptance. Current source does not establish what
-  an older pinned image supports.
-
-No transport deletion or listener-image compatibility proof is claimed yet.
+Migrated HTTP, broker, grant, worker and listener fixtures retain their security
+and lifecycle assertions; a legacy-only endpoint now refuses without invoking
+its text method.
+The EOF release regression exposed another defect: local iterator `return()`
+after EOF does not release the byte reader's source.
+HTTP now uses the byte reader's explicit `close()` for cleanup at every stage,
+including EOF; the regression waits for the source's release acknowledgement.
+All 774 shared hosted-agent tests pass (one skipped), including 137 focused
+HTTP/broker/grant tests and 29 bundled worker/listener tests.
+Independent adversarial review approves; the strengthened cancellation regression
+waits for an active upstream pull and cancellation before delivering the late chunk.
+Package types/lint, formatting and the root documentation gate pass.
+The Codex public-network operator probe now supplies a byte reader too; running
+that probe requires the rebuilt image and is part of deployment validation.
+The source change removes 79 runtime lines without adding a replacement protocol.
+Deployment must rebuild the provider-listener image (`worker-entry` imports
+`provider-http`), update all three listener pins and replace affected brokers.
+No deployed listener compatibility or live acceptance is claimed yet.
 
 | Mechanisms | Different responsibilities | Decision |
 |---|---|---|
