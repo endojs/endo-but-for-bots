@@ -34,8 +34,8 @@ const makeStub = () => {
     },
   };
   const powers = {
-    lookup(petNameOrPath) {
-      calls.push(['lookup', petNameOrPath]);
+    lookup(petNamePath) {
+      calls.push(['lookup', petNamePath]);
       return Promise.resolve(capability);
     },
   };
@@ -52,7 +52,7 @@ const makeStub = () => {
 test('glob delegates to the named capability', async t => {
   const { calls, run } = makeStub();
   const result = await run('glob', {
-    petNameOrPath: 'workspace',
+    petNamePath: 'workspace',
     pattern: 'src/**/*.js',
   });
   t.deepEqual(result, ['src/a.js', 'src/b.js']);
@@ -65,7 +65,7 @@ test('glob delegates to the named capability', async t => {
 test('grep searches all files when no glob is supplied', async t => {
   const { calls, run } = makeStub();
   const result = await run('grep', {
-    petNameOrPath: ['spaces', 'workspace'],
+    petNamePath: ['spaces', 'workspace'],
     pattern: 'TODO',
   });
   t.deepEqual(result, [
@@ -80,7 +80,7 @@ test('grep searches all files when no glob is supplied', async t => {
 test('grep with a glob uses the fused glorp surface', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: 'workspace',
     pattern: 'TODO',
     glob: 'src/**/*.js',
   });
@@ -93,7 +93,7 @@ test('grep with a glob uses the fused glorp surface', async t => {
 test('grep forwards maxResults', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: 'workspace',
     pattern: 'TODO',
     maxResults: 7,
   });
@@ -106,7 +106,7 @@ test('grep forwards maxResults', async t => {
 test('grep with a glob forwards maxResults to the fused glorp surface', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: 'workspace',
     pattern: 'TODO',
     glob: 'src/**/*.js',
     maxResults: 7,
@@ -122,7 +122,7 @@ test('grep validates optional argument shapes before dispatch', async t => {
   await t.throwsAsync(
     () =>
       run('grep', {
-        petNameOrPath: 'workspace',
+        petNamePath: 'workspace',
         pattern: 'TODO',
         maxResults: 'many',
       }),
@@ -150,7 +150,7 @@ test('grep rejects out-of-range maxResults before dispatch', async t => {
     await t.throwsAsync(
       () =>
         run('grep', {
-          petNameOrPath: 'workspace',
+          petNamePath: 'workspace',
           pattern: 'TODO',
           maxResults,
         }),
@@ -171,7 +171,7 @@ test('glob passes special-character patterns through verbatim', async t => {
     const { calls, run } = makeStub();
     // eslint-disable-next-line no-await-in-loop
     const result = await run('glob', {
-      petNameOrPath: 'workspace',
+      petNamePath: 'workspace',
       pattern,
     });
     t.deepEqual(result, ['src/a.js', 'src/b.js']);
@@ -189,7 +189,7 @@ test('glob passes special-character patterns through verbatim', async t => {
 test('grep passes a special-character regexp and glob filter through verbatim', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: 'workspace',
     pattern: '(foo|bar)',
     glob: '*.js',
   });
@@ -206,7 +206,7 @@ test('grep passes a special-character regexp and glob filter through verbatim', 
 test('glob forwards followSymlinks as an options record', async t => {
   const { calls, run } = makeStub();
   await run('glob', {
-    petNameOrPath: 'workspace',
+    petNamePath: 'workspace',
     pattern: 'src/**/*.js',
     followSymlinks: true,
   });
@@ -218,7 +218,7 @@ test('glob forwards followSymlinks as an options record', async t => {
 
 test('glob omits the options record when followSymlinks is absent', async t => {
   const { calls, run } = makeStub();
-  await run('glob', { petNameOrPath: 'workspace', pattern: 'src/**' });
+  await run('glob', { petNamePath: 'workspace', pattern: 'src/**' });
   // One argument, not `(pattern, {})`: a capability predating the parameter
   // must still answer a plain glob.
   t.deepEqual(calls[1], ['glob', 'src/**']);
@@ -227,7 +227,7 @@ test('glob omits the options record when followSymlinks is absent', async t => {
 test('grep forwards followSymlinks to the whole-tree walk', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: 'workspace',
     pattern: 'TODO',
     followSymlinks: true,
   });
@@ -240,7 +240,7 @@ test('grep forwards followSymlinks to the whole-tree walk', async t => {
 test('grep with a glob forwards followSymlinks to the fused glorp surface', async t => {
   const { calls, run } = makeStub();
   await run('grep', {
-    petNameOrPath: 'workspace',
+    petNamePath: 'workspace',
     pattern: 'TODO',
     glob: 'src/**/*.js',
     maxResults: 5,
@@ -257,7 +257,7 @@ test('a non-boolean followSymlinks is rejected before dispatch', async t => {
   await t.throwsAsync(
     () =>
       run('glob', {
-        petNameOrPath: 'workspace',
+        petNamePath: 'workspace',
         pattern: 'src/**',
         followSymlinks: 'yes',
       }),

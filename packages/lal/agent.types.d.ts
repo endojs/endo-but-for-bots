@@ -16,7 +16,6 @@ export type ToolCallArgs = {
   // capability other than the guest's own root directory.
   name?: NamePath;
   petNamePath?: NamePath;
-  petNameOrPath?: NamePath;
   fromPath?: NamePath;
   toPath?: NamePath;
   messageNumber?: number | bigint;

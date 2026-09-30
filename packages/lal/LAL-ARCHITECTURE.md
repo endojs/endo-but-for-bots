@@ -190,7 +190,7 @@ const executeTool = async (name, args) => {
   switch (name) {
     case 'help':     return E(powers).help(args.methodName);
     case 'list':     return E(powers).list(...args.petNamePath);
-    case 'lookup':   return E(powers).lookup(args.petNameOrPath);
+    case 'lookup':   return E(powers).lookup(args.petNamePath);
     case 'evaluate': /* direct code execution */
     // ...
     default: throw new Error(`Unknown tool: ${name}`);

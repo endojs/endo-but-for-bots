@@ -41,7 +41,7 @@ export const metaToolDefs = harden([
     name: 'inspect',
     summary:
       'Look up a capability by pet name and call its help() method to learn how to use it. ' +
-      'Argument: petNameOrPath.',
-    params: M.splitRecord({ petNameOrPath: NamePathArgumentShape }),
+      'Argument: petNamePath.',
+    params: M.splitRecord({ petNamePath: NamePathArgumentShape }),
   },
 ]);

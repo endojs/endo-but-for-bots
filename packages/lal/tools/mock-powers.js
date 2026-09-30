@@ -166,8 +166,8 @@ export function makeMockPowers(options = {}) {
       return Promise.resolve([...names].sort());
     },
 
-    lookup(petNameOrPath) {
-      const path = mockNamePath(petNameOrPath);
+    lookup(petNamePath) {
+      const path = mockNamePath(petNamePath);
       const key = path.join('/');
       const v = directory.get(key);
       if (v === undefined) {
@@ -224,7 +224,7 @@ export function makeMockPowers(options = {}) {
       );
     },
 
-    resolve(messageNumber, _petNameOrPath) {
+    resolve(messageNumber, _petNamePath) {
       return Promise.resolve();
     },
 
@@ -232,8 +232,8 @@ export function makeMockPowers(options = {}) {
       return Promise.resolve();
     },
 
-    adopt(messageNumber, edgeName, petNameOrPath) {
-      const path = mockNamePath(petNameOrPath);
+    adopt(messageNumber, edgeName, petNamePath) {
+      const path = mockNamePath(petNamePath);
       const key = path.join('/');
       // If we have a real ref for this edge, install it; otherwise
       // fall back to a placeholder so tests that don't care about the

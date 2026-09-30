@@ -31,10 +31,10 @@ export const mailToolDefs = harden([
     name: 'resolve',
     summary:
       'Respond to a request message by providing a named value. ' +
-      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), petNameOrPath.',
+      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), petNamePath.',
     params: M.splitRecord({
       messageNumber: MessageNumberShape,
-      petNameOrPath: NamePathArgumentShape,
+      petNamePath: NamePathArgumentShape,
     }),
   },
   {

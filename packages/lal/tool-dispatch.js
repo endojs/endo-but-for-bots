@@ -194,11 +194,11 @@ export const makeExecuteTool = powers => {
         return E(powers).list();
       }
       case 'lookup': {
-        const { petNameOrPath } = args;
-        if (petNameOrPath === undefined) {
-          throw new Error('petNameOrPath is required');
+        const { petNamePath } = args;
+        if (petNamePath === undefined) {
+          throw new Error('petNamePath is required');
         }
-        return E(powers).lookup(petNameOrPath);
+        return E(powers).lookup(petNamePath);
       }
       case 'remove': {
         const { petNamePath } = args;
@@ -251,11 +251,11 @@ export const makeExecuteTool = powers => {
         );
       }
       case 'resolve': {
-        const { messageNumber, petNameOrPath } = args;
-        if (messageNumber === undefined || petNameOrPath === undefined) {
-          throw new Error('messageNumber and petNameOrPath are required');
+        const { messageNumber, petNamePath } = args;
+        if (messageNumber === undefined || petNamePath === undefined) {
+          throw new Error('messageNumber and petNamePath are required');
         }
-        return E(powers).resolve(messageNumber, petNameOrPath);
+        return E(powers).resolve(messageNumber, petNamePath);
       }
       case 'reject': {
         const { messageNumber, reason } = args;
@@ -357,18 +357,18 @@ export const makeExecuteTool = powers => {
 
       // Capability operations
       case 'inspect': {
-        const { petNameOrPath } = args;
-        if (petNameOrPath === undefined) {
-          throw new Error('petNameOrPath is required');
+        const { petNamePath } = args;
+        if (petNamePath === undefined) {
+          throw new Error('petNamePath is required');
         }
-        const capability = await E(powers).lookup(petNameOrPath);
+        const capability = await E(powers).lookup(petNamePath);
         const parts = [];
         try {
           const helpText = await E(capability).help();
           parts.push(helpText);
         } catch {
           parts.push(
-            `Capability at "${petNameOrPath}" does not implement help().`,
+            `Capability at "${petNamePath}" does not implement help().`,
           );
         }
         try {
@@ -381,33 +381,33 @@ export const makeExecuteTool = powers => {
         return parts.join('\n');
       }
       case 'readText': {
-        const { petNameOrPath, fileName } = args;
-        if (petNameOrPath === undefined || fileName === undefined) {
-          throw new Error('petNameOrPath and fileName are required');
+        const { petNamePath, fileName } = args;
+        if (petNamePath === undefined || fileName === undefined) {
+          throw new Error('petNamePath and fileName are required');
         }
-        const capability = await E(powers).lookup(petNameOrPath);
+        const capability = await E(powers).lookup(petNamePath);
         return E(capability).readText(fileName);
       }
       case 'writeText': {
-        const { petNameOrPath, fileName, content } = args;
+        const { petNamePath, fileName, content } = args;
         if (
-          petNameOrPath === undefined ||
+          petNamePath === undefined ||
           fileName === undefined ||
           content === undefined
         ) {
-          throw new Error('petNameOrPath, fileName, and content are required');
+          throw new Error('petNamePath, fileName, and content are required');
         }
-        const capability = await E(powers).lookup(petNameOrPath);
+        const capability = await E(powers).lookup(petNamePath);
         return E(capability).writeText(fileName, content);
       }
       case 'editText': {
-        const { petNameOrPath, fileName, edits } = args;
+        const { petNamePath, fileName, edits } = args;
         if (
-          petNameOrPath === undefined ||
+          petNamePath === undefined ||
           fileName === undefined ||
           edits === undefined
         ) {
-          throw new Error('petNameOrPath, fileName, and edits are required');
+          throw new Error('petNamePath, fileName, and edits are required');
         }
         // Read-modify-write through the tree capability. `applyEdits` is
         // synchronous, so nothing interleaves *within* the transform, but the
@@ -417,7 +417,7 @@ export const makeExecuteTool = powers => {
         // (last-writer-wins). The capability serializes each individual
         // writeText, not the read-modify-write pair; a caller needing
         // atomicity must serialize at a higher level.
-        const capability = await E(powers).lookup(petNameOrPath);
+        const capability = await E(powers).lookup(petNamePath);
         const original = await E(capability).readText(fileName);
         const {
           content: updated,
@@ -428,8 +428,8 @@ export const makeExecuteTool = powers => {
         return harden({ applied, diff });
       }
       case 'glob': {
-        const { petNameOrPath, pattern, followSymlinks } = args;
-        const capability = await E(powers).lookup(petNameOrPath);
+        const { petNamePath, pattern, followSymlinks } = args;
+        const capability = await E(powers).lookup(petNamePath);
         // Omit the options record entirely when the tool call carried no
         // option, so a capability predating the parameter still answers.
         return followSymlinks === undefined
@@ -437,9 +437,8 @@ export const makeExecuteTool = powers => {
           : E(capability).glob(pattern, harden({ followSymlinks }));
       }
       case 'grep': {
-        const { petNameOrPath, pattern, glob, maxResults, followSymlinks } =
-          args;
-        const capability = await E(powers).lookup(petNameOrPath);
+        const { petNamePath, pattern, glob, maxResults, followSymlinks } = args;
+        const capability = await E(powers).lookup(petNamePath);
         const options =
           maxResults === undefined && followSymlinks === undefined
             ? undefined

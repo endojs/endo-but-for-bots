@@ -43,8 +43,8 @@ export const petnamesToolDefs = harden([
     name: 'lookup',
     summary:
       'Resolve a pet name or path to its value. Returns the value stored under that name. ' +
-      'Argument: petNameOrPath (string[], path components).',
-    params: M.splitRecord({ petNameOrPath: NamePathArgumentShape }),
+      'Argument: petNamePath (string[], path components).',
+    params: M.splitRecord({ petNamePath: NamePathArgumentShape }),
   },
   {
     name: 'remove',

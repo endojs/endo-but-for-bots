@@ -570,17 +570,17 @@ test('toAgentTool does not escape strings that do not start with sigil chars', a
 // Round-trip: args the LLM emits are decoded then re-encoded for results.
 // ---------------------------------------------------------------------------
 
-test('petNameOrPath string (no sigil) passes through decode unchanged', async t => {
-  // `lookup` expects petNameOrPath to be a string-or-string[]. A plain pet
+test('petNamePath string (no sigil) passes through decode unchanged', async t => {
+  // `lookup` receives petNamePath verbatim from the LLM. A plain pet
   // name like "my-file" has no sigil and decodes unchanged.
   const { piAgent, dispatched } = buildAgent(
-    oneToolCall('lookup', { petNameOrPath: 'my-file' }),
+    oneToolCall('lookup', { petNamePath: 'my-file' }),
   );
 
   await piAgent.prompt('start').catch(() => {});
   await piAgent.waitForIdle().catch(() => {});
 
   t.is(dispatched.length, 1);
-  t.is(dispatched[0].args.petNameOrPath, 'my-file');
-  t.is(typeof dispatched[0].args.petNameOrPath, 'string');
+  t.is(dispatched[0].args.petNamePath, 'my-file');
+  t.is(typeof dispatched[0].args.petNamePath, 'string');
 });

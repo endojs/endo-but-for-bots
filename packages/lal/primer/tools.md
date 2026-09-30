@@ -9,7 +9,7 @@
 - `list(name?)` — List your directory, or list contents of any
   capability by pet name
 - `has(petNamePath)` — Check if a name exists
-- `lookup(petNameOrPath)` — Get a value by name from your directory
+- `lookup(petNamePath)` — Get a value by name from your directory
 - `remove(petNamePath)` — Remove a name
 - `move(fromPath, toPath)` — Rename/move a reference
 - `copy(fromPath, toPath)` — Copy a reference
@@ -26,7 +26,7 @@
 - `dismiss(messageNumber)` — Remove a message from inbox
 - `request(recipientName, description, responseName?)` — Request
   a capability
-- `resolve(messageNumber, petNameOrPath)` — Respond to a request
+- `resolve(messageNumber, petNamePath)` — Respond to a request
 - `reject(messageNumber, reason?)` — Decline a request
 - `reply(messageNumber, strings, edgeNames, petNames)` — Reply
   to a message (PREFERRED for responses)
@@ -46,23 +46,23 @@
 
 ## Capability Operations
 
-- `inspect(petNameOrPath)` — Call `help()` on a capability and
+- `inspect(petNamePath)` — Call `help()` on a capability and
   list its methods. IMPORTANT: Always call `inspect()` before
   using `evaluate()` on an unfamiliar capability. The response
   includes method signatures with argument types. Do NOT guess
   method names or argument shapes — read the help text first.
-- `readText(petNameOrPath, fileName)` — Read text content from a
+- `readText(petNamePath, fileName)` — Read text content from a
   capability (ReadableTree, WritableTree, etc.)
-- `writeText(petNameOrPath, fileName, content)` — Write text
+- `writeText(petNamePath, fileName, content)` — Write text
   content to a capability (WritableTree, etc.)
-- `editText(petNameOrPath, fileName, edits)` — Apply unique-match text
+- `editText(petNamePath, fileName, edits)` — Apply unique-match text
   replacements and return a unified diff
-- `glob(petNameOrPath, pattern, followSymlinks?)` — Find paths recursively
+- `glob(petNamePath, pattern, followSymlinks?)` — Find paths recursively
   within a search-capable filesystem capability (`*` is segment-local and `**`
   crosses segments; `?` is literal). `**` reports a directory symlink but does
   not descend through it; name the path in a segment to reach through one, or
   set `followSymlinks` to sweep through all of them
-- `grep(petNameOrPath, pattern, glob?, maxResults?, followSymlinks?)` — Search
+- `grep(petNamePath, pattern, glob?, maxResults?, followSymlinks?)` — Search
   file contents with a flagless ECMAScript regular expression, optionally
   restricting the file set with a glob
 
