@@ -6,14 +6,16 @@
 import { E } from '@endo/eventual-send';
 
 /**
- * The daemon accepts only pet-name paths, so split a slash-delimited pet
- * name string into its path components.
+ * The daemon accepts only pet-name paths.
+ * A string is a single pet name and is never split on a delimiter, so a
+ * model that sends `'a/b'` gets the daemon's invalid-name error and learns to
+ * send `['a', 'b']`.
  *
  * @param {string | string[]} nameOrPath
  * @returns {string[]}
  */
 const toPetNamePath = nameOrPath =>
-  typeof nameOrPath === 'string' ? nameOrPath.split('/') : nameOrPath;
+  typeof nameOrPath === 'string' ? [nameOrPath] : nameOrPath;
 
 /**
  * Build a daemon-hosted evaluate function.

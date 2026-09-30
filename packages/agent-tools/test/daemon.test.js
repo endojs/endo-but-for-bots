@@ -21,7 +21,7 @@ test('makeDaemonEvaluate forwards source and lexical names to a powers host', as
     source: 'await E(git).status()',
     resultName: ['results', 'status'],
     globals: [
-      { name: 'workspace', petName: 'repo/workspace' },
+      { name: 'workspace', petName: ['repo', 'workspace'] },
       { name: 'git', petName: ['repo', 'git'] },
     ],
   });
@@ -41,7 +41,7 @@ test('makeDaemonEvaluate forwards source and lexical names to a powers host', as
   ]);
 });
 
-test('makeDaemonEvaluate splits string names into pet-name paths', async t => {
+test('makeDaemonEvaluate passes a string name as one segment, never split', async t => {
   /** @type {unknown[]} */
   const calls = [];
   const powers = Far('Powers', {
@@ -55,13 +55,21 @@ test('makeDaemonEvaluate splits string names into pet-name paths', async t => {
   await evaluate({
     source: '1',
     resultName: 'results/one',
-    globals: [{ name: 'counter' }],
+    globals: [{ name: 'counter' }, { name: 'repo', petName: 'a/b' }],
   });
-  await evaluate({ source: '2', globals: [] });
+  await evaluate({ source: '2', resultName: 'one', globals: [] });
+  await evaluate({ source: '3', globals: [] });
 
   t.deepEqual(calls, [
-    [undefined, '1', ['counter'], [['counter']], ['results', 'one']],
-    [undefined, '2', [], [], undefined],
+    [
+      undefined,
+      '1',
+      ['counter', 'repo'],
+      [['counter'], ['a/b']],
+      ['results/one'],
+    ],
+    [undefined, '2', [], [], ['one']],
+    [undefined, '3', [], [], undefined],
   ]);
 });
 
