@@ -96,7 +96,7 @@ test.serial(
   async t => {
     const { host } = await prepare(t);
     const registry = await E(host).lookup(['@registry']);
-    const missing = await E(registry).lookup(['ses'], '1.0.0');
+    const missing = await E(registry).lookup('ses', '1.0.0');
     t.is(missing, undefined, 'an unfetched package is absent from the table');
     const listed = await E(registry).list();
     t.deepEqual(listed, [], 'the registry table starts empty');
