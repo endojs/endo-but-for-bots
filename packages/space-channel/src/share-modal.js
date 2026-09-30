@@ -683,7 +683,7 @@ export const createShareModal = $container => {
         /** @type {{ lookup: (...args: string[]) => Promise<unknown> }} */ (
           targetPersonaPowers
         ),
-      ).lookup(targetChannelPetName);
+      ).lookup([targetChannelPetName]);
 
       await E(
         /** @type {{ post: (...args: unknown[]) => Promise<unknown> }} */ (
@@ -692,7 +692,7 @@ export const createShareModal = $container => {
       ).post(
         ['Shared thread: ', ''],
         [channelPetName],
-        [channelPetName],
+        [[channelPetName]],
         undefined,
         [],
       );
@@ -707,10 +707,10 @@ export const createShareModal = $container => {
               rootPowers
             ),
           ).send(
-            agentPetName,
+            [agentPetName],
             ['A thread was shared with you: ', ''],
             [channelPetName],
-            [channelPetName],
+            [[channelPetName]],
           );
         } catch {
           // Agent inbox notification is best-effort.

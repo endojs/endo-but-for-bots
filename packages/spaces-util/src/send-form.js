@@ -10,7 +10,7 @@
  * Structural shape of the channel exo ref the send form talks to via `E()`.
  *
  * @typedef {object} SendFormChannelRef
- * @property {(strings: string[], names: string[], petNamesOrPaths: string[], replyTo: string | undefined, resolvedIds: string[], replyType?: string) => Promise<unknown>} post
+ * @property {(strings: string[], names: string[], petNamePaths: string[][], replyTo: string | undefined, resolvedIds: string[], replyType?: string) => Promise<unknown>} post
  * @property {() => Promise<{ policies: HopPolicy[], states: HopState[] } | undefined>} getHopInfo
  * @property {() => Promise<unknown>} followHeatEvents
  * @property {() => Promise<unknown>} getHeatConfig
@@ -624,7 +624,7 @@ export const sendFormComponent = ({
             ? E(/** @type {SendFormChannelRef} */ (channelRef)).post(
                 messageStrings,
                 edgeNames,
-                petNames,
+                petNames.map(petName => petName.split('/')),
                 replyTo,
                 ids,
                 sendReplyType,
@@ -632,7 +632,7 @@ export const sendFormComponent = ({
             : E(/** @type {SendFormChannelRef} */ (channelRef)).post(
                 messageStrings,
                 edgeNames,
-                petNames,
+                petNames.map(petName => petName.split('/')),
                 replyTo,
                 ids,
               ),

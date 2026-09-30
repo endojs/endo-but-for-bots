@@ -109,7 +109,7 @@ export const postEdit = ({
       const postP = E(/** @type {ChannelRef} */ (channel)).post(
         parsed.strings,
         parsed.edgeNames,
-        parsed.petNames,
+        parsed.petNames.map(petName => petName.split('/')),
         replyTo,
         ids,
         'edit',
@@ -162,7 +162,7 @@ export const postDraft = ({
       const postP = E(/** @type {ChannelRef} */ (channel)).post(
         parsed.strings,
         parsed.edgeNames,
-        parsed.petNames,
+        parsed.petNames.map(petName => petName.split('/')),
         parentKey,
         ids,
         replyType,

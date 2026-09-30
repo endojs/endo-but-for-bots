@@ -221,7 +221,7 @@ export function useFileExplorer(powers, profilePath = []) {
     if (profileHostRef.current) return profileHostRef.current;
     let cap = /** @type {Promise<Cap>} */ (Promise.resolve(powers));
     for (const seg of profilePath) {
-      cap = /** @type {Promise<Cap>} */ (E(cap).lookup(seg));
+      cap = /** @type {Promise<Cap>} */ (E(cap).lookup([seg]));
     }
     profileHostRef.current = cap;
     return cap;
@@ -1395,10 +1395,10 @@ export function useFileExplorer(powers, profilePath = []) {
     try {
       const host = resolveProfileHost();
       let capPromise = /** @type {Promise<Cap>} */ (
-        E(host).lookup(segments[0])
+        E(host).lookup([segments[0]])
       );
       for (let i = 1; i < segments.length; i += 1) {
-        capPromise = E(capPromise).lookup(segments[i]);
+        capPromise = E(capPromise).lookup([segments[i]]);
       }
       const cap = await capPromise;
       const kind = await classifyCapability(cap);
@@ -2023,7 +2023,7 @@ export function useFileExplorer(powers, profilePath = []) {
       // classify resolves.
       (async () => {
         try {
-          const cap = await E(resolveProfileHost()).lookup(name);
+          const cap = await E(resolveProfileHost()).lookup([name]);
           if (abort.aborted) return;
           const kind = await classifyCapability(cap);
           if (abort.aborted) return;

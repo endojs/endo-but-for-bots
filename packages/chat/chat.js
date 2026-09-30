@@ -11,7 +11,7 @@
  * @typedef {object} ChannelMethods
  * @property {() => Promise<string>} getProposedName
  * @property {(proposedName: string) => Promise<unknown>} join
- * @property {(strings: string[], names: string[], petNamesOrPaths: string[], replyTo: string | undefined, resolvedIds: string[]) => Promise<unknown>} post
+ * @property {(strings: string[], names: string[], petNamePaths: string[][], replyTo: string | undefined, resolvedIds: string[]) => Promise<unknown>} post
  * @property {(displayName: string) => Promise<unknown>} createInvitation
  * @property {() => Promise<unknown>} listMessages
  * @property {() => Promise<unknown>} getMembers

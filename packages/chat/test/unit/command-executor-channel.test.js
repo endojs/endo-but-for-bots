@@ -460,7 +460,7 @@ test('reply in channel mode posts to channel with resolved IDs', async t => {
   t.deepEqual(postCall?.args, [
     ['Hello ', ' how are you?'],
     ['alice'],
-    ['alice'],
+    [['alice']],
     '10',
     ['id:alice'],
   ]);

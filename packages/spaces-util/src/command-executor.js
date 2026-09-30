@@ -17,7 +17,7 @@ import { resolveErrorTrace } from './error-trace.js';
  *
  * @typedef {object} CommandChannelRef
  * @property {() => Promise<Array<{ number: bigint }>>} listMessages
- * @property {(strings: string[], names: string[], petNamesOrPaths: string[], replyTo: string | undefined, resolvedIds: string[]) => Promise<unknown>} post
+ * @property {(strings: string[], names: string[], petNamePaths: string[][], replyTo: string | undefined, resolvedIds: string[]) => Promise<unknown>} post
  * @property {(proposedName: string) => Promise<[unknown, { setHeatConfig: (config: unknown) => Promise<unknown> }]>} createInvitation
  */
 
@@ -203,7 +203,7 @@ export const createCommandExecutor = ({
             await E(/** @type {CommandChannelRef} */ (channelRef)).post(
               strings,
               edgeNames,
-              petNames,
+              petNames.map(petName => petName.split('/')),
               String(messageNumber),
               resolvedIds,
             );
