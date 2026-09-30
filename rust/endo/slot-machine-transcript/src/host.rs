@@ -460,7 +460,7 @@ pub(crate) fn commit_staged(
 
 impl Transcript {
     fn handle_row(&self, handle: HandleId) -> Result<Option<HandleRecord>, TranscriptError> {
-        self.conn
+        self.connection
             .query_row(
                 "SELECT handle_id, callback, created_by_seq, descriptor, open, broken
                  FROM host_handle WHERE handle_id = ?1",
@@ -474,11 +474,11 @@ impl Transcript {
     /// Every handle the log says is open, including broken ones.
     pub fn open_handles(&self) -> Result<Vec<HandleRecord>, TranscriptError> {
         let read = || -> rusqlite::Result<Vec<HandleRecord>> {
-            let mut stmt = self.conn.prepare(
+            let mut statement = self.connection.prepare(
                 "SELECT handle_id, callback, created_by_seq, descriptor, open, broken
                  FROM host_handle WHERE open = 1 ORDER BY handle_id",
             )?;
-            let rows = stmt.query_map([], read_handle)?;
+            let rows = statement.query_map([], read_handle)?;
             rows.collect()
         };
         read().map_err(|e| self.read_error(&e))
@@ -516,7 +516,7 @@ impl Transcript {
 
     fn next_handle_id(&self) -> Result<HandleId, TranscriptError> {
         let durable: i64 = self
-            .conn
+            .connection
             .query_row(
                 "SELECT COALESCE(MAX(handle_id), 0) FROM host_handle",
                 [],
@@ -622,14 +622,14 @@ impl Transcript {
     /// with [`Transcript::mark_released`].
     pub fn releasable_effects(&self) -> Result<Vec<ReleasableEffect>, TranscriptError> {
         let read = || -> rusqlite::Result<Vec<ReleasableEffect>> {
-            let mut stmt = self.conn.prepare(
+            let mut statement = self.connection.prepare(
                 "SELECT e.seq, e.crank_id, h.callback, e.payload FROM event e
                  JOIN crank c ON c.crank_id = e.crank_id
                  JOIN host_call h ON h.request_seq = e.seq
                  WHERE e.kind = 'host-effect' AND e.released = 0 AND c.state = 'committed'
                  ORDER BY e.seq",
             )?;
-            let rows = stmt.query_map([], |r| {
+            let rows = statement.query_map([], |r| {
                 let seq = r.get::<_, i64>(0)? as Seq;
                 Ok(ReleasableEffect {
                     seq,
@@ -757,7 +757,7 @@ impl Transcript {
     /// ran in a crank that never committed, or while any handle is broken.
     pub fn recovery_gate(&self) -> Result<Result<(), RecoveryStop>, TranscriptError> {
         let escaped = self
-            .conn
+            .connection
             .query_row(
                 "SELECT h.crank_id, h.request_seq, h.callback FROM host_call h
                  JOIN crank c ON c.crank_id = h.crank_id
@@ -812,7 +812,7 @@ impl Transcript {
     pub fn host_replay(&self) -> Result<HostReplay, TranscriptError> {
         let watermark = self.latest_snapshot()?.map_or(0, |s| s.watermark_crank);
         let read = || -> rusqlite::Result<BTreeMap<CrankId, VecDeque<Recorded>>> {
-            let mut stmt = self.conn.prepare(
+            let mut statement = self.connection.prepare(
                 "SELECT h.crank_id, h.request_seq, h.callback, h.class, h.handle_id,
                         req.payload, rep.payload, h.opened_handle, h.cleared
                  FROM host_call h
@@ -822,7 +822,7 @@ impl Transcript {
                  WHERE c.state = 'committed' AND h.crank_id > ?1
                  ORDER BY h.request_seq",
             )?;
-            let rows = stmt.query_map([watermark as i64], |r| {
+            let rows = statement.query_map([watermark as i64], |r| {
                 Ok(Recorded {
                     crank: r.get::<_, i64>(0)? as CrankId,
                     seq: r.get::<_, i64>(1)? as Seq,

@@ -350,7 +350,7 @@ struct ActiveCrank {
 
 /// One worker's write-ahead transcript. See the crate documentation.
 pub struct Transcript {
-    conn: Connection,
+    connection: Connection,
     worker: String,
     limits: TranscriptLimits,
     active: Option<ActiveCrank>,
@@ -395,7 +395,7 @@ impl Transcript {
         let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
             | OpenFlags::SQLITE_OPEN_CREATE
             | OpenFlags::SQLITE_OPEN_NO_MUTEX;
-        let conn = match &config.fault {
+        let connection = match &config.fault {
             Some(plan) => Connection::open_with_flags_and_vfs(path, flags, plan.vfs_name()),
             None => Connection::open_with_flags(path, flags),
         }
@@ -405,11 +405,11 @@ impl Transcript {
         // process memory rather than a `-shm` file, and choose WAL with FULL
         // synchronous durability.
         let setup = || -> rusqlite::Result<String> {
-            conn.query_row("PRAGMA locking_mode=EXCLUSIVE", [], |r| {
+            connection.query_row("PRAGMA locking_mode=EXCLUSIVE", [], |r| {
                 r.get::<_, String>(0)
             })?;
-            let mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
-            conn.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
+            let mode: String = connection.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
+            connection.execute_batch("PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;")?;
             Ok(mode)
         };
         let mode = setup().map_err(|e| open_fault(format!("configure: {e}"), Some(&e)))?;
@@ -417,7 +417,7 @@ impl Transcript {
             return Err(open_fault(format!("journal_mode is {mode}, not wal"), None));
         }
         let mut t = Transcript {
-            conn,
+            connection,
             worker: config.worker,
             limits: config.limits,
             active: None,
@@ -494,7 +494,7 @@ impl Transcript {
         body: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<T>,
     ) -> Result<T, TranscriptError> {
         let result = (|| -> Result<T, (bool, rusqlite::Error)> {
-            let tx = self.conn.transaction().map_err(|e| (true, e))?;
+            let tx = self.connection.transaction().map_err(|e| (true, e))?;
             let value = body(&tx).map_err(|e| (true, e))?;
             tx.commit().map_err(|e| (false, e))?;
             Ok(value)
@@ -580,12 +580,12 @@ impl Transcript {
     }
 
     fn cranks_in_state(&self, state: &str) -> rusqlite::Result<Vec<AbortedCrank>> {
-        let mut stmt = self.conn.prepare(
+        let mut statement = self.connection.prepare(
             "SELECT c.crank_id, e.seq, e.payload FROM crank c
              JOIN event e ON e.seq = c.inbound_seq
              WHERE c.state = ?1 ORDER BY c.crank_id",
         )?;
-        let rows = stmt.query_map([state], |r| {
+        let rows = statement.query_map([state], |r| {
             Ok(AbortedCrank {
                 crank: r.get::<_, i64>(0)? as u64,
                 inbound_seq: r.get::<_, i64>(1)? as u64,
@@ -617,7 +617,7 @@ impl Transcript {
 
     /// The latest published snapshot, if any.
     pub fn latest_snapshot(&self) -> Result<Option<SnapshotRecord>, TranscriptError> {
-        self.conn
+        self.connection
             .query_row(
                 "SELECT epoch, hash, watermark_crank, watermark_seq, engine_signature, panic_on_reference_error
                  FROM snapshot ORDER BY epoch DESC LIMIT 1",
@@ -813,8 +813,8 @@ impl Transcript {
 
     /// Committed outbound frames not durably acknowledged, in sequence order.
     pub fn releasable(&self) -> Result<Vec<ReleasableFrame>, TranscriptError> {
-        let mut stmt = self
-            .conn
+        let mut statement = self
+            .connection
             .prepare(
                 "SELECT e.seq, e.crank_id, e.payload FROM event e
                  JOIN crank c ON c.crank_id = e.crank_id
@@ -822,7 +822,7 @@ impl Transcript {
                  ORDER BY e.seq",
             )
             .map_err(|e| self.read_error(&e))?;
-        let rows = stmt
+        let rows = statement
             .query_map([], |r| {
                 let seq = r.get::<_, i64>(0)? as u64;
                 Ok(ReleasableFrame {
@@ -858,7 +858,7 @@ impl Transcript {
         // covered, so the watermark never moves below the previous one.
         let previous = self.latest_snapshot()?;
         let (live_crank, live_seq) = self
-            .conn
+            .connection
             .query_row(
                 "SELECT COALESCE(MAX(c.crank_id), 0), COALESCE(MAX(e.seq), 0) FROM crank c
                  JOIN event e ON e.crank_id = c.crank_id WHERE c.state = 'committed'",
@@ -942,9 +942,9 @@ impl Transcript {
                 [wm],
             )?;
             let superseded = {
-                let mut stmt =
+                let mut statement =
                     tx.prepare("SELECT hash FROM snapshot WHERE epoch < ?1 ORDER BY epoch")?;
-                let rows = stmt.query_map([snapshot.epoch as i64], |r| r.get::<_, String>(0))?;
+                let rows = statement.query_map([snapshot.epoch as i64], |r| r.get::<_, String>(0))?;
                 rows.collect::<rusqlite::Result<Vec<_>>>()?
             };
             tx.execute(
@@ -997,21 +997,21 @@ impl Transcript {
             })
         })?;
         let read = || -> rusqlite::Result<Vec<CommittedCrank>> {
-            let mut cranks_stmt = self.conn.prepare(
+            let mut cranks_statement = self.connection.prepare(
                 "SELECT c.crank_id, e.payload FROM crank c JOIN event e ON e.seq = c.inbound_seq
                  WHERE c.state = 'committed' AND c.crank_id > ?1 ORDER BY c.crank_id",
             )?;
-            let mut out_stmt = self
-                .conn
+            let mut out_statement = self
+                .connection
                 .prepare("SELECT seq, payload FROM event WHERE crank_id = ?1 AND kind = 'outbound' ORDER BY seq")?;
-            let heads = cranks_stmt
+            let heads = cranks_statement
                 .query_map([snapshot.watermark_crank as i64], |r| {
                     Ok((r.get::<_, i64>(0)?, r.get::<_, Vec<u8>>(1)?))
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let mut cranks = Vec::with_capacity(heads.len());
             for (crank, inbound) in heads {
-                let outbound = out_stmt
+                let outbound = out_statement
                     .query_map([crank], |r| {
                         Ok((r.get::<_, i64>(0)? as u64, r.get::<_, Vec<u8>>(1)?))
                     })?
@@ -1034,7 +1034,7 @@ impl Transcript {
 
     /// The durable state of one crank, if it is still on record.
     pub fn crank_state(&self, crank: CrankId) -> Result<Option<String>, TranscriptError> {
-        self.conn
+        self.connection
             .query_row(
                 "SELECT state FROM crank WHERE crank_id = ?1",
                 [crank as i64],
@@ -1047,14 +1047,14 @@ impl Transcript {
     /// Every outbound event on record with its crank's state, in sequence
     /// order: an audit view for tests and diagnosis.
     pub fn outbound_audit(&self) -> Result<Vec<(Seq, CrankId, String)>, TranscriptError> {
-        let mut stmt = self
-            .conn
+        let mut statement = self
+            .connection
             .prepare(
                 "SELECT e.seq, e.crank_id, c.state FROM event e JOIN crank c ON c.crank_id = e.crank_id
                  WHERE e.kind = 'outbound' ORDER BY e.seq",
             )
             .map_err(|e| self.read_error(&e))?;
-        let rows = stmt
+        let rows = statement
             .query_map([], |r| {
                 Ok((
                     r.get::<_, i64>(0)? as u64,
@@ -1071,11 +1071,11 @@ fn flush_acks(tx: &rusqlite::Transaction<'_>, acks: &[Seq]) -> rusqlite::Result<
     if acks.is_empty() {
         return Ok(());
     }
-    let mut stmt = tx.prepare(
+    let mut statement = tx.prepare(
         "UPDATE event SET released = 1 WHERE seq = ?1 AND kind IN ('outbound', 'host-effect')",
     )?;
     for seq in acks {
-        stmt.execute([*seq as i64])?;
+        statement.execute([*seq as i64])?;
     }
     Ok(())
 }

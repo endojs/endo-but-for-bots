@@ -156,10 +156,10 @@ fn execute_stmt(conn: &Connection, sql: &str, params: &ParamSet) -> Result<usize
 /// `transcript` is whether one is attached, read before the host call
 /// borrows the ledger.
 fn refuse_write_under_transcript(
-    stmt: &rusqlite::Statement<'_>,
+    statement: &rusqlite::Statement<'_>,
     transcript: bool,
 ) -> Result<(), String> {
-    if transcript && !stmt.readonly() {
+    if transcript && !statement.readonly() {
         return Err(
             "Error: a statement that writes must run through sqliteStmtRun under a host transcript"
                 .into(),
@@ -308,7 +308,7 @@ unsafe fn reply(the: *mut XsMachine, text: Option<String>) -> Outcome {
 }
 
 /// Read a handle argument.
-unsafe fn arg_handle(the: *mut XsMachine, index: usize) -> u32 {
+unsafe fn argument_handle(the: *mut XsMachine, index: usize) -> u32 {
     let handle = fxToInteger(the, (*the).frame.sub(1 + index)) as u32;
     abort_if_ffi_panicked();
     handle
@@ -325,7 +325,7 @@ unsafe fn with_statement(
     params: bool,
     op: impl FnOnce(&Connection, &str, &ParamSet) -> String,
 ) {
-    let stmt_handle = arg_handle(the, 0);
+    let stmt_handle = argument_handle(the, 0);
     let params_json = if params {
         arg_str(the, 1)
     } else {
@@ -409,7 +409,7 @@ pub unsafe extern "C" fn host_sqlite_open(the: *mut XsMachine) {
 /// `sqliteClose(dbH) -> undefined`
 pub unsafe extern "C" fn host_sqlite_close(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let handle = arg_handle(the, 0);
+        let handle = argument_handle(the, 0);
         let request = handle.to_string().into_bytes();
         let _ = host_ledger::call("sqliteClose", Some(handle), &request, || {
             // Remove associated statements first.
@@ -438,7 +438,7 @@ pub unsafe extern "C" fn host_sqlite_close(the: *mut XsMachine) {
 /// `sqliteExec(dbH, sql) -> undefined | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_exec(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let handle = arg_handle(the, 0);
+        let handle = argument_handle(the, 0);
         let sql = arg_str(the, 1);
         let request = format!("{handle},{sql}").into_bytes();
         let result = host_ledger::call("sqliteExec", Some(handle), &request, || {
@@ -460,7 +460,7 @@ pub unsafe extern "C" fn host_sqlite_exec(the: *mut XsMachine) {
 /// `sqlitePrepare(dbH, sql) -> number | "Error: ..."`
 pub unsafe extern "C" fn host_sqlite_prepare(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let db_handle = arg_handle(the, 0);
+        let db_handle = argument_handle(the, 0);
         let sql = arg_str(the, 1);
         let request = format!("{db_handle},{sql}").into_bytes();
         let mut prepared = false;
@@ -569,7 +569,7 @@ pub unsafe extern "C" fn host_sqlite_stmt_columns(the: *mut XsMachine) {
 /// `sqliteStmtFinalize(stmtH) -> undefined`
 pub unsafe extern "C" fn host_sqlite_stmt_finalize(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
-        let stmt_handle = arg_handle(the, 0);
+        let stmt_handle = argument_handle(the, 0);
         let request = stmt_handle.to_string().into_bytes();
         let _ = host_ledger::call("sqliteStmtFinalize", Some(stmt_handle), &request, || {
             Outcome {
