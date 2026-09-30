@@ -64,6 +64,16 @@ export const makeIronhorseLimits = ({
   });
 harden(makeIronhorseLimits);
 
+/**
+ * The limits that bound a persisted heap image. The worker restores an image
+ * before reapplying these ceilings, and an arena that already exceeds its
+ * ceiling refuses every later allocation, so a lower ceiling could brick an
+ * existing vat. Budgets meter each crank afresh from the persisted meter index
+ * and the watchdog is operational; those may change in either direction.
+ * @type {ReadonlyArray<'slotCeiling' | 'chunkCeiling'>}
+ */
+export const heapCeilingNames = harden(['slotCeiling', 'chunkCeiling']);
+
 /** @param {EnvironmentPowers} environment */
 export const readIronhorseLimits = environment =>
   makeIronhorseLimits({

@@ -76,11 +76,13 @@ test.serial(
     const { limits: raised, ...newIdentity } = JSON.parse(manifest);
     t.deepEqual(newIdentity, oldIdentity);
     t.notDeepEqual(raised, previous);
-    // Each execution dimension is independently monotonic, including when an
-    // operator forgets an environment setting and thereby selects its default.
-    for (const name of Object.keys(firstEnv).filter(
-      key => !key.endsWith('TIMEOUT_MS'),
-    )) {
+    // Each heap ceiling is independently monotonic, including when an
+    // operator forgets an environment setting and thereby selects its default:
+    // a restored heap may already exceed the lower ceiling.
+    for (const name of [
+      'THIXOTROPE_SLOT_CEILING',
+      'THIXOTROPE_CHUNK_CEILING',
+    ]) {
       // eslint-disable-next-line no-await-in-loop
       await t.throwsAsync(
         () => start({ ...raisedEnv, [name]: firstEnv[name] }),
@@ -91,6 +93,30 @@ test.serial(
       // eslint-disable-next-line no-await-in-loop
       t.is(await readFile(join(path, 'runtime.json'), 'utf8'), manifest);
     }
+    // Budgets are per-crank allowances and cannot invalidate a heap image, so
+    // an experimentally raised budget can be tuned back down in place.
+    const loweredEnv = {
+      ...raisedEnv,
+      THIXOTROPE_CRANK_BUDGET: firstEnv.THIXOTROPE_CRANK_BUDGET,
+      THIXOTROPE_BOOTSTRAP_BUDGET: firstEnv.THIXOTROPE_BOOTSTRAP_BUDGET,
+    };
+    host = await start(loweredEnv);
+    t.is(await host.client.call('evaluate', 'savedForLimits'), '42');
+    t.like((await host.client.call('status')).ironhorse, {
+      crankBudget: '20000000',
+      bootstrapBudget: '1100000000',
+    });
+    host.client.close();
+    await host.supervisor.close();
+    const { limits: lowered } = JSON.parse(
+      await readFile(join(path, 'runtime.json'), 'utf8'),
+    );
+    t.deepEqual(lowered, {
+      crankBudget: '20000000',
+      bootstrapBudget: '1100000000',
+      slotCeiling: 1_500_000,
+      chunkCeiling: 400_000_000,
+    });
     host = await start(raisedEnv);
     t.is(await host.client.call('evaluate', 'savedForLimits'), '42');
   },

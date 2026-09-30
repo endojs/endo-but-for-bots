@@ -236,6 +236,10 @@ export const makeIronhorseEngine = (
                 if (!waiter) throw Error('Unsolicited Ironhorse reply');
                 if (reply.op === 'fatal') {
                   fail(new WorkerHaltError(String(reply.message)));
+                } else if (reply.op === 'error') {
+                  // A malformed request; the worker and its heap stay up.
+                  pending = undefined;
+                  waiter.reject(Error(String(reply.message)));
                 } else {
                   if (!['ready', 'result'].includes(reply.op))
                     throw Error('Invalid Ironhorse reply');
