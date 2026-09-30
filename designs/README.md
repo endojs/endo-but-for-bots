@@ -721,11 +721,13 @@ flowchart TD
         gpkg[gateway-package<br/><i>IN PROGRESS</i>]
         ddock[daemon-docker-selfhost<br/><i>IN PROGRESS</i>]
         dlife[daemon-lifecycle-idempotency<br/><i>PROPOSED</i>]
+        dckpt[daemon-sqlite-shutdown-checkpoint]
         ewebhook[endoclaw-webhooks]
         gauth --> gpkg
         onoise --> gpkg
         gpkg --> ddock
         dlife --> ddock
+        dlife --> dckpt
         fbund --> ddock
         gauth --> ewebhook
     end

@@ -13,8 +13,8 @@ A process supervisor such as systemd, or a deploy script run under one,
 needs Endo's daemon controls to be **idempotent** and to report their
 outcome in **exit codes it can rely on**. Running `start` twice should
 leave one healthy daemon. Running `stop` twice should leave nothing running.
-A health probe should never change what it is probing. Today none of these
-hold.
+A health probe should never change what it is probing. Today, none of these
+properties hold.
 
 The minion.town deployment
 (`kriscendobot/minion.town`, `deploy/aws/scripts/deploy-endo-daemon.sh`,
@@ -55,9 +55,13 @@ auto-start: `endo ping` (`cli/src/commands/ping.js`) and `endo log --follow`.
 ### `start` (`daemon/index.js`)
 
 `start()` calls `clean()` **unconditionally** and then spawns a detached
-`manager-node.js`, or, when `ENDO_BIN` is set, `engo` (the Go supervisor in
+`manager-node.js`, or, when `ENDO_BIN` is set, the binary it names. The
+in-tree binary this design targets is `engo` (the Go supervisor in
 `go/engo`, which runs `manager-go.js` under it; see
-[daemon-engo-supervisor](daemon-engo-supervisor.md)). `clean()` unlinks the
+[daemon-engo-supervisor](daemon-engo-supervisor.md)). The capability bus
+daemons, `endo-daemon-go` and `endor`
+([daemon-capability-bus](daemon-capability-bus.md)), are selected through
+the same variable; section 2 says how they relate to this design. `clean()` unlinks the
 socket, its `.lock` marker, and `endo.pid`. It does not check whether a daemon
 is serving the socket. So running `endo start`, or any auto-starting command
 that failed to connect, against a daemon that is still booting or merely slow
@@ -113,7 +117,7 @@ supervised.
 
 1. `terminate()` over CapTP (the object-capability protocol clients use to
    talk to the daemon), with errors ignored;
-2. `killDaemonProcess()` by `endo.pid`, waiting 5s before escalating
+2. `killDaemonProcess()` by `endo.pid`, waiting five seconds before escalating
    SIGTERM to SIGKILL;
 3. `killWorkersByPidFiles()`;
 4. `clean()`.
@@ -196,8 +200,12 @@ Ranked by how much supervisor-visible damage each prevents per line of code.
 
 ### 1. `start` is a no-op when a healthy daemon owns the socket
 
-Before `clean()`, ask the classifier. It is defined in "One owner record",
-the first subsection of section 2. The classifier reads the claim marker
+Before `clean()`, ask the classifier. A daemon instance is keyed by its
+**state directory**; the socket path is an attribute of the instance, not
+part of its identity, so one instance can own the state directory while
+serving a socket other than the one a caller names. The classifier is
+defined in full in "One owner record", the first subsection of section 2.
+It reads the claim marker
 first, then probes the socket with `probeSocket` (which already exists in
 `manager-node-powers.js`), and returns one of five values: `live` (a live
 owner serves the requested socket), `booting` (a live owner is not serving
@@ -312,14 +320,15 @@ Every other record is derived from it or retired:
   and the child's claim share one predicate. Section 6 states every
   command's exit code as a function of this value.
 
-A daemon instance is keyed by its **state directory**; the socket path is an
-attribute of the instance, not part of its identity. That is why the
-commands treat `elsewhere` asymmetrically. `start`, `clean`, and
+Because the state directory, not the socket path, is the instance's
+identity (section 1), the commands treat `elsewhere` asymmetrically. `start`, `clean`, and
 `run-daemon` refuse (69), because they were asked for a daemon at a socket
 that this instance does not serve, and acting would disturb the instance
 that owns the state. `stop` stops it, because `stop` is asked to leave the
 state directory with no daemon, and the instance that owns it is the one to
-stop.
+stop. The asymmetry is surfaced where a caller meets it, not only here:
+`endo stop --help` states it, and `stop` prints its mismatched-socket line
+(section 5) **before** it signals the owner, not after.
 
 The marker is published atomically, so a reader never sees a partial record.
 The claimant writes the three lines to a temporary file in the same
@@ -327,9 +336,44 @@ directory (`endo.lock.<pid>.tmp`), and then claims by hard-linking it to
 `endo.lock` (`link(2)` fails with `EEXIST` when a marker is already there, so
 this is the same exclusive-create step as today's `symlink`) and unlinking
 the temporary file. `rename(2)` is not used, because it would replace an
-existing marker instead of failing. A reclaim of a `stale` marker unlinks it
-and retries the link, so two reclaimers still cannot both win. Go and Node
-both expose `link` directly.
+existing marker instead of failing. Go and Node both expose `link` directly.
+
+Reclaiming a `stale` marker needs more care, because POSIX `unlink` has no
+compare-and-delete: a slow reclaimer that classified the marker `stale`
+could otherwise unlink a marker that a faster reclaimer has since replaced
+with its own live record, and then win its own `link`, leaving two
+claimants. Today's socket lock has the same shape, but a spurious second
+winner there still fails at `bind()`; the state-directory claim is checked
+before any destructive step precisely so that nothing else backstops it.
+So a reclaim works as follows:
+
+1. Take the reclaim guard `<ephemeral>/endo.lock.reclaim` by the same
+   exclusive `link` of a record naming the reclaimer. A reclaimer that
+   finds the guard held by a live owner treats the state directory as
+   `booting` and waits, as section 1 does.
+2. Under the guard, read `endo.lock` again and compare it byte for byte with
+   the record it classified as `stale`. Only if it is unchanged, unlink it
+   and `link` its own record. If it changed, some other claimant has since
+   won; release the guard and classify again.
+3. Release the guard by unlinking it.
+
+A claimant that won with a plain `link` on an empty path does not take the
+guard, and it cannot be undone by a straggler, because every unlink of
+`endo.lock` other than `stop`'s happens under the guard after a
+re-read. Finally, every claimant, however it won, reads `endo.lock` once
+more immediately before its first destructive step
+(`initializePersistence()` and `killStaleWorkers()`) and exits 69 if the
+marker no longer carries its own record.
+
+The guard is held for a few system calls, so a guard that is older than the
+section 1 window and whose owner is dead is broken by unlinking it. That
+break has the same unconditional-unlink shape as the reclaim it protects,
+so a residual gap remains: two claimants can both win only if a reclaimer
+dies while holding the guard **and** two later reclaimers race to break
+that guard **and** both then find the same `stale` marker. The design
+accepts that compound gap, as it accepts the recycled-pid gap below; the
+pre-destructive re-read narrows it further, and an advisory `flock` (below)
+would close it.
 
 A marker that does not parse (missing lines, a non-numeric pid, a socket
 path that is not absolute) can only be left by a crash or by hand, since
@@ -349,7 +393,7 @@ therefore records the owner's process start time alongside its pid and
 treats the marker as live only when both match.
 
 The start time is not equally precise everywhere. On Linux it is in clock
-ticks (about 10ms). On the `ps -o lstart=` fallback it is in whole seconds,
+ticks (about ten milliseconds). On the `ps -o lstart=` fallback it is in whole seconds,
 so a pid recycled within the same second as the original owner's start
 reproduces the same record. The design accepts that residual gap rather
 than closing it with an advisory `flock`: Node has no `flock` binding
@@ -382,10 +426,20 @@ and `clean` keep today's unguarded behavior there. A Windows identity check
 The claim is owned by the
 process that is the root of the daemon's process tree: `manager-node.js` on
 the Node path, and the `engo` supervisor (not the `manager-go.js` it runs)
-on the Go path. The marker's on-disk format (location, pid, start time) is
+on the Go path. `engo` takes the claim **before** it spawns
+`manager-go.js`, for the same reason `manager-node.js` must take it before
+`killStaleWorkers()`: otherwise a losing `engo` would start a manager whose
+persistence and worker recovery run ahead of the claim. A capability bus
+daemon selected through `ENDO_BIN` (`endo-daemon-go` or `endor`, which
+already own the pid file and socket as the root of their own trees) is the
+same kind of root, so it is the claimant on its path and takes the claim
+before spawning its manager child. This design does not retire `ENDO_BIN`
+or choose among the binaries it can name; it requires only that whichever
+one is the root honors the contract below. The marker's on-disk format (location, pid, start time) is
 the contract, specified once in this design (under "One owner record"
 above), so a Node daemon and an `engo` daemon started against the same state
-directory see and honor each other's claims. The contract has a second
+directory see and honor each other's claims; so does a capability bus
+daemon. The contract has a second
 half: a claimant that loses exits with code 69 on both paths, which is how
 `start()` learns of a lost race (section 6).
 
@@ -475,10 +529,10 @@ then clean) and adds the following:
   print which case applied (`stopped pid N`, `not running`), because
   "nothing to stop" is success for a supervisor;
 - when the classifier said `elsewhere`, print
-  `stopped pid N, which owned <state> and served <socket>, not the requested <socket>`,
-  so an operator who expected to affect one socket learns that the daemon
-  it stopped served another. The asymmetry (section 2) is deliberate, but
-  it is never silent;
+  `stopping pid N, which owns <state> and serves <socket>, not the requested <socket>`
+  before signaling it, so an operator who expected to affect one socket
+  learns that the daemon being stopped serves another before it is down.
+  The asymmetry (section 2) is deliberate, but it is never silent;
 - exit with a dedicated non-zero code (70, see section 6) only when a
   recorded process survives SIGKILL, so a supervisor can tell "needs operator
   attention" apart from any other failure.
@@ -497,8 +551,8 @@ The codes, by value:
 | Code | Meaning |
 |---|---|
 | 0 | Success (see the tables below for what success means per command) |
-| 3 | Daemon not reachable at the requested socket (LSB, Linux Standard Base, `status` convention for "not running") |
-| 69 (`EX_UNAVAILABLE`) | Another live daemon owns this state directory, or serves a different socket than requested; action declined |
+| 3 | Daemon not reachable at the requested socket, and none serving elsewhere (borrowed from the LSB, Linux Standard Base, init-script `status` code for "not running"; LSB defines it only for `status`, and this design extends it to `ping` and the no-auto-start client) |
+| 69 (`EX_UNAVAILABLE`) | Another live daemon owns this state directory, or serves a different socket than requested; action declined, or, for a query, the daemon is running but not at the requested socket |
 | 70 (`EX_SOFTWARE`) | A recorded daemon or worker process survived SIGKILL |
 | 75 (`EX_TEMPFAIL`) | The daemon did not become ready within the timeout |
 | 1 | Any other failure |
@@ -516,17 +570,26 @@ The first form is for `live` and `elsewhere`, the second for `booting`.
 `start`, `clean`, `run-daemon`, and a claimant that loses the section 2
 claim all use it.
 
-Every lifecycle command's exit code is a total function of the section 2
+Every lifecycle command's exit code is a function of the section 2
 classifier's value, so no command can report a state the classifier does
-not name. On win32 the claim is not taken (section 2, "Windows"), so the
+not name. The classifier's `live` is necessary but not sufficient for the
+commands that talk to the daemon. Its socket probe only connects, while
+`ping` and a client command also complete a CapTP round trip, and the round
+trip stays the source of truth for their success: the classifier does not
+replace it, it only decides what to report when there is nothing to talk
+to. When the classifier says `live` but the round trip fails (a daemon that
+has bound its socket but does not answer CapTP), `ping` and the client
+command exit 75, the same code as a daemon that is not ready in time.
+`status` reports the classifier alone and makes no round trip; it is the
+cheaper, weaker check, and `ping` is the stronger one. On win32 the claim is not taken (section 2, "Windows"), so the
 classifier there can only return `live` or `absent` from the socket probe,
 and the rows for the other values do not arise. For the **query commands**:
 
 | Classifier value | `status` | `ping` | client command under `ENDO_NO_AUTOSTART` |
 |---|---|---|---|
-| `live` | 0 | 0 | runs the command |
+| `live` | 0 | 0 if the CapTP round trip succeeds, else 75 | runs the command; 75 if the round trip fails |
 | `booting` | 3 | 3 | 3 |
-| `elsewhere` | 3 | 3 | 3 |
+| `elsewhere` | 69 | 69 | 69 |
 | `stale` | 3 | 3 | 3 |
 | `absent` | 3 | 3 | 3 |
 
@@ -534,11 +597,13 @@ and the rows for the other values do not arise. For the **query commands**:
 prints the value itself as a machine-readable first line, with the owner's
 pid and socket path on that same line when there is an owner
 (`state: elsewhere pid=N socket=<socket>`), so a consumer that reads only
-the first line still learns why `elsewhere` is not reachable. A
-supervisor that needs to tell `booting` from `stale` reads that line; the
-exit code only answers "can I talk to it now". That is why `elsewhere` is 3
-for the query commands even though a daemon is running: code 3 means "not
-reachable at the requested socket", and the `state:` line says why. Open
+the first line still learns why `elsewhere` is not reachable. `elsewhere`
+has its own code, 69, because its remedy is the opposite of the others:
+reconfigure the socket path rather than start a daemon. That is also the
+code the action commands use for it, so one classifier value spells one
+way across the lifecycle verbs, `stop` excepted (section 2). A supervisor
+that needs to tell `booting` from `stale` reads the `state:` line; for
+those, the exit code only answers "can I talk to it now". Open
 Question 3, at the end of this design, asks whether exit codes are worth
 having at all; this pairing is the proposed answer: the codes stay few,
 and the finer distinction is data.
@@ -584,8 +649,13 @@ window elapses. Any other early exit stays exit 1. No new message type is
 needed, and the owner's identity comes from the one classifier rather than
 from the losing child.
 
-Only `run-daemon`, which is itself the claimant a supervisor watches, exits
-69 for a duplicate, so that a unit can set `RestartPreventExitStatus=69`.
+Only `run-daemon` exits 69 for a duplicate, so that a unit can set
+`RestartPreventExitStatus=69`. `run-daemon` is not itself the claimant: the
+claim marker names its child, `manager-node.js` (or the `ENDO_BIN` root).
+`run-daemon` is the process a supervisor watches, and its exit code mirrors
+its child's, so the child's 69 reaches the supervisor unchanged. If Open
+Question 2 is adopted and `run-daemon` runs the manager in-process, the two
+become one process and the marker names `run-daemon` directly.
 
 ### 7. (Lower priority) Readiness for `Type=notify`
 
@@ -609,7 +679,8 @@ shelling out to `systemd-notify`. It is not needed once sections 1 through 3 lan
 
 | Design | Relationship |
 |---|---|
-| [daemon-engo-supervisor](daemon-engo-supervisor.md) | `runEngo` shares `start()`'s `clean()`-first path, so section 1 applies to it as shared code. The `engo` supervisor implements section 2's claim in Go against the same marker format (see section 2, "One claim protocol, two implementations"). |
+| [daemon-capability-bus](daemon-capability-bus.md) | Its `endo-daemon-go` and `endor` daemons are also selected through `ENDO_BIN` and are the root of their process trees, so each is a claimant under section 2 and must implement the same marker contract. This design does not change which binaries `ENDO_BIN` may name. |
+| [daemon-engo-supervisor](daemon-engo-supervisor.md) | `runEngo` shares `start()`'s `clean()`-first path, so section 1 applies to it as shared code. The `engo` supervisor implements section 2's claim in Go against the same marker format (see section 2, "One claim protocol, two implementations"). The roadmap marks this design consolidated into daemon-capability-bus and daemon-endor-architecture, but the `engo` code it describes is live in `go/engo`, so it is cited here as the description of that code. |
 | [daemon-sqlite-shutdown-checkpoint](daemon-sqlite-shutdown-checkpoint.md) | Section 2 opens the database only after the single-instance claim. That is a precondition for "one last-connection close" being meaningful. |
 | [daemon-docker-selfhost](daemon-docker-selfhost.md) | Container init is another supervisor that benefits from section 4 and section 6. |
 
@@ -627,6 +698,10 @@ shelling out to `systemd-notify`. It is not needed once sections 1 through 3 lan
    - a second `run-daemon` against the same state directory (exit 69);
    - a Node daemon and an `engo` daemon contending for the same state
      directory, in both orders;
+   - two reclaimers racing on one `stale` marker, with the slower one
+     delayed between its classification and its unlink, where exactly one
+     wins and the other re-classifies and does not unlink the winner's
+     marker;
    - a stale claim marker whose pid has been recycled by an unrelated live
      process with a different start time, which must classify as `stale`;
    - an upgrade: a live daemon with no claim marker (as an old binary leaves
@@ -643,15 +718,18 @@ shelling out to `systemd-notify`. It is not needed once sections 1 through 3 lan
 2. **Client and probe:** section 3 and the exit-code contract in section 6, with the
    `status`/`ping` changes, and tests that `status` prints the
    `state: <value> pid=N socket=<socket>` first line for each classifier
-   value and exits per the query table.
+   value and exits per the query table, and that `ping` exits 75 against a
+   fixture that accepts socket connections but never answers CapTP.
 3. **Shutdown completeness:** sections 4 and 5, with tests that:
    - SIGKILL the manager and assert that its workers exit;
+   - SIGKILL `engo` itself and assert that its Node daemon and workers
+     exit through the parent-death signal;
    - `stop` run twice exits 0 both times;
    - `stop` exits 70 when a recorded process survives SIGKILL (for example
      a process held in uninterruptible sleep by a test fixture);
    - `restart` exits 70 and spawns no second daemon when its `stop` exits 70;
-   - `stop` against an `elsewhere` owner stops it and prints the
-     mismatched-socket line.
+   - `stop` against an `elsewhere` owner prints the mismatched-socket line
+     before stopping it.
 4. **Optionally:** section 7.
 
 ## Open Questions
