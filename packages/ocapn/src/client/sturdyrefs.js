@@ -3,7 +3,7 @@
 
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
- * @import { InternalSession } from './types.js'
+ * @import { InternalSession, SwissNum } from './types.js'
  */
 
 import harden from '@endo/harden';
@@ -160,6 +160,26 @@ export const makeSturdyRef = (
 };
 
 /**
+ * Look up a swiss number in a nonce locator. Try ASCII decoding first so
+ * locators keyed by friendly string names continue to match. If the bytes
+ * aren't valid ASCII (e.g. a Spritely-style random 24-byte secret), fall
+ * back to passing the raw bytes through; locators that index by bytes can
+ * match those, locators that don't will simply return undefined.
+ *
+ * @param {{ get(secret: string | Uint8Array): unknown | Promise<unknown> }} locator
+ * @param {SwissNum} swissNum
+ */
+const lookupSwissnum = async (locator, swissNum) => {
+  let secret;
+  try {
+    secret = decodeSwissnum(swissNum);
+  } catch {
+    return locator.get(swissnumToBytes(swissNum));
+  }
+  return locator.get(secret);
+};
+
+/**
  * Resolve a `(location, secret)` pair to an actual reference: local values
  * come from the injected `locator`; remote values are fetched from the
  * peer's bootstrap over a session.
@@ -178,7 +198,15 @@ export const enlivenSturdyRefDetails = async (
   const { location, secret } = details;
 
   if (isSelfLocation(location)) {
-    const value = await locator.get(secret);
+    // A SturdyRef read off the wire carries its secret as bytes, even
+    // one minted here with a string secret and sent back home. Resolve
+    // bytes exactly as the bootstrap `fetch` would, so enlivening at home
+    // reaches the same capability a peer's fetch reaches.
+    const lookup =
+      typeof secret === 'string'
+        ? () => locator.get(secret)
+        : () => lookupSwissnum(locator, swissnumFromBytes(secret));
+    const value = await lookup();
     if (value === undefined) {
       // Intentionally do NOT include `secret` in the message: this
       // error rides up into rejection chains that may be serialized
@@ -246,20 +274,7 @@ export const makeSturdyRefTracker = (locator, enlivenDetails) => {
   return harden({
     makeSturdyRef: (location, secret) =>
       makeSturdyRef(location, secret, enlivenDetails),
-    lookup: async secretBytes => {
-      const swissNum = swissnumFromBytes(thawedBytes(secretBytes));
-      // Try ASCII decoding first so locators keyed by friendly string
-      // names continue to match. If the bytes aren't valid ASCII (e.g.
-      // a Spritely-style random 24-byte secret), fall back to passing
-      // the raw bytes through; locators that index by bytes can match
-      // those, locators that don't will simply return undefined.
-      let secret;
-      try {
-        secret = decodeSwissnum(swissNum);
-      } catch {
-        return locator.get(swissnumToBytes(swissNum));
-      }
-      return locator.get(secret);
-    },
+    lookup: async secretBytes =>
+      lookupSwissnum(locator, swissnumFromBytes(thawedBytes(secretBytes))),
   });
 };
