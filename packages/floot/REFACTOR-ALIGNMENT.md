@@ -14,7 +14,7 @@ The main structural unification is implemented, but the refactor is not complete
 The three native backends actually use common provisioning, lifecycle, grants,
 and execution-envelope code. Reimplementing those abstractions is not the next
 step. Simplicity and bounded context still need evidence or work.
-Protocol admission conformance is covered; generation 187 passes fresh lifecycle
+Protocol admission conformance is covered; generation 188 passes fresh lifecycle
 and ordinary restart acceptance with the generation-186 image pins.
 Neither gate settles the remaining design questions.
 
@@ -28,7 +28,20 @@ the main [architecture audit](ARCHITECTURE-AUDIT.md) retains detailed evidence.
 
 ## Current work, 2026-09-30
 
-Tokyo is on generation 187, application `a4c97588a`, host `a5a4a7d`.
+Generation 188 supersedes the generation-187 evidence below: app `5adeb4aa9`,
+host `934204f`, unchanged image pins, all four lifecycle/restoration scopes pass.
+It deploys setup/model/MCP cleanup and the explicit admission/dispatch journal
+boundary. Three old-format sessions were retired after workspace-root retention;
+Secrets and renewal owners remain intact. The new source passes 777 Floot tests.
+Claude/Codex retain native checkpoints on both restoration turns; Claude's
+initial tool-heavy lifecycle seed lacked one and remains a capture follow-up.
+Next simplification: remove Claude argument normalization from Floot context
+projection by reusing the adapter's conversion at the local composition boundary,
+without changing journal evidence or adding a durable/remote codec mechanism.
+Detailed current evidence is in [the architecture audit](ARCHITECTURE-AUDIT.md)
+and endo-host `ops/explicit-journal-deployment-20260924.md`.
+
+Generation 187 ran application `a4c97588a`, host `a5a4a7d`.
 All image pins are unchanged from generation 186.
 Fresh lifecycle acceptance passes on Claude, Codex Luna and OpenCode auto-free;
 Fae auto-free passes tool use and pending-turn cancellation.

@@ -16,8 +16,8 @@ Priority current-state review (updated 2026-09-30):
 the intended end state, rather than reviewing historical commits. It is the
 current prioritization entry point: primary ownership and explicit account identity
 are consolidated, and the native protocol-conformance matrix is complete.
-All four backends pass generation-187 acceptance on app `a4c97588a`, host `a5a4a7d`.
-The daemon cleanup changes use generation-186's unchanged image pins; fresh
+All four backends pass generation-188 acceptance on app `5adeb4aa9`, host `934204f`.
+The release uses generation-186's unchanged image pins; fresh
 Claude/Codex restart recall retains native checkpoints on both completed turns.
 Simplicity is still unproven, and whole-context/unresolved-evidence memory bounds
 remain incomplete. Direct-Fae compaction, evidence paging, local-development
@@ -34,7 +34,7 @@ redundant storage wrapper, and deletes unused MCP constants.
 The [simplification inventory](SIMPLIFICATION-AUDIT.md#account-model-authority-and-adapter-deletions-2026-09-30)
 records the ownership decisions, native-query retirement, and next concrete
 deletion candidates. Existing formula identities and durable owners are unchanged;
-deployment is pending.
+these simplifications are deployed on generation 188.
 Validation: 430 Codex tests and 53 focused storage/controller/MCP tests pass.
 The catalog regression uses the same declared subscriptions for the factory and
 catalog, proves automatic exclusion and explicit pinned-account selection, and
@@ -52,7 +52,7 @@ and retries the staged replacement. It does not claim an arbitrary lost
 acknowledgement leaves the old identity in place.
 All 57 shared/Claude/Codex/OpenCode setup tests pass, shared and Codex typechecks
 pass, and scoped lint reports zero errors. Independent review approves.
-Not deployed.
+Deployed on generation 188.
 
 Native model-query retirement: the Codex client, shared supervisor and daemon
 session owner no longer expose a second discovery path.
@@ -62,7 +62,7 @@ All 430 Codex tests, six supervisor tests and 16 session-owner tests pass, retai
 initialization, cancellation and teardown coverage through existing protocol calls.
 Affected package typechecks and scoped lint pass; independent review approves.
 No persistent schema, formula entrypoint or credential ownership changes.
-Not deployed.
+Deployed on generation 188.
 
 MCP ownership cleanup: OpenCode no longer writes an unused diagnostic config or
 wraps the shared transport; its native config remains in `OPENCODE_CONFIG_CONTENT`.
@@ -72,7 +72,7 @@ coverage. They pass alongside 22 focused Claude tests and all 299 OpenCode tests
 Affected package typechecks, scoped lint, clean root type build, all 14
 type-contract tasks and docs pass (zero errors, 180 warnings).
 Independent review approves; no durable owner or storage schema changes.
-Not deployed.
+Deployed on generation 188.
 
 Current ontology correction: turn admission is not backend dispatch.
 The reproduced pre-send cancellation defect is addressed by a `begin` record
@@ -88,7 +88,17 @@ marker publication/lost acknowledgement, conservative native send failures,
 and rejection of contradictory snapshot/archive records.
 Floot types and lint pass (zero lint errors, 286 warnings); clean root type build,
 all 14 type-contract tasks and docs pass (zero documentation errors, 180 warnings).
-Independent adversarial review approves. Not deployed.
+Independent adversarial review approves. Deployed on generation 188 after
+retaining workspace roots and retiring the three old-format sessions.
+The six Secret bindings are unchanged.
+All hosted backends pass tool use, policy changes, cancellation and deletion;
+Fae auto-free passes tool use, pending cancellation and deletion.
+All four pass ordinary restart recall, with Claude/Codex native checkpoints on
+both completed turns. This does not establish native process-loss recovery.
+The host deployment record documents exact manifests and the missing native
+checkpoint on Claude's initial tool-heavy seed; later policy/restoration turns
+captured successfully. Investigate that omission rather than claiming universal
+capture fidelity.
 
 Current durability evidence includes a generation-186 retirement correction:
 removing broker/source pet names does not withdraw capabilities already stored

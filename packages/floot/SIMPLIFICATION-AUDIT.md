@@ -7,6 +7,13 @@ The target is one owner per responsibility, not the smallest possible line count
 Fae compaction remains on hold.
 Process-loss recovery remains the separate investigation tracked in PR #1323.
 
+Current deployment: generation 188 runs app `5adeb4aa9` and host `934204f`,
+including the September 30 setup/model/MCP deletions and admission/dispatch
+separation below. All four backends pass fresh lifecycle and ordinary restart
+acceptance. Earlier not-deployed notes describe the state when those slices landed.
+The architecture audit records exact coverage and the outstanding initial Claude
+tool-seed capture omission; no universal capture or process-loss claim is made.
+
 ## Native-context mechanism inventory, 2026-09-30
 
 Current-source follow-up at `59fe1a5bd`; this supplements the earlier inventory,
@@ -182,9 +189,18 @@ Clean root type build, all 14 type-contract tasks and docs pass (zero errors,
 180 warnings). Independent adversarial review approves. Not deployed.
 Do not repair this by silently treating all empty cancelled turns as safe or by
 overloading transcript completeness with an undocumented dispatch guarantee.
-The journal/context projection also contains Claude-specific argument round-trip
-normalization; ownership of that conversion should move to an explicit adapter
-boundary before consolidating its duplicate in the native writer.
+
+Next verified duplication: context projection's `comparable()` duplicates
+Claude's `toolInput()` object/wrapper conversion from the transcript writer.
+Do not delete evidence deduplication: late host-only/unsettled evidence remains
+eligible after a newer checkpoint, and deleting matching would repeat it.
+Reuse the existing adapter-owned conversion through a local comparison-key
+function supplied at Floot's composition boundary for `claude-code-jsonl-v1`;
+other formats should compare exact arguments.
+Keep pairing, late-result reconciliation and collision handling in Floot.
+No remote API, descriptor schema, codec registry or durable state is needed.
+Test real writer/read-back equivalence for whitespace, scalar, array, null and
+malformed arguments, changed results, and isolation from non-Claude formats.
 
 | Mechanisms | Different responsibilities | Decision |
 |---|---|---|
