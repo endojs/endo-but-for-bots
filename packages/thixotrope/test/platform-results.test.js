@@ -1,10 +1,12 @@
 // @ts-check
 import test from '@endo/ses-ava/test.js';
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { createReadStream } from 'node:fs';
 import * as fsp from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { PassThrough } from 'node:stream';
 
 import { makeFilePowers } from '../src/platform/node/files.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
@@ -18,8 +20,8 @@ test('path powers return URL text', t => {
   t.is(powers.paths.fileURLToPath(url), '/tmp/with space');
 });
 
-test('socket callbacks do not receive native receivers', async t => {
-  const socket = new EventEmitter();
+test('socket failures reach streams and callbacks without native receivers', async t => {
+  const socket = new PassThrough();
   const server = Object.assign(new EventEmitter(), {
     listen: (_path, ready) => ready(),
     close: () => {
@@ -41,18 +43,54 @@ test('socket callbacks do not receive native receivers', async t => {
     receivers.push(this);
   }
   const connection = sockets.connectPath('fixture');
-  connection.onError(recordReceiver);
-  connection.onClose(recordReceiver);
+  t.deepEqual(Reflect.ownKeys(connection).sort(), [
+    'closed',
+    'reader',
+    'writer',
+  ]);
   const listener = await sockets.listenPath({
     path: 'fixture',
     onConnection: () => {},
     onError: recordReceiver,
   });
   t.teardown(() => listener.close());
-  socket.emit('error', Error('socket fixture'));
-  socket.emit('close');
+  // A socket failure nobody is awaiting must not throw in the host; it
+  // surfaces to the next read and write, and closes the connection.
+  socket.destroy(Error('socket fixture'));
+  await t.throwsAsync(() => connection.reader.next(), {
+    message: 'socket fixture',
+  });
+  await t.throwsAsync(() => connection.writer.next(new Uint8Array([1])), {
+    message: /closed/,
+  });
+  await connection.closed;
   server.emit('error', Error('server fixture'));
-  t.deepEqual(receivers, [undefined, undefined, undefined]);
+  t.deepEqual(receivers, [undefined]);
+});
+
+test('a bind failure rejects listenPath rather than reaching onError', async t => {
+  const server = Object.assign(new EventEmitter(), {
+    listen: () => {
+      server.emit(
+        'error',
+        Object.assign(Error('taken'), { code: 'EADDRINUSE' }),
+      );
+    },
+    close: () => server,
+  });
+  const sockets = makeSocketPowers({
+    net: /** @type {any} */ ({ createServer: () => server }),
+    chmod: async () => {},
+  });
+  await t.throwsAsync(
+    () =>
+      sockets.listenPath({
+        path: 'fixture',
+        onConnection: () => {},
+        onError: () => t.fail('bind failures reject instead'),
+      }),
+    { code: 'EADDRINUSE' },
+  );
 });
 
 test('file powers return plain bytes and close early iteration', async t => {
@@ -72,6 +110,8 @@ test('file powers return plain bytes and close early iteration', async t => {
       stream = createReadStream(file, { highWaterMark: 1 });
       return stream;
     },
+    randomUUID,
+    getUserId: () => undefined,
   });
   t.teardown(() => stream?.destroy());
   const chunks = files.readChunks(path);
@@ -100,6 +140,7 @@ test.serial(
     t.timeout(5000);
     const directory = await fsp.mkdtemp(join(tmpdir(), 'thix-socket-results-'));
     t.teardown(() => fsp.rm(directory, { recursive: true, force: true }));
+    /** @type {Set<import('../src/platform/sockets.js').SocketConnection>} */
     const connections = new Set();
     let receive;
     const received = new Promise(resolve => {
@@ -109,28 +150,33 @@ test.serial(
       path: join(directory, 'socket'),
       onConnection: connection => {
         connections.add(connection);
-        connection.onError(error => t.fail(String(error)));
-        connection.onData(bytes => {
-          receive(bytes);
-          connection.end();
-        });
+        void (async () => {
+          const { value } = await connection.reader.next();
+          receive(value);
+          await connection.writer.return(undefined);
+        })().catch(error => t.fail(String(error)));
       },
       onError: error => t.fail(String(error)),
     });
     const client = powers.sockets.connectPath(join(directory, 'socket'));
-    client.onError(error => t.fail(String(error)));
     t.teardown(async () => {
-      client.destroy();
-      for (const connection of connections) connection.destroy();
+      await Promise.all(
+        [client, ...connections].map(connection =>
+          connection.writer.throw(Error('teardown')),
+        ),
+      );
       listener.close();
       await listener.closed;
     });
-    client.write(new Uint8Array([1, 2, 3]));
+    await client.writer.next(new Uint8Array([1, 2, 3]));
     const bytes = await received;
     t.is(Object.getPrototypeOf(bytes), Uint8Array.prototype);
     t.deepEqual([...bytes], [1, 2, 3]);
-    client.destroy();
-    for (const connection of connections) connection.destroy();
+    // The server ended its side; the client's reader sees the end and both
+    // connections close without either being torn down.
+    t.deepEqual(await client.reader.next(), { done: true, value: undefined });
+    await client.closed;
+    await Promise.all([...connections].map(connection => connection.closed));
     t.is(listener.close(), undefined);
     await listener.closed;
   },

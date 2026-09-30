@@ -5,7 +5,7 @@ import { encodeSwissnum } from '@endo/ocapn/client/util';
 
 import { makeFirstFailure, makeInFlight } from '../in-flight.js';
 
-/** @import { NativeWorkerPowers } from '../platform/node/native-workers.js' */
+/** @import { NativeWorkerPowers } from '../platform/native-workers.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
 
 /**

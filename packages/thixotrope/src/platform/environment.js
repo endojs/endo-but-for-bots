@@ -13,16 +13,3 @@ import harden from '@endo/harden';
  */
 export const makeEnvironmentPowers = ({ get }) => harden({ get });
 harden(makeEnvironmentPowers);
-
-/**
- * The host user that owns this process, when the platform has one.
- *
- * @typedef {object} UserPowers
- * @property {() => number | undefined} getUserId
- *
- * @param {object} host
- * @param {UserPowers['getUserId']} host.getUserId
- * @returns {UserPowers}
- */
-export const makeUserPowers = ({ getUserId }) => harden({ getUserId });
-harden(makeUserPowers);

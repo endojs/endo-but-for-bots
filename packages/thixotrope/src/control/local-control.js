@@ -6,6 +6,7 @@ import harden from '@endo/harden';
 import { frozenBytes } from '@endo/immutable-arraybuffer';
 import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
+import { makePromiseKit } from '@endo/promise-kit';
 
 import { makePipeNetwork } from '../net/pipe-network.js';
 import { silentLogger } from '../platform/logging.js';
@@ -30,13 +31,13 @@ export const makeLocalControl = async (
   role,
   admin = undefined,
 ) => {
-  let finish;
-  const closed = new Promise(resolve => {
-    finish = resolve;
-  });
+  /** @type {import('@endo/promise-kit').PromiseKit<void>} */
+  const { promise: closed, resolve: finish } = makePromiseKit();
   let ended = false;
   /** @type {Awaited<ReturnType<typeof makeOcapn>> | undefined} */
   let client;
+  /** @param {Error} error */
+  const drop = error => void socket.writer.throw(error);
   const pipe = makePipeNetwork({
     codec: syrupCodec,
     workerId: 'local-admin-v1',
@@ -44,49 +45,56 @@ export const makeLocalControl = async (
     send: bytes => {
       if (ended) return;
       if (bytes.length > MAX_FRAME) {
-        socket.destroy(Error('Admin frame too large'));
+        drop(Error('Admin frame too large'));
         return;
       }
       const header = new Uint8Array(4);
       new DataView(header.buffer).setUint32(0, bytes.length);
-      socket.write(header);
-      socket.write(bytes);
+      // Not awaited: the pipe's send is synchronous, and the host keeps the
+      // order of writes. A write the host cannot complete ends the session.
+      socket.writer.next(header).catch(drop);
+      socket.writer.next(bytes).catch(drop);
     },
   });
-  let target = new Uint8Array(4);
-  let offset = 0;
-  let header = true;
-  socket.onData(bytes => {
-    let cursor = 0;
-    while (cursor < bytes.length && !ended) {
-      const length = Math.min(target.length - offset, bytes.length - cursor);
-      target.set(bytes.subarray(cursor, cursor + length), offset);
-      offset += length;
-      cursor += length;
-      if (offset === target.length) {
-        if (header) {
-          const size = new DataView(target.buffer).getUint32(0);
-          if (size === 0 || size > MAX_FRAME) {
-            socket.destroy(Error('Invalid admin frame length'));
-            return;
+  void (async () => {
+    let target = new Uint8Array(4);
+    let offset = 0;
+    let header = true;
+    try {
+      for await (const bytes of socket.reader) {
+        let cursor = 0;
+        while (cursor < bytes.length) {
+          const length = Math.min(
+            target.length - offset,
+            bytes.length - cursor,
+          );
+          target.set(bytes.subarray(cursor, cursor + length), offset);
+          offset += length;
+          cursor += length;
+          if (offset === target.length) {
+            if (header) {
+              const size = new DataView(target.buffer).getUint32(0);
+              if (size === 0 || size > MAX_FRAME)
+                throw Error('Invalid admin frame length');
+              target = new Uint8Array(size);
+            } else {
+              pipe.deliver(target);
+              target = new Uint8Array(4);
+            }
+            header = !header;
+            offset = 0;
           }
-          target = new Uint8Array(size);
-        } else {
-          pipe.deliver(target);
-          target = new Uint8Array(4);
         }
-        header = !header;
-        offset = 0;
       }
+    } catch (error) {
+      drop(/** @type {Error} */ (error));
     }
-  });
-  socket.onError(() => socket.destroy());
-  socket.onClose(() => {
+    await socket.closed;
     ended = true;
     pipe.close();
     client?.shutdown();
     finish();
-  });
+  })();
   client = await makeOcapn({
     randomBytes: length => random.randomBytes(length),
     logger: silentLogger,
@@ -99,7 +107,7 @@ export const makeLocalControl = async (
   const close = () => {
     client?.shutdown();
     pipe.close();
-    socket.destroy();
+    drop(Error('Local control closed'));
   };
   return harden({
     closed,
