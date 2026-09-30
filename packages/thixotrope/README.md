@@ -178,7 +178,9 @@ experiments; it is not a measure of physical heap reclamation.
 for delivery (including its commit cranks), snapshot creation, and engine startup/wake.
 These are coarse measurements, not a latency benchmark or isolated fsync timings.
 The idle sleep delay is 30 seconds; `stop`, SIGINT, and SIGTERM park workers before exit.
-Quarantined workspaces remain inspectable with `status`; this version offers no repair command.
+A quarantined application or native manager vat is cleared by `thix remove` of its installation
+and reinstalled; a quarantined workspace vat remains inspectable with `status`, and this version
+offers no command to repair it.
 
 ### Persistent applications
 
