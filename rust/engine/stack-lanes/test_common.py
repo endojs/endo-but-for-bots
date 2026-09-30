@@ -65,5 +65,61 @@ class OutcomeParsing(unittest.TestCase):
         self.assertEqual(o.line, 'halt=Return result="2" meter=9')
 
 
+class ExpectedTrapsList(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = f"{self.dir.name}/expected.json"
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def test_partial_run_keeps_untested_listings(self):
+        common.write_json(self.path, {"config": {"stack": 1}, "expected_traps": ["a", "b"]})
+        expected = common.ExpectedTraps(self.path, {"stack": 1})
+        self.assertTrue(expected.config_matches())
+        problems, wrote = expected.update(selected_names=["a"], trapped=set(), problems=[
+            "a: listed as an expected trap but passed; remove it from the list (--update-expected)"],
+            allow_grow=False)
+        self.assertEqual(problems, [])
+        self.assertTrue(wrote)
+        self.assertEqual(common.ExpectedTraps(self.path, {"stack": 1}).names, {"b"})
+
+    def test_growth_needs_allow_grow(self):
+        common.write_json(self.path, {"config": {"stack": 1}, "expected_traps": []})
+        expected = common.ExpectedTraps(self.path, {"stack": 1})
+        problems, wrote = expected.update(["a"], {"a"}, ["a: unexpected trap: x"], allow_grow=False)
+        self.assertEqual(len(problems), 2)
+        self.assertFalse(wrote)
+        self.assertEqual(common.ExpectedTraps(self.path, {"stack": 1}).names, set())
+        problems, wrote = expected.update(["a"], {"a"}, ["a: unexpected trap: x"], allow_grow=True)
+        self.assertEqual(problems, [])
+        self.assertTrue(wrote)
+        self.assertEqual(common.ExpectedTraps(self.path, {"stack": 1}).names, {"a"})
+
+    def test_an_undecided_case_keeps_its_listing(self):
+        common.write_json(self.path, {"config": {"stack": 1}, "expected_traps": ["a"]})
+        expected = common.ExpectedTraps(self.path, {"stack": 1})
+        problems, _ = expected.update(["a"], set(), ["a: timeout: native x, host y"], False, undecided={"a"})
+        self.assertEqual(len(problems), 1)
+        self.assertEqual(common.ExpectedTraps(self.path, {"stack": 1}).names, {"a"})
+
+    def test_config_mismatch_is_visible(self):
+        common.write_json(self.path, {"config": {"stack": 1}, "expected_traps": []})
+        self.assertFalse(common.ExpectedTraps(self.path, {"stack": 2}).config_matches())
+
+
+class SelectCases(unittest.TestCase):
+    cases = [{"name": "a"}, {"name": "slow"}, {"name": "b"}]
+
+    def test_shards_and_names(self):
+        pick = lambda names, shard: [c["name"] for c in common.select_cases(self.cases, names, shard, ("slow",))]
+        self.assertEqual(pick(None, "fast"), ["a", "b"])
+        self.assertEqual(pick(None, "slow"), ["slow"])
+        self.assertEqual(pick(None, "all"), ["a", "slow", "b"])
+        self.assertEqual(pick(["b"], "fast"), ["b"])
+        self.assertEqual(pick(["slow"], "fast"), [])
+
+
 if __name__ == "__main__":
     unittest.main()

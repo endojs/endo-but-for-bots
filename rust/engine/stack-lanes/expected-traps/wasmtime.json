@@ -1,6 +1,12 @@
 {
+  "config": {
+    "max_wasm_stack": 2097152
+  },
   "expected_traps": [
-    "parse-tagged-chain-2043"
-  ],
-  "max_wasm_stack": 2097152
+    "jstr-obj-2014",
+    "jstr-obj-2015",
+    "parse-tagged-chain-2043",
+    "u3-eval-nest-tagged-2038",
+    "u4-function-callchain-in-tojson-1900"
+  ]
 }

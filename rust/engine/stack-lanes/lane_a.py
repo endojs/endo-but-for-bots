@@ -23,49 +23,6 @@ import common  # noqa: E402
 
 DEFAULT_STACK = 2 * 1024 * 1024
 EXPECTED = common.LANES / "expected-traps/wasmtime.json"
-# Its own shard: 50-200 s on wasm (§5).
-SLOW_CASES = ("regexp-backtrack",)
-
-
-def classify(name, native, wasm, expected):
-    """One case's verdict: pass, expected-trap, or a failure string."""
-    if native.timed_out or wasm.timed_out:
-        return f"timeout: native {native.trap}, wasm {wasm.trap}"
-    if native.trapped:
-        return f"native trapped: {native.trap}"
-    if wasm.trapped:
-        if name in expected:
-            return "expected-trap"
-        return f"unexpected trap: {wasm.trap}"
-    if name in expected:
-        return "listed as an expected trap but passed; remove it from the list (--update-expected)"
-    if wasm.line != native.line:
-        return f"mismatch: native {native.line!r}, wasm {wasm.line!r}"
-    return "pass"
-
-
-def resolved_by_update(problem, allow_grow):
-    """Whether rewriting the expected-trap list answers this problem."""
-    verdict = problem.split(": ", 1)[1]
-    if "remove it from the list" in verdict:
-        return True
-    return allow_grow and verdict.startswith("unexpected trap")
-
-
-def summarize(results):
-    """Problems (failures) and the set of cases that trapped, from classify() verdicts."""
-    problems = []
-    trapped = set()
-    for name, verdict in results.items():
-        if verdict == "pass":
-            continue
-        if verdict == "expected-trap":
-            trapped.add(name)
-            continue
-        if verdict.startswith("unexpected trap"):
-            trapped.add(name)
-        problems.append(f"{name}: {verdict}")
-    return problems, trapped
 
 
 def main():
@@ -93,23 +50,16 @@ def main():
     for name in args.case or ():
         if name not in names:
             parser.error(f"unknown case: {name}")
-    selected = []
-    for case in cases:
-        slow = case["name"] in SLOW_CASES
-        if args.shard == "fast" and slow or args.shard == "slow" and not slow:
-            continue
-        if args.case and case["name"] not in args.case:
-            continue
-        selected.append(case)
+    selected = common.select_cases(cases, args.case, args.shard, common.SLOW_CASES)
     if not selected:
         print(f"FAIL: no cases in shard {args.shard}; a lane that runs nothing proves nothing")
         return 1
-    listed = common.load_json(args.expected, {"expected_traps": [], "max_wasm_stack": args.max_wasm_stack})
-    expected = set(listed["expected_traps"])
-    if listed.get("max_wasm_stack") != args.max_wasm_stack:
+    config = {"max_wasm_stack": args.max_wasm_stack}
+    expected = common.ExpectedTraps(args.expected, config)
+    if not expected.config_matches():
         if not args.update_expected:
-            parser.error(f"{args.expected} was recorded at max_wasm_stack={listed.get('max_wasm_stack')}, "
-                         f"not {args.max_wasm_stack}; pass --update-expected to re-record it")
+            parser.error(f"{args.expected} was recorded at {expected.recorded_config}, not {config}; "
+                         "pass --update-expected to re-record it")
         if args.case or args.shard != "all":
             parser.error("re-recording the list at a new max_wasm_stack needs the whole corpus: "
                          "--shard all and no --case")
@@ -125,32 +75,25 @@ def main():
             wt = common.run_wasmtime(args.wasmtime, wasm, probe_args, args.max_wasm_stack)
         except common.HarnessError as error:
             raise SystemExit(f"lane A cannot run {case['name']}: {error}") from None
-        verdict = classify(case["name"], ref, wt, expected)
+        verdict = common.classify(case["name"], ref, wt, expected.names)
         results[case["name"]] = verdict
         records[case["name"]] = {"native": ref.as_dict(), "wasmtime": wt.as_dict(), "verdict": verdict,
                                  "seconds": round(time.monotonic() - t0, 3)}
         print(f"{case['name']:{width}s}  {verdict}", flush=True)
 
-    problems, trapped = summarize(results)
+    problems, trapped, undecided = common.summarize(results)
     if args.update_expected:
-        # Cases outside this run keep their listing; the run decides the rest.
-        untested = expected - {case["name"] for case in selected}
-        grew = trapped - expected
-        if grew and not args.allow_grow:
-            problems.append(f"expected-trap list may only shrink; new traps: {sorted(grew)} "
-                            f"(--allow-grow to record them)")
-        else:
-            common.write_json(args.expected, {"max_wasm_stack": args.max_wasm_stack,
-                                              "expected_traps": sorted(untested | trapped)})
-            print(f"wrote {args.expected} ({len(untested | trapped)} expected traps)")
-            problems = [p for p in problems if not resolved_by_update(p, args.allow_grow)]
+        problems, wrote = expected.update([c["name"] for c in selected], trapped, problems,
+                                          args.allow_grow, undecided)
+        if wrote:
+            print(f"wrote {args.expected} ({len(expected.names)} expected traps)")
     if args.output:
         common.write_json(args.output, {"max_wasm_stack": args.max_wasm_stack, "shard": args.shard,
                                         "cases": records, "problems": problems})
     for problem in problems:
         print(f"FAIL: {problem}")
     passed = sum(1 for v in results.values() if v == "pass")
-    print(f"lane A: {passed} pass, {len(trapped)} trap ({len(trapped & expected)} expected) of "
+    print(f"lane A: {passed} pass, {len(trapped)} trap ({len(trapped & expected.names)} expected) of "
           f"{len(results)} at max_wasm_stack={args.max_wasm_stack}")
     return 1 if problems else 0
 

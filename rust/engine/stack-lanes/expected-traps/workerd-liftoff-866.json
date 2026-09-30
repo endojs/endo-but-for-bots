@@ -1,0 +1,29 @@
+{
+  "config": {
+    "shadow_stack": 4194304,
+    "v8_flags": [
+      "--liftoff-only",
+      "--stack-size=866"
+    ]
+  },
+  "expected_traps": [
+    "json-stringify-10k",
+    "jstr-arr-2014",
+    "jstr-arr-2015",
+    "jstr-obj-2014",
+    "jstr-obj-2015",
+    "jstr-replacer-1999",
+    "jstr-replacer-2000",
+    "parse-call-chain-2044",
+    "parse-tagged-chain-2043",
+    "proxy-call-10k",
+    "proxy-define-10k",
+    "proxy-get-10k",
+    "proxy-get-2016",
+    "proxy-proto-cycle",
+    "u2-tojson-flat-1022",
+    "u2-tojson-regexp-512",
+    "u3-eval-nest-tagged-2038",
+    "u4-function-callchain-in-tojson-1900"
+  ]
+}
