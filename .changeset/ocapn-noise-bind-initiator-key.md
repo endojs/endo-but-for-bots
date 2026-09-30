@@ -16,10 +16,10 @@ rejected, so one key holder can no longer present several torsion-shifted
 identities.
 
 IK message 1 has no freshness, so a captured genuine SYN can be replayed and
-passes this cryptographic check. The responder therefore also defers all
-per-peer bookkeeping — displacing an unclaimed inbound session, counting a
-peer's in-flight handshakes — until the post-handshake `op:start-session`
-signature proves the peer is live, which a replay cannot reproduce. Before
-that point the only bound is a cap on concurrent inbound handshakes per local
-identity (configurable via `maxInProgressPerLocalKey`), replacing an earlier
-per-peer cap that was keyed on the wrong identity and never triggered.
+passes this cryptographic check. The responder therefore defers displacing the
+named peer's unclaimed inbound session until the post-handshake
+`op:start-session` signature proves the peer is live, which a replay cannot
+reproduce, so a replay can no longer close that session. The pre-liveness work
+a flood can pin is now bounded by a cap on concurrent inbound handshakes per
+local identity (configurable via `maxInProgressPerLocalKey`), replacing an
+earlier per-peer cap that was keyed on the wrong identity and never triggered.

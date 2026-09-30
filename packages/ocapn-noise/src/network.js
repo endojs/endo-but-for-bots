@@ -972,14 +972,7 @@ export const makeOcapnNoiseNetwork = ({
       // one bindings call.  No further wire message is required.
       // The bindings reject a SYN whose claimed `initiatorVerifyingKey`
       // does not match the static key Noise authenticated, so an
-      // initiator cannot claim a key it does not hold. But the claim is
-      // still only cryptographic, not fresh: IK message 1 is replayable
-      // (Noise §7.7 destination property 2), so a captured SYN from a
-      // genuine peer reaches here too. We therefore do NO per-peer
-      // bookkeeping (slot accounting, displacing an unclaimed session)
-      // until `exchangeIdentity` below proves the peer is live: its
-      // `op:start-session` signs the fresh handshake hash, which a
-      // replay cannot reproduce.
+      // initiator cannot claim a key it does not hold.
       const { initiatorVerifyingKey, encrypt, decrypt, handshakeHash } =
         asResp.responderReadSynWriteSynack(prefixedSyn, synack);
       const initiatorKeyHex = toHex(initiatorVerifyingKey);
@@ -1001,6 +994,19 @@ export const makeOcapnNoiseNetwork = ({
         return;
       }
 
+      // Register this inbound against the peer now, before we answer, so
+      // a concurrent outbound `provideSession` to the same peer waits for
+      // it in `decrementAndSettle` and both directions run the
+      // crossed-hello tiebreaker over the same pair of ephemerals.
+      // Without this, the two sides can each settle on their own outbound
+      // and then mutually close the other's session ("Session
+      // disconnected"). A replayed SYN reaches here too, but the only
+      // pre-liveness cost it can impose is a settlement slot, bounded by
+      // the per-local-key cap above; it cannot displace the peer's
+      // existing session (deferred to after `exchangeIdentity`). The
+      // count is released in the `catch` or in `decrementAndSettle`.
+      registeredPeerId = initiatorKeyHex;
+      bumpInProgress(initiatorKeyHex);
       const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
       await stream.writer.next(synack);
 
@@ -1024,35 +1030,26 @@ export const makeOcapnNoiseNetwork = ({
         stream,
       );
 
-      // The peer is now proven live under `initiatorKeyHex`. Only now do
-      // we touch per-peer state, and from here it is synchronous, so no
-      // competing handshake interleaves between the displacement, the
-      // bump, and the settle.
-      //
-      // An unclaimed session for this peer (still queued in
-      // `pendingInbound`) can be displaced: a fresh, live handshake from
-      // the same peer is evidence its side of the old unclaimed session
-      // is gone (a live peer's dial would have been answered from its
-      // own active cache). Deferring the displacement to here — after a
-      // proof of liveness — is what stops a replayed SYN from closing it.
+      // The peer is now proven live under `initiatorKeyHex`. Displacing a
+      // stale UNCLAIMED session for this peer (a reconnect whose old
+      // session still sits unconsumed in `pendingInbound`) is deferred to
+      // here so a replayed SYN — which never completes `exchangeIdentity`
+      // — can never close it. The early `bumpInProgress` above keeps
+      // `inProgress` >= 1 for this peer until our own `decrementAndSettle`
+      // below, so no concurrent settlement can change `active` for it in
+      // the meantime; an entry here is the same unclaimed session, if any.
       const unclaimed = active.get(initiatorKeyHex);
       if (unclaimed) {
         const pendingIndex = pendingInbound.indexOf(unclaimed.session);
-        if (pendingIndex === -1) {
-          // Became adopted while we handshook; refuse in its favor
-          // rather than close a session now in use.
-          await stream.writer.return(undefined);
-          return;
+        if (pendingIndex !== -1) {
+          pendingInbound.splice(pendingIndex, 1);
+          // `close` fires the session's onClose, which forgets the
+          // active entry; the copy already queued on `inboundSessions`
+          // surfaces as a dead session, exactly as the
+          // MAX_PENDING_INBOUND_SESSIONS overflow path leaves one.
+          unclaimed.close();
         }
-        pendingInbound.splice(pendingIndex, 1);
-        // `close` fires the session's onClose, which forgets the
-        // active entry; the copy already queued on `inboundSessions`
-        // surfaces as a dead session, exactly as the
-        // MAX_PENDING_INBOUND_SESSIONS overflow path leaves one.
-        unclaimed.close();
       }
-      registeredPeerId = initiatorKeyHex;
-      bumpInProgress(initiatorKeyHex);
 
       /** @type {Candidate | undefined} */
       let candidate;

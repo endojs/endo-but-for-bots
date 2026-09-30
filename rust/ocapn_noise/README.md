@@ -125,5 +125,6 @@ so a captured SYN passes this check again when replayed.
 This check binds the claimed identity to the handshake; it does not make
 message 1 fresh.
 The JavaScript netlayer (`@endo/ocapn-noise`) is what keeps a replay
-from disturbing the peer it names: it does no per-peer bookkeeping until
-the post-handshake `op:start-session` proves the peer is live.
+from closing the named peer's session: it defers displacing that session
+until the post-handshake `op:start-session` proves the peer is live, and
+bounds the pre-liveness work with a per-local-identity handshake cap.
