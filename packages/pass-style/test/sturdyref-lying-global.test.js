@@ -6,7 +6,7 @@ import { passStyleOf } from '../src/passStyleOf.js';
 import { Far } from '../src/make-far.js';
 import { makeTagged } from '../src/makeTagged.js';
 
-const { create, freeze } = Object;
+const { create, defineProperty, freeze } = Object;
 
 test('a lying SturdyRef global cannot reclassify or observe other values', t => {
   // Something other than the shim claimed the global with a brand check that
@@ -20,6 +20,9 @@ test('a lying SturdyRef global cannot reclassify or observe other values', t => 
     seen.push(value);
     return true;
   };
+  defineProperty(impostor.prototype, Symbol.toStringTag, {
+    value: 'SturdyRef',
+  });
   freeze(impostor.prototype);
   freeze(impostor.isSturdyRef);
   freeze(impostor);
@@ -43,6 +46,13 @@ test('a lying SturdyRef global cannot reclassify or observe other values', t => 
     // otherwise have been rejected.
     const own = freeze(create(impostor.prototype));
     t.is(passStyleOf(own), 'sturdyRef');
+    t.deepEqual(seen, [own]);
+
+    // Even its own prototype does not help a candidate that carries data.
+    const withData = freeze(
+      Object.assign(create(impostor.prototype), { a: 1 }),
+    );
+    t.throws(() => passStyleOf(withData));
     t.deepEqual(seen, [own]);
   } finally {
     delete (/** @type {any} */ (globalThis).SturdyRef);
