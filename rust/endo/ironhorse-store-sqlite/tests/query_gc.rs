@@ -1,6 +1,6 @@
 //! The query-driven GC layer (store seam phase 10) against the SQLite
 //! backend: the normalized `edge_pairs` index must agree with the
-//! sealed `page_edges` rows it is derived from — same reachability
+//! stored `page_edges` rows it is derived from — same reachability
 //! answers as the dense Rust BFS, same reverse edges — and must
 //! rebuild itself at open when the store does not attest it for the
 //! committed epoch (a store from before the table or its marker, or
@@ -419,7 +419,7 @@ fn edge_pairs_backfill_for_a_store_that_predates_the_table() {
     build_closed_store(&path);
 
     // A store written before the derived index existed has neither the
-    // table nor its marker; only the sealed page_edges rows carry the
+    // table nor its marker; only the stored page_edges rows carry the
     // graph. (Dropping the table drops its page index with it.)
     {
         let raw = rusqlite::Connection::open(&path).unwrap();
@@ -431,7 +431,7 @@ fn edge_pairs_backfill_for_a_store_that_predates_the_table() {
         raw.close().unwrap();
     }
 
-    // Reopen: open recreates the table and backfills it from the sealed
+    // Reopen: open recreates the table and backfills it from the stored
     // source, and parity holds. Attesting it waits for the first commit.
     let store = SqliteHeapStore::open(&path).unwrap();
     assert_parity(&store);

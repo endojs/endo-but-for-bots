@@ -670,6 +670,16 @@ impl HeapStore for SqliteHeapStore {
         write_small_state(&tx, to.store_schema, small)?;
         tx.execute("DROP TABLE IF EXISTS leaf_hashes", [])
             .map_err(sql_err)?;
+        // The edge-index marker attests the index at the stored epoch. No
+        // ladder step moves the epoch; a manifest that does must not
+        // inherit an attestation no commit made for it.
+        if to.epoch != durable.epoch {
+            tx.execute(
+                "DELETE FROM meta WHERE key = ?1",
+                params![META_EDGE_PAIRS_EPOCH],
+            )
+            .map_err(sql_err)?;
+        }
         tx.execute(
             "INSERT INTO meta (key, value) VALUES (?1, ?2)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
