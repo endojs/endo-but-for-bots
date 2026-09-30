@@ -305,7 +305,7 @@ unsafe fn directory_slot(the: *mut XsMachine, slot_index: usize) -> (Option<u32>
 /// # Safety
 /// `the` must be valid, `slot_index` must be in range.
 #[allow(clippy::type_complexity)]
-unsafe fn directory_arg(
+unsafe fn directory_argument(
     the: *mut XsMachine,
     slot_index: usize,
 ) -> (
@@ -421,40 +421,44 @@ pub unsafe extern "C" fn host_read_chunk(the: *mut XsMachine) {
         abort_if_ffi_panicked();
         let request = format!("{handle},{max_bytes}").into_bytes();
         let result = host_ledger::call("read", Some(handle), &request, || {
-            FILE_MAP.with(|file_map| {
-                let mut map = file_map.borrow_mut();
-                match map.get_mut(&handle) {
-                    Some(FileResource::Reader(reader)) => {
-                        let mut buf = vec![0u8; max_bytes];
-                        match reader.read(&mut buf) {
-                            Ok(0) => {
-                                // EOF — return null
-                                fxNull(the, &mut (*the).scratch);
-                                *(*the).frame.add(1) = (*the).scratch;
-                                Outcome::default()
-                            }
-                            Ok(n) => {
-                                fxArrayBuffer(
-                                    the,
-                                    &mut (*the).scratch,
-                                    buf.as_mut_ptr() as *mut _,
-                                    n as i32,
-                                    n as i32,
-                                );
-                                *(*the).frame.add(1) = (*the).scratch;
-                                buf.truncate(n);
-                                Outcome {
-                                    reply: buf,
-                                    redescribes: advanced(handle, n as u64),
-                                    ..Outcome::default()
-                                }
-                            }
-                            Err(e) => error_outcome(the, format!("Error: {}", e)),
-                        }
-                    }
-                    _ => error_outcome(the, "Error: invalid file handle".into()),
+            // Release the file map before touching the XS heap: an `fxAbort`
+            // in the allocation would longjmp over a live borrow.
+            let read = FILE_MAP.with(|file_map| match file_map.borrow_mut().get_mut(&handle) {
+                Some(FileResource::Reader(reader)) => {
+                    let mut buf = vec![0u8; max_bytes];
+                    Some(reader.read(&mut buf).map(|n| {
+                        buf.truncate(n);
+                        buf
+                    }))
                 }
-            })
+                _ => None,
+            });
+            match read {
+                Some(Ok(buf)) if buf.is_empty() => {
+                    // EOF — return null
+                    fxNull(the, &mut (*the).scratch);
+                    *(*the).frame.add(1) = (*the).scratch;
+                    Outcome::default()
+                }
+                Some(Ok(mut buf)) => {
+                    let n = buf.len();
+                    fxArrayBuffer(
+                        the,
+                        &mut (*the).scratch,
+                        buf.as_mut_ptr() as *mut _,
+                        n as i32,
+                        n as i32,
+                    );
+                    *(*the).frame.add(1) = (*the).scratch;
+                    Outcome {
+                        reply: buf,
+                        redescribes: advanced(handle, n as u64),
+                        ..Outcome::default()
+                    }
+                }
+                Some(Err(e)) => error_outcome(the, format!("Error: {}", e)),
+                None => error_outcome(the, "Error: invalid file handle".into()),
+            }
         });
         if let Err(msg) = result {
             set_result_string(the, &msg);
@@ -684,7 +688,7 @@ pub unsafe extern "C" fn host_maybe_read_file_bytes(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-        let (target, token, directory) = directory_arg(the, 0);
+        let (target, token, directory) = directory_argument(the, 0);
         // Read the file contents as raw bytes (may be non-UTF-8 CESU-8).
         let data = arg_bytes(the, 2);
         let request = (target, &token, &path, BASE64.encode(data));
@@ -702,7 +706,7 @@ pub unsafe extern "C" fn host_write_file_text(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_append_file(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-        let (target, token, directory) = directory_arg(the, 0);
+        let (target, token, directory) = directory_argument(the, 0);
         // Read the contents as raw bytes (may be non-UTF-8 CESU-8), matching
         // host_write_file_text.
         let data = arg_bytes(the, 2);
@@ -879,7 +883,7 @@ pub unsafe extern "C" fn host_read_dir(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_mkdir(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-        let (target, token, directory) = directory_arg(the, 0);
+        let (target, token, directory) = directory_argument(the, 0);
         mutate(
             the,
             "mkdir",
@@ -900,7 +904,7 @@ pub unsafe extern "C" fn host_mkdir(the: *mut XsMachine) {
 pub unsafe extern "C" fn host_remove(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let path = arg_str(the, 1);
-        let (target, token, directory) = directory_arg(the, 0);
+        let (target, token, directory) = directory_argument(the, 0);
         mutate(
             the,
             "remove",
@@ -929,7 +933,7 @@ pub unsafe extern "C" fn host_rename(the: *mut XsMachine) {
     crate::worker_io::guard_ffi(|| unsafe {
         let from = arg_str(the, 1);
         let to = arg_str(the, 2);
-        let (target, token, directory) = directory_arg(the, 0);
+        let (target, token, directory) = directory_argument(the, 0);
         mutate(
             the,
             "rename",

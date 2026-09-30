@@ -17,7 +17,7 @@
 //! supervised suspend still refuses open native handles: nothing durable
 //! could rebuild them.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -139,6 +139,10 @@ static NEXT_HANDLE: AtomicU32 = AtomicU32::new(1);
 
 thread_local! {
     static LEDGER: RefCell<Option<Ledger>> = const { RefCell::new(None) };
+    /// Set while [`call`] is inside the transcript. An `fxAbort` in the
+    /// native operation longjmps over that frame and leaves this set, so the
+    /// crank's end knows a host call was abandoned mid-flight.
+    static CALLING: Cell<bool> = const { Cell::new(false) };
     /// The descriptor of every handle open in this worker, used to compose a
     /// child's authority from its parent directory or database.
     static DESCRIPTORS: RefCell<HashMap<u32, Option<Descriptor>>> = RefCell::new(HashMap::new());
@@ -173,7 +177,7 @@ pub fn admitted_callbacks() -> AdmittedCallbacks {
 
 /// Whether this worker's host calls go through a transcript.
 pub fn attached() -> bool {
-    LEDGER.with(|l| l.borrow().is_some())
+    CALLING.with(Cell::get) || LEDGER.with(|l| l.borrow().is_some())
 }
 
 /// What attaching re-seated.
@@ -390,11 +394,19 @@ const PENDING_JOBS: &[u8] = b"pending-promise-jobs";
 /// An error means the transcript refused the crank (backpressure, say), so
 /// the caller must refuse the delivery rather than run it unrecorded.
 pub(crate) fn begin_delivery(inbound: &[u8]) -> Result<(), String> {
+    if CALLING.with(Cell::get) {
+        return Err("host transcript: a host call re-entered the ledger".into());
+    }
     LEDGER.with(|l| {
         let mut ledger = l.borrow_mut();
         let Some(ledger) = ledger.as_mut() else {
             return Ok(());
         };
+        // The heap already runs ahead of the log: recording more cranks on
+        // top of the gap would only grow a log that cannot be replayed.
+        if let Some(lost) = &ledger.lost_crank {
+            return Err(format!("host transcript: a crank was lost: {lost}"));
+        }
         if ledger.transcript.active_crank().is_some() {
             return Ok(());
         }
@@ -411,6 +423,10 @@ pub(crate) fn begin_delivery(inbound: &[u8]) -> Result<(), String> {
 /// commit, so its host calls are not in the log: a caller that goes on to
 /// snapshot must not.
 pub(crate) fn end_delivery(commit: bool) -> Result<(), String> {
+    // A host call an `fxAbort` abandoned left its crank half-recorded: it
+    // must not commit.
+    let abandoned = CALLING.with(|c| c.replace(false));
+    let commit = commit && !abandoned;
     LEDGER.with(|l| {
         let mut ledger = l.borrow_mut();
         let Some(ledger) = ledger.as_mut() else {
@@ -479,8 +495,20 @@ pub(crate) fn call(
     let mut invoke = Some(invoke);
     let mut done: Option<Outcome> = None;
     let routed = LEDGER.with(|l| {
-        let mut borrowed = l.borrow_mut();
-        let ledger = borrowed.as_mut()?;
+        if l.borrow().is_none() {
+            return None;
+        }
+        // `invoke` sets the guest's result, which allocates on the XS heap.
+        // An `fxAbort` there longjmps over this frame without running
+        // destructors, so a `RefMut` held across it would stay borrowed and
+        // turn the crank-end abort into a `BorrowMutError` panic. Reach the
+        // ledger through the cell's pointer instead, and mark the window with
+        // `CALLING` so a stranded call is seen and nothing re-borrows it.
+        // SAFETY: the ledger is present (checked above), no borrow is live,
+        // and while `CALLING` is set every other entry point refuses or
+        // answers without borrowing, so this is the only reference.
+        let ledger = unsafe { (*l.as_ptr()).as_mut()? };
+        CALLING.with(|c| c.set(true));
         let result = ledger.transcript.host_call(
             &ledger.callbacks,
             callback,
@@ -505,6 +533,7 @@ pub(crate) fn call(
                 host
             },
         );
+        CALLING.with(|c| c.set(false));
         Some(match result {
             Err(HostCallError::BrokenHandle(h)) if closing(callback) => {
                 Err(match ledger.transcript.acknowledge_loss(h) {
@@ -566,6 +595,44 @@ fn closing(callback: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_descriptor_round_trips_through_its_encoding() {
+        let fed = vec![0u8, 1, 0xff, b'"', b'\\'];
+        let descriptors = [
+            Descriptor::Directory {
+                base: Base::Token("test".into()),
+                path: String::new(),
+            },
+            Descriptor::Reader {
+                base: Base::Token("t\u{e9}st".into()),
+                path: "a/b \"c\".txt".into(),
+                position: u64::MAX,
+            },
+            Descriptor::Writer {
+                base: Base::Ambient("/tmp/x".into()),
+                path: "w.log".into(),
+                position: 0,
+            },
+            Descriptor::Database {
+                path: ":memory:".into(),
+            },
+            Descriptor::Statement {
+                database: u32::MAX,
+                sql: "SELECT ?1, ',' FROM t".into(),
+            },
+            Descriptor::hasher(&fed).unwrap(),
+            Descriptor::hasher(&[]).unwrap(),
+        ];
+        for descriptor in descriptors {
+            assert_eq!(Descriptor::decode(&descriptor.encode()).unwrap(), descriptor);
+        }
+        assert_eq!(Descriptor::hasher(&fed).unwrap().hasher_fed(), Some(fed));
+        let limit = vec![7u8; HASHER_DESCRIPTOR_LIMIT];
+        assert_eq!(Descriptor::hasher(&limit).unwrap().hasher_fed(), Some(limit));
+        assert!(Descriptor::hasher(&vec![7u8; HASHER_DESCRIPTOR_LIMIT + 1]).is_none());
+        assert!(Descriptor::decode(b"{\"kind\":\"reader\"}").is_err());
+    }
 
     #[test]
     fn every_host_callback_is_classified_by_its_guest_name() {

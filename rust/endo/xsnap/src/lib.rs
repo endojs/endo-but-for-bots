@@ -532,6 +532,8 @@ pub enum SnapshotError {
     InvalidName,
     /// File I/O error during streaming snapshot.
     Io(std::io::Error),
+    /// A CAS snapshot's name is not the SHA-256 of its bytes.
+    Corrupt(String),
 }
 
 impl std::fmt::Display for SnapshotError {
@@ -541,6 +543,9 @@ impl std::fmt::Display for SnapshotError {
             SnapshotError::Read(e) => write!(f, "snapshot read failed (error {})", e),
             SnapshotError::InvalidName => write!(f, "machine name contains null byte"),
             SnapshotError::Io(e) => write!(f, "snapshot I/O: {}", e),
+            SnapshotError::Corrupt(hash) => {
+                write!(f, "snapshot {hash} does not match its content hash")
+            }
         }
     }
 }
@@ -789,6 +794,11 @@ impl Machine {
     }
 
     /// Restore a machine from a CAS-stored snapshot file.
+    ///
+    /// The bytes are checked against their name before XS sees them: a
+    /// resumed heap's name is what authorizes re-seating its native handles
+    /// (`host_ledger::attach`), so a blob that is not what it claims to be
+    /// must never run.
     pub fn resume_from_cas(
         cas_dir: &std::path::Path,
         sha256: &str,
@@ -796,9 +806,16 @@ impl Machine {
         signature: &[u8],
         callbacks: &mut [ffi::XsCallback],
     ) -> Result<Machine, SnapshotError> {
-        let path = cas_dir.join(sha256);
-        let file = std::fs::File::open(&path).map_err(SnapshotError::Io)?;
-        Machine::from_snapshot_file(file, name, signature, callbacks)
+        let well_formed = sha256.len() == 64
+            && sha256.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'));
+        if !well_formed {
+            return Err(SnapshotError::Corrupt(sha256.to_string()));
+        }
+        let bytes = std::fs::read(cas_dir.join(sha256)).map_err(SnapshotError::Io)?;
+        if slot_machine_transcript::blob_hash(&bytes) != sha256 {
+            return Err(SnapshotError::Corrupt(sha256.to_string()));
+        }
+        Machine::from_snapshot(&bytes, name, signature, callbacks)
     }
 }
 
@@ -1252,6 +1269,9 @@ enum EnvelopeAction {
     Continue,
     /// Worker should suspend: snapshot written, exit the loop.
     Suspend,
+    /// The host transcript refused to record the delivery, so it did not
+    /// run: the worker must stop rather than silently drop the frame.
+    Refused(String),
 }
 
 /// Handle an incoming envelope: intercept control verbs
@@ -1310,8 +1330,10 @@ fn handle_envelope(machine: &Machine, data: &[u8]) -> EnvelopeAction {
             _ => {}
         }
     }
-    dispatch_envelope(machine, data);
-    EnvelopeAction::Continue
+    match dispatch_envelope(machine, data) {
+        Ok(()) => EnvelopeAction::Continue,
+        Err(e) => EnvelopeAction::Refused(e),
+    }
 }
 
 /// Handle a suspend request: stream snapshot to CAS, send back hash.
@@ -1432,13 +1454,16 @@ fn send_suspend_error(nonce: i64, msg: &str) {
 /// directly — no hex encoding. This is O(n) instead of the previous
 /// O(n²) hex-parse approach, which is critical for large envelopes
 /// (e.g. 1 MB CapTP payloads from storeBlob).
-fn dispatch_envelope(machine: &Machine, data: &[u8]) {
-    // A delivery the transcript refuses to record must not run: its host
-    // calls would be unrecorded or land in another delivery's crank.
-    if let Err(e) = host_ledger::begin_delivery(data) {
-        eprintln!("refusing delivery: {e}");
-        return;
-    }
+///
+/// A crank still open from work outside any delivery (a promise job or the
+/// crank-end `__shouldTerminate` probe) is committed first, so this delivery
+/// opens a crank of its own that records its inbound bytes. A delivery the
+/// transcript refuses to record does not run, and the refusal is returned
+/// so the worker stops: its host calls would otherwise be unrecorded or land
+/// in another delivery's crank.
+fn dispatch_envelope(machine: &Machine, data: &[u8]) -> Result<(), String> {
+    host_ledger::end_delivery(true)?;
+    host_ledger::begin_delivery(data)?;
     worker_io::set_pending_envelope(data.to_vec());
     machine.eval(
         "try { \
@@ -1447,6 +1472,7 @@ fn dispatch_envelope(machine: &Machine, data: &[u8]) {
             handleCommand(__bytes); \
          } catch(e) { trace('handleCommand error: ' + e.message) }",
     );
+    Ok(())
 }
 
 /// Bootstrap an XS machine with polyfills and the SES boot bundle.
@@ -2066,6 +2092,8 @@ pub fn run_xs_program(
     // panic-injection harness (tracked follow-on; the `guard_ffi` unit suite
     // pins the poison/short-circuit mechanics these checkpoints consume).
     let mut ffi_death: Option<worker_io::FfiPanic> = None;
+    // A delivery the host transcript refused to record: the worker stops.
+    let mut refused: Option<String> = None;
     // The `fxAbort` exit that ended the supervised run, with the crank's meter
     // reading; surfaced as `XsnapError::Aborted` after teardown.
     let mut xs_abort: Option<(XsAbort, u64)> = None;
@@ -2126,12 +2154,18 @@ pub fn run_xs_program(
             // Block until the next envelope arrives.
             let frame = worker_io::with_transport(|t| t.recv_raw_envelope());
             match frame {
-                Ok(Some(data)) => {
-                    if matches!(handle_envelope(&machine, &data), EnvelopeAction::Suspend) {
+                Ok(Some(data)) => match handle_envelope(&machine, &data) {
+                    EnvelopeAction::Continue => {}
+                    EnvelopeAction::Suspend => {
                         eprintln!("{label}: suspended");
                         break;
                     }
-                }
+                    EnvelopeAction::Refused(e) => {
+                        eprintln!("{label}: refusing delivery: {e}");
+                        refused = Some(e);
+                        break 'outer;
+                    }
+                },
                 Ok(None) => break,
                 Err(e) => {
                     eprintln!("{label}: recv error: {e}");
@@ -2218,15 +2252,24 @@ pub fn run_xs_program(
                                 break 'outer;
                             }
                             got_envelope = true;
-                            // One crank is one delivery plus its promise
-                            // jobs, which the round above has drained:
-                            // commit it so this envelope opens its own.
-                            if let Err(e) = host_ledger::end_delivery(true) {
-                                eprintln!("{label}: {e}");
+                            match handle_envelope(&machine, &data) {
+                                EnvelopeAction::Continue => {}
+                                EnvelopeAction::Suspend => {
+                                    eprintln!("{label}: suspended (during pump)");
+                                    break 'outer;
+                                }
+                                EnvelopeAction::Refused(e) => {
+                                    eprintln!("{label}: refusing delivery: {e}");
+                                    refused = Some(e);
+                                    break 'outer;
+                                }
                             }
-                            if matches!(handle_envelope(&machine, &data), EnvelopeAction::Suspend) {
-                                eprintln!("{label}: suspended (during pump)");
-                                break 'outer;
+                            // One crank is one delivery plus its promise
+                            // jobs. Under a transcript, leave the drain so
+                            // the job loop runs this delivery's jobs before
+                            // the next envelope commits its crank.
+                            if host_ledger::attached() {
+                                break;
                             }
                         }
                         Ok(None) => break,
@@ -2358,6 +2401,9 @@ pub fn run_xs_program(
     }
     if let Some((abort, computrons)) = xs_abort {
         return Err(XsnapError::Aborted { abort, computrons });
+    }
+    if let Some(e) = refused {
+        return Err(XsnapError::Io(format!("refused a delivery: {e}")));
     }
     Ok(())
 }
@@ -4653,6 +4699,80 @@ mod tests {
         assert!(!powers::crypto::has_open_handles());
         assert!(matches!(handle_suspend(&machine, 124, path), EnvelopeAction::Suspend));
         worker_io::clear_transport();
+    }
+
+    /// Attach a fresh host transcript to this thread's worker, with the
+    /// guest's `handleCommand` counting deliveries and making a recorded
+    /// host call in each.
+    fn attach_counting_transcript(
+        machine: &Machine,
+        dir: &std::path::Path,
+    ) -> powers::HostPowers {
+        unsafe { worker_io::register(machine) };
+        machine.define_function("randomHex256", powers::crypto::host_random_hex256, 0);
+        machine.eval(
+            "var deliveries = 0; \
+             function handleCommand(bytes) { deliveries += 1; randomHex256(); }",
+        );
+        let powers = powers::HostPowers::new();
+        host_ledger::attach(&dir.join("worker.sqlite"), "worker-1", None, &powers, || {
+            machine.suspend(SNAPSHOT_SIGNATURE).map(|data| data.snapshot).map_err(|e| e.to_string())
+        })
+        .unwrap();
+        powers
+    }
+
+    /// A delivery opens a crank of its own even when a host call made
+    /// outside any delivery left one open, so no delivery's inbound bytes
+    /// or host calls are folded into another crank.
+    #[test]
+    fn each_delivery_commits_its_own_crank() {
+        let machine = new_machine();
+        let dir = tempfile::tempdir().unwrap();
+        let _powers = attach_counting_transcript(&machine, dir.path());
+        assert!(matches!(
+            machine.eval("randomHex256().length"),
+            Some(JsValue::Integer(64))
+        ));
+        assert!(matches!(handle_envelope(&machine, b"first"), EnvelopeAction::Continue));
+        assert!(matches!(handle_envelope(&machine, b"second"), EnvelopeAction::Continue));
+        host_ledger::end_delivery(true).unwrap();
+        assert!(matches!(machine.eval("deliveries"), Some(JsValue::Integer(2))));
+        let transcript = host_ledger::detach().unwrap();
+        // The out-of-delivery call's crank, then one per delivery.
+        assert_eq!(transcript.stats().releases, 3);
+    }
+
+    /// A delivery the transcript refuses to record never reaches the guest,
+    /// and the refusal is surfaced so the worker loop stops.
+    #[test]
+    fn a_refused_delivery_does_not_run_and_is_reported() {
+        let machine = new_machine();
+        let dir = tempfile::tempdir().unwrap();
+        let _powers = attach_counting_transcript(&machine, dir.path());
+        assert!(matches!(handle_envelope(&machine, b"small"), EnvelopeAction::Continue));
+        let oversized = vec![0u8; 16 * 1024 * 1024 + 1];
+        assert!(matches!(
+            handle_envelope(&machine, &oversized),
+            EnvelopeAction::Refused(_)
+        ));
+        assert!(matches!(machine.eval("deliveries"), Some(JsValue::Integer(1))));
+        host_ledger::detach();
+    }
+
+    /// A CAS blob whose bytes do not hash to its name never reaches XS.
+    #[test]
+    fn resume_from_cas_refuses_a_blob_that_is_not_its_name() {
+        let cas = tempfile::tempdir().unwrap();
+        let name = slot_machine_transcript::blob_hash(b"the real heap");
+        std::fs::write(cas.path().join(&name), b"a different heap").unwrap();
+        std::fs::write(cas.path().join("0".repeat(64)), b"").unwrap();
+        for hash in [name.as_str(), &"0".repeat(64), "../escape", ""] {
+            assert!(matches!(
+                Machine::resume_from_cas(cas.path(), hash, "test", SNAPSHOT_SIGNATURE, &mut []),
+                Err(SnapshotError::Corrupt(_))
+            ), "{hash}");
+        }
     }
 
     /// The worker side of § Verification's host-handle / effect contract,
