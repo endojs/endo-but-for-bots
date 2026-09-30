@@ -12,10 +12,10 @@
 
 Design only; nothing in this repository changes. This document amends
 [endo-claude](endo-claude.md) where the experiments contradicted or settled it,
-and leaves that design standing for the parts they did not reach. It does not
-revive the closed amendment in
-[#1228](https://github.com/endojs/endo-but-for-bots/pull/1228) and does not treat
-that amendment's contract as valid.
+and leaves that design standing for the parts the experiments did not reach. It
+does not revive the closed amendment in
+[#1228](https://github.com/endojs/endo-but-for-bots/pull/1228) and does not
+treat that amendment's contract as valid.
 
 **Read this first: the production evidence is thin.** On 2026-09-28 the deployed
 minion.town host had run **zero** Claude inference turns through either backend.
@@ -104,15 +104,21 @@ minted for the probe.
 | Stored login only (`~/.claude/.credentials.json`) | Fails: `Not logged in · Please run /login`. |
 | `CLAUDE_CODE_OAUTH_TOKEN=<token>` | Fails: `Not logged in · Please run /login`. |
 | `ANTHROPIC_AUTH_TOKEN=<token>` | **Succeeds** (`ok`). It also succeeded with an empty `HOME` and `CLAUDE_CONFIG_DIR`, plus `--setting-sources "" --strict-mcp-config --tools ""`. `init` reported `apiKeySource: none`. |
-| `ANTHROPIC_API_KEY=<token>`, or an `apiKeyHelper` printing it | No result: the process was still running when a 120 s timeout killed it, presumably retrying an API-key rejection. |
+| `ANTHROPIC_API_KEY=<token>`, or an `apiKeyHelper` printing it | Invalid input, not evidence about API-key behavior: the probe placed the OAuth access token in the API-key slot. The process was still running when a 120 s timeout killed it. How a genuine API key behaves under `--bare` remains untested. |
 | Control: `claude -p` without `--bare`, stored login | Succeeds. |
 
 So `--help`'s "OAuth and keychain are never read" is accurate but narrower than
 the conclusion #105 drew from it. `--bare` skips the stored OAuth login and
 `CLAUDE_CODE_OAUTH_TOKEN`, but it still sends whatever bearer token
 `ANTHROPIC_AUTH_TOKEN` holds, and the API accepts a subscription token there. A
-subscription therefore does not force an unconfined configuration. Like every
-flag, this behavior needs rechecking on each binary bump (Decision 4).
+subscription therefore does not force an unconfined configuration, at least
+for the flags this probe exercised (`--bare`, `--setting-sources ""`,
+`--strict-mcp-config`, `--tools ""`, empty `HOME` and `CLAUDE_CONFIG_DIR`). The
+rest of Decision 3's recipe (`--disable-slash-commands`,
+`--permission-mode dontAsk`, and a `--mcp-config` naming one real server) was
+not combined with a subscription token, and neither was a long-lived
+`setup-token`; gate 6 covers both. Like every flag, this behavior needs
+rechecking on each binary bump (Decision 4).
 
 ### Production observations (2026-09-28)
 
@@ -142,14 +148,15 @@ with a fake `claude` binary or an in-memory guest.
 | A real model reaches the guest's projected tools with every built-in denied | **Not observed.** Stub only: a fake binary read the generated `--mcp-config`, presented the nonce, and wrote through the guest surface. | **Observed once**: a real SDK query with built-ins denied called `writeText` then `readText` on an in-memory guest (`memory:g-abf1…-agent`), stored `sdk-live-value`, finished in three turns. Development host, claude.ai login, not the production credential or a real daemon guest. |
 | A real model reaches **nothing but** the guest's tools | Not observed (documented). | Not observed: no negative probe ran. |
 | Project and user memory, hooks, skills, and ambient MCP servers are excluded | Documented (`--bare`, `--setting-sources ""`, `--strict-mcp-config`). The 2.1.232 measurements in [endo-claude](endo-claude.md) remain the latest live check. | Documented. No live probe has measured these items for the SDK. |
-| Credential authenticates headless | Not observed in #105: no credential in the build environment. A subscription OAuth token authenticating a fully flagged `--bare -p` turn was observed on 2026-09-28 (§ Subscription credentials under `--bare`). | Observed with a claude.ai login on a development host only; the API-key path it targets is unobserved. |
+| Credential authenticates headless | Not observed in #105: no credential in the build environment. A subscription OAuth access token authenticating a `--bare -p` turn with a subset of the confinement flags was observed on 2026-09-28 (§ Subscription credentials under `--bare`). | Observed with a claude.ai login on a development host only; the API-key path it targets is unobserved. |
 | The `needs-auth` wire signal | Stub: a substring heuristic. The live shape is unknown. | Stub: missing credential mapped before any query. |
 | Wall-clock, output-byte, and turn limits terminate a turn | Stub: each axis killed a fake spawn (process-group kill). | Stub: each axis mapped to `limit-exceeded` through the SDK abort controller. |
 | The confined process does not inherit the host environment | Stub: `process.env` secrets absent from the constructed child env. | Stub: SDK `env` built from an allowlist. |
 | Pinned, integrity-checked binary deploys and rolls back | Observed in production (#99, #103; see above). | Shared: Track B points the SDK at the same pinned executable and prunes the SDK's bundled copy. |
 
 The table's honest reading: **the one positive live result belongs to the SDK
-track, no negative (closure) result exists for either track, and neither
+track, no negative result (a probe showing the model reaches nothing beyond the
+guest's tools) exists for either track, and neither
 credential path has run in production.**
 
 ## CLI versus Agent SDK
@@ -159,7 +166,7 @@ credential path has run in production.**
 | What runs | `claude -p` spawned per turn. | The SDK **also spawns the Claude Code binary** (`pathToClaudeCodeExecutable`) and drives it over a control channel. It is not in-process inference. |
 | Configuration surface | Argv plus a settings file plus an MCP config file. Order and quoting matter ([endo-claude](endo-claude.md) § *Argv order is a confinement boundary*). | Typed options object. No argv to get wrong, but each option still becomes a CLI flag underneath, so flag semantics are the same. |
 | Guest projection delivery | Out of process: a loopback HTTP endpoint gated by a per-turn nonce (#105), or a claude-spawned stdio server ([endo-guest-stdio-mcp](endo-guest-stdio-mcp.md)). | In process: an `McpServer` handed to the SDK (`mcpServers`) with no socket or nonce. The host holds the facet; the binary reaches it only through the SDK's channel. |
-| Credential kinds it can use | Under `--bare`: an API key in `ANTHROPIC_API_KEY` or from `apiKeyHelper`, **or** a subscription OAuth token delivered as `ANTHROPIC_AUTH_TOKEN` (observed on 2.1.280). `--bare` ignores the stored login and `CLAUDE_CODE_OAUTH_TOKEN`, which is what `--help`'s "OAuth and keychain are never read" describes. | API key. Track B read Anthropic's third-party guidance as making this a paid-API backend; the one live run used a developer's claude.ai login, which is not a deployable credential. |
+| Credential kinds it can use | Under `--bare`: an API key in `ANTHROPIC_API_KEY` or from `apiKeyHelper` (documented; no genuine key has been tried), **or** a subscription OAuth token delivered as `ANTHROPIC_AUTH_TOKEN` (observed on 2.1.280 with an access token). `--bare` ignores the stored login and `CLAUDE_CODE_OAUTH_TOKEN`, which is what `--help`'s "OAuth and keychain are never read" describes. | API key. Track B read Anthropic's third-party guidance as making this a paid-API backend; the one live run used a developer's claude.ai login, which is not a deployable credential. |
 | Dependency weight | The pinned binary only (~320 MiB). No npm dependency. | The SDK npm package pinned to the same Claude Code version, plus the binary. |
 | Upgrade coupling | Flags can appear between versions (2.1.280 adds `--restricted` and `--permission-prompts`). A pinned-version `--help` diff is needed on every bump. | SDK version must match the pinned binary; #106 pinned 0.3.236 to 2.1.236 and #103's bump to 2.1.268 now leaves that draft mismatched. |
 | Continuity between turns | None by construction (fresh process, no `--resume`). | None (`persistSession: false`). |
@@ -328,7 +335,8 @@ The four ownership questions:
 
 - **Persistent state:** the daemon owns formulas; the daemon secret manager owns
   credential bytes; the deployment broker owns the lease ledger and usage; the
-  backend owns nothing that outlives a turn.
+  factory owns the retained-child ledger; the backend owns nothing that outlives
+  a turn.
 - **Commit or discard:** the effects a turn causes are ordinary facet calls,
   committed by the daemon as they happen. The backend commits nothing; a killed
   turn leaves whatever facet calls already completed, which is why the
@@ -422,8 +430,9 @@ The four ownership questions:
      (#1224) already follow.
    - **Delivery, interim.** Until the broker path passes gate 6, the backend's
      host side reads the `SecretBlob` and places the credential in the
-     constructed child environment as `ANTHROPIC_AUTH_TOKEN` (the observed
-     path). With built-ins removed the model cannot read it, but the binary
+     constructed child environment as `ANTHROPIC_AUTH_TOKEN` (the path
+     observed with a short-lived access token; the stored `setup-token` itself
+     has not yet run through `--bare`). With built-ins removed the model cannot read it, but the binary
      holds it, so this is a documented residual, acceptable only for a
      single-principal deployment (Decision 9).
    - **Not `CLAUDE_CODE_OAUTH_TOKEN`.** `--bare` ignores it (observed,
@@ -645,6 +654,9 @@ opened it as of this revision).
       enricher over `InferenceBackend`, or the two stay separate contracts, is
       unsettled; `@endo/inference` must at least not redefine the broker or
       lease types `@endo/hosted-agent` already owns.
+- [ ] A genuine API key under `--bare` is untested. The 2026-09-28 probe's
+      `ANTHROPIC_API_KEY` row fed an OAuth token into the API-key slot and says
+      nothing about real API-key behavior.
 - [ ] The broker refuses a subscription mode today; gate 6 decides whether it
       gains one.
 - [ ] The `@endo/claude-sandbox` exception is due for review on 2026-12-08; this
