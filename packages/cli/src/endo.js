@@ -880,10 +880,7 @@ export const main = async rawArgs => {
     .command('start')
     .description('start the endo daemon as a background service')
     .option('--dry-run', 'log what would be don, rather than doing it')
-    .option(
-      '--force',
-      'clean and start even if a daemon appears to be running',
-    )
+    .option('--force', 'clean and start even if a daemon appears to be running')
     .action(async options => {
       const { dryRun, force } = options;
       const { start } = await import('@endo/daemon');

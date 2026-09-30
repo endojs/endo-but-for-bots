@@ -9,7 +9,8 @@ succeeds without touching anything. When a daemon has claimed its state
 but is still booting, `start` waits for it instead of replacing it.
 `clean` now leaves the socket, its lock markers, and `endo.pid` in place
 while their owner is alive. `endo start --force` and `endo clean --force`
-restore the old unconditional behavior.
+skip the probe as before, but never remove the files of a live daemon that
+holds the state lock.
 
 The daemon now claims a single-instance lock on its ephemeral state
 directory (`<ephemeral>/endo.lock`) before it opens its database or kills

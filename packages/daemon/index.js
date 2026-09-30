@@ -603,9 +603,9 @@ export const status = async (config = defaultConfig, { verbose = 0 } = {}) => {
  * @param {Config} [config]
  * @param {object} [options]
  * @param {boolean} [options.dryRun] - log what would be done, don't do it
- * @param {boolean} [options.force] - skip the probe and clean unconditionally,
- * as `start` did before it was idempotent. A live daemon still keeps its state
- * lock, so the new daemon declines to start rather than share its state.
+ * @param {boolean} [options.force] - skip the probe and clean as `start` did
+ * before it was idempotent. A live owner of the state lock is still left
+ * alone, and the new daemon declines to start rather than share its state.
  */
 export const start = async (
   config = defaultConfig,
@@ -909,27 +909,29 @@ const killDaemonProcess = async config => {
  *
  * @param {Config} [config]
  * @param {object} [options]
- * @param {boolean} [options.force] - remove them even if a daemon is live
+ * @param {boolean} [options.force] - remove them even if the socket answers
+ * or a live pid holds the socket lock. A live owner of the state lock is left
+ * alone regardless: removing its files would only orphan it, since a new
+ * daemon still could not claim its state.
  */
 export const clean = async (config = defaultConfig, { force = false } = {}) => {
   await null;
-  if (!force) {
-    const owner = await findDaemonOwner(config);
-    if (owner !== undefined || (await tryConnect(config.sockPath))) {
-      console.log(
-        `endo daemon${owner ? ` (pid ${owner.pid})` : ''} is running; not cleaning`,
-      );
-      return;
-    }
+  const owner = await findDaemonOwner(config);
+  // A socket-lock owner that is alive but not serving has either not bound
+  // yet or inherited a dead daemon's pid. The socket lock reclaims such a
+  // marker, so only a live state-lock owner or a serving socket stops us.
+  if (owner?.booting || (!force && (await tryConnect(config.sockPath)))) {
+    console.log(
+      `endo daemon${owner ? ` (pid ${owner.pid})` : ''} is running; not cleaning`,
+    );
+    return;
   }
   if (process.platform !== 'win32') {
     await removePath(config.sockPath).catch(enoentOk);
     // The marker sits beside the socket, outside the directories `purge`
     // removes.
     await removePath(socketLockPath(config.sockPath)).catch(enoentOk);
-    await removePath(stateLockPath(config.ephemeralStatePath)).catch(
-      enoentOk,
-    );
+    await removePath(stateLockPath(config.ephemeralStatePath)).catch(enoentOk);
   }
   const pidPath = path.join(config.ephemeralStatePath, 'endo.pid');
   await fs.promises.rm(pidPath, { force: true }).catch(enoentOk);

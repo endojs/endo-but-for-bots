@@ -242,3 +242,34 @@ unixOnly(
     }
   },
 );
+
+unixOnly(
+  'start --force against a live daemon declines rather than sharing its state',
+  async t => {
+    const config = makeConfig('tmp', 'lifecycle-start-force');
+    await purge(config);
+    t.teardown(() => stop(config));
+
+    await start(config);
+    const daemonPid = await readDaemonPid(config);
+
+    // `--force` skips the probe, but the state lock stays with its live
+    // owner, so the new daemon declines and the first one keeps serving.
+    await t.throwsAsync(() => start(config, { force: true }), {
+      message: new RegExp(`another Endo daemon \\(pid ${daemonPid}\\) owns`),
+    });
+    t.is(await readDaemonPid(config), daemonPid, 'endo.pid is untouched');
+    t.true(isAlive(daemonPid), 'the first daemon survives');
+    const { host, cancel } = await ping(config);
+    t.truthy(await E(host).identify('@agent'), 'and still serves its socket');
+    cancel();
+    if (process.platform === 'linux') {
+      // The declined daemon exits just after it reports.
+      await waitFor(
+        async () => (await listManagerPids(config)).length === 1,
+        5000,
+      );
+      t.deepEqual(await listManagerPids(config), [daemonPid]);
+    }
+  },
+);
