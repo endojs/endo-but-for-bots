@@ -3,8 +3,87 @@
 | | |
 |---|---|
 | **Created** | 2026-05-04 |
+| **Updated** | 2026-09-30 |
 | **Author** | Kris Kowal (prompted) |
-| **Status** | Not Started |
+| **Status** | **Complete** |
+
+## Status
+
+The design is complete. The implementation merged upstream in
+[endojs/endo#3332](https://github.com/endojs/endo/pull/3332) on
+2026-08-21 as merge commit
+[`30147f5aa1`](https://github.com/endojs/endo/commit/30147f5aa1750a98ce1d4511a6cf45068a392f65),
+which is also reachable in this repository's history.
+The terms below are defined in the [Design](#design) section; this section records
+only what shipped and where it departed from the proposal.
+
+The implementation delivered:
+
+- the split between a powered `%InitialURL%` on the start compartment and a
+  tamed `%SharedURL%` on shared compartments;
+- `URLSearchParams` as a universal intrinsic;
+- explicit sampling and hardening of `%URLSearchParamsIteratorPrototype%`;
+- graceful degradation on hosts that provide no `URL` constructor;
+- documentation and a changeset; and
+- 22 focused tests: 16 in
+  [`url.test.js`](../packages/ses/test/url.test.js), 4 in
+  [`url-blob-remove.test.js`](../packages/ses/test/url-blob-remove.test.js),
+  and 2 in
+  [`url-missing.test.js`](../packages/ses/test/url-missing.test.js).
+
+The implementation preserved the design's security boundary but changed two
+names, and this document now uses the shipped names throughout.
+The powered start-compartment intrinsic is `%InitialURL%`; the proposal
+called it `%URL%`.
+The new name matches how SES already names the powered and tamed `Date`
+constructors, `%InitialDate%` and `%SharedDate%` (see
+[`permits.js`](../packages/ses/src/permits.js)).
+The lockdown option is `urlBlobTaming: 'retain' | 'remove'`; the proposal
+called it `urlBlobMethods: 'keepOnInitialGlobal' | 'remove'`.
+Most sibling `*Taming` options take `'safe' | 'unsafe'` values, and the
+exceptions (`overrideTaming: 'moderate' | 'min' | 'severe'` and
+`evalTaming: 'safe-eval' | 'unsafe-eval' | 'no-eval'`) still name a
+safety or strictness level.
+`urlBlobTaming` is the first to name the action taken on an artifact,
+the blob methods.
+This design accepts that naming as shipped and proposes no rename.
+
+The implementation also pins `%URLPrototype%.constructor` to `%SharedURL%`,
+the same way `%DatePrototype%.constructor` points at `%SharedDate%`.
+The [cross-compartment `instanceof`](#cross-compartment-instanceof)
+section explains why.
+The test "URL.prototype.constructor points at the tamed URL, not the
+powered one" in [`url.test.js`](../packages/ses/test/url.test.js) covers
+the pin.
+With the default `urlBlobTaming: 'retain'`,
+`new URL(...).constructor === URL` is `false` in the start compartment.
+With `urlBlobTaming: 'remove'`, the start compartment's `URL` is
+`%SharedURL%` itself, so the same comparison is `true`.
+
+The Phase 3 downstream audit found no call site to change.
+In this repository, `URL.createObjectURL` and `URL.revokeObjectURL`
+appear only in:
+
+- the shim, its tests, and its type declarations;
+- lockdown log text captured by a daemon test; and
+- prose: [`docs/lockdown.md`](../docs/lockdown.md),
+  [`packages/ses/docs/guide.md`](../packages/ses/docs/guide.md),
+  the changeset
+  [`.changeset/hardened-url-shim.md`](../.changeset/hardened-url-shim.md),
+  this design, and the sibling
+  [hardened text codecs shim](./hardened-text-codecs-shim.md) design.
+
+None of these is a call site that runs under SES.
+Phase 3 also offered an optional second task: find `new URL(` call sites
+that could replace hand-written URL parsing with the now-permitted `URL`.
+Nobody did that task, and it remains open.
+
+Test plan item 9, the XS smoke test, was not delivered as written.
+No test file exercises `URL` under XS.
+The only XS test in `packages/ses`
+([`_lockdown-safe.js`](../packages/ses/test/_lockdown-safe.js)) calls
+`lockdown()` and asserts nothing about `URL` or `URLSearchParams`.
+It shows only that lockdown does not throw on a host without `URL`.
 
 ## What is the Problem Being Solved?
 
@@ -81,7 +160,7 @@ intrinsics on `sharedGlobalPropertyNames`.
 
 The chosen integration is therefore:
 
-- **`%URL%` on `initialGlobalPropertyNames`** (start compartment only),
+- **`%InitialURL%` on `initialGlobalPropertyNames`** (start compartment only),
   bound to `globalThis.URL`.
   Full host shape, including `createObjectURL` and `revokeObjectURL`.
   Hardened in place; the static methods themselves remain callable.
@@ -89,7 +168,7 @@ The chosen integration is therefore:
   compartment), bound to `globalThis.URL`.
   The constructor permits omit `createObjectURL` and
   `revokeObjectURL`.
-  `%URL%` and `%SharedURL%` share the same `prototype` value so that
+  `%InitialURL%` and `%SharedURL%` share the same `prototype` value so that
   an instance constructed in either compartment is `instanceof URL`
   in either compartment.
 
@@ -102,7 +181,7 @@ lives on `initialGlobalPropertyNames`, the powerless variant on
 `sharedGlobalPropertyNames`, both produced from the same host
 intrinsic during the intrinsics-collection pass.
 
-#### Lockdown opt-in to conflate `%URL%` and `%SharedURL%`
+#### Lockdown opt-in to conflate `%InitialURL%` and `%SharedURL%`
 
 A class of embeddings has no use for `createObjectURL` even on the
 start compartment (server-side, XS, an Electron main process that
@@ -112,23 +191,23 @@ For these embeddings, an opt-in lockdown option collapses the split:
 ```js
 lockdown({
   // ... other options ...
-  urlBlobMethods: 'remove',  // default: 'keepOnInitialGlobal'
+  urlBlobTaming: 'remove',  // default: 'retain'
 });
 ```
 
-When `urlBlobMethods: 'remove'`, the start compartment's `URL` is
+When `urlBlobTaming: 'remove'`, the start compartment's `URL` is
 also bound to `%SharedURL%`, and `createObjectURL` /
 `revokeObjectURL` are removed everywhere.
 This restores the simpler "`URL === URL` across compartments" model
 for embeddings that want it.
 
-The default is `'keepOnInitialGlobal'` because removing a
+The default is `'retain'` because removing a
 host-provided method from the start compartment is more disruptive
 than introducing a second bound name.
 
 #### Cross-compartment `instanceof`
 
-Because `%URL%` and `%SharedURL%` share the same `prototype` value,
+Because `%InitialURL%` and `%SharedURL%` share the same `prototype` value,
 a URL constructed on the start compartment and passed to a shared
 compartment satisfies `x instanceof URL` there (where `URL` is the
 shared compartment's tamed binding).
@@ -136,20 +215,33 @@ A URL constructed in a shared compartment and passed back to the
 start compartment likewise satisfies `x instanceof URL` there
 (where `URL` is the start compartment's powered binding).
 
-This is an **open question**: shared identity at the prototype level
+This was an **open question**: shared identity at the prototype level
 is the simplest fix, but it means the two constructor functions are
 distinct values, and any code that compares `Foo.constructor === URL`
 will get a different answer depending on where the value originated.
-The alternative is to make `%URL%` and `%SharedURL%` distinct
+The alternative is to make `%InitialURL%` and `%SharedURL%` distinct
 prototype chains and accept that `instanceof URL` is unreliable
 across the boundary; that pushes the burden onto cross-compartment
 helper libraries.
 Recommend the shared-prototype approach unless the maintainer prefers
 the strict separation.
 
+*Resolved:* the implementation shipped the shared prototype and pins
+`%URLPrototype%.constructor` to `%SharedURL%` (see [Status](#status)).
+The pin is a security requirement, not a style choice.
+Because the prototype is shared, an unpinned `constructor` property
+would still point at the host's powered constructor, `%InitialURL%`.
+Code in a shared compartment could then evaluate
+`new URL(...).constructor.createObjectURL` and reach the blob-registry
+authority that `%SharedURL%` withholds.
+Pinning `constructor` to `%SharedURL%` closes that path.
+The cost falls on the start compartment, where
+`new URL(...).constructor === URL` is `false` under the default
+`urlBlobTaming: 'retain'`.
+
 ### Permits table
 
-The permits entry models `%URL%`, `%SharedURL%`, and
+The permits entry models `%InitialURL%`, `%SharedURL%`, and
 `%URLSearchParams%` as ordinary constructors with an explicit set
 of permitted properties.
 Anything not listed is removed by SES's whitelisting pass.
@@ -157,7 +249,7 @@ Anything not listed is removed by SES's whitelisting pass.
 Below, columns mark which properties are kept (✓), removed (✗), or
 require special treatment (★).
 
-#### `%URL%` (start compartment, bound to `globalThis.URL`)
+#### `%InitialURL%` (start compartment, bound to `globalThis.URL`)
 
 | Property | Disposition | Rationale |
 |---|---|---|
@@ -171,13 +263,13 @@ require special treatment (★).
 
 | Property | Disposition | Rationale |
 |---|---|---|
-| `prototype` | ✓ | Required for instances; the same identity as `%URL%.prototype`. |
+| `prototype` | ✓ | Required for instances; the same identity as `%InitialURL%.prototype`. |
 | `parse` (static) | ✓ | Pure parsing returning a URL or `null`. |
 | `canParse` (static) | ✓ | Pure predicate. |
 | `createObjectURL` | ✗ | Ambient blob-registry authority; not safe to share. |
 | `revokeObjectURL` | ✗ | Companion to `createObjectURL`. |
 
-When the lockdown opt-in `urlBlobMethods: 'remove'` is set, the
+When the lockdown opt-in `urlBlobTaming: 'remove'` is set, the
 start compartment's `URL` uses the `%SharedURL%` permits row
 instead.
 
@@ -252,7 +344,7 @@ existing `intrinsics.js` flow with no new lockdown phase:
 1. `getGlobalIntrinsics` collects `URL` and `URLSearchParams` from
    the host global.
 2. The intrinsics-installation step routes the host's `URL` into
-   the `%URL%` intrinsic on `initialGlobalPropertyNames` (start
+   the `%InitialURL%` intrinsic on `initialGlobalPropertyNames` (start
    compartment, bound to `globalThis.URL`) and into a second
    intrinsic `%SharedURL%` on `sharedGlobalPropertyNames`
    (post-lockdown compartments, also bound to `globalThis.URL`).
@@ -264,8 +356,8 @@ existing `intrinsics.js` flow with no new lockdown phase:
 4. The whitelist pass walks the permits graph.
    The `%SharedURL%` permits row removes `createObjectURL` and
    `revokeObjectURL` from the shared binding.
-   The `%URL%` permits row leaves them in place on the start
-   compartment unless the `urlBlobMethods: 'remove'` lockdown option
+   The `%InitialURL%` permits row leaves them in place on the start
+   compartment unless the `urlBlobTaming: 'remove'` lockdown option
    is set, in which case the `%SharedURL%` permits row applies to
    both bindings and the start compartment also loses the methods.
 5. `harden` is applied to the closure of permitted intrinsics, which
@@ -294,7 +386,7 @@ That approach has two drawbacks:
    problem must be solved inside the shim with bespoke code that
    duplicates SES's whitelisting machinery.
 
-Folding the work into the SES intrinsics pipeline (`%URL%` on
+Folding the work into the SES intrinsics pipeline (`%InitialURL%` on
 `initialGlobalPropertyNames`, `%SharedURL%` on
 `sharedGlobalPropertyNames`, both bound to `globalThis.URL`) solves
 both: every compartment in every embedding gets the appropriate
@@ -319,7 +411,7 @@ Tests live under `packages/ses/test/`.
 1. **Presence on the start compartment.**
    `globalThis.URL` is a function after lockdown.
    `'createObjectURL' in URL` and `'revokeObjectURL' in URL` are
-   both `true` (default `urlBlobMethods: 'keepOnInitialGlobal'`).
+   both `true` (default `urlBlobTaming: 'retain'`).
 
 2. **Presence on shared compartments.**
    In a fresh compartment created post-lockdown,
@@ -333,9 +425,14 @@ Tests live under `packages/ses/test/`.
    compartment's `URL.prototype`.
    An instance constructed in the start compartment satisfies
    `instanceof URL` in a shared compartment, and vice versa.
+   The shared prototype's `constructor` is the shared compartment's
+   `URL` (`%SharedURL%`) in both compartments, so
+   `new URL(...).constructor` never yields the blob-registry methods.
+   *As shipped:* this pin was added during implementation (see
+   [Status](#status)) and is covered by its own test in `url.test.js`.
 
-4. **Lockdown opt-in `urlBlobMethods: 'remove'`.**
-   When `lockdown({ urlBlobMethods: 'remove' })` is called,
+4. **Lockdown opt-in `urlBlobTaming: 'remove'`.**
+   When `lockdown({ urlBlobTaming: 'remove' })` is called,
    `'createObjectURL' in URL` and `'revokeObjectURL' in URL` are
    both `false` on the start compartment.
    The start compartment's `URL` and a shared compartment's `URL` are
@@ -365,6 +462,8 @@ Tests live under `packages/ses/test/`.
 9. **XS smoke test.**
    The existing XS test runner exercises (2) and (8) on a host that
    never provided `URL`.
+   *As shipped:* not delivered as written; the XS runner calls only
+   `lockdown()` and makes no `URL` assertions (see [Status](#status)).
 
 ### Compatibility considerations
 
@@ -416,13 +515,13 @@ These designs are similar in spirit, not blocking dependencies.
 
 ### Phase 1: Permits and sampling (S)
 
-- Extend `packages/ses/src/permits.js` with entries for `%URL%` (on
+- Extend `packages/ses/src/permits.js` with entries for `%InitialURL%` (on
   `initialGlobalPropertyNames`), `%SharedURL%` (on
   `sharedGlobalPropertyNames`, bound to `globalThis.URL` in shared
   compartments), `%URLSearchParams%`, and
   `%URLSearchParamsIteratorPrototype%`.
-- Plumb the `urlBlobMethods` lockdown option into the permits
-  selection so `'remove'` swaps the start compartment's `%URL%` row
+- Plumb the `urlBlobTaming` lockdown option into the permits
+  selection so `'remove'` swaps the start compartment's `%InitialURL%` row
   for the `%SharedURL%` row.
 - Extend `packages/ses/src/get-anonymous-intrinsics.js` (or the
   closest equivalent) to sample the iterator prototype.
@@ -432,7 +531,7 @@ These designs are similar in spirit, not blocking dependencies.
 
 - Add the test cases enumerated in the Test Plan.
 - Add a changeset under `.changeset/` describing the newly tamed
-  intrinsics, the `urlBlobMethods` lockdown option, the removed
+  intrinsics, the `urlBlobTaming` lockdown option, the removed
   methods on shared compartments, and the behavior on hosts without
   `URL`.
 
@@ -448,7 +547,7 @@ These designs are similar in spirit, not blocking dependencies.
 
 ## Design Decisions
 
-1. **`%URL%` on the start compartment, `%SharedURL%` on shared compartments.**
+1. **`%InitialURL%` on the start compartment, `%SharedURL%` on shared compartments.**
    The blob-URL static methods are useful authority a host application
    can legitimately keep on the start compartment, but they must not
    reach shared compartments.
@@ -462,9 +561,9 @@ These designs are similar in spirit, not blocking dependencies.
    `%SharedSymbol%`, `%SharedDate%`, `%SharedError%`, and
    `%SharedRegExp%`.
 
-2. **Lockdown opt-in to conflate `%URL%` and `%SharedURL%`.**
+2. **Lockdown opt-in to conflate `%InitialURL%` and `%SharedURL%`.**
    Embeddings that have no use for blob URLs even on the start
-   compartment can pass `lockdown({ urlBlobMethods: 'remove' })` to
+   compartment can pass `lockdown({ urlBlobTaming: 'remove' })` to
    collapse the split, restoring the simpler "single `URL` binding
    shared by all compartments" model.
    The default keeps the host-provided start-compartment shape.
@@ -476,7 +575,7 @@ These designs are similar in spirit, not blocking dependencies.
 
 4. **`TextEncoder` / `TextDecoder` split into a sibling design.**
    The text codecs share the same source issue but have no
-   implementation overlap with the `%URL%` / `%SharedURL%` split.
+   implementation overlap with the `%InitialURL%` / `%SharedURL%` split.
    They live in
    [`hardened-text-codecs-shim.md`](./hardened-text-codecs-shim.md)
    so each design can land independently.
@@ -497,7 +596,7 @@ These designs are similar in spirit, not blocking dependencies.
 
 7. **Bundle-size impact is negligible.**
    The contribution is small (tens of lines of permits for the
-   `%URL%` / `%SharedURL%` pair plus one iterator-prototype sampler).
+   `%InitialURL%` / `%SharedURL%` pair plus one iterator-prototype sampler).
    The blob-methods opt-in is a single boolean check.
    No bundle-size measurement is required before landing.
 
@@ -509,7 +608,10 @@ These designs are similar in spirit, not blocking dependencies.
    If a shorter or differently spelled name is preferred (for
    consistency with how SES names other hidden intrinsics), say so.
 
-2. **Cross-compartment `instanceof` for `%URL%` and `%SharedURL%`.**
+   *Resolved:* the implementation shipped
+   `%URLSearchParamsIteratorPrototype%` as proposed (see [Status](#status)).
+
+2. **Cross-compartment `instanceof` for `%InitialURL%` and `%SharedURL%`.**
    The default proposal makes the two intrinsics share a single
    `prototype` value so an instance crosses the boundary and still
    satisfies `instanceof URL` on either side.
@@ -519,6 +621,10 @@ These designs are similar in spirit, not blocking dependencies.
    burden onto cross-compartment helper libraries.
    Confirm the shared-prototype direction or call out the trade-off
    to revisit.
+
+   *Resolved:* the implementation shipped the shared prototype, so
+   `instanceof URL` holds on either side, and pins
+   `%URLPrototype%.constructor` to `%SharedURL%` (see [Status](#status)).
 
 ## Prompt
 
