@@ -858,8 +858,10 @@ impl StoreManifest {
 /// A page's outgoing edge summary: the sorted, deduplicated set of
 /// pages its records reference (self-edges excluded — a page trivially
 /// reaches itself). A pure function of the page's records, so stored
-/// summaries are recomputable from content. `check_batch` requires each
-/// supplied summary to match its accompanying page records.
+/// summaries are recomputable from content. The engine derives them;
+/// [`check_batch`] re-derives each supplied one from its page's records in
+/// debug builds only, and [`validate_store_content`] re-derives every
+/// stored one on request.
 pub fn derive_page_edges(page: u32, records: &[Slot]) -> Vec<u32> {
     let mut targets = std::collections::BTreeSet::new();
     for r in records {
@@ -973,7 +975,9 @@ fn reject_batch(e: StoreError) -> StoreError {
 /// tests exercise these gates across backends:
 ///
 /// 1. Row indices: every traveling row and page-edge summary lies inside
-///    the batch's own geometry, since a backend writes rows by index.
+///    the batch's own geometry, since a backend writes rows by index; and
+///    that geometry is one [`StoreManifest::decode`] accepts, since a
+///    backend writes the manifest the store's next open decodes.
 /// 2. Grown-region presence: every row of a grown geometry region
 ///    (pages, extents, free segments alike) must travel in the batch
 ///    — O(grown), prior rows exist by induction.
@@ -991,6 +995,11 @@ pub fn check_batch(
     prior: Option<&StoreManifest>,
     batch: &CheckpointBatch,
 ) -> Result<(), StoreError> {
+    if batch.manifest.chunk_len > u64::from(u32::MAX) {
+        return Err(StoreError::Snapshot(SnapshotError::Corrupt(
+            "store manifest chunk length exceeds the chunk offset space",
+        )));
+    }
     let n_pages = slot_page_count(batch.manifest.slot_count) as usize;
     let n_exts = chunk_extent_count(batch.manifest.chunk_len) as usize;
     let n_frees = free_seg_count(batch.manifest.free_len) as usize;
@@ -1318,7 +1327,7 @@ pub struct CheckpointBatch {
 
 /// An admitted batch. Only the shared commit gate can construct this
 /// token; backend hooks receive no batch until succession, geometry and
-/// summaries have passed.
+/// summary coupling have passed.
 pub struct VerifiedCommit<'a> {
     batch: &'a CheckpointBatch,
 }
@@ -1581,6 +1590,8 @@ fn peek_cost_table_version(p: &[u8]) -> Result<String, StoreError> {
 /// through the handle, so a handle whose view is behind the durable
 /// manifest (a `FileStore` another handle has written since it loaded) is
 /// refused with [`StoreError::BaselineMismatch`] before anything is read.
+/// A stale handle onto a store that is already current gets `false`, and
+/// its resume refuses with [`StoreError::NeedsMigration`] until it reopens.
 /// A crash before that write leaves the store exactly as it was; a store
 /// is never half migrated. The first commit token is the first half of the
 /// seal the store carried ([`StoreManifest::token`]).
@@ -4817,6 +4828,19 @@ mod tests {
             );
             assert_eq!(store.manifest().unwrap(), prev);
         }
+        // A chunk length past the chunk offset space: the decoder refuses
+        // such a manifest, so a backend that wrote it could not reopen.
+        let mut long = batch.clone();
+        long.manifest.chunk_len = u64::from(u32::MAX) + 1;
+        assert_eq!(
+            store.commit(&long),
+            Err(StoreError::BatchRejected(Box::new(StoreError::Snapshot(
+                SnapshotError::Corrupt(
+                    "store manifest chunk length exceeds the chunk offset space"
+                )
+            )))),
+        );
+        assert_eq!(store.manifest().unwrap(), prev);
         store.commit(&batch).unwrap();
     }
 }
