@@ -1,6 +1,10 @@
 // @ts-check
-import { E, Far } from '@endo/far';
+import { Fail } from '@endo/errors';
+import { makeExo } from '@endo/exo';
+import { E } from '@endo/far';
 import harden from '@endo/harden';
+import { passStyleOf } from '@endo/pass-style';
+import { M } from '@endo/patterns';
 
 /**
  * @typedef {'application' | 'native'} InstallationKind
@@ -52,13 +56,36 @@ import harden from '@endo/harden';
  * @param {any} inventory
  */
 export const makeInstallations = inventory => {
+  // Shipped by source: the guards travel with the factory, defined here.
+  const KindShape = M.or('application', 'native');
+  const GrantsShape = M.arrayOf(harden([M.string(), M.string()]));
+  const InstallationsI = M.interface('Installations', {
+    help: M.call().returns(M.string()),
+    prepare: M.call(M.string(), KindShape, M.string(), M.string())
+      .optional(GrantsShape)
+      .returns(M.record()),
+    attach: M.call(
+      M.string(),
+      M.string(),
+      M.string(),
+      M.remotable('vat'),
+    ).returns(M.undefined()),
+    start: M.call(M.string(), M.string()).returns(M.promise()),
+    finish: M.call(M.string(), M.string(), M.remotable('facet')).returns(
+      M.undefined(),
+    ),
+    fail: M.call(M.string(), M.string(), M.string()).returns(M.undefined()),
+    lookup: M.call(M.string()).returns(M.opt(M.record())),
+    remove: M.call(M.string()).returns(M.boolean()),
+    list: M.call().returns(M.arrayOf(M.record())),
+  });
+
   /** @type {Map<string, Installation>} */
   const installed = new Map();
 
-  /** @param {unknown} name */
+  /** @param {string} name */
   const assertName = name => {
-    if (typeof name !== 'string' || !name.length)
-      throw Error('Expected an inventory name');
+    name.length > 0 || Fail`Expected an inventory name`;
   };
   // Remote-controlled text: bound it here as well as at display.
   /** @param {unknown} reason */
@@ -69,26 +96,18 @@ export const makeInstallations = inventory => {
    */
   const entryFor = (name, digest) => {
     const entry = installed.get(name);
-    if (!entry || entry.digest !== digest)
-      throw Error('Installation name has a different installation');
+    if (entry === undefined || entry.digest !== digest)
+      throw Fail`Installation name has a different installation`;
     return entry;
   };
   /**
-   * @param {unknown} grants
-   * @returns {Array<[string, string]>}
+   * @param {ReadonlyArray<string[]>} grants already matched against
+   *   GrantsShape
    */
   const canonicalGrants = grants => {
-    if (!Array.isArray(grants)) throw Error('Expected a grant list');
     const names = new Set();
-    for (const grant of grants) {
-      if (
-        !Array.isArray(grant) ||
-        grant.length !== 2 ||
-        grant.some(part => typeof part !== 'string')
-      )
-        throw Error('Expected [power name, inventory key] grants');
-      const [power] = grant;
-      if (names.has(power)) throw Error('Duplicate power name');
+    for (const [power] of grants) {
+      !names.has(power) || Fail`Duplicate power name`;
       names.add(power);
     }
     return harden(
@@ -96,6 +115,18 @@ export const makeInstallations = inventory => {
         .map(([power, key]) => /** @type {[string, string]} */ ([power, key]))
         .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
     );
+  };
+  /**
+   * Whether a value the user put into the inventory is a capability; a value
+   * that is not even passable is not, rather than an error to explain.
+   * @param {unknown} value
+   */
+  const isRemotable = value => {
+    try {
+      return passStyleOf(value) === 'remotable';
+    } catch (_error) {
+      return false;
+    }
   };
   /**
    * Admit only remotable capabilities, not potentially large copy data; the
@@ -106,14 +137,10 @@ export const makeInstallations = inventory => {
     /** @type {Record<string, unknown>} */
     const powers = {};
     for (const [power, key] of grants) {
-      if (!inventory.has(key)) throw Error('Unknown inventory grant');
+      inventory.has(key) || Fail`Unknown inventory grant`;
       const value = inventory.get(key);
-      if (
-        value === null ||
-        (typeof value !== 'object' && typeof value !== 'function') ||
-        value[Symbol.for('passStyle')] !== 'remotable'
-      )
-        throw Error('Installation grants must be remotable capabilities');
+      isRemotable(value) ||
+        Fail`Installation grants must be remotable capabilities`;
       Object.defineProperty(powers, power, { value, enumerable: true });
     }
     return harden(powers);
@@ -126,8 +153,8 @@ export const makeInstallations = inventory => {
    * @param {unknown} value
    */
   const publish = (name, entry, value) => {
-    if (inventory.has(name))
-      throw Error('Inventory name became occupied during installation');
+    !inventory.has(name) ||
+      Fail`Inventory name became occupied during installation`;
     inventory.set(name, value);
     entry.value = value;
     entry.status = 'ready';
@@ -136,7 +163,7 @@ export const makeInstallations = inventory => {
     entry.complete = true;
   };
 
-  return Far('Installations', {
+  return makeExo('Installations', InstallationsI, {
     help: () =>
       'The workspace record of installed applications and native resources: prepare(name, kind, digest, allocationKey, grants), attach(name, digest, workerId, worker), start(name, digest), finish(name, digest, value), fail(name, digest, error), lookup(name), remove(name), list(). Installed values live in the inventory under their names.',
     /**
@@ -146,27 +173,20 @@ export const makeInstallations = inventory => {
      * @param {InstallationKind} kind
      * @param {string} digest
      * @param {string} allocationKey
-     * @param {Array<[string, string]>} [grants]
+     * @param {ReadonlyArray<string[]>} [grants]
      */
-    prepare: (name, kind, digest, allocationKey, grants = []) => {
+    prepare: (name, kind, digest, allocationKey, grants = harden([])) => {
       assertName(name);
-      if (kind !== 'application' && kind !== 'native')
-        throw Error('Unknown installation kind');
-      if (typeof digest !== 'string' || typeof allocationKey !== 'string')
-        throw Error('Expected a code digest and an allocation key');
       const canonical = canonicalGrants(grants);
       const signature = JSON.stringify(canonical);
       let entry = installed.get(name);
       if (entry) {
-        if (
-          entry.kind !== kind ||
-          entry.digest !== digest ||
-          entry.signature !== signature
-        )
-          throw Error('Installation name has a different installation');
+        (entry.kind === kind &&
+          entry.digest === digest &&
+          entry.signature === signature) ||
+          Fail`Installation name has a different installation`;
       } else {
-        if (inventory.has(name))
-          throw Error('Inventory name is already occupied');
+        !inventory.has(name) || Fail`Inventory name is already occupied`;
         entry = {
           kind,
           digest,
@@ -200,8 +220,9 @@ export const makeInstallations = inventory => {
      */
     attach: (name, digest, workerId, worker) => {
       const entry = entryFor(name, digest);
-      if (entry.workerId !== undefined && entry.workerId !== workerId)
-        throw Error('Installation allocation changed');
+      entry.workerId === undefined ||
+        entry.workerId === workerId ||
+        Fail`Installation allocation changed`;
       entry.workerId = workerId;
       if (!entry.complete) entry.worker = worker;
     },
@@ -221,10 +242,8 @@ export const makeInstallations = inventory => {
      */
     start: (name, digest) => {
       const entry = entryFor(name, digest);
-      if (entry.kind !== 'application')
-        throw Error('Only an application is started');
-      if (entry.workerId === undefined)
-        throw Error('Installation has not been allocated');
+      entry.kind === 'application' || Fail`Only an application is started`;
+      entry.workerId !== undefined || Fail`Installation has not been allocated`;
       /** @param {unknown} root */
       const published = root => {
         // A name removed while its factory ran is not written to: the vat is
@@ -286,11 +305,9 @@ export const makeInstallations = inventory => {
      */
     finish: (name, digest, value) => {
       const entry = entryFor(name, digest);
-      if (entry.kind !== 'native')
-        throw Error('Only a native resource is finished');
+      entry.kind === 'native' || Fail`Only a native resource is finished`;
       if (entry.complete) return;
-      if (entry.workerId === undefined)
-        throw Error('Installation has not been allocated');
+      entry.workerId !== undefined || Fail`Installation has not been allocated`;
       publish(name, entry, value);
     },
     /**

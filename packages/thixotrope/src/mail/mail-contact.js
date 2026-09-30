@@ -1,13 +1,17 @@
 // @ts-check
-import { E, Far } from '@endo/far';
+import { Fail } from '@endo/errors';
+import { makeExo } from '@endo/exo';
+import { E } from '@endo/far';
 import harden from '@endo/harden';
+import { passStyleOf } from '@endo/pass-style';
+import { M } from '@endo/patterns';
 
 /** @import { Mailbox } from './mailbox.js' */
 
 /**
  * A local contact for one correspondent. It carries no pet name or registry.
  * Its inbound facet grants delivery only; its owner controls introductions.
- * Self-contained so it can be created in the persistent workspace.
+ * Shipped by source, so it can be created in the persistent workspace.
  *
  * Status is `pending` while no introduction has concluded, `ready` once the
  * correspondent's inbox is held, `failed` when the last acceptance was
@@ -20,6 +24,28 @@ import harden from '@endo/harden';
  *   looked up at each delivery so a replaced mailbox is followed
  */
 export const makeMailContact = provideMailbox => {
+  // Shipped by source: the guards travel with the factory, defined here.
+  const CapabilityShape = M.remotable('capability');
+  const ContactInboxI = M.interface('ContactInbox', {
+    deliver: M.call(M.bigint(), M.string(), CapabilityShape).returns(
+      M.promise(),
+    ),
+  });
+  const MailboxInvitationI = M.interface('MailboxInvitation', {
+    help: M.call().returns(M.string()),
+    accept: M.call(CapabilityShape).returns(M.remotable('inbox')),
+  });
+  const MailContactI = M.interface('MailContact', {
+    help: M.call().returns(M.string()),
+    status: M.call().returns(M.record()),
+    assertIntroducible: M.call().returns(M.boolean()),
+    // The redemption callback stays in this vat and is not passable.
+    invite: M.call().optional(M.raw()).returns(M.remotable('invitation')),
+    revokeInvitation: M.call().returns(M.boolean()),
+    accept: M.call(CapabilityShape).returns(M.boolean()),
+    deliver: M.call(M.string(), CapabilityShape).returns(M.promise()),
+  });
+
   /** @type {'pending' | 'ready' | 'failed' | 'cancelled'} */
   let status = 'pending';
   let nextSent = 0n;
@@ -29,25 +55,25 @@ export const makeMailContact = provideMailbox => {
   /** @type {string | undefined} */
   let error;
   let invitationOpen = false;
-  /** @param {any} value */
-  const assertCapability = value => {
-    if (!value || value[Symbol.for('passStyle')] !== 'remotable')
-      throw Error('Expected a remotable capability');
-  };
   const assertIntroducible = () => {
-    if (status === 'ready' || remote !== undefined || invitationOpen)
-      throw Error('Introduction already started');
+    (status !== 'ready' && remote === undefined && !invitationOpen) ||
+      Fail`Introduction already started`;
   };
   // Remote-controlled text: bound it here as well as at display.
   /** @param {unknown} reason */
   const describeError = reason => String(reason).slice(0, 512);
   // The sender cannot choose the contact recorded in our inbox: this facet
   // binds delivery to the local contact that owns this introduction.
-  const receiver = Far('ContactInbox', {
+  const receiver = makeExo('ContactInbox', ContactInboxI, {
+    /**
+     * @param {bigint} sequence
+     * @param {string} text
+     * @param {any} capability
+     */
     deliver: (sequence, text, capability) =>
       E(provideMailbox()).receive(contact, sequence, text, capability),
   });
-  const contact = Far('MailContact', {
+  const contact = makeExo('MailContact', MailContactI, {
     help: () =>
       'A local contact for one correspondent: status(), invite(onRedeemed?), accept(invitation), revokeInvitation(), deliver(text, capability).',
     status: () => harden({ status, error }),
@@ -66,18 +92,20 @@ export const makeMailContact = provideMailbox => {
      * @param {(() => void) | undefined} [onRedeemed]
      */
     invite: (onRedeemed = undefined) => {
-      if (onRedeemed !== undefined && typeof onRedeemed !== 'function')
-        throw Error('Expected a redemption callback');
+      onRedeemed === undefined ||
+        typeof onRedeemed === 'function' ||
+        Fail`Expected a redemption callback`;
       assertIntroducible();
       invitationOpen = true;
       status = 'pending';
-      return Far('MailboxInvitation', {
+      return makeExo('MailboxInvitation', MailboxInvitationI, {
         help: () => 'accept(counterpart) exchanges inbox capabilities once.',
+        /** @param {any} counterpart */
         accept: counterpart => {
-          if (!invitationOpen) throw Error('Invitation was revoked');
-          assertCapability(counterpart);
-          if (remote !== undefined && remote !== counterpart)
-            throw Error('Invitation already redeemed');
+          invitationOpen || Fail`Invitation was revoked`;
+          remote === undefined ||
+            remote === counterpart ||
+            Fail`Invitation already redeemed`;
           const first = remote === undefined;
           remote = counterpart;
           status = 'ready';
@@ -104,13 +132,13 @@ export const makeMailContact = provideMailbox => {
      * @param {any} invitation
      */
     accept: invitation => {
-      assertCapability(invitation);
       assertIntroducible();
       status = 'pending';
       const attempt = E(invitation)
         .accept(receiver)
         .then(counterpart => {
-          assertCapability(counterpart);
+          passStyleOf(counterpart) === 'remotable' ||
+            Fail`Expected a remotable capability`;
           return counterpart;
         })
         .then(
@@ -131,7 +159,7 @@ export const makeMailContact = provideMailbox => {
       return true;
     },
     deliver: (text, capability) => {
-      if (status !== 'ready') throw Error('Contact is not ready');
+      status === 'ready' || Fail`Contact is not ready`;
       // Sequence ownership follows the reusable contact, not any one sending
       // mailbox. Several local mailboxes may share this contact.
       nextSent += 1n;

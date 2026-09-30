@@ -186,11 +186,11 @@ test('mailbox validation does not consume an invitation or an inbound sequence',
     // Each assertion awaits the rejection of a separate boundary invocation.
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => E(mailbox).invite(name), {
-      message: /contact name/,
+      message: /contact name|128|Must be a string/,
     });
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() => E(mailbox).accept(name, 'irrelevant'), {
-      message: /contact name/,
+      message: /contact name|128|Must be a string/,
     });
   }
   const text = await E(mailbox).invite('valid');
@@ -203,9 +203,7 @@ test('mailbox validation does not consume an invitation or an inbound sequence',
   });
   await t.throwsAsync(
     () => E(receiver).deliver(/** @type {any} */ (1), 'text', counter),
-    {
-      message: /Invalid message sequence/,
-    },
+    { message: /bigint/ },
   );
   await t.throwsAsync(
     () => E(receiver).deliver(1n, 'x'.repeat(4097), counter),
@@ -472,7 +470,7 @@ test('mailbox inbox and outbox notify subscribers and bound delivery errors', as
   await setImmediate();
   t.deepEqual(inboxRevisions, [0n, 1n, 2n]);
   await t.throwsAsync(() => E(mailbox).take(/** @type {any} */ (1)), {
-    message: /message id/,
+    message: /Must be a string/,
   });
 });
 
