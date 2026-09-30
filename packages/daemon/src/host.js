@@ -1505,6 +1505,9 @@ export const makeHostMaker = ({
       } = options;
       assertPowersNameOrPath(powersName);
       const powersNamePath = namePathFrom(powersName);
+      // Refuse a malformed result name before any deferred task is queued.
+      const resultNamePath =
+        resultName === undefined ? undefined : namePathFrom(resultName);
 
       /** @type {DeferredTasks<MakeCapletDeferredTaskParams>} */
       const tasks = makeDeferredTasks();
@@ -1534,12 +1537,9 @@ export const makeHostMaker = ({
         );
       }
 
-      if (resultName !== undefined) {
+      if (resultNamePath !== undefined) {
         tasks.push(identifiers =>
-          E(directory).storeIdentifier(
-            namePathFrom(resultName),
-            identifiers.capletId,
-          ),
+          E(directory).storeIdentifier(resultNamePath, identifiers.capletId),
         );
       }
 

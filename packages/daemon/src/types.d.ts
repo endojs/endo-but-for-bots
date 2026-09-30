@@ -1227,7 +1227,7 @@ export interface Mail {
   // Mail operations:
   listMessages(): Promise<Array<StampedMessage>>;
   followMessages(): AsyncGenerator<StampedMessage, undefined, undefined>;
-  resolve(messageNumber: bigint, resolutionName: string): Promise<void>;
+  resolve(messageNumber: bigint, resolutionName: string[]): Promise<void>;
   reject(messageNumber: bigint, message?: string): Promise<void>;
   adopt(
     messageNumber: bigint,
