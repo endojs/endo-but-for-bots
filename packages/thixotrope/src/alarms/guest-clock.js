@@ -1,6 +1,8 @@
 // @ts-check
-import { E, Far } from '@endo/far';
+import { makeExo } from '@endo/exo';
+import { E } from '@endo/far';
 import harden from '@endo/harden';
+import { M } from '@endo/patterns';
 
 /**
  * A clock that lives in the guest vat that uses it.
@@ -24,6 +26,19 @@ import harden from '@endo/harden';
  *   one failure is worth retrying at once
  */
 export const makeGuestClock = (alarms, { restartMessage }) => {
+  // Shipped by source: the guards travel with the factory, defined here.
+  // Nonnegative signed 64-bit Unix milliseconds, as the host keeps them.
+  const DeadlineShape = M.and(M.bigint(), M.gte(0n), M.lte(2n ** 63n - 1n));
+  const GuestClockI = M.interface('GuestClock', {
+    help: M.call().returns(M.string()),
+    when: M.call(DeadlineShape).returns(M.promise()),
+    arm: M.call(DeadlineShape).returns(M.promise()),
+    now: M.call().returns(M.promise()),
+  });
+  const AlarmCancellerI = M.interface('AlarmCanceller', {
+    cancel: M.call().returns(M.promise()),
+  });
+
   let nextId = 0n;
   /** @type {Set<string>} */
   const releases = new Set();
@@ -71,19 +86,8 @@ export const makeGuestClock = (alarms, { restartMessage }) => {
     void release(id);
   };
 
-  /** @param {unknown} deadline */
-  const assertDeadline = deadline => {
-    if (
-      typeof deadline !== 'bigint' ||
-      deadline < 0n ||
-      deadline > 2n ** 63n - 1n
-    )
-      throw Error('Deadline must be nonnegative signed 64-bit milliseconds');
-  };
-
-  /** @param {bigint} deadline */
+  /** @param {bigint} deadline already matched against DeadlineShape */
   const arm = async deadline => {
-    assertDeadline(deadline);
     await retryReleases();
     nextId += 1n;
     const id = `${nextId}`;
@@ -112,7 +116,7 @@ export const makeGuestClock = (alarms, { restartMessage }) => {
     }
   };
 
-  return Far('GuestClock', {
+  return makeExo('GuestClock', GuestClockI, {
     help: () =>
       'when(deadline) settles durably at or after Unix milliseconds; arm(deadline) also returns a capability to cancel that one alarm; now() reads host time.',
 
@@ -146,7 +150,7 @@ export const makeGuestClock = (alarms, { restartMessage }) => {
       const { id, settlement } = await arm(deadline);
       return harden({
         settlement,
-        canceller: Far('AlarmCanceller', {
+        canceller: makeExo('AlarmCanceller', AlarmCancellerI, {
           cancel: () => E(alarms).cancel(id),
         }),
       });

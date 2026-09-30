@@ -1,14 +1,17 @@
 // @ts-check
-import { E, Far } from '@endo/far';
+import { Fail } from '@endo/errors';
+import { makeExo } from '@endo/exo';
+import { E } from '@endo/far';
 import harden from '@endo/harden';
+import { M } from '@endo/patterns';
 
 /** @import { ObservableMap } from '../observable-map.js' */
 
 /**
  * Guest-owned messages, addressed directly to contact capabilities. This
- * factory is self-contained so the supervisor can evaluate it in a separate
- * persistent mailbox vat; it receives the observable-map factory the same
- * way, as source evaluated in that vat.
+ * factory is shipped by source, so the supervisor can evaluate it in a
+ * separate persistent mailbox vat; it receives the observable-map factory
+ * the same way, as source evaluated in that vat.
  *
  * The inbox and outbox are observable maps of immutable message records, so
  * a view can subscribe to either and re-list on change. A delivery outcome
@@ -18,45 +21,57 @@ import harden from '@endo/harden';
  * @param {() => ObservableMap} makeObservableMap
  */
 export const makeMailbox = makeObservableMap => {
-  if (typeof makeObservableMap !== 'function')
-    throw Error('Expected an observable map factory');
+  // Shipped by source: the guards travel with the factory, defined here.
+  const CapabilityShape = M.remotable('capability');
+  const TextShape = M.string({ stringLengthLimit: 4096 });
+  const MailboxI = M.interface('Mailbox', {
+    help: M.call().returns(M.string()),
+    receive: M.call(
+      CapabilityShape,
+      M.bigint(),
+      TextShape,
+      CapabilityShape,
+    ).returns(M.boolean()),
+    send: M.call(CapabilityShape, TextShape, CapabilityShape).returns(
+      M.string(),
+    ),
+    inbox: M.call().returns(M.arrayOf(M.record())),
+    outbox: M.call().returns(M.arrayOf(M.record())),
+    take: M.call(M.string()).returns(CapabilityShape),
+    discard: M.call(M.string()).returns(M.boolean()),
+    // Listeners are the observable map's to take, plain or remote.
+    subscribeInbox: M.call(M.raw())
+      .optional(M.boolean())
+      .returns(M.remotable('subscription')),
+    subscribeOutbox: M.call(M.raw())
+      .optional(M.boolean())
+      .returns(M.remotable('subscription')),
+    disconnectEphemeral: M.call().returns(M.undefined()),
+  });
+
+  typeof makeObservableMap === 'function' ||
+    Fail`Expected an observable map factory`;
   const inbox = makeObservableMap();
   const outbox = makeObservableMap();
   let nextReceived = 0n;
   let nextSent = 0n;
-  /** @param {unknown} value */
-  const assertCapability = value => {
-    if (
-      value === null ||
-      (typeof value !== 'object' && typeof value !== 'function') ||
-      value[Symbol.for('passStyle')] !== 'remotable'
-    )
-      throw Error('Expected a remotable capability');
-  };
-  /** @param {unknown} text */
-  const assertText = text => {
-    if (typeof text !== 'string' || text.length > 4096)
-      throw Error('Message text exceeds 4096 characters');
-  };
-  /** @param {unknown} id */
-  const assertId = id => {
-    if (typeof id !== 'string') throw Error('Expected a message id');
-  };
   // Remote-controlled text: bound it here as well as at display.
   /** @param {unknown} reason */
   const describeError = reason => String(reason).slice(0, 512);
   /** @type {Map<any, bigint>} */
   const accepted = new Map();
-  return Far('Mailbox', {
+  return makeExo('Mailbox', MailboxI, {
     help: () =>
       'send(contact, text, capability), receive(contact, sequence, text, capability), inbox(), outbox(), take(id), discard(id), subscribeInbox(listener, ephemeral?), subscribeOutbox(listener, ephemeral?).',
+    /**
+     * @param {any} contact
+     * @param {bigint} sequence
+     * @param {string} text
+     * @param {any} capability
+     */
     receive: (contact, sequence, text, capability) => {
-      assertCapability(contact);
-      if (typeof sequence !== 'bigint' || sequence < 1n)
-        throw Error('Invalid message sequence');
+      sequence >= 1n || Fail`Invalid message sequence`;
       if (sequence <= (accepted.get(contact) ?? 0n)) return true;
-      assertText(text);
-      assertCapability(capability);
       nextReceived += 1n;
       inbox.set(
         String(nextReceived),
@@ -71,9 +86,6 @@ export const makeMailbox = makeObservableMap => {
      * @param {any} capability
      */
     send: (contact, text, capability) => {
-      assertCapability(contact);
-      assertText(text);
-      assertCapability(capability);
       nextSent += 1n;
       const id = String(nextSent);
       /**
@@ -104,16 +116,12 @@ export const makeMailbox = makeObservableMap => {
     outbox: () => harden([...outbox.entries()].map(([, message]) => message)),
     /** @param {string} id */
     take: id => {
-      assertId(id);
       const message = inbox.get(id);
-      if (!message) throw Error('Unknown message');
+      message !== undefined || Fail`Unknown message`;
       return message.capability;
     },
     /** @param {string} id */
-    discard: id => {
-      assertId(id);
-      return inbox.delete(id);
-    },
+    discard: id => inbox.delete(id),
     /**
      * @param {any} listener
      * @param {boolean} [ephemeral]
@@ -138,6 +146,6 @@ harden(makeMailbox);
 /**
  * The guest-owned protocol mailbox: direct capability mail with
  * at-most-once receive sequencing and an outbox the durable node
- * outbox delivers. Self-contained so it can run in a guest compartment.
+ * outbox delivers. Shipped by source, so it can run in a guest compartment.
  * @typedef {ReturnType<typeof makeMailbox>} Mailbox
  */
