@@ -1394,7 +1394,7 @@ export const makeHostMaker = ({
       const workerId = /** @type {FormulaIdentifier | undefined} */ (
         workerPath.length === 1
           ? petStore.identifyLocal(workerPath[0])
-          : await E(directory).identify(...workerNamePath)
+          : await E(directory).identify(...workerPath)
       );
       if (workerId === undefined) {
         const { namePath, petName } = assertPetNamePath(workerPath);
