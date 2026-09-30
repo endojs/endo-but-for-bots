@@ -77,6 +77,28 @@ const hexToBytes = hex => {
 };
 
 /**
+ * Assert that a peer key (an `np` designator / peer keyId) is canonical
+ * lowercase hex for a 32-byte Ed25519 key. `hexToBytes` maps any non-hex
+ * character to a zero byte, so a length-only check would let
+ * `'z'.repeat(64)` through as 32 zero bytes (a small-order key); and the
+ * raw string keys the `active`, `inProgress`, and `waiters` maps, so a
+ * non-canonical spelling of a peer already held would split into a
+ * distinct, duplicate entry. Every entry point that keys those maps by a
+ * caller-supplied peer key runs this first.
+ *
+ * @param {string} keyId
+ * @returns {KeyIdHex}
+ */
+const assertCanonicalKeyId = keyId => {
+  if (typeof keyId !== 'string' || !/^[0-9a-f]{64}$/.test(keyId)) {
+    throw makeError(
+      X`ocapn-noise: peer designator must be 64 lowercase hex chars (a 32-byte Ed25519 key), got ${q(keyId)}`,
+    );
+  }
+  return /** @type {KeyIdHex} */ (keyId);
+};
+
+/**
  * Return a genuine, integer-indexable `Uint8Array` covering the contents
  * of `buf`.
  *
@@ -1224,19 +1246,7 @@ export const makeOcapnNoiseNetwork = ({
     if (!rk) {
       throw makeError(X`ocapn-noise: unknown local keyId ${q(localKeyId)}`);
     }
-    // Require a canonical lowercase-hex designator. `hexToBytes` maps any
-    // non-hex character to a zero byte, so a length-only check would let
-    // `'z'.repeat(64)` through as 32 zero bytes (a small-order key); and
-    // the raw string is used as the key in `active`, `inProgress`, and
-    // `waiters`, so an uppercase spelling of a peer we already hold would
-    // open a second, duplicate session. Rejecting anything but canonical
-    // lowercase hex closes both.
-    if (!/^[0-9a-f]{64}$/.test(remote.designator)) {
-      throw makeError(
-        X`ocapn-noise: peer designator must be 64 lowercase hex chars (a 32-byte Ed25519 key), got ${q(remote.designator)}`,
-      );
-    }
-    const peerId = remote.designator;
+    const peerId = assertCanonicalKeyId(remote.designator);
     const peerEd25519 = hexToBytes(peerId);
 
     // If we already have an active session for this peer, reuse it
@@ -1279,7 +1289,11 @@ export const makeOcapnNoiseNetwork = ({
   };
 
   /** @type {OcapnNoiseNetwork['waitForInboundSession']} */
-  const waitForInboundSession = peerKeyId => {
+  const waitForInboundSession = rawPeerKeyId => {
+    // Validate/canonicalize like `provideSession`: this keys `active` and
+    // `waiters`, so a non-canonical argument would park a waiter that
+    // never resolves and grow the map.
+    const peerKeyId = assertCanonicalKeyId(rawPeerKeyId);
     const existing = active.get(peerKeyId);
     if (existing) return Promise.resolve(existing.session);
     return awaitActiveSession(peerKeyId);
