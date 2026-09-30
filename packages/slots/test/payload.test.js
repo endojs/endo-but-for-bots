@@ -309,7 +309,9 @@ test('index — out-of-range index rejected at encode', t => {
     index: INDEX_LIMIT,
     reply: D(Direction.Local, Kind.Promise, 1),
   };
-  t.throws(() => encodeIndexPayload(p), { message: /out of array-index range/ });
+  t.throws(() => encodeIndexPayload(p), {
+    message: /out of array-index range/,
+  });
 });
 
 test('index — largest valid index roundtrips', t => {

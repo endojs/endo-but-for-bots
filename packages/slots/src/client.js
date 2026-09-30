@@ -228,7 +228,9 @@ export const makeSlotClient = ({
    * @returns {Promise<unknown>}
    */
   const deliver = (target, args) =>
-    sendRequest(VERB_DELIVER, reply => codec.encodeDeliver({ target, args, reply }));
+    sendRequest(VERB_DELIVER, reply =>
+      codec.encodeDeliver({ target, args, reply }),
+    );
   harden(deliver);
 
   /**
@@ -239,7 +241,9 @@ export const makeSlotClient = ({
    * @returns {Promise<unknown>}
    */
   const sendGet = (target, fieldName) =>
-    sendRequest(VERB_GET, reply => codec.encodeGet({ target, fieldName, reply }));
+    sendRequest(VERB_GET, reply =>
+      codec.encodeGet({ target, fieldName, reply }),
+    );
   harden(sendGet);
 
   /**
@@ -250,7 +254,9 @@ export const makeSlotClient = ({
    * @returns {Promise<unknown>}
    */
   const sendIndex = (target, index) =>
-    sendRequest(VERB_INDEX, reply => codec.encodeIndex({ target, index, reply }));
+    sendRequest(VERB_INDEX, reply =>
+      codec.encodeIndex({ target, index, reply }),
+    );
   harden(sendIndex);
 
   /**
@@ -496,8 +502,7 @@ export const makeSlotClient = ({
         const errLike = /** @type {{ name?: unknown, message?: unknown }} */ (
           err
         );
-        const name =
-          typeof errLike?.name === 'string' ? errLike.name : 'Error';
+        const name = typeof errLike?.name === 'string' ? errLike.name : 'Error';
         const message =
           typeof errLike?.message === 'string' ? errLike.message : String(err);
         const out = codec.encodeResolve({
