@@ -27,8 +27,9 @@ Toolchain: the pinned Rust with `rust-src`, `wasm32-wasip1` and `llvm-tools`
 (`rustup component add rust-src llvm-tools --toolchain 1.91.1-x86_64-unknown-linux-gnu`,
 `rustup target add wasm32-wasip1 --toolchain 1.91.1-x86_64-unknown-linux-gnu`),
 the Wasmtime 49 CLI (`$WASMTIME`), Node 22, and workerd (`$WORKERD`; the binary
-is in the platform package, `npm install @cloudflare/workerd-linux-64`, which
-the `workerd` wrapper package resolves only in a postinstall).
+is the one file of the platform package `@cloudflare/workerd-linux-64`, from
+`npm install` or the registry tarball, which the `workerd` wrapper package
+resolves only in a postinstall).
 
 ```sh
 cd rust/engine/stack-lanes

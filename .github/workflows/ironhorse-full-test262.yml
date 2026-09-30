@@ -305,6 +305,7 @@ jobs:
       WASMTIME_VERSION: v49.0.0
       WASMTIME_SHA256: a956c279ac6e80109369a285db30fc46f68239fa1bbeb03ccfa8e913bbca85fc
       WORKERD_VERSION: 1.20260930.2
+      WORKERD_SHA256: 108de4d66cbb7d3bb283afdcda5d8f570b653170bf7e559ae554e766bb515afb
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -342,14 +343,20 @@ jobs:
           tar -xJf wasmtime.tar.xz
           echo "WASMTIME=${GITHUB_WORKSPACE}/${archive}/wasmtime" >> "$GITHUB_ENV"
       - name: Install workerd
-        # The platform package holds the binary itself; the `workerd` wrapper
-        # package only resolves it in a postinstall, which the repository's
-        # npm posture (no lifecycle scripts) would skip.
+        # The binary is the platform package's one file; the `workerd`
+        # wrapper package only resolves it in a postinstall, which the
+        # repository's npm posture (no lifecycle scripts) would skip. The
+        # package tarball is fetched from the registry like the Wasmtime
+        # release, pinned by version and checked against its SHA-256, rather
+        # than installed ad hoc outside a lockfile.
         run: |
           set -euo pipefail
-          mkdir -p workerd-install
-          npm install --prefix workerd-install --no-save --ignore-scripts "@cloudflare/workerd-linux-64@${WORKERD_VERSION}"
-          echo "WORKERD=${GITHUB_WORKSPACE}/workerd-install/node_modules/@cloudflare/workerd-linux-64/bin/workerd" >> "$GITHUB_ENV"
+          curl -fsSL -o workerd-linux-64.tgz \
+            "https://registry.npmjs.org/@cloudflare/workerd-linux-64/-/workerd-linux-64-${WORKERD_VERSION}.tgz"
+          echo "${WORKERD_SHA256}  workerd-linux-64.tgz" | sha256sum --check
+          mkdir -p workerd-linux-64
+          tar -xzf workerd-linux-64.tgz -C workerd-linux-64
+          echo "WORKERD=${GITHUB_WORKSPACE}/workerd-linux-64/package/bin/workerd" >> "$GITHUB_ENV"
       - name: Test the lane scripts
         run: python3 -m unittest discover -s rust/engine/stack-lanes -p 'test_*.py'
       - name: Build the probe, native and wasm
