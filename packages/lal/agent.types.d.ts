@@ -28,7 +28,10 @@ export type ToolCallArgs = {
   strings?: string[];
   edgeNames?: Name[];
   petNames?: NamePath[];
-  workerName?: NamePath;
+  // Pre-validation shape: `NamePathArgumentShape` admits a bare string so the
+  // dispatcher can map the LLM's literal `'undefined'` sentinel to absent and
+  // forward any other string for the daemon to refuse.
+  workerName?: NamePath | string;
   source?: string;
   codeNames?: string[];
   resultName?: NamePath;
