@@ -4893,7 +4893,8 @@ the 2026-09-24 trust-model entry at the top records the decision:
     `migrate_store` makes it first against the handle's own view, since it reads the small state
     and rows through a handle (a `FileStore`'s cache) that may be behind the durable manifest.
     An unbound lazy machine, which no checkpoint is left to refuse, checks the pairing on each
-    fault instead: `StoreSession::into_machine` hands the page source the epoch and token its
+    fault instead: as the session's tracking is dropped (at `StoreSession::into_machine`, or
+    however else the machine left the session) it hands the page source the epoch and token its
     backing describes and those of the session's own last commit (which differ after a commit
     through a forwarding wrapper), and a fault from a store holding neither unwinds with that
     store's `EpochMismatch` or `BaselineMismatch`, so a rebind or a snapshot never persists a
