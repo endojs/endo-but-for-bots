@@ -77,7 +77,7 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
-pub use cas::{blob_hash, sync_dir, CasError, CasStore};
+pub use cas::{blob_hash, sync_directory, CasError, CasStore};
 pub use embargo::{CrankVerdict, DuplicateSuppressor, Embargo, FrameSink, Received, Settlement};
 pub use fault::{FaultMode, FaultPlan};
 pub use host::{

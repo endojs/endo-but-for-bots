@@ -128,6 +128,9 @@ struct Ledger {
     transcript: Transcript,
     callbacks: AdmittedCallbacks,
     heaps: CasStore,
+    /// Why a crank failed to commit, once one has: the heap now runs ahead
+    /// of the log, so no later snapshot may be published against it.
+    lost_crank: Option<String>,
 }
 
 // Handle identifiers are globally allocated while no transcript is attached,
@@ -201,9 +204,18 @@ impl Attachment {
 /// worker holds native handles opened without a transcript, since their
 /// ids mean nothing to the log. A transcript with no published snapshot
 /// gets `heap` as its first, so deliveries can begin.
+///
+/// Descriptors record each handle's position as of the latest committed
+/// crank, so re-seating is only sound on the heap of the latest published
+/// snapshot with no committed host calls past its watermark. `resumed` is
+/// the hash of the heap the worker resumed from, when it resumed one:
+/// attaching refuses when it is not the published snapshot, and refuses
+/// while committed host calls lie past the watermark, since nothing yet
+/// replays them.
 pub fn attach(
     path: &Path,
     worker: &str,
+    resumed: Option<&str>,
     powers: &HostPowers,
     heap: impl FnOnce() -> Result<Vec<u8>, String>,
 ) -> Result<Attachment, String> {
@@ -215,6 +227,34 @@ pub fn attach(
     }
     let (mut transcript, _) = Transcript::open(path, TranscriptConfig::new(worker))
         .map_err(|e| format!("open host transcript: {e}"))?;
+    let snapshot = transcript.latest_snapshot().map_err(|e| e.to_string())?;
+    if let Some(resumed) = resumed {
+        match &snapshot {
+            Some(snapshot) if snapshot.hash == resumed => {}
+            Some(snapshot) => {
+                return Err(format!(
+                    "resumed heap {resumed} is not the transcript's published snapshot {}",
+                    snapshot.hash
+                ))
+            }
+            None => {
+                return Err(format!(
+                    "resumed heap {resumed}, but the transcript has no published snapshot"
+                ))
+            }
+        }
+    }
+    let unreplayed = transcript
+        .host_replay()
+        .map_err(|e| format!("host replay: {e}"))?
+        .cranks();
+    if let Some(crank) = unreplayed.first() {
+        return Err(format!(
+            "committed host calls from crank {crank} lie past the snapshot watermark \
+             {}; re-seating would run handles ahead of the heap",
+            snapshot.as_ref().map_or(0, |s| s.watermark_crank)
+        ));
+    }
     let mut descriptors = HashMap::new();
     let report = transcript
         .reseat_handles(|record| {
@@ -225,11 +265,7 @@ pub fn attach(
         .map_err(|e| format!("re-seat handles: {e}"))?;
     let heaps = CasStore::open(path.with_extension("heaps"))
         .map_err(|e| format!("open heap store: {e}"))?;
-    if transcript
-        .latest_snapshot()
-        .map_err(|e| e.to_string())?
-        .is_none()
-    {
+    if snapshot.is_none() {
         transcript
             .publish_snapshot(&heaps, &heap()?, snapshot_meta())
             .map_err(|e| format!("publish initial heap: {e}"))?;
@@ -244,6 +280,7 @@ pub fn attach(
             transcript,
             callbacks: admitted_callbacks(),
             heaps,
+            lost_crank: None,
         })
     });
     Ok(Attachment {
@@ -263,8 +300,12 @@ fn snapshot_meta() -> SnapshotMeta {
 /// Commit any open delivery and publish the suspended heap, so the
 /// transcript's watermark and handle descriptors agree with it.
 pub(crate) fn publish_heap(heap: &[u8]) -> Result<(), String> {
-    end_delivery(true);
+    end_delivery(true)?;
     LEDGER.with(|l| match l.borrow_mut().as_mut() {
+        Some(Ledger {
+            lost_crank: Some(e),
+            ..
+        }) => Err(format!("publish heap: an earlier crank did not commit: {e}")),
         Some(ledger) => ledger
             .transcript
             .publish_snapshot(&ledger.heaps, heap, snapshot_meta())
@@ -276,7 +317,9 @@ pub(crate) fn publish_heap(heap: &[u8]) -> Result<(), String> {
 
 /// Detach the transcript, committing any open delivery.
 pub fn detach() -> Option<Transcript> {
-    end_delivery(true);
+    if let Err(e) = end_delivery(true) {
+        eprintln!("{e}");
+    }
     LEDGER.with(|l| l.borrow_mut().take()).map(|l| l.transcript)
 }
 
@@ -326,37 +369,46 @@ pub(crate) fn begin_delivery(inbound: &[u8]) {
 }
 
 /// Close the open delivery's crank: commit it, or abort it when the
-/// delivery died or was metered out.
-pub(crate) fn end_delivery(commit: bool) {
+/// delivery died or was metered out. An error means the crank did not
+/// commit, so its host calls are not in the log: a caller that goes on to
+/// snapshot must not.
+pub(crate) fn end_delivery(commit: bool) -> Result<(), String> {
     LEDGER.with(|l| {
-        if let Some(ledger) = l.borrow_mut().as_mut() {
-            if ledger.transcript.active_crank().is_some() {
-                let redescriptions = powers::crypto::take_redescriptions();
-                let result = if commit {
-                    redescriptions
-                        .into_iter()
-                        .try_for_each(|(handle, descriptor)| {
-                            ledger.transcript.redescribe(
-                                u64::from(handle),
-                                descriptor.as_ref().map(Descriptor::encode),
-                            )
-                        })
-                        .and_then(|()| ledger.transcript.commit_crank().map(drop))
-                        // A crank whose descriptors cannot be staged must
-                        // not commit without them.
-                        .or_else(|e| match ledger.transcript.active_crank() {
-                            Some(_) => ledger.transcript.abort_crank().and(Err(e)),
-                            None => Err(e),
-                        })
-                } else {
-                    ledger.transcript.abort_crank()
-                };
-                if let Err(e) = result {
-                    eprintln!("host transcript: end crank: {e}");
-                }
-            }
+        let mut ledger = l.borrow_mut();
+        let Some(ledger) = ledger.as_mut() else {
+            return Ok(());
+        };
+        if ledger.transcript.active_crank().is_none() {
+            return Ok(());
         }
-    });
+        let redescriptions = powers::crypto::take_redescriptions();
+        let result = if commit {
+            redescriptions
+                .into_iter()
+                .try_for_each(|(handle, descriptor)| {
+                    ledger.transcript.redescribe(
+                        u64::from(handle),
+                        descriptor.as_ref().map(Descriptor::encode),
+                    )
+                })
+                .and_then(|()| ledger.transcript.commit_crank().map(drop))
+                // A crank whose descriptors cannot be staged must
+                // not commit without them.
+                .or_else(|e| match ledger.transcript.active_crank() {
+                    Some(_) => ledger.transcript.abort_crank().and(Err(e)),
+                    None => Err(e),
+                })
+        } else {
+            ledger.transcript.abort_crank()
+        };
+        result.map_err(|e| {
+            let e = format!("host transcript: end crank: {e}");
+            if commit {
+                ledger.lost_crank.get_or_insert_with(|| e.clone());
+            }
+            e
+        })
+    })
 }
 
 fn refusal(e: HostCallError) -> String {

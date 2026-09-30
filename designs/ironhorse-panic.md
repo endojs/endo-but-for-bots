@@ -209,7 +209,15 @@ length is re-seated as broken rather than truncated. The whole-file mutations
 (`writeFileText`, `appendFile`, `mkdir`, `remove`, `rename`, `symlink`, `link`)
 run through the transcript as barriers too, and a host call made outside any
 delivery (promise jobs a heap suspended mid-pump carried) opens a crank of its
-own. A worker with no attached transcript still
+own. Only the supervisor (envelope handle 0) may attach a transcript or suspend a
+worker, since both name paths and a transcript's descriptors rebuild authority:
+whoever can write the transcript file chooses what a resumed worker reopens, so
+the file is as sensitive as the worker's own grants and data. Descriptors record
+positions as of the latest committed crank, so attaching refuses a resumed heap
+that is not the transcript's published snapshot, and refuses while committed host
+calls lie past that snapshot's watermark, until a replay driver can bring the
+heap forward. A crank that fails to commit fails the suspend that would snapshot
+past it. A worker with no attached transcript still
 answers a suspend request with open native handles with `suspend-error` and keeps
 running, because nothing durable could rebuild them.
 

@@ -898,6 +898,12 @@ pub struct HostReplay {
 }
 
 impl HostReplay {
+    /// The committed cranks whose host calls are still to be replayed, in
+    /// order.
+    pub fn cranks(&self) -> Vec<CrankId> {
+        self.calls.keys().copied().collect()
+    }
+
     /// Start replaying `crank`'s delivery.
     pub fn begin_crank(&mut self, crank: CrankId) {
         let calls = self.calls.remove(&crank).unwrap_or_default();

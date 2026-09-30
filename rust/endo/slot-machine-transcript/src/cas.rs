@@ -29,7 +29,7 @@ use crate::fault::FaultPlan;
 /// A directory of content-addressed snapshot blobs.
 #[derive(Clone, Debug)]
 pub struct CasStore {
-    dir: PathBuf,
+    directory: PathBuf,
     fault: Option<FaultPlan>,
 }
 
@@ -59,7 +59,7 @@ impl std::fmt::Display for CasError {
 
 impl std::error::Error for CasError {}
 
-static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
+static TEMPORARY_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// The SHA-256 of `bytes`, lower-case hex: a blob's CAS name.
 pub fn blob_hash(bytes: &[u8]) -> String {
@@ -67,11 +67,14 @@ pub fn blob_hash(bytes: &[u8]) -> String {
 }
 
 impl CasStore {
-    /// A CAS store rooted at `dir`, created if absent.
-    pub fn open(dir: impl Into<PathBuf>) -> io::Result<CasStore> {
-        let dir = dir.into();
-        fs::create_dir_all(&dir)?;
-        Ok(CasStore { dir, fault: None })
+    /// A CAS store rooted at `directory`, created if absent.
+    pub fn open(directory: impl Into<PathBuf>) -> io::Result<CasStore> {
+        let directory = directory.into();
+        fs::create_dir_all(&directory)?;
+        Ok(CasStore {
+            directory,
+            fault: None,
+        })
     }
 
     /// The same store with its durability operations routed through `plan`.
@@ -81,8 +84,8 @@ impl CasStore {
     }
 
     /// The store's directory.
-    pub fn dir(&self) -> &Path {
-        &self.dir
+    pub fn directory(&self) -> &Path {
+        &self.directory
     }
 
     fn op(
@@ -102,42 +105,42 @@ impl CasStore {
     /// existing blob of the same hash is rewritten to the same content.
     pub fn write_blob(&self, bytes: &[u8]) -> io::Result<String> {
         let hash = blob_hash(bytes);
-        let seq = TMP_SEQ.fetch_add(1, Ordering::Relaxed);
-        let tmp = self
-            .dir
+        let seq = TEMPORARY_SEQ.fetch_add(1, Ordering::Relaxed);
+        let temporary = self
+            .directory
             .join(format!(".snapshot.{}.{seq}.tmp", std::process::id()));
-        let result = self.write_blob_steps(bytes, &tmp, &hash);
+        let result = self.write_blob_steps(bytes, &temporary, &hash);
         if result.is_err() && !self.fault.as_ref().is_some_and(FaultPlan::dead) {
             // A surviving process cleans up after itself; a dead one leaves
             // the orphan temporary for later reclamation.
-            let _ = fs::remove_file(&tmp);
+            let _ = fs::remove_file(&temporary);
         }
         result.map(|()| hash)
     }
 
-    fn write_blob_steps(&self, bytes: &[u8], tmp: &Path, hash: &str) -> io::Result<()> {
+    fn write_blob_steps(&self, bytes: &[u8], temporary: &Path, hash: &str) -> io::Result<()> {
         let mut half = || -> io::Result<()> {
-            let mut f = File::create(tmp)?;
+            let mut f = File::create(temporary)?;
             f.write_all(&bytes[..bytes.len() / 2])
         };
         self.op(
             "cas:write-blob",
             false,
             || {
-                let mut f = File::create(tmp)?;
+                let mut f = File::create(temporary)?;
                 f.write_all(bytes)
             },
             Some(&mut half),
         )?;
-        self.op("cas:sync-blob", true, || File::open(tmp)?.sync_all(), None)?;
-        let dest = self.dir.join(hash);
-        self.op("cas:rename-blob", false, || fs::rename(tmp, &dest), None)?;
-        self.op("cas:sync-dir", true, || sync_dir(&self.dir), None)
+        self.op("cas:sync-blob", true, || File::open(temporary)?.sync_all(), None)?;
+        let dest = self.directory.join(hash);
+        self.op("cas:rename-blob", false, || fs::rename(temporary, &dest), None)?;
+        self.op("cas:sync-dir", true, || sync_directory(&self.directory), None)
     }
 
     /// Read and verify the blob named `hash`.
     pub fn read_blob(&self, hash: &str) -> Result<Vec<u8>, CasError> {
-        let bytes = fs::read(self.dir.join(hash)).map_err(CasError::Io)?;
+        let bytes = fs::read(self.directory.join(hash)).map_err(CasError::Io)?;
         let actual = blob_hash(&bytes);
         if actual != hash {
             return Err(CasError::Corrupt {
@@ -153,7 +156,7 @@ impl CasStore {
     /// and blobs superseded by a newer published snapshot are both garbage.
     pub fn reclaim(&self, keep: &[String]) -> io::Result<usize> {
         let mut removed = 0;
-        for entry in fs::read_dir(&self.dir)? {
+        for entry in fs::read_dir(&self.directory)? {
             let entry = entry?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if keep.contains(&name) {
@@ -167,15 +170,15 @@ impl CasStore {
 }
 
 /// Sync a directory so a rename or create inside it survives power loss.
-pub fn sync_dir(dir: &Path) -> io::Result<()> {
+pub fn sync_directory(directory: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(dir)?.sync_all()
+        File::open(directory)?.sync_all()
     }
     #[cfg(not(unix))]
     {
         // Windows has no directory handle to sync; NTFS journals the rename.
-        let _ = dir;
+        let _ = directory;
         Ok(())
     }
 }
