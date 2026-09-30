@@ -199,8 +199,18 @@ test('namePathFrom rejects a bare string with a retry hint', t => {
   });
   t.throws(() => namePathFrom('dir/name'), {
     instanceOf: TypeError,
-    message: /never split on a delimiter.*\["dir\/name"\]/,
+    message: /never split on a delimiter.*\["directory","name"\]$/,
   });
+});
+
+test('namePathFrom hints only with an array the validator accepts', t => {
+  for (const value of ['dir/name', '', 'a@b', 'a\0b']) {
+    const error = t.throws(() => namePathFrom(value), {
+      instanceOf: TypeError,
+    });
+    t.notRegex(error.message, /for example \[[^\]]*\] or /);
+    t.regex(error.message, /\["directory","name"\]$/);
+  }
 });
 
 test('namePathFrom rejects values that are neither string nor array', t => {

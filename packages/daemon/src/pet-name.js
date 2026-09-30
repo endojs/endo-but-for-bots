@@ -153,8 +153,12 @@ export const assertPetNamePath = path => {
  */
 export const namePathFrom = namePath => {
   if (typeof namePath === 'string') {
+    // Suggest wrapping the string only when the result would be valid.
+    const example = isName(namePath)
+      ? `${q([namePath])} or ${q(['directory', 'name'])}`
+      : q(['directory', 'name']);
     throw new TypeError(
-      `Invalid pet-name path ${q(namePath)}: a string is not a pet-name path and is never split on a delimiter; try again with an array of path components, for example ${q([namePath])} or ${q(['directory', 'name'])}`,
+      `Invalid pet-name path ${q(namePath)}: a string is not a pet-name path and is never split on a delimiter; try again with an array of path components, for example ${example}`,
     );
   }
   assertNamePath(/** @type {string[]} */ (namePath));
