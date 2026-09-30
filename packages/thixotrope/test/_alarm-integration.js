@@ -68,14 +68,14 @@ export const registerAlarmIntegration = (test, kind) => {
       t.is(
         await host.client.call(
           'evaluate',
-          "E(E(apps).get('reminders')).arm(2000n, 'after restart')",
+          "E(inventory.get('reminders')).arm(2000n, 'after restart')",
         ),
         'true',
       );
       t.is(
         await host.client.call(
           'evaluate',
-          "E(E(apps).get('reminders')).status().then(s => s.count === 0n && s.items[0].state === 'waiting')",
+          "E(inventory.get('reminders')).status().then(s => s.count === 0n && s.items[0].state === 'waiting')",
         ),
         'true',
       );
@@ -102,7 +102,7 @@ export const registerAlarmIntegration = (test, kind) => {
       t.is(
         await host.client.call(
           'evaluate',
-          "E(E(apps).get('reminders')).status().then(s => s.count === 1n && s.items[0].state === 'fired' && s.items[0].message === 'after restart' && s.items[0].firedAt === 3000n)",
+          "E(inventory.get('reminders')).status().then(s => s.count === 1n && s.items[0].state === 'fired' && s.items[0].message === 'after restart' && s.items[0].firedAt === 3000n)",
         ),
         'true',
       );
@@ -115,14 +115,14 @@ export const registerAlarmIntegration = (test, kind) => {
       t.is(
         await host.client.call(
           'evaluate',
-          "E(E(apps).get('reminders')).status().then(s => s.count)",
+          "E(inventory.get('reminders')).status().then(s => s.count)",
         ),
         '1n',
       );
       t.is(
         await host.client.call(
           'evaluate',
-          "E(E(apps).get('reminders')).arm(5000n, 'reuse')",
+          "E(inventory.get('reminders')).arm(5000n, 'reuse')",
         ),
         'true',
       );
@@ -133,7 +133,7 @@ export const registerAlarmIntegration = (test, kind) => {
         // eslint-disable-next-line no-await-in-loop
         const result = await host.client.call(
           'evaluate',
-          "E(E(apps).get('reminders')).status().then(s => s.count)",
+          "E(inventory.get('reminders')).status().then(s => s.count)",
         );
         if (result === '2n') break;
         // eslint-disable-next-line no-await-in-loop
@@ -142,7 +142,7 @@ export const registerAlarmIntegration = (test, kind) => {
       t.is(
         await host.client.call(
           'evaluate',
-          "E(E(apps).get('reminders')).status().then(s => s.count === 2n && s.items.length === 2 && s.items[1].state === 'fired' && s.items[1].message === 'reuse' && s.items[1].firedAt === 6000n)",
+          "E(inventory.get('reminders')).status().then(s => s.count === 2n && s.items.length === 2 && s.items[1].state === 'fired' && s.items[1].message === 'reuse' && s.items[1].firedAt === 6000n)",
         ),
         'true',
       );

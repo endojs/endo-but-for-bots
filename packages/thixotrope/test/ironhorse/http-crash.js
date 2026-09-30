@@ -111,14 +111,14 @@ test.serial(
     await first.client.call('install', 'site', application, [['http', 'web']]);
     await first.client.call(
       'evaluate',
-      `E(E(apps).get('site')).start(${port})`,
+      `E(inventory.get('site')).start(${port})`,
     );
     t.is(
       await first.client.call(
         'evaluate',
         `(async () => {
     globalThis.waiterVat = await E(vats).createWorker('independent-listener');
-    globalThis.waiter = await E(waiterVat).evaluate(${JSON.stringify(listener)}, { app: await E(apps).get('site') });
+    globalThis.waiter = await E(waiterVat).evaluate(${JSON.stringify(listener)}, { app: inventory.get('site') });
     return E(waiter).status();
   })()`,
       ),
@@ -130,12 +130,12 @@ test.serial(
       // eslint-disable-next-line no-await-in-loop
       const waiting = await first.client.call(
         'evaluate',
-        "E(E(apps).get('site')).waiting()",
+        "E(inventory.get('site')).waiting()",
       );
       // eslint-disable-next-line no-await-in-loop
       const status = await first.client.call(
         'evaluate',
-        "E(E(apps).get('site')).status().then(s => s.status)",
+        "E(inventory.get('site')).status().then(s => s.status)",
       );
       if (waiting === 'true' && status === "'listening'") {
         ready = true;
@@ -168,7 +168,7 @@ test.serial(
         // eslint-disable-next-line no-await-in-loop
         (await first.client.call(
           'evaluate',
-          "E(E(apps).get('site')).read()",
+          "E(inventory.get('site')).read()",
         )) === '1n'
       ) {
         accepted = true;
@@ -202,7 +202,10 @@ test.serial(
       'and none appears across the restart either',
     );
     t.is(
-      await recovered.client.call('evaluate', "E(E(apps).get('site')).read()"),
+      await recovered.client.call(
+        'evaluate',
+        "E(inventory.get('site')).read()",
+      ),
       '1n',
       'the host must not issue the interrupted HTTP invocation again',
     );
@@ -210,7 +213,10 @@ test.serial(
       await recovered.client.call('evaluate', 'E(waiter).status()'),
       "'pending'",
     );
-    await recovered.client.call('evaluate', "E(E(apps).get('site')).release()");
+    await recovered.client.call(
+      'evaluate',
+      "E(inventory.get('site')).release()",
+    );
     let settled = false;
     for (let attempt = 0; attempt < 100; attempt += 1) {
       if (

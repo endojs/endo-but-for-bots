@@ -39,12 +39,13 @@ import { settleWithin, withExpiry } from '../platform/timers.js';
 import { randomHex128 } from '../random-id.js';
 import { describeNativePackage } from '../native/describe-package.js';
 
-import { makeApplicationRegistry } from './application-registry.js';
 import { evaluateSource } from './evaluate-source.js';
 import {
-  installNativeResource,
-  removeNativeResource,
-} from './install-native-resource.js';
+  installApplication,
+  installNative,
+  removeInstallation,
+} from './install.js';
+import { makeInstallations } from './installations.js';
 import { makeDurableAlarms } from '../alarms/durable-alarms.js';
 import { makeGuestClock } from '../alarms/guest-clock.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
@@ -53,7 +54,6 @@ import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
 import { readIronhorseLimits } from '../ironhorse/ironhorse-limits.js';
 import { makeLocalControl } from './local-control.js';
 import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
-import { makeNativeResourceRegistry } from '../native/registry.js';
 import { makeObservableMap } from '../observable-map.js';
 import { makeMailbox } from '../mail/mailbox.js';
 import { makeMailContact } from '../mail/mail-contact.js';
@@ -77,8 +77,10 @@ import {
 // 3: alarm acknowledgement; 4: dedicated native manager vats; 5: the mail
 // address book introduces contacts through the `mail-introductions` resource
 // and its inbox and outbox are observable; 6: a manager's adapter launcher
-// is described by the manager, so retiring the manager closes its processes.
-const WORKSPACE_VERSION = 6;
+// is described by the manager, so retiring the manager closes its processes;
+// 7: one `installations` registry for applications and native resources,
+// whose values live in the inventory under their names.
+const WORKSPACE_VERSION = 7;
 
 // sun_path on the strictest supported platform: 104 bytes including the NUL.
 const MAX_SOCKET_PATH_BYTES = 103;
@@ -390,7 +392,8 @@ export const serveThixotrope = async (
       await save(files, configPath, config);
     }
     let inventory;
-    let applications;
+    /** @type {any} */
+    let installations;
     if (
       !daemon
         .inspectWorkers()
@@ -400,8 +403,8 @@ export const serveThixotrope = async (
         `(globalThis.inventory ??= (${makeObservableMap.toString()})())`,
       );
       await E(inventory).disconnectEphemeral();
-      applications = await workspace.evaluate(
-        `(globalThis.apps ??= (${makeApplicationRegistry.toString()})(vats, inventory))`,
+      installations = await workspace.evaluate(
+        `(globalThis.installations ??= (${makeInstallations.toString()})(inventory))`,
       );
     }
     // Only the lock owner may reclaim the socket left by a dead supervisor.
@@ -486,16 +489,27 @@ export const serveThixotrope = async (
       return opening;
     };
 
-    if (inventory !== undefined) {
-      await workspace.evaluate(
-        `(globalThis.nativeResources ??= (${makeNativeResourceRegistry.toString()})(inventory), true)`,
+    // Installations, removals and collection take turns: an allocation has
+    // no guest root until its facade reaches the registry, and a removal
+    // must not race the installation it removes.
+    let installing = Promise.resolve();
+    /** @param {() => Promise<any>} operation */
+    const serialized = operation => {
+      const result = installing.then(operation);
+      installing = result.then(
+        () => {},
+        () => {},
       );
-    }
-
-    let installingNative = Promise.resolve();
+      return result;
+    };
+    const assertWorkspace = () => {
+      if (requested) throw Error('Supervisor is stopping');
+      if (installations === undefined)
+        throw Error('The workspace vat is quarantined; repair it first');
+    };
     const adminMethods = {
       help: () =>
-        'Local supervisor: evaluate(source), status(), stop(), install(name, bundle, grants), applications(), remove(name), installNative(name, directory), removeNative(name), clockGrant(key), alarmStatus(), reachability(), collect(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id); each connection also has watchInventory(listener).',
+        'Local supervisor: evaluate(source), status(), stop(), install(name, bundle, grants), installNative(name, directory), installations(), remove(name), clockGrant(key), alarmStatus(), reachability(), collect(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id); each connection also has watchInventory(listener).',
       evaluate: async source => {
         if (requested) throw Error('Supervisor is stopping');
         if (typeof source !== 'string')
@@ -522,57 +536,50 @@ export const serveThixotrope = async (
         timers.setTimer(requestStop, 0);
         return 'Stopping supervisor';
       },
+      /**
+       * Install an application from its bundle into a fresh vat, with the
+       * named inventory entries as its powers; its root takes the name in
+       * the inventory. The bundle is staged into the vat in bounded messages,
+       * so there is no request-size cap; grants are checked in the workspace
+       * before any vat exists.
+       * @param {string} name
+       * @param {string} bundle
+       * @param {Array<[string, string]>} grants
+       */
       install: async (name, bundle, grants) => {
-        if (requested) throw Error('Supervisor is stopping');
-        if (applications === undefined)
-          throw Error(
-            'The workspace vat is quarantined; repair it before installing',
-          );
-        if (typeof bundle !== 'string') throw Error('Expected module bundle');
-        // Keep decoding and forwarding below the current guest crank budget.
-        // This is a conservative admission profile, not a JS source-size limit.
-        if (
-          new TextEncoder().encode(JSON.stringify([name, bundle, grants]))
-            .length >
-          16 * 1024
-        )
-          throw Error(
-            'Installation payload exceeds the current 16 KiB profile',
-          );
-        const digest = hashes.sha256Hex(new TextEncoder().encode(bundle));
-        await E(applications).install(name, bundle, digest, grants);
-        return (await E(applications).list()).find(
+        // The lock covers allocation and staging; the factory itself may
+        // await anything, and a removal or collection must not wait for it.
+        const { result } = await serialized(async () => {
+          assertWorkspace();
+          if (typeof bundle !== 'string') throw Error('Expected module bundle');
+          const digest = hashes.sha256Hex(new TextEncoder().encode(bundle));
+          return installApplication(daemon, workspace, {
+            name,
+            digest,
+            allocationKey: randomId(),
+            bundle,
+            grants,
+          });
+        });
+        await result;
+        return (await E(installations).list()).find(
           entry => entry.name === name,
         );
       },
-      applications: () => {
-        if (applications === undefined)
-          throw Error('The workspace vat is quarantined; repair it first');
-        return E(applications).list();
+      installations: () => {
+        assertWorkspace();
+        return E(installations).list();
       },
       reachability: () => daemon.inspectReachability(),
-      // An allocation has no guest root until its facade reaches the registry.
-      // Serialize collection with installations across that short boundary.
-      collect: () => {
-        const collecting = installingNative.then(() => daemon.collectVats());
-        installingNative = collecting.then(
-          () => {},
-          () => {},
-        );
-        return collecting;
-      },
+      collect: () => serialized(() => daemon.collectVats()),
       inventoryStatus: () => {
         if (inventory === undefined)
           throw Error('The workspace vat is quarantined; repair it first');
         return E(inventory).subscriptionCounts();
       },
-      installNative: (name, directory) => {
-        const installing = installingNative.then(async () => {
-          if (requested) throw Error('Supervisor is stopping');
-          if (inventory === undefined)
-            throw Error(
-              'The workspace vat is quarantined; repair it before installing',
-            );
+      installNative: (name, directory) =>
+        serialized(async () => {
+          assertWorkspace();
           if (typeof directory !== 'string')
             throw Error('Expected a native resource directory');
           const description = await describeNativePackage(
@@ -596,7 +603,7 @@ export const serveThixotrope = async (
               ]),
             ),
           );
-          await installNativeResource(daemon, workspace, {
+          await installNative(daemon, workspace, {
             name,
             digest,
             allocationKey: randomId(),
@@ -612,49 +619,21 @@ export const serveThixotrope = async (
               }),
           });
           return harden({ name, directory: description.directory, digest });
-        });
-        installingNative = installing.then(
-          () => {},
-          () => {},
-        );
-        return installing;
-      },
+        }),
       /**
-       * Remove a native installation by name: its manager vat is retired,
+       * Remove an installation of either kind by name: its vat is retired,
        * the processes it launched are closed, and the name is free again,
        * whether the installation completed, failed, or was interrupted.
-       * Capabilities already granted from its registration break.
+       * Capabilities already handed out from it break.
        * @param {string} name
        */
-      removeNative: name => {
-        const removing = installingNative.then(async () => {
-          if (requested) throw Error('Supervisor is stopping');
-          if (inventory === undefined)
-            throw Error('The workspace vat is quarantined; repair it first');
+      remove: name =>
+        serialized(async () => {
+          assertWorkspace();
           if (typeof name !== 'string' || !name.length)
             throw Error('Expected an inventory name');
-          return removeNativeResource(daemon, workspace, name);
-        });
-        installingNative = removing.then(
-          () => {},
-          () => {},
-        );
-        return removing;
-      },
-      /**
-       * Release the application registry's reference to an installation,
-       * completed, failed, or pending. The vat is retired by the next
-       * `collect` once nothing else reaches it.
-       * @param {string} name
-       */
-      remove: name => {
-        if (requested) throw Error('Supervisor is stopping');
-        if (applications === undefined)
-          throw Error('The workspace vat is quarantined; repair it first');
-        if (typeof name !== 'string' || !name.length)
-          throw Error('Expected an application name');
-        return E(applications).remove(name);
-      },
+          return removeInstallation(daemon, workspace, name);
+        }),
       clockGrant: async key => {
         if (requested) throw Error('Supervisor is stopping');
         if (typeof key !== 'string' || !key.length || key.length > 128)
@@ -758,7 +737,7 @@ export const serveThixotrope = async (
         // Remove the endpoint while still holding the lease. A successor's
         // socket must never be removed by this process after ownership passes.
         try {
-          await settleWithin(timers, INSTALL_DRAIN_MS, installingNative);
+          await settleWithin(timers, INSTALL_DRAIN_MS, installing);
           await closeControl();
         } finally {
           try {

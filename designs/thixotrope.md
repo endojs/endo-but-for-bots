@@ -279,7 +279,8 @@ and permissions.
 
 Workspace metadata carries a version the supervisor bumps whenever a guest closure it ships changes
 shape; the current version includes dedicated native managers, the alarm acknowledgement protocol,
-and the mail address book with its introductions resource.
+the mail address book with its introductions resource, manager-owned adapter launchers, and the one
+installation registry.
 Earlier workspaces require explicit migration or fresh state; startup rejects them before restoring
 workers, because their heap-persisted registry and clock closures cannot be replaced by loading
 new source.
@@ -291,18 +292,21 @@ separate garbage-collection regime.
 
 An application module exports `make(powers)`.
 The CLI bundles its static module graph and grants only explicitly selected inventory capabilities.
-A persistent application registry retains the pending or completed factory result together with the
-bundle digest and grant mapping.
+One persistent workspace registry records every installation, application or native resource: its
+name, code digest, grant mapping, the vat the host allocated for it under an idempotent allocation
+key, and its pending, ready, or failed outcome; the installed value takes the name in the inventory.
+The host drives the phases, each durable in the workspace, so an interrupted installation resumes
+on a retry with the same identity without allocating a second vat or running a factory twice.
+The bundle is staged into the new vat in bounded messages, and the workspace obtains that vat's
+guest evaluator directly so an asynchronous factory result survives host restart as a
+guest-to-guest promise.
 Reinstalling the same name, code, and grant mapping reuses the existing result.
-The workspace obtains the guest evaluator directly so an asynchronous factory result can survive
-host restart as a guest-to-guest promise.
 
 Installation captures code and powers; it does not reload changed source files or upgrade an existing
 application's heap.
-The current admission profile limits serialized installation requests to 16 KiB and grants to
-remotable capabilities.
-Interrupted host allocation or evaluator acquisition can require an explicit retry.
-Removing a registry entry releases its reference; it does not revoke references held elsewhere.
+Grants are limited to remotable capabilities and checked before any vat exists.
+Removing an installation retires its vat first and then forgets the name, so a removal interrupted
+between the two is finished by the next removal or installation under that name.
 
 ## Contacts and capability offers
 

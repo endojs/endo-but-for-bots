@@ -57,9 +57,8 @@ try {
     command === 'reachability' ||
     command === 'collect' ||
     command === 'install' ||
-    command === 'applications' ||
+    command === 'installations' ||
     command === 'remove' ||
-    command === 'remove-native' ||
     command === 'inventory' ||
     command === 'attach' ||
     command === 'status' ||
@@ -140,11 +139,10 @@ try {
             2,
           ),
         );
-      } else if (command === 'remove' || command === 'remove-native') {
+      } else if (command === 'remove') {
         const [name] = args;
-        if (!name) throw Error(`Usage: thix ${command} state-directory name`);
-        const method = command === 'remove' ? 'remove' : 'removeNative';
-        logging.log(JSON.stringify(await client.call(method, name)));
+        if (!name) throw Error('Usage: thix remove state-directory name');
+        logging.log(JSON.stringify(await client.call('remove', name)));
       } else if (command === 'inventory') {
         await showInventory(platform.terminal.open(), client);
       } else if (command === 'attach') {
@@ -156,7 +154,7 @@ try {
       } else {
         const result = await client.call(command);
         logging.log(
-          ['status', 'applications', 'reachability', 'collect'].includes(
+          ['status', 'installations', 'reachability', 'collect'].includes(
             command,
           )
             ? JSON.stringify(result, null, 2)
@@ -169,7 +167,7 @@ try {
     }
   } else {
     logging.log(
-      'Usage: thix serve|attach|install|remove|applications|inventory|invite|revoke-invite|accept|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|install-native|remove-native|reachability|collect|status|stop [state-directory]',
+      'Usage: thix serve|attach|install|install-native|installations|remove|inventory|invite|revoke-invite|accept|contacts|send|inbox|outbox|take|discard|mail|clock-grant|alarms|reachability|collect|status|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }
