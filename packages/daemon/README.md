@@ -61,8 +61,8 @@ const guest = await E(host).provideGuest('documentation-agent', {
     },
   },
   endowments: {
-    '@main': 'documentation-worker',
-    calendar: 'calendar-service',
+    '@main': ['documentation-worker'],
+    calendar: ['services', 'calendar'],
   },
 });
 ```
@@ -94,17 +94,21 @@ the retained policy and revalidates credential references and audiences.
 Callers do not persist or resubmit a normalized authority record.
 Changing or widening a retained policy fails closed.
 
-A retained guest is endowed through a single `endowments` map from guest-side
-names to the providing host's pet names. The guest-side name (the map key)
-determines policy: a key beginning with `@` is a special, indelible endowment
-and any other key is an ordinary, mutable introduction. The map's values are the
-providing host's pet names, never formula identifiers; the daemon resolves each
-to a formula identifier behind its boundary.
+Every guest, retained or not, is endowed through a single `endowments` map from
+guest-side names to the providing host's pet name paths. The guest-side name
+(the map key) determines policy: a key beginning with `@` is a special,
+indelible endowment and any other key is an ordinary, mutable introduction. The
+map's values are pet name paths (arrays of path components, even for a single
+name), never bare strings and never formula identifiers; the daemon resolves
+each to a formula identifier behind its boundary. `endowments` replaces the
+former `introducedNames` option for guests (which mapped host names to guest
+names in the opposite direction); `provideHost` still accepts
+`introducedNames`.
 
 Every freshly provisioned guest receives its own worker at `@main`. The creating
 host may replace that binding, or add another non-daemon-reserved special name,
-by mapping it under an `@` key (`endowments: { '@main': 'a-worker' }`) while it
-first supplies retained authority. A special endowment resolves its host source
+by mapping it under an `@` key (`endowments: { '@main': ['a-worker'] }`) when it
+creates the guest; special endowments cannot be added to an existing guest. A special endowment resolves its host source
 once and persists that identity in the guest formula, retaining the formula-graph
 edge; its host source must exist. A guest cannot remove or rebind a special name.
 

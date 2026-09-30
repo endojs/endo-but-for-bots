@@ -79,7 +79,7 @@ test.serial('provideGuest retains a neutral named authority graph', async t => {
   });
   const guest = await E(host).provideGuest('coding-session', {
     authority,
-    endowments: { calendar: 'calendar' },
+    endowments: { calendar: ['calendar'] },
   });
 
   const workspace = /** @type {EndoMount} */ (
@@ -131,7 +131,7 @@ test.serial('provideGuest retains a neutral named authority graph', async t => {
   const repoId = await E(guest).identify('repo');
   const repeated = await E(host).provideGuest('coding-session', {
     authority,
-    endowments: { calendar: 'calendar' },
+    endowments: { calendar: ['calendar'] },
   });
   t.is(await E(host).identify('coding-session'), guestId);
   t.is(await E(repeated).identify('repo'), repoId);
@@ -181,7 +181,7 @@ test.serial(
     const alternateId = await E(host).identify('alternate-worker');
     const guest = await E(host).provideGuest('special-session', {
       authority,
-      endowments: { '@main': 'alternate-worker' },
+      endowments: { '@main': ['alternate-worker'] },
     });
     const guestId = await E(host).identify('special-session');
     t.is(await E(guest).identify('@main'), alternateId);
@@ -199,20 +199,39 @@ test.serial(
     await t.throwsAsync(
       E(host).provideGuest('special-session', {
         authority,
-        endowments: { '@main': 'absent' },
+        endowments: { '@main': ['absent'] },
       }),
       { message: /SPECIAL_NAME_SOURCE_UNAVAILABLE/ },
     );
     await t.throwsAsync(
       E(host).provideGuest('special-session', {
         authority,
-        endowments: { '@agent': 'alternate-worker' },
+        endowments: { '@agent': ['alternate-worker'] },
       }),
       { message: /daemon-reserved special name/ },
     );
+    // The value side is a pet name path, never a bare string.
+    await t.throwsAsync(
+      E(host).provideGuest('special-session', {
+        authority,
+        endowments: /** @type {any} */ ({ '@main': 'alternate-worker' }),
+      }),
+      { message: /Must be a copyArray/ },
+    );
+    // `introducedNames` is obviated by `endowments` for every guest.
+    await t.throwsAsync(
+      E(host).provideGuest(
+        'special-session',
+        /** @type {any} */ ({
+          authority,
+          introducedNames: { 'alternate-worker': 'tool' },
+        }),
+      ),
+      { message: /provideGuest.*Must be: \(an object\)/ },
+    );
     await t.throwsAsync(
       E(defaultGuest).provideGuest('attempted-escalation', {
-        endowments: { '@main': '@main' },
+        endowments: { '@main': ['@main'] },
       }),
       { message: /target has no method "provideGuest"/ },
     );
@@ -224,7 +243,10 @@ test.serial(
     // and a special (indelible) endowment, partitioned solely by the `@` prefix.
     const unifiedGuest = await E(host).provideGuest('unified-endowments', {
       authority,
-      endowments: { '@main': 'replacement-worker', tool: 'alternate-worker' },
+      endowments: {
+        '@main': ['replacement-worker'],
+        tool: ['alternate-worker'],
+      },
     });
     const replacementId = await E(host).identify('replacement-worker');
     t.is(await E(unifiedGuest).identify('@main'), replacementId);
@@ -243,7 +265,7 @@ test.serial(
     await t.throwsAsync(
       E(restartedHost).provideGuest('special-session', {
         authority,
-        endowments: { '@main': 'replacement-worker' },
+        endowments: { '@main': ['replacement-worker'] },
       }),
       { message: /cannot widen or change retained authority/ },
     );
@@ -366,7 +388,7 @@ test.serial(
       'missing-introduction',
       {
         authority: {},
-        endowments: { optionalTool: 'absent' },
+        endowments: { optionalTool: ['absent'] },
       },
     );
     t.false(await E(missingIntroduction).has('optionalTool'));
@@ -423,5 +445,56 @@ test.serial(
       E(host).provideGuest('credential-session', { authority }),
       { message: /cannot widen or change retained authority/ },
     );
+  },
+);
+
+test.serial(
+  'provideGuest endows an unretained guest through the same endowments map',
+  async t => {
+    t.timeout(120_000);
+    const fixture = await makeProvisioningFixture(t);
+    const host = await fixture.connectHost('unretained-endowment-host');
+    await E(host).provideWorker('custom-worker');
+    await E(host).makeDirectory(['tools']);
+    await E(host).provideWorker(['tools', 'nested-worker']);
+    const customId = await E(host).identify('custom-worker');
+    const nestedId = await E(host).identify('tools', 'nested-worker');
+
+    const guest = await E(host).provideGuest('plain-guest', {
+      endowments: {
+        '@main': ['custom-worker'],
+        'host-agent': ['@agent'],
+        nested: ['tools', 'nested-worker'],
+        missing: ['absent'],
+      },
+    });
+    t.is(await E(guest).identify('@main'), customId);
+    t.is(
+      await E(guest).identify('host-agent'),
+      await E(host).identify('@agent'),
+    );
+    t.is(await E(guest).identify('nested'), nestedId);
+    t.false(await E(guest).has('missing'));
+
+    // Ordinary endowments may be (re)applied to an existing guest; special
+    // endowments are indelible and may only be supplied at creation.
+    await E(host).provideWorker('absent');
+    await E(host).provideGuest('plain-guest', {
+      endowments: { missing: ['absent'] },
+    });
+    t.is(await E(guest).identify('missing'), await E(host).identify('absent'));
+    await t.throwsAsync(
+      E(host).provideGuest('plain-guest', {
+        endowments: { '@main': ['absent'] },
+      }),
+      { message: /cannot be added to an existing guest/ },
+    );
+    await t.throwsAsync(
+      E(host).provideGuest('other-guest', {
+        endowments: { '@main': ['nowhere'] },
+      }),
+      { message: /SPECIAL_NAME_SOURCE_UNAVAILABLE/ },
+    );
+    t.false(await E(host).has('other-guest'));
   },
 );

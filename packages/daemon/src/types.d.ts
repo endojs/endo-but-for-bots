@@ -1437,21 +1437,23 @@ export type MakeHostOptions = {
   introducedNames?: Record<string, string>;
 };
 
-export type MakeGuestOptions = MakeHostOptions & {
+export type MakeGuestOptions = {
+  agentName?: string | string[];
   /** Immutable named capability graph for a retained guest. */
   authority?: EndoGuestAuthority;
   /**
-   * A single endowment mapping from guest-side names to providing-host pet
-   * names, endowed while creating a retained guest with `authority`. The
-   * guest-side name (the map key) determines policy: a name beginning with `@`
-   * is a special, indelible endowment (for example an `@main` worker
-   * replacement) and may not name a daemon-reserved slot; any other name is an
-   * ordinary, mutable introduction. The values are the providing host's pet
-   * names, never formula identifiers; the daemon resolves them to formula
-   * identifiers behind its boundary. A repeat must resolve to the same
-   * identifiers.
+   * The single endowment mapping from guest-side names to the providing
+   * host's pet name paths (arrays of path components). The guest-side name
+   * (the map key) determines policy: a name beginning with `@` is a special,
+   * indelible endowment (for example an `@main` worker replacement) and may
+   * not name a daemon-reserved slot; any other name is an ordinary, mutable
+   * introduction. The values are pet name paths, never formula identifiers;
+   * the daemon resolves them to formula identifiers behind its boundary. For
+   * a retained guest the whole map is part of the immutable retained policy,
+   * so a repeat must resolve to the same identifiers. Special endowments
+   * cannot be added to an existing unretained guest.
    */
-  endowments?: Record<string, string>;
+  endowments?: Record<string, string[]>;
 };
 
 export type MakeCapletOptions = {

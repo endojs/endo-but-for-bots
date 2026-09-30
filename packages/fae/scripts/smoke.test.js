@@ -538,7 +538,7 @@ const setupDaemon = async () => {
       await E(host).identify(providerName)
     );
     await E(host).provideGuest(factoryGuestName, {
-      introducedNames: harden({ '@agent': 'host-agent' }),
+      endowments: harden({ 'host-agent': ['@agent'] }),
       agentName: factoryAgentName,
     });
     const factoryPowers = await E(host).lookup(factoryAgentName);

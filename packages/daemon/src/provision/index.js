@@ -434,18 +434,18 @@ export const makeGuestAuthorityProvider = powers => {
    * Partition a unified endowment map (guest-side name to providing-host pet
    * name) by its guest-side keys: names beginning with `@` are special and
    * indelible, all others are ordinary and mutable.
-   * @param {Record<string, string>} endowments
+   * @param {Record<string, string[]>} endowments
    */
   const partitionEndowments = endowments => {
-    /** @type {Record<string, string>} */
+    /** @type {Record<string, string[]>} */
     const ordinary = {};
-    /** @type {Record<string, string>} */
+    /** @type {Record<string, string[]>} */
     const special = {};
-    for (const [guestName, hostName] of Object.entries(endowments)) {
+    for (const [guestName, hostPath] of Object.entries(endowments)) {
       if (isSpecialGuestName(guestName)) {
-        special[guestName] = hostName;
+        special[guestName] = hostPath;
       } else {
-        ordinary[guestName] = hostName;
+        ordinary[guestName] = hostPath;
       }
     }
     return { ordinary, special };
@@ -456,7 +456,7 @@ export const makeGuestAuthorityProvider = powers => {
    * currently bound behind the daemon boundary. A missing source is tolerated
    * (the introduction is simply skipped) so it can be repaired by binding the
    * host pet name and reconnecting.
-   * @param {Record<string, string>} ordinaryEndowments guest name to host pet name
+   * @param {Record<string, string[]>} ordinaryEndowments guest name to host pet name path
    */
   const resolveIntroductions = async ordinaryEndowments => {
     await null;
@@ -465,9 +465,9 @@ export const makeGuestAuthorityProvider = powers => {
         await allInOrder(
           Object.entries(ordinaryEndowments)
             .sort(([left], [right]) => compareStrings(left, right))
-            .map(async ([guestName, hostName]) => [
+            .map(async ([guestName, hostPath]) => [
               guestName,
-              (await identify(hostName)) ?? null,
+              (await identify(...hostPath)) ?? null,
             ]),
         ),
       ),
@@ -477,17 +477,17 @@ export const makeGuestAuthorityProvider = powers => {
   /**
    * Resolve special endowments once. Unlike ordinary introductions, a missing
    * source is fatal because an indelible name cannot be repaired later.
-   * @param {Record<string, string>} specialEndowments guest special name to host pet name
+   * @param {Record<string, string[]>} specialEndowments guest special name to host pet name path
    */
   const resolveSpecialEndowments = async specialEndowments => {
     const entries = await allInOrder(
       Object.entries(specialEndowments)
         .sort(([left], [right]) => compareStrings(left, right))
-        .map(async ([specialName, hostName]) => {
-          const identifier = await identify(hostName);
+        .map(async ([specialName, hostPath]) => {
+          const identifier = await identify(...hostPath);
           if (identifier === undefined) {
             throw makeError(
-              X`ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE: No host name ${q(hostName)} for special name ${q(specialName)}`,
+              X`ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE: No host name ${q(hostPath)} for special name ${q(specialName)}`,
               Error,
               { code: 'ENDO_SPECIAL_NAME_SOURCE_UNAVAILABLE' },
             );
@@ -501,7 +501,7 @@ export const makeGuestAuthorityProvider = powers => {
   /**
    * @param {string[]} guestPath
    * @param {EndoGuestAuthority | undefined} authority
-   * @param {Record<string, string> | undefined} endowments guest-side name to host pet name
+   * @param {Record<string, string[]> | undefined} endowments guest-side name to host pet name path
    * @param {(specialNames: Record<string, FormulaIdentifier>) => Promise<EndoGuest>} makeGuest
    */
   const run = async (guestPath, authority, endowments, makeGuest) => {
@@ -515,7 +515,7 @@ export const makeGuestAuthorityProvider = powers => {
     /**
      * The unified endowment map (guest name to host pet name) as retained;
      * its ordinary entries are re-resolved by name on every reconnect.
-     * @type {Record<string, string>}
+     * @type {Record<string, string[]>}
      */
     let retainedEndowments;
     /** @type {Record<string, FormulaIdentifier>} */
@@ -532,7 +532,7 @@ export const makeGuestAuthorityProvider = powers => {
           );
     if (await hasNamePath(policyPath)) {
       const retained =
-        /** @type {{ policy: EndoGuestAuthorityPolicy, credentialIds: Record<string, string>, endowments: Record<string, string>, specialNames?: Record<string, FormulaIdentifier> }} */ (
+        /** @type {{ policy: EndoGuestAuthorityPolicy, credentialIds: Record<string, string>, endowments: Record<string, string[]>, specialNames?: Record<string, FormulaIdentifier> }} */ (
           await lookup(policyPath)
         );
       if (authority === undefined) {
@@ -723,7 +723,12 @@ export const makeGuestAuthorityProvider = powers => {
   /** @type {Map<string, Promise<unknown>>} */
   const tailByGuestPath = new Map();
   /** @type {typeof run} */
-  const provideGuestAuthority = (guestPath, authority, endowments, makeGuest) => {
+  const provideGuestAuthority = (
+    guestPath,
+    authority,
+    endowments,
+    makeGuest,
+  ) => {
     const key = guestPath.join('/');
     const tail = tailByGuestPath.get(key) ?? Promise.resolve();
     const result = tail.then(() =>

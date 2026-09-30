@@ -113,7 +113,7 @@ export const helpTextEntries = harden([
       storeValue:
         'storeValue(value, petNameOrPath) -> Promise<void>\nStore a passable value (number, string, array, record, etc.) with a name.\n- storeValue(42, "answer") stores the number 42\n- storeValue({x: 1, y: 2}, "point") stores a record',
       provideGuest:
-        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest("my-guest") creates/retrieves a named guest\nOptions: { authority?: { mount, git, gitRemote }, endowments?: { "@main": hostName, guestName: hostName }, introducedNames?: { hostName: guestName } }\nEach singular authority category is an object whose keys become guest binding\nnames. A retained guest (created with authority) is endowed through the single\n`endowments` map from guest-side names to providing-host pet names: a key\nbeginning with `@` is a special, indelible endowment (such as replacing the\ndefault `@main` worker) and any other key is an ordinary, mutable introduction\nwhose missing host source is ignored. Unprovisioned guests use `introducedNames`.',
+        'provideGuest(petName?, options?) -> Promise<EndoGuest>\nCreate or retrieve a confined guest agent.\n- provideGuest() creates an anonymous guest\n- provideGuest("my-guest") creates/retrieves a named guest\nOptions: { agentName?, authority?: { mount, git, gitRemote }, endowments?: { "@main": ["host", "path"], guestName: ["host", "path"] } }\nEach singular authority category is an object whose keys become guest binding\nnames. Every guest is endowed through the single `endowments` map from\nguest-side names to the providing host\'s pet name paths (arrays of path\ncomponents, never a bare string). A key beginning with `@` is a special,\nindelible endowment (such as replacing the default `@main` worker) that may only\nbe supplied when the guest is created; any other key is an ordinary, mutable\nintroduction whose missing host source is ignored. For a retained guest (created\nwith authority) the whole map is part of the immutable retained policy.',
       provideHost:
         'provideHost(petName?, options?) -> Promise<EndoHost>\nCreate or retrieve another host agent.\n- provideHost() creates an anonymous host\n- provideHost("my-host") creates/retrieves a named host',
       provideWorker:
@@ -213,10 +213,10 @@ export const helpTextEntries = harden([
         "sha256() -> string\nThe content address of the tree's manifest, as base64.",
       getInfo:
         'getInfo() -> Promise<{ algorithm, hash, size }>\nThe content-addressed identity of the tree in one round-trip: algorithm\n("sha256"), hash (base64, the same value as sha256()), and size (the byte\nlength of the tree\'s own manifest). The uniform identity accessor shared with\nblobs, so generic code can read a content hash off any blob or tree.',
-      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") → true\nExample: has("assets", "style.css") → true',
-      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() → ["index.html", "app.js", "assets"]\nExample: list("assets") → ["style.css", "logo.png"]',
+      has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") -> true\nExample: has("assets", "style.css") -> true',
+      list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() -> ["index.html", "app.js", "assets"]\nExample: list("assets") -> ["style.css", "logo.png"]',
       lookup:
-        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") → EndoReadable\nExample: lookup(["assets", "style.css"]) → EndoReadable',
+        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup("index.html") -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
     },
   ],
   [

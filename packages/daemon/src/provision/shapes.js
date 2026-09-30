@@ -2,7 +2,7 @@
 
 import { M } from '@endo/patterns';
 
-import { NameOrPathShape } from '../type-guards.js';
+import { NameOrPathShape, NamePathShape } from '../type-guards.js';
 
 export const StringListShape = M.arrayOf(M.string());
 harden(StringListShape);
@@ -68,8 +68,7 @@ export const MakeGuestOptionsShape = M.splitRecord(
   {},
   {
     agentName: NameOrPathShape,
-    introducedNames: M.recordOf(M.string(), M.string()),
-    endowments: M.recordOf(M.string(), M.string()),
+    endowments: M.recordOf(M.string(), NamePathShape),
     authority: EndoGuestAuthorityShape,
   },
   {},
