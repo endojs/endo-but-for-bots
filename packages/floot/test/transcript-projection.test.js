@@ -169,13 +169,15 @@ test('recovery before first transcript publication keeps full input, reply and t
   const { pairs } = pairToolCalls(records);
   t.is(pairs.length, 1);
   t.is(pairs[0].call.args, full.args);
-  t.is(pairs[0].result.content, full.result);
+  t.is(pairs[0].result?.content, full.result);
   t.like(records.at(-2), {
     kind: 'message',
     role: 'assistant',
     content: full.output,
   });
-  t.regex(records.at(-1).content, /Transcript publication failed/);
+  const last = records.at(-1);
+  if (last?.kind !== 'message') throw Error('Expected final message');
+  t.regex(last.content, /Transcript publication failed/);
 });
 
 test('provider projection pairs repeated IDs and preserves full tool arguments', t => {
@@ -187,8 +189,11 @@ test('provider projection pairs repeated IDs and preserves full tool arguments',
     { kind: 'tool-result', id: 'same', content: 'second result' },
     { kind: 'tool-call', id: 'pending', name: 'third', args: '{}' },
   ]);
-  t.is(messages[0].tool_calls[0].function.arguments, args);
-  t.not(messages[0].tool_calls[0].id, messages[2].tool_calls[0].id);
+  const firstCall = messages[0].tool_calls?.[0];
+  const secondCall = messages[2].tool_calls?.[0];
+  if (!firstCall || !secondCall) throw Error('Expected both tool calls');
+  t.is(firstCall.function.arguments, args);
+  t.not(firstCall.id, secondCall.id);
   t.is(messages[1].content, 'first result');
   t.is(messages[3].content, 'second result');
   t.regex(messages[5].content, /outcome unknown; do not automatically retry/);
@@ -614,9 +619,9 @@ test('provider replay selects only the last compaction and pairs tools inside it
     { role: 'user', content: 'continue' },
   ]);
   t.deepEqual(
-    replay
-      .filter(message => message.tool_calls)
-      .map(message => message.tool_calls[0].function.name),
+    replay.flatMap(message =>
+      message.tool_calls ? [message.tool_calls[0].function.name] : [],
+    ),
     ['current', 'uncertain'],
   );
   const results = replay.filter(message => message.role === 'tool');

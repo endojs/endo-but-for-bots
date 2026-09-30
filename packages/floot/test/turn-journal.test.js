@@ -180,7 +180,15 @@ test('mail receipt schema rejects malformed fields before dispatch publication',
   ]) {
     const f = fixture();
     const journal = makeTurnJournal(f.powers);
-    await t.throwsAsync(journal.begin({ ...options, mail }));
+    await t.throwsAsync(
+      journal.begin({
+        ...options,
+        // Exercise the parser's rejection of intentionally invalid receipts.
+        mail: /** @type {Parameters<typeof journal.begin>[0]['mail']} */ (
+          /** @type {unknown} */ (mail)
+        ),
+      }),
+    );
     t.is(f.store.size, 0);
   }
   for (const mail of [{ from: 'sender' }, { messageNumber: '123' }]) {

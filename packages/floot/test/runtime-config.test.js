@@ -4,6 +4,8 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { makeStreamingAgent } from '../agent.js';
 import { assertRuntimeConfig } from '../src/runtime-config.js';
 
+/** @import { RuntimeConfig } from '../src/runtime-config.js' */
+
 test('journal storage must be explicit before guest or runtime side effects', async t => {
   let effects = 0;
   const powers = harden({
@@ -93,9 +95,14 @@ test('ambiguous and legacy runtime configurations fail before powers are used', 
   await Promise.all(
     invalid.map(config =>
       t.throwsAsync(
-        makeStreamingAgent(powers, undefined, config, undefined, {
-          journalPowers: powers,
-        }),
+        makeStreamingAgent(
+          powers,
+          undefined,
+          // Deliberately malformed input must reach runtime validation.
+          /** @type {RuntimeConfig} */ (/** @type {unknown} */ (config)),
+          undefined,
+          { journalPowers: powers },
+        ),
         { message: /runtime configuration/ },
       ),
     ),
@@ -128,18 +135,19 @@ test('records-only runtime reads history without admitting turns or inbox work',
   t.teardown(() => agent.shutdown());
   t.deepEqual(await agent.getHistory(), []);
   const before = [...store.entries()];
-  let aborted;
+  /** @type {{aborted: string | undefined}} */
+  const observed = { aborted: undefined };
   await t.throwsAsync(
     agent.converse('must not execute', {
       abort: reason => {
-        aborted = reason;
+        observed.aborted = reason;
       },
     }),
     {
       message: /Records-only session cannot run turns/,
     },
   );
-  t.is(aborted, 'Records-only session cannot run turns');
+  t.is(observed.aborted, 'Records-only session cannot run turns');
   agent.startInbox();
   t.deepEqual(await agent.getTurns(), []);
   t.deepEqual([...store.entries()], before);

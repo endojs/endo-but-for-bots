@@ -3,7 +3,13 @@ import test from '@endo/ses-ava/prepare-endo.js';
 
 import { makeReplyFold } from '../src/reply-fold.js';
 
-/** A fresh status, as a daemon turn and a browser turn record both start. */
+/** @import { FoldableStatus } from '../src/reply-fold.js' */
+/** @import { ReplyEvent } from '../src/stream.js' */
+
+/**
+ * A fresh status, as a daemon turn and a browser turn record both start.
+ * @returns {FoldableStatus}
+ */
 const fresh = () => ({
   phase: 'thinking',
   streamingText: '',
@@ -16,6 +22,7 @@ const fresh = () => ({
  * The corpus: one turn's worth of reply events, with text around a tool
  * round whose two calls settle out of order, a thinking block that grows
  * across two events, a usage report, and a clean end.
+ * @type {readonly ReplyEvent[]}
  */
 const corpus = harden([
   { type: 'phase', phase: 'thinking' },
@@ -49,6 +56,9 @@ const corpus = harden([
     incompleteTurns: 0,
     inputTokens: 10,
     outputTokens: 4,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    reasoningOutputTokens: 0,
   },
   { type: 'end' },
 ]);
@@ -87,20 +97,28 @@ test('a turn folds into finished messages with text split at the tool round and 
     incompleteTurns: 0,
     inputTokens: 10,
     outputTokens: 4,
+    cachedInputTokens: 0,
+    cacheWriteInputTokens: 0,
+    reasoningOutputTokens: 0,
   });
   t.deepEqual(terminal, { type: 'end' });
 });
 
-/** The corpus cut short by a failure, after text has started streaming. */
+/**
+ * The corpus cut short by a failure, after text has started streaming.
+ * @type {readonly ReplyEvent[]}
+ */
 const aborted = harden([
   ...corpus.slice(0, 10),
   { type: 'abort', reason: 'provider gone' },
 ]);
 
-for (const [name, events] of [
+/** @type {[string, readonly ReplyEvent[]][]} */
+const scenarios = [
   ['a completed turn', corpus],
   ['an aborted turn', aborted],
-]) {
+];
+for (const [name, events] of scenarios) {
   test(`a view that adopts a snapshot mid-turn converges with one that applied every event of ${name}`, t => {
     for (let cut = 0; cut <= events.length; cut += 1) {
       // The daemon's view: the events up to the cut, then a snapshot of it,

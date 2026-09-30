@@ -277,9 +277,9 @@ test('thinking anchors split canonical text without entering model context', asy
     },
   });
   t.deepEqual(
-    result.segments
-      .filter(s => s.type === 'thinking')
-      .map(s => s.beforeTranscriptOrdinal),
+    result.segments.flatMap(s =>
+      s.type === 'thinking' ? [s.beforeTranscriptOrdinal] : [],
+    ),
     ['1', '2', '3', '4'],
   );
   t.deepEqual(

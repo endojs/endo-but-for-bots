@@ -420,7 +420,7 @@ harden(makeClaudeHostedTranslator);
  * the ClaudeClient reader itself offers.
  *
  * @param {any} rawReader - the reader `ClaudeClient.send()` returned.
- * @returns {object} a buffered hosted-event reader
+ * @returns {ReturnType<typeof makeHostedTurnChannel>['reader']} a buffered hosted-event reader
  */
 export const translateClaudeTurn = rawReader => {
   const translator = makeClaudeHostedTranslator();

@@ -21,8 +21,30 @@ const entries = harden([
     systemPrompt: 'Captured prompt.',
   },
 ]);
+/**
+ * @param {Record<string, unknown>[]} [sessions]
+ * @param {bigint} [sequence]
+ */
 const snapshot = (sessions = entries, sequence = 0n) =>
   harden({ version: 1, sequence, sessions });
+
+/**
+ * @param {Map<string, unknown>} store
+ * @param {string} name
+ */
+const readSnapshot = (store, name) => {
+  const value = store.get(name);
+  if (
+    !value ||
+    typeof value !== 'object' ||
+    !('sessions' in value) ||
+    !Array.isArray(value.sessions) ||
+    !('sequence' in value) ||
+    typeof value.sequence !== 'bigint'
+  )
+    throw Error('Expected stored snapshot');
+  return { sessions: value.sessions, sequence: value.sequence };
+};
 
 /**
  * @param {Map<string, any>} store
@@ -154,21 +176,23 @@ for (const identity of [
 }
 
 test('explicit direct pin and configured default survive registry restoration without hosted semantics', async t => {
-  const store = new Map([
-    [
-      journalName(0n),
-      snapshot(
-        harden([
-          { ...entries[0], id: 'pinned', modelId: 'vendor/pin' },
-          { ...entries[0], id: 'default', modelId: '' },
-        ]),
-      ),
-    ],
-    [
-      'llm-provider',
-      harden({ provider: 'openrouter', model: 'vendor/default' }),
-    ],
-  ]);
+  const store = new Map(
+    /** @type {[string, unknown][]} */ ([
+      [
+        journalName(0n),
+        snapshot(
+          harden([
+            { ...entries[0], id: 'pinned', modelId: 'vendor/pin' },
+            { ...entries[0], id: 'default', modelId: '' },
+          ]),
+        ),
+      ],
+      [
+        'llm-provider',
+        harden({ provider: 'openrouter', model: 'vendor/default' }),
+      ],
+    ]),
+  );
   const factory = make(makeHost(store));
   const sessions = await E(factory).listSessions();
   t.like(
@@ -199,7 +223,9 @@ test('explicit direct pin and configured default survive registry restoration wi
   });
   await E(factory).renameSession('pinned', 'Preserved pin');
   t.like(
-    store.get(journalName(1n)).sessions.find(entry => entry.id === 'pinned'),
+    readSnapshot(store, journalName(1n)).sessions.find(
+      entry => entry.id === 'pinned',
+    ),
     { backendId: 'provider', modelId: 'vendor/pin' },
   );
 });
@@ -248,11 +274,13 @@ for (const names of [
 }
 
 test('modern snapshot wins and leaves legacy roots untouched', async t => {
-  const store = new Map([
-    [canonicalName, entries],
-    [backupName, entries],
-    [journalName(0n), snapshot(harden([]))],
-  ]);
+  const store = new Map(
+    /** @type {[string, unknown][]} */ ([
+      [canonicalName, entries],
+      [backupName, entries],
+      [journalName(0n), snapshot(harden([]))],
+    ]),
+  );
   const before = [...store.entries()];
   const host = makeHost(store, {
     beforeLookup: name => {
@@ -312,11 +340,11 @@ test('a lost journal acknowledgement does not wedge later saves', async t => {
   await t.throwsAsync(E(factory).renameSession('saved', 'Uncertain'), {
     message: 'Acknowledgement lost',
   });
-  t.is(store.get(journalName(1n)).sessions[0].title, 'Uncertain');
+  t.is(readSnapshot(store, journalName(1n)).sessions[0].title, 'Uncertain');
   fail = false;
   await E(factory).renameSession('saved', 'Latest');
-  t.is(store.get(journalName(1n)).sessions[0].title, 'Uncertain');
-  t.is(store.get(journalName(2n)).sessions[0].title, 'Latest');
+  t.is(readSnapshot(store, journalName(1n)).sessions[0].title, 'Uncertain');
+  t.is(readSnapshot(store, journalName(2n)).sessions[0].title, 'Latest');
   t.is((await E(make(host)).listSessions())[0].title, 'Latest');
 });
 
@@ -357,7 +385,7 @@ test('snapshot pruning occurs after a durable newer snapshot and retains four sn
   const durableAtRemoval = [];
   const host = makeHost(store, {
     afterStore: name => {
-      latest = store.get(name).sequence;
+      latest = readSnapshot(store, name).sequence;
     },
     beforeRemove: () => durableAtRemoval.push(store.has(journalName(latest))),
   });

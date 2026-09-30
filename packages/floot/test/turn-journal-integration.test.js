@@ -19,6 +19,9 @@ import { makeReplyChannel } from '../src/stream.js';
 import { makeTurnJournal } from '../src/turn-journal.js';
 import { usageCounts } from './helpers/usage.js';
 
+/** @import { RuntimeConfig } from '../src/runtime-config.js' */
+/** @import { TranscriptRecord } from '@endo/hosted-agent/transcript-records.js' */
+
 const fixture = () => {
   const store = new Map();
   let refusedType;
@@ -1764,6 +1767,7 @@ for (const backend of ['provider', 'hosted']) {
     test(`${backend} journal finish alone controls usage accounting: ${fault}`, async t => {
       const f = fixture();
       const perTurn = usageCounts({ inputTokens: 11, outputTokens: 3 });
+      /** @type {RuntimeConfig} */
       const config =
         backend === 'provider'
           ? {
@@ -1878,7 +1882,9 @@ test('usage projection failure cannot undo successful journal settlement', async
     }),
   );
   t.is(updates, 0);
-  t.is((await agent.getTurns()).at(-1).state, 'completed');
+  const lastTurn = (await agent.getTurns()).at(-1);
+  if (!lastTurn) throw Error('Expected the completed turn');
+  t.is(lastTurn.state, 'completed');
   refuse = false;
   t.is((await agent.getUsage()).inputTokens, 11);
   t.is((await agent.getUsage()).turns, 291);
@@ -1890,6 +1896,7 @@ for (const backend of ['provider', 'hosted']) {
     const obsolete = harden({ inputTokens: 999_999, turns: 999 });
     f.store.set('floot-usage', obsolete);
     const perTurn = usageCounts({ inputTokens: 11, outputTokens: 3 });
+    /** @type {RuntimeConfig} */
     const config =
       backend === 'provider'
         ? {
@@ -1968,11 +1975,12 @@ test('archived failures remain in UI history and direct-provider context', async
   t.timeout(20_000);
   const f = fixture();
   let requests = 0;
-  let lastContext;
+  /** @type {{lastContext: {content?: string}[] | undefined, restoredTranscript: TranscriptRecord[] | undefined}} */
+  const observed = { lastContext: undefined, restoredTranscript: undefined };
   const provider = harden({
     async chatStream(context) {
       requests += 1;
-      lastContext = context;
+      observed.lastContext = context;
       if (requests === 1) throw Error('Archived failure');
       return completed();
     },
@@ -2011,17 +2019,17 @@ test('archived failures remain in UI history and direct-provider context', async
       message => message.content === 'Preserve this failed request',
     ),
   );
+  if (!observed.lastContext) throw Error('Expected the provider context');
   t.true(
-    lastContext.some(
+    observed.lastContext.some(
       message => message.content === 'Preserve this failed request',
     ),
   );
   await agent.shutdown();
-  let restoredTranscript;
   const hostedClient = harden({
     async send(input, options) {
       t.is(input, 'New hosted request');
-      restoredTranscript = options.transcript;
+      observed.restoredTranscript = options.transcript;
       const channel = makeBufferedReader();
       channel.push({ type: 'text-delta', text: 'Restored' });
       channel.push({ type: 'end' });
@@ -2037,13 +2045,20 @@ test('archived failures remain in UI history and direct-provider context', async
   );
   t.teardown(() => revived.shutdown());
   await revived.converse('New hosted request', makeReplyChannel().writer);
+  if (!observed.restoredTranscript)
+    throw Error('Expected the restored transcript');
   t.true(
-    restoredTranscript.some(
-      record => record.content === 'Preserve this failed request',
+    observed.restoredTranscript.some(
+      record =>
+        record.kind === 'message' &&
+        record.content === 'Preserve this failed request',
     ),
   );
   t.false(
-    restoredTranscript.some(record => record.content === 'New hosted request'),
+    observed.restoredTranscript.some(
+      record =>
+        record.kind === 'message' && record.content === 'New hosted request',
+    ),
   );
 });
 

@@ -290,6 +290,27 @@ Root `build:types` encounters generated-declaration input/output collisions
 (`TS2345`), so its chained `test:types` did not run.
 Package checks do not establish a green root type-build gate; generated-output
 reconciliation remains necessary before claiming that result.
+Type reconciliation follow-up: all remaining 72 Floot test diagnostics are fixed
+in 15 fixture files. Explicit result/event narrowing, typed case tables and
+captured-state records retain the existing assertions; malformed runtime options
+and mail receipts still reach their rejection tests through documented boundaries.
+The reply-fold corpus now supplies the three required zero-valued usage counters.
+Floot's full test-inclusive typecheck and 732 tests pass; package lint reports
+zero errors (279 warnings), and formatting passes. Independent review approves.
+
+Generated-output reconciliation confirms the earlier missing-`now` report was an
+artifact of a partial declaration build: a clean root `build:types` passes without
+changing the credential implementation. Ignored generated declarations, maps and
+build caches were moved to recoverable temporary archives, not deleted; tracked
+declarations, dependencies and runtime state were untouched.
+A subsequent incremental root build still encountered `TS5055`; another clean
+build passes. This proves the clean gate, not repeatable incremental builds.
+Clean declarations also exposed Claude's overly broad translator return type:
+it now declares the actual shared channel reader, with no runtime change.
+Claude's test-inclusive typecheck and 25 translator tests pass; scoped lint has
+zero errors (two warnings). No new durable owner or storage format is introduced.
+Final serial gates pass: root documentation has zero errors (180 warnings), and
+all 14 opted-in root type-contract tasks succeed against the clean declarations.
 RA-04 and the current cutover evidence are recorded above and in the alignment doc.
 Both cleanup changes are deployed in generation 187 with fresh cross-backend
 lifecycle and ordinary restart-recall acceptance.

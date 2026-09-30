@@ -10,6 +10,8 @@ import { makeTurnJournal } from '../src/turn-journal.js';
 import { encodeJournalTranscript } from '../src/journal-transcript.js';
 import { transcriptToProviderMessages } from '../src/transcript-projection.js';
 
+/** @import {TranscriptNativeContext} from '@endo/hosted-agent/transcript-records.js' */
+
 const message = content => ({ kind: 'message', role: 'assistant', content });
 const checkpoint = summary => ({
   kind: 'compaction',
@@ -35,6 +37,12 @@ const turn = (turnId, records, extra = {}) => ({
 });
 const noRead = async () => {
   throw Error('Unexpected content hydration');
+};
+
+/** @param {ReturnType<typeof pairToolCalls>['pairs'][number]} pair */
+const resultContent = pair => {
+  if (!pair.result) throw Error('Expected a paired tool result');
+  return pair.result.content;
 };
 
 const nativeCheckpoint = () => ({
@@ -310,14 +318,16 @@ test('an unsafe checkpoint turn resumes portably with its uncovered evidence', a
   );
 });
 
-for (const [label, tool, expected] of [
+/** @type {Array<[string, {settled: boolean, result?: string, resultSequence?: string}, RegExp]>} */
+const fallbackCases = [
   [
     'host-settled result',
     { settled: true, result: 'host result', resultSequence: '13' },
     /host result/,
   ],
   ['unsettled call', { settled: false }, /outcome unknown/i],
-]) {
+];
+for (const [label, tool, expected] of fallbackCases) {
   test(`a checkpoint turn's ${label} before the checkpoint stays paired in the fallback`, async t => {
     const native = nativeCheckpoint();
     const selected = await projectContextTranscript(
@@ -402,6 +412,7 @@ test('native context remains atomic with its suffix and refuses direct-provider 
 });
 
 test('opaque Codex context needs no portable projection but cannot conceal tool evidence', async t => {
+  /** @type {TranscriptNativeContext} */
   const native = {
     kind: 'native-context',
     format: 'codex-rollout-v1',
@@ -588,10 +599,10 @@ test('settled canonical prior calls are summarized but unresolved and unmatched 
     ['unfinished', 'hostOnly'],
   );
   t.regex(
-    pairs[0].result.content,
+    resultContent(pairs[0]),
     /outcome unknown; do not automatically retry/,
   );
-  t.is(pairs[1].result.content, 'host effect');
+  t.is(resultContent(pairs[1]), 'host effect');
   t.true(
     projected.some(
       record =>
@@ -625,10 +636,7 @@ test('same native IDs in different old turns retain independent late settlements
     noRead,
   );
   const { pairs } = pairToolCalls(projected);
-  t.deepEqual(
-    pairs.map(pair => pair.result.content),
-    ['first', 'second'],
-  );
+  t.deepEqual(pairs.map(resultContent), ['first', 'second']);
   t.not(pairs[0].call.id, pairs[1].call.id);
 });
 
@@ -667,8 +675,8 @@ test('mixed old pairs preserve only late canonical results and unresolved calls'
     pairs.map(pair => pair.call.name),
     ['late', 'unfinished'],
   );
-  t.is(pairs[0].result.content, 'after');
-  t.regex(pairs[1].result.content, /outcome unknown/);
+  t.is(resultContent(pairs[0]), 'after');
+  t.regex(resultContent(pairs[1]), /outcome unknown/);
 });
 
 test('recovered context IDs cannot alias a retained native call', async t => {
@@ -687,8 +695,8 @@ test('recovered context IDs cannot alias a retained native call', async t => {
   const { pairs } = pairToolCalls(projected);
   t.is(pairs.length, 2);
   t.not(pairs[0].call.id, pairs[1].call.id);
-  t.is(pairs[0].result.content, 'retained result');
-  t.regex(pairs[1].result.content, /outcome unknown/);
+  t.is(resultContent(pairs[0]), 'retained result');
+  t.regex(resultContent(pairs[1]), /outcome unknown/);
 });
 
 test('real journal late old-turn settlement survives subsequent archive publication and revival', async t => {
@@ -748,7 +756,7 @@ test('real journal late old-turn settlement survives subsequent archive publicat
   );
   const { pairs } = pairToolCalls(projected);
   t.is(pairs.length, 1);
-  t.is(pairs[0].result.content, 'late effect');
+  t.is(resultContent(pairs[0]), 'late effect');
   t.is(projected[0].summary, 'durable summary');
   t.deepEqual(await readContextTranscript(revived), projected);
 });
@@ -807,13 +815,13 @@ test('indexed reader pins one cut across publication and late settlement during 
   t.deepEqual(cursors, ['0:2', '1:2']);
   t.is(first[0].summary, 'old summary');
   t.true(first.some(record => record.content === 'after checkpoint'));
-  t.regex(pairToolCalls(first).pairs[0].result.content, /outcome unknown/);
+  t.regex(resultContent(pairToolCalls(first).pairs[0]), /outcome unknown/);
   t.false(JSON.stringify(first).includes('new settlement'));
   const second = await readContextTranscript(journal);
   t.is(views, 2);
   t.deepEqual(cursors.slice(2), ['0:3', '1:3', '2:3']);
   t.is(second[0].summary, 'new summary');
-  t.is(pairToolCalls(second).pairs[0].result.content, 'new settlement');
+  t.is(resultContent(pairToolCalls(second).pairs[0]), 'new settlement');
   t.false(second.some(record => record.content === 'after checkpoint'));
 });
 

@@ -204,7 +204,10 @@ test('a session pinned to a subscription says so, and the backend is told', asyn
   t.is((await E(pinned).getInfo()).subscription, 'home');
   await world.promptOf(pinned);
   const { id } = await E(pinned).getInfo();
-  t.is(world.specs.find(spec => spec.sessionId === id).subscription, 'home');
+  t.like(
+    world.specs.find(spec => spec.sessionId === id),
+    { subscription: 'home' },
+  );
   const listed = (await E(world.factory).listSessions()).find(
     session => session.id === id,
   );
@@ -224,7 +227,9 @@ test('auto is the default, and a backend is never sent a field it did not ask fo
     await world.promptOf(session);
     // eslint-disable-next-line no-await-in-loop
     const { id } = await E(session).getInfo();
-    t.false('subscription' in world.specs.find(spec => spec.sessionId === id));
+    const spec = world.specs.find(candidate => candidate.sessionId === id);
+    if (!spec) throw Error('Expected recorded session spec');
+    t.false('subscription' in spec);
   }
 });
 
