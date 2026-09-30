@@ -321,7 +321,7 @@ export const GuestInterface = M.interface('EndoGuest', {
   ).returns(M.promise()),
   // Send a form to a recipient
   form: M.call(
-    NamePathArgumentShape, // recipientName
+    NamePathArgumentShape, // recipientNamePath
     M.string(), // description
     M.arrayOf(M.record()), // fields
   ).returns(M.promise()),
@@ -396,7 +396,7 @@ export const HostInterface = M.interface('EndoHost', {
   deliver: M.call(M.record()).returns(),
   // Send a form to a recipient
   form: M.call(
-    NamePathArgumentShape, // recipientName
+    NamePathArgumentShape, // recipientNamePath
     M.string(), // description
     M.arrayOf(M.record()), // fields
   ).returns(M.promise()),
@@ -607,8 +607,8 @@ export const HostInterface = M.interface('EndoHost', {
     M.record(), // bindings
   )
     .optional(
-      M.or(NamePathArgumentShape, M.undefined()), // workerName
-      NamePathArgumentShape, // resultName
+      M.or(NamePathArgumentShape, M.undefined()), // workerNamePath
+      NamePathArgumentShape, // resultNamePath
     )
     .returns(M.promise()),
   // Submit values for a form

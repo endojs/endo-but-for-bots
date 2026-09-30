@@ -10,12 +10,11 @@ import { E } from '@endo/eventual-send';
  * The slice of a daemon naming hub (`NameHub` / `EndoDirectory` / `EndoHost`)
  * that resolves a pet-name path to its value.
  *
- * The daemon types `lookup`'s single parameter as `string | string[]`, and
- * that union is a footgun: because the one argument accepts *both* a bare name
- * and a whole path array, `E(hub).lookup(...path)` (spread — passes only the
- * first segment) and `E(hub).lookup(path)` (the array) BOTH type-check while
- * behaving differently. The spread form silently drops every segment after the
- * first. Sibling methods on the same hub — `identify(...path)`, `has(...path)`,
+ * `lookup` takes the whole path array as its single parameter, while sibling
+ * methods take the segments spread. `E(hub).lookup(...path)` (spread — passes
+ * only the first segment, a bare string) is the recurring mistake: the daemon
+ * now rejects that bare string at runtime, but an `ERef`-typed hub cannot catch
+ * it at the call site. Sibling methods on the same hub — `identify(...path)`, `has(...path)`,
  * `list(...path)` — genuinely ARE variadic, so the spread habit is trivially
  * copied onto `lookup` by mistake (this exact bug shipped once already).
  *

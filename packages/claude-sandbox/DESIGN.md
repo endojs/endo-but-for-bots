@@ -115,7 +115,7 @@ create paths are therefore mailbox-based and **host-rooted**:
   operator's names are durable). The client is stored under `resultName`.
 
 Delivery dictates rooting: a `reply` / `send` can only attach a cap **by pet
-name** (`Mail.reply(number, strings, edgeNames, petNamesOrPaths)`), so a session
+name** (`Mail.reply(number, strings, edgeNames, petNamePaths)`), so a session
 handed back through the mailbox is necessarily host-rooted — there is no
 caller-held cap to drop. Destroy a session with `E(host).remove(name)`. A
 peer-initiated destroy message — so a peer can tear down its own session without
