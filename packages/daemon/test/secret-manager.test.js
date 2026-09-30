@@ -857,3 +857,11 @@ test('a malformed generation precondition is refused rather than ignored', async
   t.is(new TextDecoder().decode(decodeBase64(after.base64)), canary);
   t.is(after.generation, 1n);
 });
+
+test('directory lookup refuses a bare-string pet name', async t => {
+  const harness = makeHarness();
+  const directory = harness.makeDirectory(harness.makeManager());
+  await t.throwsAsync(() => E(directory).lookup('create'), {
+    message: /a string is not a pet-name path/,
+  });
+});

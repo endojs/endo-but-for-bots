@@ -787,10 +787,10 @@ names: string[] - Path segments (optional, defaults to root).
 Example: list() -> ["index.html", "app.js", "assets"]
 Example: list("assets") -> ["style.css", "logo.png"]
 
-## lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>
+## lookup(namePath) -> Promise<EndoReadable | ReadableTree>
 
-Get the value at a name or path.
-nameOrPath: string | string[] - Name or path segments.
+Get the value at a path.
+namePath: string[] - Path segments; pass an array, not a delimited string.
 Returns EndoReadable for files, ReadableTree for subdirectories.
 Example: lookup(["index.html"]) -> EndoReadable
 Example: lookup(["assets", "style.css"]) -> EndoReadable

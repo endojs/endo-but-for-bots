@@ -583,7 +583,7 @@ export const makeDirectoryMaker = ({
 
     /**
      * Store a formula identifier at a pet name path (internal).
-     * @param {string | string[]} petNamePath
+     * @param {string[]} petNamePath
      * @param {string} id
      */
     const storeIdentifier = async (petNamePath, id) => {
@@ -599,7 +599,7 @@ export const makeDirectoryMaker = ({
 
     /**
      * Store a locator (endo:// URL) at a pet name path.
-     * @param {string | string[]} petNamePath
+     * @param {string[]} petNamePath
      * @param {string} locator
      */
     const storeLocator = async (petNamePath, locator) => {

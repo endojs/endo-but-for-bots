@@ -60,7 +60,6 @@ import { makeSecretManager } from './secret-manager.js';
 import { provideHostToolPowers } from './host-tool-powers.js';
 import { makeRemoteControlProvider } from './remote-control.js';
 import {
-  assertName,
   assertNamePath,
   assertNames,
   assertPetName,
@@ -2780,7 +2779,7 @@ const makeDaemonCore = async (
     let mailHub;
 
     /**
-     * @param {string | string[]} petNameOrPath
+     * @param {string[]} petNameOrPath
      */
     const lookup = petNameOrPath => {
       const namePath = namePathFrom(petNameOrPath);
@@ -2794,7 +2793,7 @@ const makeDaemonCore = async (
       }
       return tailNames.reduce(
         (directory, petName) => E(directory).lookup([petName]),
-        lookup(headName),
+        lookup([headName]),
       );
     };
 
@@ -3195,7 +3194,7 @@ const makeDaemonCore = async (
     }
 
     /**
-     * @param {string | string[]} petNameOrPath
+     * @param {string[]} petNameOrPath
      */
     const lookup = petNameOrPath => {
       const namePath = namePathFrom(petNameOrPath);
@@ -3234,7 +3233,7 @@ const makeDaemonCore = async (
       }
       return tailNames.reduce(
         (directory, petName) => E(directory).lookup([petName]),
-        lookup(headName),
+        lookup([headName]),
       );
     };
 
@@ -4559,7 +4558,12 @@ const makeDaemonCore = async (
         /** @type {FormulaIdentifier} */ (
           invitingHandleId ?? legacyInvitingHandleId
         ),
-        /** @type {import('./types.js').NamePath} */ (guestName),
+        // Records minted before pet-name paths became array-only may hold
+        // `guestName` as a bare string; revive them as a one-segment path
+        // rather than refusing stored daemon data.
+        /** @type {import('./types.js').NamePath} */ (
+          typeof guestName === 'string' ? [guestName] : guestName
+        ),
       ),
     timer: async ({ intervalMs, label: timerLabel }, context) => {
       const interval = Number(intervalMs) || 60_000;
@@ -8271,24 +8275,17 @@ const makeDaemonCore = async (
     const petStore = await provideStoreController(petStoreId);
 
     /**
-     * @param {string | readonly string[]} petNameOrPath - The pet name to inspect.
+     * @param {unknown} petNamePath - A one-segment path naming the value to
+     * inspect; `namePathFrom` refuses a bare string.
      * @returns {Promise<KnownEndoInspectors[string]>} An
      * inspector for the value of the given pet name.
      */
-    const lookup = async petNameOrPath => {
-      /** @type {string} */
-      let petName;
-      if (typeof petNameOrPath !== 'string') {
-        if (petNameOrPath.length !== 1) {
-          throw Error(
-            'PetStoreInspector.lookup(path) requires path length of 1',
-          );
-        }
-        petName = petNameOrPath[0];
-      } else {
-        petName = petNameOrPath;
+    const lookup = async petNamePath => {
+      const namePath = namePathFrom(petNamePath);
+      if (namePath.length !== 1) {
+        throw Error('PetStoreInspector.lookup(path) requires path length of 1');
       }
-      assertName(petName);
+      const [petName] = namePath;
       const id = /** @type {FormulaIdentifier | undefined} */ (
         petStore.identifyLocal(petName)
       );

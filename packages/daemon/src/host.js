@@ -58,7 +58,7 @@ const assertPowersName = name => {
  * multi-segment path is validated as a name path by {@link namePathFrom},
  * letting a caller reference powers that live inside a directory rather
  * than at the agent's top level.
- * @param {string | string[]} nameOrPath
+ * @param {string[]} nameOrPath
  */
 const assertPowersNameOrPath = nameOrPath => {
   const namePath = namePathFrom(nameOrPath);
@@ -927,27 +927,27 @@ export const makeHostMaker = ({
     /**
      * @overload
      * @param {EndoMount} mountCap
-     * @param {string | string[]} petName
+     * @param {NamePath} petName
      * @param {GitProvisionOptions & {allowHistoryRewrite: true}} options
      * @returns {Promise<HistoryRewriteEndoGit>}
      */
     /**
      * @overload
      * @param {EndoMount} mountCap
-     * @param {string | string[]} petName
+     * @param {NamePath} petName
      * @param {GitProvisionOptions & {allowHistoryRewrite?: false}} [options]
      * @returns {Promise<ReadWriteEndoGit>}
      */
     /**
      * @overload
      * @param {EndoMount} mountCap
-     * @param {string | string[]} petName
+     * @param {NamePath} petName
      * @param {GitProvisionOptions & {allowHistoryRewrite: boolean}} options
      * @returns {Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>}
      */
     /**
      * @param {EndoMount} mountCap
-     * @param {string | string[]} petName
+     * @param {NamePath} petName
      * @param {GitProvisionOptions} [options]
      * @returns {Promise<ReadWriteEndoGit | HistoryRewriteEndoGit>}
      */
@@ -1415,7 +1415,7 @@ export const makeHostMaker = ({
      * @param {NamePath | undefined} workerName
      * @param {string} source
      * @param {Array<string>} codeNames
-     * @param {(string | string[])[]} petNamePaths
+     * @param {NamePath[]} petNamePaths
      * @param {NamePath | undefined} resultName
      */
     const evaluate = async (
@@ -1498,7 +1498,7 @@ export const makeHostMaker = ({
      */
     const prepareMakeCaplet = async (workerName, options = {}) => {
       const {
-        powersName = '@none',
+        powersName = ['@none'],
         resultName,
         env = {},
         workerTrustedShims,
@@ -1721,7 +1721,7 @@ export const makeHostMaker = ({
      * the id with `getScratchMountPath`.  The public `stageTree`
      * surface exposes only the mount capability.
      *
-     * @param {string | string[]} treeName
+     * @param {string[]} treeName
      * @param {NamePath} scratchPetName
      */
     const stageTreeInternal = async (treeName, scratchPetName) => {

@@ -3252,3 +3252,21 @@ test.serial('getMember(memberId) returns member info', async t => {
     'getMember should return undefined for unknown memberId',
   );
 });
+
+test.serial(
+  'post refuses a bare-string pet name with a retry hint',
+  async t => {
+    const { host } = await prepareHost(t);
+    await E(host).provideHost(['string-space'], {
+      agentName: ['persona-for-string-space'],
+    });
+    const personaPowers = await E(host).lookup(['persona-for-string-space']);
+    await E(personaPowers).makeChannel(['general'], 'Alice');
+    const channel = await E(personaPowers).lookup(['general']);
+    await t.throwsAsync(
+      E(/** @type {any} */ (channel)).post(['Hi ', ''], ['x'], ['counter']),
+      { message: /a string is not a pet-name path.*\["counter"\]/ },
+    );
+    t.is((await E(channel).listMessages()).length, 0);
+  },
+);

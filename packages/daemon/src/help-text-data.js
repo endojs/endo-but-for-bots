@@ -239,7 +239,7 @@ export const helpTextEntries = harden([
       has: 'has(...names) -> Promise<boolean>\nCheck if an entry exists at the given path.\nnames: string[] - Path segments.\nExample: has("index.html") -> true\nExample: has("assets", "style.css") -> true',
       list: 'list(...names) -> Promise<string[]>\nList entry names at the given path (or root).\nnames: string[] - Path segments (optional, defaults to root).\nExample: list() -> ["index.html", "app.js", "assets"]\nExample: list("assets") -> ["style.css", "logo.png"]',
       lookup:
-        'lookup(nameOrPath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a name or path.\nnameOrPath: string | string[] - Name or path segments.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup(["index.html"]) -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
+        'lookup(namePath) -> Promise<EndoReadable | ReadableTree>\nGet the value at a path.\nnamePath: string[] - Path segments; pass an array, not a delimited string.\nReturns EndoReadable for files, ReadableTree for subdirectories.\nExample: lookup(["index.html"]) -> EndoReadable\nExample: lookup(["assets", "style.css"]) -> EndoReadable',
     },
   ],
   [

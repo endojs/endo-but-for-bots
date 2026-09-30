@@ -666,9 +666,11 @@ export type InvitationFormula = {
    * pending invitation. Deliberately NOT renamed to `correspondentName`
    * alongside the `EndoHost.accept`/`EndoGuest.accept` and CLI rename: this is a
    * persisted on-disk field, so renaming it would be a stored-record schema
-   * change. The concept it names is the correspondent's pet name.
+   * change. The concept it names is the correspondent's pet name. Records
+   * minted before pet-name paths became array-only may hold a bare string,
+   * which the maker revives as a one-segment path.
    */
-  guestName: NamePath;
+  guestName: NamePath | string;
   /**
    * @deprecated Legacy field name for {@link invitingAgent}, persisted by
    * records minted before the `hostAgent`/`hostHandle` ->

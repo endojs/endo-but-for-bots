@@ -2592,6 +2592,16 @@ testNeedsNodeWorker('@pins values survive collection', async t => {
   t.is(await E(pinnedCounter).incr(), 2);
 });
 
+testNeedsNodeWorker('makeUnconfined defaults powersName to @none', async t => {
+  const { host } = await prepareHost(t);
+  const counterPath = path.join(dirname, 'test', 'counter.js');
+  const counterLocation = url.pathToFileURL(counterPath).href;
+  const counter = await E(host).makeUnconfined(['@main'], counterLocation, {
+    resultName: ['default-powers-counter'],
+  });
+  t.is(await E(counter).incr(), 1);
+});
+
 testNeedsNodeWorker('@pins values reincarnate after cancellation', async t => {
   const { cancelled, config } = await prepareConfig(t, { gcEnabled: true });
   const { host } = await makeHost(config, cancelled);

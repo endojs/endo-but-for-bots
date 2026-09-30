@@ -12,7 +12,7 @@ import {
   SecretImporterInterface,
   SecretManagerDirectoryInterface,
 } from './interfaces.js';
-import { assertPetName } from './pet-name.js';
+import { assertPetName, namePathFrom } from './pet-name.js';
 
 /** @import { SecretAdmin, SecretAuditEvent, SecretBlob, SecretRecord, SecretSummary } from './types.js' */
 
@@ -639,7 +639,7 @@ export const makeSecretManager = ({
     });
 
     const lookup = async path => {
-      const names = Array.isArray(path) ? path : [path];
+      const names = namePathFrom(path);
       if (names.length === 1 && names[0] === 'create') return importer;
       if (names.length === 1 && names[0] === 'catalog') return catalog;
       if (names.length === 1 && names[0] === 'audit') return auditReader;

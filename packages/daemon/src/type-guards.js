@@ -28,8 +28,10 @@ harden(NamePathShape);
 /**
  * A pet-name path argument on the daemon's Exo surface.
  *
- * Only an array of path components is a valid pet-name path. A bare string is
- * refused, not coerced to a one-segment path: these methods are primarily
+ * This guard admits both an array of path components and a bare string, but
+ * only the array is a valid pet-name path: every method using this guard must
+ * pass the argument through `namePathFrom`, which refuses the string rather
+ * than coercing it to a one-segment path. These methods are primarily
  * geared toward agents, and a string invites confusion about whether it may be
  * a delimited path and what the delimiter would be in the virtual file (and
  * other capability) systems. The guard admits a string solely so that
