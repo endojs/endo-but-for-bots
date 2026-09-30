@@ -929,9 +929,9 @@ harden(isEncodedRemotable);
  * prefix used by any cover so that ordinal mapping keys are always outside
  * the range of valid collection entry keys.
  *
- * `sturdyRef` has no prefix yet: marshal gives SturdyRefs a representation
- * in a later layer, and until then encoding one throws as an unexpected
- * pass style.
+ * `sturdyRef` has no prefix: until marshal gives SturdyRefs a
+ * representation, encoding one throws as an unexpected pass style, and
+ * rank-ordering one throws as an unordered pass style.
  */
 export const passStylePrefixes = {
   error: '!',
