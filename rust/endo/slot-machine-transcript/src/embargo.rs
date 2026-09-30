@@ -32,7 +32,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use crate::{CrankId, ReleasableFrame, Seq, Transcript, TranscriptError};
+use crate::{CrankId, ReleasableFrame, Sequence, Transcript, TranscriptError};
 
 /// How the crank ended, as the supervisor's commit decision reads it: the
 /// three arms of the engine's `ExecutionOutcome`, without its reasons.
@@ -43,8 +43,13 @@ pub enum CrankVerdict {
     /// rejection is itself a committed outbound frame (§ Open Questions, "Should an
     /// uncaught `Throw`").
     Quiesced,
-    /// A throw escaped every handler of the delivery. Discard and
-    /// terminate; not placed on the restore-and-replay path.
+    /// A throw escaped every handler of the delivery. Discard; not placed
+    /// on the restore-and-replay path. The discard holds under either
+    /// answer to the design's open question (§ Open Questions, "Should an
+    /// uncaught `Throw`"; the embargo table discards `Uncaught` outbound
+    /// "either way"). Whether the worker then terminates or continues its
+    /// incarnation is that open question, and the supervisor's to decide,
+    /// not this crate's.
     Uncaught,
     /// The run terminated uncatchably. Discard and terminate; the crank is
     /// eligible for the retry policy.
@@ -72,6 +77,11 @@ impl CrankVerdict {
 /// The transport, reduced to what release needs. An error means the frame
 /// was not handed off; it stays queued and a later [`Embargo::pump`]
 /// retries it, still in sequence order.
+///
+/// A transport must preserve that order to the receiver: a
+/// [`DuplicateSuppressor`] keeps only a per-worker high-water mark, so a
+/// frame arriving after a higher sequence from the same worker is
+/// classified as a duplicate and dropped.
 pub trait FrameSink {
     /// The transport's error.
     type Error: std::fmt::Debug;
@@ -89,7 +99,7 @@ pub enum Settlement<E> {
     /// any.
     Committed {
         crank: CrankId,
-        released: Vec<Seq>,
+        released: Vec<Sequence>,
         blocked: Option<E>,
     },
     /// The crank's staged frames were discarded and it is recorded aborted.
@@ -145,7 +155,7 @@ impl<S: FrameSink> Embargo<S> {
     }
 
     /// Sequences committed but not yet handed to the sink.
-    pub fn queued(&self) -> Vec<Seq> {
+    pub fn queued(&self) -> Vec<Sequence> {
         self.queue.iter().map(|f| f.seq).collect()
     }
 
@@ -204,7 +214,7 @@ impl<S: FrameSink> Embargo<S> {
     /// at the first sink error. Returns the sequences handed off and the
     /// error, if any. Their acknowledgment rides the transcript's next
     /// transaction (or [`Embargo::flush_acks`]).
-    pub fn pump(&mut self) -> (Vec<Seq>, Option<S::Error>) {
+    pub fn pump(&mut self) -> (Vec<Sequence>, Option<S::Error>) {
         let mut released = Vec::new();
         let mut blocked = None;
         while let Some(frame) = self.queue.front() {
@@ -259,7 +269,7 @@ pub enum Received {
 /// it delivered, and restores them with [`DuplicateSuppressor::with_watermarks`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DuplicateSuppressor {
-    highest: BTreeMap<String, Seq>,
+    highest: BTreeMap<String, Sequence>,
 }
 
 impl DuplicateSuppressor {
@@ -270,7 +280,7 @@ impl DuplicateSuppressor {
 
     /// Restore a receiver from persisted high-water marks.
     pub fn with_watermarks(
-        watermarks: impl IntoIterator<Item = (String, Seq)>,
+        watermarks: impl IntoIterator<Item = (String, Sequence)>,
     ) -> DuplicateSuppressor {
         DuplicateSuppressor {
             highest: watermarks.into_iter().collect(),
@@ -278,12 +288,14 @@ impl DuplicateSuppressor {
     }
 
     /// The highest delivered sequence per worker.
-    pub fn watermarks(&self) -> &BTreeMap<String, Seq> {
+    pub fn watermarks(&self) -> &BTreeMap<String, Sequence> {
         &self.highest
     }
 
     /// Classify `seq` from `worker`, advancing the mark when it is fresh.
-    pub fn receive_seq(&mut self, worker: &str, seq: Seq) -> Received {
+    /// Assumes in-order delivery per worker (see [`FrameSink`]): any `seq`
+    /// at or below the mark is a duplicate.
+    pub fn receive_seq(&mut self, worker: &str, seq: Sequence) -> Received {
         match self.highest.get_mut(worker) {
             Some(highest) if seq <= *highest => Received::Duplicate,
             Some(highest) => {
@@ -300,7 +312,7 @@ impl DuplicateSuppressor {
     /// Classify a released frame by its idempotency key (`<worker>:<seq>`).
     pub fn receive(&mut self, frame: &ReleasableFrame) -> Received {
         match frame.idempotency_key.rsplit_once(':') {
-            Some((worker, seq)) if seq.parse::<Seq>().ok() == Some(frame.seq) => {
+            Some((worker, seq)) if seq.parse::<Sequence>().ok() == Some(frame.seq) => {
                 self.receive_seq(worker, frame.seq)
             }
             _ => Received::Malformed,

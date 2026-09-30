@@ -162,29 +162,29 @@ impl FaultPlan {
 
     /// Count one operation and decide its fate.
     pub(crate) fn decide(&self, label: &str, is_write: bool, is_sync: bool) -> Decision {
-        let mut st = self.lock();
-        if st.dead {
+        let mut state = self.lock();
+        if state.dead {
             return Decision::Fail;
         }
-        st.count += 1;
-        st.log.push(label.to_string());
+        state.count += 1;
+        state.log.push(label.to_string());
         if is_sync {
-            st.syncs += 1;
+            state.syncs += 1;
         }
-        let Some((n, mode)) = st.trigger else {
+        let Some((n, mode)) = state.trigger else {
             return Decision::Proceed;
         };
-        if st.count != n {
+        if state.count != n {
             return Decision::Proceed;
         }
-        st.fired = true;
+        state.fired = true;
         match mode {
             FaultMode::Crash => {
-                st.dead = true;
+                state.dead = true;
                 Decision::Fail
             }
             FaultMode::TornWrite => {
-                st.dead = true;
+                state.dead = true;
                 if is_write {
                     Decision::Tear
                 } else {
@@ -569,14 +569,14 @@ unsafe extern "C" fn io_device_characteristics(file: *mut ffi::sqlite3_file) -> 
 
 unsafe extern "C" fn io_shm_map(
     file: *mut ffi::sqlite3_file,
-    pg: c_int,
-    pgsz: c_int,
+    page: c_int,
+    page_size: c_int,
     extend: c_int,
     out: *mut *mut c_void,
 ) -> c_int {
     let (_, real, m) = parts(file);
     match m.xShmMap {
-        Some(f) => f(real, pg, pgsz, extend, out),
+        Some(f) => f(real, page, page_size, extend, out),
         None => ffi::SQLITE_IOERR,
     }
 }

@@ -629,12 +629,12 @@ fn host_call_refuses_an_unknown_callback_and_a_call_outside_a_crank() {
 /// A transactional effect: append the request to a local table.
 fn put_row(request: &[u8]) -> TransactionalWrite {
     let request = request.to_vec();
-    Box::new(move |tx| {
-        tx.execute(
+    Box::new(move |transaction| {
+        transaction.execute(
             "CREATE TABLE IF NOT EXISTS applied (request BLOB NOT NULL) STRICT",
             [],
         )?;
-        tx.execute("INSERT INTO applied (request) VALUES (?1)", [&request])?;
+        transaction.execute("INSERT INTO applied (request) VALUES (?1)", [&request])?;
         Ok(())
     })
 }
@@ -892,6 +892,56 @@ fn pure_callback_reporting_a_handle_effect_is_refused() {
             opened: None
         })
     );
+    // The escaped resource is in the handle log as broken, so recovery
+    // stops on it even though the crank never commits.
+    t.abort_crank().unwrap();
+    let handles = t.open_handles().unwrap();
+    assert_eq!(handles.len(), 1);
+    assert!(handles[0].broken);
+    assert_eq!(
+        t.recovery_gate().unwrap(),
+        Err(RecoveryStop::BrokenHandles(vec![handles[0].handle]))
+    );
+}
+
+#[test]
+fn a_reply_past_the_byte_bound_is_refused_and_its_handle_recorded_broken() {
+    let root = tempfile::tempdir().unwrap();
+    let callbacks = callbacks();
+    let mut config = TranscriptConfig::new("w");
+    config.limits.max_host_bytes = 8;
+    let cas = ContentAddressedStore::open(root.path().join("cas")).unwrap();
+    let (mut t, _) = Transcript::open(root.path().join("t.sqlite"), config).unwrap();
+    t.publish_snapshot(&cas, b"heap-0", meta()).unwrap();
+    t.begin_crank(b"d1").unwrap();
+    // The only call in the crank: its request fits, its reply does not.
+    assert!(matches!(
+        t.host_call(&callbacks, "now", None, b"a", |_| reply(&[0; 8])),
+        Err(HostCallError::Transcript(TranscriptError::Backpressure(_)))
+    ));
+    assert!(matches!(
+        t.host_call(&callbacks, "open-file", None, b"b", |_| {
+            opens(&[0; 8], Some(b"cap:/a.txt@0"))
+        }),
+        Err(HostCallError::Transcript(TranscriptError::Backpressure(_)))
+    ));
+    // A reply that fits is still staged.
+    t.host_call(&callbacks, "now", None, b"c", |_| reply(b"1234567"))
+        .unwrap();
+    t.commit_crank().unwrap();
+    let handles = t.open_handles().unwrap();
+    assert_eq!(handles.len(), 1);
+    assert!(handles[0].broken);
+}
+
+#[test]
+fn registering_a_callback_again_replaces_its_classification() {
+    let callbacks = CallbackRegistry::new()
+        .classify("now", HostClass::Pure)
+        .classify("now", HostClass::Read)
+        .admit(true)
+        .unwrap();
+    assert_eq!(callbacks.class("now"), Some(HostClass::Read));
 }
 
 #[test]
