@@ -1,7 +1,14 @@
 // @ts-check
 import { Far } from '@endo/far';
 import test from '@endo/ses-ava/test.js';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 
 import {
@@ -44,6 +51,20 @@ test.serial(
     t.true(released);
     t.false(started);
     t.is(await readFile(join(path, 'workspace.json'), 'utf8'), metadata);
+  },
+);
+test.serial(
+  'a state directory whose socket paths cannot be bound is refused before it is created',
+  async t => {
+    t.timeout(5000);
+    const base = await mkdtemp('/tmp/thix-long-');
+    t.teardown(() => rm(base, { recursive: true, force: true }));
+    // sun_path allows 103 bytes; this path alone is longer than that.
+    const path = join(base, 'x'.repeat(120));
+    await t.throwsAsync(() => serveThixotrope(nodePowers, path), {
+      message: /Socket path exceeds 103 bytes/,
+    });
+    await t.throwsAsync(() => stat(path), { code: 'ENOENT' });
   },
 );
 const controlPowers = {

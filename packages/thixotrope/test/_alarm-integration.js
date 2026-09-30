@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
-import { bundleApplication } from '../src/control/bundle-application.js';
 import { connectLocalControl } from '../src/control/local-control.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
@@ -60,8 +59,7 @@ export const registerAlarmIntegration = (test, kind) => {
         ),
         'false',
       );
-      const { bundle } = await bundleApplication(
-        nodePowers.bundler,
+      const { bundle } = await nodePowers.bundler.bundle(
         fileURLToPath(new URL('../examples/reminder.js', import.meta.url)),
       );
       await host.client.call('install', 'reminders', bundle, [
@@ -93,7 +91,8 @@ export const registerAlarmIntegration = (test, kind) => {
           // while waiting for the overdue alarm dispatch acknowledgment.
           // eslint-disable-next-line no-await-in-loop
           const status = await host.client.call('alarmStatus');
-          if (status.pending === 0 && status.observations === 0) return;
+          // Delivered and acknowledged: the table holds no row at all.
+          if (status.pending === 0 && status.retained === 0) return;
           // eslint-disable-next-line no-await-in-loop
           await setTimeout(30);
         }

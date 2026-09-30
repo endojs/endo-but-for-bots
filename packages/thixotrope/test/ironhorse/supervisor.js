@@ -15,7 +15,6 @@ import {
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { bundleApplication } from '../../src/control/bundle-application.js';
 import { connectLocalControl } from '../../src/control/local-control.js';
 
 import { makeNodePowers } from '../../src/platform/node/powers.js';
@@ -609,10 +608,7 @@ test.serial(
       'evaluate',
       "inventory.set('counter', Far('GrantedCounter', { read: () => 42n })); undefined",
     );
-    const { bundle, digest } = await bundleApplication(
-      nodePowers.bundler,
-      file,
-    );
+    const { bundle, digest } = await nodePowers.bundler.bundle(file);
     const installed = await admin.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);

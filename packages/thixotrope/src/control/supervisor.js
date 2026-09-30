@@ -63,7 +63,7 @@ import {
 } from '../net/unix-netlayer.js';
 
 /** @import { WorkerEngine } from '../core/worker-engine.js' */
-/** @import { SocketConnection } from '../platform/sockets.js' */
+/** @import { SocketConnection, SocketListener } from '../platform/sockets.js' */
 
 // The shape of what the supervisor keeps in the workspace vat's heap. Guest
 // closures the supervisor ships (the inventory, the registries, the clock,
@@ -74,6 +74,15 @@ import {
 // address book introduces contacts through the `mail-introductions` resource
 // and its inbox and outbox are observable.
 const WORKSPACE_VERSION = 5;
+
+// sun_path on the strictest supported platform: 104 bytes including the NUL.
+const MAX_SOCKET_PATH_BYTES = 103;
+// A stuck installation cannot block `stop`: installations are resumable, so
+// shutdown waits this long for an accepted one and then proceeds. This bounds
+// the host-side phases (describing and bundling the package, booting the
+// manager); a delivery stalled inside the workspace vat is bounded by the
+// engine's request timeout, as every other delivery is.
+const INSTALL_DRAIN_MS = 10_000;
 
 /**
  * @param {FilePowers} files
@@ -111,6 +120,20 @@ export const serveThixotrope = async (
   const log = logging.sub('thixotrope', 'supervisor');
   const randomId = () => randomHex128(random);
   statePath = paths.resolve(statePath);
+  const socketPath = paths.join(statePath, 'control.sock');
+  const peerPath = paths.join(statePath, 'peers.sock');
+  // A Unix socket path is bounded by sun_path (104 bytes with its NUL on the
+  // strictest platform). The peer path is checked again by every peer that
+  // dials it; the control path is only ever bound here, so this is its one
+  // check. Both are refused before the state directory is created, so a
+  // path that can never serve leaves nothing behind.
+  for (const path of [socketPath, peerPath]) {
+    if (new TextEncoder().encode(path).length > MAX_SOCKET_PATH_BYTES) {
+      throw Error(
+        `Socket path exceeds ${MAX_SOCKET_PATH_BYTES} bytes; use a shorter state directory: ${path}`,
+      );
+    }
+  }
   await files.makeDirectory(statePath, { mode: 0o700 });
   const stat = await files.stat(statePath);
   if (stat.kind !== 'directory' || !(await files.isPrivateToUser(statePath))) {
@@ -118,8 +141,6 @@ export const serveThixotrope = async (
       'The state directory must be a private directory owned by this user (mode 0700).',
     );
   }
-  const socketPath = paths.join(statePath, 'control.sock');
-  const peerPath = paths.join(statePath, 'peers.sock');
   const packagePath = paths.fileURLToPath(new URL('../../', import.meta.url));
   const ironhorseLimits = engine ? undefined : readIronhorseLimits(environment);
   const rawEngine =
@@ -140,8 +161,7 @@ export const serveThixotrope = async (
         storePath: paths.join(statePath, 'heaps'),
       },
     );
-  const acquireStore = rawEngine.acquireStore;
-  if (!acquireStore)
+  if (!rawEngine.acquireStore)
     throw Error('Supervisor requires exclusive store ownership support');
   const configPath = paths.join(statePath, 'workspace.json');
   let config;
@@ -166,26 +186,6 @@ export const serveThixotrope = async (
   };
   const measured = harden({
     ...rawEngine,
-    acquireStore: async path => {
-      const release = await acquireStore(path);
-      try {
-        try {
-          config = JSON.parse(await files.readText(configPath));
-        } catch (error) {
-          if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
-            throw error;
-        }
-        if (config !== undefined && config.version !== WORKSPACE_VERSION) {
-          throw Error(
-            `Incompatible workspace metadata: this build requires version ${WORKSPACE_VERSION}; migrate or use a fresh state directory`,
-          );
-        }
-        return release;
-      } catch (error) {
-        await release();
-        throw error;
-      }
-    },
     start: async options => {
       const worker = await timed('wake', () => rawEngine.start(options));
       return harden({
@@ -211,7 +211,7 @@ export const serveThixotrope = async (
   const pendingDisconnects = makeInFlight();
   /** @type {Map<SocketConnection, () => Promise<void>>} */
   const disconnectViews = new Map();
-  /** @type {import('../platform/sockets.js').SocketListener | undefined} */
+  /** @type {SocketListener | undefined} */
   let controlListener;
   let listening = false;
   let requested = false;
@@ -281,6 +281,24 @@ export const serveThixotrope = async (
         nativeWorkers: platform.nativeWorkers,
         codec: syrupCodec,
         idleSleepMs,
+        validateState: async () => {
+          try {
+            config = JSON.parse(await files.readText(configPath));
+          } catch (error) {
+            if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
+              throw error;
+          }
+          if (config !== undefined && config.version !== WORKSPACE_VERSION) {
+            throw Error(
+              `Incompatible workspace metadata: this build requires version ${WORKSPACE_VERSION}; migrate or use a fresh state directory`,
+            );
+          }
+        },
+        // Re-arm the host timer from the durable table once every worker
+        // session is seated and before any vat is notified, so an alarm
+        // already past its deadline settles as part of startup, with its
+        // listener seated, rather than at some later point after it.
+        beforeStartNotices: () => alarms.start(),
         onRetireWorker: workerId => {
           alarms.retireWorker(workerId);
         },
@@ -325,11 +343,6 @@ export const serveThixotrope = async (
         },
       },
     );
-
-    // Arm the host timer from the durable table, now that every worker session
-    // is seated: an alarm already past its deadline settles immediately, and
-    // its listener must have somewhere to arrive.
-    alarms.start();
 
     if (config === undefined) {
       // createWorker records the label with its id. Recover that allocation
@@ -462,7 +475,8 @@ export const serveThixotrope = async (
 
     let installingNative = Promise.resolve();
     const adminMethods = {
-      help: () => 'Local supervisor: evaluate(source), status(), stop().',
+      help: () =>
+        'Local supervisor: evaluate(source), status(), stop(), install(name, bundle, grants), applications(), installNative(name, directory), clockGrant(key), alarmStatus(), reachability(), collect(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id); each connection also has watchInventory(listener).',
       evaluate: async source => {
         if (requested) throw Error('Supervisor is stopping');
         if (typeof source !== 'string')
@@ -491,6 +505,10 @@ export const serveThixotrope = async (
       },
       install: async (name, bundle, grants) => {
         if (requested) throw Error('Supervisor is stopping');
+        if (applications === undefined)
+          throw Error(
+            'The workspace vat is quarantined; repair it before installing',
+          );
         if (typeof bundle !== 'string') throw Error('Expected module bundle');
         // Keep decoding and forwarding below the current guest crank budget.
         // This is a conservative admission profile, not a JS source-size limit.
@@ -508,7 +526,11 @@ export const serveThixotrope = async (
           entry => entry.name === name,
         );
       },
-      applications: () => E(applications).list(),
+      applications: () => {
+        if (applications === undefined)
+          throw Error('The workspace vat is quarantined; repair it first');
+        return E(applications).list();
+      },
       reachability: () => daemon.inspectReachability(),
       // An allocation has no guest root until its facade reaches the registry.
       // Serialize collection with installations across that short boundary.
@@ -520,10 +542,18 @@ export const serveThixotrope = async (
         );
         return collecting;
       },
-      inventoryStatus: () => E(inventory).subscriptionCounts(),
+      inventoryStatus: () => {
+        if (inventory === undefined)
+          throw Error('The workspace vat is quarantined; repair it first');
+        return E(inventory).subscriptionCounts();
+      },
       installNative: (name, directory) => {
         const installing = installingNative.then(async () => {
           if (requested) throw Error('Supervisor is stopping');
+          if (inventory === undefined)
+            throw Error(
+              'The workspace vat is quarantined; repair it before installing',
+            );
           if (typeof directory !== 'string')
             throw Error('Expected a native resource directory');
           const description = await describeNativePackage(
@@ -581,12 +611,13 @@ export const serveThixotrope = async (
       },
       alarmStatus: () => {
         const status = alarms.status();
+        // Plain numbers: the CLI prints this record as JSON, and each count
+        // is bounded by the alarm table's row limit. `pending` rows are still
+        // armed; `retained` counts every row the table holds, armed or
+        // settled and awaiting the clock's acknowledgement.
         return harden({
-          // `pending` is the host's durable row count. There are no host
-          // observations any more — nothing calls into the clock — so the
-          // count that used to track them is reported as the zero it now is.
           pending: Number(status.armed),
-          observations: 0,
+          retained: Number(status.retained),
           materialised: Number(status.materialised),
           stopped: status.stopped,
         });
@@ -670,7 +701,7 @@ export const serveThixotrope = async (
         // Remove the endpoint while still holding the lease. A successor's
         // socket must never be removed by this process after ownership passes.
         try {
-          await installingNative;
+          await settleWithin(timers, INSTALL_DRAIN_MS, installingNative);
           await closeControl();
         } finally {
           try {

@@ -343,8 +343,10 @@ Pushing policy at bind time is how that is arranged.
 
 So the manager sleeps, and needs exactly one thing — to learn that a new host
 incarnation exists.
-`notifyOnStart(secret)` records a publication in worker meta, and the daemon
-calls `started()` on it at every startup.
+`notifyOnStart(target)` names one of the worker's objects that the daemon
+endpoint holds; the daemon publishes it under a secret only the daemon knows,
+records that publication in worker meta, and calls `started()` on the object at
+every startup.
 
 Two consequences of that being a delivery rather than a flag.
 The delivery *is* the wake, so nothing needs to start the vat separately — which
@@ -354,7 +356,9 @@ sleep is host policy and not a guest lifecycle event.
 And the publication is already a retention root, so a notified vat is retained
 without any rule about pins and collection.
 
-It is send-only.
+It is awaited, within one bound for every notice together: a caller that gets a started daemon
+back may assume what a notified vat re-establishes is in place, while a vat that cannot restore is
+reported rather than allowed to wedge or abort startup.
 A manager that cannot restore its resource is a condition for it to report, not
 a reason to refuse to start the host — and there is no caller at startup to
 receive a rejection.
@@ -381,8 +385,9 @@ Host-side, small and generic:
 - **Ephemeral workers**: a worker whose heap is not a recovery baseline and
   which is retired at the next daemon startup.
 - A durable alarm table offering restorable promise resources.
-- **Start notices**: `notifyOnStart(secret)` on a worker facade, durable in
-  worker meta, delivered send-only at every startup.
+- **Start notices**: `notifyOnStart(target)` on a worker facade, durable in
+  worker meta as a publication only the daemon knows, delivered together
+  under one bound at every startup.
 
 ### Retrying across a break is the caller's decision
 

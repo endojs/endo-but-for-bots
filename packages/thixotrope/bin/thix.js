@@ -5,13 +5,12 @@ import '@endo/init';
 // Node directly; every other host effect goes through `platform`.
 import process from 'node:process';
 
-import { bundleApplication } from '../src/control/bundle-application.js';
 import { connectLocalControl } from '../src/control/local-control.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
 import { showAttach } from '../src/tui/attach-view.js';
 import { showInventory } from '../src/tui/inventory-view.js';
-import { printJson, terminalText } from '../src/tui/terminal-text.js';
 import { showMailbox } from '../src/tui/mailbox-view.js';
+import { printJson, terminalText } from '../src/tui/terminal-text.js';
 
 import { makeNodePowers } from '../src/platform/node/powers.js';
 
@@ -129,10 +128,9 @@ try {
           if (separator < 1) throw Error('Expected power=inventory-key');
           return [grant.slice(0, separator), grant.slice(separator + 1)];
         });
-        const { bundle } = await bundleApplication(
-          platform.bundler,
-          modulePath,
-        );
+        // Bundled locally; only the guest runs it. The supervisor recomputes
+        // the digest at its own boundary rather than trusting this one.
+        const { bundle } = await platform.bundler.bundle(modulePath);
         logging.log(
           JSON.stringify(
             await client.call('install', name, bundle, grants),
