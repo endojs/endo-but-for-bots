@@ -104,6 +104,28 @@ test('a SturdyRef minted without a client refuses to enliven', async t => {
   });
 });
 
+test('the public SturdyRef mint takes no custom enliven', async t => {
+  const location = harden({
+    type: /** @type {const} */ ('ocapn-peer'),
+    network: 'tcp-test',
+    transport: 'tcp',
+    designator: '127.0.0.1:9999',
+    hints: /** @type {const} */ (false),
+  });
+  // A caller-supplied enliven could resolve to something other than the
+  // (location, secret) the codec writes, so the public mint ignores it.
+  const decoy = Far('decoy', {});
+  const sturdyRef = /** @type {any} */ (makeSturdyRef)(
+    location,
+    'a-secret',
+    async () => decoy,
+  );
+  t.deepEqual(getSturdyRefDetails(sturdyRef), { location, secret: 'a-secret' });
+  await t.throwsAsync(() => SturdyRef.enliven(sturdyRef), {
+    message: /minted without an OCapN client/,
+  });
+});
+
 test('a foreign realm SturdyRef is not an OCapN SturdyRef', t => {
   const foreign = /** @type {any} */ (
     new SturdyRef({ enliven: () => 'elsewhere' })
