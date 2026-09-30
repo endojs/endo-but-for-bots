@@ -21,19 +21,38 @@
  * the hook of a ref the caller already holds. The shim therefore takes no
  * position on whether child compartments see it; that is SES's decision.
  *
- * The constructor, its prototype, and every ref are hardened by
- * `@endo/harden`. Because hardening must happen after `lockdown` when
- * `lockdown` will be called, installation is LAZY: nothing is installed or
- * hardened at import time. The first call to `provideSturdyRef()` performs
- * the race-to-install. The eager `@endo/sturdyref/shim.js` entry, meant to be
- * imported in a lockdown bootstrap AFTER `lockdown()`, simply forces that
- * first call.
+ * Installation may happen before or after `lockdown`, like the
+ * `HandledPromise` shim. The constructor must never call `@endo/harden` before
+ * `lockdown`: doing so installs `Object[@harden]`, after which `lockdown`
+ * refuses to run. So the constructor is hardened with `@endo/harden` only
+ * when a harden is already present (`lockdown` has run, or another library
+ * already installed one). Otherwise the constructor, its prototype, and its
+ * statics are merely frozen, and `lockdown` hardens them later along with
+ * every other intrinsic. Installing before `lockdown` is what lets SES admit
+ * `SturdyRef` at `repairIntrinsics` time and share it with child
+ * compartments. Every ref is frozen at construction either way.
+ *
+ * Installation is still LAZY: nothing is installed at import time. The first
+ * call to `provideSturdyRef()` performs the race-to-install. The eager
+ * `@endo/sturdyref/shim.js` entry simply forces that first call.
  */
 
 import harden from '@endo/harden';
 
 const { defineProperty, freeze } = Object;
 const { apply } = Reflect;
+
+const symbolForHarden = Symbol.for('harden');
+
+/**
+ * Whether a harden implementation is already installed, which is the case
+ * after `lockdown` (or once any `@endo/harden` has been used). Only then is it
+ * safe to call `@endo/harden`; before `lockdown`, calling it would install a
+ * harden of its own and make `lockdown` throw.
+ */
+const isHardenInstalled = () =>
+  /** @type {any} */ (Object)[symbolForHarden] !== undefined ||
+  /** @type {any} */ (globalThis).harden !== undefined;
 
 /**
  * An opaque, frozen object with no own properties. What it captures is
@@ -134,8 +153,19 @@ export const makeSturdyRefConstructor = () => {
     configurable: false,
   });
 
+  if (isHardenInstalled()) {
+    harden(SturdyRef);
+  } else {
+    // Before lockdown: freeze everything reachable that is ours, and leave
+    // hardening (including the shared intrinsics above these) to lockdown.
+    freeze(SturdyRef.enliven);
+    freeze(SturdyRef.isSturdyRef);
+    freeze(SturdyRef.prototype);
+    freeze(SturdyRef);
+  }
+
   return /** @type {SturdyRefConstructor} */ (
-    /** @type {unknown} */ (harden(SturdyRef))
+    /** @type {unknown} */ (SturdyRef)
   );
 };
 
@@ -157,7 +187,7 @@ const isSturdyRefConstructor = candidate => {
 /**
  * Race to install the `SturdyRef` constructor at `globalThis.SturdyRef`,
  * first-wins. If a valid constructor is already installed (an eval twin got
- * there first), adopt it unchanged. Otherwise make, harden, and install ours
+ * there first), adopt it unchanged. Otherwise make and install ours
  * non-configurably and non-writably so that no later code, twin or attacker,
  * can replace the realm's shared constructor.
  *
@@ -189,8 +219,8 @@ let selected;
 
 /**
  * Lazily and idempotently obtain the realm's shared `SturdyRef` constructor,
- * installing it first-wins on the first call. Safe to import before
- * `lockdown` because it does nothing until called.
+ * installing it first-wins on the first call. Safe to import, and to call,
+ * before `lockdown`.
  *
  * @returns {SturdyRefConstructor}
  */

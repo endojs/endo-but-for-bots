@@ -10,6 +10,8 @@ constructed like a `Proxy`, as `new SturdyRef(handler)`, where the handler's
 for its result, and `SturdyRef.isSturdyRef(value)` is a brand check. Refs are
 frozen, have no own properties, never expose their handler, and are distinct
 even when made from the same handler. First-wins lets eval twins of ocapn or
-captp that share a realm converge on one constructor. The constructor and every
-ref are hardened by `@endo/harden`, installed lazily so hardening happens after
-`lockdown`.
+captp that share a realm converge on one constructor. Like the `HandledPromise`
+shim, the shim may be imported before `lockdown`: it then only freezes the
+constructor and leaves hardening to `lockdown`, so it does not install a prior
+harden that would make `lockdown` fail. After `lockdown`, it hardens with
+`@endo/harden`. Every ref is frozen.

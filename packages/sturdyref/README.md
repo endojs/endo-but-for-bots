@@ -64,22 +64,31 @@ safe before `lockdown`: it installs nothing until first used.
 
 ## Shim entry and `lockdown`
 
-The constructor, its prototype, and every ref are hardened by
-[`@endo/harden`](../harden/README.md). When `lockdown` will be called,
-hardening must happen **after** it, so installation is lazy: the ponyfill
-installs on first use, which is after `lockdown` in normal use. To install
-eagerly in a lockdown bootstrap, import the shim entry **after** `lockdown()`:
+Like the `HandledPromise` shim, the shim entry installs `globalThis.SturdyRef`
+immediately and may be imported **before** `lockdown()`:
 
 ```js
+import '@endo/sturdyref/shim.js';
 import 'ses';
 lockdown();
-import '@endo/sturdyref/shim.js';
 ```
+
+Before `lockdown`, the shim does not use [`@endo/harden`](../harden/README.md),
+because a harden installed before `lockdown` makes `lockdown` throw. It freezes
+the constructor, its prototype, and its statics, and leaves hardening to
+`lockdown`. Once a harden is present (after `lockdown`, or after another
+library installed one), it hardens with `@endo/harden` instead. Every ref is
+frozen at construction.
+
+Importing the shim after `lockdown()` also works, but then SES never sees the
+constructor as an intrinsic (see below).
 
 ## Child compartments
 
 The global confers no authority: construction only wraps a handler the caller
 already has, the brand check reveals nothing, and `enliven` only runs the hook
 of a ref the caller already holds. The shim takes no position on propagation
-to child compartments; SES decides. Today SES has no permit for `SturdyRef`,
-so a child `Compartment` does not see a global installed after `lockdown`.
+to child compartments; SES decides. A SES that permits `SturdyRef` admits a
+constructor installed before `lockdown` as a shared intrinsic, hardens it, and
+gives the same constructor to every child `Compartment`. A global installed
+after `lockdown` stays in the start compartment only.

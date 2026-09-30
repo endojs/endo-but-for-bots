@@ -8,8 +8,8 @@
  * this ponyfill recognizes and enlivens the refs minted by every other twin.
  *
  * Importing this module is safe before `lockdown`: it installs nothing until a
- * function is first called, and installation and hardening therefore happen
- * after `lockdown` in normal use.
+ * function is first called. Calling it before `lockdown` is safe too; see
+ * `./sturdyref-shim.js` for how hardening is deferred to `lockdown`.
  */
 
 import { provideSturdyRef } from './sturdyref-shim.js';
