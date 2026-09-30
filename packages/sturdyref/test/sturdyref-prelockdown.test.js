@@ -23,6 +23,12 @@ const Installed = globalThis.SturdyRef;
 // checking is absent.
 const hardenBeforeLockdown = Object[Symbol.for('harden')];
 
+// Before lockdown the shim only freezes what it owns; the shared intrinsics
+// above it (here `Function.prototype`) are still mutable.
+const functionPrototypeFrozenBeforeLockdown = Object.isFrozen(
+  Function.prototype,
+);
+
 let lockdownError;
 try {
   lockdown();
@@ -54,6 +60,12 @@ test('the constructor, prototype, and statics are frozen', t => {
   t.true(isFrozen(Installed.prototype));
   t.true(isFrozen(Installed.enliven));
   t.true(isFrozen(Installed.isSturdyRef));
+});
+
+test('lockdown hardens the constructor along with the intrinsics', t => {
+  t.false(functionPrototypeFrozenBeforeLockdown, 'shim did not harden');
+  t.true(isFrozen(getPrototypeOf(Installed)), 'lockdown hardened the rest');
+  t.is(harden(Installed), Installed, 'harden accepts it as already hardened');
 });
 
 test('the constructor matches the shape SES permits for SturdyRef', t => {

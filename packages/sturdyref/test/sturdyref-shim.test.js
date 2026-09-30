@@ -133,6 +133,19 @@ test('construction: calling without new throws', t => {
   t.throws(() => SturdyRef(makeHandler(1)), { instanceOf: TypeError });
 });
 
+test('construction: a foreign new.target throws', t => {
+  const SturdyRef = provideSturdyRef();
+  // A caller-chosen prototype could give a branded ref a `then` or a
+  // `toString`, making it anything but inert.
+  function NT() {}
+  NT.prototype = { then: resolve => resolve('pwned') };
+  t.throws(() => Reflect.construct(SturdyRef, [makeHandler(1)], NT), {
+    instanceOf: TypeError,
+  });
+  class Sub extends SturdyRef {}
+  t.throws(() => new Sub(makeHandler(1)), { instanceOf: TypeError });
+});
+
 test('isSturdyRef is a brand check', t => {
   t.true(isSturdyRef(makeSturdyRef(makeHandler(1))));
   t.false(isSturdyRef(harden({})));

@@ -26,7 +26,9 @@ SturdyRef.isSturdyRef(ref); // true
   it reads once, at construction. It returns a fresh, frozen object with no
   own properties whose prototype is `SturdyRef.prototype`
   (`Object.prototype.toString` reports `[object SturdyRef]`). Calling
-  `SturdyRef` without `new` throws.
+  `SturdyRef` without `new` throws, and so does subclassing it or passing a
+  foreign `new.target` to `Reflect.construct`, so every branded ref has
+  `SturdyRef.prototype` as its prototype.
 - `SturdyRef.enliven(ref)` sends `enliven` to the ref: in a later turn it calls
   the hook as `handler.enliven(ref)` and settles with the result. A throwing
   hook, or an argument that is not a SturdyRef, yields a rejected promise.
@@ -36,7 +38,10 @@ SturdyRef.isSturdyRef(ref); // true
 What a SturdyRef captures is defined **entirely** by its handler: a CapTP, for
 example, closes over its own peer id, swiss number, and hints. The handler is
 held in a `WeakMap` inside the constructor and is never reachable from the
-ref. Refs have **no identification**: two refs made from the same handler are
+ref. The shim captures the `WeakMap.prototype` methods it uses when it is
+first imported, so code that later tampers with `WeakMap.prototype` (before
+`lockdown` freezes it) cannot observe or redirect that map. Code that runs
+before the shim's first import is trusted, as it is for every shim. Refs have **no identification**: two refs made from the same handler are
 distinct. Any notion of "same referent" belongs to the handler.
 
 A SturdyRef is not passable at this layer: `passStyleOf` rejects it.
@@ -46,8 +51,15 @@ A SturdyRef is not passable at this layer: `passStyleOf` rejects it.
 Many copies of a ponyfill, ocapn, or captp may load in one realm. Each races to
 install `globalThis.SturdyRef`, but only the **first** installation takes; it
 is non-configurable and non-writable. Every later importer senses the existing
-global and adopts it. The realm therefore has exactly one constructor, so a ref
+global and adopts it, and if the adopted global is still configurable or
+writable, locks it (non-configurable, non-writable) so that no later importer
+can adopt a different constructor. The realm therefore has exactly one constructor, so a ref
 minted by one copy is recognized and enlivened by any other.
+
+First-wins trusts the first installer. Adoption checks only the shape of the
+existing global (a function with `enliven` and `isSturdyRef` statics), so code
+that runs first can install an impostor. Install the shim early, in the
+lockdown bootstrap, where that code is already trusted.
 
 ## Ponyfill
 

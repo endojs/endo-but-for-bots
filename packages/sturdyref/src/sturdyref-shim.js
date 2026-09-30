@@ -39,8 +39,13 @@
 
 import harden from '@endo/harden';
 
-const { defineProperty, freeze } = Object;
+const { defineProperty, freeze, getOwnPropertyDescriptor } = Object;
 const { apply } = Reflect;
+
+// Captured at module load, so that later mutation of `WeakMap.prototype` in a
+// realm that has not (yet) been locked down cannot observe or redirect the
+// closely held ref-to-handler map.
+const { get: weakMapGet, set: weakMapSet, has: weakMapHas } = WeakMap.prototype;
 
 const symbolForHarden = Symbol.for('harden');
 
@@ -104,6 +109,12 @@ export const makeSturdyRefConstructor = () => {
      * @param {SturdyRefHandler} handler
      */
     constructor(handler) {
+      // Reject subclassing and `Reflect.construct` with a foreign `new.target`,
+      // either of which would mint a branded ref whose prototype, and thus
+      // behavior (a `then`, a `toString`), is chosen by the caller.
+      if (new.target !== SturdyRef) {
+        throw TypeError('SturdyRef cannot be subclassed');
+      }
       if (
         handler === null ||
         (typeof handler !== 'object' && typeof handler !== 'function')
@@ -117,8 +128,7 @@ export const makeSturdyRefConstructor = () => {
         throw TypeError('SturdyRef handler must have an enliven method');
       }
       freeze(this);
-      // Safe because this WeakMap owns its set method.
-      handlers.set(this, { handler, enliven });
+      apply(weakMapSet, handlers, [this, freeze({ handler, enliven })]);
     }
 
     /**
@@ -126,8 +136,7 @@ export const makeSturdyRefConstructor = () => {
      * @returns {value is SturdyRef}
      */
     static isSturdyRef(value) {
-      // Safe because this WeakMap owns its has method.
-      return handlers.has(/** @type {SturdyRef} */ (value));
+      return apply(weakMapHas, handlers, [value]);
     }
 
     /**
@@ -136,8 +145,7 @@ export const makeSturdyRefConstructor = () => {
      */
     static enliven(ref) {
       return Promise.resolve().then(() => {
-        // Safe because this WeakMap owns its get method.
-        const entry = handlers.get(ref);
+        const entry = apply(weakMapGet, handlers, [ref]);
         if (entry === undefined) {
           throw TypeError('SturdyRef.enliven expects a SturdyRef');
         }
@@ -187,7 +195,9 @@ const isSturdyRefConstructor = candidate => {
 /**
  * Race to install the `SturdyRef` constructor at `globalThis.SturdyRef`,
  * first-wins. If a valid constructor is already installed (an eval twin got
- * there first), adopt it unchanged. Otherwise make and install ours
+ * there first), adopt it, locking the global binding (non-writable,
+ * non-configurable) if it was not already locked, so that no later twin can
+ * adopt a different constructor. Otherwise make and install ours
  * non-configurably and non-writably so that no later code, twin or attacker,
  * can replace the realm's shared constructor.
  *
@@ -200,6 +210,22 @@ export const selectSturdyRef = () => {
       throw TypeError(
         '@endo/sturdyref expected globalThis.SturdyRef to be a constructor with enliven and isSturdyRef statics',
       );
+    }
+    const desc = getOwnPropertyDescriptor(globalThis, 'SturdyRef');
+    if (
+      desc === undefined ||
+      desc.configurable ||
+      !('value' in desc) ||
+      desc.writable
+    ) {
+      // Throws if the binding is a non-configurable accessor, which cannot
+      // be locked to one constructor.
+      defineProperty(globalThis, 'SturdyRef', {
+        value: existing,
+        enumerable: false,
+        writable: false,
+        configurable: false,
+      });
     }
     return existing;
   }

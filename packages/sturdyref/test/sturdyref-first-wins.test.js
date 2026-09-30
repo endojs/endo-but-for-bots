@@ -28,6 +28,17 @@ test('first-wins: an already-installed constructor is adopted, not overwritten',
   t.is(selectSturdyRef(), TwinSturdyRef, 'selectSturdyRef adopts the twin');
   t.is(provideSturdyRef(), TwinSturdyRef, 'provideSturdyRef adopts the twin');
   t.is(globalThis.SturdyRef, TwinSturdyRef, 'the twin install is untouched');
+  const desc = Object.getOwnPropertyDescriptor(globalThis, 'SturdyRef');
+  t.false(desc.configurable, 'adoption locks a configurable global');
+  t.false(desc.writable, 'adoption locks a writable global');
+  t.throws(
+    () =>
+      Object.defineProperty(globalThis, 'SturdyRef', {
+        value: makeSturdyRefConstructor(),
+      }),
+    { instanceOf: TypeError },
+    'a later redefinition cannot displace the adopted constructor',
+  );
 
   const ref = new TwinSturdyRef({ enliven: () => 'from the twin' });
   t.true(isSturdyRef(ref), "the twin's ref passes this copy's brand check");
