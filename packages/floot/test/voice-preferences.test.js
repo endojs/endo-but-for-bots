@@ -8,6 +8,9 @@ import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
 
+// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
+const petKey = path => [path].flat(2).join('/');
+
 /**
  * The factory host's petstore, reduced to the surface the factory reads at
  * construction and the preference store uses. `storeValue` overwrites, as the
@@ -21,13 +24,14 @@ const makeHost = (store = new Map(), { storeDelayMs = 0 } = {}) => {
   let failNextStore = false;
   const host = Far('TestHost', {
     list: () => harden([...store.keys()]),
-    has: (/** @type {string} */ name) => store.has(name),
-    lookup: (/** @type {string} */ name) => store.get(name),
+    has: (/** @type {string[]} */ ...path) => store.has(petKey(path)),
+    lookup: (/** @type {string[]} */ path) => store.get(petKey(path)),
     provideGuest: () => undefined,
     storeValue: async (
       /** @type {unknown} */ value,
-      /** @type {string} */ name,
+      /** @type {string[]} */ path,
     ) => {
+      const name = petKey(path);
       if (storeDelayMs) await delay(storeDelayMs);
       if (failNextStore) {
         failNextStore = false;
@@ -35,8 +39,8 @@ const makeHost = (store = new Map(), { storeDelayMs = 0 } = {}) => {
       }
       store.set(name, value);
     },
-    remove: (/** @type {string} */ name) => {
-      store.delete(name);
+    remove: (/** @type {string[]} */ ...path) => {
+      store.delete(petKey(path));
     },
   });
   return {

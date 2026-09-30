@@ -11,6 +11,9 @@ import {
   normalizeInnerPath,
 } from '../src/container-mounts.js';
 
+// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
+const petKey = path => [path].flat(2).join('/');
+
 /**
  * Build a persisted record with the key the registrar will derive. A record
  * whose `key` is anything else is rejected on load — the key names the 9P
@@ -84,24 +87,25 @@ const makeHarness = () => {
     async list() {
       return harden([...names.keys()]);
     },
-    /** @param {string} name */
-    async has(name) {
+    async has(...path) {
+      const name = petKey(path);
       return names.has(name);
     },
-    /** @param {string} name */
-    async lookup(name) {
+    async lookup(path) {
+      const name = petKey(path);
       if (!names.has(name)) throw Error(`missing ${name}`);
       return names.get(name);
     },
-    /** @param {string} name */
-    async remove(name) {
+    async remove(...path) {
+      const name = petKey(path);
       names.delete(name);
     },
     /**
      * @param {unknown} value
-     * @param {string} name
+     * @param {string | string[]} path
      */
-    async storeValue(value, name) {
+    async storeValue(value, path) {
+      const name = petKey(path);
       storeCount += 1;
       if (storeCount > failStoresAfter) {
         throw Error('petstore write failed');

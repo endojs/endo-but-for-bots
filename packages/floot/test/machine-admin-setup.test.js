@@ -121,15 +121,17 @@ const makeFakeRoot = () => {
     },
     provideGuest: async (handleName, { agentName }) => {
       calls.provideGuest += 1;
-      if (names.has(handleName)) {
+      const handleKey = key(toPath(handleName));
+      const agentKey = key(toPath(agentName));
+      if (names.has(handleKey)) {
         // The daemon resolves an existing name to what it holds — the mail
         // handle — not to the guest agent.
-        return names.get(handleName);
+        return names.get(handleKey);
       }
       const { store } = makeStore();
-      guests.set(agentName, store);
-      names.set(handleName, Far('FakeHandle', {}));
-      names.set(agentName, store);
+      guests.set(agentKey, store);
+      names.set(handleKey, Far('FakeHandle', {}));
+      names.set(agentKey, store);
       return store;
     },
     makeUnconfined: async (
@@ -143,7 +145,8 @@ const makeFakeRoot = () => {
         nextMakeUnconfinedFailure = undefined;
         throw failure;
       }
-      if (workerName !== '@main') throw Error('expected the @main worker');
+      if (key(toPath(workerName)) !== '@main')
+        throw Error('expected the @main worker');
       if (!specifier.endsWith('/deploy-connection.js')) {
         throw Error(`unexpected caplet module ${specifier}`);
       }
@@ -188,7 +191,7 @@ const makeFactoryHost = () => {
       grants.delete(varargsPath(args).join('/'));
     },
     storeLocator: async (name, locator) => {
-      grants.set(name, locator);
+      grants.set(toPath(name).join('/'), locator);
     },
   });
   return { host, grants };

@@ -53,8 +53,8 @@ test('machine-admin prompt routes ordinary deploys through durable runs', t => {
   t.true(
     systemPrompt.includes('NORMAL DEPLOYS MUST GO THROUGH A WORKFLOW FACTORY'),
   );
-  t.true(systemPrompt.includes("lookup('deploy-endo')"));
-  t.true(systemPrompt.includes("lookup('change-nixos')"));
+  t.true(systemPrompt.includes("lookup(['deploy-endo'])"));
+  t.true(systemPrompt.includes("lookup(['change-nixos'])"));
   t.true(systemPrompt.includes('E(deployEndo).start'));
   t.true(systemPrompt.includes('E(changeNixos).start'));
   t.true(systemPrompt.includes("approval form to the OWNER'S INBOX"));

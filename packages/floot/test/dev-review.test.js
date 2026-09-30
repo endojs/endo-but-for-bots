@@ -19,6 +19,9 @@ import { make as makeProject } from '../review-project.js';
 import { make as makeConnection } from '../review-connection.js';
 import { makeWorkflowTools } from '../src/workflow-tools.js';
 
+// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
+const petKey = path => [path].flat(2).join('/');
+
 const BASE = 'a'.repeat(40);
 const FIRST = 'b'.repeat(40);
 const SECOND = 'c'.repeat(40);
@@ -189,9 +192,10 @@ test('provisioning registers attenuated capabilities before granting them', asyn
     values.set('@self', register(Far(`${name} mail`, {})));
     return register(
       Far(name, {
-        has: key => values.has(key),
-        lookup: key => values.get(key),
-        storeValue: (value, key) => {
+        has: (...path) => values.has(petKey(path)),
+        lookup: path => values.get(petKey(path)),
+        storeValue: (value, path) => {
+          const key = petKey(path);
           if (
             typeof value === 'object' &&
             value !== null &&

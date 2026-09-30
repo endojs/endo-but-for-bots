@@ -22,6 +22,9 @@ import { make as makeClaudeClientCaplet } from '@endo/claude-sandbox/src/claude-
 
 import { makeContainerMountRegistrar } from '../src/container-mounts.js';
 
+// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
+const petKey = path => [path].flat(2).join('/');
+
 const CLIENT_ENV = harden({
   SESSION_ID: 'sess-mnt',
   CREATED_AT: '2026-01-01T00:00:00.000Z',
@@ -104,17 +107,21 @@ const makeWorld = () => {
     async list() {
       return harden([...factoryNames.keys()]);
     },
-    async has(name) {
+    async has(...path) {
+      const name = petKey(path);
       return factoryNames.has(name);
     },
-    async lookup(name) {
+    async lookup(path) {
+      const name = petKey(path);
       if (!factoryNames.has(name)) throw Error(`missing ${name}`);
       return factoryNames.get(name);
     },
-    async remove(name) {
+    async remove(...path) {
+      const name = petKey(path);
       factoryNames.delete(name);
     },
-    async storeValue(value, name) {
+    async storeValue(value, path) {
+      const name = petKey(path);
       if (factoryNames.has(name)) throw Error(`cannot overwrite ${name}`);
       factoryNames.set(name, value);
     },

@@ -18,6 +18,9 @@ import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
 
+// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
+const petKey = path => [path].flat(2).join('/');
+
 /**
  * A world with one floot session on a fake hosted backend. The backend
  * records every `create` spec and can refuse to terminate once, the way a
@@ -43,12 +46,14 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
     guestStore.set(name, harden({ kind: 'mount-cap' }));
   }
   const guest = Far('TestGuest', {
-    has: name => guestStore.has(name),
-    lookup: name => guestStore.get(name),
-    storeValue: (value, name) => {
+    has: (...path) => guestStore.has(petKey(path)),
+    lookup: path => guestStore.get(petKey(path)),
+    storeValue: (value, path) => {
+      const name = petKey(path);
       guestStore.set(name, value);
     },
-    remove: name => {
+    remove: (...path) => {
+      const name = petKey(path);
       guestStore.delete(name);
     },
     list: prefix => harden(prefix === 'tools' ? [] : [...guestStore.keys()]),
@@ -182,14 +187,16 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
   hostStore.set('session-agent-one', guest);
   const host = Far('TestHost', {
     list: () => harden([...hostStore.keys()]),
-    has: name => hostStore.has(name),
-    lookup: name => hostStore.get(name),
+    has: (...path) => hostStore.has(petKey(path)),
+    lookup: path => hostStore.get(petKey(path)),
     provideGuest: () => undefined,
-    storeValue: (value, name) => {
+    storeValue: (value, path) => {
+      const name = petKey(path);
       if (hostStore.has(name)) throw Error(`cannot overwrite ${name}`);
       hostStore.set(name, value);
     },
-    remove: name => {
+    remove: (...path) => {
+      const name = petKey(path);
       hostStore.delete(name);
     },
   });
