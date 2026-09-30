@@ -632,7 +632,7 @@ export const makeDirectoryMaker = ({
         return E(/** @type {any} */ (blob)).text();
       }
       const { hub, name } = await lookupTailNameHub(namePath);
-      return E(/** @type {any} */ (hub)).readText(name);
+      return E(/** @type {any} */ (hub)).readText([name]);
     };
 
     /** @type {EndoDirectory['maybeReadText']} */
@@ -646,7 +646,7 @@ export const makeDirectoryMaker = ({
         return E(/** @type {any} */ (blob)).text();
       }
       const { hub, name } = await lookupTailNameHub(namePath);
-      return E(/** @type {any} */ (hub)).maybeReadText(name);
+      return E(/** @type {any} */ (hub)).maybeReadText([name]);
     };
 
     /** @type {EndoDirectory['writeText']} */
@@ -666,7 +666,7 @@ export const makeDirectoryMaker = ({
         return;
       }
       const { hub, name } = await lookupTailNameHub(namePath);
-      await E(/** @type {any} */ (hub)).writeText(name, content);
+      await E(/** @type {any} */ (hub)).writeText([name], content);
     };
 
     /** @type {EndoDirectory & ContentLocatable} */
