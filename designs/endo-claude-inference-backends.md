@@ -4,7 +4,7 @@
 |---|---|
 | **Created** | 2026-09-28 |
 | **Author** | kriscendobot (prompted) |
-| **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214) and the design-panel rounds on PR #1357) |
+| **Updated** | 2026-09-30 (revised per [review 5348050214](https://github.com/endojs/endo-but-for-bots/pull/1357#pullrequestreview-5348050214) and the design-panel rounds on PR #1357; Decision 11 settled per [review comment 4149077338](https://github.com/endojs/endo-but-for-bots/pull/1357#discussion_r4149077338)) |
 | **Status** | Draft, awaiting production evidence |
 | **Source** | Back-filled from the minion.town Claude CLI and Agent SDK experiments (kriscendobot/minion.town#105, kriscendobot/minion.town#106) and the production observations listed in § Evidence |
 
@@ -788,6 +788,10 @@ for designs that span several owners:
     is trusted with guests' credentials; the intake must say so to the guest.
     Per-principal ownership in the store waits on the owning-principal column
     that [daemon-secret-manager](daemon-secret-manager.md) names as future work.
+    The single-principal store is acceptable for guests' credentials until that
+    column lands: guest bring-your-own-credential is gated on the slice
+    (Decision 9), not additionally on the column (settled by the maintainer in
+    [review comment 4149077338](https://github.com/endojs/endo-but-for-bots/pull/1357#discussion_r4149077338)).
 
 ## Verification Gates
 
@@ -984,15 +988,12 @@ be linked here once it exists. Pull request:
       tracking). Gate 8 tests the factory's existing call paths, but a new call
       path is unverified until gate 8 is extended to it (Decision 9).
 - [ ] The secret manager's owning-principal column, needed before guests'
-      credentials are partitioned from the operator's catalog.
+      credentials are partitioned from the operator's catalog. Guest
+      bring-your-own-credential does not wait on it (Decision 11).
 
 ## Open Questions
 
-1. **Is the single-principal secret store acceptable for guests' credentials
-   until the owning-principal column lands?** Decision 11 makes the operator
-   trusted with every guest's credential, which is already true of the host
-   that runs the process. The alternative gates guest bring-your-own-credential
-   on the column as well as on the slice.
+None.
 
 ## Prompt
 
