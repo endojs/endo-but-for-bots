@@ -185,6 +185,12 @@ const main = async () => {
     const agentIdPath = filePowers.joinPath(statePath, 'root');
     await filePowers.writeFileText(agentIdPath, `${agentId}\n`);
 
+    // Record self as official daemon process so killDaemonProcess targets
+    // the node daemon (which owns workers) rather than the supervisor.  This
+    // must precede the ready signal: a resolved start() lets callers act on
+    // endo.pid immediately (stop() reads it to kill the daemon).
+    await updateRecordedPid();
+
     // Signal readiness to supervisor.
     await sendEnvelope(0, 'ready');
     console.log('Endo daemon (bus) ready, signaled supervisor');
@@ -195,10 +201,6 @@ const main = async () => {
   }
 
   const servicesStopped = Promise.all(services.map(({ stopped }) => stopped));
-
-  // Record self as official daemon process so killDaemonProcess targets
-  // the node daemon (which owns workers) rather than the supervisor.
-  await updateRecordedPid();
 
   // Wait for services to end normally
   await servicesStopped;
