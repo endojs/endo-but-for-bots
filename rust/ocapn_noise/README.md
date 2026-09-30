@@ -122,3 +122,8 @@ The conversion drops the sign of x, so the holder of A can still claim
 -A, a second identity for the same key holder.
 IK message 1 carries no freshness (Noise §7.7 destination property 2),
 so a captured SYN passes this check again when replayed.
+This check binds the claimed identity to the handshake; it does not make
+message 1 fresh.
+The JavaScript netlayer (`@endo/ocapn-noise`) is what keeps a replay
+from disturbing the peer it names: it does no per-peer bookkeeping until
+the post-handshake `op:start-session` proves the peer is live.
