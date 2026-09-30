@@ -20,7 +20,10 @@ import { makeWorkerPeer } from './worker-peer.js';
  * (`{ t: 'init', workerId }` then `{ t: 'f', b64 }`), so the durable
  * worker transport cannot tell them from `makeXsEngine` running
  * `dist-xs/worker-peer.js`. Test doubles for the host's persistence
- * logic; deliberately not part of the public API.
+ * logic; deliberately not part of the public API. They load the guest
+ * prelude as host modules, so the environment options those packages
+ * read at initialization (`ENDO_RANK_STRINGS`, `DEBUG`, and the like)
+ * must be the same across the runs that share a journal.
  */
 
 /**
