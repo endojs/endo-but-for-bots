@@ -10,6 +10,11 @@ import { makePromiseKit } from '@endo/promise-kit';
 import { MAX_TIMER_DELAY_MS } from '../platform/timers.js';
 
 const MAX_TIME = 2n ** 63n - 1n;
+// One row per pending or unacknowledged alarm, shared by every vat. The table
+// is rewritten whole on each change, so its size is a write cost as well as a
+// memory one; 1,024 rows keep a rewrite on the order of a hundred kilobytes,
+// a few hundred with the longest alarm ids, and are far more than a personal
+// daemon's reminders need. Per-vat quotas are future work.
 const MAX_ALARMS = 1024;
 
 /** @param {unknown} value @returns {asserts value is bigint} */
@@ -118,10 +123,8 @@ export const makeDurableAlarms = (
     const saved = storage.read();
     if (saved === undefined) return;
     const state = JSON.parse(saved);
-    (state &&
-      (state.version === 1 || state.version === 2) &&
-      Array.isArray(state.alarms)) ||
-      Fail`Invalid durable alarm metadata`;
+    (state && state.version === 2 && Array.isArray(state.alarms)) ||
+      Fail`Invalid durable alarm metadata: this build reads ledger version 2; migrate the state directory or use a fresh one`;
     for (const entry of state.alarms) {
       const { workerId, alarmId, deadline, outcome } = entry;
       (typeof workerId === 'string' &&
