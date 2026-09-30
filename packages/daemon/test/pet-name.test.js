@@ -1,5 +1,6 @@
 // @ts-nocheck
 import test from '@endo/ses-ava/prepare-endo.js';
+import fc from 'fast-check';
 
 import {
   isValidName,
@@ -267,4 +268,102 @@ test('petNamePathFrom rejects a special name leaf', t => {
 
 test('petNamePathFrom rejects an empty path', t => {
   t.throws(() => petNamePathFrom([]), { message: /Invalid name path/ });
+});
+
+// --- properties of namePathFrom and petNamePathFrom ---
+
+// Any string, including ones containing `/`, `@`, `\0`, and lone surrogates.
+const anyStringArb = fc.string({ unit: 'binary', maxLength: 300 });
+
+const petNameArb = fc
+  .string({ unit: 'binary', minLength: 1, maxLength: 64 })
+  .filter(isPetName);
+
+const specialNameArb = fc.stringMatching(/^@[a-z][a-z0-9-]{0,127}$/);
+
+const nameArb = fc.oneof(petNameArb, specialNameArb);
+
+// A string that no path segment may be, whatever else surrounds it.
+const invalidNameArb = fc.oneof(
+  fc.constantFrom('', '.', '..'),
+  fc
+    .tuple(anyStringArb, fc.constantFrom('/', '\0'), anyStringArb)
+    .map(([before, bad, after]) => `${before}${bad}${after}`),
+  fc.string({ minLength: 256, maxLength: 300 }).filter(s => !s.includes('@')),
+);
+
+test('namePathFrom refuses every string, whatever its content', t => {
+  fc.assert(
+    fc.property(anyStringArb, s => {
+      const error = t.throws(() => namePathFrom(s), { instanceOf: TypeError });
+      t.regex(error.message, /\["directory","name"\]$/);
+      // The one-segment suggestion appears exactly when it would be valid.
+      t.is(
+        error.message.includes(`for example ${JSON.stringify([s])} or `),
+        isName(s),
+      );
+    }),
+  );
+});
+
+test('namePathFrom passes every array of valid names through unchanged', t => {
+  fc.assert(
+    fc.property(fc.array(nameArb, { minLength: 1, maxLength: 8 }), path => {
+      const copy = [...path];
+      const result = namePathFrom(path);
+      t.is(result, path);
+      t.deepEqual(result, copy);
+    }),
+  );
+});
+
+test('namePathFrom refuses an array with any invalid segment', t => {
+  fc.assert(
+    fc.property(
+      fc.array(nameArb, { maxLength: 4 }),
+      invalidNameArb,
+      fc.array(nameArb, { maxLength: 4 }),
+      (before, bad, after) => {
+        t.throws(() => namePathFrom([...before, bad, ...after]), {
+          message: /Invalid name/,
+        });
+      },
+    ),
+  );
+});
+
+test('petNamePathFrom decomposes every pet-name path into prefix and leaf', t => {
+  fc.assert(
+    fc.property(
+      fc.array(nameArb, { maxLength: 8 }),
+      petNameArb,
+      (prefix, leaf) => {
+        const path = [...prefix, leaf];
+        const { namePath, prefixPath, petName } = petNamePathFrom(path);
+        t.is(namePath, path);
+        t.deepEqual(prefixPath, prefix);
+        t.is(petName, leaf);
+        t.deepEqual([...prefixPath, petName], path);
+      },
+    ),
+  );
+});
+
+test('petNamePathFrom refuses a special-name leaf and every string', t => {
+  fc.assert(
+    fc.property(
+      fc.array(nameArb, { maxLength: 8 }),
+      specialNameArb,
+      (prefix, leaf) => {
+        t.throws(() => petNamePathFrom([...prefix, leaf]), {
+          message: /Invalid pet name/,
+        });
+      },
+    ),
+  );
+  fc.assert(
+    fc.property(anyStringArb, s => {
+      t.throws(() => petNamePathFrom(s), { instanceOf: TypeError });
+    }),
+  );
 });

@@ -185,6 +185,7 @@
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
     "expect-type": "^1.4.0",
+    "fast-check": "^4.10.2",
     "typescript": "catalog:dev"
   },
   "peerDependencies": {
