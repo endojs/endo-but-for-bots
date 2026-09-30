@@ -186,9 +186,9 @@ export const makeExecuteTool = powers => {
         // eslint-disable-next-line no-shadow
         const { name: lookupName } = args;
         if (lookupName !== undefined) {
-          const capability = await E(powers).lookup(
-            Array.isArray(lookupName) ? lookupName : lookupName.split('/'),
-          );
+          // Pass the name through unsplit, as `lookup` does: the daemon
+          // refuses a bare string with a hint to retry with an array.
+          const capability = await E(powers).lookup(lookupName);
           return E(capability).list();
         }
         return E(powers).list();

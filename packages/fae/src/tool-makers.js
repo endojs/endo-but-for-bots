@@ -877,7 +877,8 @@ export const makeStoreTool = host => {
       if (petName === undefined) {
         throw new Error('petName is required');
       }
-      await E(host).storeValue(value, petName.split('/'));
+      // One segment, never split on a delimiter.
+      await E(host).storeValue(value, [petName]);
       return `Stored value under "${petName}"`;
     },
     help() {
