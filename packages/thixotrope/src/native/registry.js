@@ -6,6 +6,12 @@ import harden from '@endo/harden';
  * unfinished installation only until its registration is ready for
  * inventory; from then on the registration reference retains the manager
  * the ordinary way, and the facade's administrative authority is dropped.
+ *
+ * Removal is the host's to drive, since the manager vat must be retired
+ * first: `lookup` tells the host which vat that is, and `remove` forgets the
+ * name once the vat is gone, taking the registration out of the inventory
+ * only if the inventory still holds it.
+ *
  * This self-contained factory is evaluated in the workspace.
  * @param {any} inventory
  */
@@ -59,6 +65,33 @@ export const makeNativeResourceRegistry = inventory => {
       entry.registration = registration;
       entry.worker = undefined;
       entry.complete = true;
+    },
+    /**
+     * The manager vat behind a name, for the host to retire; undefined for a
+     * name this registry does not hold.
+     * @param {string} name
+     */
+    lookup: name => {
+      const entry = installed.get(name);
+      if (!entry) return undefined;
+      return harden({ workerId: entry.workerId, complete: entry.complete });
+    },
+    /**
+     * Forget a name whose manager the host has retired. The inventory entry
+     * goes only if it is still this installation's registration; a value the
+     * user put there since is theirs. Returns whether the name was held.
+     * @param {string} name
+     */
+    remove: name => {
+      const entry = installed.get(name);
+      if (!entry) return false;
+      installed.delete(name);
+      if (
+        entry.registration !== undefined &&
+        inventory.get(name) === entry.registration
+      )
+        inventory.delete(name);
+      return true;
     },
   });
 };

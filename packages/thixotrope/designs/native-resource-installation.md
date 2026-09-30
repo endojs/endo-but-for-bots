@@ -90,6 +90,17 @@ An interrupted installation resumes on an explicit same-identity install retry, 
 source directory; startup does not silently complete an unfinished install.
 These records coordinate installation, not reconstruction of the manager's ordinary heap state.
 
+Removal is the host's to drive, in the opposite order.
+The manager vat is retired first, which closes the native processes it launched (each launcher is
+described by the manager that owns it), withdraws its startup notice, and drops the host rows keyed
+by it; only then does the registry forget the name, taking the registration out of inventory if the
+inventory still holds it.
+A removal interrupted between the two steps leaves an entry naming a retired vat, which the next
+removal or installation under that name resolves; the reverse order could leave a manager that no
+name reaches but whose startup notice still roots it.
+A failed or interrupted installation is removed the same way, so a corrected package installs under
+the same name rather than by overwriting an installation the registry still holds.
+
 Workspace metadata advances to version 4 because existing registry closures and installed managers
 cannot be relocated automatically.
 Older workspaces require migration or fresh state.

@@ -40,7 +40,10 @@ import { randomHex128 } from '../random-id.js';
 import { describeNativePackage } from '../native/describe-package.js';
 
 import { makeApplicationRegistry } from './application-registry.js';
-import { installNativeResource } from './install-native-resource.js';
+import {
+  installNativeResource,
+  removeNativeResource,
+} from './install-native-resource.js';
 import { makeDurableAlarms } from '../alarms/durable-alarms.js';
 import { makeGuestClock } from '../alarms/guest-clock.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
@@ -72,8 +75,9 @@ import {
 // it rather than run new host code against old guest code.
 // 3: alarm acknowledgement; 4: dedicated native manager vats; 5: the mail
 // address book introduces contacts through the `mail-introductions` resource
-// and its inbox and outbox are observable.
-const WORKSPACE_VERSION = 5;
+// and its inbox and outbox are observable; 6: a manager's adapter launcher
+// is described by the manager, so retiring the manager closes its processes.
+const WORKSPACE_VERSION = 6;
 
 // sun_path on the strictest supported platform: 104 bytes including the NUL.
 const MAX_SOCKET_PATH_BYTES = 103;
@@ -476,7 +480,7 @@ export const serveThixotrope = async (
     let installingNative = Promise.resolve();
     const adminMethods = {
       help: () =>
-        'Local supervisor: evaluate(source), status(), stop(), install(name, bundle, grants), applications(), installNative(name, directory), clockGrant(key), alarmStatus(), reachability(), collect(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id); each connection also has watchInventory(listener).',
+        'Local supervisor: evaluate(source), status(), stop(), install(name, bundle, grants), applications(), remove(name), installNative(name, directory), removeNative(name), clockGrant(key), alarmStatus(), reachability(), collect(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id); each connection also has watchInventory(listener).',
       evaluate: async source => {
         if (requested) throw Error('Supervisor is stopping');
         if (typeof source !== 'string')
@@ -582,13 +586,15 @@ export const serveThixotrope = async (
             digest,
             allocationKey: randomId(),
             bundle,
-            adapters: daemon.makeResource('native-adapter', {
-              moduleUrl: description.moduleUrl,
-              packageIdentity: {
-                directory: description.directory,
-                digest: description.digest,
-              },
-            }),
+            makeAdapters: workerId =>
+              daemon.makeResource('native-adapter', {
+                moduleUrl: description.moduleUrl,
+                packageIdentity: {
+                  directory: description.directory,
+                  digest: description.digest,
+                },
+                workerId,
+              }),
           });
           return harden({ name, directory: description.directory, digest });
         });
@@ -597,6 +603,42 @@ export const serveThixotrope = async (
           () => {},
         );
         return installing;
+      },
+      /**
+       * Remove a native installation by name: its manager vat is retired,
+       * the processes it launched are closed, and the name is free again,
+       * whether the installation completed, failed, or was interrupted.
+       * Capabilities already granted from its registration break.
+       * @param {string} name
+       */
+      removeNative: name => {
+        const removing = installingNative.then(async () => {
+          if (requested) throw Error('Supervisor is stopping');
+          if (inventory === undefined)
+            throw Error('The workspace vat is quarantined; repair it first');
+          if (typeof name !== 'string' || !name.length)
+            throw Error('Expected an inventory name');
+          return removeNativeResource(daemon, workspace, name);
+        });
+        installingNative = removing.then(
+          () => {},
+          () => {},
+        );
+        return removing;
+      },
+      /**
+       * Release the application registry's reference to an installation,
+       * completed, failed, or pending. The vat is retired by the next
+       * `collect` once nothing else reaches it.
+       * @param {string} name
+       */
+      remove: name => {
+        if (requested) throw Error('Supervisor is stopping');
+        if (applications === undefined)
+          throw Error('The workspace vat is quarantined; repair it first');
+        if (typeof name !== 'string' || !name.length)
+          throw Error('Expected an application name');
+        return E(applications).remove(name);
       },
       clockGrant: async key => {
         if (requested) throw Error('Supervisor is stopping');

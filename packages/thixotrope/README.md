@@ -213,9 +213,11 @@ Inventory changes after installation do not change previously captured powers.
 Failed installations remain inspectable and do not automatically run `make` again.
 A crash during host-side worker allocation or acquisition of its evaluator can reject that installation under the
 existing at-most-once host-resource policy; remove its record before deliberately retrying.
-`apps.remove(name)` releases the registry's reference, including a pending installation;
-it does not cancel work or revoke references already held elsewhere.
-Unused application vats become eligible for ordinary vat collection.
+`apps.remove(name)`, or `thix remove ./private-state NAME`, releases the registry's reference,
+including a pending installation; it does not cancel work or revoke references already held
+elsewhere.
+Unused application vats become eligible for ordinary vat collection, so `thix collect` retires
+a removed application's vat once nothing else reaches it.
 This initial version provides installation, not live code upgrades.
 
 ## Persistent applications serving HTTP
@@ -264,6 +266,12 @@ A failed port bind does not prevent other registrations from being restored.
 Native installation pins the directory's complete file contents and the durable bundle digest.
 Changing installed source requires a new explicit installation; the old manager will refuse to
 launch an adapter with different code.
+A name stays taken by its installation, completed, failed, or interrupted, until
+`thix remove-native ./private-state NAME` removes it: the manager vat is retired, the processes it
+launched are closed and its ports released, its startup notice is withdrawn, and the name is free.
+Capabilities granted from the removed registration break; applications holding one need a new grant.
+A corrected package therefore installs under the same name after `remove-native`, and never by
+overwriting.
 Dependencies outside the resource directory use ordinary Node module resolution and must remain
 compatible with the installed durable bundle.
 The selected state directory currently identifies the daemon's single user workspace.
@@ -313,10 +321,12 @@ The host checks wall-clock time before firing, so this is not a precise timer.
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 5 is required.
+Workspace metadata version 6 is required.
 It includes dedicated native manager vats (version 4), the alarm acknowledgement protocol
-(version 3), and the mail address book that introduces contacts through the `mail-introductions`
-resource with observable inbox and outbox maps.
+(version 3), the mail address book that introduces contacts through the `mail-introductions`
+resource with observable inbox and outbox maps (version 5), and adapter launchers described by the
+manager vat that owns them, so that removing or collecting a manager closes its processes
+(version 6).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 See [alarm settlement](designs/alarm-settlement.md) for recovery and cleanup details.
@@ -893,7 +903,9 @@ Retirement is a capability, not a host operation: `retire()` on the
 embedder's worker object (and on the guest-visible `worker-facade`
 resource) permanently deletes the worker — its session aborts so live
 presences reject, publications rooted in it drop, its store is
-deleted, and its snapshot is released.
+deleted, its snapshot is released, the native adapter processes it
+launched are closed, and host state keyed by it (alarm rows) is
+dropped.
 
 Unreferenced workers die by collection instead:
 `daemon.collectVats({ keep })` marks workers reachable from
