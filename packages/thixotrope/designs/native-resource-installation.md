@@ -86,6 +86,8 @@ Initialization evaluates the durable module once in the manager and retains its 
 Then the host publishes the lifecycle facet and installs that manager's startup notice.
 Finally, the workspace inserts registration into inventory, checking for intervening inventory edits.
 Completed retries preserve later inventory edits; failed managers retain their identity and error.
+The chunked source transfer this uses serves any source too large for one message: the workspace's
+mail bootstrap goes the same way, on a staging slot of its own.
 An interrupted installation resumes on an explicit same-identity install retry, using the pinned
 source directory; startup does not silently complete an unfinished install.
 These records coordinate installation, not reconstruction of the manager's ordinary heap state.
