@@ -217,26 +217,31 @@ test('a CapTP SturdyRef enliven facet refuses other methods and arguments', asyn
 /**
  * Connect two CapTP instances directly, with options for each side.
  *
- * @param {object} leftOpts
- * @param {object} rightOpts
+ * @param {object} leftOptions
+ * @param {object} rightOptions
  */
-const makeOptsPair = (leftOpts, rightOpts) => {
+const makeOptionsPair = (leftOptions, rightOptions) => {
   /** @type {any} */
   let right;
   const left = makeCapTP(
     'left',
     obj => right.dispatch(obj),
     undefined,
-    leftOpts,
+    leftOptions,
   );
-  right = makeCapTP('right', obj => left.dispatch(obj), undefined, rightOpts);
+  right = makeCapTP(
+    'right',
+    obj => left.dispatch(obj),
+    undefined,
+    rightOptions,
+  );
   return { left, right };
 };
 
 test('a SturdyRef constructed from data enlivens through the peer locator', async t => {
   const target = Far('target', { hello: () => 'hi' });
   const located = [];
-  const { left } = makeOptsPair(
+  const { left } = makeOptionsPair(
     { peerId: 'right' },
     {
       locateSturdyRef: objectId => {
@@ -269,7 +274,7 @@ test('a SturdyRef constructed from data enlivens through the peer locator', asyn
 });
 
 test('constructing a SturdyRef from data validates the data', t => {
-  const { left } = makeOptsPair({ peerId: 'right' }, {});
+  const { left } = makeOptionsPair({ peerId: 'right' }, {});
   t.throws(
     () => left.makeSturdyRefFromData({ peerId: 'other', objectId: 'x' }),
     {
@@ -303,13 +308,13 @@ test('constructing a SturdyRef from data validates the data', t => {
 });
 
 test('a SturdyRef from data rejects without a peer locator or connection', async t => {
-  const { left } = makeOptsPair({}, {});
+  const { left } = makeOptionsPair({}, {});
   const ref = left.makeSturdyRefFromData({ peerId: 'right', objectId: 'x' });
   await t.throwsAsync(() => SturdyRef.enliven(ref), {
     message: /does not locate SturdyRefs from data/,
   });
 
-  const { left: left2 } = makeOptsPair(
+  const { left: left2 } = makeOptionsPair(
     {},
     { locateSturdyRef: () => Far('t', {}) },
   );
@@ -319,7 +324,7 @@ test('a SturdyRef from data rejects without a peer locator or connection', async
 });
 
 test('constructing a SturdyRef from data checks each coordinate type', t => {
-  const { left } = makeOptsPair({}, {});
+  const { left } = makeOptionsPair({}, {});
   t.throws(
     () =>
       left.makeSturdyRefFromData(
@@ -352,7 +357,7 @@ test('constructing a SturdyRef from data checks each coordinate type', t => {
 });
 
 test('the SturdyRef locator refuses a non-string object id', async t => {
-  const { left } = makeOptsPair({}, { locateSturdyRef: () => Far('t', {}) });
+  const { left } = makeOptionsPair({}, { locateSturdyRef: () => Far('t', {}) });
   const { promise } = left.makeRemoteKit('l-0');
   const locator = /** @type {any} */ (promise);
   await t.throwsAsync(() => E(locator).locate(1), {
