@@ -3658,6 +3658,67 @@ test('a directory reaches a guest without identifier or locator methods', async 
   });
 });
 
+test('a guest cannot copy or move through another guest it names', async t => {
+  // Amplifying the named guest to its directory would let the namer
+  // `identify` a value in that guest's namespace, or `storeIdentifier` into it.
+  const { host } = await prepareHost(t);
+  const namer = await E(host).provideGuest('namer', {
+    agentName: 'namer-agent',
+  });
+  const named = await E(host).provideGuest('named', {
+    agentName: 'named-agent',
+  });
+  await E(named).storeValue(42, 'secret');
+  await E(host).storeValue(7, ['namer-agent', 'mine']);
+  await E(host).copy(['named-agent'], ['namer-agent', 'peer']);
+  await E(namer).makeDirectory(['shelf']);
+  await E(host).copy(['named-agent'], ['namer-agent', 'shelf', 'peer']);
+  const shelf = await E(namer).lookup('shelf');
+
+  const refusals = {
+    'copy from': () => E(namer).copy(['peer', 'secret'], ['stolen']),
+    'copy into': () => E(namer).copy(['mine'], ['peer', 'planted']),
+    'move from': () => E(namer).move(['peer', 'secret'], ['stolen']),
+    'move into': () => E(namer).move(['mine'], ['peer', 'planted']),
+    'facet copy from': () => E(shelf).copy(['peer', 'secret'], ['stolen']),
+    'facet move from': () => E(shelf).move(['peer', 'secret'], ['stolen']),
+  };
+  for (const [label, attempt] of Object.entries(refusals)) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(attempt, { message: /target has no method/u }, label);
+  }
+  t.false(await E(namer).has('stolen'));
+  t.false(await E(shelf).has('stolen'));
+  t.false(await E(named).has('planted'));
+  t.true(await E(named).has('secret'));
+  t.true(await E(namer).has('mine'));
+
+  // A host still traverses into its own guest.
+  await E(host).copy(['named-agent', 'secret'], ['namer-agent', 'given']);
+  t.is(await E(namer).lookup('given'), 42);
+});
+
+test('a directory resolving a guest request arrives as its facet', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
+  await E(host).makeDirectory(['granted']);
+
+  const iterator = iterateReader(E(host).followMessages());
+  const grantedP = E(guest).request('@host', 'a directory');
+  const { value: message } = await iterator.next();
+  await E(host).resolve(message.number, 'granted');
+  const granted = await grantedP;
+
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = new Set(await E(granted).__getMethodNames__());
+  t.true(methods.has('lookup'));
+  for (const method of directoryDesignationMethods) {
+    t.false(methods.has(method), `request result lacks ${method}`);
+  }
+});
+
 test('a guest evaluation endowed with a directory receives its facet', async t => {
   // An endowment bound by formula identifier would hand the evaluated code
   // the full directory, with `identify`, `locate`, and `storeIdentifier`.

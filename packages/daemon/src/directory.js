@@ -41,7 +41,7 @@ import {
 } from './guest-amplification.js';
 import { redactNameChange } from './guest-redaction.js';
 
-/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
+/** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, GuestPathOperations, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
 
 // A directory reaches a guest only as its pet-name facet (distributed
 // confinement): the guest-facing `lookup`, `maybeLookup`, `listValues`, and
@@ -306,8 +306,14 @@ export const makeDirectoryMaker = ({
       return E(hub).has(name);
     };
 
-    /** @type {EndoDirectory['identify']} */
-    const identify = async (...petNamePath) => {
+    /**
+     * Identify the value at a path, reaching the hub at its prefix through
+     * `toHub`.
+     *
+     * @param {(hub: NameHub) => NameHub} toHub
+     * @param {string[]} petNamePath
+     */
+    const identifyThrough = async (toHub, petNamePath) => {
       assertNames(petNamePath);
       if (petNamePath.length === 1) {
         const petName = petNamePath[0];
@@ -316,8 +322,12 @@ export const makeDirectoryMaker = ({
       const { hub, name } = await lookupTailNameHub(
         /** @type {NamePath} */ (petNamePath),
       );
-      return E(amplifyNameHub(hub)).identify(name);
+      return E(toHub(hub)).identify(name);
     };
+
+    /** @type {EndoDirectory['identify']} */
+    const identify = (...petNamePath) =>
+      identifyThrough(amplifyNameHub, petNamePath);
 
     /** @type {EndoDirectory['locate']} */
     const locate = async (...petNamePath) => {
@@ -617,61 +627,15 @@ export const makeDirectoryMaker = ({
       await E(hub).remove(petName);
     };
 
-    /** @type {EndoDirectory['move']} */
-    const move = async (fromPath, toPath) => {
-      const { prefixPath: fromPrefixPath, petName: fromPetName } =
-        assertPetNamePath(fromPath);
-      const { prefixPath: toPrefixPath, petName: toPetName } =
-        assertPetNamePath(toPath);
-      await null;
-
-      // Optimize for same-hub moves (rename)
-      if (fromPrefixPath.length === toPrefixPath.length) {
-        const samePrefix = fromPrefixPath.every(
-          (name, i) => name === toPrefixPath[i],
-        );
-        if (samePrefix) {
-          if (fromPrefixPath.length === 0) {
-            await controller.rename(fromPetName, toPetName);
-          } else {
-            const hub = /** @type {NameHub} */ (await lookup(fromPrefixPath));
-            await E(hub).move([fromPetName], [toPetName]);
-          }
-          return;
-        }
-      }
-
-      // Cross-hub move: copy then remove
-      const id = await identify(...fromPath);
-      if (id === undefined) {
-        throw new Error(`Unknown name: ${q(fromPath)}`);
-      }
-      // First write to the "to" hub so that the original name is preserved on the
-      // "from" hub in case of failure.
-      await storeIdentifier(toPath, id);
-      await remove(...fromPath);
-    };
-
-    /** @type {EndoDirectory['copy']} */
-    const copy = async (fromPath, toPath) => {
-      assertNamePath(fromPath);
-      assertPetNamePath(toPath);
-      const fromNamePath = /** @type {NamePath} */ (fromPath);
-      const { hub: fromHub, name: fromName } =
-        await lookupTailNameHub(fromNamePath);
-      const id = await E(amplifyNameHub(fromHub)).identify(fromName);
-      if (id === undefined) {
-        throw new Error(`Unknown name: ${q(fromPath)}`);
-      }
-      await storeIdentifier(toPath, id);
-    };
-
     /**
-     * Store a formula identifier at a pet name path (internal).
+     * Store a formula identifier at a pet name path, reaching the hub at its
+     * prefix through `toHub`.
+     *
+     * @param {(hub: NameHub) => NameHub} toHub
      * @param {string | string[]} petNamePath
      * @param {string} id
      */
-    const storeIdentifier = async (petNamePath, id) => {
+    const storeIdentifierThrough = async (toHub, petNamePath, id) => {
       const { prefixPath, petName } = petNamePathFrom(petNamePath);
       await null;
       if (prefixPath.length === 0) {
@@ -679,8 +643,84 @@ export const makeDirectoryMaker = ({
         return;
       }
       const hub = /** @type {NameHub} */ (await lookup(prefixPath));
-      await E(amplifyNameHub(hub)).storeIdentifier([petName], id);
+      await E(toHub(hub)).storeIdentifier([petName], id);
     };
+
+    /**
+     * Store a formula identifier at a pet name path (internal).
+     * @param {string | string[]} petNamePath
+     * @param {string} id
+     */
+    const storeIdentifier = (petNamePath, id) =>
+      storeIdentifierThrough(amplifyNameHub, petNamePath, id);
+
+    /**
+     * `move` and `copy`, reaching the hubs along both paths through `toHub`.
+     *
+     * @param {(hub: NameHub) => NameHub} toHub
+     */
+    const makeMoveCopy = toHub => {
+      /** @type {EndoDirectory['move']} */
+      const move = async (fromPath, toPath) => {
+        const { prefixPath: fromPrefixPath, petName: fromPetName } =
+          assertPetNamePath(fromPath);
+        const { prefixPath: toPrefixPath, petName: toPetName } =
+          assertPetNamePath(toPath);
+        await null;
+
+        // Optimize for same-hub moves (rename)
+        if (fromPrefixPath.length === toPrefixPath.length) {
+          const samePrefix = fromPrefixPath.every(
+            (name, i) => name === toPrefixPath[i],
+          );
+          if (samePrefix) {
+            if (fromPrefixPath.length === 0) {
+              await controller.rename(fromPetName, toPetName);
+            } else {
+              const hub = /** @type {NameHub} */ (await lookup(fromPrefixPath));
+              await E(hub).move([fromPetName], [toPetName]);
+            }
+            return;
+          }
+        }
+
+        // Cross-hub move: copy then remove
+        const id = await identifyThrough(toHub, fromPath);
+        if (id === undefined) {
+          throw new Error(`Unknown name: ${q(fromPath)}`);
+        }
+        // First write to the "to" hub so that the original name is preserved on
+        // the "from" hub in case of failure.
+        await storeIdentifierThrough(toHub, toPath, id);
+        await remove(...fromPath);
+      };
+
+      /** @type {EndoDirectory['copy']} */
+      const copy = async (fromPath, toPath) => {
+        assertNamePath(fromPath);
+        assertPetNamePath(toPath);
+        const fromNamePath = /** @type {NamePath} */ (fromPath);
+        const { hub: fromHub, name: fromName } =
+          await lookupTailNameHub(fromNamePath);
+        const id = await E(toHub(fromHub)).identify(fromName);
+        if (id === undefined) {
+          throw new Error(`Unknown name: ${q(fromPath)}`);
+        }
+        await storeIdentifierThrough(toHub, toPath, id);
+      };
+
+      return { move, copy };
+    };
+
+    const { move, copy } = makeMoveCopy(amplifyNameHub);
+
+    // A guest's own `move` and `copy` recover a directory from its guest
+    // facet but never amplify a guest: a name bound to another guest must not
+    // open that guest's directory to `identify` or `storeIdentifier`. A path
+    // through a guest is refused, since a guest has neither method.
+    const { move: guestMove, copy: guestCopy } = makeMoveCopy(
+      hub => /** @type {NameHub} */ (unwrapGuestFacet(hub)),
+    );
 
     /**
      * Store a locator (endo:// URL) at a pet name path.
@@ -754,7 +794,7 @@ export const makeDirectoryMaker = ({
       await E(/** @type {any} */ (hub)).writeText(name, content);
     };
 
-    /** @type {EndoDirectory & ContentLocatable} */
+    /** @type {EndoDirectory & ContentLocatable & GuestPathOperations} */
     const directory = {
       has,
       identify,
@@ -779,6 +819,8 @@ export const makeDirectoryMaker = ({
       move,
       remove,
       copy,
+      guestMove,
+      guestCopy,
       makeDirectory,
       readText,
       maybeReadText,
@@ -958,8 +1000,8 @@ export const makeDirectoryMaker = ({
             forGuest(directory.maybeLookup(petNamePath)),
           reverseLookup: value => reverseLookup(unwrapGuestFacet(value)),
           remove,
-          move,
-          copy,
+          move: directory.guestMove,
+          copy: directory.guestCopy,
           makeDirectory: petNamePath => forGuest(makeDirectory(petNamePath)),
           readText: directory.readText,
           maybeReadText: directory.maybeReadText,

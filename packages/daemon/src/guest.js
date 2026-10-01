@@ -162,9 +162,9 @@ export const makeGuestMaker = ({
       readText: directoryReadText,
       maybeReadText: directoryMaybeReadText,
       writeText: directoryWriteText,
-      move,
+      guestMove: move,
       remove,
-      copy,
+      guestCopy: copy,
       makeDirectory: directoryMakeDirectory,
     } = directory;
 
@@ -178,7 +178,7 @@ export const makeGuestMaker = ({
       dismiss,
       dismissAll,
       reply,
-      request,
+      request: mailboxRequest,
       send,
       editMessage,
       define: mailboxDefine,
@@ -234,6 +234,14 @@ export const makeGuestMaker = ({
     /** @type {EndoGuest['reverseLookup']} */
     const reverseLookup = value =>
       directoryReverseLookup(unwrapGuestFacet(value));
+
+    // A correspondent resolves a request with any value it names, which may
+    // be a directory; it too reaches the guest as its pet-name facet.
+    /** @type {EndoGuest['request']} */
+    const request = async (toNameOrPath, description, responseName) =>
+      guestFacetFor(
+        await mailboxRequest(toNameOrPath, description, responseName),
+      );
 
     /** @type {EndoGuest['makeDirectory']} */
     const makeDirectory = async petNamePath =>
