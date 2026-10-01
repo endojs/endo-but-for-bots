@@ -166,50 +166,101 @@ fn regenerate_stage1_sqlite_store_fixture() {
     println!("fixture written at {} — commit it", path.display());
 }
 
+/// The boot layout of the build that wrote the stage-1 fixture
+/// (`regenerate_stage1_sqlite_store_fixture`, which only a schema-35 build
+/// can run). The fixture is frozen, so this is too.
+const STAGE1_FIXTURE_BOOT: [u8; 32] = [
+    210, 205, 173, 102, 192, 135, 146, 200, 62, 10, 111, 223, 170, 167, 104, 132, 31, 246, 118, 18,
+    42, 255, 101, 204, 150, 227, 222, 102, 95, 182, 69, 250,
+];
+
+/// Whether the SQLite store at `path` still has the `leaf_hashes` table the
+/// schemas before 36 kept. Read between opens: the store holds an exclusive
+/// lock while it is open.
+fn has_leaf_table(path: &std::path::Path) -> bool {
+    rusqlite::Connection::open(path)
+        .unwrap()
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE name = 'leaf_hashes'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap()
+        == 1
+}
+
 /// The committed stage-1 fixture, a schema-35 SQLite store with its
-/// `leaf_hashes` table, migrates in place: the table is dropped, the store
-/// passes both validator levels (including the edge-index parity hook), and
-/// it resumes where it stopped and checkpoints. The fixture's history is
-/// frozen, so a build whose boot layout or cost table differs from the one
-/// that wrote it cannot migrate it: the migration refuses before writing,
-/// which the deterministic-math provider checks instead, and any other
-/// build fails.
+/// `leaf_hashes` table, is refused by this build and left untouched.
+///
+/// The fixture's history is frozen, so only a build with the boot layout
+/// that wrote it could migrate it, and no build since the realm's
+/// `%ThrowTypeError%`, `@@species` getters and Number formatting methods
+/// has that layout (the deterministic-math provider never had it). The
+/// migration's boot gate refuses before writing and names both layouts.
+/// [`stage1_history_at_schema_35_migrates_and_resumes`] migrates the same
+/// history under this build's own layout.
 #[test]
-fn stage1_sqlite_fixture_migrates_and_resumes() {
+fn stage1_sqlite_fixture_refuses_a_later_boot_layout() {
     let dir = TempDir::new("ih-stage1-sqlite-fixture");
     let path = dir.join("heap.sqlite");
     std::fs::copy(stage1_fixture(), &path).unwrap();
     let before = std::fs::read(&path).unwrap();
-    // Between opens: the store holds an exclusive lock while it is open.
-    let leaf_tables = |path: &std::path::Path| -> i64 {
-        rusqlite::Connection::open(path)
-            .unwrap()
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE name = 'leaf_hashes'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap()
-    };
-    assert_eq!(leaf_tables(&path), 1, "stage 1 kept the leaf table");
+    assert!(has_leaf_table(&path), "stage 1 kept the leaf table");
     let mut store = SqliteHeapStore::open(&path).unwrap();
-    let old = store.manifest().unwrap();
-    assert_eq!(old.store_schema, 35);
+    assert_eq!(store.manifest().unwrap().store_schema, 35);
+    let current = Interp::boot_fingerprint();
+    assert_ne!(current, STAGE1_FIXTURE_BOOT);
     match migrate_store(&mut store, &sig()) {
-        Ok(ran) => assert!(ran),
-        // The fixture was written under the platform math provider, whose
-        // boot layout the deterministic-math lane does not share.
-        Err(StoreError::Snapshot(
-            SnapshotError::BootLayoutMismatch { .. } | SnapshotError::CostTableMismatch { .. },
-        )) if ironhorse_vm::MATH_PROVIDER != "platform" => {
-            store.close().unwrap();
-            assert_eq!(std::fs::read(&path).unwrap(), before);
-            return;
+        Err(StoreError::Snapshot(SnapshotError::BootLayoutMismatch { expected, found })) => {
+            assert_eq!(expected, current);
+            assert_eq!(found, Some(STAGE1_FIXTURE_BOOT));
         }
-        Err(other) => panic!("the fixture must migrate: {other:?}"),
+        other => panic!("the fixture must be refused: {other:?}"),
     }
     store.close().unwrap();
-    assert_eq!(leaf_tables(&path), 0, "migration drops the leaf table");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+/// A schema-35 SQLite store of the stage-1 history under this build's own
+/// boot layout migrates in place: the `leaf_hashes` table is dropped, the
+/// manifest moves to the current schema and nothing else, the store passes
+/// both validator levels (including the edge-index parity hook), and it
+/// resumes where it stopped and checkpoints.
+///
+/// The history is written fresh, its manifest restamped to schema 35
+/// through the migration hook, and the leaf table a schema-35 store kept is
+/// planted beside it, as an older build's store would read.
+#[test]
+fn stage1_history_at_schema_35_migrates_and_resumes() {
+    let dir = TempDir::new("ih-stage1-sqlite-v35");
+    let path = dir.join("heap.sqlite");
+    write_stage1_sqlite_store(&path);
+    let mut store = SqliteHeapStore::open(&path).unwrap();
+    let current = store.manifest().unwrap();
+    let small = store.read_small_state().unwrap();
+    let old = StoreManifest {
+        store_schema: 35,
+        ..current.clone()
+    };
+    store.replace_for_migration(&current, &old, &small).unwrap();
+    store.close().unwrap();
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute_batch(
+            "CREATE TABLE leaf_hashes (
+               kind INTEGER NOT NULL, idx INTEGER NOT NULL, hash BLOB NOT NULL,
+               PRIMARY KEY (kind, idx)
+             );
+             INSERT INTO leaf_hashes VALUES (0, 0, zeroblob(32));",
+        )
+        .unwrap();
+    assert!(has_leaf_table(&path));
+
+    let mut store = SqliteHeapStore::open(&path).unwrap();
+    assert_eq!(store.manifest().unwrap(), old);
+    assert!(migrate_store(&mut store, &sig()).expect("migrates"));
+    store.close().unwrap();
+    assert!(!has_leaf_table(&path), "migration drops the leaf table");
     let mut store = SqliteHeapStore::open(&path).unwrap();
     let migrated = store.manifest().unwrap();
     assert_eq!(
@@ -218,11 +269,11 @@ fn stage1_sqlite_fixture_migrates_and_resumes() {
             store_schema: STORE_SCHEMA_VERSION,
             ..old
         },
-        "the token is the stored seal's first half; nothing else moves"
+        "only the schema moves"
     );
     validate_store(&store, &sig()).expect("metadata-scale validation");
     validate_store_content(&store, &sig()).expect("full validation");
-    let mut session = resume_from_store(&store, &sig()).expect("the fixture resumes");
+    let mut session = resume_from_store(&store, &sig()).expect("the store resumes");
     assert_eq!((session.epoch(), session.token()), (4, migrated.token));
     let (bytecode, names) = compile(STAGE1_PROBE.0);
     let code = session

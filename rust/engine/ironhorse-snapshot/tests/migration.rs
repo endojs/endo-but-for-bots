@@ -500,39 +500,72 @@ fn v5_container_imports_and_round_trips_unchanged() {
     assert_resumes_and_reads(&mut store);
 }
 
+/// The boot layout of the build that wrote the stage-1 fixture
+/// (`regenerate_stage1_file_store_fixture`, which only a schema-35 build can
+/// run). The fixture is frozen, so this is too.
+const STAGE1_FIXTURE_BOOT: [u8; 32] = [
+    210, 205, 173, 102, 192, 135, 146, 200, 62, 10, 111, 223, 170, 167, 104, 132, 31, 246, 118, 18,
+    42, 255, 101, 204, 150, 227, 222, 102, 95, 182, 69, 250,
+];
+
 /// The committed stage-1 fixture, a schema-35 store in the file store's
-/// layout before schema 36, migrates in place: the file is rewritten in
-/// the current layout, passes both validator levels, and resumes where it
-/// stopped, and the resumed machine checkpoints into it.
+/// layout before schema 36, is refused by this build and left untouched.
 ///
-/// The fixture's history is frozen, so a build whose boot layout or cost
-/// table differs from the one that wrote it cannot migrate it: the
-/// migration's signature and cost-table gates refuse before writing. The
-/// deterministic-math provider is such a build, and checks that refusal
-/// instead; in any other build a refusal fails the test.
+/// The fixture's history is frozen, so only a build with the boot layout
+/// that wrote it could migrate it, and no build since the realm's
+/// `%ThrowTypeError%`, `@@species` getters and Number formatting methods
+/// has that layout (the deterministic-math provider never had it). The
+/// migration's boot gate refuses before writing and names both layouts.
+/// [`stage1_history_at_schema_35_migrates_and_resumes`] migrates the same
+/// history under this build's own layout.
 #[test]
-fn stage1_file_store_fixture_migrates_and_resumes() {
+fn stage1_file_store_fixture_refuses_a_later_boot_layout() {
     let dir = TempDir::new("ih-stage1-fixture");
     let path = dir.join("heap.ihstore");
     std::fs::copy(fixture("store-v35-stage1.ihstore"), &path).unwrap();
     let before = std::fs::read(&path).unwrap();
     assert_eq!(&before[..8], b"IHSTORE5");
     let mut store = FileStore::open(&path).unwrap();
-    let old = store.manifest().unwrap();
-    assert_eq!(old.store_schema, 35);
+    assert_eq!(store.manifest().unwrap().store_schema, 35);
+    let current = ironhorse_vm::Interp::boot_fingerprint();
+    assert_ne!(current, STAGE1_FIXTURE_BOOT);
     match migrate_store(&mut store, &sig()) {
-        Ok(ran) => assert!(ran),
-        // The fixture was written under the platform math provider, whose
-        // boot layout the deterministic-math lane does not share.
-        Err(StoreError::Snapshot(
-            SnapshotError::BootLayoutMismatch { .. } | SnapshotError::CostTableMismatch { .. },
-        )) if ironhorse_vm::MATH_PROVIDER != "platform" => {
-            assert_eq!(std::fs::read(&path).unwrap(), before);
-            return;
+        Err(StoreError::Snapshot(SnapshotError::BootLayoutMismatch { expected, found })) => {
+            assert_eq!(expected, current);
+            assert_eq!(found, Some(STAGE1_FIXTURE_BOOT));
         }
-        Err(other) => panic!("the fixture must migrate: {other:?}"),
+        other => panic!("the fixture must be refused: {other:?}"),
     }
-    assert_eq!(&std::fs::read(&path).unwrap()[..8], b"IHSTORE6");
+    assert_eq!(std::fs::read(&path).unwrap(), before);
+}
+
+/// A schema-35 store of the stage-1 history under this build's own boot
+/// layout migrates in place: the manifest moves to the current schema and
+/// nothing else, the store passes both validator levels, and it resumes
+/// where it stopped, and the resumed machine checkpoints into it.
+///
+/// The history is written fresh and its manifest restamped to schema 35
+/// through the migration hook, as an older build's store would read; the
+/// file is in the current layout, since reading the legacy layout is
+/// `store_file`'s to test.
+#[test]
+fn stage1_history_at_schema_35_migrates_and_resumes() {
+    let dir = TempDir::new("ih-stage1-v35");
+    let path = dir.join("heap.ihstore");
+    write_stage1_file_store(&path);
+    let mut store = FileStore::open(&path).unwrap();
+    let current = store.manifest().unwrap();
+    let small = store.read_small_state().unwrap();
+    let old = StoreManifest {
+        store_schema: 35,
+        ..current.clone()
+    };
+    store.replace_for_migration(&current, &old, &small).unwrap();
+    drop(store);
+
+    let mut store = FileStore::open(&path).unwrap();
+    assert_eq!(store.manifest().unwrap(), old);
+    assert!(migrate_store(&mut store, &sig()).expect("migrates"));
     let migrated = store.manifest().unwrap();
     assert_eq!(
         migrated,
@@ -540,11 +573,11 @@ fn stage1_file_store_fixture_migrates_and_resumes() {
             store_schema: STORE_SCHEMA_VERSION,
             ..old
         },
-        "the token is the stored seal's first half; nothing else moves"
+        "only the schema moves"
     );
     validate_store(&store, &sig()).expect("metadata-scale validation");
     validate_store_content(&store, &sig()).expect("full validation");
-    let mut session = resume_from_store(&store, &sig()).expect("the fixture resumes");
+    let mut session = resume_from_store(&store, &sig()).expect("the store resumes");
     assert_eq!((session.epoch(), session.token()), (4, migrated.token));
     let (code, symbols) = ironhorse_compile::compile_atoms(STAGE1_PROBE.0).unwrap();
     let code = session
