@@ -4,6 +4,7 @@ import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
 import { passStyleOf } from '@endo/pass-style';
+import { makeEncodePassable } from '@endo/marshal';
 
 import { isKey, assertKey } from '../src/keys/checkKey.js';
 import { keyEQ } from '../src/keys/compareKeys.js';
@@ -12,6 +13,7 @@ import {
   matches,
   mustMatch,
   M,
+  getRankCover,
 } from '../src/patterns/patternMatchers.js';
 
 /** @type {any} */
@@ -65,4 +67,11 @@ test('a SturdyRef as a specimen fails to match rather than throwing', t => {
   t.false(matches(harden({ ref }), M.key()));
   t.false(matches(harden({ ref }), harden({ ref: M.key() })));
   t.true(matches(harden({ ref }), harden({ ref: M.any() })));
+});
+
+test('a SturdyRef has no rank cover', t => {
+  const encodePassable = makeEncodePassable();
+  t.throws(() => getRankCover(makeRef(), encodePassable), {
+    message: /"sturdyRef" cannot be rank-ordered/,
+  });
 });
