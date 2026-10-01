@@ -688,8 +688,7 @@ export const sendFormComponent = ({
       // The daemon treats a recipient STRING as a single pet-name segment
       // (namePathFrom does not split on "/"), so a nested recipient like
       // `floot/controller-profile/session-…` must be handed over as a path
-      // array or it fails with `Invalid name`. Mirror the `identify` calls
-      // below, which already split on "/".
+      // array or it fails with `Invalid name`.
       const conversationRecipient =
         typeof conversationPetName === 'string'
           ? conversationPetName.split('/')
@@ -724,7 +723,7 @@ export const sendFormComponent = ({
       petNames.length === 1 && strings.every(part => !part.trim());
     if (onlyToken) {
       const [petName] = petNames;
-      const petNamePath = petName.split('/');
+      const petNamePath = [petName];
       setSubmitting(true);
       Promise.all([
         E(powers).identify(
@@ -797,7 +796,7 @@ export const sendFormComponent = ({
         to.split('/'),
         messageStrings,
         messageEdgeNames,
-        messagePetNames.map(petName => petName.split('/')),
+        messagePetNames.map(petName => [petName]),
       )
       .then(
         () => {

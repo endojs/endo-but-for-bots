@@ -610,7 +610,7 @@ const DefinitionBody = ({ message, powers, setError }) => {
         setError(` Missing binding for ${codeName}`);
         return;
       }
-      collected[codeName] = val.split('/');
+      collected[codeName] = [val];
     }
     setError('');
     E(powers)

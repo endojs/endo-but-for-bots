@@ -79,11 +79,14 @@ const setup = ({
   names = ['alice', 'bob', 'charlie'],
   getChannelRef,
   getConversationPetName,
+  showValue = () => {},
 } = {}) => {
   const { $input, $menu, $error, $sendButton, $chatBar } =
     createElements(testDocument);
 
-  const { powers, sentMessages, addName, setValue } = makeMockPowers({ names });
+  const { powers, sentMessages, calls, addName, setValue } = makeMockPowers({
+    names,
+  });
 
   /** @type {import('@endo/spaces-util/send-form.js').SendFormState[]} */
   const stateChanges = [];
@@ -97,7 +100,7 @@ const setup = ({
     E,
     iterateReader,
     powers,
-    showValue: () => {},
+    showValue,
     onStateChange: state => {
       stateChanges.push(state);
     },
@@ -114,10 +117,24 @@ const setup = ({
     component,
     powers,
     sentMessages,
+    calls,
     stateChanges,
     addName,
     setValue,
   };
+};
+
+/**
+ * Append a pet-name token to the input, as the autocomplete does on accept.
+ * @param {HTMLElement} $input
+ * @param {string} petName
+ */
+const appendToken = ($input, petName) => {
+  const $token = testDocument.createElement('span');
+  $token.className = 'chat-token';
+  $token.dataset.petName = petName;
+  $token.dataset.edgeName = petName;
+  $input.appendChild($token);
 };
 
 test.afterEach(() => {
@@ -278,6 +295,61 @@ test.serial(
       'the remembered recipient round-trips back to a path',
     );
     t.is(ctx.$error.textContent, '', 'no error surfaced');
+
+    t.teardown(() => ctx.component.dispose());
+  },
+);
+
+test.serial(
+  'a slash in an embedded pet name stays one segment on send',
+  async t => {
+    const ctx = setup();
+
+    appendToken(ctx.$input, 'bob');
+    ctx.$input.appendChild(testDocument.createTextNode(' see '));
+    appendToken(ctx.$input, 'feature/foo');
+
+    ctx.$sendButton.click();
+    await waitFor(() => ctx.sentMessages.length > 0);
+
+    t.is(ctx.sentMessages.length, 1, 'one message sent');
+    t.deepEqual(ctx.sentMessages[0].to, ['bob'], 'leading token is recipient');
+    t.deepEqual(
+      ctx.sentMessages[0].petNames,
+      [['feature/foo']],
+      'the embedded pet name is not split on "/"',
+    );
+
+    t.teardown(() => ctx.component.dispose());
+  },
+);
+
+test.serial(
+  'a lone token with a slash is shown as a one-segment path',
+  async t => {
+    /** @type {unknown[][]} */
+    const shown = [];
+    const ctx = setup({
+      showValue: (...args) => {
+        shown.push(args);
+      },
+    });
+    ctx.setValue('feature/foo', 'value');
+
+    appendToken(ctx.$input, 'feature/foo');
+
+    ctx.$sendButton.click();
+    await waitFor(() => shown.length > 0 || ctx.$error.textContent !== '');
+
+    const identifyCall = ctx.calls.find(c => c.method === 'identify');
+    t.deepEqual(
+      identifyCall && identifyCall.args,
+      ['feature/foo'],
+      'identify receives one segment',
+    );
+    t.is(shown.length, 1, 'the value modal opened');
+    t.deepEqual(shown[0][2], ['feature/foo'], 'the path is one segment');
+    t.is(ctx.sentMessages.length, 0, 'nothing sent');
 
     t.teardown(() => ctx.component.dispose());
   },
