@@ -10,7 +10,8 @@ This directory holds the implementation notes behind contracts that are implemen
 possible table designs in more detail.
 [Host-managed resources](host-managed-resources.md) gathers the changes proposed while reviewing
 the current implementation: the installation registry out of the user's workspace, many
-workspaces per daemon, and typed resource descriptions.
+workspaces per daemon, typed resource descriptions, and where the package can reuse its own
+building blocks and other Endo packages instead of a second implementation.
 Two notes that argued for the manager and adapter model before it was built are kept under
 [archive](archive/): [what a host service had to write](archive/host-service-template.md) and
 [manual persistence vats](archive/manual-persistence-vats.md).
