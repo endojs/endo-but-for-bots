@@ -127,20 +127,27 @@ Each case runs on a fresh thread of `NATIVE_STACK_BYTES`; before each stage unde
 (compiling the source; running it on a fresh machine) the unused stack below the caller's
 frame is painted with a sentinel, and afterwards the lowest dirtied byte gives the stage's
 high-water mark in bytes.
-One run per case, byte-exact, no bisection and no engine instrumentation.
+One run per case, read to the byte, no bisection and no engine instrumentation.
 The cases are the `native_recursion_budget` scenarios at their halting and accepted sizes
 (the report's 25 family cases) plus the accepted compiler pins of
 `ironhorse-compile/tests/recursion_bounds.rs`, and a few in-place walks as controls.
 Each case reports a `.compile` mark and, unless it is a compiler pin, a `.run` mark with its
 outcome (`completed`, `ReentryLimit`, ...).
 
-Frame sizes are a property of the build, so the marks are deterministic for one compiler,
-target and profile and move when any of those does.
+Frame sizes are a property of the build, so the marks move when the compiler, target or
+profile does.
 `stack-height-baseline.json` records that provenance with the marks, and the check refuses a
 mismatch unless `--ignore-provenance` is passed.
-A case fails when it grows past the baseline by more than the baseline's `slack` (2%) or when
-its outcome changes; an outcome change is an acceptance change, which the report says needs a
-versioned release.
+Within one build the marks still vary from run to run: the standard library seeds its hash
+tables randomly in each process, which changes what runs at a case's deepest point.
+Over eight identical runs, no two alike, 27 of the 347 marks moved, by at most 184 B, which
+is 1.41% of the 13,087 B mark it moved; no mark over 100 KB moved by more than 0.14%.
+With the seeds pinned (an `LD_PRELOAD` that fixes `getrandom`) twelve runs were
+byte-identical, with address-space randomization on or off; turning it off alone did not
+make two runs agree.
+A case fails when it grows past the baseline by more than the baseline's `slack` (2%), which
+absorbs that variation, or when its outcome changes; an outcome change is an acceptance
+change, which the report says needs a versioned release.
 A case well under the baseline is reported as a note: lower the baseline explicitly, never as
 part of a check.
 

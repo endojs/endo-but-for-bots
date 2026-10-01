@@ -6,12 +6,16 @@
 //! running it on a fresh machine) the unused stack below the caller's frame is
 //! painted with a sentinel, and afterwards the lowest byte the stage dirtied
 //! gives its high-water mark in bytes below that frame (`stack-lanes/paint.rs`).
-//! One run per case, byte-exact, no bisection and no engine instrumentation.
+//! One run per case, read to the byte, no bisection and no engine
+//! instrumentation.
 //!
-//! Frame sizes are a property of the build, so the marks are deterministic for
-//! one compiler, target and profile and move when any of those does. The gate
-//! is `benches/stack_height.py`, which keeps a baseline per build provenance
-//! and fails when a case grows past it or changes outcome.
+//! Frame sizes are a property of the build, so the marks move when the
+//! compiler, target or profile does. Within one build they vary from run to
+//! run by up to about 1.4%: the standard library seeds its hash tables
+//! randomly in each process, which changes what runs at a case's deepest
+//! point (`benches/README.md`). The gate is `benches/stack_height.py`, which
+//! keeps a baseline per build provenance and fails when a case grows past it
+//! by more than its 2% slack or changes outcome.
 //!
 //! The marks are native. They show whether a refactor shrinks frames; they do
 //! not predict which cases trap on Wasmtime or V8, whose frames differ (report
