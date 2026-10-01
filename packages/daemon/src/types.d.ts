@@ -1752,6 +1752,20 @@ export type GuestMessageRevision = Omit<MessageRevision, 'envelope'> & {
 /** A name change as a guest reads it: the named value's identifier is withheld. */
 export type GuestNameChange = { add: Name; type?: string } | { remove: Name };
 
+/**
+ * A directory as a guest holds it: an `EndoDirectory` without the methods
+ * that produce or consume identifiers or locators. A guest's `makeDirectory`,
+ * `lookup`, `maybeLookup`, and `listValues` hand out this facet in place of a
+ * directory, and the facet narrows the directories it reaches the same way.
+ */
+export interface EndoGuestDirectory extends Omit<
+  EndoDirectory,
+  GuestWithheldMethod | 'makeDirectory' | 'followNameChanges'
+> {
+  makeDirectory(petNamePath: string | string[]): Promise<EndoGuestDirectory>;
+  followNameChanges(): AsyncGenerator<GuestNameChange, undefined, undefined>;
+}
+
 export interface EndoGuest extends Omit<
   EndoAgent,
   | GuestWithheldMethod
@@ -1759,7 +1773,9 @@ export interface EndoGuest extends Omit<
   | 'followMessages'
   | 'messageHistory'
   | 'followNameChanges'
+  | 'makeDirectory'
 > {
+  makeDirectory(petNamePath: string | string[]): Promise<EndoGuestDirectory>;
   listMessages(): Promise<Array<GuestMessage>>;
   followMessages(): AsyncGenerator<GuestMessage, undefined, undefined>;
   messageHistory(messageNumber: bigint): Promise<Array<GuestMessageRevision>>;

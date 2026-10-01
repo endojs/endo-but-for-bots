@@ -7,7 +7,7 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import {
   cancelPendingIterator,
-  makeCancelableIterator,
+  mapCancelableIterator,
 } from './cancelable-iterator.js';
 import { makePetSitter } from './pet-sitter.js';
 import {
@@ -16,48 +16,13 @@ import {
   petNamePathFrom,
 } from './pet-name.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
-import { idFromLocator } from './locator.js';
 
-/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, GuestMessage, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EndoGuestDirectory, EvalDeferredTaskParams, GuestMessage, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
 import { guestHelp, makeHelp } from './help-text.js';
 import { registerGuestDirectory } from './guest-amplification.js';
-
-/**
- * A guest holds no formula identifiers or locators (distributed confinement):
- * a designation carried as data must not become authority, and authority the
- * guest holds must not leave as data. These message fields carry one or the
- * other and are withheld from every message a guest reads.
- */
-const designationMessageFields = harden([
-  'from',
-  'to',
-  'ids',
-  'promiseId',
-  'resolverId',
-  'valueId',
-]);
-
-/**
- * @template T, U
- * @param {AsyncGenerator<T, undefined, undefined>} source
- * @param {(item: T) => U} transform
- */
-const mapCancelableIterator = (source, transform) =>
-  makeCancelableIterator(async function* mapped(setCancelPending) {
-    try {
-      const cancellation = setCancelPending(() =>
-        cancelPendingIterator(source),
-      );
-      if (cancellation !== undefined) await cancellation;
-      for await (const item of source) {
-        yield transform(item);
-      }
-    } finally {
-      await source.return(undefined);
-    }
-    return undefined;
-  });
+import { makeMessageRedactor, redactNameChange } from './guest-redaction.js';
+import { guestFacetFor, unwrapGuestFacet } from './directory.js';
 
 /**
  * @param {object} args
@@ -184,23 +149,23 @@ export const makeGuestMaker = ({
     const {
       has,
       list,
-      listValues,
+      listValues: directoryListValues,
       locateContent,
       listContent,
       storeContent,
       reverseLocateContent,
       internalizeContentLocator,
       followNameChanges: directoryFollowNameChanges,
-      lookup,
-      maybeLookup,
-      reverseLookup,
+      lookup: directoryLookup,
+      maybeLookup: directoryMaybeLookup,
+      reverseLookup: directoryReverseLookup,
       readText: directoryReadText,
       maybeReadText: directoryMaybeReadText,
       writeText: directoryWriteText,
       move,
       remove,
       copy,
-      makeDirectory,
+      makeDirectory: directoryMakeDirectory,
     } = directory;
 
     const {
@@ -222,39 +187,9 @@ export const makeGuestMaker = ({
       sendValue: mailboxSendValue,
     } = mailbox;
 
-    /**
-     * The guest's own pet names for a correspondent, in place of the
-     * correspondent's locator.
-     * @param {unknown} locator
-     * @returns {Name[]}
-     */
-    const namesForLocator = locator => {
-      if (typeof locator !== 'string') {
-        return harden([]);
-      }
-      try {
-        return specialStore.reverseIdentify(idFromLocator(locator));
-      } catch {
-        return harden([]);
-      }
-    };
-
-    /**
-     * @param {Record<string, any>} message
-     * @returns {GuestMessage}
-     */
-    const redactMessage = message => {
-      /** @type {Record<string, any>} */
-      const redacted = {
-        ...message,
-        fromNames: namesForLocator(message.from),
-        toNames: namesForLocator(message.to),
-      };
-      for (const field of designationMessageFields) {
-        delete redacted[field];
-      }
-      return /** @type {GuestMessage} */ (harden(redacted));
-    };
+    const { redactMessage } = makeMessageRedactor(id =>
+      specialStore.reverseIdentify(id),
+    );
 
     /** @type {EndoGuest['listMessages']} */
     const listMessages = async () =>
@@ -274,13 +209,37 @@ export const makeGuestMaker = ({
 
     /** @type {EndoGuest['followNameChanges']} */
     const followNameChanges = () =>
-      mapCancelableIterator(directoryFollowNameChanges(), change => {
-        if (!('add' in change)) {
-          return change;
-        }
-        const { value: _value, ...rest } = change;
-        return harden(rest);
-      });
+      mapCancelableIterator(directoryFollowNameChanges(), redactNameChange);
+
+    // A directory reaches a guest only as its pet-name facet, which carries no
+    // identifier or locator methods: otherwise a guest could make or look up a
+    // directory, copy a value into it, and `identify` or `locate` it there.
+    /** @type {EndoGuest['lookup']} */
+    const lookup = async petNamePath =>
+      guestFacetFor(await directoryLookup(petNamePath));
+
+    /** @type {EndoGuest['maybeLookup']} */
+    const maybeLookup = async petNamePath =>
+      guestFacetFor(await directoryMaybeLookup(petNamePath));
+
+    // The snapshot holds a promise per name; narrow each as it settles.
+    /** @type {EndoGuest['listValues']} */
+    const listValues = async () =>
+      harden(
+        (await directoryListValues()).map(value =>
+          Promise.resolve(value).then(guestFacetFor),
+        ),
+      );
+
+    /** @type {EndoGuest['reverseLookup']} */
+    const reverseLookup = value =>
+      directoryReverseLookup(unwrapGuestFacet(value));
+
+    /** @type {EndoGuest['makeDirectory']} */
+    const makeDirectory = async petNamePath =>
+      /** @type {EndoGuestDirectory} */ (
+        guestFacetFor(await directoryMakeDirectory(petNamePath))
+      );
 
     /**
      * @param {NameOrPath | undefined} workerName

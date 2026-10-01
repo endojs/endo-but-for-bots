@@ -254,6 +254,16 @@ export const DirectoryInterface = M.interface('EndoDirectory', {
   readOnly: M.callWhen().returns(M.remotable('ReadableNameHub')),
 });
 
+// `EndoGuestDirectory` is a directory as a guest holds it: the pet-name hub
+// and file-I/O surface of `EndoDirectory` without the identifier and locator
+// methods (see `designationMethodGuards`). A guest that made or looked up a
+// directory could otherwise copy a value into it and `identify` it there.
+export const GuestDirectoryInterface = M.interface('EndoGuestDirectory', {
+  ...petNameHubMethodGuards,
+  ...directoryFileMethodGuards,
+  readOnly: M.callWhen().returns(M.remotable('ReadableNameHub')),
+});
+
 export const GuestInterface = M.interface('EndoGuest', {
   // Name hub — the shared read (incl. `help`) + pet-name mutation surface,
   // plus the directory file-I/O surface. No identifier or locator methods:

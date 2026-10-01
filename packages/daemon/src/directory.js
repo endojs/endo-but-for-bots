@@ -11,6 +11,7 @@ import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 import {
   cancelPendingIterator,
   makeCancelableIterator,
+  mapCancelableIterator,
 } from './cancelable-iterator.js';
 import {
   externalizeId,
@@ -29,10 +30,85 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { directoryHelp, readableNameHubHelp, makeHelp } from './help-text.js';
 
-import { DirectoryInterface, ReadableNameHubInterface } from './interfaces.js';
-import { amplifyNameHub } from './guest-amplification.js';
+import {
+  DirectoryInterface,
+  GuestDirectoryInterface,
+  ReadableNameHubInterface,
+} from './interfaces.js';
+import {
+  amplifyNameHub,
+  registerGuestDirectory,
+} from './guest-amplification.js';
+import { redactNameChange } from './guest-redaction.js';
 
 /** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
+
+// A directory reaches a guest only as its pet-name facet (distributed
+// confinement): the guest-facing `lookup`, `maybeLookup`, `listValues`, and
+// `makeDirectory` pass every result through `guestFacetFor`. Each directory
+// registers a memoized facet maker, keyed by the directory exo.
+
+/** @type {WeakMap<object, () => object>} */
+const guestFacetMakers = new WeakMap();
+
+/** @type {WeakMap<object, object>} */
+const directoriesByGuestFacet = new WeakMap();
+
+/**
+ * The value a guest receives in place of `value`: a directory's pet-name
+ * facet, or `value` itself when it is not a directory.
+ *
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+export const guestFacetFor = value => {
+  if (
+    value === null ||
+    (typeof value !== 'object' && typeof value !== 'function')
+  ) {
+    return value;
+  }
+  const makeGuestFacet = guestFacetMakers.get(value);
+  return makeGuestFacet === undefined ? value : makeGuestFacet();
+};
+harden(guestFacetFor);
+
+/**
+ * The directory behind a guest facet, so a guest's `reverseLookup` of a facet
+ * finds the names of the directory it stands for.
+ *
+ * @param {unknown} value
+ * @returns {unknown}
+ */
+export const unwrapGuestFacet = value => {
+  if (
+    value === null ||
+    (typeof value !== 'object' && typeof value !== 'function')
+  ) {
+    return value;
+  }
+  return directoriesByGuestFacet.get(value) ?? value;
+};
+harden(unwrapGuestFacet);
+
+const designationMethodNames = new Set([
+  'identify',
+  'locate',
+  'reverseLocate',
+  'followLocatorNameChanges',
+  'listIdentifiers',
+  'listLocators',
+  'storeIdentifier',
+  'storeLocator',
+]);
+
+const guestDirectoryHelp = harden(
+  Object.fromEntries(
+    Object.entries(directoryHelp).filter(
+      ([method]) => !designationMethodNames.has(method),
+    ),
+  ),
+);
 
 // A read-only view of a name hub: a local in-daemon exo that forwards only the
 // readable hub methods (help / has / list / lookup / maybeLookup) to the
@@ -779,7 +855,7 @@ export const makeDirectoryMaker = ({
       }
     };
 
-    return makeExo(
+    const directoryExo = makeExo(
       'EndoDirectory',
       DirectoryInterface,
       /** @type {any} */ ({
@@ -834,6 +910,81 @@ export const makeDirectoryMaker = ({
         },
       }),
     );
+
+    /** @param {unknown} value */
+    const forGuest = async value => guestFacetFor(await value);
+
+    /** @type {ReadableNameHub | undefined} */
+    let guestReadOnlyView;
+    /** @type {object | undefined} */
+    let guestFacet;
+    const makeGuestFacet = () => {
+      if (guestFacet !== undefined) {
+        return guestFacet;
+      }
+      const guestHelp = makeHelp(guestDirectoryHelp);
+      guestFacet = makeExo(
+        'EndoGuestDirectory',
+        GuestDirectoryInterface,
+        /** @type {any} */ ({
+          help: guestHelp,
+          has,
+          list,
+          listValues: async () =>
+            harden(
+              (await listValues()).map(value =>
+                Promise.resolve(value).then(guestFacetFor),
+              ),
+            ),
+          followNameChanges: () => {
+            const iterator = mapCancelableIterator(
+              directory.followNameChanges(),
+              redactNameChange,
+            );
+            return readerFromIterator(iterator, {
+              cancelPending: () => cancelPendingIterator(iterator),
+            });
+          },
+          lookup: petNamePath => forGuest(lookup(petNamePath)),
+          maybeLookup: petNamePath =>
+            forGuest(directory.maybeLookup(petNamePath)),
+          reverseLookup: value => reverseLookup(unwrapGuestFacet(value)),
+          remove,
+          move,
+          copy,
+          makeDirectory: petNamePath => forGuest(makeDirectory(petNamePath)),
+          readText: directory.readText,
+          maybeReadText: directory.maybeReadText,
+          writeText: directory.writeText,
+          // Unlike the directory's own view, this view's lookups yield guest
+          // facets, so a directory reached through it is narrowed too.
+          readOnly: async () => {
+            assertReadOnlyViewLive();
+            if (guestReadOnlyView === undefined) {
+              guestReadOnlyView = makeReadOnlyDirectoryView(
+                harden({
+                  has,
+                  list,
+                  lookup: petNamePath => forGuest(lookup(petNamePath)),
+                  maybeLookup: petNamePath =>
+                    forGuest(directory.maybeLookup(petNamePath)),
+                }),
+                assertReadOnlyViewLive,
+              );
+            }
+            return guestReadOnlyView;
+          },
+        }),
+      );
+      directoriesByGuestFacet.set(guestFacet, directoryExo);
+      // Daemon code that traverses a pet-name path through the facet (as
+      // through a guest) still reaches the directory.
+      registerGuestDirectory(guestFacet, /** @type {any} */ (directoryExo));
+      return guestFacet;
+    };
+    guestFacetMakers.set(directoryExo, makeGuestFacet);
+
+    return directoryExo;
   };
 
   return { makeIdentifiedDirectory, makeDirectoryNode };

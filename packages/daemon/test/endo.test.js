@@ -3587,6 +3587,77 @@ test('a guest neither produces nor consumes identifiers or locators', async t =>
   }
 });
 
+// The directory methods that produce or consume identifiers or locators.
+const directoryDesignationMethods = [
+  'identify',
+  'locate',
+  'reverseLocate',
+  'followLocatorNameChanges',
+  'listIdentifiers',
+  'listLocators',
+  'storeIdentifier',
+  'storeLocator',
+];
+
+test('a directory reaches a guest without identifier or locator methods', async t => {
+  // A guest that held a full directory could copy any value it names into the
+  // directory and `identify` or `locate` it there.
+  const { host } = await prepareHost(t);
+  await E(host).makeDirectory(['granted']);
+  await E(host).makeDirectory(['granted', 'inner']);
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
+  await E(host).copy(['granted'], ['guest-agent', 'granted']);
+  await E(host).storeValue(42, ['guest-agent', 'answer']);
+
+  const made = await E(guest).makeDirectory(['scratch']);
+  const lookedUp = await E(guest).lookup('scratch');
+  const maybe = await E(guest).maybeLookup('scratch');
+  const granted = await E(guest).lookup('granted');
+  const nested = await E(guest).lookup(['granted', 'inner']);
+  const listed = await Promise.all(await E(guest).listValues());
+  const madeWithin = await E(made).makeDirectory(['deeper']);
+  const reachedWithin = await E(granted).lookup('inner');
+  const reachedReadOnly = await E(E(granted).readOnly()).lookup('inner');
+  const facets = {
+    made,
+    lookedUp,
+    maybe,
+    granted,
+    nested,
+    madeWithin,
+    reachedWithin,
+    reachedReadOnly,
+  };
+  for (const [label, facet] of Object.entries(facets)) {
+    // eslint-disable-next-line no-await-in-loop, no-underscore-dangle
+    const methods = new Set(await E(facet).__getMethodNames__());
+    t.true(methods.has('lookup'), `${label} keeps lookup`);
+    t.true(methods.has('copy'), `${label} keeps copy`);
+    for (const method of directoryDesignationMethods) {
+      t.false(methods.has(method), `${label} lacks ${method}`);
+    }
+  }
+  // A directory's facet is memoized, so every route reaches the same one.
+  t.is(lookedUp, made);
+  t.is(maybe, made);
+  t.is(nested, reachedWithin);
+  t.true(listed.includes(made));
+  t.true(listed.includes(granted));
+
+  // The pet-name surface still works through the facet, and the host still
+  // traverses into what the guest made.
+  await E(guest).copy(['answer'], ['scratch', 'alias']);
+  t.is(await E(made).lookup('alias'), 42);
+  t.is(await E(host).lookup(['guest-agent', 'scratch', 'alias']), 42);
+  t.truthy(await E(host).identify('guest-agent', 'scratch', 'alias'));
+  t.deepEqual(await E(guest).reverseLookup(made), ['scratch']);
+  await t.throwsAsync(() => E(made).identify('alias'), {
+    message: /target has no method/u,
+  });
+});
+
 test('a guest cannot adopt a host formula identifier carried as data', async t => {
   // #1371: a guest that read the host's formula identifier from its prompt
   // stored it with `storeIdentifier` and then held `?type=host`.
