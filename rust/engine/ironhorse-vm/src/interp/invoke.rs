@@ -12,6 +12,15 @@ pub(super) enum RunCall {
     Call(Slot, Slot, Vec<Slot>),
 }
 
+/// Whether `m` is one of the `Iterator.prototype` accessor setters that
+/// [`Interp::call_native_method`] dispatches apart.
+fn is_iterator_setter(m: NativeMethod) -> bool {
+    matches!(
+        m,
+        NativeMethod::IteratorConstructorSetter | NativeMethod::IteratorToStringTagSetter
+    )
+}
+
 impl Interp {
     /// Invoke a callback through the shared, complete ECMAScript `Call`
     /// dispatcher. Native algorithms use this name at callback-taking sites;
@@ -324,34 +333,93 @@ impl Interp {
         // crate. A method that invokes another native without entering
         // `dispatch_at` — `Array.prototype.join` stringifying an element that
         // is itself an array, `Function.prototype.call` trampolining, an
-        // accessor's native setter re-entering itself — nests this frame on
-        // the host stack, so it is charged at the heavy class and bounded by
-        // [`NATIVE_DEPTH_LIMIT`]. `invoke_regexp_protocol` (natives/regexp.rs)
-        // repeats this charge for the intrinsic RegExp protocol methods it
-        // calls in place: keep the two in step.
+        // accessor's native setter re-entering itself — nests the dispatch's
+        // frames on the host stack, so it is charged at the heavy class and
+        // bounded by [`NATIVE_DEPTH_LIMIT`]. `call_native_method_in_place`
+        // repeats this charge for `RUN`, and `invoke_regexp_protocol`
+        // (natives/regexp.rs) for the intrinsic RegExp protocol methods it
+        // calls in place: keep the three in step.
+        self.enter_native_frame(HEAVY_FRAME_COST)?;
+        let result = self.call_native_method_body(m, base, argc, code);
+        self.leave_native_frame(HEAVY_FRAME_COST);
+        result
+    }
 
-        self.with_native_frame(HEAVY_FRAME_COST, |vm| {
-            // These accessors can recursively Set their own copied descriptor.
-            // Keep the large dispatch frame out of that forwarding cycle.
-            if matches!(
-                m,
-                NativeMethod::IteratorConstructorSetter | NativeMethod::IteratorToStringTagSetter
-            ) {
-                vm.cost.on_builtin(m);
-                let this = vm.stack.get(base).copied().unwrap_or_else(Slot::undefined);
-                let arg0 = vm
-                    .stack
-                    .get(base + 4)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let result = vm.iterator_prototype_setter(code, m, this, arg0)?;
-                vm.stack.truncate(base);
-                vm.push(result);
-                Ok(())
-            } else {
-                vm.call_native_method_inner(m, base, argc, code)
-            }
-        })
+    /// [`Self::call_native_method`] for `RUN`'s arm for a native method,
+    /// which every level of a nest that re-enters through a native method
+    /// called from bytecode (`forEach`, `sort`, a generator's `next`)
+    /// passes. It charges the activation around the dispatcher itself, with
+    /// no frame between: `with_native_frame` and its closure left two (560 B
+    /// natively), and on wasm, which has no sibling calls, the wrapper's
+    /// body leaves one.
+    #[inline(always)]
+    pub(super) fn call_native_method_in_place(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<(), Step> {
+        self.enter_native_frame(HEAVY_FRAME_COST)?;
+        let result = if is_iterator_setter(m) {
+            self.iterator_setter_out_of_line(m, base, code)
+        } else {
+            self.call_native_method_inner(m, base, argc, code)
+        };
+        self.leave_native_frame(HEAVY_FRAME_COST);
+        result
+    }
+
+    /// The activation [`Self::call_native_method`] charges. In an optimized
+    /// native build its call of `call_native_method_inner` compiles to a
+    /// sibling call, so a level carries that frame and not this one.
+    #[inline(never)]
+    fn call_native_method_body(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+    ) -> Result<(), Step> {
+        if is_iterator_setter(m) {
+            self.iterator_setter(m, base, code)
+        } else {
+            self.call_native_method_inner(m, base, argc, code)
+        }
+    }
+
+    /// [`Self::iterator_setter`], out of line for `RUN`'s arm.
+    #[cold]
+    #[inline(never)]
+    fn iterator_setter_out_of_line(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        code: &[u8],
+    ) -> Result<(), Step> {
+        self.iterator_setter(m, base, code)
+    }
+
+    /// The `Iterator.prototype` `constructor` and `@@toStringTag` setters,
+    /// which can recursively Set their own copied descriptor: kept out of
+    /// the large dispatch frame and that forwarding cycle.
+    #[inline]
+    fn iterator_setter(&mut self, m: NativeMethod, base: usize, code: &[u8]) -> Result<(), Step> {
+        self.cost.on_builtin(m);
+        let this = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let arg0 = self
+            .stack
+            .get(base + 4)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let result = self.iterator_prototype_setter(code, m, this, arg0)?;
+        self.stack.truncate(base);
+        self.push(result);
+        Ok(())
     }
 
     /// The single complete `Call(F, thisArg, args)` dispatcher. Promise
