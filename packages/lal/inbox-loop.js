@@ -60,8 +60,6 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
     [],
   );
 
-  /** @type {string | undefined} */
-  const selfLocator = await E(powers).locate('@self');
   const cancelled = await getCancelled();
   const cancelledSignal = cancelled
     ? cancelled.then(
@@ -107,15 +105,15 @@ export const runInboxLoop = async ({ powers, getCancelled, runOneRound }) => {
         message
       );
     const {
-      from: fromLocator,
+      fromNames = [],
       number,
       type,
       done: messageDone = true,
     } = inboxMessage;
 
-    // Skip our own outbound messages; only act on inbound mail.
-    // eslint-disable-next-line @endo/restrict-comparison-operands
-    if (fromLocator !== selfLocator) {
+    // Skip our own outbound messages; only act on inbound mail. A guest
+    // sees its correspondents by its own pet names, and itself as `@self`.
+    if (!fromNames.includes('@self')) {
       // Skip partial (in-flight) submissions: wait until the sender
       // marks the message done before spinning up an LLM turn.
       if (messageDone === false) {

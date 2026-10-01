@@ -16,7 +16,7 @@ Lal is an AI agent manager that runs as an unconfined guest caplet. It sends a c
 - Exports `make(guestPowers, _context)` — the standard unconfined guest entry point.
 - The manager loop: sends form, resolves `host-agent`, pre-scans messages for the latest `formMessageId`, then follows messages for value replies.
 - Sub-guests are created via `E(agent).provideGuest(name, { agentName })` which returns the full EndoGuest (not a handle).
-- Form submission values are resolved via `E(powers).lookupById(msg.valueId)` (not `adopt()`, which only works for package messages).
+- Form submission values are resolved by adopting the value message's `value` edge under a scratch pet name (`E(powers).adopt(msg.number, 'value', name)`), reading it, and removing the name: a guest has no `lookupById`, and its messages carry no `valueId`.
 
 ## Common Pitfalls
 

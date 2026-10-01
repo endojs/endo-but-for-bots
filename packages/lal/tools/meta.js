@@ -1,14 +1,14 @@
 // @ts-check
 /**
- * Meta / self-documentation tools: `help` surfaces guest documentation,
- * `locate` returns the endo:// URL for a pet name, and `inspect` resolves
- * a capability and reports its help() text plus method names.
+ * Meta / self-documentation tools: `help` surfaces guest documentation, and
+ * `inspect` resolves a capability and reports its help() text plus method
+ * names. A guest has no `locate`: it designates values only by pet name.
  *
  * @import { Pattern } from '@endo/patterns'
  */
 
 import { M } from '@endo/patterns';
-import { NamePathShape, NameOrPathShape } from '@endo/daemon/type-guards.js';
+import { NameOrPathShape } from '@endo/daemon/type-guards.js';
 
 /** @import { LalToolDef } from './index.js' */
 
@@ -21,16 +21,6 @@ export const metaToolDefs = harden([
       'Get documentation for guest capabilities or a specific method. ' +
       'Call with no arguments for an overview, or with a method name for specific documentation.',
     params: M.splitRecord({}, { methodName: M.string() }),
-  },
-
-  // --- Identity ---
-  {
-    name: 'locate',
-    summary:
-      'Get the locator URL for a pet name. Returns an "endo://..." URL string. ' +
-      'Use locate(["@self"]) to get your own locator. ' +
-      'Argument: petNamePath (string[]).',
-    params: M.splitRecord({ petNamePath: NamePathShape }),
   },
 
   // --- Capability operations ---

@@ -118,9 +118,23 @@ export function makeMockPowers(options = {}) {
 
   messages.push(firstMessage);
 
+  /**
+   * A guest sees its correspondents by its own pet names, never by locator,
+   * and no formula identifiers ride on a message it reads.
+   * @param {any} m
+   */
+  const guestView = m => {
+    const { from, to, ids: _ids, ...rest } = m;
+    return harden({
+      ...rest,
+      fromNames: harden([from === SELF_ID ? '@self' : from]),
+      toNames: harden([to === SELF_ID ? '@self' : to]),
+    });
+  };
+
   async function* followMessages() {
     for (const m of messages) {
-      yield m;
+      yield guestView(m);
     }
   }
 
@@ -198,16 +212,17 @@ export function makeMockPowers(options = {}) {
 
     listMessages() {
       return Promise.resolve(
-        messages.map(m => ({
-          number: m.number,
-          from: m.from,
-          to: m.to,
-          strings: m.strings || [],
-          names: m.names || [],
-          ids: m.ids || [],
-          messageId: m.messageId,
-          replyTo: m.replyTo,
-        })),
+        messages.map(m =>
+          guestView({
+            number: m.number,
+            from: m.from,
+            to: m.to,
+            strings: m.strings || [],
+            names: m.names || [],
+            messageId: m.messageId,
+            replyTo: m.replyTo,
+          }),
+        ),
       );
     },
 
@@ -325,24 +340,6 @@ export function makeMockPowers(options = {}) {
       const key = Array.isArray(petName) ? petName.join('/') : petName;
       directory.set(key, value);
       return Promise.resolve();
-    },
-
-    identify(...petNamePath) {
-      const key = petNamePath.join('/');
-      const v = directory.get(key);
-      return Promise.resolve(
-        v !== undefined ? /** @type {string} */ (v) : undefined,
-      );
-    },
-
-    locate(...petNamePath) {
-      const key = petNamePath.join('/');
-      const v = directory.get(key);
-      return Promise.resolve(
-        v !== undefined
-          ? `endo://localhost/${encodeURIComponent(/** @type {string} */ (v))}?type=handle`
-          : undefined,
-      );
     },
 
     followMessages() {

@@ -237,8 +237,8 @@ export const makeExecuteTool = powers => {
             ) => ({
               number: msg.number,
               date: msg.date,
-              from: msg.from,
-              to: msg.to,
+              fromNames: msg.fromNames,
+              toNames: msg.toNames,
               type: msg.type,
               strings: msg.strings,
               names: msg.names,
@@ -342,15 +342,6 @@ export const makeExecuteTool = powers => {
           throw new Error('messageNumber is required');
         }
         return E(powers).messageHistory(messageNumber);
-      }
-
-      // Identity
-      case 'locate': {
-        const { petNamePath } = args;
-        if (!petNamePath) {
-          throw new Error('petNamePath is required');
-        }
-        return E(powers).locate(...petNamePath);
       }
 
       // Capability operations

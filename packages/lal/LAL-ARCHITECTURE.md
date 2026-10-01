@@ -95,7 +95,7 @@ The caplet entry point follows the Endo convention. On load:
 
 1. Initialize the LLM provider (`createProvider(env)`)
 2. Announce readiness to `@host`
-3. Locate `@self` and start the message-following loop
+3. Start the message-following loop
 
 ```
 make()
@@ -103,7 +103,6 @@ make()
   ├─ createProvider(env)              # LLM provider from env vars
   ├─ Initialize transcript with system prompt
   ├─ E(powers).send('@host', [...])   # greeting with call to action
-  ├─ E(powers).locate('@self')        # Get own locator
   └─ runAgent()                       # Enter message-following loop
 ```
 
@@ -114,7 +113,7 @@ while (true):
     message = await messageIterator.next()  # Block on next mail
     │
     ├─ Race against cancellation signal
-    ├─ Skip own messages (fromId === selfId)
+    ├─ Skip own messages (fromNames includes '@self')
     │
     ├─ Push "You have new mail" → transcript
     │
@@ -483,7 +482,7 @@ A complete request lifecycle:
 1. User sends "@lal Please increment the counter" via Endo chat UI
 2. Endo daemon delivers mail to lal's inbox
 3. messageIterator.next() yields the message
-4. lal skips own messages (fromId !== selfId)
+4. lal skips own messages (`fromNames` includes `@self`)
 5. Message is "package" type → push "You have new mail" to transcript
 6. runAgenticLoop():
    a. chat(transcript) → LLM calls listMessages()
