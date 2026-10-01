@@ -240,7 +240,7 @@
       "outcome": "compiled"
     },
     "flat-self.run": {
-      "bytes": 823007,
+      "bytes": 17439,
       "outcome": "ReentryLimit"
     },
     "flat-256.compile": {
@@ -248,7 +248,7 @@
       "outcome": "compiled"
     },
     "flat-256.run": {
-      "bytes": 85119,
+      "bytes": 15943,
       "outcome": "completed"
     },
     "foreach-63.compile": {
@@ -1056,7 +1056,7 @@
       "outcome": "compiled"
     },
     "flat-fast-2015.run": {
-      "bytes": 822895,
+      "bytes": 17439,
       "outcome": "completed"
     },
     "flat-fast-2016.compile": {
@@ -1064,7 +1064,7 @@
       "outcome": "compiled"
     },
     "flat-fast-2016.run": {
-      "bytes": 823007,
+      "bytes": 17439,
       "outcome": "ReentryLimit"
     },
     "flat-generic-2015.compile": {
@@ -1072,7 +1072,7 @@
       "outcome": "compiled"
     },
     "flat-generic-2015.run": {
-      "bytes": 822895,
+      "bytes": 17439,
       "outcome": "completed"
     },
     "flat-generic-2016.compile": {
@@ -1080,7 +1080,7 @@
       "outcome": "compiled"
     },
     "flat-generic-2016.run": {
-      "bytes": 823007,
+      "bytes": 17407,
       "outcome": "ReentryLimit"
     },
     "render-arr-2047.compile": {
@@ -1352,7 +1352,7 @@
       "outcome": "compiled"
     },
     "u2-tojson-flat-1022.run": {
-      "bytes": 2464959,
+      "bytes": 2187311,
       "outcome": "completed"
     },
     "u2-tojson-regexp-512.compile": {
