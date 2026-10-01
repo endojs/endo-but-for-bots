@@ -1,13 +1,12 @@
 // The stack-lanes probe as a Worker: one fresh instance per request, a WASI
-// preview1 shim for the eight imports the probe uses, and the same shadow-stack
-// painting as node/run.cjs. GET /?case=<name>[&paint=1] answers JSON:
+// preview1 shim for the eight imports the probe uses, and the shadow-stack
+// painter node/run.cjs uses (../shadow-paint.mjs, embedded beside this file).
+// GET /?case=<name>[&paint=1] answers JSON:
 // { stdout, stderr, exit, trap, shadowStack }. A trap is V8's RangeError (the
 // host stack) or WebAssembly.RuntimeError (unreachable, out of bounds); any
 // other failure is a 500 so the runner never mistakes it for a verdict.
 import probe from "probe.wasm";
-
-const SENTINEL = 0xa5;
-const PAINT_MARGIN = 1024;
+import { highWater, paint } from "shadow-paint.mjs";
 
 class ProcExit {
   constructor(code) {
@@ -81,23 +80,6 @@ function wasi(args, io) {
       },
     },
   };
-}
-
-function paint(instance) {
-  const sp = instance.exports.__stack_pointer;
-  const memory = instance.exports.memory;
-  if (!sp || !memory) return null;
-  const top = sp.value;
-  new Uint8Array(memory.buffer, PAINT_MARGIN, top - PAINT_MARGIN).fill(SENTINEL);
-  return { top };
-}
-
-function highWater(instance, painted) {
-  const bytes = new Uint8Array(instance.exports.memory.buffer, 0, painted.top);
-  for (let addr = PAINT_MARGIN; addr < painted.top; addr++) {
-    if (bytes[addr] !== SENTINEL) return painted.top - addr;
-  }
-  return 0;
 }
 
 export default {

@@ -11,6 +11,7 @@ output line byte for byte against a native reference produced in the same run.
 |---|---|
 | `cases.rs` | The corpus: the `native_recursion_budget` scenarios at their halting and accepted sizes, every heavy re-entry family and walker at its ceiling and one past it, the compiler pins and the unpinned chain kinds at ceiling and ceiling+1, the invariant-8 value-stack cases and the U1-U4 compositions. Included by path from the native harness and the probe, so every lane measures the same programs. |
 | `paint.rs` | The stack painter: a stage's host-stack high-water mark in bytes, shared by the harness and the probe. |
+| `shadow-paint.mjs` | The shadow-stack painter, shared by `node/run.cjs` (which imports it) and the workerd Worker (whose config embeds it). |
 | `probe/` | A standalone cargo root that runs one case (or a family at a depth, or standard input) and prints `halt=… result=… meter=…`, byte-identical on every host. `build_probe.py` builds it natively and for `wasm32-wasip1` with the `WASM-BLOCKERS.md` B1 workaround. |
 | `ceilings.py` | Re-derives every family's native ceiling by bisection and fails when `cases.rs` disagrees. |
 | `lane_a.py` | **Lane A**: native against Wasmtime at a fixed `max_wasm_stack`. |
@@ -86,7 +87,8 @@ The headroom sits 0.1% over the measured excess, so any growth prints it.
 
 `node/run.cjs` and `workerd/worker.js` can paint the shadow stack (the region
 below the module's initial `__stack_pointer`, linked first in memory) before a
-run and report the lowest byte it dirtied afterwards, trap or not; the lanes fail
+run and report the lowest byte it dirtied afterwards, trap or not, both with the
+one painter in `shadow-paint.mjs` so their marks are comparable; the lanes fail
 when a mark exceeds the linked shadow stack (4 MiB by default) less a margin, and
 the record is what a final `-zstack-size` is derived from.
 Natively the probe's `--stack` does the same with `paint.rs`.
