@@ -191,10 +191,13 @@ impl Interp {
                 .expect("brand checked");
             data.disposed = true;
             let records = std::mem::take(&mut data.records);
-            let proto = match self.slots.get(inst).value {
-                Payload::Reference(proto) => proto,
-                _ => self.object_proto,
-            };
+            // OrdinaryCreateFromConstructor(%DisposableStack%) (or the async
+            // intrinsic): a subclass instance moves into a base instance.
+            let proto = self
+                .intrinsics
+                .get(brand)
+                .and_then(|&ctor| self.prototype_of(ctor))
+                .unwrap_or(self.object_proto);
             let moved = self.slots.alloc(Slot::instance(proto));
             self.disposable_stacks.insert(
                 moved,
