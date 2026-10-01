@@ -224,7 +224,7 @@
       "outcome": "compiled"
     },
     "json-stringify-10k.run": {
-      "bytes": 2209183,
+      "bytes": 18087,
       "outcome": "ReentryLimit"
     },
     "json-stringify-256.compile": {
@@ -232,7 +232,7 @@
       "outcome": "compiled"
     },
     "json-stringify-256.run": {
-      "bytes": 296023,
+      "bytes": 18087,
       "outcome": "completed"
     },
     "flat-self.compile": {
@@ -1008,7 +1008,7 @@
       "outcome": "compiled"
     },
     "jstr-arr-2014.run": {
-      "bytes": 2208727,
+      "bytes": 18087,
       "outcome": "completed"
     },
     "jstr-arr-2015.compile": {
@@ -1016,7 +1016,7 @@
       "outcome": "compiled"
     },
     "jstr-arr-2015.run": {
-      "bytes": 2209183,
+      "bytes": 18087,
       "outcome": "ReentryLimit"
     },
     "jstr-obj-2014.compile": {
@@ -1024,7 +1024,7 @@
       "outcome": "compiled"
     },
     "jstr-obj-2014.run": {
-      "bytes": 2177239,
+      "bytes": 19135,
       "outcome": "completed"
     },
     "jstr-obj-2015.compile": {
@@ -1032,7 +1032,7 @@
       "outcome": "compiled"
     },
     "jstr-obj-2015.run": {
-      "bytes": 2177415,
+      "bytes": 19135,
       "outcome": "ReentryLimit"
     },
     "jstr-replacer-1999.compile": {
@@ -1040,7 +1040,7 @@
       "outcome": "compiled"
     },
     "jstr-replacer-1999.run": {
-      "bytes": 2198191,
+      "bytes": 23599,
       "outcome": "completed"
     },
     "jstr-replacer-2000.compile": {
@@ -1048,7 +1048,7 @@
       "outcome": "compiled"
     },
     "jstr-replacer-2000.run": {
-      "bytes": 2198191,
+      "bytes": 23599,
       "outcome": "ReentryLimit"
     },
     "flat-fast-2015.compile": {
@@ -1352,7 +1352,7 @@
       "outcome": "compiled"
     },
     "u2-tojson-flat-1022.run": {
-      "bytes": 2187311,
+      "bytes": 31607,
       "outcome": "completed"
     },
     "u2-tojson-regexp-512.compile": {
@@ -1360,7 +1360,7 @@
       "outcome": "compiled"
     },
     "u2-tojson-regexp-512.run": {
-      "bytes": 2406895,
+      "bytes": 251071,
       "outcome": "completed"
     },
     "u3-eval-nest-tagged-2038.compile": {
@@ -1384,7 +1384,7 @@
       "outcome": "compiled"
     },
     "u4-function-callchain-in-tojson-1900.run": {
-      "bytes": 3115087,
+      "bytes": 1048479,
       "outcome": "completed"
     },
     "regexp-backtrack.compile": {

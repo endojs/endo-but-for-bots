@@ -83,6 +83,48 @@ struct JsonStringifyState {
     stack: Vec<crate::value::SlotIndex>,
 }
 
+/// One container `JSON.stringify` has opened and not yet closed: the explicit
+/// stack that stands in for `SerializeJSONArray`/`SerializeJSONObject`'s
+/// recursion through `SerializeJSONProperty`. Each holds the light unit of
+/// the native-recursion budget its value charged, the parts serialized so
+/// far, and the indentation to restore when it closes.
+enum JsonStrFrame {
+    Array {
+        inst: crate::value::SlotIndex,
+        length: u64,
+        /// The index whose value is serialized next.
+        next: u64,
+        partial: Vec<Vec<u16>>,
+        stepback: Vec<u16>,
+    },
+    Object {
+        inst: crate::value::SlotIndex,
+        names: Vec<JsonPropertyName>,
+        /// The position in `names` serialized next.
+        next: usize,
+        partial: Vec<Vec<u16>>,
+        stepback: Vec<u16>,
+    },
+}
+
+/// What the value phase of `SerializeJSONProperty` yields: a finished
+/// serialization (or none), or an opened container.
+enum JsonStrOpened {
+    Value(Option<Vec<u16>>),
+    Frame(JsonStrFrame),
+}
+
+/// What advancing an open container yields: the next property's value, read
+/// from its holder, or the container's finished serialization.
+enum JsonStrNext {
+    Child {
+        value: Slot,
+        key: Slot,
+        holder: Slot,
+    },
+    Closed(Vec<u16>),
+}
+
 impl Interp {
     /// `fxStringifyJSONString` (`xsJSON.c`): the JSON-escaped, double-quoted form
     /// of a string, over its UTF-16 code `units`. Control characters below 0x20
@@ -457,14 +499,25 @@ impl Interp {
         cost: &mut u64,
     ) -> Result<Option<Vec<u16>>, Step> {
         let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
+        let value = self.json_stringify_get(code, holder, name.key_id)?;
+        self.json_stringify_value(code, value, name, Some(holder_slot), state, cost)
+    }
+
+    /// `SerializeJSONProperty`'s live `Get` of `key_id` on `holder`.
+    fn json_stringify_get(
+        &mut self,
+        code: &[u8],
+        holder: crate::value::SlotIndex,
+        key_id: ReadKey,
+    ) -> Result<Slot, Step> {
+        let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
         // `json_stringify_own_names` snapshots every key BEFORE any value is
         // read, and a replacer list is cached for the whole stringify, so a
         // replacer or getter can name an index between the snapshot and this
         // live Get. Refresh, or the promoted property silently vanishes from
         // the output.
-        let key_id = self.refresh_read_key(name.key_id);
-        let value = self.mop_get_read(code, holder, key_id, holder_slot)?;
-        self.json_stringify_value(code, value, name, Some(holder_slot), state, cost)
+        let key_id = self.refresh_read_key(key_id);
+        self.mop_get_read(code, holder, key_id, holder_slot)
     }
 
     /// `GetV(value, id)` for the object/BigInt `toJSON` probe.  BigInt is the
@@ -487,6 +540,14 @@ impl Interp {
     /// Each nesting level of the value is one light frame of the
     /// native-recursion budget (a cycle is already a `TypeError` via
     /// `state.stack`; this bounds the acyclic-but-deep case).
+    ///
+    /// The nesting is an explicit stack of open containers rather than a
+    /// recursion (STACK-DEPTH-REFACTOR.md B5), so the host stack stays flat
+    /// whatever the depth. Each property's `Get` runs in its container, its
+    /// light unit is charged after the `Get` and before `toJSON` as the
+    /// recursion charged it, and a container holds its unit until it closes:
+    /// the budget, the meter, every admission and every observable call
+    /// evolve exactly as they did.
     fn json_stringify_value(
         &mut self,
         code: &[u8],
@@ -496,30 +557,98 @@ impl Interp {
         state: &mut JsonStringifyState,
         cost: &mut u64,
     ) -> Result<Option<Vec<u16>>, Step> {
-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-            vm.json_stringify_value_inner(code, value, name, holder, state, cost)
-        })
+        let base = self.native_depth;
+        let mut frames = Vec::new();
+        let result =
+            self.json_stringify_nested(code, value, name.key, holder, state, cost, &mut frames);
+        // An error leaves the units of every open container (and of the value
+        // that failed) charged; the recursion released them on its way out.
+        debug_assert!(result.is_err() || self.native_depth == base);
+        self.native_depth = base;
+        result
     }
 
-    fn json_stringify_value_inner(
+    #[allow(clippy::too_many_arguments)]
+    fn json_stringify_nested(
         &mut self,
         code: &[u8],
         mut value: Slot,
-        name: &JsonPropertyName,
+        mut key: Slot,
+        mut holder: Option<Slot>,
+        state: &mut JsonStringifyState,
+        cost: &mut u64,
+        frames: &mut Vec<JsonStrFrame>,
+    ) -> Result<Option<Vec<u16>>, Step> {
+        'value: loop {
+            self.enter_native_frame(LIGHT_FRAME_COST)?;
+            // The serialization to hand to the innermost open container; none
+            // for a container just opened, which has no child yet.
+            let mut done = match self.json_stringify_open(code, value, key, holder, state, cost)? {
+                JsonStrOpened::Value(out) => {
+                    self.leave_native_frame(LIGHT_FRAME_COST);
+                    Some(out)
+                }
+                JsonStrOpened::Frame(frame) => {
+                    // Host memory the recursion took as stack: at most one
+                    // frame per unit of the budget, so this fails only if the
+                    // host allocator does.
+                    frames
+                        .try_reserve(1)
+                        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                    frames.push(frame);
+                    None
+                }
+            };
+            loop {
+                let Some(frame) = frames.last_mut() else {
+                    return Ok(done.expect("a value finishes before the stack empties"));
+                };
+                if let Some(out) = done.take() {
+                    self.json_stringify_deliver(frame, out, state)?;
+                }
+                match self.json_stringify_next(code, frame, state)? {
+                    JsonStrNext::Child {
+                        value: child,
+                        key: child_key,
+                        holder: child_holder,
+                    } => {
+                        value = child;
+                        key = child_key;
+                        holder = Some(child_holder);
+                        continue 'value;
+                    }
+                    JsonStrNext::Closed(out) => {
+                        frames.pop();
+                        self.leave_native_frame(LIGHT_FRAME_COST);
+                        done = Some(Some(out));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The value phase of one `SerializeJSONProperty`, with its light unit
+    /// held: `toJSON`, the replacer, unwrapping, then a scalar's text or an
+    /// opened container.
+    fn json_stringify_open(
+        &mut self,
+        code: &[u8],
+        mut value: Slot,
+        key: Slot,
         holder: Option<Slot>,
         state: &mut JsonStringifyState,
         cost: &mut u64,
-    ) -> Result<Option<Vec<u16>>, Step> {
+    ) -> Result<JsonStrOpened, Step> {
         if value.kind == Kind::Reference || value.kind == Kind::BigInt {
             let to_json_id = self.intern_static_key("toJSON");
             let to_json = self.json_stringify_get_v(code, value, to_json_id)?;
             if self.is_callable_value(to_json) {
-                value = self.run_callback(code, to_json, value, &[name.key])?;
+                value = self.run_callback(code, to_json, value, &[key])?;
             }
         }
         if let Some(replacer) = state.replacer {
             let receiver = holder.expect("a replacer callback always has a holder");
-            value = self.run_callback(code, replacer, receiver, &[name.key, value])?;
+            value = self.run_callback(code, replacer, receiver, &[key, value])?;
         }
 
         if let Payload::Reference(object) = value.value {
@@ -538,9 +667,11 @@ impl Interp {
         match value.kind {
             Kind::Null => {
                 self.charge_and_check(JSON_STRINGIFY_SCALAR_METERING)?;
-                Ok(Some(self.json_output_text(state, "null")?))
+                Ok(JsonStrOpened::Value(Some(
+                    self.json_output_text(state, "null")?,
+                )))
             }
-            Kind::Undefined | Kind::Symbol => Ok(None),
+            Kind::Undefined | Kind::Symbol => Ok(JsonStrOpened::Value(None)),
             Kind::Boolean => {
                 self.charge_and_check(JSON_STRINGIFY_SCALAR_METERING)?;
                 let text = if matches!(value.value, Payload::Boolean(true)) {
@@ -548,14 +679,18 @@ impl Interp {
                 } else {
                     "false"
                 };
-                Ok(Some(self.json_output_text(state, &text)?))
+                Ok(JsonStrOpened::Value(Some(
+                    self.json_output_text(state, &text)?,
+                )))
             }
             Kind::Integer => match value.value {
                 Payload::Integer(integer) => {
                     self.charge_and_check(JSON_STRINGIFY_SCALAR_METERING)?;
-                    Ok(Some(self.json_output_text(state, &integer.to_string())?))
+                    Ok(JsonStrOpened::Value(Some(
+                        self.json_output_text(state, &integer.to_string())?,
+                    )))
                 }
-                _ => Ok(None),
+                _ => Ok(JsonStrOpened::Value(None)),
             },
             Kind::Number => match value.value {
                 Payload::Number(number) => {
@@ -565,48 +700,52 @@ impl Interp {
                     } else {
                         "null".to_string()
                     };
-                    Ok(Some(self.json_output_text(state, &text)?))
+                    Ok(JsonStrOpened::Value(Some(
+                        self.json_output_text(state, &text)?,
+                    )))
                 }
-                _ => Ok(None),
+                _ => Ok(JsonStrOpened::Value(None)),
             },
             Kind::String => match value.value {
                 Payload::String(offset) => {
                     self.charge_and_check(JSON_STRINGIFY_SCALAR_METERING)?;
                     let units = self.str_units(offset);
-                    Ok(Some(self.json_escape_string(&units, state)?))
+                    Ok(JsonStrOpened::Value(Some(
+                        self.json_escape_string(&units, state)?,
+                    )))
                 }
-                _ => Ok(None),
+                _ => Ok(JsonStrOpened::Value(None)),
             },
             Kind::BigInt => Err(self.catchable_type_error_msg("stringify bigint".into())),
             Kind::Reference => {
                 let inst = match value.value {
                     Payload::Reference(inst) => inst,
-                    _ => return Ok(None),
+                    _ => return Ok(JsonStrOpened::Value(None)),
                 };
                 if self.is_callable_value(value) {
-                    return Ok(None);
+                    return Ok(JsonStrOpened::Value(None));
                 }
                 if self.array_generic_is_array(inst)? {
-                    self.json_stringify_array(code, inst, value, state, cost)
+                    self.json_stringify_open_array(code, inst, value, state, cost)
                 } else {
-                    self.json_stringify_object(code, inst, value, state, cost)
+                    self.json_stringify_open_object(code, inst, state, cost)
                 }
+                .map(JsonStrOpened::Frame)
             }
-            _ => Ok(None),
+            _ => Ok(JsonStrOpened::Value(None)),
         }
     }
 
-    /// `SerializeJSONArray`: snapshot `length`, then perform a live Get and
-    /// full value transformation for every index.  Missing/unsupported values
-    /// become `null`; indentation follows the invocation's UTF-16 Gap.
-    fn json_stringify_array(
+    /// Open `SerializeJSONArray`: the cycle check, the `length` snapshot,
+    /// the container's metering and indentation, and the parts' scratch.
+    fn json_stringify_open_array(
         &mut self,
         code: &[u8],
         inst: crate::value::SlotIndex,
         receiver: Slot,
         state: &mut JsonStringifyState,
         cost: &mut u64,
-    ) -> Result<Option<Vec<u16>>, Step> {
+    ) -> Result<JsonStrFrame, Step> {
         if state.stack.contains(&inst) {
             return Err(self.catchable_type_error_msg("cyclic value".into()));
         }
@@ -624,63 +763,200 @@ impl Interp {
         state.indent.extend_from_slice(&state.gap);
         *cost += length * JSON_STRINGIFY_ARRAY_ELEMENT_METERING;
         self.charge_and_check(std::mem::take(cost))?;
-        let mut partial = self.reserve_scratch(length as usize)?;
-        for index in 0..length {
-            let text = index.to_string();
-            // XS walks the array here by index and never mints a key. Taking
-            // the id unmetered kept the computron count right but still grew
-            // the name table one entry per element, so a long array exhausted
-            // the shared `u16` id space; the key is spelled from the index
-            // instead, exactly as `fxKeyAt` spells it.
-            // `length > u32::MAX` was refused above, so the position always
-            // fits the index space.
-            let index = index as u32;
-            let key_id = match self.index_read_key_id(index) {
-                Some(id) => ReadKey::Id(id),
-                None => ReadKey::Index(index),
-            };
-            let key = self.read_key_slot(key_id)?;
-            let name = JsonPropertyName {
-                key_id,
-                key,
-                units: text.encode_utf16().collect(),
-            };
-            let element = match self.json_stringify_property(code, inst, &name, state, cost)? {
-                Some(element) => element,
-                None => self.json_output_text(state, "null")?,
-            };
-            partial.push(element);
+        let partial = self.reserve_scratch(length as usize)?;
+        Ok(JsonStrFrame::Array {
+            inst,
+            length,
+            next: 0,
+            partial,
+            stepback,
+        })
+    }
+
+    /// Open `SerializeJSONObject`: the cycle check, the replacer
+    /// PropertyList or one enumeration of own string keys, the container's
+    /// metering and indentation, and the parts' scratch.
+    fn json_stringify_open_object(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        state: &mut JsonStringifyState,
+        cost: &mut u64,
+    ) -> Result<JsonStrFrame, Step> {
+        if state.stack.contains(&inst) {
+            return Err(self.catchable_type_error_msg("cyclic value".into()));
         }
+        state.stack.push(inst);
+        let names = match &state.property_list {
+            Some(property_list) => property_list.clone(),
+            None => self.json_stringify_own_names(code, inst)?,
+        };
+        *cost += JSON_STRINGIFY_OBJECT_ENTER_METERING;
+        *cost += names.len() as u64 * JSON_STRINGIFY_OBJECT_KEY_SLOT_METERING;
+        if !names.is_empty() {
+            *cost += JSON_STRINGIFY_OBJECT_NONEMPTY_METERING;
+        }
+        let stepback = state.indent.clone();
+        state.indent.extend_from_slice(&state.gap);
+        self.charge_and_check(std::mem::take(cost))?;
+        let partial = self.reserve_scratch(names.len())?;
+        Ok(JsonStrFrame::Object {
+            inst,
+            names,
+            next: 0,
+            partial,
+            stepback,
+        })
+    }
+
+    /// Hand the serialization of a container's last property value to it: an
+    /// array element (`null` for none), or an object member (none omits it).
+    fn json_stringify_deliver(
+        &mut self,
+        frame: &mut JsonStrFrame,
+        out: Option<Vec<u16>>,
+        state: &mut JsonStringifyState,
+    ) -> Result<(), Step> {
+        match frame {
+            JsonStrFrame::Array { partial, .. } => {
+                let element = match out {
+                    Some(element) => element,
+                    None => self.json_output_text(state, "null")?,
+                };
+                partial.push(element);
+            }
+            JsonStrFrame::Object {
+                names,
+                next,
+                partial,
+                ..
+            } => {
+                if let Some(value) = out {
+                    let name = &names[*next - 1];
+                    let mut member = self.json_escape_string(&name.units, state)?;
+                    let punctuation = if state.gap.is_empty() { 1 } else { 2 };
+                    self.json_reserve_output(state, punctuation)?;
+                    let additional = punctuation + value.len();
+                    self.admit_scratch::<u16>(member.len() + additional)?;
+                    member
+                        .try_reserve(additional)
+                        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                    member.push(b':' as u16);
+                    if !state.gap.is_empty() {
+                        member.push(b' ' as u16);
+                    }
+                    member.extend_from_slice(&value);
+                    partial.push(member);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Advance an open container: read its next property's value from it
+    /// (`SerializeJSONProperty`'s live `Get`), or close it.
+    fn json_stringify_next(
+        &mut self,
+        code: &[u8],
+        frame: &mut JsonStrFrame,
+        state: &mut JsonStringifyState,
+    ) -> Result<JsonStrNext, Step> {
+        match frame {
+            JsonStrFrame::Array {
+                inst, length, next, ..
+            } if *next < *length => {
+                let inst = *inst;
+                // XS walks the array here by index and never mints a key.
+                // Taking the id unmetered kept the computron count right but
+                // still grew the name table one entry per element, so a long
+                // array exhausted the shared `u16` id space; the key is
+                // spelled from the index instead, exactly as `fxKeyAt` spells
+                // it. `length > u32::MAX` was refused on opening, so the
+                // position always fits the index space.
+                let index = *next as u32;
+                *next += 1;
+                let key_id = match self.index_read_key_id(index) {
+                    Some(id) => ReadKey::Id(id),
+                    None => ReadKey::Index(index),
+                };
+                let key = self.read_key_slot(key_id)?;
+                let holder = Slot::of(Kind::Reference, Payload::Reference(inst));
+                let value = self.json_stringify_get(code, inst, key_id)?;
+                Ok(JsonStrNext::Child { value, key, holder })
+            }
+            JsonStrFrame::Object {
+                inst, names, next, ..
+            } if *next < names.len() => {
+                let inst = *inst;
+                let name = &names[*next];
+                *next += 1;
+                self.charge_and_check(
+                    JSON_STRINGIFY_OBJECT_KEY_BODY_METERING
+                        + (string_chunk_cost(name.units.len() as u64)
+                            - CHUNK_HEADER_BYTES * CHUNK_ALLOCATION_METERING),
+                )?;
+                let (key, key_id) = (name.key, name.key_id);
+                let holder = Slot::of(Kind::Reference, Payload::Reference(inst));
+                let value = self.json_stringify_get(code, inst, key_id)?;
+                Ok(JsonStrNext::Child { value, key, holder })
+            }
+            JsonStrFrame::Array {
+                partial, stepback, ..
+            } => {
+                let (partial, stepback) = (std::mem::take(partial), std::mem::take(stepback));
+                self.json_stringify_close(state, partial, stepback, b'[', b']')
+                    .map(JsonStrNext::Closed)
+            }
+            JsonStrFrame::Object {
+                partial, stepback, ..
+            } => {
+                let (partial, stepback) = (std::mem::take(partial), std::mem::take(stepback));
+                self.json_stringify_close(state, partial, stepback, b'{', b'}')
+                    .map(JsonStrNext::Closed)
+            }
+        }
+    }
+
+    /// Close a container: restore the indentation, leave the cycle stack,
+    /// and assemble its parts between `open` and `close`.
+    fn json_stringify_close(
+        &mut self,
+        state: &mut JsonStringifyState,
+        partial: Vec<Vec<u16>>,
+        stepback: Vec<u16>,
+        open: u8,
+        close: u8,
+    ) -> Result<Vec<u16>, Step> {
         let indent = state.indent.clone();
         state.indent = stepback.clone();
         state.stack.pop();
         let mut out = self.json_container_buffer(state, &partial, &indent, &stepback)?;
-        out.push(b'[' as u16);
+        out.push(open as u16);
         if !partial.is_empty() {
             if state.gap.is_empty() {
-                for (index, element) in partial.iter().enumerate() {
+                for (index, part) in partial.iter().enumerate() {
                     if index > 0 {
                         out.push(b',' as u16);
                     }
-                    out.extend_from_slice(element);
+                    out.extend_from_slice(part);
                 }
             } else {
                 out.push(b'\n' as u16);
                 out.extend_from_slice(&indent);
-                for (index, element) in partial.iter().enumerate() {
+                for (index, part) in partial.iter().enumerate() {
                     if index > 0 {
                         out.push(b',' as u16);
                         out.push(b'\n' as u16);
                         out.extend_from_slice(&indent);
                     }
-                    out.extend_from_slice(element);
+                    out.extend_from_slice(part);
                 }
                 out.push(b'\n' as u16);
                 out.extend_from_slice(&stepback);
             }
         }
-        out.push(b']' as u16);
-        Ok(Some(out))
+        out.push(close as u16);
+        Ok(out)
     }
 
     /// Snapshot the enumerable own String keys for SerializeJSONObject.  The
@@ -713,88 +989,6 @@ impl Interp {
             }
         }
         Ok(names)
-    }
-
-    /// `SerializeJSONObject`: use the replacer PropertyList when present,
-    /// otherwise enumerate own string keys once, then Get each value live.
-    fn json_stringify_object(
-        &mut self,
-        code: &[u8],
-        inst: crate::value::SlotIndex,
-        _receiver: Slot,
-        state: &mut JsonStringifyState,
-        cost: &mut u64,
-    ) -> Result<Option<Vec<u16>>, Step> {
-        if state.stack.contains(&inst) {
-            return Err(self.catchable_type_error_msg("cyclic value".into()));
-        }
-        state.stack.push(inst);
-        let names = match &state.property_list {
-            Some(property_list) => property_list.clone(),
-            None => self.json_stringify_own_names(code, inst)?,
-        };
-        *cost += JSON_STRINGIFY_OBJECT_ENTER_METERING;
-        *cost += names.len() as u64 * JSON_STRINGIFY_OBJECT_KEY_SLOT_METERING;
-        if !names.is_empty() {
-            *cost += JSON_STRINGIFY_OBJECT_NONEMPTY_METERING;
-        }
-        let stepback = state.indent.clone();
-        state.indent.extend_from_slice(&state.gap);
-        self.charge_and_check(std::mem::take(cost))?;
-        let mut partial = self.reserve_scratch(names.len())?;
-        for name in &names {
-            self.charge_and_check(
-                JSON_STRINGIFY_OBJECT_KEY_BODY_METERING
-                    + (string_chunk_cost(name.units.len() as u64)
-                        - CHUNK_HEADER_BYTES * CHUNK_ALLOCATION_METERING),
-            )?;
-            if let Some(value) = self.json_stringify_property(code, inst, name, state, cost)? {
-                let mut member = self.json_escape_string(&name.units, state)?;
-                let punctuation = if state.gap.is_empty() { 1 } else { 2 };
-                self.json_reserve_output(state, punctuation)?;
-                let additional = punctuation + value.len();
-                self.admit_scratch::<u16>(member.len() + additional)?;
-                member
-                    .try_reserve(additional)
-                    .map_err(|_| Step::Host(Halt::HeapExhausted))?;
-                member.push(b':' as u16);
-                if !state.gap.is_empty() {
-                    member.push(b' ' as u16);
-                }
-                member.extend_from_slice(&value);
-                partial.push(member);
-            }
-        }
-        let indent = state.indent.clone();
-        state.indent = stepback.clone();
-        state.stack.pop();
-        let mut out = self.json_container_buffer(state, &partial, &indent, &stepback)?;
-        out.push(b'{' as u16);
-        if !partial.is_empty() {
-            if state.gap.is_empty() {
-                for (index, member) in partial.iter().enumerate() {
-                    if index > 0 {
-                        out.push(b',' as u16);
-                    }
-                    out.extend_from_slice(member);
-                }
-            } else {
-                out.push(b'\n' as u16);
-                out.extend_from_slice(&indent);
-                for (index, member) in partial.iter().enumerate() {
-                    if index > 0 {
-                        out.push(b',' as u16);
-                        out.push(b'\n' as u16);
-                        out.extend_from_slice(&indent);
-                    }
-                    out.extend_from_slice(member);
-                }
-                out.push(b'\n' as u16);
-                out.extend_from_slice(&stepback);
-            }
-        }
-        out.push(b'}' as u16);
-        Ok(Some(out))
     }
 
     /// Skip JSON whitespace (`fxParseJSONToken`'s space/tab/CR/LF cases). Never
