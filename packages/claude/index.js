@@ -1,4 +1,6 @@
 // @ts-check
+// reexport-policy-exempt: this is the package's own entry point, not a
+// compatibility shim; each name has no older home to deprecate.
 //
 // `@endo/claude`: confined `claude -p` inference for an Endo guest from a Claude
 // subscription, whose only capability surface is the MCP projection of one guest
