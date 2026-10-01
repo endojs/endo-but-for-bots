@@ -2,8 +2,9 @@
 import { Fail } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import harden from '@endo/harden';
-import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
+
+import { isRemotable } from '../is-remotable.js';
 
 /**
  * What a workspace lets the host's registry do to it: resolve the grants an
@@ -27,18 +28,6 @@ export const makeWorkspaceAccess = inventory => {
     put: M.call(M.string(), M.raw()).returns(M.undefined()),
     remove: M.call(M.string(), M.raw()).returns(M.boolean()),
   });
-  /**
-   * Whether a value the user put into the inventory is a capability; a value
-   * that is not even passable is not, rather than an error to explain.
-   * @param {unknown} value
-   */
-  const isRemotable = value => {
-    try {
-      return passStyleOf(value) === 'remotable';
-    } catch (_error) {
-      return false;
-    }
-  };
   return makeExo('WorkspaceAccess', WorkspaceAccessI, {
     help: () =>
       "The registry's hold on this workspace: lookupGrants(grants) resolves [power, key] pairs to the inventory values under the keys; put(name, value) places an installed value under a free name; remove(name, value) takes it out again if it is still there.",
@@ -55,6 +44,8 @@ export const makeWorkspaceAccess = inventory => {
         !(power in powers) || Fail`Duplicate power name`;
         inventory.has(key) || Fail`Unknown inventory grant`;
         const value = inventory.get(key);
+        // A value the user put into the inventory that is not even passable
+        // is not a capability, rather than an error to explain.
         isRemotable(value) ||
           Fail`Installation grants must be remotable capabilities`;
         Object.defineProperty(powers, power, { value, enumerable: true });

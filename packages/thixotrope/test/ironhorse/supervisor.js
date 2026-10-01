@@ -265,7 +265,7 @@ test.serial(
     t.is(await restored.call('evaluate', 'E(counter).incr()'), '3n');
     const after = await restored.call('status');
     t.is(after.workers.length, 6);
-    t.not(after.timings.delivery.count, '0');
+    t.not(after.timings.delivery.count, 0);
     // Only the supervisor reads the store; client access is confined to socket.
     // eslint-disable-next-line no-bitwise
     t.is((await stat(join(path, 'control.sock'))).mode & 0o777, 0o600);
@@ -347,7 +347,7 @@ test.serial(
     t.is(good.output, '40\n42\n');
     const status = await transcript(t, path, '', 'status');
     t.is(status.code, 0);
-    t.is(typeof JSON.parse(status.output).timings.delivery.count, 'string');
+    t.is(typeof JSON.parse(status.output).timings.delivery.count, 'number');
     const bad = await transcript(
       t,
       path,

@@ -3,8 +3,9 @@ import { Fail } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/far';
 import harden from '@endo/harden';
-import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
+
+import { isRemotable } from '../is-remotable.js';
 
 /** @import { Mailbox } from './mailbox.js' */
 /** @import { MailContact } from './mail-contact.js' */
@@ -67,14 +68,6 @@ export const makeMailAddressBook = (
   /** @param {string} name */
   const assertName = name => {
     name.length > 0 || Fail`Expected a contact name of 1–128 characters`;
-  };
-  /** @param {unknown} value */
-  const isRemotable = value => {
-    try {
-      return passStyleOf(value) === 'remotable';
-    } catch (_error) {
-      return false;
-    }
   };
   /**
    * Only the secret is read here; the host validates the rest when the

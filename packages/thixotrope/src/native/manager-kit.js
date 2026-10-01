@@ -2,6 +2,7 @@
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
 
+import { describeError } from '../describe-error.js';
 import { makeSerialQueue } from '../serial-queue.js';
 
 /**
@@ -109,9 +110,6 @@ export const makeManager = (
     enqueue(async () => {
       if (desired.size > 0) await keeper.provide();
     });
-  /** @param {unknown} reason */
-  const describeError = reason =>
-    String(/** @type {Error} */ (reason)?.message ?? reason).slice(0, 512);
   /**
    * A failed bind retains the desired state but must not withhold the close
    * handle; status retries reconciliation and reports the current outcome.

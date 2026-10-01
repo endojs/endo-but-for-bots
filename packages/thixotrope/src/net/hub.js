@@ -1,6 +1,7 @@
 // @ts-check
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
+import { encodeHex } from '@endo/hex';
 import {
   DescHandoffGiveSigEnvelopeCodec,
   getSelectorName,
@@ -98,29 +99,13 @@ import { locationToLocationId } from '@endo/ocapn/client/util';
 const BOOTSTRAP_POSITION = '0';
 const STATE_VERSION = 2;
 
-const { isView } = ArrayBuffer;
-
 /**
- * Hex-encode a byteArray `Uint8Array`. A byteArray passable is always a
- * whole-buffer-spanning `Uint8Array` (issue #573), never a bare
- * `ArrayBufferLike` nor some other `ArrayBufferView`, so this is typed
- * `Uint8Array`. The runtime `isView` branch is *not* buffer-vs-view type
- * generality — it is tolerance for the single emulation infidelity of the
- * `@endo/immutable-arraybuffer` shim: an emulated frozen wrapper (as
- * `makeSessionId`/`frozenBytes` yield) is *typed* `Uint8Array` yet is a plain
- * object that reports `ArrayBuffer.isView === false` and is not
- * integer-indexable, so it must first be copied into a fresh mutable
- * `Uint8Array`. A genuine view — including one over a native immutable buffer
- * — is read in place. This mirrors `@endo/bytes`' `toIndexableUint8Array`.
- *
- * @param {Uint8Array} bytes
+ * Hex-encode a byteArray `Uint8Array`, a whole-buffer-spanning view (issue
+ * #573) or the emulated frozen wrapper the `@endo/immutable-arraybuffer`
+ * shim yields (as `makeSessionId`/`frozenBytes` do); `encodeHex` copies the
+ * wrapper itself.
  */
-const hexFromBytes = bytes => {
-  const view = isView(bytes)
-    ? bytes
-    : new Uint8Array(/** @type {Uint8Array} */ (bytes).slice(0));
-  return Array.from(view, byte => byte.toString(16).padStart(2, '0')).join('');
-};
+const hexFromBytes = encodeHex;
 
 /** @param {string} hex */
 const bytesFromHex = hex => {

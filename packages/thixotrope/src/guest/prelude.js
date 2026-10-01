@@ -7,6 +7,8 @@ import { passStyleOf } from '@endo/pass-style';
 import { M, matches, mustMatch } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { describeError } from '../describe-error.js';
+import { isRemotable } from '../is-remotable.js';
 import { makeSerialQueue } from '../serial-queue.js';
 
 /**
@@ -49,6 +51,8 @@ export const guestPrelude = harden({
   makeError,
   makePromiseKit,
   makeSerialQueue,
+  describeError,
+  isRemotable,
 });
 
 /** @typedef {typeof globalThis & typeof guestPrelude} GuestGlobals */

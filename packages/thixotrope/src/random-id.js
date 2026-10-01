@@ -1,5 +1,6 @@
 // @ts-check
 import harden from '@endo/harden';
+import { encodeHex } from '@endo/hex';
 
 /** @import { RandomPowers } from './platform/random.js' */
 
@@ -10,10 +11,7 @@ import harden from '@endo/harden';
  *
  * @param {RandomPowers} random
  */
-export const randomHex128 = random =>
-  Array.from(random.randomBytes(16), byte =>
-    byte.toString(16).padStart(2, '0'),
-  ).join('');
+export const randomHex128 = random => encodeHex(random.randomBytes(16));
 harden(randomHex128);
 
 /**

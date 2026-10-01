@@ -1,8 +1,10 @@
 // @ts-check
 /** @import { SyncStringAtom } from '../store/sync-string-atom.js' */
-import { Fail, q } from '@endo/errors';
+import { Fail } from '@endo/errors';
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
+
+import { assertRecordVersion } from '../store/versioned-record.js';
 
 /**
  * The host's own record of what the registry vat holds: one entry per
@@ -81,14 +83,7 @@ export const makeInstallationIndex = storage => {
     (typeof parsed === 'object' && parsed !== null) ||
       Fail`Invalid installation index`;
     const { version, entries: stored } = parsed;
-    if (typeof version !== 'number')
-      throw Fail`Invalid installation index version`;
-    if (version > INDEX_VERSION)
-      throw Error(
-        `Installation index is from a newer version: ${version} exceeds supported version ${INDEX_VERSION}; use that build or migrate to a fresh state directory`,
-      );
-    version === INDEX_VERSION ||
-      Fail`Installation index version ${q(version)} needs migration`;
+    assertRecordVersion('installation index', version, INDEX_VERSION);
     stored === undefined ||
       Array.isArray(stored) ||
       Fail`Invalid installation index entries`;

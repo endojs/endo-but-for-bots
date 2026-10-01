@@ -48,6 +48,7 @@ import { makeRegistry } from './registry.js';
 import { makeWorkspaceAccess } from './workspace-access.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
 import { makeFileSyncStringAtom } from '../store/file-sync-string-atom.js';
+import { assertRecordVersion } from '../store/versioned-record.js';
 import { make as makeClock } from '../../resources/clock/durable.js';
 import { make as makeControl } from '../../resources/control/durable.js';
 import { makeDurableNetLayer } from '../net/durable-netlayer.js';
@@ -330,11 +331,12 @@ export const serveThixotrope = async (
             if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'ENOENT')
               throw error;
           }
-          if (config !== undefined && config.version !== WORKSPACE_VERSION) {
-            throw Error(
-              `Incompatible workspace metadata: this build requires version ${WORKSPACE_VERSION}; migrate or use a fresh state directory`,
+          if (config !== undefined)
+            assertRecordVersion(
+              'workspace metadata',
+              config.version,
+              WORKSPACE_VERSION,
             );
-          }
           const atom = makeFileSyncStringAtom(
             syncFiles,
             paths.join(statePath, 'installations.json'),
@@ -1103,7 +1105,8 @@ export const serveThixotrope = async (
             Object.entries(metrics).map(([name, metric]) => [
               name,
               {
-                count: String(metric.count),
+                // A count over the control socket is a JSON number.
+                count: Number(metric.count),
                 milliseconds: metric.milliseconds,
               },
             ]),
