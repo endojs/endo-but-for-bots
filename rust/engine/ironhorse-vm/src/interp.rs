@@ -2988,6 +2988,7 @@ fn round_half_even(x: f64) -> f64 {
 
 fn temporal_set_time_args(
     interp: &mut Interp,
+    code: &[u8],
     record: &mut TemporalPlainRecord,
     args: &[Slot],
     start: usize,
@@ -2996,7 +2997,7 @@ fn temporal_set_time_args(
     for (n, field) in out.iter_mut().enumerate() {
         let value = args.get(start + n).copied().unwrap_or_else(Slot::undefined);
         if value.kind != Kind::Undefined {
-            *field = u32::try_from(interp.temporal_integer(value)?).map_err(|_| {
+            *field = u32::try_from(interp.temporal_integer(code, value)?).map_err(|_| {
                 interp.catchable_range_error_msg("Temporal: time component out of range".into())
             })?;
         }
