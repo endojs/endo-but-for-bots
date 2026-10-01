@@ -627,7 +627,7 @@ impl Interp {
                 .ok_or(Step::Host(Halt::NotImplemented(
                     "typed-array-species:symbol",
                 )))?;
-            let species = self.mop_get(code, constructor_ref, species_id, constructor)?;
+            let species = self.species_of(code, constructor_ref, constructor, species_id)?;
             constructor = if species.kind == Kind::Null || species.kind == Kind::Undefined {
                 default_constructor
             } else {

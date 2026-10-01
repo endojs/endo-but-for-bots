@@ -808,6 +808,12 @@ pub enum NativeMethod {
     /// `get ArrayBuffer[Symbol.species]`: the standard accessor returns its
     /// receiver.
     ArrayBufferSpeciesGetter,
+    /// `get [Symbol.species]` of `Array`, `Map`, `Set`, `SharedArrayBuffer`
+    /// and `%TypedArray%`: one function per constructor, as XS's
+    /// `fxNextHostAccessorProperty` mints them, each returning its receiver.
+    /// Recorded in `proto_accessors`, so the species readers can tell the
+    /// untouched intrinsic from a guest getter.
+    SpeciesGetter,
     /// The fixed-buffer-compatible `ArrayBuffer.prototype` accessors.
     ArrayBufferDetachedGetter,
     ArrayBufferMaxByteLengthGetter,

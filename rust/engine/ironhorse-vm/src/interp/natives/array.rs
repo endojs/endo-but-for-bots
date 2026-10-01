@@ -1878,11 +1878,62 @@ impl Interp {
         let mut owner = constructor_inst;
         while !owner.is_null() {
             if self.find_property(owner, species_id).is_some() {
-                return false;
+                // The intrinsic getter answers the Array constructor itself.
+                return self.intrinsic_species_getter(owner, species_id);
             }
             owner = self.instance_prototype(owner);
         }
         true
+    }
+
+    /// Whether `owner`'s own `@@species` is an accessor whose getter is the
+    /// untouched intrinsic [`NativeMethod::SpeciesGetter`], which returns its
+    /// receiver and observes nothing.
+    pub(in crate::interp) fn intrinsic_species_getter(
+        &self,
+        owner: crate::value::SlotIndex,
+        species_id: u16,
+    ) -> bool {
+        let Some(property) = self.find_property(owner, species_id) else {
+            return false;
+        };
+        if self.slots.get(property).flag & XS_GETTER_FLAG == 0 {
+            return false;
+        }
+        self.accessors
+            .get(&(owner, species_id))
+            .and_then(|accessor| accessor.get)
+            .is_some_and(|getter| match getter.value {
+                Payload::Reference(getter) => self
+                    .functions
+                    .get(&getter)
+                    .is_some_and(|info| info.method == Some(NativeMethod::SpeciesGetter)),
+                _ => false,
+            })
+    }
+
+    /// `Get(C, @@species)` for the Array and TypedArray species readers. The
+    /// untouched intrinsic getter is answered without a call — it returns its
+    /// receiver — which keeps these readers' metering what it was before the
+    /// accessor existed; anything else is the observable MOP read.
+    pub(in crate::interp) fn species_of(
+        &mut self,
+        code: &[u8],
+        constructor_ref: crate::value::SlotIndex,
+        constructor: Slot,
+        species_id: u16,
+    ) -> Result<Slot, Step> {
+        let mut owner = constructor_ref;
+        while !owner.is_null() && !self.proxies.contains_key(&owner) {
+            if self.find_property(owner, species_id).is_some() {
+                if self.intrinsic_species_getter(owner, species_id) {
+                    return Ok(constructor);
+                }
+                break;
+            }
+            owner = self.instance_prototype(owner);
+        }
+        self.mop_get(code, constructor_ref, species_id, constructor)
     }
 
     /// Whether the compact `flat` path can read the complete traversed graph
@@ -3028,11 +3079,20 @@ impl Interp {
                 let Payload::Reference(c) = constructor.value else {
                     unreachable!()
                 };
-                let species = self.mop_get(code, c, species_id, constructor)?;
-                constructor = if species.kind == Kind::Null || species.kind == Kind::Undefined {
-                    Slot::undefined()
-                } else {
-                    species
+                let species = self.species_of(code, c, constructor, species_id)?;
+                // `Construct(%Array%, «length»)` is ArrayCreate(length): the
+                // compact path below builds the same array.
+                let intrinsic_array = self.intrinsics.get("Array").copied();
+                constructor = match species.value {
+                    _ if species.kind == Kind::Null || species.kind == Kind::Undefined => {
+                        Slot::undefined()
+                    }
+                    Payload::Reference(r)
+                        if species.kind == Kind::Reference && Some(r) == intrinsic_array =>
+                    {
+                        Slot::undefined()
+                    }
+                    _ => species,
                 };
             }
         }
