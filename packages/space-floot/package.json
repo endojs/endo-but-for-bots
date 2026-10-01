@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "@endo/harden": "workspace:^",
-    "preact": "^10.29.8"
+    "preact": "^11.0.0"
   },
   "devDependencies": {
     "ava": "catalog:dev",

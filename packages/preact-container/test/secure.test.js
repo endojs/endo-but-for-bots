@@ -1,4 +1,4 @@
-import { h, createRef, Fragment, render } from 'preact';
+import { h, createRef, createPortal, Fragment, render } from 'preact';
 import { useState } from 'preact/hooks';
 import { setupRerender } from 'preact/test-utils';
 import { renderConfined, unmount, HostPassthrough } from '../src/renderer.js';
@@ -1794,6 +1794,30 @@ describe('../src/renderer.js', () => {
       expect(() => renderConfined(h(Guest, null), scratch)).to.not.throw();
       expect(stolen).to.deep.equal([]);
       expect(scratch.querySelector('div > span.kid').textContent).to.equal('x');
+    });
+
+    it('a host portal inside a HostPassthrough island still renders into its container', () => {
+      const target = document.createElement('div');
+      document.body.appendChild(target);
+      try {
+        renderConfined(
+          h(
+            'div',
+            null,
+            h(
+              HostPassthrough,
+              null,
+              createPortal(h('span', { class: 'portaled' }, 'p'), target),
+            ),
+          ),
+          scratch,
+        );
+        expect(target.querySelector('span.portaled').textContent).to.equal('p');
+        expect(scratch.querySelector('span.portaled')).to.equal(null);
+      } finally {
+        unmount(scratch);
+        target.remove();
+      }
     });
   });
 });

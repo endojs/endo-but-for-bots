@@ -37,7 +37,7 @@
     "@endo/harden": "workspace:^",
     "@endo/spaces-util": "workspace:^",
     "@endo/workflow": "workspace:^",
-    "preact": "^10.29.2"
+    "preact": "^11.0.0"
   },
   "devDependencies": {
     "eslint": "catalog:dev"

@@ -43,7 +43,7 @@
     "test:browser": "vitest run"
   },
   "peerDependencies": {
-    "preact": "^10.0.0 || ^11.0.0"
+    "preact": "^11.0.0"
   },
   "devDependencies": {
     "@lavamoat/lavatube": "^1.0.0",
@@ -51,7 +51,7 @@
     "@vitest/browser-playwright": "^4.1.11",
     "eslint": "catalog:dev",
     "playwright": "^1.63.0",
-    "preact": "^10.29.8",
+    "preact": "^11.0.0",
     "ses": "workspace:^",
     "vite": "^8.0.16",
     "vitest": "^4.1.11"
