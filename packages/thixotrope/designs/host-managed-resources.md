@@ -91,15 +91,41 @@ Two smaller changes follow:
   next except through the inventory.
   The session is already OCapN; the admin facet could return references and render client-side.
 
-## 4. Typed resource descriptions
+## 4. Resources bound to workers, not described
 
 A resource description is the static constructor argument of a host resource: any passable value,
-memoised and persisted as `(name, JSON(description))`.
-Each maker defines the shape it expects (`{ workerId }` for alarms and worker facades,
-`{ moduleUrl, resourceIdentity }` for an adapter launcher), but nothing types it.
-Proposal: a description type per resource name, so maker signatures and `retireResource` take a
-checked argument, and the launcher's read-side fallback for the field renamed this session can
-retire once no pre-rename state directories remain.
+memoised and persisted as `(name, JSON(description))` so the host can make the same instance again
+after a restart.
+It cannot be removed outright, because a host object is not orthogonally persistent and something
+must say how to rebuild it, and because a per-vat facet is the capability discipline: the clock
+facet a vat holds is the authority over that vat's alarms and no other's.
+
+It can be reduced to one shape.
+Every per-instance description in the code today carries a worker id: `{ workerId }` for the
+clock facet and the worker facade, `{ workerId, alarmId }` for an alarm's settlement promise, and
+`{ moduleUrl, resourceIdentity, workerId }` for the adapter launcher, whose other two fields are
+the installation's and will be in the host index of section 1.
+The two singletons, the worker controller and mail introductions, carry none.
+
+Proposal: a resource is **bound to a worker**, `makeResource(name, workerId, key?)`, where `key`
+is a small discriminator a resource may add (the alarm id) and a daemon-wide singleton is bound to
+the endpoint itself.
+Then the maker signature is typed per resource name, `retireResource` takes checked arguments,
+retiring a worker retires every resource bound to it generically rather than through the
+`onRetireWorker` hook each service registers today, and the launcher's description shrinks to the
+worker id with its module and identity looked up in the host index.
+The export record persists `(name, workerId, key)` instead of an opaque value; the launcher's
+read-side fallback for the field renamed this session retires with the old shape.
+
+## 4a. `debugLabel`
+
+Today the label is a free-form string used for logging, process names, `status`, the TUI and the
+reachability report, with one use as identity: the supervisor recovers an interrupted first start
+by finding the worker labelled `workspace`.
+After sections 1 and 2 nothing identifies a worker by its label: installations and workspaces are
+allocated under allocation keys, and the host index records each worker's kind and name.
+The label is then derived (`kind:name`) for display and need not be an input at all; it should not
+be upgraded into something more, because the index record is the something more.
 
 ## 5. Smaller items
 
@@ -203,5 +229,6 @@ Each entry names the copies; the fix is the one piece they should share.
 
 1. Section 1, since sections 2 and 3 are simpler once installations are the host's.
 2. Section 2.
-3. Section 4 and the documentation rewording in section 3.
+3. Section 4 (worker-bound resources, which removes `onRetireWorker`), 4a, and the documentation
+   rewording in section 3.
 4. Section 5 as they come up.
