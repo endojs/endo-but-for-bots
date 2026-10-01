@@ -713,6 +713,11 @@ mod tests {
             // derived object-classification index is retained.
             "snapshot_dirt",
             "snapshot_baseline_identity",
+            // Boot holders whose intrinsic surface is not yet complete: a
+            // cache rebuilt at boot from the rosters and never stored. A
+            // restored machine starts with every holder pending, which only
+            // completes a complete surface again.
+            "pending_surfaces",
         ];
         const TRANSIENTS: &[&str] = &[
             // Intrinsic linking is synchronous and restores this guard before

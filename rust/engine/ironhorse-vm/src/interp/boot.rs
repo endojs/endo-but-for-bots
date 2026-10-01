@@ -86,6 +86,7 @@ impl Interp {
         let snapshot_dirt = SnapshotDirt::default();
         let mut interp = boot_fresh!(snapshot_dirt, slots, chunks, global_obj, static_str);
         interp.create_intrinsics();
+        interp.pending_surfaces = interp.intrinsic_surface_holders();
         // **After `create_intrinsics`, before `boot_slot_count` is fixed.**
         // Both halves of that are load-bearing. After, because boot's own
         // constructor wiring reads `ctor_prototype` back to install
