@@ -601,7 +601,16 @@ impl Interp {
             } => {
                 *func = trap;
                 *this = handler;
-                Ok(Some(trap_args.to_vec()))
+                // A heap list, not a local array: the list outlives this turn,
+                // and a three-slot array in the loop's frame would widen every
+                // call level. Reserved fallibly so the host's refusal is
+                // `HeapExhausted`, not an abort. It is not admitted against the
+                // heap profile, as the argument array the step just built is
+                // not: admission's meter check would land after the step's
+                // unchecked ticks and move a checkpoint the recursion did not
+                // have.
+                let list = Self::reserved_vec(trap_args.len())?;
+                Ok(Some(Self::fill_scratch(list, trap_args)))
             }
         }
     }
