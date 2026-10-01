@@ -39,3 +39,59 @@ import { E } from '@endo/eventual-send';
  */
 export const lookupPath = (hub, petNamePath) => E(hub).lookup(petNamePath);
 harden(lookupPath);
+
+/**
+ * Whether an agent's powers designate values by formula identifier and
+ * locator. A host does; a guest does not, and names everything only by its
+ * own pet names. Detected from the agent's method names, so a powers object
+ * that does not report them (a test double) counts as a host.
+ *
+ * @param {ERef<unknown>} powers
+ * @returns {Promise<boolean>}
+ */
+export const holdsLocators = async powers => {
+  const reflective =
+    /** @type {ERef<{ __getMethodNames__: () => string[] }>} */ (powers);
+  /** @type {string[]} */
+  let methods;
+  try {
+    // eslint-disable-next-line no-underscore-dangle
+    methods = await E(reflective).__getMethodNames__();
+  } catch {
+    return true;
+  }
+  return methods.includes('locate') || methods.includes('identify');
+};
+harden(holdsLocators);
+
+/**
+ * Throw a clear error when a host-only feature is asked of a guest, rather
+ * than letting the guest's missing method surface as a raw CapTP error.
+ *
+ * @param {ERef<unknown>} powers
+ * @param {string} feature - How the feature reads in the message, e.g. `/locate`.
+ */
+export const assertHoldsLocators = async (powers, feature) => {
+  if (!(await holdsLocators(powers))) {
+    throw Error(`${feature} is not available to a guest agent`);
+  }
+};
+harden(assertHoldsLocators);
+
+/**
+ * A pet-name path's formula identifier for display (`showValue`'s id), or
+ * `undefined` for a guest, which holds no identifiers.
+ *
+ * @param {ERef<unknown>} powers
+ * @param {string[]} petNamePath
+ * @returns {Promise<string | undefined>}
+ */
+export const identifyIfHost = async (powers, petNamePath) => {
+  if (!(await holdsLocators(powers))) return undefined;
+  return E(
+    /** @type {ERef<{ identify: (...path: string[]) => Promise<string | undefined> }>} */ (
+      powers
+    ),
+  ).identify(...petNamePath);
+};
+harden(identifyIfHost);

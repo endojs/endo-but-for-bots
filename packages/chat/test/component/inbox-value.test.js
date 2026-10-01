@@ -222,6 +222,126 @@ test.serial(
   },
 );
 
+/**
+ * A guest's powers: no locators or identifiers, messages name correspondents
+ * by `fromNames`/`toNames`, and a submitted value is reached by adopting the
+ * message's `value` edge.
+ *
+ * @param {object} opts
+ * @param {object} opts.message
+ * @param {unknown} opts.adoptedValue
+ */
+const makeGuestValuePowers = ({ message, adoptedValue }) => {
+  /** @type {Array<{method: string, args: unknown[]}>} */
+  const calls = [];
+  const store = new Map();
+  const powers = Far('MockGuestPowers', {
+    async adopt(number, edgeName, petNamePath) {
+      const petName = [petNamePath].flat().join('/');
+      calls.push({ method: 'adopt', args: [number, edgeName, petName] });
+      store.set(petName, adoptedValue);
+    },
+    async lookup(petNamePath) {
+      const petName = [petNamePath].flat().join('/');
+      calls.push({ method: 'lookup', args: [petName] });
+      if (!store.has(petName)) throw Error(`Unknown pet name ${petName}`);
+      return store.get(petName);
+    },
+    async remove(petName) {
+      calls.push({ method: 'remove', args: [petName] });
+      store.delete(petName);
+    },
+    followMessages() {
+      let delivered = false;
+      return readerFromIterator(
+        Far('MessageIterator', {
+          next() {
+            if (!delivered) {
+              delivered = true;
+              return Promise.resolve({ value: message, done: false });
+            }
+            return new Promise(() => {});
+          },
+        }),
+      );
+    },
+  });
+  return { powers, calls, store };
+};
+
+test.serial(
+  'guest value message adopts its value edge and names the sender by fromNames',
+  async t => {
+    const { $parent, $end } = createInboxDOM();
+    const { powers, calls, store } = makeGuestValuePowers({
+      message: {
+        type: 'value',
+        number: 5n,
+        date: new Date().toISOString(),
+        fromNames: ['@host'],
+        toNames: ['@self'],
+        messageId: 'v5',
+        dismissed: makePromiseKit().promise,
+      },
+      adoptedValue: 7,
+    });
+
+    inboxComponent($parent, $end, powers, {
+      showValue: () => {},
+      conversationPetName: '@host',
+    });
+    await waitFor(() =>
+      $parent.querySelector('.form-request-inline-value .number'),
+    );
+
+    const $number = $parent.querySelector('.form-request-inline-value .number');
+    t.truthy($number, 'adopted value renders inline');
+    t.is($number.textContent, '7');
+    t.true(
+      $parent.textContent.includes('@host'),
+      'sender chip comes from fromNames',
+    );
+    const adopt = calls.find(c => c.method === 'adopt');
+    t.deepEqual(adopt.args.slice(0, 2), [5n, 'value']);
+    t.true(
+      calls.some(c => c.method === 'remove' && c.args[0] === adopt.args[2]),
+      'scratch name is removed after reading',
+    );
+    t.is(store.size, 0);
+  },
+);
+
+test.serial(
+  'guest inbox filters a conversation by the correspondent pet name',
+  async t => {
+    const { $parent, $end } = createInboxDOM();
+    const { powers } = makeGuestValuePowers({
+      message: {
+        type: 'value',
+        number: 6n,
+        date: new Date().toISOString(),
+        fromNames: ['alice'],
+        toNames: ['@self'],
+        messageId: 'v6',
+        dismissed: makePromiseKit().promise,
+      },
+      adoptedValue: 8,
+    });
+
+    inboxComponent($parent, $end, powers, {
+      showValue: () => {},
+      conversationId: '@host',
+      conversationPetName: '@host',
+    });
+    await tick(200);
+    t.is(
+      $parent.querySelector('.form-request-inline-value'),
+      null,
+      'a message from another correspondent is filtered out',
+    );
+  },
+);
+
 test.after(() => {
   testDocument.body.innerHTML = '';
 });

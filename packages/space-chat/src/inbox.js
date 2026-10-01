@@ -23,6 +23,7 @@ import {
   initialFormValues,
 } from '@endo/spaces-util/form-fields.js';
 import { idFromLocator } from '@endo/spaces-util/locator.js';
+import { lookupPath } from '@endo/spaces-util/name-hub.js';
 import { prepareTextWithPlaceholders } from '@endo/spaces-util/markdown-render.js';
 import { markdownToVnodes } from '@endo/spaces-util/markdown-vnodes.js';
 import { valueToVnodes } from '@endo/spaces-util/value-vnodes.js';
@@ -83,13 +84,38 @@ const locatorsMatch = (a, b) => {
 };
 harden(locatorsMatch);
 
+let scratchCounter = 0;
+
+/**
+ * Read a value a message carries by adopting its edge under a scratch pet
+ * name, reading it, and dropping the name. A guest holds no locators or
+ * formula ids, so this is how it reaches a message's values.
+ *
+ * @param {ERef<EndoHost>} powers
+ * @param {bigint} number
+ * @param {string} edgeName
+ * @returns {Promise<unknown>}
+ */
+const adoptMessageValue = async (powers, number, edgeName) => {
+  scratchCounter += 1;
+  const scratchName = `inbox-${edgeName}-${number}-${scratchCounter}`;
+  await E(powers).adopt(number, edgeName, [scratchName]);
+  try {
+    return await lookupPath(powers, [scratchName]);
+  } finally {
+    await E(powers).remove(scratchName);
+  }
+};
+harden(adoptMessageValue);
+
 /**
  * @typedef {object} InboxMessage
  * @property {bigint} number
  * @property {string} type
  * @property {string} date
- * @property {string} from
- * @property {string} to
+ * @property {string} [from] - A host's correspondent locator; absent for a
+ *   guest, whose messages name correspondents by `fromNames`/`toNames`.
+ * @property {string} [to]
  * @property {string} [messageId]
  * @property {string} [replyTo]
  * @property {Promise<unknown>} dismissed
@@ -389,7 +415,8 @@ harden(RequestBody);
  * An interactive token / pet-name chip inside a package message body. Replaces
  * one markdown placeholder. Clicking (or Enter / Space) looks the referenced
  * value up by its locator and opens it via `showValue`; hovering shows the
- * value's current pet names (resolved async via `reverseLocate`).
+ * value's current pet names (resolved async via `reverseLocate`). A guest's
+ * messages carry no locators, so a guest adopts the edge to open it instead.
  *
  * Replicates the original imperative `$token` behavior: a `<span class="token"
  * role="button" tabindex="0">` wrapping `<b>@{edgeName}</b>`, default title
@@ -398,7 +425,7 @@ harden(RequestBody);
  * @param {object} props
  * @param {string} props.edgeName - The `@name` to display.
  * @param {string | undefined} props.locator - The value's `endo://` locator
- *   (from `message.ids[index]`), or undefined when not available.
+ *   (from `message.ids[index]`), or undefined for a guest's message.
  * @param {bigint} props.number - The message number, passed to `showValue`.
  * @param {ERef<EndoHost>} props.powers
  * @param {(value: unknown, id?: string, petNamePath?: string[], messageContext?: { number: bigint, edgeName: string }) => void | Promise<void>} props.showValue
@@ -437,7 +464,12 @@ const TokenChip = ({
 
   const openValue = () => {
     if (!locator) {
-      setError(' Value not available');
+      adoptMessageValue(powers, number, edgeName).then(
+        value => showValue(value, undefined, undefined, { number, edgeName }),
+        (/** @type {Error} */ error) => {
+          setError(` ${error.message}`);
+        },
+      );
       return;
     }
     // `message.ids` are delivered as endo:// locators, not bare ids.
@@ -884,6 +916,12 @@ const ValueBody = ({
 }) => {
   const { number, senderChip } = message;
   const { valueId, replyTo } = /** @type {any} */ (message.raw);
+  // A host reads the submitted value by formula id; a guest's value message
+  // carries no `valueId`, so it adopts the message's `value` edge instead.
+  const readValue = () =>
+    valueId === undefined
+      ? adoptMessageValue(powers, number, 'value')
+      : E(powers).lookupById(valueId);
   const formTitle =
     replyTo !== undefined ? formDescriptions.get(String(replyTo)) : undefined;
   const responseText =
@@ -904,19 +942,17 @@ const ValueBody = ({
 
   useEffect(() => {
     let disposed = false;
-    E(powers)
-      .lookupById(valueId)
-      .then(
-        value => {
-          if (disposed) return;
-          setState({ loaded: true, value, error: null });
-        },
-        (/** @type {Error} */ err) => {
-          if (!disposed) {
-            setState({ loaded: true, value: undefined, error: err.message });
-          }
-        },
-      );
+    readValue().then(
+      value => {
+        if (disposed) return;
+        setState({ loaded: true, value, error: null });
+      },
+      (/** @type {Error} */ err) => {
+        if (!disposed) {
+          setState({ loaded: true, value: undefined, error: err.message });
+        }
+      },
+    );
     return () => {
       disposed = true;
     };
@@ -948,19 +984,17 @@ const ValueBody = ({
           class: 'form-request-show-result',
           title: 'Inspect the submitted value',
           onClick: () => {
-            E(powers)
-              .lookupById(valueId)
-              .then(
-                value => {
-                  showValue(value, valueId, undefined, {
-                    number,
-                    edgeName: 'value',
-                  });
-                },
-                (/** @type {Error} */ err) => {
-                  setError(` ${err.message}`);
-                },
-              );
+            readValue().then(
+              value => {
+                showValue(value, valueId, undefined, {
+                  number,
+                  edgeName: 'value',
+                });
+              },
+              (/** @type {Error} */ err) => {
+                setError(` ${err.message}`);
+              },
+            );
           },
         },
         'Show Value',
@@ -1259,7 +1293,8 @@ harden(MessageEnvelope);
  * @param {object} ctx
  * @param {any} ctx.message - The raw daemon message.
  * @param {ERef<EndoHost>} ctx.powers
- * @param {string | undefined} ctx.selfLocator
+ * @param {() => Promise<string>} ctx.getSelfLocator - A host's own locator,
+ *   consulted only for a host's (locator-bearing) messages.
  * @param {string | null | undefined} ctx.conversationId
  * @param {string | string[] | null | undefined} ctx.conversationPetName
  * @param {() => InboxMessage[]} ctx.getMessages - Current list, for self-reply
@@ -1270,16 +1305,47 @@ harden(MessageEnvelope);
 const toInboxMessage = async ({
   message,
   powers,
-  selfLocator,
+  getSelfLocator,
   conversationId,
   conversationPetName,
   getMessages,
   formDescriptions,
 }) => {
   const { number, from: fromId, to: toId, date, dismissed } = message;
-  const isSent = locatorsMatch(fromId, selfLocator);
+  // A guest's messages name its correspondents by the guest's own pet names
+  // (`fromNames`/`toNames`) and carry no locators.
+  const guestNames =
+    message.fromNames !== undefined
+      ? {
+          from: /** @type {string[]} */ (message.fromNames),
+          to: /** @type {string[]} */ (message.toNames),
+        }
+      : undefined;
+  const selfLocator = guestNames ? undefined : await getSelfLocator();
+  const isSent = guestNames
+    ? guestNames.from.includes('@self')
+    : locatorsMatch(fromId, selfLocator);
 
-  if (conversationId) {
+  if (guestNames) {
+    if (conversationPetName) {
+      const leafName = Array.isArray(conversationPetName)
+        ? conversationPetName[conversationPetName.length - 1]
+        : conversationPetName;
+      const otherNames = isSent ? guestNames.to : guestNames.from;
+      const replyTo =
+        'replyTo' in message
+          ? /** @type {string} */ (message.replyTo)
+          : undefined;
+      const isSelfReplyInThread =
+        guestNames.from.includes('@self') &&
+        guestNames.to.includes('@self') &&
+        replyTo &&
+        getMessages().some(m => String(m.messageId) === String(replyTo));
+      if (!isSelfReplyInThread && !otherNames.includes(leafName)) {
+        return null;
+      }
+    }
+  } else if (conversationId) {
     const otherPartyId = isSent ? toId : fromId;
     if (!locatorsMatch(otherPartyId, conversationId)) {
       // Self-to-self messages (e.g. endow result delivery) belong to a
@@ -1318,7 +1384,10 @@ const toInboxMessage = async ({
   // Resolve the sender/recipient chip name (async via reverseLocate).
   /** @type {string | null} */
   let senderChip = null;
-  if (!isSent) {
+  if (guestNames) {
+    const [chipName] = isSent ? guestNames.to : guestNames.from;
+    if (chipName !== undefined) senderChip = `@${chipName}`;
+  } else if (!isSent) {
     const fromNames = await E(powers).reverseLocate(fromId);
     const fromName = fromNames?.[0];
     if (fromName !== undefined) senderChip = `@${fromName}`;
@@ -1443,8 +1512,16 @@ export const InboxRoot = ({
     const disposed = () => localDisposed || !isLive();
 
     const run = async () => {
-      const selfLocator = await E(powers).locate('@self');
-      if (disposed()) return;
+      // Only a host's messages need its own locator; a guest has none, so
+      // ask lazily on the first locator-bearing message.
+      /** @type {Promise<string> | undefined} */
+      let selfLocatorP;
+      const getSelfLocator = () => {
+        selfLocatorP ??= /** @type {Promise<string>} */ (
+          E(powers).locate('@self')
+        );
+        return selfLocatorP;
+      };
 
       for await (const message of iterateReader(
         /** @type {Parameters<typeof iterateReader>[0]} */ (
@@ -1467,7 +1544,7 @@ export const InboxRoot = ({
         const inboxMessage = await toInboxMessage({
           message,
           powers,
-          selfLocator,
+          getSelfLocator,
           conversationId,
           conversationPetName,
           getMessages: () => messagesRef.current,
