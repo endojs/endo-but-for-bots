@@ -381,6 +381,17 @@ def classify(paths, graphs, all_jobs=False):
         if under(path, "packages/test262-runner/test262/test/ironhorse"):
             # ironhorse-compile integration tests include these files directly.
             jobs["test-ironhorse"] = True
+        if path in {
+            "rust/engine/stack-lanes/sweep-pins.json",
+            "rust/engine/stack-lanes/cases.rs",
+            "rust/engine/stack-lanes/paint.rs",
+        }:
+            # Engine tests include these by path from outside any crate:
+            # ironhorse-compile's `recursion_bounds.rs` reads the sweep's
+            # ceilings from `sweep-pins.json`, and ironhorse-vm's
+            # `native_recursion_budget.rs` and `stack_height.rs` compile the
+            # stack-lane corpus and painter.
+            jobs["test-ironhorse"] = True
         if path == "packages/ocapn-noise/gen/ocapn-noise.wasm":
             jobs["build-wasm"] = True
         if path == "rust/engine/scripts/compare-math-vectors.py":

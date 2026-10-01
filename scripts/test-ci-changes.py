@@ -201,6 +201,18 @@ class Repository(unittest.TestCase):
         self.assertTrue(self.selected(".github/workflows/browser-test.yml")["lint"])
         self.assertTrue(self.selected("typedoc.json")["lint"])
 
+    def test_stack_lane_files_engine_tests_include_select_the_matrix(self):
+        """`stack-lanes/` is no crate, so the graph cannot see that
+        `recursion_bounds.rs` reads `sweep-pins.json` and that
+        ironhorse-vm's tests compile `cases.rs` and `paint.rs`: without
+        this rule a bad pin selected no job and merged green."""
+        for path in ["rust/engine/stack-lanes/sweep-pins.json",
+                     "rust/engine/stack-lanes/cases.rs",
+                     "rust/engine/stack-lanes/paint.rs"]:
+            with self.subTest(path=path):
+                self.assertTrue(self.selected(path)["test-ironhorse"])
+        self.assertFalse(self.selected("rust/engine/stack-lanes/lane_c.py")["test-ironhorse"])
+
     def test_format_helper_inputs(self):
         self.assertTrue(self.selected("rust/engine/scripts/generate-compiler-opcodes.py")["format-ironhorse"])
 
