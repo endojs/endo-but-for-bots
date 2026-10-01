@@ -42,6 +42,7 @@ import {
   TracesInterface,
 } from './interfaces.js';
 import { hostHelp, makeHelp } from './help-text.js';
+import { amplifyNameHub } from './guest-amplification.js';
 import { assertValidTreeEntryName, getMountBacking } from './mount.js';
 
 /**
@@ -1867,7 +1868,10 @@ export const makeHostMaker = ({
           if (introducedId === undefined) {
             return;
           }
-          await agent.storeIdentifier([childName], introducedId);
+          await E(amplifyNameHub(agent)).storeIdentifier(
+            [childName],
+            introducedId,
+          );
         }),
       );
     };

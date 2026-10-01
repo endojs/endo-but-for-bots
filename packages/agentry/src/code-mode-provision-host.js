@@ -506,17 +506,9 @@ const realizeProvisionResources = async (
   );
 
   for (const [guestName, controllerAlias] of guestBindings) {
+    // Bound by the host so the guest never handles a formula identifier.
     // eslint-disable-next-line no-await-in-loop
-    const id = await E(host).identify(...controllerAlias);
-    if (typeof id !== 'string') {
-      throw makeError(
-        X`Controller alias ${q(controllerAlias.join('/'))} has no formula identifier`,
-      );
-    }
-    // Identifier sharing preserves the controller alias and binds the exact
-    // same retained formula into the guest under its simple lexical pet name.
-    // eslint-disable-next-line no-await-in-loop
-    await E(guest).storeIdentifier(guestName, id);
+    await E(host).copy([...controllerAlias], [...guestAgentPath, guestName]);
   }
 
   registerProvisionedGuest(guest);

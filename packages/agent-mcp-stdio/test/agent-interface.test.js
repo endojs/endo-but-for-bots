@@ -45,12 +45,30 @@ test('the static agent interface is a valid catalog with no warnings', t => {
     'glob',
     'grep',
     'glorp',
-    'storeLocator',
     'followMessages',
     'followStream',
     'readFollower',
   ]) {
     t.true(catalog.names.includes(name), name);
+  }
+});
+
+test('the catalog offers no identifier or locator tools', t => {
+  const { names } = makeToolCatalog(makeAgentTools());
+  for (const name of [
+    'identify',
+    'reverseIdentify',
+    'listIdentifiers',
+    'storeIdentifier',
+    'locate',
+    'listLocators',
+    'reverseLocate',
+    'storeLocator',
+    'followLocatorNameChanges',
+    'invite',
+    'accept',
+  ]) {
+    t.false(names.includes(name), name);
   }
 });
 
@@ -636,25 +654,12 @@ const expectedGuestCalls = {
   remove: [[['remove', 'petNamePath']]],
   move: [[['move', ['fromPath'], ['toPath']]]],
   copy: [[['copy', ['fromPath'], ['toPath']]]],
-  identify: [[['identify', 'petNamePath']]],
-  reverseIdentify: [[['reverseIdentify', 'identifier']]],
-  listIdentifiers: [
-    [['listIdentifiers']],
-    [['listIdentifiers', 'petNamePath']],
-  ],
-  storeIdentifier: [[['storeIdentifier', ['petNamePath'], 'identifier']]],
-  locate: [[['locate', 'petNamePath']]],
-  listLocators: [[['listLocators']], [['listLocators', 'petNamePath']]],
-  reverseLocate: [[['reverseLocate', 'locator']]],
-  storeLocator: [[['storeLocator', ['petNamePath'], 'locator']]],
   locateContent: [[['locateContent', 'petNamePath']]],
   listContent: [[['listContent']], [['listContent', 'petNamePath']]],
   storeContent: [[['storeContent', 'petNamePath']]],
   reverseLocateContent: [[['reverseLocateContent', 'locator']]],
   internalizeContentLocator: [[['internalizeContentLocator', 'locator']]],
   loadContent: [[['loadContent', 'locator']]],
-  invite: [[['invite', ['petNamePath']]]],
-  accept: [[['accept', 'locator', ['petNamePath']]]],
   makeDirectory: [[['makeDirectory', ['petNamePath']]]],
   makePath: [[['has', 'petNamePath']]],
   readText: [[['readText', ['petNamePath']]]],
@@ -741,7 +746,6 @@ const expectedGuestCalls = {
   submit: [[['submit', 13n, { values: 'value' }]]],
   followMessages: [[['followMessages']]],
   followNameChanges: [[['followNameChanges']]],
-  followLocatorNameChanges: [[['followLocatorNameChanges', 'locator']]],
   followStream: [[['lookup', ['petNamePath']]]],
 };
 

@@ -92,28 +92,41 @@ export const ReadableNameHubInterface = M.interface('ReadableNameHub', {
   ...readableNameHubMethodGuards,
 });
 
-// The full name-hub method-guard record: the portable read contract plus the
-// daemon-specific registry/locator/mutation surface. `EndoDirectory` spreads it
-// (and `directoryFileMethodGuards`); `EndoGuest` / `EndoHost` spread it but
-// override the two `follow*` methods (which return `M.promise()` on agents,
-// where the hub returns `M.remotable()` — the exo awaits before wrapping the
-// reader).
-export const nameHubMethodGuards = harden({
-  ...readableNameHubMethodGuards,
+// The name-hub methods that produce or consume formula identifiers and
+// locators. A directory and a host carry them; a guest does not, because a
+// designation carried as data must not become authority in a confined guest,
+// and a guest's authority must not leave it as data (distributed confinement).
+const designationMethodGuards = harden({
   identify: M.call().rest(NamePathShape).returns(M.promise()),
   locate: M.call().rest(NamePathShape).returns(M.promise()),
   reverseLocate: M.call(LocatorShape).returns(M.promise()),
   followLocatorNameChanges: M.call(LocatorShape).returns(M.remotable()),
-  listValues: M.call().returns(M.promise()),
   listIdentifiers: M.call().rest(NamePathShape).returns(M.promise()),
   listLocators: M.call().rest(NamePathShape).returns(M.promise()),
-  followNameChanges: M.call().returns(M.remotable()),
-  reverseLookup: M.call(M.any()).returns(M.promise()),
   storeIdentifier: M.call(NameOrPathShape, IdShape).returns(M.promise()),
   storeLocator: M.call(NameOrPathShape, IdShape).returns(M.promise()),
+});
+
+// The name-hub methods that speak only in pet names and values.
+const petNameHubMethodGuards = harden({
+  ...readableNameHubMethodGuards,
+  listValues: M.call().returns(M.promise()),
+  followNameChanges: M.call().returns(M.remotable()),
+  reverseLookup: M.call(M.any()).returns(M.promise()),
   remove: M.call().rest(NamePathShape).returns(M.promise()),
   move: M.call(NamePathShape, NamePathShape).returns(M.promise()),
   copy: M.call(NamePathShape, NamePathShape).returns(M.promise()),
+});
+
+// The full name-hub method-guard record: the portable read contract plus the
+// daemon-specific registry/locator/mutation surface. `EndoDirectory` and
+// `EndoHost` spread it (and `directoryFileMethodGuards`); `EndoGuest` spreads
+// only `petNameHubMethodGuards`. Agents override `follow*` methods, which
+// return `M.promise()` on agents where the hub returns `M.remotable()` (the
+// exo awaits before wrapping the reader).
+export const nameHubMethodGuards = harden({
+  ...petNameHubMethodGuards,
+  ...designationMethodGuards,
 });
 
 // The content-locate method family (`designs/endo-content-locators-magnet-urn.md`
@@ -242,24 +255,18 @@ export const DirectoryInterface = M.interface('EndoDirectory', {
 });
 
 export const GuestInterface = M.interface('EndoGuest', {
-  // Name hub — the shared read (incl. `help`) + registry/locator/mutation
-  // surface, plus the directory file-I/O surface.
-  ...nameHubMethodGuards,
+  // Name hub — the shared read (incl. `help`) + pet-name mutation surface,
+  // plus the directory file-I/O surface. No identifier or locator methods:
+  // see `designationMethodGuards`.
+  ...petNameHubMethodGuards,
   ...directoryFileMethodGuards,
-  // Content-locate family (agent-only): the content-side analogue of the
-  // name-resolution family above.
+  // Content-locate family (agent-only). A content locator names immutable
+  // bytes by their hash, not a formula, so it designates no authority.
   ...contentLocatorMethodGuards,
-  // `followNameChanges` / `followLocatorNameChanges` are async on agents
-  // (the exo awaits before wrapping the reader), so they return a Promise
-  // where the bare `EndoDirectory` returns the reader synchronously
-  // (`M.remotable()`). Override the shared record's remotable shape with the
-  // agent's promise shape.
-  followLocatorNameChanges: M.call(LocatorShape).returns(M.promise()),
+  // `followNameChanges` is async on agents (the exo awaits before wrapping
+  // the reader), so it returns a Promise where the bare `EndoDirectory`
+  // returns the reader synchronously (`M.remotable()`).
   followNameChanges: M.call().returns(M.promise()),
-  // Agent-only registry extras beyond the bare name hub.
-  reverseIdentify: M.call(IdShape).returns(M.array()),
-  lookupById: M.call(IdShape).returns(M.promise()),
-  lookupByLocator: M.call(LocatorShape).returns(M.promise()),
   // Mail
   // Get the guest's mailbox handle
   handle: M.call().returns(M.remotable()),
@@ -267,7 +274,7 @@ export const GuestInterface = M.interface('EndoGuest', {
   listMessages: M.call().returns(M.promise()),
   // Subscribe to messages (returns iterator ref)
   followMessages: M.call().returns(M.promise()),
-  // Respond to a request with a formula identifier
+  // Respond to a request with a named value
   resolve: M.call(MessageNumberShape, NameOrPathShape).returns(M.promise()),
   // Decline a request
   reject: M.call(MessageNumberShape).optional(M.string()).returns(M.promise()),
@@ -337,14 +344,8 @@ export const GuestInterface = M.interface('EndoGuest', {
     MessageNumberShape, // messageNumber
     NameOrPathShape, // petNameOrPath
   ).returns(M.promise()),
-  // Internal: deliver a message
-  deliver: M.call(M.record()).returns(),
   // Evaluate code directly in a worker
   evaluate: EvaluateMethodGuard,
-  // Mint a guest-owned invitation (network mediation stays internal)
-  invite: M.call(NameOrPathShape).returns(M.promise()),
-  // Redeem an invitation into this guest (accepts as itself; no minted guest)
-  accept: M.call(LocatorShape, NameOrPathShape).returns(M.promise()),
 });
 
 export const HostInterface = M.interface('EndoHost', {

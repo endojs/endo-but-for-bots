@@ -15,8 +15,7 @@
 // not already hold.
 //
 // Streams. MCP tool calls are request/response, so a daemon subscription
-// (`followMessages`, `followNameChanges`, `followLocatorNameChanges`, or a
-// reader stored under a pet name) is opened by a `follow*` tool that returns
+// (`followMessages`, `followNameChanges`, or a reader stored under a pet name) is opened by a `follow*` tool that returns
 // a follower handle, then drained in bounded pulls with `readFollower` and
 // released with `closeFollower`. A pull returns at most `maxItems` items and
 // returns within `waitMilliseconds` of the call in all, even when it waits
@@ -65,7 +64,8 @@ const stringsSchema = harden({ type: 'array', items: { type: 'string' } });
 const petNamePathsSchema = harden({ type: 'array', items: petNamePathSchema });
 const locatorSchema = harden({
   type: 'string',
-  description: 'A locator, for example from locate or invite.',
+  description:
+    'A content locator (a magnet URN), for example from locateContent.',
 });
 const recordSchema = harden({ type: 'object' });
 
@@ -457,67 +457,6 @@ export const makeAgentTools = ({ delay = defaultDelay } = {}) => {
       invoke: (guest, { fromPath, toPath }) => E(guest).copy(fromPath, toPath),
     },
     restPathTool(
-      'identify',
-      'Report the formula identifier a pet name path designates.',
-    ),
-    {
-      name: 'reverseIdentify',
-      description: 'List the pet names that designate a formula identifier.',
-      inputSchema: objectSchema({ identifier: { type: 'string' } }, [
-        'identifier',
-      ]),
-      argumentsShape: M.splitRecord({ identifier: M.string() }),
-      invoke: (guest, { identifier }) => E(guest).reverseIdentify(identifier),
-    },
-    optionalRestPathTool(
-      'listIdentifiers',
-      'List the formula identifiers in your directory, or in the directory at a path.',
-    ),
-    {
-      name: 'storeIdentifier',
-      description: 'Name the value a formula identifier designates.',
-      inputSchema: objectSchema(
-        { petNamePath: petNamePathSchema, identifier: { type: 'string' } },
-        ['petNamePath', 'identifier'],
-      ),
-      argumentsShape: M.splitRecord({
-        petNamePath: PetNamePathShape,
-        identifier: M.string(),
-      }),
-      invoke: async (guest, { petNamePath, identifier }) => {
-        await E(guest).storeIdentifier(petNamePath, identifier);
-        return `Stored ${identifier} as ${petNamePath.join('/')}`;
-      },
-    },
-
-    // Locators.
-    restPathTool('locate', 'Report the locator for a pet name path.'),
-    optionalRestPathTool(
-      'listLocators',
-      'List the locators in your directory, or in the directory at a path.',
-    ),
-    locatorTool(
-      'reverseLocate',
-      'List the pet names that designate a locator.',
-    ),
-    {
-      name: 'storeLocator',
-      description:
-        'Adopt a locator: give the value it designates a pet name in your directory.',
-      inputSchema: objectSchema(
-        { petNamePath: petNamePathSchema, locator: locatorSchema },
-        ['petNamePath', 'locator'],
-      ),
-      argumentsShape: M.splitRecord({
-        petNamePath: PetNamePathShape,
-        locator: M.string(),
-      }),
-      invoke: async (guest, { petNamePath, locator }) => {
-        await E(guest).storeLocator(petNamePath, locator);
-        return `Adopted ${locator} as ${petNamePath.join('/')}`;
-      },
-    },
-    restPathTool(
       'locateContent',
       'Report the content locator (a magnet URN) for a pet name path.',
     ),
@@ -541,32 +480,6 @@ export const makeAgentTools = ({ delay = defaultDelay } = {}) => {
       'loadContent',
       'Load the content a content locator designates.',
     ),
-    {
-      name: 'invite',
-      description:
-        'Mint an invitation for a new correspondent and report its locator.',
-      inputSchema: objectSchema({ petNamePath: petNamePathSchema }, [
-        'petNamePath',
-      ]),
-      argumentsShape: M.splitRecord({ petNamePath: PetNamePathShape }),
-      invoke: (guest, { petNamePath }) => E(guest).invite(petNamePath),
-    },
-    {
-      name: 'accept',
-      description:
-        'Redeem an invitation locator and name the new correspondent.',
-      inputSchema: objectSchema(
-        { locator: locatorSchema, petNamePath: petNamePathSchema },
-        ['locator', 'petNamePath'],
-      ),
-      argumentsShape: M.splitRecord({
-        locator: M.string(),
-        petNamePath: PetNamePathShape,
-      }),
-      invoke: (guest, { locator, petNamePath }) =>
-        E(guest).accept(locator, petNamePath),
-    },
-
     // Files and directories.
     {
       name: 'makeDirectory',
@@ -1081,16 +994,6 @@ export const makeAgentTools = ({ delay = defaultDelay } = {}) => {
       inputSchema: objectSchema({}),
       argumentsShape: M.splitRecord({}),
       invoke: guest => openFollower(() => E(guest).followNameChanges()),
-    },
-    {
-      name: 'followLocatorNameChanges',
-      description:
-        'Follow the pet names that designate a locator. Returns a follower ' +
-        'to read with readFollower.',
-      inputSchema: objectSchema({ locator: locatorSchema }, ['locator']),
-      argumentsShape: M.splitRecord({ locator: M.string() }),
-      invoke: (guest, { locator }) =>
-        openFollower(() => E(guest).followLocatorNameChanges(locator)),
     },
     {
       name: 'followStream',

@@ -1711,7 +1711,59 @@ export interface EndoAgent
   lookupByLocator(locator: string): Promise<unknown>;
 }
 
-export interface EndoGuest extends EndoAgent {
+/**
+ * The `EndoAgent` methods a guest does not carry: every method that produces
+ * or consumes a formula identifier or locator, and the internal `deliver`,
+ * which would let a guest forge an envelope carrying identifiers into its own
+ * mailbox. A guest designates only by pet name (distributed confinement).
+ */
+export type GuestWithheldMethod =
+  | 'identify'
+  | 'reverseIdentify'
+  | 'locate'
+  | 'reverseLocate'
+  | 'followLocatorNameChanges'
+  | 'listIdentifiers'
+  | 'listLocators'
+  | 'lookupById'
+  | 'lookupByLocator'
+  | 'storeIdentifier'
+  | 'storeLocator'
+  | 'deliver';
+
+/**
+ * A message as a guest reads it: the sender's and recipient's formula
+ * locators are replaced by the guest's own pet names for them, and the
+ * attachment, promise, resolver, and value identifiers are withheld. A guest
+ * reaches an attachment with `adopt` by edge name.
+ */
+export type GuestMessage = Omit<
+  StampedMessage,
+  'from' | 'to' | 'ids' | 'promiseId' | 'resolverId' | 'valueId'
+> & {
+  fromNames: Name[];
+  toNames: Name[];
+};
+
+export type GuestMessageRevision = Omit<MessageRevision, 'envelope'> & {
+  envelope: GuestMessage;
+};
+
+/** A name change as a guest reads it: the named value's identifier is withheld. */
+export type GuestNameChange = { add: Name; type?: string } | { remove: Name };
+
+export interface EndoGuest extends Omit<
+  EndoAgent,
+  | GuestWithheldMethod
+  | 'listMessages'
+  | 'followMessages'
+  | 'messageHistory'
+  | 'followNameChanges'
+> {
+  listMessages(): Promise<Array<GuestMessage>>;
+  followMessages(): AsyncGenerator<GuestMessage, undefined, undefined>;
+  messageHistory(messageNumber: bigint): Promise<Array<GuestMessageRevision>>;
+  followNameChanges(): AsyncGenerator<GuestNameChange, undefined, undefined>;
   /** Evaluate code directly in a worker, constrained by reachable capabilities. */
   evaluate(
     workerPetName: string | string[] | undefined,
@@ -1739,34 +1791,6 @@ export interface EndoGuest extends EndoAgent {
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];
-  /**
-   * Mint a single-use invitation whose locator's `from` names this guest's
-   * handle, so an acceptor binds this guest (not the top host) under its chosen
-   * pet name. Acceptance stores the acceptor's handle in this guest's pet store
-   * under `correspondentName`. Network mediation runs through an internal
-   * daemon broker; this call confers no `getPeerInfo`/`addPeerInfo`, host facet,
-   * peer enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
-   * implementation.
-   */
-  invite(correspondentName: string | string[]): Promise<Invitation>;
-  /**
-   * Redeem an invitation locator into THIS guest, binding the relationship to
-   * the calling guest — no replacement guest is minted on the acceptor side.
-   * The guest accepts *as itself*: its `@self` handle is the identity presented
-   * to the inviter, and the inviter's handle is bound reciprocally under
-   * `correspondentName` (a pet name this guest chooses; the inviter chooses its
-   * own independently, so the two may differ). A path nests the binding under a
-   * directory that must already exist. Shares `EndoHost.accept`'s
-   * implementation; confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
-   * enumeration, or outbound-dialing surface. Redeeming a genuine invitation
-   * registers the inviter's daemon and agent key additively only (never
-   * redirecting an existing route), with the agent-key write deferred until the
-   * invitation is proven.
-   */
-  accept(
-    invitationLocator: string,
-    correspondentName: string | string[],
-  ): Promise<void>;
 }
 
 export type SecretState = 'active' | 'revoked';

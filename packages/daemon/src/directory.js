@@ -30,6 +30,7 @@ import { makeDeferredTasks } from './deferred-tasks.js';
 import { directoryHelp, readableNameHubHelp, makeHelp } from './help-text.js';
 
 import { DirectoryInterface, ReadableNameHubInterface } from './interfaces.js';
+import { amplifyNameHub } from './guest-amplification.js';
 
 /** @import { DaemonCore, DeferredTasks, MakeDirectoryNode, EndoDirectory, ContentLocatable, ContentIdentity, NameHub, LocatorNameChange, Context, Name, NamePath, PetName, FormulaIdentifier, NodeNumber, PetStoreNameChange, ReadableBlobDeferredTaskParams, ReadableNameHub, StoreController } from './types.js' */
 
@@ -231,7 +232,7 @@ export const makeDirectoryMaker = ({
       const { hub, name } = await lookupTailNameHub(
         /** @type {NamePath} */ (petNamePath),
       );
-      return E(hub).identify(name);
+      return E(amplifyNameHub(hub)).identify(name);
     };
 
     /** @type {EndoDirectory['locate']} */
@@ -339,7 +340,7 @@ export const makeDirectoryMaker = ({
         return harden(record);
       }
       const hub = /** @type {NameHub} */ (await lookup(petNamePath));
-      return E(hub).listLocators();
+      return E(amplifyNameHub(hub)).listLocators();
     };
 
     // Content locators (magnet URNs). The content-side analogue of `locate` /
@@ -574,7 +575,7 @@ export const makeDirectoryMaker = ({
       const fromNamePath = /** @type {NamePath} */ (fromPath);
       const { hub: fromHub, name: fromName } =
         await lookupTailNameHub(fromNamePath);
-      const id = await E(fromHub).identify(fromName);
+      const id = await E(amplifyNameHub(fromHub)).identify(fromName);
       if (id === undefined) {
         throw new Error(`Unknown name: ${q(fromPath)}`);
       }
@@ -594,7 +595,7 @@ export const makeDirectoryMaker = ({
         return;
       }
       const hub = /** @type {NameHub} */ (await lookup(prefixPath));
-      await E(hub).storeIdentifier([petName], id);
+      await E(amplifyNameHub(hub)).storeIdentifier([petName], id);
     };
 
     /**

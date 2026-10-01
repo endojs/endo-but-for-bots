@@ -5,7 +5,10 @@ import { makeExo } from '@endo/exo';
 import { q } from '@endo/errors';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
-import { cancelPendingIterator } from './cancelable-iterator.js';
+import {
+  cancelPendingIterator,
+  makeCancelableIterator,
+} from './cancelable-iterator.js';
 import { makePetSitter } from './pet-sitter.js';
 import {
   assertPetNamePath,
@@ -15,9 +18,46 @@ import {
 import { makeDeferredTasks } from './deferred-tasks.js';
 import { idFromLocator } from './locator.js';
 
-/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, FormulaIdentifier, InvitationDeferredTaskParams, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
+/** @import { Context, ContentLoadable, DaemonCore, DeferredTasks, EndoGuest, EvalDeferredTaskParams, GuestMessage, FormulaIdentifier, MakeDirectoryNode, MakeMailbox, MarshalDeferredTaskParams, Name, NameOrPath, NamePath, NodeNumber, NamesOrPaths, Provide, ReadableBlobDeferredTaskParams, WorkerDeferredTaskParams } from './types.js' */
 import { GuestInterface } from './interfaces.js';
 import { guestHelp, makeHelp } from './help-text.js';
+import { registerGuestDirectory } from './guest-amplification.js';
+
+/**
+ * A guest holds no formula identifiers or locators (distributed confinement):
+ * a designation carried as data must not become authority, and authority the
+ * guest holds must not leave as data. These message fields carry one or the
+ * other and are withheld from every message a guest reads.
+ */
+const designationMessageFields = harden([
+  'from',
+  'to',
+  'ids',
+  'promiseId',
+  'resolverId',
+  'valueId',
+]);
+
+/**
+ * @template T, U
+ * @param {AsyncGenerator<T, undefined, undefined>} source
+ * @param {(item: T) => U} transform
+ */
+const mapCancelableIterator = (source, transform) =>
+  makeCancelableIterator(async function* mapped(setCancelPending) {
+    try {
+      const cancellation = setCancelPending(() =>
+        cancelPendingIterator(source),
+      );
+      if (cancellation !== undefined) await cancellation;
+      for await (const item of source) {
+        yield transform(item);
+      }
+    } finally {
+      await source.return(undefined);
+    }
+    return undefined;
+  });
 
 /**
  * @param {object} args
@@ -26,8 +66,6 @@ import { guestHelp, makeHelp } from './help-text.js';
  * @param {DaemonCore['formulateEval']} args.formulateEval
  * @param {DaemonCore['formulateReadableBlob']} args.formulateReadableBlob
  * @param {DaemonCore['formulateMarshalValue']} args.formulateMarshalValue
- * @param {DaemonCore['formulateInvitation']} args.formulateInvitation
- * @param {DaemonCore['acceptInvitation']} args.acceptInvitation
  * @param {DaemonCore['getFormulaForId']} args.getFormulaForId
  * @param {DaemonCore['getAllNetworkAddresses']} args.getAllNetworkAddresses
  * @param {DaemonCore['getAllContentSources']} args.getAllContentSources
@@ -44,8 +82,6 @@ export const makeGuestMaker = ({
   formulateEval,
   formulateReadableBlob,
   formulateMarshalValue,
-  formulateInvitation,
-  acceptInvitation,
   getFormulaForId,
   getAllNetworkAddresses,
   getAllContentSources,
@@ -145,28 +181,19 @@ export const makeGuestMaker = ({
     });
     const { handle } = mailbox;
 
-    const { reverseIdentify } = specialStore;
     const {
       has,
-      identify,
-      locate,
-      reverseLocate,
       list,
       listValues,
-      listIdentifiers,
-      listLocators,
       locateContent,
       listContent,
       storeContent,
       reverseLocateContent,
       internalizeContentLocator,
-      followNameChanges,
-      followLocatorNameChanges,
+      followNameChanges: directoryFollowNameChanges,
       lookup,
       maybeLookup,
       reverseLookup,
-      storeIdentifier: directoryStoreIdentifier,
-      storeLocator: directoryStoreLocator,
       readText: directoryReadText,
       maybeReadText: directoryMaybeReadText,
       writeText: directoryWriteText,
@@ -176,25 +203,10 @@ export const makeGuestMaker = ({
       makeDirectory,
     } = directory;
 
-    /**
-     * Look up a value by its formula identifier directly.
-     * @param {string} id - The formula identifier.
-     * @returns {Promise<unknown>} The value for the given formula identifier.
-     */
-    const lookupById = async id =>
-      provide(/** @type {FormulaIdentifier} */ (id));
-
-    /**
-     * Look up a value by an `endo://` locator. Mail attachments are delivered
-     * as locators (the portable, cross-node form), so this is what callers use
-     * to resolve an attachment reference.
-     * @param {string} locator - An `endo://` locator.
-     * @returns {Promise<unknown>} The value for the given locator.
-     */
-    const lookupByLocator = async locator => provide(idFromLocator(locator));
     const {
-      listMessages,
-      followMessages,
+      listMessages: mailboxListMessages,
+      followMessages: mailboxFollowMessages,
+      messageHistory: mailboxMessageHistory,
       resolve,
       reject,
       adopt,
@@ -203,14 +215,72 @@ export const makeGuestMaker = ({
       reply,
       request,
       send,
-      deliver,
       editMessage,
-      messageHistory,
       define: mailboxDefine,
       form: mailboxForm,
       submit: mailboxSubmit,
       sendValue: mailboxSendValue,
     } = mailbox;
+
+    /**
+     * The guest's own pet names for a correspondent, in place of the
+     * correspondent's locator.
+     * @param {unknown} locator
+     * @returns {Name[]}
+     */
+    const namesForLocator = locator => {
+      if (typeof locator !== 'string') {
+        return harden([]);
+      }
+      try {
+        return specialStore.reverseIdentify(idFromLocator(locator));
+      } catch {
+        return harden([]);
+      }
+    };
+
+    /**
+     * @param {Record<string, any>} message
+     * @returns {GuestMessage}
+     */
+    const redactMessage = message => {
+      /** @type {Record<string, any>} */
+      const redacted = {
+        ...message,
+        fromNames: namesForLocator(message.from),
+        toNames: namesForLocator(message.to),
+      };
+      for (const field of designationMessageFields) {
+        delete redacted[field];
+      }
+      return /** @type {GuestMessage} */ (harden(redacted));
+    };
+
+    /** @type {EndoGuest['listMessages']} */
+    const listMessages = async () =>
+      harden((await mailboxListMessages()).map(redactMessage));
+
+    /** @type {EndoGuest['followMessages']} */
+    const followMessages = () =>
+      mapCancelableIterator(mailboxFollowMessages(), redactMessage);
+
+    /** @type {EndoGuest['messageHistory']} */
+    const messageHistory = async messageNumber =>
+      harden(
+        (await mailboxMessageHistory(messageNumber)).map(revision =>
+          harden({ ...revision, envelope: redactMessage(revision.envelope) }),
+        ),
+      );
+
+    /** @type {EndoGuest['followNameChanges']} */
+    const followNameChanges = () =>
+      mapCancelableIterator(directoryFollowNameChanges(), change => {
+        if (!('add' in change)) {
+          return change;
+        }
+        const { value: _value, ...rest } = change;
+        return harden(rest);
+      });
 
     /**
      * @param {NameOrPath | undefined} workerName
@@ -358,126 +428,22 @@ export const makeGuestMaker = ({
       await unpinTransient(id);
     };
 
-    /**
-     * Mint a single-use invitation owned by this guest. This shares
-     * `EndoHost.invite`'s implementation (`formulateInvitation`): the resulting
-     * invitation's locator `from` names *this guest's* handle, so an acceptor
-     * binds this guest rather than the top host. The invitation id is retained
-     * under `correspondentName` in this guest's own pet store so it survives a
-     * restart,
-     * and acceptance overwrites that slot with the accepted handle (consume
-     * once). Network mediation is supplied internally by the daemon inside the
-     * invitation formula, so this call hands the guest no `getPeerInfo`,
-     * `addPeerInfo`, host facet, peer enumeration, or outbound-dialing surface:
-     * a guest inviter gains no *dialing or peer-registration* authority. Note
-     * this is narrower than "no network authority" — the invitation URL the
-     * guest can then obtain via `locate()` does embed this daemon's advertised
-     * connection-hint addresses (by design; every invitation, host- or
-     * guest-issued, encodes them), so a guest learns and can forward those
-     * addresses even with an empty `@nets`. That disclosure is inherent to
-     * issuing a redeemable invitation and grants no authority to act on the
-     * addresses.
-     * @param {NameOrPath} correspondentName
-     */
-    const invite = async correspondentName => {
-      const { namePath, petName: correspondentPetName } =
-        petNamePathFrom(correspondentName);
-      /** @type {DeferredTasks<InvitationDeferredTaskParams>} */
-      const tasks = makeDeferredTasks();
-      tasks.push(identifiers =>
-        namePath.length === 1
-          ? specialStore.storeIdentifier(
-              correspondentPetName,
-              identifiers.invitationId,
-            )
-          : E(directory).storeIdentifier(namePath, identifiers.invitationId),
-      );
-      const { value } = await formulateInvitation(
-        guestId,
-        handleId,
-        correspondentName,
-        tasks,
-      );
-      return value;
-    };
-
-    /**
-     * Redeem an invitation locator into THIS guest. Acceptance binds the
-     * relationship to the calling guest — no replacement guest is minted on the
-     * acceptor side. The guest accepts *as itself*: its own `@self` handle is
-     * the identity presented to the inviter, and the inviter's handle is bound
-     * reciprocally under `correspondentName`, a pet name this guest chooses in
-     * its own directory (a path nests under a directory that must already
-     * exist). The inviter independently chooses its own pet name for this
-     * guest, so the two names may differ.
-     *
-     * This shares one implementation with `EndoHost.accept` via the daemon-core
-     * `acceptInvitation` helper. Peer registration and remote-agent-key routing
-     * stay behind that helper (and the invitation formula's own daemon-mediated
-     * accept), so a guest acceptor gains no `getPeerInfo`/`addPeerInfo`, host
-     * facet, peer enumeration, or outbound-dialing surface — exactly as a guest
-     * inviter does not. Redeeming a genuine invitation does have a bounded,
-     * additive effect on shared routing: the inviter's daemon is registered as
-     * a peer and its agent key recorded, but only additively (a known peer is
-     * never re-addressed and a mapped agent key never redirected), and the
-     * agent-key write happens only after the invitation is proven, so a forged
-     * locator mutates nothing. Reachability follows this guest's own `@nets`: an
-     * empty `@nets` (the default) still accepts same-daemon peers but leaves the
-     * guest undialable across daemons (the anonymizing-persona default).
-     * @param {string} invitationLocator
-     * @param {NameOrPath} correspondentName
-     */
-    const accept = async (invitationLocator, correspondentName) => {
-      const { namePath } = petNamePathFrom(correspondentName);
-      return acceptInvitation({
-        invitationLocator,
-        acceptingHandleId: handleId,
-        acceptingNetworksDirectoryId: networksDirectoryId,
-        bindCorrespondent: async remoteHandleLocator => {
-          await null;
-          // Snapshot whatever `correspondentName` held before this speculative
-          // bind so a rejected invitation can restore it rather than clobber a
-          // pre-existing correspondent bound under the same name.
-          const priorLocator = await E(directory).locate(...namePath);
-          await E(directory).storeLocator(namePath, remoteHandleLocator);
-          return async () => {
-            if (priorLocator === undefined) {
-              await E(directory).remove(...namePath);
-            } else {
-              await E(directory).storeLocator(namePath, priorLocator);
-            }
-          };
-        },
-      });
-    };
-
     /** @type {EndoGuest} */
     const guest = {
       // Directory
       has,
-      identify,
-      reverseIdentify,
-      locate,
-      reverseLocate,
       list,
       listValues,
-      listIdentifiers,
-      listLocators,
       locateContent,
       listContent,
       storeContent,
       reverseLocateContent,
       internalizeContentLocator,
       loadContent,
-      followLocatorNameChanges,
       followNameChanges,
       lookup,
       maybeLookup,
-      lookupById,
-      lookupByLocator,
       reverseLookup,
-      storeIdentifier: directoryStoreIdentifier,
-      storeLocator: directoryStoreLocator,
       move,
       remove,
       copy,
@@ -497,7 +463,6 @@ export const makeGuestMaker = ({
       reply,
       request,
       send,
-      deliver,
       editMessage,
       messageHistory,
       evaluate,
@@ -508,21 +473,14 @@ export const makeGuestMaker = ({
       storeValue,
       submit,
       sendValue,
-      invite,
-      accept,
     };
 
-    return makeExo(
+    const guestExo = makeExo(
       'EndoGuest',
       GuestInterface,
       /** @type {any} */ ({
         help: makeHelp(guestHelp),
         ...guest,
-        /** @param {string} locator */
-        followLocatorNameChanges: async locator => {
-          const iterator = guest.followLocatorNameChanges(locator);
-          return readerFromIterator(iterator);
-        },
         followMessages: async () => {
           const iterator = guest.followMessages();
           return readerFromIterator(/** @type {any} */ (iterator), {
@@ -537,6 +495,8 @@ export const makeGuestMaker = ({
         },
       }),
     );
+    registerGuestDirectory(guestExo, directory);
+    return guestExo;
   };
 
   return makeGuest;

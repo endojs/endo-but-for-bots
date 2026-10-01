@@ -1564,12 +1564,10 @@ test('guest facet receives a message for host', async t => {
   const ten = await E(host).lookup(['ten2']);
   t.is(ten, 10);
 
-  // Each agent externalizes locators with its own keypair key.
-  // eslint-disable-next-line no-unused-vars
-  const guestLocatorFromHost = await E(host).locate('guest');
+  // Each agent externalizes locators with its own keypair key. The host reads
+  // the guest's own designations by traversing into its guest.
   const hostLocatorFromHost = await E(host).locate('@self');
-  const guestLocatorFromGuest = await E(guest).locate('@self');
-  const hostLocatorFromGuest = await E(guest).locate('@host');
+  const guestLocatorFromGuest = await E(host).locate('guest-agent', '@self');
 
   // The guest externalized 'from' with its own key, so the host inbox
   // sees the guest's self-locator.  The 'to' was the host's self-ID
@@ -1587,23 +1585,25 @@ test('guest facet receives a message for host', async t => {
     ],
   );
 
-  // Guest should have own sent messages (externalized with guest's key).
+  // The guest reads its own sent messages with its correspondents named by
+  // its own pet names, and without any locator or identifier.
   const guestInbox = await E(guest).listMessages();
   t.deepEqual(
-    guestInbox.map(({ type, from, to }) => ({ type, from, to })),
+    guestInbox.map(({ type, fromNames, toNames }) => ({
+      type,
+      fromNames,
+      toNames,
+    })),
     [
-      {
-        type: 'request',
-        from: guestLocatorFromGuest,
-        to: hostLocatorFromGuest,
-      },
-      {
-        type: 'package',
-        from: guestLocatorFromGuest,
-        to: hostLocatorFromGuest,
-      },
+      { type: 'request', fromNames: ['@self'], toNames: ['@host'] },
+      { type: 'package', fromNames: ['@self'], toNames: ['@host'] },
     ],
   );
+  for (const message of guestInbox) {
+    for (const field of ['from', 'to', 'ids', 'promiseId', 'resolverId']) {
+      t.false(field in message, `guest message withholds ${field}`);
+    }
+  }
 });
 
 test('reply links to parent message', async t => {
@@ -3540,6 +3540,110 @@ test('guest cannot access host methods', async t => {
   t.is(revealedTarget, undefined);
 });
 
+const guestWithheldMethods = [
+  'identify',
+  'reverseIdentify',
+  'locate',
+  'reverseLocate',
+  'followLocatorNameChanges',
+  'listIdentifiers',
+  'listLocators',
+  'lookupById',
+  'lookupByLocator',
+  'storeIdentifier',
+  'storeLocator',
+  'deliver',
+  'invite',
+  'accept',
+];
+
+test('a guest neither produces nor consumes identifiers or locators', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+
+  // eslint-disable-next-line no-underscore-dangle
+  const guestMethods = new Set(await E(guest).__getMethodNames__());
+  // eslint-disable-next-line no-underscore-dangle
+  const hostMethods = new Set(await E(host).__getMethodNames__());
+  for (const method of guestWithheldMethods) {
+    t.false(guestMethods.has(method), `guest lacks ${method}`);
+    if (method !== 'invite' && method !== 'accept') {
+      t.true(hostMethods.has(method), `host keeps ${method}`);
+    }
+  }
+  t.true(hostMethods.has('invite'));
+  t.true(hostMethods.has('accept'));
+  for (const method of guestWithheldMethods) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(guest)[method]('x', 'y'), {
+      message: /target has no method/u,
+    });
+  }
+});
+
+test('a guest cannot adopt a host formula identifier carried as data', async t => {
+  // #1371: a guest that read the host's formula identifier from its prompt
+  // stored it with `storeIdentifier` and then held `?type=host`.
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
+  const hostId = await E(host).identify('@self');
+  const hostLocator = await E(host).locate('@self');
+  t.truthy(hostId);
+
+  await t.throwsAsync(() => E(guest).storeIdentifier(['escalated'], hostId), {
+    message: /target has no method "storeIdentifier"/u,
+  });
+  await t.throwsAsync(() => E(guest).storeLocator(['escalated'], hostLocator), {
+    message: /target has no method "storeLocator"/u,
+  });
+  await t.throwsAsync(() => E(guest).lookupById(hostId), {
+    message: /target has no method "lookupById"/u,
+  });
+  await t.throwsAsync(() => E(guest).lookupByLocator(hostLocator), {
+    message: /target has no method "lookupByLocator"/u,
+  });
+  // A forged envelope naming the host's identifier cannot be delivered into
+  // the guest's own mailbox and then adopted.
+  await t.throwsAsync(
+    () =>
+      E(guest).deliver({
+        type: 'package',
+        messageId: '0',
+        from: hostId,
+        to: hostId,
+        strings: ['', ''],
+        names: ['gift'],
+        ids: [hostId],
+      }),
+    { message: /target has no method "deliver"/u },
+  );
+  t.false(await E(guest).has('escalated'));
+  t.is(await E(host).identify('guest-agent', 'escalated'), undefined);
+});
+
+test('guest name changes withhold formula identifiers', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  await E(guest).storeValue(42, 'answer');
+
+  const changes = iterateReader(E(guest).followNameChanges());
+  const seen = [];
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop
+    const { value: change } = await changes.next();
+    seen.push(change);
+    if (change.add === 'answer') {
+      break;
+    }
+  }
+  for (const change of seen) {
+    t.false('value' in change, `name change for ${change.add} has no id`);
+  }
+  t.is(seen.at(-1).type, 'marshal');
+});
+
 test('the diagnostics facet is absent on the guest facet', async t => {
   const { host } = await prepareHost(t);
 
@@ -3768,42 +3872,30 @@ test('locate local persisted value', async t => {
   }
 });
 
-test('host and guest present different locators for the same value', async t => {
+test('a host binds a value into its guest by pet-name path', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
 
-  // Store a value reachable by both agents.
   await E(host).storeValue(42, 'answer');
+  await E(host).copy(['answer'], ['guest-agent', 'answer']);
 
-  // Give the guest access to the same value.
-  const hostLocator = await E(host).locate('answer');
-  await E(guest).storeLocator(['answer'], hostLocator);
-
-  // Both agents locate the same value.
-  const guestLocator = await E(guest).locate('answer');
-
-  // The underlying formula number must be the same.
-  const hostParsed = parseLocator(hostLocator);
-  const guestParsed = parseLocator(guestLocator);
-  t.is(hostParsed.number, guestParsed.number, 'same formula number');
-  t.is(hostParsed.formulaType, guestParsed.formulaType, 'same formula type');
-
-  // The node (peer key) is the same because the value formula was
-  // created at the daemon level (using localNodeNumber). Agent
-  // formulas (host, guest, handle, store) carry per-agent keys,
-  // but daemon-level formulas (values, evals) use localNodeNumber.
+  t.is(await E(guest).lookup('answer'), 42);
   t.is(
-    hostParsed.node,
-    guestParsed.node,
-    'daemon-level values share the same peer key',
+    await E(host).identify('guest-agent', 'answer'),
+    await E(host).identify('answer'),
+    'the guest names the same formula the host does',
   );
 });
 
 test('guest has its own @nets special name', async t => {
   const { host } = await prepareHost(t);
 
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
 
   // The guest should be able to look up @nets — it resolves to a directory.
   const guestNetsNames = await E(guest).list('@nets');
@@ -3813,7 +3905,7 @@ test('guest has its own @nets special name', async t => {
 
   // The host also has @nets; verify their locators differ (different directories).
   const hostNetsLocator = await E(host).locate('@nets');
-  const guestNetsLocator = await E(guest).locate('@nets');
+  const guestNetsLocator = await E(host).locate('guest-agent', '@nets');
   t.truthy(hostNetsLocator, 'host has @nets');
   t.truthy(guestNetsLocator, 'guest has @nets');
   t.not(
@@ -3825,13 +3917,15 @@ test('guest has its own @nets special name', async t => {
 
 test('agents have distinct empty @planes directories', async t => {
   const { host } = await prepareHost(t);
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
 
   t.deepEqual(await E(host).list('@planes'), []);
   t.deepEqual(await E(guest).list('@planes'), []);
 
   const hostPlanesLocator = await E(host).locate('@planes');
-  const guestPlanesLocator = await E(guest).locate('@planes');
+  const guestPlanesLocator = await E(host).locate('guest-agent', '@planes');
   t.truthy(hostPlanesLocator);
   t.truthy(guestPlanesLocator);
   t.not(hostPlanesLocator, guestPlanesLocator);
@@ -3875,26 +3969,6 @@ test('locate produces locators with connection hints from agent NETS', async t =
   const hostAddresses = addressesFromLocator(hostLocator);
   // Loopback network advertises no addresses, so no at= params.
   t.is(hostAddresses.length, 0, 'loopback-only NETS yields no at= params');
-
-  // Create a guest — its NETS starts empty.
-  const guest = await E(host).provideGuest('guest');
-  await E(guest).storeLocator(['answer'], hostLocator);
-
-  // Guest has empty NETS, so its locator should also have no at= params.
-  const guestLocator = await E(guest).locate('answer');
-  t.truthy(guestLocator, 'guest locator is defined');
-  const guestAddresses = addressesFromLocator(guestLocator);
-  t.is(guestAddresses.length, 0, 'empty NETS yields no at= params');
-
-  // Both locators point to the same daemon-level formula.
-  const hostParsed = parseLocator(hostLocator);
-  const guestParsed = parseLocator(guestLocator);
-  t.is(hostParsed.number, guestParsed.number, 'same formula number');
-  t.is(
-    hostParsed.node,
-    guestParsed.node,
-    'daemon-level values share the same peer key',
-  );
 });
 
 testNeedsNodeWorker('locate remote value', async t => {
@@ -3957,351 +4031,6 @@ testNeedsNodeWorker('invite, accept, and send mail', async t => {
   t.is(actualParsed.number, expectedParsed.number);
   t.is(actualParsed.node, expectedParsed.node);
 });
-
-testNeedsNodeWorker('guest invites a guest and they exchange mail', async t => {
-  const hostA = await prepareHostWithTestNetwork(t);
-  const hostB = await prepareHostWithTestNetwork(t);
-
-  const guestA = await E(hostA).provideGuest('guest-a-handle', {
-    agentName: 'guest-a',
-  });
-  const invitation = await E(guestA).invite('guest-b');
-  const invitationLocator = await E(invitation).locate();
-  await E(hostB).accept(invitationLocator, 'guest-a');
-
-  // The invitation's result name is the durable connection edge. Acceptance
-  // replaces the invitation with the remote accepter handle without minting
-  // and pinning an otherwise-unreachable local guest on either side.
-  t.truthy(await E(guestA).identify('guest-b'));
-  t.truthy(await E(hostB).identify('guest-a'));
-  t.is(await E(guestA).identify('@pins', 'guest-guest-b'), undefined);
-  t.is(await E(hostA).identify('@pins', 'guest-guest-b'), undefined);
-  t.is(await E(hostB).identify('@pins', 'guest-guest-a'), undefined);
-
-  // The host-only directory remains available for deliberate hidden pins, but
-  // invitation acceptance no longer adds a redundant synthetic guest to it.
-  const guestAId = await E(hostA).identify('guest-a');
-  const guestARecord = await E(E(hostA).diagnostics()).getFormula(guestAId);
-  const guestPinsId = guestARecord.properties.guestPins.identifier;
-  const hostPinsId = guestARecord.properties.hostPins.identifier;
-  t.not(guestPinsId, hostPinsId);
-  const hostPins = await E(hostA).lookupById(hostPinsId);
-  t.is(await E(hostPins).identify('guest-guest-b'), undefined);
-
-  await E(guestA).send('guest-b', ['Hello from guest A'], [], []);
-  await E(hostB).send('guest-a', ['Hello from guest B'], [], []);
-
-  const messagesForGuestB = await E(hostB).listMessages();
-  t.true(
-    messagesForGuestB.some(
-      message =>
-        message.type === 'package' &&
-        message.strings?.[0] === 'Hello from guest A',
-    ),
-  );
-
-  const messagesForGuestA = await E(guestA).listMessages();
-  t.true(
-    messagesForGuestA.some(
-      message =>
-        message.type === 'package' &&
-        message.strings?.[0] === 'Hello from guest B',
-    ),
-  );
-});
-
-test('EndoGuest.invite nests the invitation at a directory path', async t => {
-  const { host } = await prepareHost(t);
-  const guest = await E(host).provideGuest('guest-handle', {
-    agentName: 'guest-agent',
-  });
-  await E(guest).makeDirectory('peers');
-  const invitation = await E(guest).invite(['peers', 'bob']);
-  t.truthy(await E(invitation).locate());
-  t.true(await E(guest).has('peers', 'bob'));
-  t.false(await E(guest).has('bob'));
-});
-
-testNeedsNodeWorker(
-  'EndoGuest.accept binds into the calling guest (same daemon)',
-  async t => {
-    // Both the inviting and accepting guest live in ONE daemon — the
-    // minion.town shape, where the app's inviter and invitee guests are
-    // siblings under a single daemon. No network is required.
-    const { host } = await prepareHost(t);
-    const guestA = await E(host).provideGuest('guest-a-handle', {
-      agentName: 'guest-a',
-    });
-    const guestB = await E(host).provideGuest('guest-b-handle', {
-      agentName: 'guest-b',
-    });
-
-    const invitation = await E(guestA).invite('to-b');
-    const invitationLocator = await E(invitation).locate();
-    // The invitee redeems into ITSELF via the guest facet, not through a host.
-    await E(guestB).accept(invitationLocator, 'to-a');
-
-    // Reciprocal binding, each under its own independently chosen pet name.
-    t.truthy(await E(guestA).identify('to-b'));
-    t.truthy(await E(guestB).identify('to-a'));
-
-    // Accepting as itself mints no replacement guest on either side.
-    t.is(await E(guestA).identify('@pins', 'guest-to-b'), undefined);
-    t.is(await E(guestB).identify('@pins', 'guest-to-a'), undefined);
-
-    // Same-daemon acceptance registers NO peer: the inviter's daemon is this
-    // daemon, so writing a self-peer (or a self-referential remote-agent-key
-    // row) would be spurious. NOTE: this end-to-end check does NOT by itself pin
-    // the same-daemon skips — both agents here have empty `@nets`, so the
-    // orthogonal `hints.length > 0` / `addresses.length > 0` guards keep the peer
-    // store empty even if a same-daemon skip were removed (prover round 4). The
-    // skips are pinned load-bearingly by the multiplayer-suite test "same-daemon
-    // accept writes no peer route with reachable @nets on both sides", which
-    // gives both sides non-empty addresses so only the skips prevent the write.
-    t.deepEqual(
-      await E(host).listKnownPeers(),
-      [],
-      'same-daemon accept writes no known-peer entry',
-    );
-
-    // The bound handles are each guest's OWN handle — the acceptor bound the
-    // inviter's handle (not the top host's), and vice versa.
-    const guestAHandleId = await E(host).identify('guest-a-handle');
-    const guestBHandleId = await E(host).identify('guest-b-handle');
-    t.is(
-      parseLocator(await E(guestB).locate('to-a')).number,
-      parseId(guestAHandleId).number,
-      "acceptor's 'to-a' is the inviting guest's own handle",
-    );
-    t.is(
-      parseLocator(await E(guestA).locate('to-b')).number,
-      parseId(guestBHandleId).number,
-      "inviter's 'to-b' is the accepting guest's own handle",
-    );
-
-    // Mail flows both directions over the shared daemon's mailbox substrate.
-    await E(guestA).send('to-b', ['Hello from A'], [], []);
-    await E(guestB).send('to-a', ['Hello from B'], [], []);
-
-    const messagesForB = await E(guestB).listMessages();
-    t.true(
-      messagesForB.some(
-        message =>
-          message.type === 'package' && message.strings?.[0] === 'Hello from A',
-      ),
-      "B received A's message",
-    );
-    const messagesForA = await E(guestA).listMessages();
-    t.true(
-      messagesForA.some(
-        message =>
-          message.type === 'package' && message.strings?.[0] === 'Hello from B',
-      ),
-      "A received B's message",
-    );
-
-    // Single-use: a replay of the spent invitation is rejected.
-    await t.throwsAsync(
-      () => E(guestB).accept(invitationLocator, 'to-a-again'),
-      undefined,
-      'replayed invitation is rejected',
-    );
-  },
-);
-
-testNeedsNodeWorker(
-  'accept rolls back its speculative bind when the invitation is rejected (same daemon)',
-  async t => {
-    // The acceptor-side pet-name bind is written from the caller-supplied
-    // locator BEFORE the invitation is proven (so a bad name path cannot strand
-    // a spent invitation). A rejected accept — forged, unspent, or replayed —
-    // must therefore roll that bind back rather than leave the chosen name
-    // pointing at the unverified handle; least of all may it silently clobber a
-    // pre-existing correspondent already bound under that name.
-    const { host } = await prepareHost(t);
-    const guestA = await E(host).provideGuest('guest-a-handle', {
-      agentName: 'guest-a',
-    });
-    const guestB = await E(host).provideGuest('guest-b-handle', {
-      agentName: 'guest-b',
-    });
-    const guestC = await E(host).provideGuest('guest-c-handle', {
-      agentName: 'guest-c',
-    });
-
-    // B binds a genuine correspondent (A's handle) under 'contact'.
-    const invAB = await E(guestA).invite('to-b');
-    await E(guestB).accept(await E(invAB).locate(), 'contact');
-    const guestAHandleId = await E(host).identify('guest-a-handle');
-    t.is(
-      parseLocator(await E(guestB).locate('contact')).number,
-      parseId(guestAHandleId).number,
-      "'contact' initially names A's handle",
-    );
-
-    // Produce a spent invitation from a DIFFERENT correspondent (C), so a
-    // successful clobber would be observable as C's handle replacing A's.
-    const invCB = await E(guestC).invite('to-b-2');
-    const spentCLocator = await E(invCB).locate();
-    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
-
-    // Redeeming the now-spent invitation from C, reusing the name that already
-    // holds A, must reject AND leave 'contact' bound to A (not C, not stray).
-    await t.throwsAsync(
-      () => E(guestB).accept(spentCLocator, 'contact'),
-      undefined,
-      'a spent invitation is rejected',
-    );
-    t.is(
-      parseLocator(await E(guestB).locate('contact')).number,
-      parseId(guestAHandleId).number,
-      "'contact' still names A's handle after the rejected accept",
-    );
-  },
-);
-
-testNeedsNodeWorker(
-  'accept rollback removes a FRESH name it speculatively bound (same daemon)',
-  async t => {
-    // The rollback restores "whatever the pet name held before". The existing
-    // rollback test only covers the branch where a prior binding existed (so
-    // rollback re-stores it); this covers the OTHER branch — a name that held
-    // nothing before the speculative bind — where rollback must `remove()` the
-    // phantom binding, not leave it pointing at the unverified handle. Deleting
-    // the `priorLocator === undefined ? remove() : storeLocator()` split's
-    // remove() arm reddens here.
-    const { host } = await prepareHost(t);
-    const guestB = await E(host).provideGuest('guest-b-handle', {
-      agentName: 'guest-b',
-    });
-    const guestC = await E(host).provideGuest('guest-c-handle', {
-      agentName: 'guest-c',
-    });
-
-    // Produce a spent invitation from C.
-    const invCB = await E(guestC).invite('to-b');
-    const spentCLocator = await E(invCB).locate();
-    await E(guestB).accept(spentCLocator, 'temp'); // consumes invCB
-
-    // 'fresh-contact' has never been bound. Redeeming the now-spent invitation
-    // under it must reject AND leave 'fresh-contact' unbound — the speculative
-    // bind removed, not left as a phantom pointing at C's unverified handle.
-    t.is(
-      await E(guestB).identify('fresh-contact'),
-      undefined,
-      'the fresh name is unbound before the rejected accept',
-    );
-    await t.throwsAsync(
-      () => E(guestB).accept(spentCLocator, 'fresh-contact'),
-      undefined,
-      'a spent invitation is rejected',
-    );
-    t.is(
-      await E(guestB).identify('fresh-contact'),
-      undefined,
-      'the fresh name is unbound again after the rejected accept (phantom removed)',
-    );
-  },
-);
-
-testNeedsNodeWorker(
-  'duplicate accept(sameLocator, sameName) never loses the winner (same daemon)',
-  async t => {
-    // A client that naively retries its own accept(sameLocator, sameName) —
-    // no attacker required — starts two accepts of the SAME single-use
-    // invitation under the SAME correspondent name. The required outcome:
-    // exactly one wins, and the loser's `E(invitation).accept()` rejection
-    // (single-use) and its correspondent-bind rollback do NOT strand the
-    // winner's binding — 'contact' still names A's handle afterward.
-    //
-    // NOTE: this test asserts the OUTCOME, not the serialization mechanism.
-    // prover round 4 showed that removing the `acceptInvitationJobs.enqueue`
-    // wrapper leaves this same-daemon case green, because same-process
-    // eventual-send delivery ordering already serializes these two calls (the
-    // acceptor's writes here touch no network, so no interleaving await opens
-    // the check-then-act window the queue closes). The daemon-wide queue is
-    // load-bearing for the CROSS-daemon race — a forged locator racing a genuine
-    // one for the same not-yet-known peer, where real network awaits interleave
-    // — which this same-daemon shape cannot exercise. This test remains a useful
-    // guard on the duplicate-accept outcome; it does not claim to pin the queue.
-    const { host } = await prepareHost(t);
-    const guestA = await E(host).provideGuest('guest-a-handle', {
-      agentName: 'guest-a',
-    });
-    const guestB = await E(host).provideGuest('guest-b-handle', {
-      agentName: 'guest-b',
-    });
-
-    const invitation = await E(guestA).invite('to-b');
-    const invitationLocator = await E(invitation).locate();
-
-    const results = await Promise.allSettled([
-      E(guestB).accept(invitationLocator, 'contact'),
-      E(guestB).accept(invitationLocator, 'contact'),
-    ]);
-    const fulfilled = results.filter(r => r.status === 'fulfilled');
-    t.is(fulfilled.length, 1, 'exactly one duplicate accept succeeds');
-
-    // The winner's bind survives the loser's rollback: 'contact' still names
-    // A's handle rather than having been un-named.
-    const guestAHandleId = await E(host).identify('guest-a-handle');
-    const contactLocator = await E(guestB).locate('contact');
-    t.truthy(
-      contactLocator,
-      "'contact' remains bound after the duplicate race",
-    );
-    t.is(
-      parseLocator(contactLocator).number,
-      parseId(guestAHandleId).number,
-      "'contact' still names A's handle after the losing duplicate rolled back",
-    );
-  },
-);
-
-testNeedsNodeWorker(
-  'EndoGuest transitive invite chain I -> J -> K (same daemon)',
-  async t => {
-    // A guest that has accepted an invitation can itself invite and accept
-    // further guests: "a guest may invite more guests, transitively."
-    const { host } = await prepareHost(t);
-    const guestI = await E(host).provideGuest('i-handle', { agentName: 'i' });
-    const guestJ = await E(host).provideGuest('j-handle', { agentName: 'j' });
-    const guestK = await E(host).provideGuest('k-handle', { agentName: 'k' });
-
-    const invIJ = await E(guestI).invite('j');
-    await E(guestJ).accept(await E(invIJ).locate(), 'i');
-
-    // J, an accepted guest, now extends its OWN invitation to K.
-    const invJK = await E(guestJ).invite('k');
-    await E(guestK).accept(await E(invJK).locate(), 'j');
-
-    t.truthy(await E(guestI).identify('j'));
-    t.truthy(await E(guestJ).identify('i'));
-    t.truthy(await E(guestJ).identify('k'));
-    t.truthy(await E(guestK).identify('j'));
-
-    // Mail flows along each hop of the chain.
-    await E(guestI).send('j', ['I to J'], [], []);
-    await E(guestJ).send('k', ['J to K'], [], []);
-
-    const messagesForJ = await E(guestJ).listMessages();
-    t.true(
-      messagesForJ.some(
-        message =>
-          message.type === 'package' && message.strings?.[0] === 'I to J',
-      ),
-      "J received I's message",
-    );
-    const messagesForK = await E(guestK).listMessages();
-    t.true(
-      messagesForK.some(
-        message =>
-          message.type === 'package' && message.strings?.[0] === 'J to K',
-      ),
-      "K received J's message",
-    );
-  },
-);
 
 testNeedsNodeWorker(
   'accept keeps distinct result names for paths that a naive join would collide',
@@ -4586,13 +4315,17 @@ test('send with pet name path for recipient and values', async t => {
   await E(host).evaluate('worker', '42', [], [], ['values', 'the-answer']);
 
   // Create a guest and set up its directory with a values subdirectory
-  const guest = await E(host).provideGuest('guest');
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
 
   // Create a directory in the guest's namespace and put a value in it
   await E(guest).makeDirectory(['my-values']);
   // Copy the answer to the guest's directory
-  const answerId = await E(host).identify(...['values', 'the-answer']);
-  await E(guest).storeIdentifier(['my-values', 'answer'], answerId);
+  await E(host).copy(
+    ['values', 'the-answer'],
+    ['guest-agent', 'my-values', 'answer'],
+  );
 
   // Guest sends to @host using a path for the value
   await E(guest).send(
@@ -4999,8 +4732,17 @@ test('form happy path: guest sends form, host submits', async t => {
   t.is(guestFormMsg.type, 'form');
   const { value: valueMsg } = await guestIterator.next();
   t.is(valueMsg.type, 'value');
-  t.is(typeof valueMsg.valueId, 'string');
   t.is(valueMsg.replyTo, formMsg.messageId);
+  // The guest reads no value identifier; it reaches the submitted value by
+  // adopting the message's "value" edge.
+  const guestMessages = await E(guest).listMessages();
+  const valueMessage = guestMessages.find(message => message.type === 'value');
+  t.false('valueId' in valueMessage);
+  await E(guest).adopt(valueMessage.number, 'value', 'submitted');
+  t.deepEqual(await E(guest).lookup('submitted'), {
+    name: 'Alice',
+    color: 'blue',
+  });
 });
 
 test('form submit rejects when a field is missing', async t => {

@@ -127,6 +127,7 @@ import {
 } from './interfaces.js';
 import { makeTraceAggregator } from './trace-aggregator.js';
 import { getUnredactedStackString } from './unredacted-stack.js';
+import { amplifyNameHub } from './guest-amplification.js';
 
 /** @import { Passable } from '@endo/pass-style' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
@@ -7616,7 +7617,9 @@ const makeDaemonCore = async (
       // retry repeats that idempotent registration. Callers must therefore
       // treat a crashed accept as "retry the whole accept", not "resume".
       return invitationJobs.enqueue(async () => {
-        const currentSlot = await E(invitingAgent).identify(...guestNamePath);
+        const currentSlot = await E(amplifyNameHub(invitingAgent)).identify(
+          ...guestNamePath,
+        );
         if (currentSlot !== id) {
           throw makeError(
             'Invitation has already been accepted, canceled, or superseded',
@@ -7725,7 +7728,7 @@ const makeDaemonCore = async (
         // subsequent accept()/cancel() (already serialized behind us) observes
         // a spent invitation.  It also installs the remote guest handle under
         // `guestName` for mail delivery.
-        await E(invitingAgent).storeLocator(
+        await E(amplifyNameHub(invitingAgent)).storeLocator(
           guestNamePath,
           guestHandleLocatorString,
         );
@@ -7764,7 +7767,9 @@ const makeDaemonCore = async (
       // rebound the slot, cancel()'s `current !== id` and it is the promised
       // idempotent no-op.
       await invitationJobs.enqueue(async () => {
-        const current = await E(invitingAgent).identify(...guestNamePath);
+        const current = await E(amplifyNameHub(invitingAgent)).identify(
+          ...guestNamePath,
+        );
         if (current === id) {
           await E(invitingAgent).remove(...guestNamePath);
         }
@@ -7834,8 +7839,6 @@ const makeDaemonCore = async (
     formulateEval,
     formulateReadableBlob,
     formulateMarshalValue,
-    formulateInvitation,
-    acceptInvitation,
     getFormulaForId,
     getAllNetworkAddresses,
     getAllContentSources,

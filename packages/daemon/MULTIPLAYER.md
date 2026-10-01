@@ -434,13 +434,13 @@ the bytes-and-handshake layer differs.
    transport stack for `libp2p`.
 2. **Invitation URL**: Encodes the inviter's node id, inviting handle id,
    and one or more connection-hint addresses (TCP `at=tcp+netstring+
-   json+captp0://…`, OCapN `at=ocapn+noise+tcp://…`, or libp2p
-   multiaddrs). The inviter is either a host (`EndoHost.invite`) or a
-   guest (`EndoGuest.invite`); the locator's `from` names that inviting
-   agent's handle, not necessarily a host handle.
-3. **Accept**: The acceptor is either a host (`EndoHost.accept`) or a
-   guest (`EndoGuest.accept`) — symmetric with the invite step above,
-   since a guest can now redeem an invitation as itself. The acceptor
+   json+captp0://...`, OCapN `at=ocapn+noise+tcp://...`, or libp2p
+   multiaddrs). The inviter is a host (`EndoHost.invite`); the locator's
+   `from` names the inviting host's handle. A guest cannot invite: an
+   invitation is a locator, and a confined guest neither produces nor
+   consumes identifiers or locators.
+3. **Accept**: The acceptor is a host (`EndoHost.accept`); a guest cannot
+   redeem an invitation locator, for the same reason. The acceptor
    parses the locator, registers the inviter's peer info, iterates
    installed networks for one that `supports` the hint's protocol, dials
    it, and runs the `hello` handshake to exchange handle ids.
