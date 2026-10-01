@@ -913,10 +913,10 @@ impl Interp {
                                 )));
                             }
                         }
+                        // XS's `fx_TypedArray` caps the byte length at
+                        // `0x7FFFFFFF`, after the prototype read.
                         if length > (0x7FFF_FFFFu32 >> shift) {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "native-call:TypedArray:bad-length",
-                            )));
+                            return Err(self.catchable_range_error_msg("byteLength too big".into()));
                         }
                         let byte_length = length << shift;
                         self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
@@ -1811,13 +1811,10 @@ impl Interp {
                     match a.kind {
                         Kind::Integer | Kind::Number => match self.checked_array_length(a) {
                             Some(n) => data.length = n,
-                            // A non-length number (`Array(2.5)`, `Array(-1)`)
-                            // is a `RangeError` in XS — its abort value and
-                            // metering are a later increment; honest skip.
+                            // A non-length number (`Array(2.5)`, `Array(-1)`):
+                            // XS's `fx_Array` throws after the prototype read.
                             None => {
-                                return Err(Step::Host(Halt::NotImplemented(
-                                    "native-call:Array:bad-length",
-                                )))
+                                return Err(self.catchable_range_error_msg("invalid length".into()))
                             }
                         },
                         _ => {
@@ -2078,9 +2075,9 @@ impl Interp {
             Native::LockedDownConstructor => {
                 return Err(self.catchable_type_error_msg("secure mode".into()));
             }
-            // The remaining fundamentals constructors' call/coerce/construct
-            // behaviors land incrementally; until then they self-name so the
-            // differential runner records an honest skip.
+            // Every native the dispatcher routes here has an arm above. This
+            // guards a native that joins the routing without one: it
+            // self-names, so the gap reads as an honest skip, not a panic.
             _ => {
                 return Err(Step::Host(Halt::NotImplemented(native_unsupported_name(
                     native,

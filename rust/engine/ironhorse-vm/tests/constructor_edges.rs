@@ -117,3 +117,19 @@ fn super_new_target_belongs_to_the_super_call() {
         ),
     ]);
 }
+
+#[test]
+fn engine_halts_became_catchable_errors() {
+    check(&[
+        (
+            "array_lengths",
+            r#"var r = []; [-1, 2 ** 32, 1.5, NaN].forEach(function (v) { try { new Array(v); } catch (e) { r.push(e.constructor.name + ':' + e.message); } }); try { Array(-1); } catch (e) { r.push('call:' + e.constructor.name); } r.join()"#,
+            r#"RangeError:invalid length,RangeError:invalid length,RangeError:invalid length,RangeError:invalid length,call:RangeError"#,
+        ),
+        (
+            "array_max_length",
+            r#"new Array(4294967295).length"#,
+            r#"4294967295"#,
+        ),
+    ]);
+}

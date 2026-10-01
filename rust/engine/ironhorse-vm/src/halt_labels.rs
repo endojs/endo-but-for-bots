@@ -88,10 +88,8 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "module:import-meta",
     "module:static-linking",
     "module:top-level-await",
-    "native-call:Array:bad-length",
     "native-call:ArrayBuffer:resizable",
     "native-call:SharedArrayBuffer:growable",
-    "native-call:TypedArray:bad-length",
     // Custom iterator protocols and array-like interleaving are not yet modeled.
     "native-call:TypedArray:from-array-like",
     "number:unmodeled",

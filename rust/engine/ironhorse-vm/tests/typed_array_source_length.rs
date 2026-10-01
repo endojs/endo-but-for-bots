@@ -59,10 +59,12 @@ fn an_over_long_source_is_refused_before_it_is_materialized() {
     match rx.recv_timeout(Duration::from_secs(20)) {
         Ok((completed, halt)) => {
             assert!(!completed, "an over-long source must not construct");
-            assert_eq!(
-                halt,
-                Halt::NotImplemented("native-call:TypedArray:bad-length"),
-                "and must name the length as the reason"
+            assert!(
+                matches!(
+                    &halt,
+                    Halt::Throw { rendered, .. } if rendered == "RangeError: byteLength too big"
+                ),
+                "and must throw XS's RangeError naming the length: {halt:?}"
             );
             probe.join().expect("probe thread");
         }
