@@ -3,10 +3,13 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
 
+import { AUTH_SECRET_PETNAME } from '../src/credentials.js';
+
 import {
   makeSubagentSpawner,
   provisionFaeAgent,
   releaseFaeAgent,
+  spawnerProfileNameFor,
   subagentAgentName,
   subagentNamesIn,
 } from '../src/subagent-host.js';
@@ -26,6 +29,9 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
   const cancelled = [];
   /** @type {string[]} */
   const removed = [];
+  /** Locators the host bound into a guest's namespace, by full path. */
+  /** @type {Map<string, string>} */
+  const bindings = new Map();
   /** Caplet environments keyed by result name. */
   /** @type {Map<string, Record<string, string> | undefined>} */
   const envs = new Map();
@@ -72,11 +78,12 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
       onStep({ op: 'provideGuest', name });
       bind(name);
       if (options.agentName) bind(options.agentName);
-      return Far('Guest', {
-        async storeLocator() {
-          return undefined;
-        },
-      });
+      // A guest neither produces nor consumes locators: the host binds into
+      // its namespace by path.
+      return Far('Guest', {});
+    },
+    async storeLocator(petNamePath, locator) {
+      bindings.set(petNamePath.join('/'), locator);
     },
     async makeUnconfined(_worker, _specifier, options = {}) {
       onStep({ op: 'makeUnconfined', name: options.resultName });
@@ -103,7 +110,7 @@ const makeFakeHost = ({ onStep = () => {} } = {}) => {
       names.delete(key);
     },
   });
-  return { hostAgent, names, cancelled, removed, envs };
+  return { hostAgent, names, cancelled, removed, envs, bindings };
 };
 
 const provisionOptions = {
@@ -144,6 +151,49 @@ test('provisioning releases a half-built agent when a later step fails', async t
     'no name may still reach the spawner that held host-agent',
   );
   t.false(names.has('parent'), 'the agent guest must be released too');
+});
+
+test('provisioning binds each guest its capabilities through the host', async t => {
+  const { hostAgent, bindings } = makeFakeHost();
+  await provisionFaeAgent({
+    hostAgent,
+    name: 'parent',
+    depth: 0,
+    maxDepth: 1,
+    authSecretLocator: 'endo://node/secret?type=secret-blob',
+    ...provisionOptions,
+  });
+
+  const spawner = spawnerProfileNameFor('parent');
+  t.is(spawner, 'profile-for-parent-spawner-handle');
+  const driver = 'profile-for-parent-driver-handle';
+  t.is(
+    bindings.get(`${spawner}/llm-provider`),
+    provisionOptions.providerLocator,
+  );
+  t.is(
+    bindings.get(`${spawner}/host-agent`),
+    provisionOptions.hostAgentLocator,
+  );
+  t.is(
+    bindings.get(`${driver}/llm-provider`),
+    provisionOptions.providerLocator,
+  );
+  t.regex(
+    /** @type {string} */ (bindings.get(`${driver}/agent`)),
+    /profile-for-parent-id/,
+  );
+  t.regex(
+    /** @type {string} */ (bindings.get(`${driver}/subagent-spawner`)),
+    /parent-spawner-id/,
+  );
+  for (const guest of [spawner, driver]) {
+    t.is(
+      bindings.get(`${guest}/${AUTH_SECRET_PETNAME}`),
+      'endo://node/secret?type=secret-blob',
+      `${guest} should hold the auth secret`,
+    );
+  }
 });
 
 test('releasing an agent cancels its guests, not only its caplets', async t => {

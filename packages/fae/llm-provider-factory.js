@@ -65,7 +65,29 @@ export const make = (guestPowers, _context) => {
     );
 
     const hostAgent = await E(powers).lookup('host-agent');
-    const selfId = await E(powers).locate('@self');
+
+    // A guest sees its correspondents by its own pet names; its own outbound
+    // mail names it `@self`.
+    /** @param {any} msg */
+    const isOwnForm = msg =>
+      msg.type === 'form' &&
+      Array.isArray(msg.fromNames) &&
+      msg.fromNames.includes('@self');
+
+    /**
+     * Read the value a value message carries: a guest reaches it by adopting
+     * the message's `value` edge, not by its formula id.
+     * @param {bigint | number | string} messageNumber
+     */
+    const adoptValue = async messageNumber => {
+      const scratchName = `form-value-${messageNumber}`;
+      await E(powers).adopt(messageNumber, 'value', scratchName);
+      try {
+        return await E(powers).lookup(scratchName);
+      } finally {
+        await E(powers).remove(scratchName);
+      }
+    };
 
     /** @type {string | undefined} */
     let formMessageId;
@@ -73,7 +95,7 @@ export const make = (guestPowers, _context) => {
       await E(powers).listMessages()
     );
     for (const msg of existingMessages) {
-      if (msg.from === selfId && msg.type === 'form') {
+      if (isOwnForm(msg)) {
         formMessageId = msg.messageId;
       }
     }
@@ -85,13 +107,13 @@ export const make = (guestPowers, _context) => {
 
       const msg = /** @type {any} */ (message);
 
-      if (msg.from === selfId && msg.type === 'form') {
+      if (isOwnForm(msg)) {
         formMessageId = msg.messageId;
       } else if (msg.type === 'value' && msg.replyTo === formMessageId) {
         try {
           const config =
             /** @type {{ name: string, host: string, model: string, authToken: string }} */ (
-              await E(powers).lookupById(msg.valueId)
+              await adoptValue(msg.number)
             );
 
           const { name, host, model, authToken } = config;

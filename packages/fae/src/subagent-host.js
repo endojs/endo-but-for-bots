@@ -87,6 +87,17 @@ harden(subagentNamesIn);
 const profileNameFor = handleName => `profile-for-${handleName}`;
 
 /**
+ * The host's pet name for the guest a spawner caplet runs as, given the agent
+ * the spawner serves. A guest cannot locate its own petstore entries, so a
+ * spawner finds them through the host by this name.
+ *
+ * @param {string} name - The agent name the spawner was provisioned for.
+ */
+export const spawnerProfileNameFor = name =>
+  profileNameFor(`${name}${SPAWNER_SUFFIX}${HANDLE_SUFFIX}`);
+harden(spawnerProfileNameFor);
+
+/**
  * Provision one Fae agent: its guest, an optional subagent spawner, and the
  * driver caplet that runs its inbox loop.
  *
@@ -179,14 +190,22 @@ export const provisionFaeAgent = async ({
     /** @type {string | undefined} */
     let spawnerLocator;
     if (depth < maxDepth) {
-      const spawnerGuest = await E(hostAgent).provideGuest(spawnerHandleName, {
+      // A guest neither produces nor consumes locators, so its petstore is
+      // populated from the host side, through the host's name for it.
+      await E(hostAgent).provideGuest(spawnerHandleName, {
         agentName: spawnerProfileName,
       });
-      await E(spawnerGuest).storeLocator('llm-provider', providerLocator);
-      await E(spawnerGuest).storeLocator('host-agent', hostAgentLocator);
+      await E(hostAgent).storeLocator(
+        [spawnerProfileName, 'llm-provider'],
+        providerLocator,
+      );
+      await E(hostAgent).storeLocator(
+        [spawnerProfileName, 'host-agent'],
+        hostAgentLocator,
+      );
       if (authSecretLocator !== undefined) {
-        await E(spawnerGuest).storeLocator(
-          AUTH_SECRET_PETNAME,
+        await E(hostAgent).storeLocator(
+          [spawnerProfileName, AUTH_SECRET_PETNAME],
           authSecretLocator,
         );
       }
@@ -211,19 +230,28 @@ export const provisionFaeAgent = async ({
     // 3. The driver's own guest holds capability references to everything the
     //    inbox loop needs, so the driver formula itself carries no
     //    configuration.
-    const driverGuest = await E(hostAgent).provideGuest(driverHandleName, {
+    await E(hostAgent).provideGuest(driverHandleName, {
       agentName: driverProfileName,
     });
-    await E(driverGuest).storeLocator('llm-provider', providerLocator);
-    await E(driverGuest).storeLocator(
-      'agent',
+    await E(hostAgent).storeLocator(
+      [driverProfileName, 'llm-provider'],
+      providerLocator,
+    );
+    await E(hostAgent).storeLocator(
+      [driverProfileName, 'agent'],
       /** @type {string} */ (await E(hostAgent).locate(profileName)),
     );
     if (spawnerLocator !== undefined) {
-      await E(driverGuest).storeLocator('subagent-spawner', spawnerLocator);
+      await E(hostAgent).storeLocator(
+        [driverProfileName, 'subagent-spawner'],
+        spawnerLocator,
+      );
     }
     if (authSecretLocator !== undefined) {
-      await E(driverGuest).storeLocator(AUTH_SECRET_PETNAME, authSecretLocator);
+      await E(hostAgent).storeLocator(
+        [driverProfileName, AUTH_SECRET_PETNAME],
+        authSecretLocator,
+      );
     }
 
     await E(hostAgent).makeUnconfined('@main', driverSpecifier, {

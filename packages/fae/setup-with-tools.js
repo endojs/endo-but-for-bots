@@ -85,14 +85,16 @@ export const main = async agent => {
       });
     }
 
-    const factoryPowers = await E(agent).lookup(factoryAgent);
-    // E(agent).identify(...) returns a bare formula id, so use
-    // storeIdentifier rather than storeLocator (which requires endo://).
-    await E(factoryPowers).storeIdentifier('llm-provider', providerId);
+    // A guest consumes no identifiers, so the host binds the provider into
+    // the factory's petstore by path. E(agent).identify(...) returns a bare
+    // formula id, so use storeIdentifier rather than storeLocator (which
+    // requires endo://).
+    await E(agent).storeIdentifier([factoryAgent, 'llm-provider'], providerId);
 
     await E(agent).makeUnconfined('@main', faeFactorySpecifier, {
       powersName: factoryAgent,
       resultName: factoryName,
+      env: harden({ FAE_FACTORY_POWERS_NAME: factoryAgent }),
     });
     console.log(
       `[setup] Fae factory "${factoryName}" created, bound to provider "${providerName}"`,

@@ -86,7 +86,12 @@ const formatMessage = msg => {
   const parts = [];
   parts.push(`#${msg.number} [${msg.type || 'unknown'}]`);
   if (msg.date) parts.push(` ${msg.date}`);
-  if (msg.from) parts.push(` from:${msg.from.slice(0, 20)}...`);
+  // A guest reads its correspondents by its own pet names; a host by locator.
+  if (Array.isArray(msg.fromNames) && msg.fromNames.length > 0) {
+    parts.push(` from:${msg.fromNames.join(',')}`);
+  } else if (msg.from) {
+    parts.push(` from:${msg.from.slice(0, 20)}...`);
+  }
 
   if (msg.type === 'package' && Array.isArray(msg.strings)) {
     const text = [];

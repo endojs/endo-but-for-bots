@@ -43,8 +43,28 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
   /** @type {bigint[]} */
   const dismissed = [];
 
-  const push = message => {
+  /**
+   * The guest's own top-level pet names for a correspondent, as the daemon
+   * reports them on `fromNames`/`toNames`.
+   *
+   * @param {unknown} locator
+   */
+  const namesFor = locator =>
+    harden(
+      [...directory]
+        .filter(([key, value]) => value === locator && !key.includes('/'))
+        .map(([key]) => key),
+    );
+
+  // The locators stay on the message alongside the names: the delegation
+  // registry still matches a subagent's replies by them.
+  const push = rawMessage => {
     if (closed) return;
+    const message = harden({
+      ...rawMessage,
+      fromNames: namesFor(rawMessage.from),
+      toNames: namesFor(rawMessage.to),
+    });
     const waiter = waiters.shift();
     if (waiter) waiter(harden({ value: message, done: false }));
     else queue.push(message);

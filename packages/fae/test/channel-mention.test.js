@@ -227,19 +227,15 @@ test.serial('agent replies to channel mention (not inbox)', async t => {
     agentName: factoryAgentName,
   });
 
-  // Write provider ref into factory's namespace
-  /** @type {any} */
-  const factoryPowers = await E(host).lookup(factoryAgentName);
-  const providerId = await E(host).identify('llm-provider');
-  await E(factoryPowers).write(
-    'llm-provider',
-    /** @type {string} */ (providerId),
-  );
+  // Write provider ref into factory's namespace, from the host side: a
+  // guest consumes no formula identifiers.
+  await E(host).copy(['llm-provider'], [factoryAgentName, 'llm-provider']);
 
   // Launch factory caplet
   await E(host).makeUnconfined('@main', faeFactorySpecifier, {
     powersName: factoryAgentName,
     resultName: 'fae-factory',
+    env: harden({ FAE_FACTORY_POWERS_NAME: factoryAgentName }),
   });
 
   /** @type {any} */

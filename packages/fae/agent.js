@@ -34,7 +34,6 @@ import { runAgenticTurn } from './src/turn-engine.js';
 import {
   assertAgentName,
   composeSubagentSystemPrompt,
-  isSameFormula,
   makeSubagentDelegations,
   makeSubagentTools,
 } from './src/subagent.js';
@@ -513,8 +512,6 @@ export const spawnWorkerLoop = async (
 
     await E(powers).send('@host', ['Fae agent ready.'], [], []);
 
-    /** @type {string | undefined} */
-    const selfLocator = await E(powers).locate('@self');
     const cancelled = await getCancelled();
     // `whenCancelled` is a `Promise<never>`: it never fulfills, and a
     // *rejection* is the ordinary deliberate-cancellation path, carrying the
@@ -569,7 +566,7 @@ export const spawnWorkerLoop = async (
      */
     const handleMessage = async message => {
       const {
-        from: fromId,
+        fromNames = [],
         number,
         type,
         strings,
@@ -600,7 +597,9 @@ export const spawnWorkerLoop = async (
 
       await rootNodeIdP;
 
-      console.error(`[fae] New message #${number} from ${fromId}`);
+      console.error(
+        `[fae] New message #${number} from ${fromNames.join(', ') || '(unnamed)'}`,
+      );
 
       // Discover tools (picks up newly adopted tools each turn)
       const { schemas: toolSchemas, toolMap } = await discoverTools(
@@ -784,8 +783,10 @@ export const spawnWorkerLoop = async (
         if (done) {
           break;
         }
+        // A guest sees its correspondents by its own pet names; its own
+        // outbound mail names it `@self`.
         const {
-          from: fromId,
+          fromNames = [],
           number,
           done: messageDone = true,
         } = /** @type {any} */ (message);
@@ -821,7 +822,7 @@ export const spawnWorkerLoop = async (
           continue;
         }
 
-        if (!isSameFormula(fromId, selfLocator)) {
+        if (!fromNames.includes('@self')) {
           // Skip partial (in-flight) submissions: wait until the sender
           // marks the message done before spinning up an LLM turn.
           if (messageDone === false) {
@@ -882,16 +883,22 @@ const spawnerSpecifier = new URL('subagent-spawner.js', import.meta.url).href;
  * Exposes `createAgent(name, options)` for creating new agents, each
  * backed by a driver caplet that can be pinned for restart survival.
  *
+ * `FAE_FACTORY_POWERS_NAME` is the host's pet name for this factory's own
+ * guest. A guest cannot locate its own petstore entries, so the factory reads
+ * the locators it hands each new agent through the host, by that name.
+ *
  * @param {import('@endo/eventual-send').FarRef<object>} guestPowers
  * @param {Promise<object> | object | undefined} _context
+ * @param {{ env?: Record<string, string> }} [options]
  * @returns {Promise<object>}
  */
 // eslint-disable-next-line no-underscore-dangle
-export const make = async (guestPowers, _context) => {
+export const make = async (guestPowers, _context, { env } = {}) => {
   /** @type {any} */
   const powers = guestPowers;
 
   const hostAgent = await E(powers).lookup('host-agent');
+  const selfName = env?.FAE_FACTORY_POWERS_NAME || '';
 
   return makeExo('FaeFactory', FaeFactoryInterface, {
     /**
@@ -934,19 +941,24 @@ export const make = async (guestPowers, _context) => {
       // factory holds a SecretBlob, every agent it creates gets the same one,
       // so a rotation or revocation reaches all of them at once.
       const hasAuthSecret = await E(powers).has(AUTH_SECRET_PETNAME);
+      if (selfName === '') {
+        throw Error(
+          "The Fae factory needs FAE_FACTORY_POWERS_NAME, the host's name for its guest; re-run fae-factory-setup.js",
+        );
+      }
       const { profileName } = await provisionFaeAgent({
         hostAgent,
         name,
         providerLocator: /** @type {string} */ (
-          await E(powers).locate('llm-provider')
+          await E(hostAgent).locate(selfName, 'llm-provider')
         ),
         hostAgentLocator: /** @type {string} */ (
-          await E(powers).locate('host-agent')
+          await E(hostAgent).locate(selfName, 'host-agent')
         ),
         ...(hasAuthSecret
           ? {
               authSecretLocator: /** @type {string} */ (
-                await E(powers).locate(AUTH_SECRET_PETNAME)
+                await E(hostAgent).locate(selfName, AUTH_SECRET_PETNAME)
               ),
             }
           : {}),
