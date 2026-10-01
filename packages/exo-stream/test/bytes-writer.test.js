@@ -2,6 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { makePromiseKit } from '@endo/promise-kit';
 import { Far } from '@endo/pass-style';
+import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { makePipe } from '@endo/stream';
@@ -373,3 +374,36 @@ test('iterateBytesWriter is async iterable', async t => {
   const writer = iterateBytesWriter(fakeWriter);
   t.is(writer[Symbol.asyncIterator](), writer);
 });
+
+test.serial(
+  'a bytes writer iterator abandoned before its first pull does not leak a stream rejection',
+  async t => {
+    // See the iterateReader test of the same name in reader.test.js.
+    /** @type {unknown[]} */
+    const unhandledReasons = [];
+    /** @param {unknown} reason */
+    const onUnhandledRejection = reason => {
+      unhandledReasons.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    t.teardown(() => {
+      process.off('unhandledRejection', onUnhandledRejection);
+    });
+
+    const lost = harden(Error('connection lost before the first pull'));
+    const bytesWriterRef = Far('LostBytesWriter', {
+      streamBase64: async () => {
+        await delay(0);
+        throw lost;
+      },
+    });
+    const iterator = iterateBytesWriter(/** @type {any} */ (bytesWriterRef));
+    await delay(10);
+
+    t.deepEqual(unhandledReasons, []);
+    // The rejection is still reported to a consumer that does pull.
+    await t.throwsAsync(() => iterator.next(new Uint8Array([1, 2, 3])), {
+      is: lost,
+    });
+  },
+);
