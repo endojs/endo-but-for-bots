@@ -617,15 +617,10 @@ impl Interp {
         state: &mut JsonStringifyState,
         cost: &mut u64,
     ) -> Result<Option<Vec<u16>>, Step> {
-        let base = self.native_depth;
-        let mut frames = Vec::new();
-        let result =
-            self.json_stringify_nested(code, value, name.key, holder, state, cost, &mut frames);
-        // An error leaves the units of every open container (and of the value
-        // that failed) charged; the recursion released them on its way out.
-        debug_assert!(result.is_err() || self.native_depth == base);
-        self.native_depth = base;
-        result
+        self.with_native_depth_restored(|vm| {
+            let mut frames = Vec::new();
+            vm.json_stringify_nested(code, value, name.key, holder, state, cost, &mut frames)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1083,14 +1078,10 @@ impl Interp {
         pos: &mut usize,
         track_source: bool,
     ) -> Result<(Slot, JsonSource), Step> {
-        let base = self.native_depth;
-        let mut stack = Vec::new();
-        let result = self.json_parse_nested(input, pos, track_source, &mut stack);
-        // An error leaves the units of every open container (and of the value
-        // that failed) charged; the recursion released them on its way out.
-        debug_assert!(result.is_err() || self.native_depth == base);
-        self.native_depth = base;
-        result
+        self.with_native_depth_restored(|vm| {
+            let mut stack = Vec::new();
+            vm.json_parse_nested(input, pos, track_source, &mut stack)
+        })
     }
 
     fn json_parse_nested(
@@ -1679,15 +1670,10 @@ impl Interp {
         source: Option<&JsonSource>,
         reviver: Slot,
     ) -> Result<Slot, Step> {
-        let base = self.native_depth;
-        let mut frames = Vec::new();
-        let result =
-            self.json_internalize_nested(code, input, holder, name, source, reviver, &mut frames);
-        // An error leaves the units of every entered property charged; the
-        // recursion released them on its way out.
-        debug_assert!(result.is_err() || self.native_depth == base);
-        self.native_depth = base;
-        result
+        self.with_native_depth_restored(|vm| {
+            let mut frames = Vec::new();
+            vm.json_internalize_nested(code, input, holder, name, source, reviver, &mut frames)
+        })
     }
 
     #[allow(clippy::too_many_arguments)]
