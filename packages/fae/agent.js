@@ -14,6 +14,7 @@ import {
 } from '@endo/conversation-tree';
 
 import { makeProviderOwner } from './src/provider-owner.js';
+import { restoreInboxConversation } from './src/inbox-conversation.js';
 import { discoverTools, executeTool } from './src/tools.js';
 import {
   makeListPetnamesTool,
@@ -284,10 +285,11 @@ export const spawnWorkerLoop = async (
     loopCancelled.reject(loopAbort.signal.reason);
     return disposeProvider();
   };
-  // An owned subscription adapter's retained late-endpoint cleanup must finish
-  // before its formula reports disposal. This is cancellation, not permanent GC.
-  if (context && providerConfig.kind === 'subscription-responses') {
-    await E(context).addDisposalHook(Far('FaeProviderDisposal', stopProvider));
+  // Every route owns conversation writers; the subscription route also owns
+  // late-endpoint cleanup. A borrowed provider owns neither our tree nor its
+  // cleanup acknowledgement. This is cancellation, not permanent GC.
+  if (context) {
+    await E(context).addDisposalHook(Far('FaeLoopDisposal', stopProvider));
   }
 
   /**
@@ -319,36 +321,9 @@ export const spawnWorkerLoop = async (
   );
   const tree = makeConversationTree(makeEndoPetstoreBackend(powers));
 
-  /**
-   * Find or create the root node that carries the system prompt.
-   * If the system prompt has changed since the last root was created,
-   * start a fresh conversation tree so old messages with stale
-   * instructions don't confuse the LLM.
-   *
-   * @returns {Promise<string>} rootNodeId
-   */
-  const getOrCreateRoot = async () => {
-    const roots = await tree.getRoots();
-    if (roots.length > 0) {
-      const existingRoot = await tree.getNode(roots[0].id);
-      if (existingRoot) {
-        const rootMsg = existingRoot.messages[0];
-        if (rootMsg && rootMsg.content === effectivePrompt) {
-          return roots[0].id;
-        }
-        // System prompt changed — start fresh
-        console.error(
-          '[fae] System prompt changed, creating fresh conversation tree',
-        );
-      }
-    }
-    const root = await tree.addNode(null, [
-      { role: 'system', content: effectivePrompt },
-    ]);
-    return root.id;
-  };
-
-  const rootNodeIdP = getOrCreateRoot();
+  // Restore before following the replaying mailbox. Starting from an arbitrary
+  // root or forgetting admission receipts would rerun old tools after restart.
+  let conversation;
 
   // Built-in tools: petname ops + mail (no filesystem tools for guest)
   /** @type {Map<string, object>} */
@@ -498,7 +473,7 @@ export const spawnWorkerLoop = async (
       getTools: round =>
         round === 0 ? firstTools : discoverTools(powers, localTools),
       getContext: async currentLeafId => {
-        const providerContext = await tree.getPath(currentLeafId);
+        const providerContext = await conversation.getContext(currentLeafId);
         console.log(
           `[fae] context has ${providerContext.length} messages, sending to LLM`,
         );
@@ -544,7 +519,10 @@ export const spawnWorkerLoop = async (
       },
       commitStep: async (currentLeafId, message, results) => {
         try {
-          const node = await tree.addNode(currentLeafId, [message, ...results]);
+          const node = await conversation.append(currentLeafId, [
+            message,
+            ...results,
+          ]);
           toolWrite.resolve(undefined);
           return node.id;
         } catch (error) {
@@ -555,7 +533,7 @@ export const spawnWorkerLoop = async (
       commitFinal: async (currentLeafId, message) => {
         const write = retainWrite();
         try {
-          const node = await tree.addNode(currentLeafId, [message]);
+          const node = await conversation.append(currentLeafId, [message]);
           write.resolve(undefined);
           if (message.content) console.log(`[fae] ${message.content}`);
           return node.id;
@@ -610,12 +588,6 @@ export const spawnWorkerLoop = async (
    * @returns {Promise<void>}
    */
   const runAgent = async () => {
-    await initializeIntroducedTools();
-
-    await E(powers).send('@host', ['Fae agent ready.'], [], []);
-
-    /** @type {string | undefined} */
-    const selfLocator = await E(powers).locate('@self');
     const cancelled = await getCancelled();
     // `whenCancelled` is a `Promise<never>`: it never fulfills, and a
     // *rejection* is the ordinary deliberate-cancellation path, carrying the
@@ -656,10 +628,30 @@ export const spawnWorkerLoop = async (
       ...(contextStopped ? [contextStopped] : []),
     ]);
 
-    // Track the most recent leaf across messages so that follow-up
-    // messages from the same sender continue the conversation rather
-    // than branching from the root (which would lose all context).
-    let lastLeafId = await rootNodeIdP;
+    // Restoration can create a root and publish its selection. Retain that
+    // startup publication before starting it; disposal cannot acknowledge and
+    // then let the detached startup write new state or announce readiness.
+    if (loopAbort.signal.aborted) return;
+    const startup = retainWrite();
+    try {
+      conversation = await restoreInboxConversation({
+        powers,
+        tree,
+        prompt: effectivePrompt,
+      });
+      startup.resolve(undefined);
+    } catch (error) {
+      startup.reject(error);
+      throw error;
+    }
+    if (loopAbort.signal.aborted) return;
+    await initializeIntroducedTools();
+    if (loopAbort.signal.aborted) return;
+    await E(powers).send('@host', ['Fae agent ready.'], [], []);
+
+    /** @type {string | undefined} */
+    const selfLocator = await E(powers).locate('@self');
+    if (loopAbort.signal.aborted) return;
 
     /**
      * Track inbound message numbers we have already processed.  Re-emission
@@ -681,7 +673,7 @@ export const spawnWorkerLoop = async (
      *
      * @param {any} message
      */
-    const handleMessage = async message => {
+    const runMessage = async message => {
       const {
         from: fromId,
         number,
@@ -692,10 +684,50 @@ export const spawnWorkerLoop = async (
         replyTo,
       } = message;
 
-      // Read the credential before anything else. A revoked or unreadable
-      // secret is a fact about this deployment that no peer should be able to
-      // read off a reply, so this failure — like a provider's — is answered
-      // generically and logged in full.
+      console.error(`[fae] New message #${number} from ${fromId}`);
+
+      let textContent;
+      if (type === 'package' && Array.isArray(strings)) {
+        const parts = [];
+        const namesArray = Array.isArray(names) ? names : [];
+        for (let i = 0; i < strings.length; i += 1) {
+          parts.push(strings[i]);
+          if (i < namesArray.length) {
+            parts.push(`@${namesArray[i]}`);
+          }
+        }
+        textContent = parts.join('').trim();
+      } else {
+        textContent = `(${type || 'unknown'} message)`;
+      }
+
+      // Retain admission before provider selection or any effectful tool call.
+      // A queued but unadmitted message can run after restart; an admitted one
+      // cannot, even if its outcome is unknown. Selection is acknowledged too.
+      if (loopAbort.signal.aborted) return;
+      const parentId = await conversation.parentForReply(replyTo);
+      if (loopAbort.signal.aborted) return;
+      const admission = retainWrite();
+      let userNode;
+      try {
+        await conversation.beginTurn();
+        userNode = await conversation.append(
+          parentId,
+          [
+            {
+              role: 'user',
+              content: `[Inbox message #${number}] ${textContent}\n\nUse reply(messageNumber: ${number}, ...) to respond to this message.`,
+            },
+          ],
+          { messageId, inboundNumber: number },
+        );
+        admission.resolve(undefined);
+      } catch (error) {
+        admission.reject(error);
+        throw error;
+      }
+
+      // A revoked or unreadable credential is not a peer-visible diagnostic.
       try {
         turnProvider = await Promise.race([
           providerOwner.forTurn(),
@@ -717,58 +749,16 @@ export const spawnWorkerLoop = async (
         return;
       }
 
-      await rootNodeIdP;
-
-      console.error(`[fae] New message #${number} from ${fromId}`);
-
-      // Discover tools (picks up newly adopted tools each turn)
-      const { schemas: toolSchemas, toolMap } = await discoverTools(
-        powers,
-        localTools,
-      );
-
-      let textContent;
-      if (type === 'package' && Array.isArray(strings)) {
-        const parts = [];
-        const namesArray = Array.isArray(names) ? names : [];
-        for (let i = 0; i < strings.length; i += 1) {
-          parts.push(strings[i]);
-          if (i < namesArray.length) {
-            parts.push(`@${namesArray[i]}`);
-          }
-        }
-        textContent = parts.join('').trim();
-      } else {
-        textContent = `(${type || 'unknown'} message)`;
-      }
-
-      // Determine the parent node for this message:
-      //  1. If replyTo matches a node in the tree, branch from there
-      //  2. Otherwise continue from the last leaf (preserves context)
-      let parentId = lastLeafId;
-      if (typeof replyTo === 'string') {
-        const existingNode = await tree.getNode(replyTo);
-        if (existingNode !== null) {
-          parentId = replyTo;
-        }
-      }
-
-      const userNode = await tree.addNode(
-        parentId,
-        [
-          {
-            role: 'user',
-            content: `[Inbox message #${number}] ${textContent}\n\nUse reply(messageNumber: ${number}, ...) to respond to this message.`,
-          },
-        ],
-        { messageId },
-      );
-
       try {
+        // Discover tools (picks up newly adopted tools each turn).
+        const { schemas: toolSchemas, toolMap } = await discoverTools(
+          powers,
+          localTools,
+        );
+        loopAbort.signal.throwIfAborted();
         replyTracker.sent = false;
         const outcome = await runAgenticLoop(toolSchemas, toolMap, userNode.id);
         loopAbort.signal.throwIfAborted();
-        lastLeafId = outcome.leafId;
         if (!outcome.answered) {
           throw senderVisible(
             Error(
@@ -783,7 +773,7 @@ export const spawnWorkerLoop = async (
         // tool, send the content as a fallback reply so the sender
         // (e.g. a Whylip UI) actually receives it.
         if (!replyTracker.sent) {
-          const finalNode = await tree.getNode(lastLeafId);
+          const finalNode = await tree.getNode(outcome.leafId);
           loopAbort.signal.throwIfAborted();
           if (finalNode) {
             const lastMsg = finalNode.messages[finalNode.messages.length - 1];
@@ -810,6 +800,32 @@ export const spawnWorkerLoop = async (
           [],
           [],
         );
+      }
+    };
+
+    const handleMessage = async message => {
+      // This narrow obligation covers settling the durable turn fence, not a
+      // borrowed provider read: chat/selection are independently cancel-raced.
+      const completion = retainWrite();
+      try {
+        await runMessage(message);
+        // claim() settles an ask synchronously, but its receipt is retained in
+        // that same stack before the waiting tool can resume. Drain those
+        // writers too before clearing the turn fence; exclude our own promise.
+        const writes = await Promise.allSettled(
+          [...evidenceWrites].filter(write => write !== completion.promise),
+        );
+        const failures = writes
+          .filter(write => write.status === 'rejected')
+          .map(write => write.reason);
+        if (failures.length) {
+          throw new AggregateError(failures, 'Fae turn publication failed');
+        }
+        await conversation.finishTurn();
+        completion.resolve(undefined);
+      } catch (error) {
+        completion.reject(error);
+        throw error;
       }
     };
 
@@ -909,6 +925,10 @@ export const spawnWorkerLoop = async (
           number,
           done: messageDone = true,
         } = /** @type {any} */ (message);
+        if (loopAbort.signal.aborted) {
+          stopping = true;
+          return;
+        }
 
         // Offer every message — including this agent's own outbound mail — to
         // the delegation registry before any other routing. It learns a
@@ -917,6 +937,14 @@ export const spawnWorkerLoop = async (
         // instead.
         const delegated = delegations.claim(message);
         if (delegated.claimed) {
+          const receipt = retainWrite();
+          try {
+            await conversation.recordClaimedReply(number);
+            receipt.resolve(undefined);
+          } catch (error) {
+            receipt.reject(error);
+            throw error;
+          }
           console.error(
             `[fae] Message #${number} answers a pending subagent ask`,
           );
@@ -955,7 +983,10 @@ export const spawnWorkerLoop = async (
           // Re-emission of a previously-processed number means the sender
           // edited a settled message.  Do not start a new turn; the
           // history is available via the messageHistory tool.
-          if (seenInboundNumbers.has(number)) {
+          if (
+            seenInboundNumbers.has(number) ||
+            conversation.hasAdmission(number)
+          ) {
             console.error(
               `[fae] Message #${number} was edited after settlement; ` +
                 `not rerunning. Use messageHistory(${number}) for the prior text.`,

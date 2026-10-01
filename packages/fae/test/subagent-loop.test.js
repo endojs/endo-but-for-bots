@@ -28,13 +28,21 @@ const locatorFor = number => formatLocator(`${number}:${NODE}`, 'handle');
  * @param {(message: any, mailbox: any) => void} [options.onEcho] - Called with
  *   each echoed outbound message, so a test can script a reply to it.
  * @param {(value: any) => Promise<void>} [options.beforeStore] - Delay or refuse a durable write.
+ * @param {Map<string, unknown>} [options.storedDirectory] - Retained names from a prior incarnation.
+ * @param {bigint} [options.firstNumber] - First new mailbox number after restart.
  */
-const makeLiveMailbox = ({ onEcho, beforeStore } = {}) => {
+const makeLiveMailbox = ({
+  onEcho,
+  beforeStore,
+  storedDirectory,
+  firstNumber = 1n,
+} = {}) => {
   /** @type {Map<string, unknown>} */
   const directory = new Map([
     ['@self', locatorFor(SELF)],
     ['@host', locatorFor(HOST)],
     ['subagents/helper', locatorFor(CHILD)],
+    ...(storedDirectory || []),
   ]);
   /** @type {any[]} */
   const queue = [];
@@ -42,7 +50,7 @@ const makeLiveMailbox = ({ onEcho, beforeStore } = {}) => {
   const waiters = [];
   let closed = false;
   let streamFailure;
-  let nextNumber = 1n;
+  let nextNumber = firstNumber;
   let nextId = 0;
   /** @type {any[]} */
   const sent = [];
@@ -128,7 +136,15 @@ const makeLiveMailbox = ({ onEcho, beforeStore } = {}) => {
   const keyOf = nameOrPath =>
     Array.isArray(nameOrPath) ? nameOrPath.join('/') : `${nameOrPath}`;
 
-  const mailbox = { deliver, close, fail, sent, dismissed, directory };
+  const mailbox = {
+    deliver,
+    close,
+    fail,
+    sent,
+    dismissed,
+    directory,
+    replay: push,
+  };
 
   const echoSend = (recipientKey, strings, replyTo) => {
     nextId += 1;
@@ -205,6 +221,10 @@ const inertTimers = /** @type {any} */ (
   })
 );
 
+/** @param {Record<string, any>} methods */
+const makeContext = methods =>
+  Far('Context', { addDisposalHook: () => undefined, ...methods });
+
 /**
  * Poll a predicate on a bounded schedule. Bounded rather than raced against a
  * rejection timer: an uncleared rejection timer keeps the AVA worker alive
@@ -243,6 +263,139 @@ const stubSpawner = Far('SubagentSpawner', {
   stop: async () => {},
   list: async () => harden(['helper']),
   help: () => 'stub',
+});
+
+test('a fresh inbox incarnation restores context and does not replay admitted mail', async t => {
+  t.timeout(15_000);
+  const first = makeLiveMailbox();
+  const provider = makeScriptedProvider([
+    () =>
+      harden({ message: { role: 'assistant', content: 'retained answer' } }),
+  ]);
+  const firstLoop = spawnWorkerLoop(
+    first.powers,
+    null,
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    first.close();
+    await firstLoop;
+  });
+  const admitted = first.deliver({
+    from: locatorFor(HOST),
+    strings: ['remember this request'],
+  });
+  t.true(
+    await until(() => first.sent.some(record => record.replyTo !== undefined)),
+  );
+  first.close();
+  await firstLoop;
+
+  const second = makeLiveMailbox({
+    storedDirectory: first.directory,
+    firstNumber: 100n,
+  });
+  let calls = 0;
+  const restoredProvider = makeScriptedProvider([
+    messages => {
+      calls += 1;
+      t.true(messages.some(message => message.content === 'retained answer'));
+      t.true(
+        messages.some(message =>
+          message.content.includes('remember this request'),
+        ),
+      );
+      return harden({ message: { role: 'assistant', content: 'restored' } });
+    },
+  ]);
+  const secondLoop = spawnWorkerLoop(
+    second.powers,
+    null,
+    harden({ provider: restoredProvider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    second.close();
+    await secondLoop;
+  });
+  second.replay(admitted);
+  second.deliver({ from: locatorFor(HOST), strings: ['continue'] });
+  t.true(
+    await until(() => second.sent.some(record => record.replyTo !== undefined)),
+  );
+  t.is(calls, 1);
+  t.is(second.sent.filter(record => record.replyTo !== undefined).length, 1);
+});
+
+test('cancelled inference leaves a receipt, not a request to replay', async t => {
+  t.timeout(15_000);
+  const first = makeLiveMailbox();
+  const cancelled = makePromiseKit();
+  const started = makePromiseKit();
+  const provider = harden({
+    chat: () => {
+      started.resolve(undefined);
+      return new Promise(() => {});
+    },
+  });
+  const firstLoop = spawnWorkerLoop(
+    first.powers,
+    makeContext({ whenCancelled: () => cancelled.promise }),
+    harden({ provider }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    cancelled.reject(Error('cleanup'));
+    first.close();
+    await firstLoop;
+  });
+  const admitted = first.deliver({
+    from: locatorFor(HOST),
+    strings: ['effectful task'],
+  });
+  await started.promise;
+  cancelled.reject(Error('restart'));
+  await firstLoop;
+  const second = makeLiveMailbox({
+    storedDirectory: first.directory,
+    firstNumber: 100n,
+  });
+  let calls = 0;
+  const secondLoop = spawnWorkerLoop(
+    second.powers,
+    null,
+    harden({
+      provider: makeScriptedProvider([
+        messages => {
+          calls += 1;
+          t.true(
+            messages.some(message =>
+              message.content.includes('effectful task'),
+            ),
+          );
+          return harden({
+            message: { role: 'assistant', content: 'new request only' },
+          });
+        },
+      ]),
+    }),
+    'test prompt',
+    harden({ timers: inertTimers }),
+  );
+  t.teardown(async () => {
+    second.close();
+    await secondLoop;
+  });
+  second.replay(admitted);
+  second.deliver({ from: locatorFor(HOST), strings: ['new request'] });
+  t.true(
+    await until(() => second.sent.some(record => record.replyTo !== undefined)),
+  );
+  t.is(calls, 1);
 });
 
 test('a turn blocked on askSubagent still observes the reply', async t => {
@@ -379,6 +532,101 @@ test('a claimed subagent reply is dismissed so a restart cannot replay it', asyn
   t.is(mailbox.dismissed.length, 1);
 });
 
+for (const refuse of [false, true]) {
+  test(`a ${refuse ? 'refused' : 'delayed'} claimed-reply receipt cannot clear the active turn fence`, async t => {
+    t.timeout(5000);
+    const entered = makePromiseKit();
+    const release = makePromiseKit();
+    const cancelled = makePromiseKit();
+    let calls = 0;
+    const mailbox = makeLiveMailbox({
+      onEcho: (message, box) => {
+        if (message.to === locatorFor(CHILD)) {
+          box.deliver({
+            from: locatorFor(CHILD),
+            strings: ['delegated answer'],
+            replyTo: message.messageId,
+          });
+        }
+      },
+      beforeStore: async value => {
+        if (
+          value.parentId === null &&
+          value.metadata?.inboundNumber !== undefined
+        ) {
+          entered.resolve(undefined);
+          await release.promise;
+          if (refuse) throw Error('claimed receipt refused');
+        }
+      },
+    });
+    const provider = makeScriptedProvider([
+      () => {
+        calls += 1;
+        return harden({
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'ask',
+                type: 'function',
+                function: {
+                  name: 'askSubagent',
+                  arguments: JSON.stringify({ name: 'helper', task: 'answer' }),
+                },
+              },
+            ],
+          },
+        });
+      },
+      () => {
+        calls += 1;
+        return harden({ message: { role: 'assistant', content: 'answered' } });
+      },
+    ]);
+    const loop = spawnWorkerLoop(
+      mailbox.powers,
+      makeContext({ whenCancelled: () => cancelled.promise }),
+      { provider },
+      'test prompt',
+      { spawner: stubSpawner, timers: inertTimers },
+    );
+    void loop.catch(() => undefined);
+    let stopped = false;
+    void loop.then(
+      () => {
+        stopped = true;
+      },
+      () => {
+        stopped = true;
+      },
+    );
+    t.teardown(async () => {
+      release.resolve(undefined);
+      cancelled.reject(Error('cleanup'));
+      mailbox.close();
+      await loop.catch(() => undefined);
+    });
+    mailbox.deliver({ from: locatorFor(HOST), strings: ['delegate'] });
+    await entered.promise;
+    t.true(await until(() => calls === 2));
+    cancelled.reject(Error('cancel while receipt is pending'));
+    await null;
+    await null;
+    t.false(stopped);
+    t.true(mailbox.directory.get('fae-conversation').turnActive);
+    release.resolve(undefined);
+    if (refuse) {
+      await t.throwsAsync(() => loop, { message: /disposal failed/ });
+      t.true(mailbox.directory.get('fae-conversation').turnActive);
+    } else {
+      await loop;
+      t.false(mailbox.directory.get('fae-conversation').turnActive);
+    }
+  });
+}
+
 test('a backlog larger than any bound is answered, not declined', async t => {
   const mailbox = makeLiveMailbox();
   let turns = 0;
@@ -469,7 +717,7 @@ test('cancellation closes delegations without waiting for the reader', async t =
   cancelled.catch(() => undefined);
   const loop = spawnWorkerLoop(
     mailbox.powers,
-    Far('Context', { whenCancelled: () => cancelled }),
+    makeContext({ whenCancelled: () => cancelled }),
     harden({ provider }),
     'test prompt',
     harden({ spawner: stubSpawner, timers: inertTimers }),
@@ -514,7 +762,7 @@ test('a real daemon context does not stop the loop before it starts', async t =>
   // Every test passed no context at all, so neither showed.
   const loop = spawnWorkerLoop(
     mailbox.powers,
-    Far('Context', { whenCancelled: () => new Promise(() => {}) }),
+    makeContext({ whenCancelled: () => new Promise(() => {}) }),
     harden({ provider }),
     'test prompt',
     harden({ timers: inertTimers }),
@@ -547,7 +795,7 @@ test('a context that cannot report cancellation stops the loop', async t => {
   // can stop.
   const loop = spawnWorkerLoop(
     mailbox.powers,
-    Far('Context', { id: () => 'no-cancellation-method' }),
+    makeContext({ id: () => 'no-cancellation-method' }),
     harden({ provider }),
     'test prompt',
     harden({ timers: inertTimers }),
@@ -668,6 +916,199 @@ test('the Fae loop uses a subscription for tools and preserves opaque Responses 
       ),
     ),
   );
+  mailbox.close();
+  await loop;
+  const restoredMailbox = makeLiveMailbox({
+    storedDirectory: mailbox.directory,
+    firstNumber: 100n,
+  });
+  const restoredLoop = spawnWorkerLoop(
+    restoredMailbox.powers,
+    undefined,
+    harden({
+      kind: 'subscription-responses',
+      subscription,
+      model: 'test-luna',
+    }),
+    'test prompt',
+    { sessionId: 'persistent-agent' },
+  );
+  t.teardown(async () => {
+    restoredMailbox.close();
+    await restoredLoop;
+  });
+  restoredMailbox.deliver({
+    from: locatorFor(HOST),
+    strings: ['continue after restart'],
+  });
+  t.true(
+    await until(() =>
+      restoredMailbox.sent.some(record => record.replyTo !== undefined),
+    ),
+  );
+  t.is(requests.length, 3);
+  t.true(
+    requests[2].input.some(
+      item =>
+        item.encrypted_content === 'opaque-context' && item.id === 'reason-1',
+    ),
+  );
+  t.true(
+    requests[2].input.some(
+      item => item.type === 'function_call_output' && item.call_id === 'call-1',
+    ),
+  );
+  t.is(revocations, 3);
+});
+
+test('formula disposal drains startup publication and never announces readiness after cancellation', async t => {
+  t.timeout(5000);
+  const entered = makePromiseKit();
+  const release = makePromiseKit();
+  const cancelled = makePromiseKit();
+  const hooks = [];
+  let acknowledged = false;
+  let writesAfterAcknowledgement = 0;
+  const mailbox = makeLiveMailbox({
+    beforeStore: async value => {
+      if (value.parentId === null) {
+        entered.resolve(undefined);
+        await release.promise;
+      }
+      if (acknowledged) writesAfterAcknowledgement += 1;
+    },
+  });
+  const context = Far('Context', {
+    whenCancelled: () => cancelled.promise,
+    addDisposalHook: hook => hooks.push(hook),
+  });
+  const subscription = Far('Subscription', {
+    describe: () => {
+      throw Error('must not infer');
+    },
+  });
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    context,
+    harden({
+      kind: 'subscription-responses',
+      subscription,
+      model: 'test-luna',
+    }),
+    'test prompt',
+    { sessionId: 'persistent-agent' },
+  );
+  t.teardown(async () => {
+    release.resolve(undefined);
+    cancelled.reject(Error('cleanup'));
+    mailbox.close();
+    await loop;
+  });
+  await entered.promise;
+  const disposal = E(hooks[0])().then(() => {
+    acknowledged = true;
+  });
+  await null;
+  await null;
+  t.false(acknowledged);
+  release.resolve(undefined);
+  await disposal;
+  await loop;
+  t.true(acknowledged);
+  t.is(writesAfterAcknowledgement, 0);
+  t.deepEqual(mailbox.sent, []);
+});
+
+test('failed head publication keeps tool evidence and blocks restart inference', async t => {
+  t.timeout(5000);
+  let effects = 0;
+  let calls = 0;
+  const mailbox = makeLiveMailbox({
+    beforeStore: async value => {
+      const selected = mailbox.directory.get(`ct-${value.leafId}`);
+      if (selected?.messages?.some(message => message.role === 'tool')) {
+        throw Error('tool head publication refused');
+      }
+    },
+  });
+  mailbox.directory.set('tools', Far('Directory', {}));
+  mailbox.directory.set(
+    'tools/effect',
+    Far('EffectTool', {
+      schema: () =>
+        harden({
+          type: 'function',
+          function: {
+            name: 'effect',
+            parameters: { type: 'object', properties: {} },
+          },
+        }),
+      help: () => 'effect',
+      execute: () => {
+        effects += 1;
+        return 'known completed effect';
+      },
+    }),
+  );
+  const provider = harden({
+    chat: () => {
+      calls += 1;
+      return {
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [
+            {
+              id: 'one',
+              type: 'function',
+              function: { name: 'effect', arguments: '{}' },
+            },
+          ],
+        },
+      };
+    },
+  });
+  const loop = spawnWorkerLoop(
+    mailbox.powers,
+    null,
+    { provider },
+    'test prompt',
+  );
+  void loop.catch(() => undefined);
+  t.teardown(() => mailbox.close());
+  mailbox.deliver({ from: locatorFor(HOST), strings: ['perform effect'] });
+  await t.throwsAsync(() => loop, { message: /disposal failed/ });
+  t.is(effects, 1);
+  t.true(
+    [...mailbox.directory.values()].some(node =>
+      node?.messages?.some(message =>
+        message.content?.includes('known completed effect'),
+      ),
+    ),
+  );
+  const restored = makeLiveMailbox({
+    storedDirectory: mailbox.directory,
+    firstNumber: 100n,
+  });
+  const restoredLoop = spawnWorkerLoop(
+    restored.powers,
+    null,
+    { provider },
+    'test prompt',
+  );
+  void restoredLoop.catch(() => undefined);
+  t.teardown(() => restored.close());
+  restored.deliver({ from: locatorFor(HOST), strings: ['continue'] });
+  const failure = await t.throwsAsync(() => restoredLoop, {
+    message: /disposal failed/,
+  });
+  t.true(
+    failure.errors.some(error =>
+      error.message.includes('Interrupted inbox turn'),
+    ),
+  );
+  t.is(calls, 1);
+  t.is(effects, 1);
 });
 
 test('formula disposal waits for a late subscription endpoint and never sends inference', async t => {
@@ -862,7 +1303,7 @@ test('cancellation inside the first tool preserves its result and never admits t
   });
   const loop = spawnWorkerLoop(
     mailbox.powers,
-    Far('Context', { whenCancelled: () => cancelled.promise }),
+    makeContext({ whenCancelled: () => cancelled.promise }),
     { provider },
     'test prompt',
   );
@@ -911,7 +1352,7 @@ test('cancellation does not wait for borrowed inference that ignores its signal'
   });
   const loop = spawnWorkerLoop(
     mailbox.powers,
-    Far('Context', { whenCancelled: () => cancelled.promise }),
+    makeContext({ whenCancelled: () => cancelled.promise }),
     { provider },
     'test prompt',
   );
@@ -955,6 +1396,7 @@ test('cancellation waits for admitted tool evidence publication, not just model 
   const enteredWrite = makePromiseKit();
   const finishWrite = makePromiseKit();
   const cancelled = makePromiseKit();
+  const hooks = [];
   void cancelled.promise.catch(() => undefined);
   const mailbox = makeLiveMailbox({
     beforeStore: async value => {
@@ -1001,7 +1443,10 @@ test('cancellation waits for admitted tool evidence publication, not just model 
   let stopped = false;
   const loop = spawnWorkerLoop(
     mailbox.powers,
-    Far('Context', { whenCancelled: () => cancelled.promise }),
+    makeContext({
+      whenCancelled: () => cancelled.promise,
+      addDisposalHook: hook => hooks.push(hook),
+    }),
     { provider },
     'test prompt',
   ).then(() => {
@@ -1015,13 +1460,21 @@ test('cancellation waits for admitted tool evidence publication, not just model 
   });
   mailbox.deliver({ from: locatorFor(HOST), strings: ['do the effect'] });
   await enteredWrite.promise;
+  t.is(hooks.length, 1, 'non-subscription routes also own their tree writes');
+  let acknowledged = false;
+  const disposal = E(hooks[0])().then(() => {
+    acknowledged = true;
+  });
   await null;
+  t.false(acknowledged);
   t.false(
     stopped,
     'cleanup cannot acknowledge before the tool outcome is durable',
   );
   finishWrite.resolve(undefined);
+  await disposal;
   await loop;
+  t.true(acknowledged);
   t.true(stopped);
   t.true(
     [...mailbox.directory.values()].some(
@@ -1125,7 +1578,7 @@ test('cancellation around final-node publication never sends a late fallback rep
     });
     const loop = spawnWorkerLoop(
       mailbox.powers,
-      Far('Context', { whenCancelled: () => cancelled.promise }),
+      makeContext({ whenCancelled: () => cancelled.promise }),
       { provider },
       'test prompt',
     );

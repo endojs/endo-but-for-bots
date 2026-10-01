@@ -1,0 +1,192 @@
+// @ts-check
+/* eslint-disable no-await-in-loop */
+
+import test from '@endo/ses-ava/prepare-endo.js';
+import { Far } from '@endo/far';
+import {
+  makeConversationTree,
+  makeMemoryBackend,
+  makeEndoPetstoreBackend,
+} from '@endo/conversation-tree';
+
+import { restoreInboxConversation } from '../src/inbox-conversation.js';
+
+const makeFixture = () => {
+  const tree = makeConversationTree(makeMemoryBackend());
+  const records = new Map();
+  let refused = false;
+  const powers = Far('SelectionStore', {
+    has: name => records.has(name),
+    lookup: name => records.get(name),
+    storeValue: (value, [name]) => {
+      if (refused) throw Error('selection write refused');
+      records.set(name, value);
+    },
+  });
+  return {
+    tree,
+    records,
+    restore: (prompt = 'prompt') =>
+      restoreInboxConversation({ powers, tree, prompt }),
+    refuse: () => {
+      refused = true;
+    },
+  };
+};
+
+test('restores the selected branch, not newest/deepest siblings', async t => {
+  const f = makeFixture();
+  const first = await f.restore();
+  const root = first.getLeafId();
+  const initial = await first.append(root, [{ role: 'user', content: 'a' }], {
+    inboundNumber: 1n,
+  });
+  await first.append(initial.id, [{ role: 'assistant', content: 'answer a' }]);
+  const branch = await first.append(root, [{ role: 'user', content: 'b' }], {
+    inboundNumber: 2n,
+  });
+  // A later stored node is not selected merely because it exists.
+  await f.tree.addNode(initial.id, [
+    { role: 'assistant', content: 'unselected' },
+  ]);
+  const restored = await f.restore();
+  t.is(restored.getLeafId(), branch.id);
+  t.deepEqual(await restored.getContext(branch.id), [
+    { role: 'system', content: 'prompt' },
+    { role: 'user', content: 'b' },
+  ]);
+  t.true(restored.hasAdmission(1n));
+  t.true(restored.hasAdmission(2n));
+});
+
+test('admission survives a failed pointer publication without selecting the node', async t => {
+  const f = makeFixture();
+  const current = await f.restore();
+  const root = current.getLeafId();
+  await current.beginTurn();
+  f.refuse();
+  await t.throwsAsync(
+    () =>
+      current.append(root, [{ role: 'user', content: 'do not rerun' }], {
+        inboundNumber: 1n,
+      }),
+    { message: /selection write refused/ },
+  );
+  await t.throwsAsync(() => current.finishTurn(), {
+    message: /publication failed/,
+  });
+  await t.throwsAsync(() => f.restore(), { message: /Interrupted inbox turn/ });
+  t.true(current.hasAdmission(1n));
+  t.deepEqual(f.records.get('fae-conversation'), {
+    rootId: root,
+    leafId: root,
+    turnActive: true,
+  });
+});
+
+test('prompt replacement keeps receipts from previous roots and claimed replies', async t => {
+  const f = makeFixture();
+  const original = await f.restore();
+  const oldRoot = original.getLeafId();
+  await original.append(oldRoot, [{ role: 'user', content: 'old request' }], {
+    inboundNumber: 4n,
+  });
+  await original.recordClaimedReply(5n);
+  const changed = await f.restore('new prompt');
+  t.not(changed.getLeafId(), oldRoot);
+  t.true(changed.hasAdmission(4n));
+  t.true(changed.hasAdmission(5n));
+  t.deepEqual(await changed.getContext(changed.getLeafId()), [
+    { role: 'system', content: 'new prompt' },
+  ]);
+  t.is(await changed.parentForReply(oldRoot), changed.getLeafId());
+  t.is((await f.restore('new prompt')).getLeafId(), changed.getLeafId());
+});
+
+test('rejects pre-selection trees rather than guessing a compatible head', async t => {
+  const f = makeFixture();
+  await f.tree.addNode(null, [{ role: 'system', content: 'prompt' }]);
+  await t.throwsAsync(() => f.restore(), { message: /no retained selection/ });
+});
+
+test('an orphan-only tree without a selection is not treated as empty', async t => {
+  const f = makeFixture();
+  await f.tree.addNode('absent-parent', [], { inboundNumber: 3n });
+  await t.throwsAsync(() => f.restore(), { message: /no retained selection/ });
+});
+
+test('petstore restoration cannot silently lose an unselected admission receipt', async t => {
+  const stored = new Map();
+  let unavailableName;
+  const powers = Far('Petstore', {
+    list: () => [...stored.keys()],
+    has: name => stored.has(name),
+    lookup: name => {
+      if (name === unavailableName) {
+        unavailableName = undefined;
+        throw Error('receipt lookup unavailable');
+      }
+      return stored.get(name);
+    },
+    storeValue: (value, [name]) => stored.set(name, value),
+  });
+  const freshTree = () => makeConversationTree(makeEndoPetstoreBackend(powers));
+  const first = await restoreInboxConversation({
+    powers,
+    tree: freshTree(),
+    prompt: 'p',
+  });
+  const root = first.getLeafId();
+  const old = await first.append(root, [{ role: 'user', content: 'one' }], {
+    inboundNumber: 1n,
+  });
+  await first.append(root, [{ role: 'user', content: 'two' }], {
+    inboundNumber: 2n,
+  });
+  unavailableName = `ct-${old.id}`;
+  await t.throwsAsync(
+    () => restoreInboxConversation({ powers, tree: freshTree(), prompt: 'p' }),
+    {
+      message: /receipt lookup unavailable/,
+    },
+  );
+  const restored = await restoreInboxConversation({
+    powers,
+    tree: freshTree(),
+    prompt: 'p',
+  });
+  t.true(restored.hasAdmission(1n));
+  t.true(restored.hasAdmission(2n));
+});
+
+test('missing, cyclic and wrong-root selections fail closed', async t => {
+  for (const kind of ['missing', 'cyclic', 'wrong-root', 'malformed']) {
+    const f = makeFixture();
+    const current = await f.restore();
+    const rootId = current.getLeafId();
+    if (kind === 'cyclic') {
+      await f.tree.addNode('cycle', [], { nodeId: 'cycle' });
+    }
+    if (kind === 'wrong-root') {
+      await f.tree.addNode(null, [], { nodeId: 'other' });
+    }
+    f.records.set(
+      'fae-conversation',
+      kind === 'malformed'
+        ? harden({ rootId })
+        : harden({
+            rootId,
+            turnActive: false,
+            leafId:
+              kind === 'cyclic'
+                ? 'cycle'
+                : kind === 'missing'
+                  ? 'absent'
+                  : 'other',
+          }),
+    );
+    await t.throwsAsync(() => f.restore(), {
+      message: /inbox conversation (node|branch|selection)/i,
+    });
+  }
+});

@@ -53,18 +53,39 @@ The 27 focused tests pass; the full Fae suite passes 186 tests with two existing
 known failures.
 Fae ESLint reports 0 errors and 141 warnings, the nearest Floot turn/transcript
 suites pass 35 tests, and root documentation still builds with 0 errors and 180 warnings.
-Floot provider wiring, standalone inbox restoration, context-window metadata
-integration, compaction, the development preset, live acceptance, and deployment
-remain pending.
+Standalone inbox restoration now uses the existing conversation tree for messages
+and admission receipts, with one retained `fae-conversation` branch selection.
+The selection also records an active turn before inference or tool effects.
+Graceful cancellation drains startup, tool, final-response, and claimed-reply
+publications before clearing that fence.
+An abruptly interrupted turn or failed publication stays fenced for explicit
+admin inspection or retirement; this is not automatic effect recovery.
+Restoration reads every retained tree node, including unselected or orphaned
+receipts, and rejects failed lookups rather than silently allowing replay.
+It rejects missing, cyclic, wrong-root, malformed, and pre-selection state.
+The tree remains the conversation authority; the branch selection stores no
+duplicate transcript, and no old-name compatibility path is added.
+Fresh inbox-incarnation tests preserve encrypted Responses reasoning and tool outputs.
+A real isolated daemon test also preserves the branch, receipt, and opaque
+context across a cold restart using retained guest formulas.
+The full Fae suite passes 200 tests with two existing known failures;
+conversation-tree passes 9 tests and the nearby Floot suites pass 35 tests.
+Fae and conversation-tree ESLint have no errors; root documentation builds with
+0 errors and 180 warnings.
+Floot provider wiring, context-window metadata integration, compaction, the
+development preset, live acceptance, and deployment remain pending.
 Automatic environment GC is a recorded design gap, not implementation scope for
 this PR; cleanup remains explicit on the administration facet.
 The Codex catalog currently omits context-window metadata; the adapter reports
 unknown (`0`) unless a caller supplies provider-observed catalog metadata.
 This slice does not claim provider-sized compaction or live pool acceptance.
-Standalone Fae currently restarts from the prompt root with a process-local
-inbound-message set; the next durability slice must restore branch selection and
-admission receipts from its existing conversation tree before restart acceptance.
-It must not replay an admitted command or inference to discover its result.
+No admitted inbox command or inference is replayed to discover its result.
+The delegation registry's closed-ask and unsolicited-sender routing remains
+process-local; published claimed-reply receipts prevent their replay, but an
+interrupted late-reply receipt outside an active turn is not a durable exchange
+restoration guarantee.
+Automatic resumption of subagent asks and native process-loss recovery remain
+outside this slice.
 Focused factory, native-factory, ownership, lifecycle, and runtime suites pass
 78 tests in each of the four SES configurations; package types and ESLint pass
 with warnings, and root documentation builds with 0 errors and 180 warnings.
