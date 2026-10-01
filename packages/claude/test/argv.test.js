@@ -116,7 +116,10 @@ const conformingArgv = () => [...buildArgv(spec())];
 test('property: dropping any of the six required flags refuses', t => {
   fc.assert(
     fc.property(
-      fc.subarray([...REQUIRED_FLAGS], { minLength: 0, maxLength: REQUIRED_FLAGS.length - 1 }),
+      fc.subarray([...REQUIRED_FLAGS], {
+        minLength: 0,
+        maxLength: REQUIRED_FLAGS.length - 1,
+      }),
       fc.array(fc.string(), { maxLength: 3 }),
       (present, noise) => {
         // A strict subset of the required flags plus arbitrary noise -> refuse.
