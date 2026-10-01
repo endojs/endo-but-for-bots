@@ -37,11 +37,34 @@ and refusal handling, SSE framing, cancellation, and retried cleanup.
 The adapter's 25 tests and the nearest OpenRouter/configuration suites pass
 72 tests together. Lal ESLint and Lal/hosted-agent type checks pass;
 root documentation builds with 0 errors and 180 warnings.
-Fae/Floot provisioning, context-window metadata integration, compaction, permanent
-environment GC, the development preset, live acceptance, and deployment remain pending.
+Standalone Fae now accepts a `subscription-responses` recipe containing the
+retained subscription, model, and optional reasoning/catalog metadata.
+The driver derives pool affinity from the retained agent's full locator identity.
+The former token cache is replaced by one local provider owner: HTTP providers
+still follow Secret rotation, subscription adapters never read a Secret, and
+injected providers remain borrowed.
+Cancellation fences late inference and unadmitted tools while retaining completed
+tool outcomes and waiting for their tree publication; it does not wait for a
+borrowed provider that ignores cancellation.
+The adapter's disposal is an acknowledged cancellation hook, not a GC hook.
+Focused tests cover the actual driver, opaque tool continuation, late endpoint
+acquisition, batch cancellation, stalled inference, and delayed evidence writes.
+The 27 focused tests pass; the full Fae suite passes 186 tests with two existing
+known failures.
+Fae ESLint reports 0 errors and 141 warnings, the nearest Floot turn/transcript
+suites pass 35 tests, and root documentation still builds with 0 errors and 180 warnings.
+Floot provider wiring, standalone inbox restoration, context-window metadata
+integration, compaction, the development preset, live acceptance, and deployment
+remain pending.
+Automatic environment GC is a recorded design gap, not implementation scope for
+this PR; cleanup remains explicit on the administration facet.
 The Codex catalog currently omits context-window metadata; the adapter reports
 unknown (`0`) unless a caller supplies provider-observed catalog metadata.
 This slice does not claim provider-sized compaction or live pool acceptance.
+Standalone Fae currently restarts from the prompt root with a process-local
+inbound-message set; the next durability slice must restore branch selection and
+admission receipts from its existing conversation tree before restart acceptance.
+It must not replay an admitted command or inference to discover its result.
 Focused factory, native-factory, ownership, lifecycle, and runtime suites pass
 78 tests in each of the four SES configurations; package types and ESLint pass
 with warnings, and root documentation builds with 0 errors and 180 warnings.
@@ -305,23 +328,27 @@ observers alone do not give the collector an acknowledged per-slice cleanup barr
 Individual slices are not independently durable formulas today.
 Do not claim a complete GC integration from the existing shutdown path.
 
-The durable environment and independently revivable Shell facet must retain each
-other's required dependencies so a retained Shell keeps its environment alive.
-After the last durable root is removed, collection must close the environment and
-dispose only its owned development storage, while cancellation preserves the recipe
-and storage for reconstruction.
-The integration needs an acknowledged collection cleanup obligation that cannot
-vanish before native disposal is proved; failures retain cleanup evidence and
-storage rather than reporting successful collection.
-Determine the narrow daemon hook required before native provisioning lands, using
-existing formula collection and ownership mechanisms rather than a new GC platform.
-Test collection of an active environment, a dormant environment, a retained Shell,
-and failed cleanup separately from explicit session deletion and restart.
+The operator has deferred automatic environment GC beyond this PR.
+Keep native and owned-storage cleanup explicit on the administration facet.
+The operator must retain that facet until cleanup is acknowledged, then remove its
+durable roots; merely dropping a Shell or administration reference is not cleanup.
+Ordinary cancellation preserves the recipe and development storage for reconstruction.
+Explicit deletion must first stop native work, then dispose only owned storage;
+failed or uncertain cleanup keeps the environment fenced and its storage retained.
+
+The remaining design gap is acknowledged permanent cleanup after the last durable
+root is removed, including a dormant environment that has no installed live hook.
+A future design must keep a retained Shell's environment dependencies alive and
+retain the cleanup obligation until native disposal is proved.
+It should use existing formula collection and ownership mechanisms rather than
+introduce another GC platform.
+Active/dormant collection, retained Shells, and failed collection cleanup are
+follow-up tests, separate from this PR's explicit disposal and restart acceptance.
 
 These constraints need formula-backed tests for passive lookup, exact dependency
 retention after name rebinding, stop during acquisition, failed cleanup, and
-graceful restart and permanent collection before environment provisioning is
-described as complete.
+graceful restart before environment provisioning is described as complete.
+Automatic permanent collection remains explicitly unsupported.
 
 ## Network and development storage
 

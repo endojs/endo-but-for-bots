@@ -6,12 +6,14 @@ import { M } from '@endo/patterns';
 import { E } from '@endo/eventual-send';
 import { passableAsJustin, makeMarshal } from '@endo/marshal';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
+import { Far } from '@endo/pass-style';
+import { makePromiseKit } from '@endo/promise-kit';
 import {
   makeConversationTree,
   makeEndoPetstoreBackend,
 } from '@endo/conversation-tree';
 
-import { makeRotatingProvider } from './src/provider-cache.js';
+import { makeProviderOwner } from './src/provider-owner.js';
 import { discoverTools, executeTool } from './src/tools.js';
 import {
   makeListPetnamesTool,
@@ -163,6 +165,15 @@ Example: if a message says "Here is @counter for you", adopt it:
  */
 
 /**
+ * @typedef {object} SubscriptionProviderConfig
+ * @property {'subscription-responses'} kind
+ * @property {any} subscription - Existing subscription, never credentials.
+ * @property {string} model
+ * @property {string} [reasoningEffort]
+ * @property {number} [contextLength] - Provider-observed catalog metadata.
+ */
+
+/**
  * @typedef {object} InjectedProviderConfig
  * @property {{ chat: (messages: object[], tools: object[]) => Promise<{ message: object }> }} provider - Pre-built provider (e.g. for tests).
  */
@@ -173,7 +184,7 @@ Example: if a message says "Here is @counter for you", adopt it:
  *
  * @param {any} powers - Guest powers (manager's own or a sub-guest's)
  * @param {Promise<object> | object | undefined} context - Context for cancellation
- * @param {ProviderConstructorConfig | InjectedProviderConfig} providerConfig - Token-free host/model config, or an injected provider. Authentication is supplied by the Secret resolver in options.
+ * @param {ProviderConstructorConfig | SubscriptionProviderConfig | InjectedProviderConfig} providerConfig - Token-free HTTP config, subscription recipe, or an injected provider.
  * @param {string} [systemPrompt] - Override system prompt (defaults to guestSystemPrompt)
  * @param {object} [options]
  * @param {any} [options.spawner] - A `SubagentSpawner` capability. Present only
@@ -186,6 +197,7 @@ Example: if a message says "Here is @counter for you", adopt it:
  * @param {() => Promise<string>} [options.provideAuthToken] - Reads the auth
  *   token afresh for each turn, so a rotated secret reaches a running agent and
  *   a revoked one stops it. Absent when the caller injected a built provider.
+ * @param {string} [options.sessionId] - Stable pool identity, required for subscriptions.
  * @returns {Promise<void>}
  */
 export const spawnWorkerLoop = async (
@@ -193,7 +205,7 @@ export const spawnWorkerLoop = async (
   context,
   providerConfig,
   systemPrompt,
-  { spawner, timers, provideAuthToken, delegatedPrompt } = {},
+  { spawner, timers, provideAuthToken, delegatedPrompt, sessionId } = {},
 ) => {
   /**
    * The agent's cancellation promise, boxed.
@@ -227,11 +239,56 @@ export const spawnWorkerLoop = async (
 
   // Resolved per turn rather than captured when the loop starts, so a rotated
   // secret reaches an agent that is already running and a revoked one stops
-  // its next turn. See `makeRotatingProvider`.
-  const currentProvider = makeRotatingProvider({
+  // its next turn. Subscription-backed providers leave credential custody to
+  // the retained subscription capability instead.
+  const providerOwner = makeProviderOwner({
     config: providerConfig,
+    sessionId,
     ...(provideAuthToken ? { provideAuthToken } : {}),
   });
+  const loopAbort = new AbortController();
+  const loopCancelled = makePromiseKit();
+  void loopCancelled.promise.catch(() => undefined);
+  // Wait for admitted evidence writers, not a borrowed model's stalled read.
+  // Failed publication stays retained and fences the loop instead of allowing
+  // another turn to obscure known effects that were not durably recorded.
+  const evidenceWrites = new Set();
+  const retainWrite = () => {
+    const completion = makePromiseKit();
+    evidenceWrites.add(completion.promise);
+    void completion.promise.then(
+      () => evidenceWrites.delete(completion.promise),
+      error => {
+        loopAbort.abort(error);
+        loopCancelled.reject(error);
+      },
+    );
+    return completion;
+  };
+  const disposeProvider = async () => {
+    const settled = await Promise.allSettled([
+      providerOwner.dispose(),
+      ...evidenceWrites,
+    ]);
+    const failures = settled
+      .filter(result => result.status === 'rejected')
+      .map(result => result.reason);
+    if (failures.length)
+      throw new AggregateError(
+        failures,
+        'Fae provider/evidence disposal failed',
+      );
+  };
+  const stopProvider = () => {
+    loopAbort.abort(Error('Fae agent cancelled'));
+    loopCancelled.reject(loopAbort.signal.reason);
+    return disposeProvider();
+  };
+  // An owned subscription adapter's retained late-endpoint cleanup must finish
+  // before its formula reports disposal. This is cancellation, not permanent GC.
+  if (context && providerConfig.kind === 'subscription-responses') {
+    await E(context).addDisposalHook(Far('FaeProviderDisposal', stopProvider));
+  }
 
   /**
    * The provider a turn runs on, resolved once when the turn starts.
@@ -251,7 +308,10 @@ export const spawnWorkerLoop = async (
    * @returns {Promise<{message: object}>}
    */
   const chat = async (messages, toolSchemas) =>
-    turnProvider.chat(messages, toolSchemas);
+    Promise.race([
+      turnProvider.chat(messages, toolSchemas, loopAbort.signal),
+      loopCancelled.promise,
+    ]);
 
   const effectivePrompt = composeSubagentSystemPrompt(
     systemPrompt || guestSystemPrompt,
@@ -382,20 +442,30 @@ export const spawnWorkerLoop = async (
       replyTracker.anyToolCalled = true;
 
       let result;
-      try {
-        result = await executeTool(name, args, toolMap);
-        console.log(`[tool] ${name} -> ${passableAsJustin(result, false)}`);
-      } catch (error) {
-        const errorMessage =
-          error instanceof Error ? error.message : String(error);
-        result = harden({ error: errorMessage });
-        console.error(`[tool] ${name} error: ${errorMessage}`);
+      let failed = false;
+      if (loopAbort.signal.aborted) {
+        result = harden({
+          error: 'Not executed: Fae agent cancelled before tool admission',
+        });
+        failed = true;
+      } else {
+        try {
+          result = await executeTool(name, args, toolMap);
+          console.log(`[tool] ${name} -> ${passableAsJustin(result, false)}`);
+        } catch (error) {
+          const errorMessage =
+            error instanceof Error ? error.message : String(error);
+          result = harden({ error: errorMessage });
+          failed = true;
+          console.error(`[tool] ${name} error: ${errorMessage}`);
+        }
       }
 
       results.push({
         role: 'tool',
         content: passableAsJustin(result, false),
         tool_call_id: /** @type {any} */ (toolCall).id,
+        ...(failed ? { failed: true } : {}),
       });
     }
 
@@ -416,12 +486,14 @@ export const spawnWorkerLoop = async (
    * @returns {Promise<{ answered: boolean, exhausted: boolean, leafId: string, message?: any }>} the turn outcome
    */
   const runAgenticLoop = async (initialSchemas, initialToolMap, leafNodeId) => {
+    let toolWrite;
     const firstTools = harden({
       schemas: initialSchemas,
       toolMap: initialToolMap,
     });
     const outcome = await runAgenticTurn({
       leafId: leafNodeId,
+      signal: loopAbort.signal,
       maxRounds: MAX_TOOL_ROUNDS,
       getTools: round =>
         round === 0 ? firstTools : discoverTools(powers, localTools),
@@ -434,10 +506,15 @@ export const spawnWorkerLoop = async (
       },
       invoke: async (providerContext, tools) => {
         const response = await chat(providerContext, tools.schemas);
+        loopAbort.signal.throwIfAborted();
         const responseMessage = response.message;
         if (responseMessage) {
           const rm = /** @type {any} */ (responseMessage);
-          if ((!rm.tool_calls || rm.tool_calls.length === 0) && rm.content) {
+          if (
+            !rm.responsesOutput &&
+            (!rm.tool_calls || rm.tool_calls.length === 0) &&
+            rm.content
+          ) {
             const extracted = extractToolCallsFromContent(rm.content);
             if (extracted.toolCalls) {
               rm.tool_calls = extracted.toolCalls;
@@ -453,18 +530,39 @@ export const spawnWorkerLoop = async (
       getToolCalls: message =>
         Array.isArray(message.tool_calls) ? message.tool_calls : [],
       runTools: async (calls, tools) => {
-        const results = await processToolCalls(calls, tools.toolMap);
-        console.log(`[fae] tool results: ${JSON.stringify(results, null, 2)}`);
-        return results;
+        toolWrite = retainWrite();
+        try {
+          const results = await processToolCalls(calls, tools.toolMap);
+          console.log(
+            `[fae] tool results: ${JSON.stringify(results, null, 2)}`,
+          );
+          return results;
+        } catch (error) {
+          toolWrite.reject(error);
+          throw error;
+        }
       },
       commitStep: async (currentLeafId, message, results) => {
-        const node = await tree.addNode(currentLeafId, [message, ...results]);
-        return node.id;
+        try {
+          const node = await tree.addNode(currentLeafId, [message, ...results]);
+          toolWrite.resolve(undefined);
+          return node.id;
+        } catch (error) {
+          toolWrite.reject(error);
+          throw error;
+        }
       },
       commitFinal: async (currentLeafId, message) => {
-        const node = await tree.addNode(currentLeafId, [message]);
-        if (message.content) console.log(`[fae] ${message.content}`);
-        return node.id;
+        const write = retainWrite();
+        try {
+          const node = await tree.addNode(currentLeafId, [message]);
+          write.resolve(undefined);
+          if (message.content) console.log(`[fae] ${message.content}`);
+          return node.id;
+        } catch (error) {
+          write.reject(error);
+          throw error;
+        }
       },
     });
     return outcome;
@@ -527,15 +625,21 @@ export const spawnWorkerLoop = async (
     // Something must be: `runAgent` returns normally afterwards, so the
     // driver's own `.catch` never fires and an agent that simply goes quiet is
     // otherwise indistinguishable from one that was never wired up.
-    const cancelledSignal = cancelled
+    const contextStopped = cancelled
       ? cancelled.promise.then(
           () => {
+            void stopProvider().catch(error =>
+              console.error('[fae] provider cleanup failed:', error),
+            );
             console.error(
               '[fae] cancellation signal fulfilled, which it never should; stopping the inbox loop',
             );
             return { cancelled: true };
           },
           reason => {
+            void stopProvider().catch(error =>
+              console.error('[fae] provider cleanup failed:', error),
+            );
             console.error(
               '[fae] stopping the inbox loop:',
               /** @type {Error} */ (reason)?.message ?? reason,
@@ -544,6 +648,13 @@ export const spawnWorkerLoop = async (
           },
         )
       : null;
+    const cancelledSignal = Promise.race([
+      loopCancelled.promise.then(
+        () => ({ cancelled: true }),
+        () => ({ cancelled: true }),
+      ),
+      ...(contextStopped ? [contextStopped] : []),
+    ]);
 
     // Track the most recent leaf across messages so that follow-up
     // messages from the same sender continue the conversation rather
@@ -586,8 +697,13 @@ export const spawnWorkerLoop = async (
       // read off a reply, so this failure — like a provider's — is answered
       // generically and logged in full.
       try {
-        turnProvider = await currentProvider();
+        turnProvider = await Promise.race([
+          providerOwner.forTurn(),
+          loopCancelled.promise,
+        ]);
+        loopAbort.signal.throwIfAborted();
       } catch (error) {
+        if (loopAbort.signal.aborted) return;
         console.error(
           '[fae] provider unavailable:',
           error instanceof Error ? error.message : String(error),
@@ -651,6 +767,7 @@ export const spawnWorkerLoop = async (
       try {
         replyTracker.sent = false;
         const outcome = await runAgenticLoop(toolSchemas, toolMap, userNode.id);
+        loopAbort.signal.throwIfAborted();
         lastLeafId = outcome.leafId;
         if (!outcome.answered) {
           throw senderVisible(
@@ -667,6 +784,7 @@ export const spawnWorkerLoop = async (
         // (e.g. a Whylip UI) actually receives it.
         if (!replyTracker.sent) {
           const finalNode = await tree.getNode(lastLeafId);
+          loopAbort.signal.throwIfAborted();
           if (finalNode) {
             const lastMsg = finalNode.messages[finalNode.messages.length - 1];
             if (lastMsg && lastMsg.role === 'assistant' && lastMsg.content) {
@@ -678,6 +796,7 @@ export const spawnWorkerLoop = async (
           }
         }
       } catch (error) {
+        if (loopAbort.signal.aborted) return;
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         console.error('[fae] turn failed:', errorMessage);
@@ -729,7 +848,7 @@ export const spawnWorkerLoop = async (
 
     const turnWorker = (async () => {
       for (;;) {
-        if (stopping) return;
+        if (stopping || loopAbort.signal.aborted) return;
         if (pendingTurns.length === 0) {
           if (pumpEnded) return;
           // eslint-disable-next-line no-await-in-loop
@@ -762,12 +881,10 @@ export const spawnWorkerLoop = async (
     try {
       while (true) {
         const nextMessage = messageIterator.next();
-        const raced = cancelledSignal
-          ? await Promise.race([
-              cancelledSignal,
-              nextMessage.then(result => ({ cancelled: false, result })),
-            ])
-          : { cancelled: false, result: await nextMessage };
+        const raced = await Promise.race([
+          cancelledSignal,
+          nextMessage.then(result => ({ cancelled: false, result })),
+        ]);
         if (raced.cancelled) {
           // Queued turns are abandoned rather than drained: cancellation must
           // be prompt, and an in-flight provider call can take minutes.
@@ -850,6 +967,14 @@ export const spawnWorkerLoop = async (
           enqueueTurn(message);
         }
       }
+    } catch (error) {
+      // A failed mailbox cannot be allowed to leave a late provider response
+      // capable of admitting tools. Normal EOF still drains admitted turns.
+      stopping = true;
+      loopAbort.abort(error);
+      loopCancelled.reject(error);
+      void Promise.resolve(messageIterator.return?.()).catch(() => undefined);
+      throw error;
     } finally {
       // Nothing can feed `claim` once this loop is out, so an ask that kept
       // waiting would hold the queue open for its whole timeout — up to an
@@ -867,7 +992,11 @@ export const spawnWorkerLoop = async (
   };
 
   // Start the worker loop
-  await runAgent();
+  try {
+    await runAgent();
+  } finally {
+    await disposeProvider();
+  }
 };
 harden(spawnWorkerLoop);
 

@@ -116,3 +116,36 @@ test('turn engine rejects an invalid round bound', async t => {
     { message: /maxRounds must be a positive integer/ },
   );
 });
+
+test('a provider response that arrives after cancellation cannot admit tools or a final', async t => {
+  const controller = new AbortController();
+  const trace = [];
+  await t.throwsAsync(
+    () =>
+      runAgenticTurn({
+        leafId: 'root',
+        maxRounds: 1,
+        signal: controller.signal,
+        getTools: async () => ({}),
+        getContext: async () => [],
+        invoke: async () => {
+          controller.abort(Error('cancelled during inference'));
+          return { message: { calls: ['tool'] } };
+        },
+        getToolCalls: message => message.calls,
+        runTools: async () => {
+          trace.push('tools');
+        },
+        commitStep: async () => {
+          trace.push('step');
+          return 'step';
+        },
+        commitFinal: async () => {
+          trace.push('final');
+          return 'final';
+        },
+      }),
+    { message: /cancelled during inference/ },
+  );
+  t.deepEqual(trace, []);
+});

@@ -13,6 +13,7 @@ import { Fail } from '@endo/errors';
  * @param {object} options
  * @param {string} options.leafId
  * @param {number} options.maxRounds
+ * @param {AbortSignal} [options.signal] Fence late provider outcomes and further tool admission.
  * @param {(round: number) => Promise<any>} options.getTools
  * @param {(leafId: string) => Promise<readonly any[]>} options.getContext
  * @param {(context: readonly any[], tools: any, round: number) => Promise<{ message?: any }>} options.invoke
@@ -24,6 +25,7 @@ import { Fail } from '@endo/errors';
 export const runAgenticTurn = async ({
   leafId,
   maxRounds,
+  signal,
   getTools,
   getContext,
   invoke,
@@ -37,12 +39,16 @@ export const runAgenticTurn = async ({
   let currentLeafId = leafId;
   await null;
   for (let round = 0; round < maxRounds; round += 1) {
+    signal?.throwIfAborted();
     // eslint-disable-next-line no-await-in-loop
     const tools = await getTools(round);
+    signal?.throwIfAborted();
     // eslint-disable-next-line no-await-in-loop
     const context = await getContext(currentLeafId);
+    signal?.throwIfAborted();
     // eslint-disable-next-line no-await-in-loop
     const outcome = await invoke(context, tools, round);
+    signal?.throwIfAborted();
     if (!outcome.message) {
       return harden({
         answered: false,

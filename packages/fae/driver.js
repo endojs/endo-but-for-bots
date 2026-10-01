@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
+import { parseLocator } from '@endo/daemon/locator.js';
 
 import { spawnWorkerLoop } from './agent.js';
 import { resolveAuthToken } from './src/credentials.js';
@@ -12,7 +13,7 @@ import { resolveAuthToken } from './src/credentials.js';
  * a single fae agent.  Its namespace holds two capability references
  * written by the factory at creation time:
  *
- *   - `llm-provider`  – the token-free provider config `{ host, model }`
+ *   - `llm-provider`  – token-free HTTP config or a subscription-capability recipe
  *   - `agent`          – the agent's EndoGuest (inbox, mail, petstore, tools)
  *
  * and optionally a third:
@@ -43,13 +44,22 @@ export const make = async (powers, context, { env } = {}) => {
   const delegatedPrompt = env?.FAE_SUBAGENT_PROMPT || undefined;
 
   const startLoop = async () => {
-    const storedConfig = /** @type {{ host: string, model: string }} */ (
-      await E(powers).lookup('llm-provider')
-    );
+    const storedConfig =
+      /** @type {{ host?: string, model: string, kind?: string, subscription?: object }} */ (
+        await E(powers).lookup('llm-provider')
+      );
     const agentPowers = await E(powers).lookup('agent');
     const spawner = (await E(powers).has('subagent-spawner'))
       ? await E(powers).lookup('subagent-spawner')
       : undefined;
+    // The agent, not the driver incarnation or a mutable pet name, identifies
+    // the inference session. Preserve both fixed-width components without a
+    // delimiter to fit the subscription endpoint's 128-character identity.
+    let sessionId;
+    if (storedConfig.kind === 'subscription-responses') {
+      const { number, node } = parseLocator(await E(powers).locate('agent'));
+      sessionId = `${number}${node}`;
+    }
     // The token comes from the `SecretBlob` when one was delegated, so the
     // stored config carries no credential. Handing the loop a thunk rather
     // than a token is what makes rotation and revocation reach an agent that
@@ -62,8 +72,12 @@ export const make = async (powers, context, { env } = {}) => {
       harden({
         ...(spawner ? { spawner } : {}),
         ...(delegatedPrompt ? { delegatedPrompt } : {}),
-        provideAuthToken: () =>
-          resolveAuthToken({ powers, config: storedConfig }),
+        ...(sessionId === undefined
+          ? {
+              provideAuthToken: () =>
+                resolveAuthToken({ powers, config: storedConfig }),
+            }
+          : { sessionId }),
       }),
     );
   };
