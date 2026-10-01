@@ -156,13 +156,19 @@ const start = async (store, index, { after, collectAfterAllocate } = {}) => {
         const facet = index.resource();
         return Far('InterruptibleIndex', {
           /**
+           * @param {string | undefined} workspace
            * @param {string} name
            * @param {any} entry
            */
-          record: (name, entry) =>
-            interrupting('record', async () => E(facet).record(name, entry)),
-          /** @param {string} name */
-          forget: name => E(facet).forget(name),
+          record: (workspace, name, entry) =>
+            interrupting('record', async () =>
+              E(facet).record(workspace, name, entry),
+            ),
+          /**
+           * @param {string | undefined} workspace
+           * @param {string} name
+           */
+          forget: (workspace, name) => E(facet).forget(workspace, name),
         });
       },
     },
@@ -220,7 +226,7 @@ const waitForStatus = async (registry, name, status) => {
   let found;
   for (let attempt = 0; attempt < 400; attempt += 1) {
     // eslint-disable-next-line no-await-in-loop
-    found = await E(registry).lookup(name);
+    found = await E(registry).lookup(name, 'main');
     if (found?.status === status) return found;
     // eslint-disable-next-line no-await-in-loop
     await setTimeout(25);
@@ -251,7 +257,8 @@ for (const after of /** @type {const} */ ([
         kind: 'native',
         digest: 'pinned-code',
         allocationKey: '1'.repeat(32),
-        workspace: access,
+        workspace: 'main',
+        access,
         durableDigest,
         ephemeralDigest,
       });
@@ -287,7 +294,7 @@ for (const after of /** @type {const} */ ([
       );
       t.is(await E(registration).loads(), 1);
       t.is(await E(registration).factories(), 1);
-      t.like(index.get('resource'), {
+      t.like(index.get('main', 'resource'), {
         status: 'ready',
         workerId: managers[0].workerId,
       });
@@ -336,7 +343,8 @@ test.serial(
       kind: 'native',
       digest: 'broken-code',
       allocationKey: '2'.repeat(32),
-      workspace: access,
+      workspace: 'main',
+      access,
       durableDigest: brokenDigest,
       ephemeralDigest,
     });
@@ -353,16 +361,16 @@ test.serial(
       );
     t.is(managers.length, 1);
     t.is(await daemon.getWorker(managers[0].workerId).evaluate('attempts'), 1);
-    t.is(index.get('resource')?.status, 'failed');
-    t.regex(index.get('resource')?.error ?? '', /factory failed/);
+    t.is(index.get('main', 'resource')?.status, 'failed');
+    t.regex(index.get('main', 'resource')?.error ?? '', /factory failed/);
 
     // The name is not lost to the failure: removal retires the manager and a
     // corrected package installs under the same name.
-    t.true(await E(registry).remove('resource'));
+    t.true(await E(registry).remove('resource', 'main'));
     t.false(daemon.listWorkerIds().includes(managers[0].workerId));
-    t.is(await E(registry).lookup('resource'), undefined);
-    t.is(index.get('resource'), undefined);
-    t.false(await E(registry).remove('resource'));
+    t.is(await E(registry).lookup('resource', 'main'), undefined);
+    t.is(index.get('main', 'resource'), undefined);
+    t.false(await E(registry).remove('resource', 'main'));
     const corrected = await E(registry).install(
       harden({
         ...request,
@@ -399,7 +407,8 @@ test.serial(
         kind: 'native',
         digest: 'pinned-code',
         allocationKey: '2'.repeat(32),
-        workspace: access,
+        workspace: 'main',
+        access,
         durableDigest,
         ephemeralDigest,
       }),
@@ -415,7 +424,7 @@ test.serial(
           worker.debugLabel === 'native:resource',
       );
     t.is(managers.length, 1);
-    t.like(await E(registry).lookup('resource'), {
+    t.like(await E(registry).lookup('resource', 'main'), {
       status: 'ready',
       complete: true,
       workerId: managers[0].workerId,

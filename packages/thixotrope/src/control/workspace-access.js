@@ -66,14 +66,19 @@ export const makeWorkspaceAccess = inventory => {
     /**
      * The installed value takes the name only if nothing else took it
      * meanwhile; a concurrent inventory edit wins, and the installation
-     * reports it.
+     * reports it. The same value under the name already is nothing to do,
+     * so a value the host hands to every workspace at every start is put
+     * once.
      * @param {string} name
      * @param {unknown} value
      */
     put: (name, value) => {
       name.length > 0 || Fail`Expected an inventory name`;
-      !inventory.has(name) ||
-        Fail`Inventory name became occupied during installation`;
+      if (inventory.has(name)) {
+        inventory.get(name) === value ||
+          Fail`Inventory name became occupied during installation`;
+        return;
+      }
       inventory.set(name, value);
     },
     /**

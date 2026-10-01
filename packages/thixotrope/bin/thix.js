@@ -17,9 +17,33 @@ import { makeNodePowers } from '../src/platform/node/powers.js';
 const platform = makeNodePowers();
 const { logging, paths } = platform;
 
-const [command, directory = './.thix', ...args] = process.argv.slice(2);
+// `--workspace NAME` (or `--workspace=NAME`) ahead of the command selects
+// the workspace a command speaks to; `default` otherwise. The commands that
+// are the daemon's rather than a workspace's take no selection.
+const argv = process.argv.slice(2);
+/** @type {string | undefined} */
+let workspace;
+/** @type {string | undefined} */
+let usageError;
+if (argv[0] === '--workspace') {
+  [, workspace] = argv.splice(0, 2);
+  if (workspace === undefined || workspace.startsWith('-'))
+    usageError = 'Usage: thix --workspace NAME command [state-directory ...]';
+} else if (argv[0]?.startsWith('--workspace=')) {
+  workspace = argv.shift()?.slice('--workspace='.length);
+}
+const [command, directory = './.thix', ...args] = argv;
 const statePath = paths.resolve(directory);
+const daemonWide = [
+  'workspaces',
+  'create-workspace',
+  'installations',
+  'reachability',
+  'collect',
+  'stop',
+].includes(command);
 try {
+  if (usageError !== undefined) throw Error(usageError);
   if (command === 'serve') {
     const supervisor = await serveThixotrope(platform, statePath);
     const stop = () => {
@@ -61,11 +85,14 @@ try {
     command === 'inventory' ||
     command === 'attach' ||
     command === 'status' ||
+    command === 'workspaces' ||
+    command === 'create-workspace' ||
     command === 'stop'
   ) {
     const client = await connectLocalControl(
       { sockets: platform.sockets, random: platform.random },
       paths.join(statePath, 'control.sock'),
+      daemonWide ? {} : { workspace },
     );
     try {
       if (command === 'alarms') {
@@ -140,6 +167,13 @@ try {
         const [name] = args;
         if (!name) throw Error('Usage: thix remove state-directory name');
         logging.log(JSON.stringify(await client.call('remove', name)));
+      } else if (command === 'create-workspace') {
+        const [name] = args;
+        if (!name)
+          throw Error('Usage: thix create-workspace state-directory name');
+        logging.log(
+          JSON.stringify(await client.call('createWorkspace', name), null, 2),
+        );
       } else if (command === 'inventory') {
         await showInventory(platform.terminal.open(), client);
       } else if (command === 'attach') {
@@ -151,9 +185,13 @@ try {
       } else {
         const result = await client.call(command);
         logging.log(
-          ['status', 'installations', 'reachability', 'collect'].includes(
-            command,
-          )
+          [
+            'status',
+            'installations',
+            'reachability',
+            'collect',
+            'workspaces',
+          ].includes(command)
             ? JSON.stringify(result, null, 2)
             : result,
         );
@@ -164,7 +202,7 @@ try {
     }
   } else {
     logging.log(
-      'Usage: thix serve|attach|install|install-native|installations|remove|inventory|invite|revoke-invite|accept|contacts|send|inbox|outbox|take|discard|mail|alarms|reachability|collect|status|stop [state-directory]',
+      'Usage: thix [--workspace NAME | --workspace=NAME] serve|attach|install|install-native|installations|remove|inventory|invite|revoke-invite|accept|contacts|send|inbox|outbox|take|discard|mail|alarms|reachability|collect|status|workspaces|create-workspace|stop [state-directory]',
     );
     process.exitCode = command === undefined || command === 'help' ? 0 : 1;
   }

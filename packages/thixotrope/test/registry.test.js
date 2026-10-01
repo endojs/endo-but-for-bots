@@ -130,12 +130,21 @@ const fixture = () => {
      * @param {string} name
      * @param {any} entry
      */
-    record: (name, entry) => {
-      index.set(name, entry);
+    /**
+     * @param {string | undefined} workspace
+     * @param {string} name
+     * @param {any} entry
+     */
+    record: (workspace, name, entry) => {
+      index.set(workspace === undefined ? name : `${workspace}/${name}`, entry);
       maybeBreak();
     },
-    /** @param {string} name */
-    forget: name => index.delete(name),
+    /**
+     * @param {string | undefined} workspace
+     * @param {string} name
+     */
+    forget: (workspace, name) =>
+      index.delete(workspace === undefined ? name : `${workspace}/${name}`),
   });
   const inventory = new Map();
   const workspace = makeWorkspaceAccess(inventory);
@@ -217,7 +226,8 @@ const request = (f, overrides = {}) =>
     digest: 'code',
     allocationKey: 'key-1',
     grants: [['service', 'selected']],
-    workspace: f.workspace,
+    workspace: 'main',
+    access: f.workspace,
     bundleDigest: 'bundle-1',
     ...overrides,
   });
@@ -268,13 +278,14 @@ test('an application is installed once: grants resolved, vat allocated, code sta
       ['service', 'selected'],
     ],
   });
-  t.deepEqual(f.registry.lookup('app'), {
+  t.deepEqual(f.registry.lookup('app', 'main'), {
     kind: 'application',
     workerId: 'w1',
+    value: root,
     complete: true,
     status: 'ready',
   });
-  t.like(f.index.get('app'), { workerId: 'w1', status: 'ready' });
+  t.like(f.index.get('main/app'), { workerId: 'w1', status: 'ready' });
   await t.throwsAsync(
     () => E(f.registry).install(request(f, { digest: 'different' })),
     { message: /different installation/ },
@@ -334,11 +345,14 @@ test('a failed factory stays inspectable and is not run again; removal frees the
   });
   t.is(attempts, 1, 'the vat memoises the factory call');
   t.false(f.inventory.has('app'));
-  t.like(f.index.get('app'), { status: 'failed', error: 'factory failed' });
-  t.true(await E(f.registry).remove('app'));
+  t.like(f.index.get('main/app'), {
+    status: 'failed',
+    error: 'factory failed',
+  });
+  t.true(await E(f.registry).remove('app', 'main'));
   t.true(f.vats.size === 0, 'the vat was retired');
-  t.false(f.index.has('app'));
-  t.false(await E(f.registry).remove('app'));
+  t.false(f.index.has('main/app'));
+  t.false(await E(f.registry).remove('app', 'main'));
   t.deepEqual(await E(f.registry).list(), []);
 });
 
@@ -362,17 +376,17 @@ test('a native resource is installed through its manager and its facet placed; r
     'allocate native:web',
     'native w1 durable-1 ephemeral-1',
   ]);
-  t.like(f.index.get('web'), { kind: 'native', status: 'ready' });
+  t.like(f.index.get('main/web'), { kind: 'native', status: 'ready' });
   t.is(
-    f.index.get('web')?.durableDigest,
+    f.index.get('main/web')?.durableDigest,
     undefined,
     'the index stops naming a bundle once the manager holds it',
   );
-  t.is(f.index.get('web')?.ephemeralDigest, undefined);
+  t.is(f.index.get('main/web')?.ephemeralDigest, undefined);
   // A value the user put under the name since is theirs.
   const theirs = Far('Theirs', {});
   f.inventory.set('web', theirs);
-  t.true(await E(f.registry).remove('web'));
+  t.true(await E(f.registry).remove('web', 'main'));
   t.is(f.inventory.get('web'), theirs);
   t.deepEqual(f.log.at(-1), 'retire w1');
   await t.throwsAsync(
@@ -419,13 +433,13 @@ test('a removal while the driver runs ends the installation at its next step', a
     // eslint-disable-next-line no-await-in-loop
     await new Promise(resolve => setTimeout(resolve, 0));
   }
-  t.true(await E(f.registry).remove('app'));
+  t.true(await E(f.registry).remove('app', 'main'));
   t.deepEqual(
     f.log.filter(line => line.startsWith('retire')),
     ['retire w1'],
     'the vat was retired before the name was forgotten',
   );
-  t.false(f.index.has('app'));
+  t.false(f.index.has('main/app'));
   gate.resolve(undefined);
   await t.throwsAsync(() => result, { message: /Installation was removed/ });
   t.false(
@@ -434,7 +448,7 @@ test('a removal while the driver runs ends the installation at its next step', a
   );
   t.deepEqual(await E(f.registry).list(), []);
   t.false(
-    f.index.has('app'),
+    f.index.has('main/app'),
     'the record of a removed name was not made again',
   );
 });
@@ -447,7 +461,7 @@ test('a removal that lands while the value is being placed takes it back out', a
   const root = Far('Application', {});
   f.factories.set('app:app', () => root);
   const { result: driving } = await E(f.registry).install(
-    request(f, { grants: [], workspace: front.workspace }),
+    request(f, { grants: [], access: front.workspace }),
   );
   const result = /** @type {Promise<unknown>} */ (driving);
   void result.catch(() => {});
@@ -457,15 +471,18 @@ test('a removal that lands while the value is being placed takes it back out', a
   }
   // The removal finds nothing in the workspace yet; the placement, landing
   // after it, finds the name gone and takes the value out itself.
-  t.true(await E(f.registry).remove('app'));
-  t.false(f.index.has('app'));
+  t.true(await E(f.registry).remove('app', 'main'));
+  t.false(f.index.has('main/app'));
   gate.resolve(undefined);
   await t.throwsAsync(() => /** @type {Promise<unknown>} */ (result), {
     message: /Installation was removed/,
   });
   t.false(f.inventory.has('app'), 'the value was taken back out');
   t.deepEqual(await E(f.registry).list(), []);
-  t.false(f.index.has('app'), 'the placement did not record the removed name');
+  t.false(
+    f.index.has('main/app'),
+    'the placement did not record the removed name',
+  );
 });
 
 test('same-identity installs arriving while an unplaced value is being placed make one placement', async t => {
@@ -478,7 +495,7 @@ test('same-identity installs arriving while an unplaced value is being placed ma
   const factoryGate = makePromiseKit();
   f.holdFactory(factoryGate);
   const { result: first } = await E(f.registry).install(
-    request(f, { grants: [], workspace: front.workspace }),
+    request(f, { grants: [], access: front.workspace }),
   );
   f.inventory.set('app', Far('Occupant', {}));
   factoryGate.resolve(undefined);
@@ -492,10 +509,10 @@ test('same-identity installs arriving while an unplaced value is being placed ma
   const gate = makePromiseKit();
   front.holdPut(gate);
   const second = E(f.registry).install(
-    request(f, { grants: [], workspace: front.workspace }),
+    request(f, { grants: [], access: front.workspace }),
   );
   const third = E(f.registry).install(
-    request(f, { grants: [], workspace: front.workspace }),
+    request(f, { grants: [], access: front.workspace }),
   );
   gate.resolve(undefined);
   const [{ result: a }, { result: b }] = await Promise.all([second, third]);
@@ -504,7 +521,7 @@ test('same-identity installs arriving while an unplaced value is being placed ma
   t.is(front.puts(), 2, 'one placement per attempt, not one per install');
   t.is(f.inventory.get('app'), root);
   t.like((await E(f.registry).list())[0], { status: 'ready' });
-  t.is(f.index.get('app')?.status, 'ready');
+  t.is(f.index.get('main/app')?.status, 'ready');
 });
 
 test('a workspace that refuses to give a value back does not keep the name in the index', async t => {
@@ -512,16 +529,55 @@ test('a workspace that refuses to give a value back does not keep the name in th
   const front = frontWorkspace(f, { refuseRemove: true });
   f.factories.set('app:app', () => Far('Application', {}));
   const { result } = await E(f.registry).install(
-    request(f, { grants: [], workspace: front.workspace }),
+    request(f, { grants: [], access: front.workspace }),
   );
   await result;
-  await t.throwsAsync(() => E(f.registry).remove('app'), {
+  await t.throwsAsync(() => E(f.registry).remove('app', 'main'), {
     message: /workspace quarantined/,
   });
   t.deepEqual(
     f.log.filter(line => line.startsWith('retire')),
     ['retire w1'],
   );
-  t.false(f.index.has('app'), 'the index forgot the name all the same');
+  t.false(f.index.has('main/app'), 'the index forgot the name all the same');
   t.deepEqual(await E(f.registry).list(), []);
+});
+
+test('the same name in two workspaces is two installations, removed apart', async t => {
+  const f = fixture();
+  const other = new Map();
+  const otherAccess = makeWorkspaceAccess(other);
+  f.factories.set('app:app', () => Far('Application', {}));
+  const { result: first } = await E(f.registry).install(
+    request(f, { grants: [] }),
+  );
+  const { result: second } = await E(f.registry).install(
+    request(f, {
+      grants: [],
+      workspace: 'other',
+      access: otherAccess,
+      allocationKey: 'key-2',
+    }),
+  );
+  await first;
+  await second;
+  t.is(f.vats.size, 2, 'a vat each');
+  t.deepEqual(
+    (await E(f.registry).list())
+      .map(entry => [entry.workspace, entry.name])
+      .sort(),
+    [
+      ['main', 'app'],
+      ['other', 'app'],
+    ],
+  );
+  t.true(f.inventory.has('app'));
+  t.true(other.has('app'));
+  t.true(await E(f.registry).remove('app', 'other'));
+  t.false(other.has('app'));
+  t.true(f.inventory.has('app'), 'the other workspace keeps its own');
+  t.is(f.vats.size, 1);
+  t.true(f.index.has('main/app'));
+  t.false(f.index.has('other/app'));
+  t.is(await E(f.registry).lookup('app'), undefined, 'neither is daemon-wide');
 });

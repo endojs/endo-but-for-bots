@@ -599,7 +599,11 @@ test.serial(
         ]),
       { message: /Unknown inventory grant/ },
     );
-    t.false('refused' in (await entries()));
+    const listed = async (/** @type {string} */ name) =>
+      (await entries()).find(
+        (/** @type {{name: string}} */ entry) => entry.name === name,
+      );
+    t.is(await listed('refused'), undefined);
     host.client.close();
     await host.supervisor.close();
     // Two requests the registry never received, the host having ended
@@ -614,7 +618,9 @@ test.serial(
       ['ghost', ghostBundle],
       ['orphan', orphanBundle],
     ]) {
-      file.entries[name] = {
+      file.entries.push({
+        workspace: 'default',
+        name,
         kind: 'application',
         digest: bundleDigest,
         grants: [],
@@ -622,7 +628,7 @@ test.serial(
         bundleDigest,
         status: 'pending',
         provisional: true,
-      };
+      });
     }
     await writeFile(indexPath, JSON.stringify(file));
     host = await serve(t, path);
@@ -642,10 +648,10 @@ test.serial(
       ),
       { name: 'ghost', status: 'ready' },
     );
-    t.is((await entries()).ghost.provisional, undefined);
-    t.is((await entries()).ghost.status, 'ready');
+    t.is((await listed('ghost'))?.provisional, undefined);
+    t.is((await listed('ghost'))?.status, 'ready');
     t.true(await host.client.call('remove', 'orphan'));
-    t.false('orphan' in (await entries()));
+    t.is(await listed('orphan'), undefined);
     t.false(await host.client.call('remove', 'orphan'));
     host.client.close();
     await host.supervisor.close();

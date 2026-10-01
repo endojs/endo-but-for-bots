@@ -160,12 +160,16 @@ test.serial(
     // lifecycle facet is published privately for its notices.
     t.is(Object.keys(publications).length, 3);
 
-    // A worker allocation exists, but its selection record did not commit.
+    // The workspace's vat exists, but the table that names it did not
+    // commit: the vat is found again under the key derived from the name.
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    t.is(config.workspaces.default.workerId, workerId);
     await rm(configPath);
     const second = await start(t, path);
     const recoveredSelection = await connect(t, path);
     const status = await recoveredSelection.call('status');
     t.is(status.workspace, workerId);
+    t.deepEqual(status.workspaces, { default: workerId });
     // The workspace, the registry, and the provided clock and mailbox.
     t.is(status.workers.length, 4);
     t.is(await recoveredSelection.call('evaluate', 'retained'), '91');
@@ -175,22 +179,28 @@ test.serial(
       JSON.parse(await readFile(hubPath, 'utf8')).publications,
       publications,
     );
+    t.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), config);
 
-    // The root publication committed, but initialization completion did not.
-    const config = JSON.parse(await readFile(configPath, 'utf8'));
-    config.initialized = false;
-    await writeFile(configPath, JSON.stringify(config));
+    // A table naming a vat that is gone is a stale cache: the vat under the
+    // name's key serves, and the table is repaired.
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        ...config,
+        workspaces: { default: { workerId: 'f'.repeat(32) } },
+      }),
+    );
     const third = await start(t, path);
-    const recoveredPublication = await connect(t, path);
-    t.is((await recoveredPublication.call('status')).workspace, workerId);
-    t.is(await recoveredPublication.call('evaluate', 'retained'), '91');
-    await recoveredPublication.call('stop');
+    const recoveredTable = await connect(t, path);
+    t.is((await recoveredTable.call('status')).workspace, workerId);
+    t.is(await recoveredTable.call('evaluate', 'retained'), '91');
+    await recoveredTable.call('stop');
     t.is((await third.exited)[0], 0);
+    t.deepEqual(JSON.parse(await readFile(configPath, 'utf8')), config);
     t.deepEqual(
       JSON.parse(await readFile(hubPath, 'utf8')).publications,
       publications,
     );
-    t.is(JSON.parse(await readFile(configPath, 'utf8')).initialized, true);
   },
 );
 
@@ -286,7 +296,7 @@ test.serial(
     const config = JSON.parse(
       await readFile(join(path, 'workspace.json'), 'utf8'),
     );
-    t.is(config.workerId, workerId);
+    t.is(config.workspaces.default.workerId, workerId);
     await next.call('stop');
     t.is((await second.exited)[0], 0);
   },

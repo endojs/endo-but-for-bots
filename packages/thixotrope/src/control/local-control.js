@@ -126,8 +126,14 @@ harden(makeLocalControl);
  * @param {SocketPowers} powers.sockets
  * @param {RandomPowers} powers.random
  * @param {string} socketPath
+ * @param {{ workspace?: string }} [options] the workspace this connection
+ *   speaks for; `default` when none is named
  */
-export const connectLocalControl = async ({ sockets, random }, socketPath) => {
+export const connectLocalControl = async (
+  { sockets, random },
+  socketPath,
+  { workspace = undefined } = {},
+) => {
   const socket = sockets.connectPath(socketPath);
   const control = await makeLocalControl({ sockets, random }, socket, 'host');
   const disconnected = control.closed.then(() => {
@@ -139,6 +145,8 @@ export const connectLocalControl = async ({ sockets, random }, socketPath) => {
   disconnected.catch(() => {});
   try {
     const admin = await Promise.race([control.getAdmin(), disconnected]);
+    if (workspace !== undefined)
+      await Promise.race([E(admin).selectWorkspace(workspace), disconnected]);
     return harden({
       close: control.close,
       closed: control.closed,
