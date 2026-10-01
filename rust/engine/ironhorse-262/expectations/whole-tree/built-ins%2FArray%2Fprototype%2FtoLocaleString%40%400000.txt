@@ -15,9 +15,9 @@ built-ins/Array/prototype/toLocaleString/primitive_this_value.js strict pass
 built-ins/Array/prototype/toLocaleString/primitive_this_value_getter.js strict pass
 built-ins/Array/prototype/toLocaleString/prop-desc.js sloppy pass
 built-ins/Array/prototype/toLocaleString/prop-desc.js strict pass
-built-ins/Array/prototype/toLocaleString/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/toLocaleString/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-grow.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-grow.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-shrink.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-shrink.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Array/prototype/toLocaleString/resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/Array/prototype/toLocaleString/resizable-buffer.js strict skip:shared-positive-test-failure
+built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-grow.js sloppy skip:shared-positive-test-failure
+built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-grow.js strict skip:shared-positive-test-failure
+built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-shrink.js sloppy skip:shared-positive-test-failure
+built-ins/Array/prototype/toLocaleString/user-provided-tolocalestring-shrink.js strict skip:shared-positive-test-failure

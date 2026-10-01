@@ -6,5 +6,5 @@ language/destructuring/binding/initialization-requires-object-coercible-undefine
 language/destructuring/binding/initialization-returns-normal-completion-for-empty-objects.js sloppy pass
 language/destructuring/binding/initialization-returns-normal-completion-for-empty-objects.js strict pass
 language/destructuring/binding/keyed-destructuring-property-reference-target-evaluation-order-with-bindings.js sloppy pass
-language/destructuring/binding/typedarray-backed-by-resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-language/destructuring/binding/typedarray-backed-by-resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+language/destructuring/binding/typedarray-backed-by-resizable-buffer.js sloppy skip:shared-positive-test-failure
+language/destructuring/binding/typedarray-backed-by-resizable-buffer.js strict skip:shared-positive-test-failure

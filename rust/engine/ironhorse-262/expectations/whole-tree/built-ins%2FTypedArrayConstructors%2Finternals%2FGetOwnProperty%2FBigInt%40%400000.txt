@@ -7,8 +7,8 @@ built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/detached-buffer
 built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/detached-buffer-realm.js strict skip:shared-positive-test-failure
 built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/detached-buffer.js sloppy pass
 built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/detached-buffer.js strict pass
-built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/enumerate-detached-buffer.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number0») to be true (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/enumerate-detached-buffer.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number0») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/enumerate-detached-buffer.js sloppy pass
+built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/enumerate-detached-buffer.js strict pass
 built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/index-prop-desc.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/index-prop-desc.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArrayConstructors/internals/GetOwnProperty/BigInt/key-is-minus-zero.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable

@@ -1,6 +1,6 @@
 # engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/includes tip=be13516fb6441b950ba8a3df97eb34062c186972
-built-ins/TypedArray/prototype/includes/coerced-searchelement-fromindex-resize.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/includes/coerced-searchelement-fromindex-resize.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/includes/coerced-searchelement-fromindex-resize.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/includes/coerced-searchelement-fromindex-resize.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/includes/detached-buffer-during-fromIndex-returns-false-for-zero.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/includes/detached-buffer-during-fromIndex-returns-false-for-zero.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/includes/detached-buffer-during-fromIndex-returns-true-for-undefined.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
@@ -33,10 +33,10 @@ built-ins/TypedArray/prototype/includes/not-a-constructor.js sloppy pass
 built-ins/TypedArray/prototype/includes/not-a-constructor.js strict pass
 built-ins/TypedArray/prototype/includes/prop-desc.js sloppy pass
 built-ins/TypedArray/prototype/includes/prop-desc.js strict pass
-built-ins/TypedArray/prototype/includes/resizable-buffer-special-float-values.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/includes/resizable-buffer-special-float-values.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/includes/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/includes/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/includes/resizable-buffer-special-float-values.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/includes/resizable-buffer-special-float-values.js strict skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/includes/resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/includes/resizable-buffer.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/includes/return-abrupt-from-this-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/includes/return-abrupt-from-this-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/includes/return-abrupt-tointeger-fromindex-symbol.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable

@@ -23,8 +23,8 @@ built-ins/TypedArray/prototype/toLocaleString/not-a-constructor.js sloppy pass
 built-ins/TypedArray/prototype/toLocaleString/not-a-constructor.js strict pass
 built-ins/TypedArray/prototype/toLocaleString/prop-desc.js sloppy pass
 built-ins/TypedArray/prototype/toLocaleString/prop-desc.js strict pass
-built-ins/TypedArray/prototype/toLocaleString/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/toLocaleString/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/toLocaleString/resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/toLocaleString/resizable-buffer.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/toLocaleString/return-abrupt-from-firstelement-tolocalestring.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/toLocaleString/return-abrupt-from-firstelement-tolocalestring.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/toLocaleString/return-abrupt-from-firstelement-tostring.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
@@ -45,7 +45,7 @@ built-ins/TypedArray/prototype/toLocaleString/this-is-not-object.js sloppy pass
 built-ins/TypedArray/prototype/toLocaleString/this-is-not-object.js strict pass
 built-ins/TypedArray/prototype/toLocaleString/this-is-not-typedarray-instance.js sloppy pass
 built-ins/TypedArray/prototype/toLocaleString/this-is-not-typedarray-instance.js strict pass
-built-ins/TypedArray/prototype/toLocaleString/user-provided-tolocalestring-grow.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/toLocaleString/user-provided-tolocalestring-grow.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/toLocaleString/user-provided-tolocalestring-shrink.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/toLocaleString/user-provided-tolocalestring-shrink.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/toLocaleString/user-provided-tolocalestring-grow.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/toLocaleString/user-provided-tolocalestring-grow.js strict skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/toLocaleString/user-provided-tolocalestring-shrink.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/toLocaleString/user-provided-tolocalestring-shrink.js strict skip:shared-positive-test-failure

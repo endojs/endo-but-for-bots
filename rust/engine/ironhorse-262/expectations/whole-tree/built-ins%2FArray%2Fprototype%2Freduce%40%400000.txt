@@ -7,8 +7,8 @@ built-ins/Array/prototype/reduce/15.4.4.21-1-11.js sloppy pass
 built-ins/Array/prototype/reduce/15.4.4.21-1-11.js strict pass
 built-ins/Array/prototype/reduce/15.4.4.21-1-12.js sloppy pass
 built-ins/Array/prototype/reduce/15.4.4.21-1-12.js strict pass
-built-ins/Array/prototype/reduce/15.4.4.21-1-13.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Array.prototype.reduce.call(JSON, callbackfn, 1) !== true"
-built-ins/Array/prototype/reduce/15.4.4.21-1-13.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Array.prototype.reduce.call(JSON, callbackfn, 1) !== true"
+built-ins/Array/prototype/reduce/15.4.4.21-1-13.js sloppy pass
+built-ins/Array/prototype/reduce/15.4.4.21-1-13.js strict pass
 built-ins/Array/prototype/reduce/15.4.4.21-1-14.js sloppy pass
 built-ins/Array/prototype/reduce/15.4.4.21-1-14.js strict pass
 built-ins/Array/prototype/reduce/15.4.4.21-1-15.js sloppy pass

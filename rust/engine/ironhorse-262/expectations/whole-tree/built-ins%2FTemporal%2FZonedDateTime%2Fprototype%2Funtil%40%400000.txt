@@ -88,8 +88,8 @@ built-ins/Temporal/ZonedDateTime/prototype/until/does-not-include-higher-units-t
 built-ins/Temporal/ZonedDateTime/prototype/until/exact-multiple-of-larger-unit.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/exact-multiple-of-larger-unit.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/float64-representable-integer.js sloppy fail:"ironhorse-worker-panic:attempt to add with overflow"
-built-ins/Temporal/ZonedDateTime/prototype/until/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/ZonedDateTime/prototype/until/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/ZonedDateTime/prototype/until/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/until/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/invalid-increments.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/invalid-increments.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/largestunit-default.js sloppy skip:oracle-host-missing-global:Temporal
@@ -102,8 +102,8 @@ built-ins/Temporal/ZonedDateTime/prototype/until/largestunit-smallestunit-mismat
 built-ins/Temporal/ZonedDateTime/prototype/until/largestunit-smallestunit-mismatch.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/largestunit-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/largestunit-undefined.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/ZonedDateTime/prototype/until/largestunit-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/prototype/until/largestunit-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/until/largestunit-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/until/largestunit-wrong-type.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/leap-second.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/leap-second.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/length.js sloppy skip:oracle-host-missing-temporal
@@ -168,8 +168,8 @@ built-ins/Temporal/ZonedDateTime/prototype/until/roundingmode-trunc.js sloppy sk
 built-ins/Temporal/ZonedDateTime/prototype/until/roundingmode-trunc.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/roundingmode-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/roundingmode-undefined.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/ZonedDateTime/prototype/until/roundingmode-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/prototype/until/roundingmode-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/until/roundingmode-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/until/roundingmode-wrong-type.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/rounds-relative-to-receiver.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/rounds-relative-to-receiver.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/same-epoch-nanoseconds.js sloppy skip:oracle-host-missing-temporal
@@ -180,8 +180,8 @@ built-ins/Temporal/ZonedDateTime/prototype/until/smallestunit-plurals-accepted.j
 built-ins/Temporal/ZonedDateTime/prototype/until/smallestunit-plurals-accepted.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/smallestunit-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/smallestunit-undefined.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/ZonedDateTime/prototype/until/smallestunit-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/prototype/until/smallestunit-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/prototype/until/smallestunit-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/until/smallestunit-wrong-type.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/subseconds.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/subseconds.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/until/until-since.js sloppy skip:oracle-host-missing-temporal

@@ -159,14 +159,14 @@ language/expressions/class/elements/private-arrow-fnc-init-err-contains-argument
 language/expressions/class/elements/private-arrow-fnc-init-err-contains-arguments.js strict pass
 language/expressions/class/elements/private-arrow-fnc-init-err-contains-super.js sloppy pass
 language/expressions/class/elements/private-arrow-fnc-init-err-contains-super.js strict pass
-language/expressions/class/elements/private-async-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
-language/expressions/class/elements/private-async-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
-language/expressions/class/elements/private-async-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
-language/expressions/class/elements/private-async-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
-language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-1.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
-language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-1.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
-language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-2.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
-language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-2.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/expressions/class/elements/private-async-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/expressions/class/elements/private-async-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/expressions/class/elements/private-async-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/expressions/class/elements/private-async-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-1.js sloppy pass
+language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-1.js strict pass
+language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-2.js sloppy pass
+language/expressions/class/elements/private-derived-cls-direct-eval-contains-superproperty-2.js strict pass
 language/expressions/class/elements/private-derived-cls-direct-eval-err-contains-supercall-1.js sloppy pass
 language/expressions/class/elements/private-derived-cls-direct-eval-err-contains-supercall-1.js strict pass
 language/expressions/class/elements/private-derived-cls-direct-eval-err-contains-supercall-2.js sloppy pass
@@ -183,10 +183,10 @@ language/expressions/class/elements/private-derived-cls-indirect-eval-err-contai
 language/expressions/class/elements/private-derived-cls-indirect-eval-err-contains-supercall-2.js strict pass
 language/expressions/class/elements/private-derived-cls-indirect-eval-err-contains-supercall.js sloppy pass
 language/expressions/class/elements/private-derived-cls-indirect-eval-err-contains-supercall.js strict pass
-language/expressions/class/elements/private-direct-eval-err-contains-arguments.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a ReferenceError"
-language/expressions/class/elements/private-direct-eval-err-contains-arguments.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a ReferenceError"
-language/expressions/class/elements/private-direct-eval-err-contains-newtarget.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid new.target"
-language/expressions/class/elements/private-direct-eval-err-contains-newtarget.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid new.target"
+language/expressions/class/elements/private-direct-eval-err-contains-arguments.js sloppy pass
+language/expressions/class/elements/private-direct-eval-err-contains-arguments.js strict pass
+language/expressions/class/elements/private-direct-eval-err-contains-newtarget.js sloppy pass
+language/expressions/class/elements/private-direct-eval-err-contains-newtarget.js strict pass
 language/expressions/class/elements/private-field-access-on-inner-arrow-function.js sloppy pass
 language/expressions/class/elements/private-field-access-on-inner-arrow-function.js strict pass
 language/expressions/class/elements/private-field-access-on-inner-function.js sloppy pass

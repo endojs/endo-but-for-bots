@@ -61,5 +61,5 @@ built-ins/Object/defineProperties/property-description-must-be-an-object-not-und
 built-ins/Object/defineProperties/property-description-must-be-an-object-not-undefined.js strict pass
 built-ins/Object/defineProperties/proxy-no-ownkeys-returned-keys-order.js sloppy pass
 built-ins/Object/defineProperties/proxy-no-ownkeys-returned-keys-order.js strict pass
-built-ins/Object/defineProperties/typedarray-backed-by-resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/Object/defineProperties/typedarray-backed-by-resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/Object/defineProperties/typedarray-backed-by-resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/Object/defineProperties/typedarray-backed-by-resizable-buffer.js strict skip:shared-positive-test-failure

@@ -3,10 +3,10 @@ built-ins/TypedArray/prototype/slice/arraylength-internal.js sloppy pass
 built-ins/TypedArray/prototype/slice/arraylength-internal.js strict pass
 built-ins/TypedArray/prototype/slice/bit-precision.js sloppy pass
 built-ins/TypedArray/prototype/slice/bit-precision.js strict pass
-built-ins/TypedArray/prototype/slice/coerced-start-end-grow.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/slice/coerced-start-end-grow.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/slice/coerced-start-end-shrink.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/slice/coerced-start-end-shrink.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/slice/coerced-start-end-grow.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/slice/coerced-start-end-grow.js strict skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/slice/coerced-start-end-shrink.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/slice/coerced-start-end-shrink.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/slice/detached-buffer-custom-ctor-other-targettype.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/slice/detached-buffer-custom-ctor-other-targettype.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/slice/detached-buffer-custom-ctor-same-targettype.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
@@ -37,8 +37,8 @@ built-ins/TypedArray/prototype/slice/not-a-constructor.js sloppy pass
 built-ins/TypedArray/prototype/slice/not-a-constructor.js strict pass
 built-ins/TypedArray/prototype/slice/prop-desc.js sloppy pass
 built-ins/TypedArray/prototype/slice/prop-desc.js strict pass
-built-ins/TypedArray/prototype/slice/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/slice/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/slice/resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/slice/resizable-buffer.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/slice/resize-count-bytes-to-zero.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/slice/resize-count-bytes-to-zero.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/slice/result-does-not-copy-ordinary-properties.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
@@ -95,8 +95,8 @@ built-ins/TypedArray/prototype/slice/speciesctor-get-species-use-default-ctor.js
 built-ins/TypedArray/prototype/slice/speciesctor-get-species-use-default-ctor.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/slice/speciesctor-get-species.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/slice/speciesctor-get-species.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/slice/speciesctor-resize.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/slice/speciesctor-resize.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/slice/speciesctor-resize.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/slice/speciesctor-resize.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/slice/speciesctor-return-same-buffer-with-offset.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Actual [20, 30, 40, 60] and expected [20, 20, 20, 60] should have the same contents.  (Testing with Float64Array and makePassthrough.)"
 built-ins/TypedArray/prototype/slice/speciesctor-return-same-buffer-with-offset.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Actual [20, 30, 40, 60] and expected [20, 20, 20, 60] should have the same contents.  (Testing with Float64Array and makePassthrough.)"
 built-ins/TypedArray/prototype/slice/this-is-not-object.js sloppy pass

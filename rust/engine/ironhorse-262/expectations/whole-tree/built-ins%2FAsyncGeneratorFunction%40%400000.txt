@@ -5,8 +5,8 @@ built-ins/AsyncGeneratorFunction/has-instance.js sloppy pass
 built-ins/AsyncGeneratorFunction/has-instance.js strict pass
 built-ins/AsyncGeneratorFunction/instance-await-expr-in-param.js sloppy pass
 built-ins/AsyncGeneratorFunction/instance-await-expr-in-param.js strict pass
-built-ins/AsyncGeneratorFunction/instance-construct-throws.js sloppy skip:unsupported-opcode:async-generator:new-target
-built-ins/AsyncGeneratorFunction/instance-construct-throws.js strict skip:unsupported-opcode:async-generator:new-target
+built-ins/AsyncGeneratorFunction/instance-construct-throws.js sloppy pass
+built-ins/AsyncGeneratorFunction/instance-construct-throws.js strict pass
 built-ins/AsyncGeneratorFunction/instance-length.js sloppy pass
 built-ins/AsyncGeneratorFunction/instance-length.js strict pass
 built-ins/AsyncGeneratorFunction/instance-name.js sloppy pass
@@ -33,15 +33,3 @@ built-ins/AsyncGeneratorFunction/proto-from-ctor-realm-prototype.js sloppy skip:
 built-ins/AsyncGeneratorFunction/proto-from-ctor-realm-prototype.js strict skip:shared-positive-test-failure
 built-ins/AsyncGeneratorFunction/proto-from-ctor-realm.js sloppy skip:shared-positive-test-failure
 built-ins/AsyncGeneratorFunction/proto-from-ctor-realm.js strict skip:shared-positive-test-failure
-built-ins/AsyncGeneratorFunction/prototype/Symbol.toStringTag.js sloppy pass
-built-ins/AsyncGeneratorFunction/prototype/Symbol.toStringTag.js strict pass
-built-ins/AsyncGeneratorFunction/prototype/constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: constructor descriptor should not be writable"
-built-ins/AsyncGeneratorFunction/prototype/constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: constructor descriptor should not be writable"
-built-ins/AsyncGeneratorFunction/prototype/extensibility.js sloppy pass
-built-ins/AsyncGeneratorFunction/prototype/extensibility.js strict pass
-built-ins/AsyncGeneratorFunction/prototype/not-callable.js sloppy pass
-built-ins/AsyncGeneratorFunction/prototype/not-callable.js strict pass
-built-ins/AsyncGeneratorFunction/prototype/prop-desc.js sloppy pass
-built-ins/AsyncGeneratorFunction/prototype/prop-desc.js strict pass
-built-ins/AsyncGeneratorFunction/prototype/prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: prototype descriptor should be configurable"
-built-ins/AsyncGeneratorFunction/prototype/prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: prototype descriptor should be configurable"

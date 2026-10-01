@@ -7,8 +7,8 @@ built-ins/Math/max/S15.8.2.11_A1.js sloppy pass
 built-ins/Math/max/S15.8.2.11_A1.js strict pass
 built-ins/Math/max/S15.8.2.11_A2.js sloppy pass
 built-ins/Math/max/S15.8.2.11_A2.js strict pass
-built-ins/Math/max/S15.8.2.11_A4.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number2») to be true"
-built-ins/Math/max/S15.8.2.11_A4.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number2») to be true"
+built-ins/Math/max/S15.8.2.11_A4.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of Math.max.length is expected to be 2 Expected SameValue(«0», «2») to be true"
+built-ins/Math/max/S15.8.2.11_A4.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of Math.max.length is expected to be 2 Expected SameValue(«0», «2») to be true"
 built-ins/Math/max/length.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
 built-ins/Math/max/length.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: length descriptor value should be 2; length value should be 2"
 built-ins/Math/max/name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: name descriptor value should be max; name value should be max"

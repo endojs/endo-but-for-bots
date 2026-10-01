@@ -193,9 +193,9 @@ built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-9.js sloppy fail:"ironhorse
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-9.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-90.js sloppy pass
 built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-90.js strict pass
-built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-91.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-91.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-92.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-92.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-93.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
-built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-93.js strict fail:"ironhorse threw where the oracle completed: TypeError: cannot coerce undefined to object"
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-91.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-91.js strict pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-92.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-92.js strict pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-93.js sloppy pass
+built-ins/Object/getOwnPropertyDescriptor/15.2.3.3-4-93.js strict pass

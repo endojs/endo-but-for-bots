@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=built-ins/Object/preventExtensions tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/Object/preventExtensions/15.2.3.10-0-1.js sloppy pass
 built-ins/Object/preventExtensions/15.2.3.10-0-1.js strict pass
-built-ins/Object/preventExtensions/15.2.3.10-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
-built-ins/Object/preventExtensions/15.2.3.10-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+built-ins/Object/preventExtensions/15.2.3.10-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.preventExtensions.length Expected SameValue(«0», «1») to be true"
+built-ins/Object/preventExtensions/15.2.3.10-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.preventExtensions.length Expected SameValue(«0», «1») to be true"
 built-ins/Object/preventExtensions/15.2.3.10-1-1.js sloppy pass
 built-ins/Object/preventExtensions/15.2.3.10-1-1.js strict pass
 built-ins/Object/preventExtensions/15.2.3.10-1-2.js sloppy pass

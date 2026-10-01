@@ -7,8 +7,8 @@ language/literals/regexp/7.8.5-2gs.js sloppy pass
 language/literals/regexp/7.8.5-2gs.js strict pass
 language/literals/regexp/S7.8.5_A1.1_T1.js sloppy pass
 language/literals/regexp/S7.8.5_A1.1_T1.js strict pass
-language/literals/regexp/S7.8.5_A1.1_T2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"�\"», «string\"\\ud800\"») to be true"
-language/literals/regexp/S7.8.5_A1.1_T2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"�\"», «string\"\\ud800\"») to be true"
+language/literals/regexp/S7.8.5_A1.1_T2.js sloppy pass
+language/literals/regexp/S7.8.5_A1.1_T2.js strict pass
 language/literals/regexp/S7.8.5_A1.2_T1.js sloppy pass
 language/literals/regexp/S7.8.5_A1.2_T1.js strict pass
 language/literals/regexp/S7.8.5_A1.2_T2.js sloppy pass
@@ -31,8 +31,8 @@ language/literals/regexp/S7.8.5_A1.3_T6.js sloppy pass
 language/literals/regexp/S7.8.5_A1.3_T6.js strict pass
 language/literals/regexp/S7.8.5_A1.4_T1.js sloppy pass
 language/literals/regexp/S7.8.5_A1.4_T1.js strict pass
-language/literals/regexp/S7.8.5_A1.4_T2.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: line 1: invalid regular expression"
-language/literals/regexp/S7.8.5_A1.4_T2.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: line 1: invalid regular expression"
+language/literals/regexp/S7.8.5_A1.4_T2.js sloppy pass
+language/literals/regexp/S7.8.5_A1.4_T2.js strict pass
 language/literals/regexp/S7.8.5_A1.5_T1.js sloppy pass
 language/literals/regexp/S7.8.5_A1.5_T1.js strict pass
 language/literals/regexp/S7.8.5_A1.5_T2.js sloppy pass
@@ -47,8 +47,8 @@ language/literals/regexp/S7.8.5_A1.5_T6.js sloppy pass
 language/literals/regexp/S7.8.5_A1.5_T6.js strict pass
 language/literals/regexp/S7.8.5_A2.1_T1.js sloppy pass
 language/literals/regexp/S7.8.5_A2.1_T1.js strict pass
-language/literals/regexp/S7.8.5_A2.1_T2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"nnnn�\"», «string\"nnnn\\ud800\"») to be true"
-language/literals/regexp/S7.8.5_A2.1_T2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"nnnn�\"», «string\"nnnn\\ud800\"») to be true"
+language/literals/regexp/S7.8.5_A2.1_T2.js sloppy pass
+language/literals/regexp/S7.8.5_A2.1_T2.js strict pass
 language/literals/regexp/S7.8.5_A2.2_T1.js sloppy pass
 language/literals/regexp/S7.8.5_A2.2_T1.js strict pass
 language/literals/regexp/S7.8.5_A2.2_T2.js sloppy pass
@@ -67,8 +67,8 @@ language/literals/regexp/S7.8.5_A2.3_T6.js sloppy pass
 language/literals/regexp/S7.8.5_A2.3_T6.js strict pass
 language/literals/regexp/S7.8.5_A2.4_T1.js sloppy pass
 language/literals/regexp/S7.8.5_A2.4_T1.js strict pass
-language/literals/regexp/S7.8.5_A2.4_T2.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: line 1: invalid regular expression"
-language/literals/regexp/S7.8.5_A2.4_T2.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: line 1: invalid regular expression"
+language/literals/regexp/S7.8.5_A2.4_T2.js sloppy pass
+language/literals/regexp/S7.8.5_A2.4_T2.js strict pass
 language/literals/regexp/S7.8.5_A2.5_T1.js sloppy pass
 language/literals/regexp/S7.8.5_A2.5_T1.js strict pass
 language/literals/regexp/S7.8.5_A2.5_T2.js sloppy pass

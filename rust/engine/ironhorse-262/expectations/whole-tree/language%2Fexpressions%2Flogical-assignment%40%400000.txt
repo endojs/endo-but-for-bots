@@ -46,12 +46,12 @@ language/expressions/logical-assignment/lgcl-and-assignment-operator-bigint.js s
 language/expressions/logical-assignment/lgcl-and-assignment-operator-bigint.js strict pass
 language/expressions/logical-assignment/lgcl-and-assignment-operator-lhs-before-rhs.js sloppy pass
 language/expressions/logical-assignment/lgcl-and-assignment-operator-lhs-before-rhs.js strict pass
-language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-arrow-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-arrow-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-class-expression.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-class-expression.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-arrow-function.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-arrow-function.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-class-expression.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-class-expression.js strict pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-function.js sloppy pass
+language/expressions/logical-assignment/lgcl-and-assignment-operator-namedevaluation-function.js strict pass
 language/expressions/logical-assignment/lgcl-and-assignment-operator-no-set-put.js strict pass
 language/expressions/logical-assignment/lgcl-and-assignment-operator-no-set.js strict pass
 language/expressions/logical-assignment/lgcl-and-assignment-operator-non-extensible.js strict pass
@@ -76,12 +76,12 @@ language/expressions/logical-assignment/lgcl-nullish-assignment-operator-bigint.
 language/expressions/logical-assignment/lgcl-nullish-assignment-operator-bigint.js strict pass
 language/expressions/logical-assignment/lgcl-nullish-assignment-operator-lhs-before-rhs.js sloppy pass
 language/expressions/logical-assignment/lgcl-nullish-assignment-operator-lhs-before-rhs.js strict pass
-language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-arrow-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-arrow-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-class-expression.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-class-expression.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-arrow-function.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-arrow-function.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-class-expression.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-class-expression.js strict pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-function.js sloppy pass
+language/expressions/logical-assignment/lgcl-nullish-assignment-operator-namedevaluation-function.js strict pass
 language/expressions/logical-assignment/lgcl-nullish-assignment-operator-no-set-put.js strict pass
 language/expressions/logical-assignment/lgcl-nullish-assignment-operator-no-set.js strict pass
 language/expressions/logical-assignment/lgcl-nullish-assignment-operator-non-extensible.js strict pass
@@ -106,12 +106,12 @@ language/expressions/logical-assignment/lgcl-or-assignment-operator-bigint.js sl
 language/expressions/logical-assignment/lgcl-or-assignment-operator-bigint.js strict pass
 language/expressions/logical-assignment/lgcl-or-assignment-operator-lhs-before-rhs.js sloppy pass
 language/expressions/logical-assignment/lgcl-or-assignment-operator-lhs-before-rhs.js strict pass
-language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-arrow-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-arrow-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-class-expression.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-class-expression.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
-language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"value\"») to be true"
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-arrow-function.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-arrow-function.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-class-expression.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-class-expression.js strict pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-function.js sloppy pass
+language/expressions/logical-assignment/lgcl-or-assignment-operator-namedevaluation-function.js strict pass
 language/expressions/logical-assignment/lgcl-or-assignment-operator-no-set-put.js strict pass
 language/expressions/logical-assignment/lgcl-or-assignment-operator-no-set.js strict pass
 language/expressions/logical-assignment/lgcl-or-assignment-operator-non-extensible.js strict pass

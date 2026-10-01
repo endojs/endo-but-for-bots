@@ -1,14 +1,14 @@
 # engine=ironhorse features=default corpus=annexB/language/eval-code/direct tip=be13516fb6441b950ba8a3df97eb34062c186972
-annexB/language/eval-code/direct/block-decl-nostrict.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefined») to be true\" ironhorse=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefinedundefined») to be true\""
+annexB/language/eval-code/direct/block-decl-nostrict.js sloppy skip:shared-test262-failure
 annexB/language/eval-code/direct/func-block-decl-eval-func-block-scoping.js sloppy skip:shared-positive-test-failure
 annexB/language/eval-code/direct/func-block-decl-eval-func-existing-block-fn-no-init.js sloppy skip:shared-positive-test-failure
 annexB/language/eval-code/direct/func-block-decl-eval-func-existing-block-fn-update.js sloppy skip:shared-positive-test-failure
 annexB/language/eval-code/direct/func-block-decl-eval-func-existing-fn-no-init.js sloppy pass
-annexB/language/eval-code/direct/func-block-decl-eval-func-existing-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"outer declaration\\\"», «\\\"inner declaration\\\"») to be true\" ironhorse=\"Test262Error: string\\\"outer declaration\\\"», «string\\\"inner declaration\\\"») to be true\""
+annexB/language/eval-code/direct/func-block-decl-eval-func-existing-fn-update.js sloppy skip:shared-test262-failure
 annexB/language/eval-code/direct/func-block-decl-eval-func-existing-var-no-init.js sloppy pass
-annexB/language/eval-code/direct/func-block-decl-eval-func-existing-var-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/eval-code/direct/func-block-decl-eval-func-existing-var-update.js sloppy skip:shared-test262-failure
 annexB/language/eval-code/direct/func-block-decl-eval-func-init.js sloppy skip:shared-positive-test-failure
-annexB/language/eval-code/direct/func-block-decl-eval-func-no-skip-param.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: value is updated following evaluation Expected SameValue(«\\\"number\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"number\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/eval-code/direct/func-block-decl-eval-func-no-skip-param.js sloppy skip:shared-test262-failure
 annexB/language/eval-code/direct/func-block-decl-eval-func-no-skip-try.js sloppy skip:shared-positive-test-failure
 annexB/language/eval-code/direct/func-block-decl-eval-func-skip-early-err-block.js sloppy pass
 annexB/language/eval-code/direct/func-block-decl-eval-func-skip-early-err-for-in.js sloppy pass

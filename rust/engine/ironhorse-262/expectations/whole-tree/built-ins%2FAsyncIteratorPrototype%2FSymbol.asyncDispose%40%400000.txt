@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=built-ins/AsyncIteratorPrototype/Symbol.asyncDispose tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/invokes-return.js sloppy skip:async:reported-failure
 built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/invokes-return.js strict skip:async:reported-failure
-built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/is-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
-built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/is-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/is-function.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"undefined\"», «\"function\"») to be true"
+built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/is-function.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"undefined\"», «\"function\"») to be true"
 built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/length.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
 built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/length.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
 built-ins/AsyncIteratorPrototype/Symbol.asyncDispose/name.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: invalid object"

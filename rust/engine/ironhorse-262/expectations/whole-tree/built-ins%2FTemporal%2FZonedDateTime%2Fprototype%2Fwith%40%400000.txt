@@ -17,8 +17,8 @@ built-ins/Temporal/ZonedDateTime/prototype/with/disambiguation-wrong-type.js slo
 built-ins/Temporal/ZonedDateTime/prototype/with/disambiguation-wrong-type.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/with/incorrectly-spelled-properties-ignored.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/with/incorrectly-spelled-properties-ignored.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/prototype/with/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/ZonedDateTime/prototype/with/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/ZonedDateTime/prototype/with/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/prototype/with/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prototype/with/invalid-disambiguation.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/with/invalid-disambiguation.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/prototype/with/invalid-offset.js sloppy skip:oracle-host-missing-global:Temporal

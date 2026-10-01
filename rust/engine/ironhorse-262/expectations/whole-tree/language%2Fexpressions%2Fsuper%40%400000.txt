@@ -7,8 +7,8 @@ language/expressions/super/call-bind-this-value.js sloppy pass
 language/expressions/super/call-bind-this-value.js strict pass
 language/expressions/super/call-construct-error.js sloppy pass
 language/expressions/super/call-construct-error.js strict pass
-language/expressions/super/call-construct-invocation.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: new.target value Expected SameValue(«function [\"Child\"] (){[native code]}», «function [\"expectedNewTarget\"] (){[native code]}») to be true"
-language/expressions/super/call-construct-invocation.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: new.target value Expected SameValue(«function [\"Child\"] (){[native code]}», «function [\"expectedNewTarget\"] (){[native code]}») to be true"
+language/expressions/super/call-construct-invocation.js sloppy pass
+language/expressions/super/call-construct-invocation.js strict pass
 language/expressions/super/call-expr-value.js sloppy pass
 language/expressions/super/call-expr-value.js strict pass
 language/expressions/super/call-poisoned-underscore-proto.js sloppy pass
@@ -107,8 +107,8 @@ language/expressions/super/prop-dot-cls-this-uninit.js sloppy pass
 language/expressions/super/prop-dot-cls-this-uninit.js strict pass
 language/expressions/super/prop-dot-cls-val-from-arrow.js sloppy pass
 language/expressions/super/prop-dot-cls-val-from-arrow.js strict pass
-language/expressions/super/prop-dot-cls-val-from-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
-language/expressions/super/prop-dot-cls-val-from-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/expressions/super/prop-dot-cls-val-from-eval.js sloppy pass
+language/expressions/super/prop-dot-cls-val-from-eval.js strict pass
 language/expressions/super/prop-dot-cls-val.js sloppy pass
 language/expressions/super/prop-dot-cls-val.js strict pass
 language/expressions/super/prop-dot-obj-null-proto.js sloppy pass
@@ -119,8 +119,8 @@ language/expressions/super/prop-dot-obj-ref-this.js sloppy pass
 language/expressions/super/prop-dot-obj-ref-this.js strict pass
 language/expressions/super/prop-dot-obj-val-from-arrow.js sloppy pass
 language/expressions/super/prop-dot-obj-val-from-arrow.js strict pass
-language/expressions/super/prop-dot-obj-val-from-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
-language/expressions/super/prop-dot-obj-val-from-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/expressions/super/prop-dot-obj-val-from-eval.js sloppy pass
+language/expressions/super/prop-dot-obj-val-from-eval.js strict pass
 language/expressions/super/prop-dot-obj-val.js sloppy pass
 language/expressions/super/prop-dot-obj-val.js strict pass
 language/expressions/super/prop-expr-cls-err.js sloppy pass
@@ -139,8 +139,8 @@ language/expressions/super/prop-expr-cls-unresolvable.js sloppy pass
 language/expressions/super/prop-expr-cls-unresolvable.js strict pass
 language/expressions/super/prop-expr-cls-val-from-arrow.js sloppy pass
 language/expressions/super/prop-expr-cls-val-from-arrow.js strict pass
-language/expressions/super/prop-expr-cls-val-from-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
-language/expressions/super/prop-expr-cls-val-from-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/expressions/super/prop-expr-cls-val-from-eval.js sloppy pass
+language/expressions/super/prop-expr-cls-val-from-eval.js strict pass
 language/expressions/super/prop-expr-cls-val.js sloppy pass
 language/expressions/super/prop-expr-cls-val.js strict pass
 language/expressions/super/prop-expr-getsuperbase-before-topropertykey-getvalue.js sloppy skip:unsupported-opcode:super_at:key
@@ -165,8 +165,8 @@ language/expressions/super/prop-expr-obj-unresolvable.js sloppy pass
 language/expressions/super/prop-expr-obj-unresolvable.js strict pass
 language/expressions/super/prop-expr-obj-val-from-arrow.js sloppy pass
 language/expressions/super/prop-expr-obj-val-from-arrow.js strict pass
-language/expressions/super/prop-expr-obj-val-from-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
-language/expressions/super/prop-expr-obj-val-from-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid super"
+language/expressions/super/prop-expr-obj-val-from-eval.js sloppy pass
+language/expressions/super/prop-expr-obj-val-from-eval.js strict pass
 language/expressions/super/prop-expr-obj-val.js sloppy pass
 language/expressions/super/prop-expr-obj-val.js strict pass
 language/expressions/super/prop-expr-uninitialized-this-getvalue.js sloppy pass

@@ -7,10 +7,10 @@ built-ins/Symbol/desc-to-string-symbol.js sloppy pass
 built-ins/Symbol/desc-to-string-symbol.js strict pass
 built-ins/Symbol/desc-to-string.js sloppy pass
 built-ins/Symbol/desc-to-string.js strict pass
-built-ins/Symbol/invoked-with-new.js sloppy skip:unsupported-opcode:native-call:Symbol
-built-ins/Symbol/invoked-with-new.js strict skip:unsupported-opcode:native-call:Symbol
-built-ins/Symbol/is-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
-built-ins/Symbol/is-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Symbol/invoked-with-new.js sloppy pass
+built-ins/Symbol/invoked-with-new.js strict pass
+built-ins/Symbol/is-constructor.js sloppy pass
+built-ins/Symbol/is-constructor.js strict pass
 built-ins/Symbol/length.js sloppy pass
 built-ins/Symbol/length.js strict pass
 built-ins/Symbol/name.js sloppy pass

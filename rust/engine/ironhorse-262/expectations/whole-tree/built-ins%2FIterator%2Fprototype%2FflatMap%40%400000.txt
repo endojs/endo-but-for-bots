@@ -3,8 +3,8 @@ built-ins/Iterator/prototype/flatMap/argument-effect-order.js sloppy pass
 built-ins/Iterator/prototype/flatMap/argument-effect-order.js strict pass
 built-ins/Iterator/prototype/flatMap/argument-validation-failure-closes-underlying.js sloppy pass
 built-ins/Iterator/prototype/flatMap/argument-validation-failure-closes-underlying.js strict pass
-built-ins/Iterator/prototype/flatMap/callable.js sloppy skip:non-primitive-completion
-built-ins/Iterator/prototype/flatMap/callable.js strict skip:non-primitive-completion
+built-ins/Iterator/prototype/flatMap/callable.js sloppy pass
+built-ins/Iterator/prototype/flatMap/callable.js strict pass
 built-ins/Iterator/prototype/flatMap/exhaustion-does-not-call-return.js sloppy pass
 built-ins/Iterator/prototype/flatMap/exhaustion-does-not-call-return.js strict pass
 built-ins/Iterator/prototype/flatMap/flattens-iterable.js sloppy pass

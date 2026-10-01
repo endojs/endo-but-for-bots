@@ -9,8 +9,8 @@ built-ins/TypedArray/prototype/fill/coerced-start-detach.js sloppy skip:unsuppor
 built-ins/TypedArray/prototype/fill/coerced-start-detach.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/fill/coerced-value-detach.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/fill/coerced-value-detach.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/fill/coerced-value-start-end-resize.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/fill/coerced-value-start-end-resize.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/fill/coerced-value-start-end-resize.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/fill/coerced-value-start-end-resize.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/fill/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/fill/detached-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/fill/fill-values-conversion-once.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
@@ -47,8 +47,8 @@ built-ins/TypedArray/prototype/fill/not-a-constructor.js sloppy pass
 built-ins/TypedArray/prototype/fill/not-a-constructor.js strict pass
 built-ins/TypedArray/prototype/fill/prop-desc.js sloppy pass
 built-ins/TypedArray/prototype/fill/prop-desc.js strict pass
-built-ins/TypedArray/prototype/fill/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/fill/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/fill/resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/fill/resizable-buffer.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/fill/return-abrupt-from-end-as-symbol.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/fill/return-abrupt-from-end-as-symbol.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/fill/return-abrupt-from-end.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable

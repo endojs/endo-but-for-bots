@@ -3,5 +3,5 @@ annexB/built-ins/Date/prototype/toGMTString/not-a-constructor.js sloppy pass
 annexB/built-ins/Date/prototype/toGMTString/not-a-constructor.js strict pass
 annexB/built-ins/Date/prototype/toGMTString/prop-desc.js sloppy pass
 annexB/built-ins/Date/prototype/toGMTString/prop-desc.js strict pass
-annexB/built-ins/Date/prototype/toGMTString/value.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"\"] (){[native code]}») to be true"
-annexB/built-ins/Date/prototype/toGMTString/value.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"\"] (){[native code]}», «function [\"\"] (){[native code]}») to be true"
+annexB/built-ins/Date/prototype/toGMTString/value.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"toGMTString\"] (){[native code]}», «function [\"toUTCString\"] (){[native code]}») to be true"
+annexB/built-ins/Date/prototype/toGMTString/value.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"toGMTString\"] (){[native code]}», «function [\"toUTCString\"] (){[native code]}») to be true"

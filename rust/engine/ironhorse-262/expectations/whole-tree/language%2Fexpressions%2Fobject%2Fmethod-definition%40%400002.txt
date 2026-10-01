@@ -40,8 +40,8 @@ language/expressions/object/method-definition/meth-rest-param-strict-body.js slo
 language/expressions/object/method-definition/meth-rest-param-strict-body.js strict pass
 language/expressions/object/method-definition/meth-rest-params-trailing-comma-early-error.js sloppy pass
 language/expressions/object/method-definition/meth-rest-params-trailing-comma-early-error.js strict pass
-language/expressions/object/method-definition/name-invoke-ctor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/object/method-definition/name-invoke-ctor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/expressions/object/method-definition/name-invoke-ctor.js sloppy pass
+language/expressions/object/method-definition/name-invoke-ctor.js strict pass
 language/expressions/object/method-definition/name-invoke-fn-no-strict.js sloppy pass
 language/expressions/object/method-definition/name-invoke-fn-strict.js sloppy pass
 language/expressions/object/method-definition/name-length-dflt.js sloppy pass

@@ -17,8 +17,8 @@ built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-characterEscapes.js slo
 built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-characterEscapes.js strict pass
 built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-slash-lower-b.js sloppy pass
 built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-slash-lower-b.js strict pass
-built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-slash-lower-p.js sloppy skip:shared-test262-failure
-built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-slash-lower-p.js strict skip:shared-test262-failure
+built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-slash-lower-p.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: \\p{Lu} should match A"
+built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-slash-lower-p.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: \\p{Lu} should match A"
 built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-slash-lower-w.js sloppy pass
 built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-slash-lower-w.js strict pass
 built-ins/RegExp/regexp-modifiers/add-ignoreCase-affects-slash-upper-b.js sloppy pass

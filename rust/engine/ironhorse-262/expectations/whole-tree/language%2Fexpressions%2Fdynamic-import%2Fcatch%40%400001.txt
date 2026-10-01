@@ -4,8 +4,8 @@ language/expressions/dynamic-import/catch/nested-block-labeled-eval-rqstd-abrupt
 language/expressions/dynamic-import/catch/nested-block-labeled-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-block-labeled-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-block-labeled-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-block-labeled-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-block-labeled-import-defer-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-block-labeled-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/catch/nested-block-labeled-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
 language/expressions/dynamic-import/catch/nested-block-labeled-import-source-source-text-module.js sloppy skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-block-labeled-import-source-source-text-module.js strict skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-block-labeled-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
@@ -25,8 +25,8 @@ language/expressions/dynamic-import/catch/nested-do-while-eval-rqstd-abrupt-urie
 language/expressions/dynamic-import/catch/nested-do-while-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-do-while-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-do-while-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-do-while-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-do-while-import-defer-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-do-while-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/catch/nested-do-while-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
 language/expressions/dynamic-import/catch/nested-do-while-import-source-source-text-module.js sloppy skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-do-while-import-source-source-text-module.js strict skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-do-while-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
@@ -46,8 +46,8 @@ language/expressions/dynamic-import/catch/nested-else-import-catch-eval-rqstd-ab
 language/expressions/dynamic-import/catch/nested-else-import-catch-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-else-import-catch-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-else-import-catch-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-else-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-else-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-else-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/catch/nested-else-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
 language/expressions/dynamic-import/catch/nested-else-import-catch-import-source-source-text-module.js sloppy skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-else-import-catch-import-source-source-text-module.js strict skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-else-import-catch-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
@@ -67,8 +67,8 @@ language/expressions/dynamic-import/catch/nested-function-import-catch-eval-rqst
 language/expressions/dynamic-import/catch/nested-function-import-catch-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-function-import-catch-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-function-import-catch-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-function-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-function-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-function-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/catch/nested-function-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
 language/expressions/dynamic-import/catch/nested-function-import-catch-import-source-source-text-module.js sloppy skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-function-import-catch-import-source-source-text-module.js strict skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-function-import-catch-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
@@ -88,8 +88,8 @@ language/expressions/dynamic-import/catch/nested-if-import-catch-eval-rqstd-abru
 language/expressions/dynamic-import/catch/nested-if-import-catch-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-if-import-catch-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-if-import-catch-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-if-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-if-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-if-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/catch/nested-if-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
 language/expressions/dynamic-import/catch/nested-if-import-catch-import-source-source-text-module.js sloppy skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-if-import-catch-import-source-source-text-module.js strict skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-if-import-catch-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
@@ -109,8 +109,8 @@ language/expressions/dynamic-import/catch/nested-while-import-catch-eval-rqstd-a
 language/expressions/dynamic-import/catch/nested-while-import-catch-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-while-import-catch-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/nested-while-import-catch-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/nested-while-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/nested-while-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/nested-while-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/catch/nested-while-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
 language/expressions/dynamic-import/catch/nested-while-import-catch-import-source-source-text-module.js sloppy skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-while-import-catch-import-source-source-text-module.js strict skip:parse-or-decode
 language/expressions/dynamic-import/catch/nested-while-import-catch-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
@@ -130,8 +130,8 @@ language/expressions/dynamic-import/catch/top-level-import-catch-eval-rqstd-abru
 language/expressions/dynamic-import/catch/top-level-import-catch-eval-script-code-target.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/top-level-import-catch-file-does-not-exist.js sloppy skip:unsupported-opcode:module:dynamic-import
 language/expressions/dynamic-import/catch/top-level-import-catch-file-does-not-exist.js strict skip:unsupported-opcode:module:dynamic-import
-language/expressions/dynamic-import/catch/top-level-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode
-language/expressions/dynamic-import/catch/top-level-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict skip:parse-or-decode
+language/expressions/dynamic-import/catch/top-level-import-catch-import-defer-specifier-tostring-abrupt-rejects.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
+language/expressions/dynamic-import/catch/top-level-import-catch-import-defer-specifier-tostring-abrupt-rejects.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid import.\" ironhorse=\"SyntaxError\""
 language/expressions/dynamic-import/catch/top-level-import-catch-import-source-source-text-module.js sloppy skip:parse-or-decode
 language/expressions/dynamic-import/catch/top-level-import-catch-import-source-source-text-module.js strict skip:parse-or-decode
 language/expressions/dynamic-import/catch/top-level-import-catch-import-source-specifier-tostring-abrupt-rejects.js sloppy skip:parse-or-decode

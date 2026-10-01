@@ -39,8 +39,8 @@ language/statements/for-await-of/head-const-init.js sloppy pass
 language/statements/for-await-of/head-const-init.js strict pass
 language/statements/for-await-of/head-let-init.js sloppy pass
 language/statements/for-await-of/head-let-init.js strict pass
-language/statements/for-await-of/head-lhs-async.js sloppy skip:parse-or-decode
-language/statements/for-await-of/head-lhs-async.js strict skip:parse-or-decode
+language/statements/for-await-of/head-lhs-async.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid for await\" ironhorse=\"SyntaxError\""
+language/statements/for-await-of/head-lhs-async.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: invalid for await\" ironhorse=\"SyntaxError\""
 language/statements/for-await-of/head-using-init.js sloppy pass
 language/statements/for-await-of/head-using-init.js strict pass
 language/statements/for-await-of/head-var-init.js sloppy pass

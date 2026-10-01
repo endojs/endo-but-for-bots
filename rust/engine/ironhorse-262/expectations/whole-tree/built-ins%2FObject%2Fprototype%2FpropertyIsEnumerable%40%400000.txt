@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=built-ins/Object/prototype/propertyIsEnumerable tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A10.js sloppy pass
 built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A10.js strict pass
-built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A11.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
-built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A11.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A11.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of Object.prototype.propertyIsEnumerable.length is expected to be 1 Expected SameValue(«0», «1») to be true"
+built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A11.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of Object.prototype.propertyIsEnumerable.length is expected to be 1 Expected SameValue(«0», «1») to be true"
 built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A12.js sloppy pass
 built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A12.js strict pass
 built-ins/Object/prototype/propertyIsEnumerable/S15.2.4.7_A13.js sloppy pass

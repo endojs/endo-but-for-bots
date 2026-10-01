@@ -7,8 +7,8 @@ built-ins/Array/prototype/forEach/15.4.4.18-1-11.js sloppy pass
 built-ins/Array/prototype/forEach/15.4.4.18-1-11.js strict pass
 built-ins/Array/prototype/forEach/15.4.4.18-1-12.js sloppy pass
 built-ins/Array/prototype/forEach/15.4.4.18-1-12.js strict pass
-built-ins/Array/prototype/forEach/15.4.4.18-1-13.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: result !== true"
-built-ins/Array/prototype/forEach/15.4.4.18-1-13.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: result !== true"
+built-ins/Array/prototype/forEach/15.4.4.18-1-13.js sloppy pass
+built-ins/Array/prototype/forEach/15.4.4.18-1-13.js strict pass
 built-ins/Array/prototype/forEach/15.4.4.18-1-14.js sloppy pass
 built-ins/Array/prototype/forEach/15.4.4.18-1-14.js strict pass
 built-ins/Array/prototype/forEach/15.4.4.18-1-15.js sloppy pass
@@ -190,8 +190,8 @@ built-ins/Array/prototype/forEach/15.4.4.18-7-3.js sloppy pass
 built-ins/Array/prototype/forEach/15.4.4.18-7-3.js strict pass
 built-ins/Array/prototype/forEach/15.4.4.18-7-4.js sloppy pass
 built-ins/Array/prototype/forEach/15.4.4.18-7-4.js strict pass
-built-ins/Array/prototype/forEach/15.4.4.18-7-5.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number4», «number5») to be true"
-built-ins/Array/prototype/forEach/15.4.4.18-7-5.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number4», «number5») to be true"
+built-ins/Array/prototype/forEach/15.4.4.18-7-5.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: callCnt Expected SameValue(«4», «5») to be true"
+built-ins/Array/prototype/forEach/15.4.4.18-7-5.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: callCnt Expected SameValue(«4», «5») to be true"
 built-ins/Array/prototype/forEach/15.4.4.18-7-7.js sloppy pass
 built-ins/Array/prototype/forEach/15.4.4.18-7-7.js strict pass
 built-ins/Array/prototype/forEach/15.4.4.18-7-8.js sloppy pass

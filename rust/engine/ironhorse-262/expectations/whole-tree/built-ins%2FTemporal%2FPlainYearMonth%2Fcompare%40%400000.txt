@@ -59,8 +59,8 @@ built-ins/Temporal/PlainYearMonth/compare/calendar-temporal-object.js sloppy ski
 built-ins/Temporal/PlainYearMonth/compare/calendar-temporal-object.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/compare/compare-reference-day.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/compare/compare-reference-day.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/PlainYearMonth/compare/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainYearMonth/compare/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainYearMonth/compare/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/compare/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/compare/leap-second.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainYearMonth/compare/leap-second.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainYearMonth/compare/length.js sloppy skip:oracle-host-missing-temporal

@@ -9,8 +9,8 @@ built-ins/TypedArrayConstructors/ctors-bigint/object-arg/bigint-tobiguint64.js s
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/bigint-tobiguint64.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/boolean-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/boolean-tobigint.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/custom-proto-access-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/custom-proto-access-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/custom-proto-access-throws.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/custom-proto-access-throws.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/iterating-throws.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/iterating-throws.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/iterator-not-callable-throws.js sloppy pass
@@ -57,7 +57,7 @@ built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-newtarget-thr
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-newtarget-throws.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-tobigint.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/undefined-tobigint.js strict pass
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-custom-proto-if-object.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"BigInt64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-custom-proto-if-object.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"BigInt64Array\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-custom-proto-if-object.js sloppy pass
+built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-custom-proto-if-object.js strict pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-default-proto-if-custom-proto-is-not-object.js sloppy pass
 built-ins/TypedArrayConstructors/ctors-bigint/object-arg/use-default-proto-if-custom-proto-is-not-object.js strict pass

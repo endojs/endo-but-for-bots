@@ -125,10 +125,10 @@ language/expressions/class/elements/same-line-method-static-private-methods.js s
 language/expressions/class/elements/same-line-method-static-private-methods.js strict pass
 language/expressions/class/elements/same-line-method-string-literal-names.js sloppy pass
 language/expressions/class/elements/same-line-method-string-literal-names.js strict pass
-language/expressions/class/elements/static-as-valid-instance-field-assigned.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: static should be an own property"
-language/expressions/class/elements/static-as-valid-instance-field-assigned.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: static should be an own property"
-language/expressions/class/elements/static-as-valid-instance-field.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: static should be an own property"
-language/expressions/class/elements/static-as-valid-instance-field.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: static should be an own property"
+language/expressions/class/elements/static-as-valid-instance-field-assigned.js sloppy pass
+language/expressions/class/elements/static-as-valid-instance-field-assigned.js strict pass
+language/expressions/class/elements/static-as-valid-instance-field.js sloppy pass
+language/expressions/class/elements/static-as-valid-instance-field.js strict pass
 language/expressions/class/elements/static-as-valid-static-field-assigned.js sloppy pass
 language/expressions/class/elements/static-as-valid-static-field-assigned.js strict pass
 language/expressions/class/elements/static-as-valid-static-field.js sloppy pass
@@ -139,8 +139,8 @@ language/expressions/class/elements/static-comp-name-init-err-contains-super.js 
 language/expressions/class/elements/static-comp-name-init-err-contains-super.js strict pass
 language/expressions/class/elements/static-field-anonymous-function-length.js sloppy pass
 language/expressions/class/elements/static-field-anonymous-function-length.js strict pass
-language/expressions/class/elements/static-field-anonymous-function-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#field\"») to be true"
-language/expressions/class/elements/static-field-anonymous-function-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#field\"») to be true"
+language/expressions/class/elements/static-field-anonymous-function-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#field\"») to be true"
+language/expressions/class/elements/static-field-anonymous-function-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#field\"») to be true"
 language/expressions/class/elements/static-field-declaration.js sloppy pass
 language/expressions/class/elements/static-field-declaration.js strict pass
 language/expressions/class/elements/static-field-init-this-inside-arrow-function.js sloppy pass

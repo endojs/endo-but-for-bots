@@ -150,8 +150,8 @@ language/expressions/object/method-definition/gen-yield-spread-arr-single.js slo
 language/expressions/object/method-definition/gen-yield-spread-arr-single.js strict pass
 language/expressions/object/method-definition/gen-yield-spread-obj.js sloppy pass
 language/expressions/object/method-definition/gen-yield-spread-obj.js strict pass
-language/expressions/object/method-definition/generator-invoke-ctor.js sloppy skip:unsupported-opcode:generator:new-target
-language/expressions/object/method-definition/generator-invoke-ctor.js strict skip:unsupported-opcode:generator:new-target
+language/expressions/object/method-definition/generator-invoke-ctor.js sloppy pass
+language/expressions/object/method-definition/generator-invoke-ctor.js strict pass
 language/expressions/object/method-definition/generator-invoke-fn-no-strict.js sloppy pass
 language/expressions/object/method-definition/generator-invoke-fn-strict.js sloppy pass
 language/expressions/object/method-definition/generator-length-dflt.js sloppy pass

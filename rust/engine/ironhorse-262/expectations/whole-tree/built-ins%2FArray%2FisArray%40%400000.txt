@@ -1,14 +1,14 @@
 # engine=ironhorse features=default corpus=built-ins/Array/isArray tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/Array/isArray/15.4.3.2-0-1.js sloppy pass
 built-ins/Array/isArray/15.4.3.2-0-1.js strict pass
-built-ins/Array/isArray/15.4.3.2-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
-built-ins/Array/isArray/15.4.3.2-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+built-ins/Array/isArray/15.4.3.2-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of Array.isArray.length is expected to be 1 Expected SameValue(«0», «1») to be true"
+built-ins/Array/isArray/15.4.3.2-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of Array.isArray.length is expected to be 1 Expected SameValue(«0», «1») to be true"
 built-ins/Array/isArray/15.4.3.2-0-3.js sloppy pass
 built-ins/Array/isArray/15.4.3.2-0-3.js strict pass
 built-ins/Array/isArray/15.4.3.2-0-4.js sloppy pass
 built-ins/Array/isArray/15.4.3.2-0-4.js strict pass
-built-ins/Array/isArray/15.4.3.2-0-5.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «booleantrue») to be true"
-built-ins/Array/isArray/15.4.3.2-0-5.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «booleantrue») to be true"
+built-ins/Array/isArray/15.4.3.2-0-5.js sloppy pass
+built-ins/Array/isArray/15.4.3.2-0-5.js strict pass
 built-ins/Array/isArray/15.4.3.2-0-6.js sloppy pass
 built-ins/Array/isArray/15.4.3.2-0-6.js strict pass
 built-ins/Array/isArray/15.4.3.2-0-7.js sloppy pass

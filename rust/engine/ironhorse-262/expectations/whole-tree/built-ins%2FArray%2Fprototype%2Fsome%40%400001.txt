@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=built-ins/Array/prototype/some tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/Array/prototype/some/15.4.4.17-7-5.js sloppy pass
 built-ins/Array/prototype/some/15.4.4.17-7-5.js strict pass
-built-ins/Array/prototype/some/15.4.4.17-7-6.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «booleantrue») to be true"
-built-ins/Array/prototype/some/15.4.4.17-7-6.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «booleantrue») to be true"
+built-ins/Array/prototype/some/15.4.4.17-7-6.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: res Expected SameValue(«false», «true») to be true"
+built-ins/Array/prototype/some/15.4.4.17-7-6.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: res Expected SameValue(«false», «true») to be true"
 built-ins/Array/prototype/some/15.4.4.17-7-8.js sloppy pass
 built-ins/Array/prototype/some/15.4.4.17-7-8.js strict pass
 built-ins/Array/prototype/some/15.4.4.17-7-9.js sloppy pass

@@ -23,8 +23,8 @@ built-ins/AggregateError/name.js sloppy pass
 built-ins/AggregateError/name.js strict pass
 built-ins/AggregateError/newtarget-is-undefined.js sloppy pass
 built-ins/AggregateError/newtarget-is-undefined.js strict pass
-built-ins/AggregateError/newtarget-proto-custom.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«AggregateError», «[object Object]») to be true"
-built-ins/AggregateError/newtarget-proto-custom.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«AggregateError», «[object Object]») to be true"
+built-ins/AggregateError/newtarget-proto-custom.js sloppy pass
+built-ins/AggregateError/newtarget-proto-custom.js strict pass
 built-ins/AggregateError/newtarget-proto-fallback.js sloppy pass
 built-ins/AggregateError/newtarget-proto-fallback.js strict pass
 built-ins/AggregateError/newtarget-proto.js sloppy pass

@@ -31,8 +31,8 @@ built-ins/Temporal/PlainTime/from/argument-string-multiple-time-zone.js sloppy f
 built-ins/Temporal/PlainTime/from/argument-string-multiple-time-zone.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject more than one time zone annotation: 00:00[UTC][UTC] Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject more than one time zone annotation: 00:00[UTC][UTC] Expected a RangeError to be thrown but no exception was thrown at all\""
 built-ins/Temporal/PlainTime/from/argument-string-no-implicit-midnight.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Date-only string throws, does not implicitly convert to midnight Expected a RangeError but got a ReferenceError"
 built-ins/Temporal/PlainTime/from/argument-string-no-implicit-midnight.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Date-only string throws, does not implicitly convert to midnight Expected a RangeError but got a ReferenceError"
-built-ins/Temporal/PlainTime/from/argument-string-time-designator-required-for-disambiguation.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: '2021-12' is ambiguous and requires T prefix Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
-built-ins/Temporal/PlainTime/from/argument-string-time-designator-required-for-disambiguation.js strict fail:"abort-value-differs: oracle=\"Test262Error: '2021-12' is ambiguous and requires T prefix Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/PlainTime/from/argument-string-time-designator-required-for-disambiguation.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: '2021-12' is ambiguous and requires T prefix Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal: invalid date/time string\""
+built-ins/Temporal/PlainTime/from/argument-string-time-designator-required-for-disambiguation.js strict fail:"abort-value-differs: oracle=\"Test262Error: '2021-12' is ambiguous and requires T prefix Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal: invalid date/time string\""
 built-ins/Temporal/PlainTime/from/argument-string-time-separators.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainTime/from/argument-string-time-separators.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainTime/from/argument-string-time-zone-annotation.js sloppy skip:oracle-host-missing-global:Temporal
@@ -57,8 +57,8 @@ built-ins/Temporal/PlainTime/from/argument-zoneddatetime-negative-epochnanosecon
 built-ins/Temporal/PlainTime/from/argument-zoneddatetime-negative-epochnanoseconds.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainTime/from/builtin.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainTime/from/builtin.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/PlainTime/from/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainTime/from/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainTime/from/infinity-throws-rangeerror.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: hour property cannot be Infinity (overflow constrain Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/PlainTime/from/infinity-throws-rangeerror.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: hour property cannot be Infinity (overflow constrain Expected a RangeError but got a ReferenceError"
 built-ins/Temporal/PlainTime/from/leap-second.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainTime/from/leap-second.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainTime/from/length.js sloppy skip:oracle-host-missing-temporal

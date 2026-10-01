@@ -39,8 +39,8 @@ built-ins/Temporal/PlainDateTime/prototype/add/builtin.js sloppy skip:oracle-hos
 built-ins/Temporal/PlainDateTime/prototype/add/builtin.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/add/hour-overflow.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDateTime/prototype/add/hour-overflow.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/PlainDateTime/prototype/add/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainDateTime/prototype/add/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/prototype/add/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/add/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/add/length.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/add/length.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/add/limits.js sloppy skip:oracle-host-missing-global:Temporal
@@ -51,8 +51,8 @@ built-ins/Temporal/PlainDateTime/prototype/add/name.js sloppy skip:oracle-host-m
 built-ins/Temporal/PlainDateTime/prototype/add/name.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/add/negative-duration.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDateTime/prototype/add/negative-duration.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/PlainDateTime/prototype/add/negative-infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainDateTime/prototype/add/negative-infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/prototype/add/negative-infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/add/negative-infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/add/non-integer-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/add/non-integer-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/add/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"

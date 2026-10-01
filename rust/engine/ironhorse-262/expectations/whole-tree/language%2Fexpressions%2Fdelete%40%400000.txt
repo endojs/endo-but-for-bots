@@ -37,8 +37,8 @@ language/expressions/delete/11.4.1-4.a-6.js sloppy pass
 language/expressions/delete/11.4.1-4.a-7.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: d Expected SameValue(«true», «false») to be true"
 language/expressions/delete/11.4.1-4.a-8-s.js strict pass
 language/expressions/delete/11.4.1-4.a-8.js sloppy pass
-language/expressions/delete/11.4.1-4.a-9-s.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/expressions/delete/11.4.1-4.a-9.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleantrue», «booleanfalse») to be true"
+language/expressions/delete/11.4.1-4.a-9-s.js strict pass
+language/expressions/delete/11.4.1-4.a-9.js sloppy pass
 language/expressions/delete/11.4.1-5-1.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: d Expected SameValue(«true», «false») to be true"
 language/expressions/delete/11.4.1-5-2.js sloppy pass
 language/expressions/delete/11.4.1-5-3.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: d Expected SameValue(«true», «false») to be true"
@@ -53,7 +53,7 @@ language/expressions/delete/S11.4.1_A2.2_T2.js sloppy pass
 language/expressions/delete/S11.4.1_A2.2_T2.js strict pass
 language/expressions/delete/S11.4.1_A2.2_T3.js sloppy pass
 language/expressions/delete/S11.4.1_A2.2_T3.js strict pass
-language/expressions/delete/S11.4.1_A3.1.js sloppy skip:oracle-xs-script-decl-eval-framing
+language/expressions/delete/S11.4.1_A3.1.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: #1: var x = 1; delete x === false"
 language/expressions/delete/S11.4.1_A3.2_T1.js sloppy pass
 language/expressions/delete/S11.4.1_A3.2_T2.js sloppy pass
 language/expressions/delete/S11.4.1_A3.2_T2.js strict pass
@@ -64,12 +64,12 @@ language/expressions/delete/S11.4.1_A3.3_T2.js sloppy pass
 language/expressions/delete/S11.4.1_A3.3_T2.js strict pass
 language/expressions/delete/S11.4.1_A3.3_T3.js sloppy pass
 language/expressions/delete/S11.4.1_A3.3_T3.js strict pass
-language/expressions/delete/S11.4.1_A3.3_T4.js sloppy skip:oracle-xs-script-decl-eval-framing
+language/expressions/delete/S11.4.1_A3.3_T4.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: #1: function MyFunction(){}; var MyObjectVar = new MyFunction(); delete MyObjectVar === false"
 language/expressions/delete/S11.4.1_A3.3_T5.js sloppy pass
 language/expressions/delete/S11.4.1_A3.3_T6.js sloppy pass
 language/expressions/delete/S11.4.1_A4.js sloppy pass
 language/expressions/delete/S11.4.1_A5.js strict pass
-language/expressions/delete/S8.12.7_A1.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: delete Math.E === false. Actual: true"
+language/expressions/delete/S8.12.7_A1.js sloppy pass
 language/expressions/delete/S8.12.7_A2_T1.js sloppy pass
 language/expressions/delete/S8.12.7_A2_T1.js strict pass
 language/expressions/delete/S8.12.7_A2_T2.js sloppy pass

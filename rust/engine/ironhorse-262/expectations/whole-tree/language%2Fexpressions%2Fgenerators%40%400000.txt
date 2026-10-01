@@ -32,8 +32,8 @@ language/expressions/generators/has-instance.js sloppy pass
 language/expressions/generators/has-instance.js strict pass
 language/expressions/generators/implicit-name.js sloppy pass
 language/expressions/generators/implicit-name.js strict pass
-language/expressions/generators/invoke-as-constructor.js sloppy skip:unsupported-opcode:generator:new-target
-language/expressions/generators/invoke-as-constructor.js strict skip:unsupported-opcode:generator:new-target
+language/expressions/generators/invoke-as-constructor.js sloppy pass
+language/expressions/generators/invoke-as-constructor.js strict pass
 language/expressions/generators/length-dflt.js sloppy pass
 language/expressions/generators/length-dflt.js strict pass
 language/expressions/generators/length-property-descriptor.js sloppy pass
@@ -84,8 +84,8 @@ language/expressions/generators/params-trailing-comma-multiple.js sloppy pass
 language/expressions/generators/params-trailing-comma-multiple.js strict pass
 language/expressions/generators/params-trailing-comma-single.js sloppy pass
 language/expressions/generators/params-trailing-comma-single.js strict pass
-language/expressions/generators/prototype-own-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number0») to be true"
-language/expressions/generators/prototype-own-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number0») to be true"
+language/expressions/generators/prototype-own-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«1», «0») to be true"
+language/expressions/generators/prototype-own-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«1», «0») to be true"
 language/expressions/generators/prototype-property-descriptor.js sloppy pass
 language/expressions/generators/prototype-property-descriptor.js strict pass
 language/expressions/generators/prototype-relation-to-function.js sloppy pass

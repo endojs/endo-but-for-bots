@@ -32,8 +32,8 @@ language/statements/generators/generator-created-after-decl-inst.js sloppy pass
 language/statements/generators/generator-created-after-decl-inst.js strict pass
 language/statements/generators/has-instance.js sloppy pass
 language/statements/generators/has-instance.js strict pass
-language/statements/generators/invoke-as-constructor.js sloppy skip:unsupported-opcode:generator:new-target
-language/statements/generators/invoke-as-constructor.js strict skip:unsupported-opcode:generator:new-target
+language/statements/generators/invoke-as-constructor.js sloppy pass
+language/statements/generators/invoke-as-constructor.js strict pass
 language/statements/generators/length-dflt.js sloppy pass
 language/statements/generators/length-dflt.js strict pass
 language/statements/generators/length-property-descriptor.js sloppy pass
@@ -54,8 +54,8 @@ language/statements/generators/params-trailing-comma-multiple.js sloppy pass
 language/statements/generators/params-trailing-comma-multiple.js strict pass
 language/statements/generators/params-trailing-comma-single.js sloppy pass
 language/statements/generators/params-trailing-comma-single.js strict pass
-language/statements/generators/prototype-own-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number0») to be true"
-language/statements/generators/prototype-own-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number1», «number0») to be true"
+language/statements/generators/prototype-own-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«1», «0») to be true"
+language/statements/generators/prototype-own-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«1», «0») to be true"
 language/statements/generators/prototype-property-descriptor.js sloppy pass
 language/statements/generators/prototype-property-descriptor.js strict pass
 language/statements/generators/prototype-relation-to-function.js sloppy pass
@@ -70,8 +70,8 @@ language/statements/generators/rest-param-strict-body.js sloppy pass
 language/statements/generators/rest-param-strict-body.js strict pass
 language/statements/generators/rest-params-trailing-comma-early-error.js sloppy pass
 language/statements/generators/rest-params-trailing-comma-early-error.js strict pass
-language/statements/generators/restricted-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/generators/restricted-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/generators/restricted-properties.js sloppy pass
+language/statements/generators/restricted-properties.js strict pass
 language/statements/generators/return.js sloppy pass
 language/statements/generators/return.js strict pass
 language/statements/generators/scope-body-lex-distinct.js sloppy pass

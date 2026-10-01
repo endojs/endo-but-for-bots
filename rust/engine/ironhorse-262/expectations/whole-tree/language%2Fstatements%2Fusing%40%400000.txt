@@ -64,8 +64,8 @@ language/statements/using/static-init-await-binding-invalid.js sloppy pass
 language/statements/using/static-init-await-binding-invalid.js strict pass
 language/statements/using/static-init-await-binding-valid.js sloppy pass
 language/statements/using/static-init-await-binding-valid.js strict pass
-language/statements/using/throws-error-as-is-if-only-one-error-during-disposal.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a MyError but got a Error"
-language/statements/using/throws-error-as-is-if-only-one-error-during-disposal.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a MyError but got a Error"
+language/statements/using/throws-error-as-is-if-only-one-error-during-disposal.js sloppy pass
+language/statements/using/throws-error-as-is-if-only-one-error-during-disposal.js strict pass
 language/statements/using/throws-if-initializer-Symbol.dispose-property-is-null.js sloppy pass
 language/statements/using/throws-if-initializer-Symbol.dispose-property-is-null.js strict pass
 language/statements/using/throws-if-initializer-Symbol.dispose-property-is-undefined.js sloppy pass

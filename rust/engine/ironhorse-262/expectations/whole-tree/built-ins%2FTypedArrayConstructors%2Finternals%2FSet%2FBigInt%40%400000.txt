@@ -15,8 +15,8 @@ built-ins/TypedArrayConstructors/internals/Set/BigInt/detached-buffer.js sloppy 
 built-ins/TypedArrayConstructors/internals/Set/BigInt/detached-buffer.js strict pass
 built-ins/TypedArrayConstructors/internals/Set/BigInt/indexed-value.js sloppy pass
 built-ins/TypedArrayConstructors/internals/Set/BigInt/indexed-value.js strict pass
-built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-canonical-invalid-index-prototype-chain-set.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: receiver[1] should not be created (receiver: regular array) (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-canonical-invalid-index-prototype-chain-set.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: receiver[1] should not be created (receiver: regular array) (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-canonical-invalid-index-prototype-chain-set.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-canonical-invalid-index-prototype-chain-set.js strict pass
 built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-canonical-invalid-index-reflect-set.js sloppy pass
 built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-canonical-invalid-index-reflect-set.js strict pass
 built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-minus-zero.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
@@ -33,8 +33,8 @@ built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-out-of-bounds.js sl
 built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-symbol.js sloppy pass
 built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-symbol.js strict pass
-built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-valid-index-prototype-chain-set.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: setting receiver[0] should throw in strict mode (receiver: non-extensible empty object) Expected a TypeError to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-valid-index-prototype-chain-set.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: setting receiver[0] should throw in strict mode (receiver: non-extensible empty object) Expected a TypeError to be thrown but no exception was thrown at all (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-valid-index-prototype-chain-set.js sloppy pass
+built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-valid-index-prototype-chain-set.js strict pass
 built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-valid-index-reflect-set.js sloppy pass
 built-ins/TypedArrayConstructors/internals/Set/BigInt/key-is-valid-index-reflect-set.js strict pass
 built-ins/TypedArrayConstructors/internals/Set/BigInt/null-tobigint.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable

@@ -15,8 +15,8 @@ built-ins/Temporal/Now/zonedDateTimeISO/time-zone-undefined.js sloppy skip:oracl
 built-ins/Temporal/Now/zonedDateTimeISO/time-zone-undefined.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Now/zonedDateTimeISO/timezone-case-insensitive.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Now/zonedDateTimeISO/timezone-case-insensitive.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Now/zonedDateTimeISO/timezone-string-datetime.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
-built-ins/Temporal/Now/zonedDateTimeISO/timezone-string-datetime.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/Now/zonedDateTimeISO/timezone-string-datetime.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal: invalid or unsupported time zone\""
+built-ins/Temporal/Now/zonedDateTimeISO/timezone-string-datetime.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal: invalid or unsupported time zone\""
 built-ins/Temporal/Now/zonedDateTimeISO/timezone-string-leap-second.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Now/zonedDateTimeISO/timezone-string-leap-second.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Now/zonedDateTimeISO/timezone-string-multiple-offsets.js sloppy skip:oracle-host-missing-global:Temporal
