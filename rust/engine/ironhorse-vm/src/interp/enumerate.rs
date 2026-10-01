@@ -40,10 +40,10 @@ impl Interp {
     }
 
     /// The enumerable own-then-inherited string keys of `obj` in XS for-in
-    /// order, as `(id, index)` pairs (`id == XS_NO_ID` ⇒ an array index). For
-    /// an array: the present item indices ascending. For an ordinary object:
-    /// its own string-named properties in insertion order. The prototype chain
-    /// is walked (skipping already-seen keys), but the covered grammar's
+    /// order, as `(id, index)` pairs (`id == XS_NO_ID` ⇒ an array index). Each
+    /// level lists its array-index keys ascending, then its other string-named
+    /// properties in insertion order. The prototype chain is walked (skipping
+    /// already-seen keys), but the covered grammar's
     /// prototypes (`%Object.prototype%` / `%Array.prototype%`) carry no
     /// enumerable data properties, so only own keys appear.
     pub(super) fn enumerable_keys(&self, obj: crate::value::SlotIndex) -> Vec<(u16, u32)> {
@@ -51,6 +51,14 @@ impl Interp {
         let mut seen: std::collections::HashSet<(u16, u32)> = std::collections::HashSet::new();
         let mut cur = obj;
         while !cur.is_null() {
+            // Each level's array-index keys ascending, ahead of its named
+            // chain, whichever store holds them — the order `fxOrdinaryOwnKeys`
+            // gives, since XS keeps every index key in the one indexed chunk.
+            // Every one is recorded as `(XS_NO_ID, index)`, including an index
+            // NAMED by a promoted accessor or an exotic shape's expando, so a
+            // stored index and a named one shadow each other as the single
+            // property they are.
+            let mut indices: Vec<u32> = Vec::new();
             // A String wrapper's units and a TypedArray's elements are
             // enumerable own keys, and XS queues them ahead of the named chain
             // (`fxStringOwnKeys`, `fxTypedArrayOwnKeys`). Neither had an arm
@@ -65,12 +73,7 @@ impl Interp {
                 ..
             }) = self.wrapper_data.get(&cur).copied()
             {
-                for index in 0..self.str_len(offset) as u32 {
-                    let k = (crate::value::XS_NO_ID, index);
-                    if seen.insert(k) {
-                        out.push(k);
-                    }
-                }
+                indices.extend(0..self.str_len(offset) as u32);
             }
             if let Some(&ta) = self.typed_arrays.get(&cur) {
                 let length = if self.detached_buffers.contains(&ta.buffer) {
@@ -78,27 +81,18 @@ impl Interp {
                 } else {
                     ta.length
                 };
-                for index in 0..length {
-                    let k = (crate::value::XS_NO_ID, index);
-                    if seen.insert(k) {
-                        out.push(k);
-                    }
-                }
+                indices.extend(0..length);
             }
-            // An ordinary object's index properties, ascending, ahead of its
-            // named chain — the enumeration order `fxOrdinaryOwnKeys` gives.
+            // An ordinary object's index properties.
             if let Some(props) = self.index_props.get(&cur) {
-                for (&index, item) in props.items() {
-                    if item.flag & XS_DONT_ENUM_FLAG != 0 {
-                        continue;
-                    }
-                    let k = (crate::value::XS_NO_ID, index);
-                    if seen.insert(k) {
-                        out.push(k);
-                    }
-                }
+                indices.extend(
+                    props
+                        .items()
+                        .iter()
+                        .filter(|(_, item)| item.flag & XS_DONT_ENUM_FLAG == 0)
+                        .map(|(index, _)| *index),
+                );
             }
-            // Array index keys first (ascending), then string keys.
             if let Some(a) = self.arrays.get(&cur) {
                 // A non-enumerable ITEM is skipped, exactly as the
                 // non-enumerable named property below is. Items could not
@@ -108,19 +102,12 @@ impl Interp {
                 // an element stays an item, `for-in` over
                 // `Object.defineProperty(a, '1', {enumerable: false})` would
                 // otherwise yield the key that `Object.keys` correctly omits.
-                let mut idxs: Vec<u32> = a
-                    .items()
-                    .iter()
-                    .filter(|(_, item)| item.flag & XS_DONT_ENUM_FLAG == 0)
-                    .map(|(index, _)| *index)
-                    .collect();
-                idxs.sort_unstable();
-                for i in idxs {
-                    let k = (crate::value::XS_NO_ID, i);
-                    if seen.insert(k) {
-                        out.push(k);
-                    }
-                }
+                indices.extend(
+                    a.items()
+                        .iter()
+                        .filter(|(_, item)| item.flag & XS_DONT_ENUM_FLAG == 0)
+                        .map(|(index, _)| *index),
+                );
             }
             // Own string-named properties, in insertion order. The property
             // list is prepend-ordered (newest first), so collect and reverse.
@@ -136,11 +123,22 @@ impl Interp {
                     && s.flag & XS_DONT_ENUM_FLAG == 0
                     && !self.is_symbol_key_id(s.id)
                 {
-                    names.push((s.id, 0));
+                    match self.key_id_index(s.id) {
+                        Some(index) => indices.push(index),
+                        None => names.push((s.id, 0)),
+                    }
                 }
                 p = s.next;
             }
             names.reverse();
+            indices.sort_unstable();
+            indices.dedup();
+            for index in indices {
+                let k = (crate::value::XS_NO_ID, index);
+                if seen.insert(k) {
+                    out.push(k);
+                }
+            }
             for k in names {
                 if seen.insert(k) {
                     out.push(k);
