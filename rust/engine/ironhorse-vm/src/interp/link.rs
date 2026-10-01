@@ -1484,6 +1484,30 @@ impl Interp {
         }
     }
 
+    /// Every object the boot rosters give lazily installed members, but the
+    /// global object, whose bindings a program creates as it runs: the
+    /// initial [`Self::pending_surfaces`].
+    pub(super) fn intrinsic_surface_holders(
+        &self,
+    ) -> std::collections::HashSet<crate::value::SlotIndex> {
+        let mut holders: std::collections::HashSet<_> = self
+            .proto_methods
+            .iter()
+            .map(|(owner, _, _)| *owner)
+            .chain(self.proto_data.iter().map(|(owner, _, _)| *owner))
+            .chain(self.proto_value_data.iter().map(|(owner, _, _)| *owner))
+            .chain(
+                self.proto_accessors
+                    .iter()
+                    .map(|(owner, _, _, _, _)| *owner),
+            )
+            .chain(self.intrinsics.get("Symbol").copied())
+            .chain(self.error_stack_accessor.map(|(owner, _, _)| owner))
+            .collect();
+        holders.remove(&self.environment.global_obj);
+        holders
+    }
+
     /// Ensure `inst` exposes every modeled string-named own intrinsic before
     /// `[[OwnPropertyKeys]]` observes it. A constructor reached through a
     /// runtime-computed global name can exist before any of its member names
@@ -1561,6 +1585,7 @@ impl Interp {
             self.intern_static_key_unmetered(name);
         }
         self.install_pending_intrinsics();
+        self.pending_surfaces.remove(&inst);
     }
 
     /// String-key creation order for a standard intrinsic object's modeled

@@ -2753,6 +2753,24 @@ pub struct Interp {
     /// what a guest can observe: they are unreferenced until step 2 wires them,
     /// and being boot instances they are already in step 5's derived root set.
     locked_down_constructors: Vec<crate::value::SlotIndex>,
+    #[boot_new(std::collections::HashSet::new())]
+    #[gc_root(indices)]
+    #[quiescent(retained)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The intrinsic objects whose boot surface may still be partly
+    /// uninstalled: every holder in the boot rosters but the global object,
+    /// until [`Self::materialize_intrinsic_own_surface`] completes it. A
+    /// guest's first new key on one installs the rest first, so every boot
+    /// key precedes it. Derived at boot and never persisted: a restored
+    /// machine starts with every holder pending, and completing a complete
+    /// surface again changes nothing.
+    pending_surfaces: std::collections::HashSet<crate::value::SlotIndex>,
     #[boot_new(crate::value::SlotIndex::NULL)]
     #[gc_root(index)]
     #[quiescent(retained)]

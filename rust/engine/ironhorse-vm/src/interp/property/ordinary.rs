@@ -253,6 +253,16 @@ impl Interp {
         // attributes ({writable:false, configurable:true}), exactly as XS
         // redefines its real slot.
         self.materialize_function_meta_slot(inst, id);
+        // A guest's new key on an intrinsic object follows every boot key the
+        // object has, as XS and the specification order them. Boot keys a
+        // program never named are installed lazily, so install them before
+        // the new key would take a place among them.
+        if self.pending_surfaces.contains(&inst)
+            && !self.installing_intrinsics
+            && self.find_property(inst, id).is_none()
+        {
+            self.materialize_intrinsic_own_surface(inst);
+        }
         let current = self.ordinary_get_own_descriptor(inst, id);
         if current.is_none() {
             if !self.instance_extensible(inst) {
