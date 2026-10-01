@@ -1420,8 +1420,6 @@ const makeDaemonCore = async (
       provideController(id).value
     );
 
-  // SturdyRefs for formulas, minted without incarnating them; enlivening one
-  // incarnates its formula through `provide`.
   const { sturdyRefForFormula, formulaIdOf } = makeFormulaSturdyRefKit({
     provide: id => provide(/** @type {FormulaIdentifier} */ (id)),
   });
