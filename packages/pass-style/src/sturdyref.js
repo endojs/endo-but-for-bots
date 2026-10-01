@@ -43,40 +43,18 @@ const hasOwnHiddenDataValue = (object, key, expected) => {
 
 /**
  * A SturdyRef is passable, analogous to a presence: it has object identity
- * and no data. Pass-style recognizes one using the `SturdyRef.isSturdyRef`
- * brand check of its global's `SturdyRef` constructor, as installed by
- * `@endo/sturdyref` (see that package's README). It never uses `instanceof`,
- * because a prototype chain can be forged with `Object.create`, and it never
- * reads anything from the ref, because a ref is opaque.
+ * and no data. Pass-style senses `globalThis.SturdyRef` (installed first-wins
+ * by `@endo/sturdyref`) rather than depending on that package, and asks its
+ * `isSturdyRef` brand check rather than `instanceof`, which `Object.create`
+ * can forge.
  *
- * Pass-style does not depend on `@endo/sturdyref`. It senses
- * `globalThis.SturdyRef`, which the shim installs first-wins and then never
- * replaces. Note that `globalThis` is the global of the compartment that
- * loaded this module. A child compartment sees the same constructor only when
- * the shim was installed before `lockdown`, which makes `SturdyRef` a shared
- * intrinsic.
- *
- * Pass-style trusts the first constructor it finds that is frozen, together
- * with its `isSturdyRef` static and its `prototype`, and then captures it, so
- * a SturdyRef stays a SturdyRef for as long as this module lives, as
- * `passStyleOf`'s memo requires. The global binding itself cannot be required
- * to be locked, because a child compartment's copy of a shared intrinsic is
- * writable. A constructor installed by something other than the shim could
- * therefore be trusted. To bound what such an impostor can do, the brand
- * check is only ever asked about a candidate that is shaped like a SturdyRef:
- * frozen, with no own properties, and inheriting directly from the captured
- * `SturdyRef.prototype`. That prototype must itself be shaped like the
- * shim's: inheriting directly from `Object.prototype`, with only its
- * `constructor` and its `Symbol.toStringTag` of `'SturdyRef'`, both
- * non-enumerable data properties, so an impostor cannot give its refs
- * inherited behavior. Pass-style reads the constructor's `isSturdyRef` and
- * `prototype` only as own data properties, so a global carrying a throwing
- * accessor is simply not trusted. `passStyleOf` also asks only after every
- * other pass style has declined the candidate. So an impostor never sees an object of any
- * other pass style, and can only make passable empty objects that inherit from
- * its own prototype, which would otherwise be rejected
- * (`test/sturdyref-lying-global.test.js` pins this bound). A brand check that
- * throws, or returns anything other than `true`, rejects the candidate.
+ * The global binding cannot be required to be locked, because a child
+ * compartment's copy of a shared intrinsic is writable, so an impostor
+ * constructor could be trusted. The shape checks below bound that impostor:
+ * it is only ever asked about a frozen, empty object inheriting directly from
+ * a shim-shaped prototype, after every other pass style has declined it
+ * (`test/sturdyref-lying-global.test.js`). The captured check stays fixed for
+ * this module's lifetime, as `passStyleOf`'s memo requires.
  *
  * @type {((value: object) => boolean) | undefined}
  */

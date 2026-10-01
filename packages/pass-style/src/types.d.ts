@@ -60,6 +60,10 @@ export type ExtractStyle<P extends PassStyled<any, any>> = P[typeof PASS_STYLE];
 
 export type PassByCopy = Atom | Error | CopyArray | CopyRecord | CopyTagged;
 
+/**
+ * Excludes `SturdyRefObject`, which is passed by identity but, like its
+ * exclusion from `PassableCap`, has no marshal slot representation yet.
+ */
 export type PassByRef =
   | RemotableObject
   | RemotableBrand<any, any>
