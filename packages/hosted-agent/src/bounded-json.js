@@ -10,9 +10,12 @@ import { Fail, b } from '@endo/errors';
  * @param {Response} response
  * @param {number} maxBytes
  * @param {string} label for messages, e.g. `Codex usage read`
+ * @param {ReadableStreamDefaultReader<Uint8Array>} [ownedReader] An already
+ * held body reader. Its caller owns cancellation, including oversized input;
+ * otherwise this function obtains a reader and cancels oversized input itself.
  */
-export const boundedJson = async (response, maxBytes, label) => {
-  const reader = response.body?.getReader();
+export const boundedJson = async (response, maxBytes, label, ownedReader) => {
+  const reader = ownedReader ?? response.body?.getReader();
   if (!reader) throw Fail`${b(label)} had no body`;
   const chunks = [];
   let bytes = 0;
@@ -22,7 +25,7 @@ export const boundedJson = async (response, maxBytes, label) => {
     if (done) break;
     bytes += value.byteLength;
     if (bytes > maxBytes) {
-      void reader.cancel().catch(() => {});
+      if (ownedReader === undefined) void reader.cancel().catch(() => {});
       throw Fail`${b(label)} too large`;
     }
     chunks.push(value);

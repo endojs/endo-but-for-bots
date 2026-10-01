@@ -356,6 +356,26 @@ The source review does not establish that either branch is dead.
   Hosted types, scoped ESLint and formatting pass.
   This removes four source lines, bringing the committed count to 42,585.
   No new public surface, durable format or release pin changes; not deployed.
+- **SB-11 done:** Codex renewal uses the existing shared bounded JSON parser
+  instead of its own byte/decode/parse loop.
+  An optional already-owned reader leaves cancellation entirely with its caller;
+  existing three-argument callers keep their original behavior.
+  Codex retains its unconditional awaited `finally` cancellation, including on
+  overflow, parse/claim failure and success; tests prove exactly one cancellation,
+  delayed settlement until acknowledgement, and swallowed cleanup rejection.
+  Strict fatal UTF-8, the 64 KiB bound, fixed endpoint, 15-second abort signal,
+  sanitized errors, account/expiry checks and durable no-replay/CAS rules remain.
+  The accepted timing difference is explicit: malformed UTF-8 is decoded after
+  the bounded body read instead of failing on its first invalid chunk.
+  No second parser mode is added to preserve that timing.
+  Focused tests pass: 29 Codex renewal/account/reset, 48 shared parser/account/model
+  and 11 Claude renewal; independent review reruns six parser and 23 renewal tests.
+  Full Codex tests pass: 445; hosted/Codex/Claude types, scoped ESLint and formatting pass.
+  Only ignored shared declarations were refreshed to match the new reader argument.
+  This removes six Codex source lines and adds three shared lines: net minus
+  three, bringing the committed count to 42,582.
+  No credential edits, actual renewal calls, durable format or release pin changes;
+  not deployed.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.
