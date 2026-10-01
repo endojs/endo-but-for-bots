@@ -79,8 +79,10 @@ The retired descriptor flag is rejected; sharing/delegation itself remains.
 Scope item 4 moves the existing snapshot journal out of the account oracle into
 `snapshot-journal.js` as `makeSnapshotJournal`, without an old-name alias.
 The five callers keep identical persisted prefixes and separate state ownership.
-The metric is now 42,557, down 229 lines, across 161 files; the move adds two lines
-and is ontology clarification, not a size reduction.
+The move adds two source lines and is ontology clarification, not a size reduction.
+Scope item 5 corrects Claude's native-context versus acknowledgement documentation
+and help; `acknowledge()` remains an operational no-op, not the persistence hook.
+The final metric is 42,561, down 225 lines, across 161 files.
 The audit records each slice and its validation.
 For SB-01 through SB-12, full shared, Claude, Codex and OpenCode suites passed,
 along with shared/Claude/Codex type checks, scoped ESLint/formatting and root docs
@@ -94,14 +96,20 @@ Its full shared suite passes 808 tests with one existing skip; independent revie
 confirms unchanged storage mechanics and passes 54 focused tests and shared types.
 The composite declaration build fails on existing generated-file TS5055 conflicts
 outside the slice; that repository-wide gate is not green.
+For the complete scope-item 3–5 pass, fresh full suites pass: shared 808 (one
+existing skip), Claude 539, Codex 445 and OpenCode 298, totaling 2,090 passes.
+Shared/Claude/Codex types, four-package JavaScript ESLint and changed-file formatting
+pass; warnings remain.
+Root docs passes with 0 errors and 180 warnings.
+Ignored declarations were narrowly regenerated, not committed.
 Whole-repository lint remains unclean on unchanged formatting and other lint
 errors, including Chat project-resolution failures.
 The source audit records those limitations and suspected bucketing separately.
 These source-only changes are not deployed; generation 190 and its pins remain
 the live acceptance baseline.
 The smaller-combined-implementation target is still unproven.
-Next is the approved Claude checkpoint-comment slice, then the sharing/delegation
-and pool-weight scope decisions before the
+The requested scope items 3–5 are done.
+Next are the sharing/delegation and pool-weight scope decisions before the
 cross-adapter SB-13 through SB-15 extractions.
 The recommended sequence remains deletion before abstraction.
 

@@ -50,11 +50,18 @@ actually support and attest these mounts.
 ## Conversation and storage
 
 Floot owns durable conversation records, including known tool effects and failed turns.
-On revival the client restores the CLI's JSONL from those records using
-`claude-transcript-writer.js`; it does not adopt an arbitrary surviving CLI transcript.
-Within an incarnation Claude continues its native conversation.
-The backend's `transcript` continuity declaration tells Floot to mirror delivered partial
-turns, so cancellation does not silently erase what the CLI already received.
+Before a turn the client restores the host-selected native-context checkpoint
+and portable suffix, or reconstructs portable records through
+`claude-transcript-writer.js` when no native checkpoint is available.
+It does not adopt an arbitrary surviving CLI transcript, even within an incarnation.
+The backend's `transcript` continuity declaration permits per-turn reconstruction
+and portable fallback when native restoration would hide tool evidence.
+Floot retains delivered partial turns independently of this flag, so cancellation
+does not silently erase what the CLI already received.
+Validated native-context records travel through the hosted turn events and are
+retained in Floot's journal, including Claude's signed/opaque continuation context.
+`run.acknowledge()` is a separate operational hook and remains a no-op for Claude;
+it is not the operation that saves native context, nor evidence that none exists.
 
 The workspace is projected through a host-side 9P mount at `/workspace`.
 Claude's state provider supplies a session config directory at `/claude-config`;

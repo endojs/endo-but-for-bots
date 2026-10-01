@@ -27,9 +27,10 @@ The tables describe the initial audit snapshot; the progress section records
 subsequent implementation.
 The concrete deletion and compatibility candidates SB-01 through SB-08 are now
 removed, and local repetition SB-09 through SB-12 is consolidated.
-This same source metric is now 42,557 lines.
+This same source metric is now 42,561 lines.
 Scope item 3's unsupported delegated storage-bound extension is removed.
 Scope item 4 gives the existing snapshot journal a neutral name and module.
+Scope item 5 corrects Claude's native-context versus acknowledgement documentation.
 Further implementation should follow deletion before abstraction, with independent
 adversarial review and focused regression tests before each commit.
 
@@ -213,6 +214,8 @@ not evidence that whole clients can be merged safely.
    predate native capture.
    Distinguish native context capture from the adapter's operational acknowledgement;
    fix misleading documentation rather than deleting a working acknowledgement path.
+   **Done:** factory/translator comments, README and run help distinguish
+   Floot-retained native context from the operational no-op acknowledgement hook.
 6. **Reset-provider response guesses.** Codex reset response normalization accepts
    several provider outcome/status names.
    The provider protocol needs evidence before reducing that live boundary.
@@ -257,6 +260,8 @@ The source review does not establish that either branch is dead.
 4. Decide whether optional sharing/delegation and inert weight/storage knobs
    belong in this release.
    Do not bury that scope decision in an abstraction commit.
+   Sharing/delegation and pool weight remain undecided; scope item 3 removes
+   the unsupported storage-bound extension rather than implementing quotas.
 5. Only then consider pure framing/common-profile extraction SB-13 through SB-15,
    with differential protocol and closed-shape tests.
 6. Remeasure this same committed four-package scope after each slice and update
@@ -470,6 +475,42 @@ The source review does not establish that either branch is dead.
   down **229** from the initial snapshot.
   No host, credential, lifecycle authority or release pin changes; not deployed.
   Scope item 5 is next; sharing/delegation and pool weight remain undecided.
+
+- **Scope item 5 done:** corrected the Claude factory and hosted translator's
+  comments, README and run help; `acknowledge()` remains an operational no-op.
+  Floot retains validated native-context checkpoints through hosted events and
+  the host journal, including signed/opaque context, for restoration before a
+  turn; portable reconstruction is the fallback when no native checkpoint exists.
+  The `transcript` continuity mode permits per-turn reconstruction and portable
+  fallback when native restoration would hide tool evidence.
+  Floot records delivered partial turns independently of that flag; arbitrary
+  surviving CLI files are not conversation authority.
+  No dispatch, capture, persistence, restoration or acknowledgement behavior
+  changes; the only runtime-value change is the corrected help text.
+  The existing no-op test also checks that help distinguishes retained native
+  context from operational acknowledgement.
+  All 40 focused factory/translator tests and the full 539-test Claude suite pass.
+  Independent review passes the same 40 focused tests, Claude types, scoped
+  ESLint (0 errors, 8 warnings), formatting and diff checks; it confirms only
+  the help string changes runtime values.
+  Fresh full suites for the other packages also pass: shared **808** with one
+  existing skip, Codex **445**, OpenCode **298**; **2,090** passes in total.
+  Shared/Claude/Codex types, four-package JavaScript ESLint (0 errors, 490 warnings),
+  changed-file formatting and root docs (0 errors, 180 warnings) pass.
+  Ignored hosted declarations were narrowly regenerated to match the removed
+  exports/fields; no generated files are committed.
+  Repository lint still stops on the same five unchanged formatting files;
+  the composite declaration build remains blocked by the recorded TS5055 conflicts.
+  Neither repository-wide gate is claimed green.
+  Documentation adds **4** physical source lines, making Claude 7,061;
+  combined source is **42,561** across **161** files, down **20** this pass and
+  **225** from the original snapshot.
+  This is contract clarification, not new machinery or a size reduction for this
+  individual slice.
+  No secrets, owner identities, host config, runtime pins or deployed state changed;
+  not deployed.
+  The three requested scope items are closed; sharing/delegation and pool weight
+  remain separate decisions, and SB-13 through SB-15 remain unimplemented.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.
