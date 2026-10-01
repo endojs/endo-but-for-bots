@@ -171,6 +171,9 @@
       "path": "packages/import-bundle/tsconfig.composite.json"
     },
     {
+      "path": "packages/inference/tsconfig.composite.json"
+    },
+    {
       "path": "packages/init/tsconfig.composite.json"
     },
     {
