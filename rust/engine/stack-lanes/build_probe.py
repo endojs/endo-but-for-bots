@@ -40,7 +40,9 @@ def build(target=None, shadow_stack=DEFAULT_SHADOW_STACK, quiet=False):
     """Build one probe and return its path. The workspace lockfile pins every
     dependency; cargo adds only the probe's own entry to the copy."""
     shutil.copyfile(ROOT / "Cargo.lock", PROBE / "Cargo.lock")
-    env = dict(os.environ, CARGO_INCREMENTAL="0")
+    # The artifact is looked for under the probe's own target directory, so
+    # an inherited CARGO_TARGET_DIR must not send the build elsewhere.
+    env = dict(os.environ, CARGO_INCREMENTAL="0", CARGO_TARGET_DIR=str(PROBE / "target"))
     command = ["cargo", "build", "--release"]
     if target == WASM_TARGET:
         env["RUSTC_BOOTSTRAP"] = "1"
