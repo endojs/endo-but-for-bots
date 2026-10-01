@@ -68,23 +68,34 @@ export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
 /**
  * The coordinates an OCapN SturdyRef is constructed from. The field names
  * follow `@endo/captp`'s `SturdyRefData`, but the shape is OCapN's own and
- * stricter: `designator` is required because every OCapN location names a
+ * stricter: `network` is required because every OCapN location names a
  * network, and `objectId` may be raw bytes because OCapN swiss numbers may be
  * arbitrary bytes. As in captp, every hint value is a string.
  *
  * @typedef {object} SturdyRefData
- * @property {string} peerId the peer's designator (its public key)
+ * @property {string} peerId the peer's identity, which an `OcapnLocation`
+ * carries as its `designator` (the peer's public key)
  * @property {string | Uint8Array} objectId the swiss number
- * @property {string} designator the network the peer is reachable on
+ * @property {string} network the network the peer is reachable on
  * @property {Record<string, string>} [hints] how to connect to the peer
  */
 
 /**
+ * Convert SturdyRef data to the `(location, secret)` pair an OCapN SturdyRef
+ * is made of: `peerId` becomes `location.designator`, `network` becomes
+ * `location.transport`, `hints` (copied) becomes `location.hints`, and
+ * `objectId` becomes the secret.
+ *
+ * Throws a `TypeError` if `data` has properties other than those of
+ * `SturdyRefData`, if `peerId` or `network` is not a string, if `objectId`
+ * is neither a string nor a `Uint8Array`, or if `hints` is present but not a
+ * record of strings. No error reveals `objectId`.
+ *
  * @param {SturdyRefData} data
  * @returns {SturdyRefDetails}
  */
 export const sturdyRefDataToDetails = data => {
-  const { peerId, objectId, designator, hints = undefined, ...rest } = data;
+  const { peerId, objectId, network, hints = undefined, ...rest } = data;
   const extra = Object.keys(rest);
   if (extra.length !== 0) {
     throw TypeError(
@@ -94,18 +105,25 @@ export const sturdyRefDataToDetails = data => {
   if (typeof peerId !== 'string') {
     throw TypeError('ocapn: SturdyRef peerId must be a string');
   }
-  if (typeof designator !== 'string') {
-    throw TypeError('ocapn: SturdyRef designator must be a string');
+  if (typeof network !== 'string') {
+    throw TypeError('ocapn: SturdyRef network must be a string');
   }
   if (typeof objectId !== 'string' && !(objectId instanceof Uint8Array)) {
     // Intentionally do NOT include `objectId`: it is the secret.
     throw TypeError('ocapn: SturdyRef objectId must be a string or bytes');
   }
+  // Read the hint entries once, so a getter or proxy cannot answer
+  // validation and copying differently, and refuse symbol-keyed or
+  // non-enumerable properties, which `Object.entries` would skip.
+  const hintEntries =
+    hints === undefined || typeof hints !== 'object' || hints === null
+      ? undefined
+      : Object.entries(hints);
   if (
     hints !== undefined &&
-    (typeof hints !== 'object' ||
-      hints === null ||
-      !Object.values(hints).every(hint => typeof hint === 'string'))
+    (hintEntries === undefined ||
+      Reflect.ownKeys(hints).length !== hintEntries.length ||
+      !hintEntries.every(([_key, hint]) => typeof hint === 'string'))
   ) {
     throw TypeError('ocapn: SturdyRef hints must be a record of strings');
   }
@@ -113,14 +131,21 @@ export const sturdyRefDataToDetails = data => {
     location: harden({
       type: 'ocapn-peer',
       designator: peerId,
-      transport: designator,
-      hints: hints === undefined ? false : { ...hints },
+      transport: network,
+      hints:
+        hintEntries === undefined ? false : Object.fromEntries(hintEntries),
     }),
     secret: objectId,
   };
 };
 
 /**
+ * Convert the `(location, secret)` pair of an OCapN SturdyRef to its data,
+ * the inverse of `sturdyRefDataToDetails`: `location.designator` becomes
+ * `peerId`, `location.network ?? location.transport` becomes `network`,
+ * `location.hints` (when not `false`) becomes `hints`, and the secret becomes
+ * `objectId`. The result includes the secret, so it is closely held.
+ *
  * @param {SturdyRefDetails} details
  * @returns {SturdyRefData}
  */
@@ -128,7 +153,7 @@ export const sturdyRefDetailsToData = ({ location, secret }) =>
   harden({
     peerId: location.designator,
     objectId: secret,
-    designator: location.network ?? location.transport,
+    network: location.network ?? location.transport,
     ...(location.hints ? { hints: location.hints } : {}),
   });
 

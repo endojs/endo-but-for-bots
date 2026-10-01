@@ -323,7 +323,7 @@ test('a SturdyRef reconstructed from its data enlivens like the original', async
   if (!data) throw Error('expected SturdyRef data');
   t.is(data.peerId, locationB.designator);
   t.is(data.objectId, 'test-object');
-  t.is(data.designator, locationB.network ?? locationB.transport);
+  t.is(data.network, locationB.network ?? locationB.transport);
   t.true(Object.isFrozen(data));
 
   const reconstructed = clientA.makeSturdyRefFromData(data);
@@ -350,7 +350,7 @@ test('constructing an OCapN SturdyRef from data validates the data', async t => 
   t.throws(
     () =>
       client.makeSturdyRefFromData(
-        /** @type {any} */ ({ peerId: 'p', designator: 'tcp' }),
+        /** @type {any} */ ({ peerId: 'p', network: 'tcp' }),
       ),
     { message: /objectId must be a string or bytes/ },
   );
@@ -359,7 +359,7 @@ test('constructing an OCapN SturdyRef from data validates the data', async t => 
       client.makeSturdyRefFromData(
         /** @type {any} */ ({ peerId: 'p', objectId: 'x' }),
       ),
-    { message: /designator must be a string/ },
+    { message: /network must be a string/ },
   );
   t.throws(
     () =>
@@ -367,7 +367,7 @@ test('constructing an OCapN SturdyRef from data validates the data', async t => 
         /** @type {any} */ ({
           peerId: 'p',
           objectId: 'x',
-          designator: 'tcp',
+          network: 'tcp',
           extra: true,
         }),
       ),
@@ -377,13 +377,13 @@ test('constructing an OCapN SturdyRef from data validates the data', async t => 
   const ref = client.makeSturdyRefFromData({
     peerId: 'p',
     objectId: bytes,
-    designator: 'tcp',
+    network: 'tcp',
   });
   t.is(getSturdyRefDetails(ref)?.secret, bytes);
   t.deepEqual(client.getSturdyRefData(ref), {
     peerId: 'p',
     objectId: bytes,
-    designator: 'tcp',
+    network: 'tcp',
   });
   t.is(client.getSturdyRefData(/** @type {any} */ (harden({}))), undefined);
   client.shutdown();
@@ -394,7 +394,7 @@ test('OCapN SturdyRef data checks peerId and hints, and round-trips hints', asyn
   t.throws(
     () =>
       client.makeSturdyRefFromData(
-        /** @type {any} */ ({ peerId: 1, objectId: 'x', designator: 'tcp' }),
+        /** @type {any} */ ({ peerId: 1, objectId: 'x', network: 'tcp' }),
       ),
     { message: /peerId must be a string/ },
   );
@@ -404,7 +404,7 @@ test('OCapN SturdyRef data checks peerId and hints, and round-trips hints', asyn
         /** @type {any} */ ({
           peerId: 'p',
           objectId: 'x',
-          designator: 'tcp',
+          network: 'tcp',
           hints: null,
         }),
       ),
@@ -416,16 +416,43 @@ test('OCapN SturdyRef data checks peerId and hints, and round-trips hints', asyn
         /** @type {any} */ ({
           peerId: 'p',
           objectId: 'x',
-          designator: 'tcp',
+          network: 'tcp',
           hints: { port: 1234 },
         }),
       ),
     { message: /hints must be a record of strings/ },
   );
+  t.throws(
+    () =>
+      client.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'p',
+          objectId: 'x',
+          network: 'tcp',
+          hints: { host: 'h', [Symbol('smuggled')]: {} },
+        }),
+      ),
+    { message: /hints must be a record of strings/ },
+  );
+  let reads = 0;
+  const fickle = {
+    get port() {
+      reads += 1;
+      return reads === 1 ? '1234' : {};
+    },
+  };
+  const fickleRef = client.makeSturdyRefFromData({
+    peerId: 'p',
+    objectId: 'x',
+    network: 'tcp',
+    hints: /** @type {any} */ (fickle),
+  });
+  t.is(reads, 1);
+  t.deepEqual(getSturdyRefDetails(fickleRef)?.location.hints, { port: '1234' });
   const data = {
     peerId: 'p',
     objectId: 'x',
-    designator: 'tcp',
+    network: 'tcp',
     hints: { host: '127.0.0.1', port: '1234' },
   };
   const ref = client.makeSturdyRefFromData(data);
@@ -437,7 +464,7 @@ test('OCapN SturdyRef data checks peerId and hints, and round-trips hints', asyn
 test('a client reveals SturdyRef data only for refs it minted', async t => {
   const { client: clientA } = await makeTestClient({ debugLabel: 'A' });
   const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
-  const data = { peerId: 'p', objectId: 'x', designator: 'tcp' };
+  const data = { peerId: 'p', objectId: 'x', network: 'tcp' };
   const fromData = clientA.makeSturdyRefFromData(data);
   t.deepEqual(clientA.getSturdyRefData(fromData), data);
   t.is(clientB.getSturdyRefData(fromData), undefined);

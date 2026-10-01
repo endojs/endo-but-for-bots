@@ -946,7 +946,7 @@ export const makeOcapn = async ({
     },
     /**
      * Construct a SturdyRef from its recorded coordinates: the peer id
-     * (designator), object id (swiss number), network designator, and
+     * (designator), object id (swiss number), network, and
      * connection hints. This is how a persistence layer re-issues a ref it
      * stored with `getSturdyRefData`. The ref enlivens through this client.
      * Like the client itself, this capability is closely held.

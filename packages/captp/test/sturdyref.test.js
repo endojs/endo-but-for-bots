@@ -253,7 +253,7 @@ test('a SturdyRef constructed from data enlivens through the peer locator', asyn
   const data = {
     peerId: 'right',
     objectId: 'swiss-1',
-    designator: 'tcp-testing-only',
+    network: 'tcp-testing-only',
     hints: { host: '127.0.0.1', port: '1234' },
   };
   const ref = left.makeSturdyRefFromData(data);
@@ -305,6 +305,66 @@ test('constructing a SturdyRef from data validates the data', t => {
       ),
     { message: /hints must be a record of strings/ },
   );
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'right',
+          objectId: 'x',
+          hints: { host: 'h', [Symbol('smuggled')]: {} },
+        }),
+      ),
+    { message: /hints must be a record of strings/ },
+  );
+  let reads = 0;
+  const fickle = {
+    get port() {
+      reads += 1;
+      return reads === 1 ? '1234' : {};
+    },
+  };
+  const ref = left.makeSturdyRefFromData({
+    peerId: 'right',
+    objectId: 'x',
+    hints: /** @type {any} */ (fickle),
+  });
+  t.is(reads, 1);
+  t.deepEqual(left.getSturdyRefData(ref)?.hints, { port: '1234' });
+});
+
+test('a SturdyRef from data rejects when the peer locates nothing', async t => {
+  const { left } = makeOptionsPair({}, { locateSturdyRef: () => undefined });
+  const ref = left.makeSturdyRefFromData({
+    peerId: 'right',
+    objectId: 'secret-swiss',
+  });
+  const error = await t.throwsAsync(() => SturdyRef.enliven(ref), {
+    message: /has no SturdyRef for the requested object id/,
+  });
+  t.notRegex(error?.message ?? '', /secret-swiss/);
+});
+
+test('a peer-chosen question id cannot shadow the SturdyRef locator', async t => {
+  const target = Far('target', { hello: () => 'hi' });
+  const decoy = Far('decoy', { hello: () => 'decoy' });
+  /** @type {any} */
+  let right;
+  const left = makeCapTP('left', obj => right.dispatch(obj), undefined, {});
+  right = makeCapTP('right', obj => left.dispatch(obj), decoy, {
+    locateSturdyRef: objectId => (objectId === 'x' ? target : undefined),
+  });
+  // Ask a question whose id is the reserved locator slot, so its answer
+  // would shadow the locator if `answers` were consulted first.
+  right.dispatch({
+    type: 'CTP_CALL',
+    epoch: 0,
+    questionID: 'l-0',
+    target: 'o+0',
+    method: right.serialize(harden(['hello', []])),
+  });
+  const ref = left.makeSturdyRefFromData({ peerId: 'right', objectId: 'x' });
+  const live = await SturdyRef.enliven(ref);
+  t.is(await E(live).hello(), 'hi');
 });
 
 test('a SturdyRef from data rejects without a peer locator or connection', async t => {
@@ -335,9 +395,9 @@ test('constructing a SturdyRef from data checks each coordinate type', t => {
   t.throws(
     () =>
       left.makeSturdyRefFromData(
-        /** @type {any} */ ({ peerId: 'right', objectId: 'x', designator: 1 }),
+        /** @type {any} */ ({ peerId: 'right', objectId: 'x', network: 1 }),
       ),
-    { message: /designator must be a string/ },
+    { message: /network must be a string/ },
   );
   t.throws(
     () =>

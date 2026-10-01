@@ -230,8 +230,11 @@ export const makeDefaultCapTPImportExportTables = ({
  * `makeSturdyRefFromData` refuses data that names a different peer.
  * @property {(objectId: string) => unknown} [locateSturdyRef] if specified,
  * serve the peer's SturdyRefs-from-data: when the peer enlivens a SturdyRef
- * it constructed with `objectId`, answer with this hook's result. Without it,
- * every such enliven rejects.
+ * it constructed with `objectId`, answer with this hook's result (or a
+ * promise for it). Return `undefined` when `objectId` names nothing; the
+ * enliven then rejects without revealing `objectId`. Without the hook, every
+ * such enliven rejects. `objectId` is the only access check on this path, so
+ * it must be an unguessable bearer secret, like a swiss number.
  * @property {(MakeCapTPImportExportTablesOptions) => CapTPImportExportTables} [makeCapTPImportExportTables] provide external import/export tables
  * @property {(err: Error, errorId?: string) => void} [marshalSaveError]
  * forwarded to the underlying `makeMarshal` call. Invoked after the
@@ -252,9 +255,32 @@ export const makeDefaultCapTPImportExportTables = ({
  * @property {string} peerId the peer that holds the referent
  * @property {string} objectId the peer's name for the referent, such as a
  * swiss number
- * @property {string} [designator] the network the peer is reachable on
+ * @property {string} [network] the network the peer is reachable on
  * @property {Record<string, string>} [hints] how to connect to the peer
  */
+
+/**
+ * The entries of `record` if it is an object whose own properties are all
+ * enumerable string-keyed strings, or `undefined` otherwise. The entries are
+ * read once, so a getter or proxy cannot answer validation and copying
+ * differently.
+ *
+ * @param {unknown} record
+ * @returns {[string, string][] | undefined}
+ */
+const stringRecordEntries = record => {
+  if (typeof record !== 'object' || record === null) {
+    return undefined;
+  }
+  const entries = Object.entries(record);
+  if (
+    Reflect.ownKeys(record).length !== entries.length ||
+    !entries.every(([_key, value]) => typeof value === 'string')
+  ) {
+    return undefined;
+  }
+  return entries;
+};
 
 /** @type {CapTPRejectionContext} */
 const PROMISE_REJECTION = harden({
@@ -499,7 +525,9 @@ export const makeCapTP = (
   // Used to construct slot names for questions.
   // In this version of CapTP we use strings for export/import slot names.
   // prefixed with 'p' if promises, 'q' for questions, 'o' for objects,
-  // and 't' for traps.;
+  // and 't' for traps.
+  // 'l-0' is a fixed singleton, not a `+`/`-` pair: it names the peer's
+  // SturdyRef locator (see `makeSturdyRefFromData`).
   let lastQuestionID = 0;
   let lastTrapID = 0;
   let lastSturdyRefID = 0;
@@ -834,7 +862,13 @@ export const makeCapTP = (
 
       const [prop, args] = decodeMethod(obj.method);
       let val;
-      if (answers.has(target)) {
+      if (target === 'l-0') {
+        // The peer is enlivening a SturdyRef it constructed from data. The
+        // target is our SturdyRef locator, which answers only `locate`.
+        // Checked before `answers` so a peer-chosen question id cannot
+        // shadow it.
+        val = sturdyRefLocator;
+      } else if (answers.has(target)) {
         val = answers.get(target);
       } else if (typeof target === 'string' && target[0] === 's') {
         // The peer is enlivening a SturdyRef we exported. The target is
@@ -852,10 +886,6 @@ export const makeCapTP = (
                   X`SturdyRef export ${slot} answers only enliven(), not ${q(prop)}`,
                 ),
               );
-      } else if (target === 'l-0') {
-        // The peer is enlivening a SturdyRef it constructed from data. The
-        // target is our SturdyRef locator, which answers only `locate`.
-        val = sturdyRefLocator;
       } else {
         val = unserialize({
           body: JSON.stringify({
@@ -1143,12 +1173,16 @@ export const makeCapTP = (
   const sturdyRefLocator = harden({
     /** @param {string} objectId */
     locate: async objectId => {
+      // Intentionally do NOT include `objectId` in errors: it is the secret.
       typeof objectId === 'string' ||
-        Fail`SturdyRef object id must be a string, not ${objectId}`;
+        Fail`SturdyRef object id must be a string`;
       if (locateSturdyRef === undefined) {
         throw Fail`CapTP ${ourId} does not locate SturdyRefs from data`;
       }
-      return locateSturdyRef(objectId);
+      const located = await locateSturdyRef(objectId);
+      located !== undefined ||
+        Fail`CapTP ${ourId} has no SturdyRef for the requested object id`;
+      return located;
     },
   });
 
@@ -1163,7 +1197,7 @@ export const makeCapTP = (
   /**
    * Construct a SturdyRef from its recorded coordinates. Enlivening it asks
    * the peer's `locateSturdyRef` hook for `objectId` over this connection, so
-   * it fails once the connection is gone. `designator` and `hints` are
+   * it fails once the connection is gone. `network` and `hints` are
    * recorded for the layer that routes connections; a single CapTP
    * connection does not interpret them.
    *
@@ -1177,7 +1211,7 @@ export const makeCapTP = (
     const {
       peerId: dataPeerId,
       objectId,
-      designator = undefined,
+      network = undefined,
       hints = {},
       ...rest
     } = data;
@@ -1185,14 +1219,13 @@ export const makeCapTP = (
     extra.length === 0 || Fail`Unexpected SturdyRef data properties ${extra}`;
     typeof dataPeerId === 'string' ||
       Fail`SturdyRef peerId must be a string, not ${dataPeerId}`;
-    typeof objectId === 'string' ||
-      Fail`SturdyRef objectId must be a string, not ${objectId}`;
-    designator === undefined ||
-      typeof designator === 'string' ||
-      Fail`SturdyRef designator must be a string, not ${designator}`;
-    (typeof hints === 'object' &&
-      hints !== null &&
-      Object.values(hints).every(hint => typeof hint === 'string')) ||
+    // Intentionally do NOT include `objectId` in errors: it is the secret.
+    typeof objectId === 'string' || Fail`SturdyRef objectId must be a string`;
+    network === undefined ||
+      typeof network === 'string' ||
+      Fail`SturdyRef network must be a string, not ${network}`;
+    const hintEntries =
+      stringRecordEntries(hints) ??
       Fail`SturdyRef hints must be a record of strings, not ${hints}`;
     peerId === undefined ||
       dataPeerId === peerId ||
@@ -1201,8 +1234,8 @@ export const makeCapTP = (
     const recorded = harden({
       peerId: dataPeerId,
       objectId,
-      ...(designator === undefined ? {} : { designator }),
-      hints: { ...hints },
+      ...(network === undefined ? {} : { network }),
+      hints: Object.fromEntries(hintEntries),
     });
     const sturdyRef = /** @type {import('@endo/pass-style').SturdyRef} */ (
       makeSturdyRef(

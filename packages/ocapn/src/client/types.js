@@ -375,7 +375,7 @@
  *   Peers resolve the secret against their own `NonceLocator`.
  * @property {(data: SturdyRefData) => SturdyRef} makeSturdyRefFromData
  *   Construct a SturdyRef from its recorded coordinates: peer id
- *   (designator), object id (swiss number), network designator, and
+ *   (designator), object id (swiss number), network, and
  *   connection hints. Closely held, like the client.
  * @property {(sturdyRef: SturdyRef) => SturdyRefData | undefined} getSturdyRefData
  *   The coordinates of a SturdyRef this client minted, including its
