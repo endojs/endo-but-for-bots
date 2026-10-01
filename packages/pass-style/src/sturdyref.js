@@ -61,6 +61,13 @@ const hasOwnHiddenDataValue = (object, key, expected) => {
 let brandCheck;
 
 /**
+ * Whether the brand check is already running. `passStyleOf`'s cycle guard is
+ * per call, so an `isSturdyRef` that calls back into `passStyleOf` would
+ * otherwise recurse without bound. A reentrant check rejects its candidate.
+ */
+let checking = false;
+
+/**
  * @returns {((value: object) => boolean) | undefined}
  */
 const provideBrandCheck = () => {
@@ -88,10 +95,16 @@ const provideBrandCheck = () => {
       if (getPrototypeOf(value) !== prototype || ownKeys(value).length !== 0) {
         return false;
       }
+      if (checking) {
+        return false;
+      }
+      checking = true;
       try {
         return apply(isSturdyRef, SturdyRef, [value]) === true;
       } catch {
         return false;
+      } finally {
+        checking = false;
       }
     };
   }
