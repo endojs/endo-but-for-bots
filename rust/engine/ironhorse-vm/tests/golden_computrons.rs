@@ -36,7 +36,7 @@ fn frozen_program_results_and_computrons() {
     }
     assert_eq!(
         labels.len(),
-        55,
+        57,
         "review family coverage when extending the corpus"
     );
 }

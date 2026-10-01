@@ -1,4 +1,4 @@
-# ironhorse-meter-5 runtime cost corpus: label, source, halt, result, raw, computrons
+# ironhorse-meter-6 runtime cost corpus: label, source, halt, result, raw, computrons
 dispatch	1+2*3	return	7	804120	12
 slots	var a={x:1,y:2}; a.x+a.y	return	3	2247776	34
 default-key	var a={}; a.length=3; a.length	return	3	1886512	28
@@ -20,6 +20,8 @@ date	new Date(0).getUTCFullYear()	return	1970	1066264	16
 generator	function* g(){yield 1;yield 2} var it=g(); it.next().value+it.next().value	return	3	4775976	72
 promise	var x=0; Promise.resolve(3).then(function(v){x=v}); 1	return	1	4871288	74
 iterator	var s=0; for(var x of [1,2,3]) s+=x; s	return	6	11605056	177
+for-in	var n=0; for(var k in {a:1,b:2}) n++; n	return	2	9201280	140
+for-in-nullish	var n=0; for(var k in null) n++; for(var k in undefined) n++; n	return	0	6526296	99
 symbol	var s=Symbol("x"); var o={}; o[s]=7; o[s]	return	7	3182432	48
 throw	throw 7	throw:7		443672	6
 catch	try{throw 7}catch(e){e+1}	return	8	2639128	40

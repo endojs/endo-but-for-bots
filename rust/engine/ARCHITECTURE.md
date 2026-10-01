@@ -359,7 +359,7 @@ Provider identity participates in the boot fingerprint, independently of the wei
 See [the implementation record](DETERMINISM-METERING.md) for coverage and scope.
 Canonical NaNs are enforced on slot construction and independently by the snapshot codec.
 
-The current meter release is `ironhorse-meter-5`.
+The current meter release is `ironhorse-meter-6`.
 The release name and table digest are both needed: releases 3, 4 and 5 share weights
 but differ in charging/admission policy.
 The VM, compiler and regexp engine use the shared cost definitions.
@@ -378,7 +378,7 @@ The table covers the review identifiers and the capture/restore row contract.
 
 | Identifier | Owner and current value | Bump rule and compatibility cost |
 |---|---|---|
-| `COST_TABLE_VERSION` | `ironhorse-meter/src/lib.rs`: `ironhorse-meter-5` | Change weights, charging points or admission policy by appending to `releases::PINNED`, changing the release literal and deliberately updating golden vectors together. `METR` requires both matching name and digest; old-meter persisted heaps cannot resume on the new engine. |
+| `COST_TABLE_VERSION` | `ironhorse-meter/src/lib.rs`: `ironhorse-meter-6` | Change weights, charging points or admission policy by appending to `releases::PINNED`, changing the release literal and deliberately updating golden vectors together. `METR` requires both matching name and digest; old-meter persisted heaps cannot resume on the new engine. |
 | `PARSE_METER_RELEASE` | `ironhorse-compile/src/meter.rs`: alias of `COST_TABLE_VERSION` | No independent bump. Compiler charge/admission changes follow the shared meter release procedure; do not recreate a second version namespace. |
 | `IRONHORSE_FORMAT_VERSION` | Snapshot `format.rs`: 24 | Change the container encoding/interpretation with a format bump and explicit decoder support/refusal. `MIN_READ` is 1, but decoding an old container is not permission to execute it: boot and meter identity gates still apply. |
 | `STORE_SCHEMA_VERSION` | Snapshot `store.rs`: 36 | Change paged-store/manifest/small-state representation with a schema bump and a migration step or explicit refusal. `migrate_store` advances monotonically through an in-memory ladder over the manifest and small state, checks the result against the stored rows with the metadata-scale `validate_store` checks, and writes it once with `HeapStore::replace_for_migration`, which refuses a store that moved since the migration read it; it does not translate old meter semantics. |
