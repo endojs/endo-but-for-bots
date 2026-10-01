@@ -4,6 +4,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 import { Far } from '@endo/pass-style';
+import process from 'node:process';
 import { setTimeout as delay } from 'node:timers/promises';
 
 import { makePipe } from '@endo/stream';
@@ -672,3 +673,36 @@ test('writerFromIterator enforces writeReturnPattern on early close', async t =>
   t.is(ackHead.value, 123);
   t.is(returnedValue, 123);
 });
+
+test.serial(
+  'a writer iterator abandoned before its first pull does not leak a stream rejection',
+  async t => {
+    // See the iterateReader test of the same name in reader.test.js.
+    /** @type {unknown[]} */
+    const unhandledReasons = [];
+    /** @param {unknown} reason */
+    const onUnhandledRejection = reason => {
+      unhandledReasons.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    t.teardown(() => {
+      process.off('unhandledRejection', onUnhandledRejection);
+    });
+
+    const lost = harden(Error('connection lost before the first pull'));
+    const writerRef = Far('LostWriter', {
+      stream: async () => {
+        await delay(0);
+        throw lost;
+      },
+    });
+    const iterator = iterateWriter(/** @type {any} */ (writerRef));
+    await delay(10);
+
+    t.deepEqual(unhandledReasons, []);
+    // The rejection is still reported to a consumer that does pull.
+    await t.throwsAsync(() => iterator.next(harden({ type: 'message' })), {
+      is: lost,
+    });
+  },
+);
