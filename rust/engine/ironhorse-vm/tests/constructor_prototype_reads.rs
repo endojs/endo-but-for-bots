@@ -11,7 +11,7 @@
 //!
 //! Each case runs on its own machine. Every expectation is the XS oracle's
 //! answer, except where a case says the specification (and V8) is followed
-//! instead; the PR that added a table lists those departures.
+//! instead; `ironhorse-262/tests/xs_departures.rs` records those departures.
 mod common;
 use common::TestCompiler;
 
