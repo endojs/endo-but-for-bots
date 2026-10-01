@@ -1,6 +1,7 @@
 // @ts-check
 
 /** @import { ERef } from '@endo/eventual-send' */
+/** @import { EndoHost } from '@endo/daemon' */
 /** @import { Evaluate, EvaluateInput } from './types.js' */
 
 import { E } from '@endo/eventual-send';
@@ -17,10 +18,10 @@ const toPetNamePath = nameOrPath =>
 /**
  * Build a daemon-hosted evaluate function.
  * The host is supplied as a live powers reference and is expected to expose
- * the daemon's existing `evaluate(workerName, source, codeNames, petNames,
- * resultName)` method.
+ * the daemon's `evaluate(workerNamePath, source, codeNames, petNamePaths,
+ * resultNamePath)` method.
  *
- * @param {ERef<{ evaluate: (workerName: undefined, source: string, codeNames: string[], petNames: string[][], resultName?: string[]) => Promise<unknown> }>} powers
+ * @param {ERef<Pick<EndoHost, 'evaluate'>>} powers
  * @returns {Evaluate}
  */
 export const makeDaemonEvaluate = powers => {

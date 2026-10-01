@@ -6,9 +6,9 @@ export type PowerHandle = object;
 /** A code-mode power passed inline or resolved from a lookup handle. */
 export type CodeModePower = ERef<PowerHandle>;
 
-/** The host capability used to resolve powers by pet name. */
+/** The host capability used to resolve powers by pet-name path. */
 export type LookupPowers = {
-  lookup: (petName: string | string[]) => Promise<PowerHandle>;
+  lookup: (petNamePath: string[]) => Promise<PowerHandle>;
 };
 
 /** Store a completion value under a pet name or pet-name path. */
