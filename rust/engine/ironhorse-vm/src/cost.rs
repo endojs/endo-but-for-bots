@@ -109,7 +109,8 @@ mod on {
 
         /// Record one native builtin invocation, keyed by the dispatched
         /// prototype method. Called at the `call_native_method` dispatch
-        /// seam.
+        /// seam, and where `invoke_regexp_protocol` calls an intrinsic RegExp
+        /// method in place of it.
         #[inline]
         pub fn on_builtin(&mut self, method: NativeMethod) {
             *self.builtins.entry(method).or_insert(0) += 1;

@@ -310,7 +310,9 @@ impl Interp {
         // is itself an array, `Function.prototype.call` trampolining, an
         // accessor's native setter re-entering itself — nests this frame on
         // the host stack, so it is charged at the heavy class and bounded by
-        // [`NATIVE_DEPTH_LIMIT`].
+        // [`NATIVE_DEPTH_LIMIT`]. `invoke_regexp_protocol` (natives/regexp.rs)
+        // repeats this charge for the intrinsic RegExp protocol methods it
+        // calls in place: keep the two in step.
 
         self.with_native_frame(HEAVY_FRAME_COST, |vm| {
             // These accessors can recursively Set their own copied descriptor.
@@ -553,6 +555,9 @@ impl Interp {
                 args_fresh = false;
                 continue;
             }
+            // `invoke_regexp_protocol` (natives/regexp.rs) calls the intrinsic
+            // RegExp protocol methods without this dispatch, after the same
+            // tests as the turns above: keep the two in step.
             if native.is_some() || method.is_some() {
                 // Native / native-method: build the [THIS, FUNCTION, RESULT,
                 // FRAME] frame + args, dispatch, and take the pushed result.
