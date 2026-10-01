@@ -193,6 +193,7 @@ test.serial('shutdown waits for an accepted native installation', async t => {
     harden({
       ...powers,
       bundler: harden({
+        ...powers.bundler,
         bundle: async file => {
           bundleStarted(undefined);
           await gate;

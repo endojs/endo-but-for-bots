@@ -25,10 +25,13 @@ harden(MAX_EXIT_NOTICE_DELAY_MS);
 /**
  * Each native incarnation is an ephemeral session: no heap or input replay.
  *
- * A launcher is described by the code it launches and the manager vat that
+ * A launcher is described by the code it launches, the digest of the stored
+ * ephemeral bundle (`description.bundleDigest`), and the manager vat that
  * owns it (`description.workerId`), so the processes a manager started can
  * be closed with the manager: retiring a vat retires the host resources it
- * owns, and a native process is one.
+ * owns, and a native process is one. `bundlePath` says where the store
+ * keeps a bundle, for the process to load; the process checks the digest
+ * over the bytes it finds there.
  *
  * An incarnation that exits on its own, rather than through `retire`, its
  * owner's retirement or shutdown, is reported to its owner through
@@ -37,11 +40,11 @@ harden(MAX_EXIT_NOTICE_DELAY_MS);
  * that needs an adapter or for the next daemon start.
  *
  * @param {{nativeWorkers?: NativeWorkerPowers, random: RandomPowers, timers: TimerPowers}} powers
- * @param {{hub: any, importBootstrap: (id: string) => any, onAdapterExit?: (workerId: string) => void}} options
+ * @param {{hub: any, importBootstrap: (id: string) => any, bundlePath: (digest: string) => string, onAdapterExit?: (workerId: string) => void}} options
  */
 export const makeNativeAdapters = (
   { nativeWorkers, random, timers },
-  { hub, importBootstrap, onAdapterExit = () => {} },
+  { hub, importBootstrap, bundlePath, onAdapterExit = () => {} },
 ) => {
   const opening = makeInFlight();
   const cleanupFailure = makeFirstFailure();
@@ -114,9 +117,10 @@ export const makeNativeAdapters = (
 
   /** @param {any} description */
   const resource = description => {
-    const { workerId: owner } = /** @type {{ workerId?: string }} */ (
-      description ?? {}
-    );
+    const { workerId: owner, bundleDigest } =
+      /** @type {{ workerId?: string, bundleDigest?: string }} */ (
+        description ?? {}
+      );
     return Far('NativeAdapterLauncher', {
       help: () =>
         'create() starts a fresh native adapter from this installation.',
@@ -127,6 +131,13 @@ export const makeNativeAdapters = (
             if (owner !== undefined && retiredOwners.has(owner))
               throw Error('Native adapters of a retired vat cannot start');
             if (!nativeWorkers) throw Error('Native workers are unavailable');
+            // A launcher recorded by a build that started the process from
+            // the resource's directory names no bundle, and nothing can be
+            // launched for it now: the installation is to be made again.
+            if (typeof bundleDigest !== 'string')
+              throw Error(
+                'This native resource was installed before its ephemeral module was bundled at installation; remove it and install it again',
+              );
             const id = `transient:native:${randomHex128(random)}`;
             /** @type {any} */
             let sink;
@@ -135,11 +146,8 @@ export const makeNativeAdapters = (
             let exited = false;
             const child = await nativeWorkers.start({
               id,
-              moduleUrl: description.moduleUrl,
-              // A description recorded before the field was renamed still
-              // names the identity the process must verify.
-              resourceIdentity:
-                description.resourceIdentity ?? description.packageIdentity,
+              bundlePath: bundlePath(bundleDigest),
+              bundleDigest,
               onFrame: bytes => {
                 if (exited) return;
                 if (sink) sink.deliver(bytes);

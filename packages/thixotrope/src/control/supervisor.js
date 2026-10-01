@@ -81,8 +81,10 @@ import {
 // is described by the manager, so retiring the manager closes its processes;
 // 7: one `installations` registry for applications and native resources,
 // whose values live in the inventory under their names; 8: the clock and the
-// mailbox are installations the supervisor provides, each in its own vat.
-const WORKSPACE_VERSION = 8;
+// mailbox are installations the supervisor provides, each in its own vat;
+// 9: native adapters are launched from bundles stored under their digest,
+// which the launcher's description names in place of a directory.
+const WORKSPACE_VERSION = 9;
 
 // sun_path on the strictest supported platform: 104 bytes including the NUL.
 const MAX_SOCKET_PATH_BYTES = 103;
@@ -282,10 +284,11 @@ export const serveThixotrope = async (
   };
 
   try {
+    const store = makeFsStore({ syncFiles, paths }, statePath);
     daemon = await makeThixotropeDaemon(
       { timers, random, logging },
       {
-        store: makeFsStore({ syncFiles, paths }, statePath),
+        store,
         engine: measured,
         nativeWorkers: platform.nativeWorkers,
         codec: syrupCodec,
@@ -610,6 +613,14 @@ export const serveThixotrope = async (
           throw Error('The workspace vat is quarantined; repair it first');
         return E(inventory).subscriptionCounts();
       },
+      /**
+       * Install a native resource from its directory: both entry modules
+       * are bundled now, the durable one for the manager vat and the
+       * ephemeral one into the store under its digest, for every process
+       * the manager launches.
+       * @param {string} name
+       * @param {string} directory
+       */
       installNative: (name, directory) =>
         serialized(async () => {
           assertWorkspace();
@@ -621,6 +632,11 @@ export const serveThixotrope = async (
           );
           const { bundle, digest: bundleDigest } =
             await platform.bundler.bundle(description.durablePath);
+          const ephemeralBundleDigest = store.putBundle(
+            await platform.bundler.bundleNative(
+              paths.fileURLToPath(description.moduleUrl),
+            ),
+          );
           const checked = await describeNativeResource(
             { files, paths, hashes },
             description.directory,
@@ -643,11 +659,7 @@ export const serveThixotrope = async (
             bundle,
             makeAdapters: workerId =>
               daemon.makeResource('native-adapter', {
-                moduleUrl: description.moduleUrl,
-                resourceIdentity: {
-                  directory: description.directory,
-                  digest: description.digest,
-                },
+                bundleDigest: ephemeralBundleDigest,
                 workerId,
               }),
           });

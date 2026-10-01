@@ -15,9 +15,11 @@
 /**
  * @typedef {object} NativeWorkerStartOptions
  * @property {string} id
- * @property {string} moduleUrl
- * @property {{ directory: string, digest: string }} [resourceIdentity] the
- *   installed directory the process must verify before importing `moduleUrl`
+ * @property {string} bundlePath the stored ephemeral bundle: a CommonJS
+ *   module whose exports are the entry module's namespace
+ * @property {string} bundleDigest SHA-256 hex over the file's bytes, which
+ *   the process verifies before loading it; a file that does not match does
+ *   not run
  * @property {(bytes: Uint8Array) => void} onFrame
  * @property {() => void} onExit
  */

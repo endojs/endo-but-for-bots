@@ -3,14 +3,50 @@ import { E } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import test from '@endo/ses-ava/test.js';
+import { mkdtemp, rm } from 'node:fs/promises';
 import process from 'node:process';
 import { setImmediate } from 'node:timers';
+import { fileURLToPath } from 'node:url';
 
 import { makeThixotropeDaemon } from '../src/core/daemon.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { QUICK_EXIT_MS, makeNativeAdapters } from '../src/native/adapters.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
-import { makeMemoryStore } from '../src/store/store-memory.js';
+import { makeFsStore } from '../src/store/store-fs.js';
+
+/** @import { ExecutionContext } from 'ava' */
+
+const fixturePath = fileURLToPath(
+  new URL('./fixtures/native-resource.js', import.meta.url),
+);
+
+/**
+ * A daemon over a filesystem store in a fresh directory, holding the
+ * single-file fixture bundled the way an installation stores it, so a
+ * launcher naming the bundle's digest starts a real process from it. The
+ * bundle is stored once the daemon is up, as an installation stores it: a
+ * start frees every bundle no launcher names.
+ * @param {ExecutionContext} t
+ */
+const makeNativeFixture = async t => {
+  const path = await mkdtemp('/tmp/thix-native-adapter-');
+  t.teardown(() => rm(path, { recursive: true, force: true }));
+  const powers = makeNodePowers();
+  const store = makeFsStore(powers, path);
+  const daemon = await makeThixotropeDaemon(powers, {
+    store,
+    engine: makePeerJournalReplayEngine(powers),
+    nativeWorkers: powers.nativeWorkers,
+    codec: syrupCodec,
+    makeNetlayer: ({ handlers, logger }) =>
+      makeTcpNetLayer({ handlers, logger }),
+  });
+  t.teardown(() => daemon.shutdown());
+  const bundleDigest = store.putBundle(
+    await powers.bundler.bundleNative(fixturePath),
+  );
+  return { daemon, store, bundleDigest, powers };
+};
 
 /**
  * Timers the test advances by hand: a monotonic clock and a queue of armed
@@ -70,14 +106,14 @@ const makeExitFixture = () => {
       random: makeNodePowers().random,
       timers: fake.timers,
       nativeWorkers: {
-        start: async ({ moduleUrl, onExit }) => {
+        start: async ({ bundleDigest, onExit }) => {
           /** @type {() => void} */
           let resolveClosed = () => {};
           const closed = new Promise(resolve => {
             resolveClosed = () => resolve(undefined);
           });
           const child = {
-            owner: moduleUrl,
+            owner: bundleDigest,
             terminated: false,
             exit: () => {
               onExit();
@@ -102,12 +138,13 @@ const makeExitFixture = () => {
         forgetSession: () => {},
       },
       importBootstrap: () => ({ fetch: async () => 'root' }),
+      bundlePath: digest => `/bundles/${digest}`,
       onAdapterExit: owner => exits.push(owner),
     },
   );
   /** @param {string} owner */
   const launcherOf = owner =>
-    adapters.resource({ moduleUrl: owner, workerId: owner });
+    adapters.resource({ bundleDigest: owner, workerId: owner });
   return { adapters, fake, children, exits, launcherOf };
 };
 
@@ -115,21 +152,9 @@ test.serial(
   'native adapters run in fresh processes and retire without replay',
   async t => {
     t.timeout(30_000);
-    const powers = makeNodePowers();
-    const daemon = await makeThixotropeDaemon(powers, {
-      store: makeMemoryStore(),
-      engine: makePeerJournalReplayEngine(powers),
-      nativeWorkers: powers.nativeWorkers,
-      codec: syrupCodec,
-      makeNetlayer: ({ handlers, logger }) =>
-        makeTcpNetLayer({ handlers, logger }),
-    });
-    t.teardown(() => daemon.shutdown());
+    const { daemon, bundleDigest } = await makeNativeFixture(t);
     const launcher = /** @type {{create: () => Promise<any>}} */ (
-      daemon.makeResource('native-adapter', {
-        moduleUrl: new URL('./fixtures/native-resource.js', import.meta.url)
-          .href,
-      })
+      daemon.makeResource('native-adapter', { bundleDigest })
     );
     const incarnation = await E(launcher).create();
     const root = await E(incarnation).getRoot();
@@ -158,8 +183,8 @@ test.serial(
         random: makeNodePowers().random,
         timers: makeFakeTimers().timers,
         nativeWorkers: {
-          start: async ({ moduleUrl }) => {
-            const child = { owner: moduleUrl, terminated: false };
+          start: async ({ bundleDigest }) => {
+            const child = { owner: bundleDigest, terminated: false };
             children.push(child);
             let resolveClosed;
             const closed = new Promise(resolve => {
@@ -182,11 +207,12 @@ test.serial(
           forgetSession: () => {},
         },
         importBootstrap: () => ({ fetch: async () => 'root' }),
+        bundlePath: digest => `/bundles/${digest}`,
       },
     );
     t.teardown(() => adapters.shutdown());
     const launcherOf = owner =>
-      adapters.resource({ moduleUrl: owner, workerId: owner });
+      adapters.resource({ bundleDigest: owner, workerId: owner });
     await launcherOf('a').create();
     await launcherOf('a').create();
     await launcherOf('b').create();
@@ -251,10 +277,11 @@ test.serial('native shutdown closes a process awaiting its root', async t => {
           });
         },
       }),
+      bundlePath: digest => `/bundles/${digest}`,
     },
   );
   t.teardown(() => adapters.shutdown());
-  const creating = adapters.resource({ moduleUrl: 'fixture' }).create();
+  const creating = adapters.resource({ bundleDigest: 'fixture' }).create();
   const rejected = t.throwsAsync(() => creating, { message: /Root retired/ });
   await requested;
   await adapters.shutdown();
@@ -269,10 +296,10 @@ test.serial('failed native startup reports exit before rejecting', async t => {
     () =>
       makeNodePowers().nativeWorkers.start({
         id: 'failed-start',
-        moduleUrl: new URL(
-          './fixtures/absent-native-module.js',
-          import.meta.url,
-        ).href,
+        bundlePath: fileURLToPath(
+          new URL('./fixtures/absent-native-bundle.cjs', import.meta.url),
+        ),
+        bundleDigest: '0'.repeat(64),
         onFrame() {},
         onExit: () => {
           exited = true;
@@ -366,16 +393,7 @@ test.serial(
   'a process that exits on its own is reported to the vat that owns it, which may rebuild',
   async t => {
     t.timeout(30_000);
-    const powers = makeNodePowers();
-    const daemon = await makeThixotropeDaemon(powers, {
-      store: makeMemoryStore(),
-      engine: makePeerJournalReplayEngine(powers),
-      nativeWorkers: powers.nativeWorkers,
-      codec: syrupCodec,
-      makeNetlayer: ({ handlers, logger }) =>
-        makeTcpNetLayer({ handlers, logger }),
-    });
-    t.teardown(() => daemon.shutdown());
+    const { daemon, bundleDigest } = await makeNativeFixture(t);
     const worker = await daemon.createWorker({ debugLabel: 'owner' });
     // The owner's lifecycle object, held by the vat and registered for
     // notices as a manager's is; it counts what the host tells it.
@@ -390,8 +408,7 @@ test.serial(
     worker.notifyOnStart(lifecycle);
     const launcher = /** @type {{create: () => Promise<any>}} */ (
       daemon.makeResource('native-adapter', {
-        moduleUrl: new URL('./fixtures/native-resource.js', import.meta.url)
-          .href,
+        bundleDigest,
         workerId: worker.workerId,
       })
     );
