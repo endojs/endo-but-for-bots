@@ -3,8 +3,26 @@
 | | |
 |---|---|
 | **Created** | 2026-10-01 |
+| **Updated** | 2026-10-01 |
 | **Author** | kumavis (prompted) |
-| **Status** | Proposed |
+| **Status** | In Progress |
+
+## Implementation status
+
+Implementation is authorized; the first slice removes the misleading dynamic
+`mount`, `scratch`, `open`, `fork`, and unused `reset` methods from public and native
+slice contracts, together with the tracker-only `SandboxMount` capability.
+Static mount declarations, process supervision, admission fencing, and owned disposal remain.
+Interface enumeration tests pin the smaller surface without old-name aliases.
+The portable spawner/Shell adapter, durable environment provisioning, independent
+egress composition, and Fae/Floot acceptance remain to be implemented.
+No new native recovery mechanism or deployment is included in this slice.
+Focused factory, native-factory, ownership, lifecycle, and runtime suites pass
+78 tests in each of the four SES configurations; package types and ESLint pass
+with warnings, and root documentation builds with 0 errors and 180 warnings.
+The full sandbox suite is not green: two unchanged direct Podman-driver
+environment-extensibility assertions fail in the unsafe configuration.
+No live Podman acceptance is claimed on this macOS development host.
 
 ## Problem and scope
 
@@ -17,8 +35,8 @@ Floot should compose these capabilities rather than maintain a parallel environm
 The proposed direction is to reuse `@endo/exo-shell`, the sandbox process interfaces,
 and existing formula and storage mechanisms, with adapters only where contracts actually differ.
 The primary goal remains less duplicated code, less dead code, and clearer ownership and ontology.
-This document records the investigation and a proposed implementation sequence, not an
-implemented API or approval to build a new lifecycle framework.
+This document records the investigation, implementation progress, and remaining sequence,
+not approval to build a new lifecycle framework.
 It does not add a merge gate to [PR #1248](https://github.com/endojs/endo-but-for-bots/pull/1248).
 
 Automatic recovery after native process loss remains separate research in
@@ -27,7 +45,7 @@ Automatic recovery after native process loss remains separate research in
 Durable environment configuration does not imply that a running process, its streams,
 or the outcome of an interrupted command can be recovered.
 
-## Current implementation
+## Investigation baseline
 
 The following findings describe application revision `43d27e5f3` and host revision `f3dc1a8`.
 The investigation used source inspection and existing focused factory/runtime and shell tests.
@@ -95,15 +113,14 @@ operation at its capture bound and propagate read failures.
 Termination and descendant cleanup differ between the host spawner and Podman as well.
 Matching method names do not establish equivalent limits or error reporting.
 
-### Some slice methods overstate the implemented behavior
+### Retired slice methods overstated the implemented behavior
 
-In the current [`factory`](../packages/sandbox/src/factory.js), dynamic `mount()`
-mints a tracker without performing a new mount, and `scratch()` allocates and tracks
-storage without dynamically attaching it.
-`open()` and `fork()` refuse as unimplemented.
-`reset()` kills tracked live processes; it does not restore a filesystem snapshot.
-These surfaces need truthful semantics or removal before being advertised as general
-environment management.
+At the investigation baseline, dynamic `mount()` minted a tracker without performing
+a new mount, and `scratch()` allocated and tracked storage without dynamically attaching it.
+`open()` and `fork()` refused as unimplemented.
+`reset()` killed tracked live processes without restoring a filesystem snapshot.
+These methods and the tracker-only mount capability are now removed from the
+[`factory`](../packages/sandbox/src/factory.js), guards, types, and help.
 Tokyo is the only consumer; old names and unsupported option shapes need no compatibility aliases.
 
 ## Proposed capability boundaries
@@ -245,12 +262,12 @@ through the portable shell.
 | [Source bulk audit](../packages/floot/SOURCE-BULK-AUDIT.md) | Deletion-before-abstraction work and the clarified decision to keep sharing/delegation |
 | [Refactor alignment](../packages/floot/REFACTOR-ALIGNMENT.md) | Current implementation and acceptance status for #1248 |
 
-Assign this proposed follow-up to M10, with a Shell integration dependency on the M3
+Assign this implementation to M10, with a Shell integration dependency on the M3
 agent-tool work.
 Size and duration remain unestimated until the contract and minimum durability requirements
 are reviewed; no additional critical-path duration is assigned.
 
-## Proposed implementation sequence
+## Implementation sequence
 
 1. **Decide the contract and minimum state.** Specify the roles, failure semantics,
    authority descriptors, restart guarantees, and retained evidence before adding interfaces.

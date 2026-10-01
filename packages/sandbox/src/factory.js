@@ -12,7 +12,6 @@ import { M } from '@endo/patterns';
 import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
 
 import {
-  MountHandleInterface,
   ProcessHandleInterface,
   SandboxFactoryInterface,
   SandboxHandleInterface,
@@ -23,7 +22,7 @@ import { makeResourceRegistry } from './resource-registry.js';
 import { resolveLimits } from './limits.js';
 import { validateGeneratedFiles } from './generated-files.js';
 
-/** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, MountHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
+/** @import { MakeSandboxFactoryInput, SandboxFactory, SandboxMakeOpts, SandboxDriver, BackendProbe, MountSpec, SliceSpec, MountCap, MountMode, SandboxHandle, ProcessHandle, SpawnOpts, DriverProcess, RootfsSpec, TerminationSignal } from './types.js' */
 /** @import { NativeSandboxMakeOpts, NativeSandboxHandle, MakeSandboxFactoryKitInput } from './native-factory-types.js' */
 
 const NativeHandleInterface = harden(
@@ -33,7 +32,6 @@ const NativeHandleInterface = harden(
       .optional(NativeSpawnOptsShape)
       .returns(M.promise()),
     policy: M.call().returns(M.promise()),
-    reset: M.call().returns(M.promise()),
     dispose: M.call().returns(M.promise()),
   }),
 );
@@ -67,18 +65,12 @@ const METHOD_HELP = harden({
 const HANDLE_HELP_BASE = `\
 SandboxHandle — a live confined POSIX slice.
 
-Pinned by the formula that minted it. When dropped, every
-ProcessHandle is killed and every MountHandle is unmounted before the
-driver tears down the underlying namespace.
+Static mounts are declared at construction. Disposal fences new work,
+kills owned processes, and tears down the underlying namespace.
 
 Methods:
   spawn(argv, opts)   Spawn a process in the slice.
   policy()            Report the slice's policy attestation.
-  mount(cap, …)       Bind a Mount capability into the slice.
-  scratch(innerPath)  Mint an ephemeral scratch mount.
-  open(innerPath)     Open a single file inside the slice.
-  fork(opts)          Mint a nested sub-slice (Phase 3).
-  reset()             Tear down processes / scratch, keep mounts.
   dispose()           Full teardown.
 `;
 
@@ -191,16 +183,6 @@ Methods:
   kill(signal?)       Terminate the process tree: deliver the
                       termination signal (SIGTERM by default), escalate
                       to SIGKILL, and reap.
-`;
-
-const MOUNT_HELP = `\
-MountHandle — a mount bound into a slice.
-
-Methods:
-  innerPath()  Path inside the slice.
-  cap()        Back-reference to the original Mount capability.
-  mode()       'ro' or 'rw'.
-  unmount()    Detach the mount from the slice.
 `;
 
 const KILL_GRACE_MS = 1000;
@@ -675,7 +657,7 @@ export const makeSandboxFactoryKit = (
       };
     }
     // Retain before waiting for preparation, rendering, or handle construction.
-    // Once built, disposal also releases processes and dynamic mounts.
+    // Once built, disposal also releases processes.
     let disposeOwned = preparation.close;
     /** @type {Promise<void> | undefined} */
     let cleanupFlight;
@@ -704,29 +686,8 @@ export const makeSandboxFactoryKit = (
       sliceSpec,
     );
 
-    /**
-     * Refuse the mount-granting methods on a policy slice.
-     *
-     * The policy declares the whole mount table and `policy()` attests
-     * that table as exact. Handing back a `MountHandle` afterwards would
-     * consume a host scratch allocation the daemon must later reclaim and
-     * report an `innerPath` the slice does not have — a capability that
-     * contradicts the attestation the same slice hands out.
-     *
-     * @param {string} method
-     */
-    const assertNoPolicy = method => {
-      if (needsPolicy) {
-        throw makeError(
-          X`${q(method)} is not available on a policy slice: the policy declares the whole mount table`,
-        );
-      }
-    };
-
     /** @type {Set<{ killAndReap: (reason: Error, initialSignal?: TerminationSignal) => Promise<void> }>} */
     const liveProcesses = new Set();
-    /** @type {Set<MountHandle>} */
-    const liveMounts = new Set();
     /** @type {Promise<void> | undefined} */
     let disposePromise;
     /** @type {Error | undefined} */
@@ -1084,76 +1045,6 @@ export const makeSandboxFactoryKit = (
     };
 
     /**
-     * @param {MountCap} cap
-     * @param {string} innerPath
-     * @param {MountMode} [mode]
-     * @returns {MountHandle}
-     */
-    const makeMountHandle = (cap, innerPath, mode = 'ro') => {
-      let unmounted = false;
-      /** @type {MountHandle} */
-      const m = /** @type {any} */ (
-        makeExo('SandboxMount', /** @type {any} */ (MountHandleInterface), {
-          help: () => MOUNT_HELP,
-          innerPath: () => innerPath,
-          cap: () => /** @type {any} */ (cap),
-          mode: () => mode,
-          unmount: async () => {
-            unmounted = true;
-            liveMounts.delete(m);
-          },
-        })
-      );
-      void unmounted;
-      liveMounts.add(m);
-      return m;
-    };
-
-    /**
-     * @param {MountCap} cap
-     * @param {string} innerPath
-     * @param {MountMode} [mode]
-     */
-    const mountInSlice = async (cap, innerPath, mode = 'ro') => {
-      assertRunning();
-      assertNoPolicy('mount');
-      // Phase 1 only supports mounts declared at slice construction;
-      // dynamic mounts after the fact would require remounting bwrap.
-      // We still mint a tracker so dispose() can iterate.
-      return makeMountHandle(cap, innerPath, mode);
-    };
-
-    /**
-     * @param {string} innerPath
-     */
-    const scratchInSlice = async innerPath => {
-      assertRunning();
-      assertNoPolicy('scratch');
-      // Lifecycle is bound to the slice; the daemon's scratch GC
-      // sweeps the host directory when the cap is unpinned.
-      const scratchCap = /** @type {MountCap} */ (
-        await E(requireScratchProvider()).provideScratchMount(
-          `sandbox-scratch-${innerPath.replace(/[^a-zA-Z0-9-]/g, '-')}`,
-        )
-      );
-      assertRunning();
-      return makeMountHandle(scratchCap, innerPath, 'rw');
-    };
-
-    /**
-     * @param {string} innerPath
-     */
-    const openInSlice = async innerPath => {
-      throw makeError(
-        X`open(${q(innerPath)}) requires a ReadableFile cap from the slice driver; not implemented before Phase 2`,
-      );
-    };
-
-    const forkSlice = async () => {
-      throw makeError(X`fork not implemented before Phase 3`);
-    };
-
-    /**
      * Report the slice's policy attestation.
      *
      * `assertRunning` first: an attestation is a statement about a
@@ -1170,13 +1061,6 @@ export const makeSandboxFactoryKit = (
         );
       }
       return driver.policy(driverSlice);
-    };
-
-    const resetSlice = async () => {
-      const reason = makeError(X`sandbox handle reset`);
-      await Promise.all(
-        [...liveProcesses].map(lease => lease.killAndReap(reason)),
-      );
     };
 
     /**
@@ -1210,7 +1094,6 @@ export const makeSandboxFactoryKit = (
               { cause: failure },
             );
           }
-          await Promise.all([...liveMounts].map(m => E(m).unmount()));
           slices.release(sliceId, cleanupOwned);
           liveClosers.delete(cleanupOwned);
         })().catch(error => {
@@ -1228,27 +1111,20 @@ export const makeSandboxFactoryKit = (
     const sharedMethods = {
       help: () =>
         nativeOnly
-          ? `Native sandbox with static mounts. Methods: help, spawn, policy, reset, dispose.\n${sliceRuntimeReport}`
+          ? `Native sandbox with static mounts. Methods: help, spawn, policy, dispose.\n${sliceRuntimeReport}`
           : `${HANDLE_HELP_BASE}\n${sliceRuntimeReport}`,
       spawn: (argv, spawnOptions = {}) => {
         if (nativeOnly) assertCopyData(harden(spawnOptions));
         return spawnProc(argv, spawnOptions);
       },
       policy: attestPolicy,
-      reset: resetSlice,
       dispose: disposeSlice,
     };
     const mintedHandle = /** @type {NativeSandboxHandle | SandboxHandle} */ (
       /** @type {unknown} */ (
         nativeOnly
           ? makeExo('NativeSandboxHandle', NativeHandleInterface, sharedMethods)
-          : makeExo('SandboxHandle', SandboxHandleInterface, {
-              ...sharedMethods,
-              mount: mountInSlice,
-              scratch: scratchInSlice,
-              open: openInSlice,
-              fork: forkSlice,
-            })
+          : makeExo('SandboxHandle', SandboxHandleInterface, sharedMethods)
       )
     );
     // The owner may have been lost while this slice was being built, in

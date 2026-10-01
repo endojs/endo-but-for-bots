@@ -524,8 +524,12 @@ The source review does not establish that either branch is dead.
   The new [durable POSIX environment proposal](../../designs/durable-posix-environments.md)
   records the current Shell, spawner, slice, and ownership differences, with a
   contract-first path for Fae and Floot to share environment authority.
-  It is proposed, not implemented; process-loss recovery remains separate research.
-  This documentation changes no source metric, runtime behavior, or deployed state.
+  Implementation subsequently starts with removal of misleading sandbox dynamic
+  mount/scratch/open/fork/reset methods and tracker-only mount handles, outside
+  this audit's four-package source metric.
+  Static mounts and owned process cleanup remain; Shell/environment integration
+  is pending, and process-loss recovery remains separate research.
+  The deletion is not deployed; the recorded hosted acceptance baseline is unchanged.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.

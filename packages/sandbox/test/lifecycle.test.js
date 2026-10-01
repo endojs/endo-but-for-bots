@@ -674,29 +674,3 @@ test('failed disposal retains the handle for a later owner cancellation sweep', 
   await E(handle).dispose();
   t.is(fixture.counts().teardownCalls, 2);
 });
-
-test('disposal fences a scratch capability returned after provider admission', async t => {
-  t.timeout(3000);
-  const entered = makePromiseKit();
-  const release = makePromiseKit();
-  t.teardown(() => release.resolve(harden({})));
-  const fixture = makeDriverFixture({
-    scratchProvider: harden({
-      ...scratchProvider,
-      /** @param {string} name */
-      provideScratchMount: name => {
-        if (name === 'sandbox-scratch')
-          return scratchProvider.provideScratchMount();
-        entered.resolve(undefined);
-        return release.promise;
-      },
-    }),
-  });
-  const handle = await makeHandle(fixture);
-  const scratch = E(handle).scratch('/late');
-  const rejected = t.throwsAsync(scratch, { message: /disposed/ });
-  await entered.promise;
-  await E(handle).dispose();
-  release.resolve(harden({}));
-  await rejected;
-});

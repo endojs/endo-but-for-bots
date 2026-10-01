@@ -293,14 +293,10 @@ can enforce and attest a slice policy".
 The capability surface:
 
 - `SandboxFactory` — root cap; `help`, `listBackends`, `make`.
-- `SandboxHandle` — one slice; `spawn`, `policy`, `mount`, `scratch`,
-  `open`, `fork`, `reset`, `dispose`.
+- `SandboxHandle` — one slice with static mounts; `spawn`, `policy`, `dispose`.
 - `ProcessHandle` — one process inside a slice; `pid`, `stdin`,
   `stdout`, `stderr`, `wait`, `kill`.
-- `MountHandle` — one bind into a slice; `innerPath`, `cap`, `mode`,
-  `unmount`.
-
-All four are `makeExo()` objects with `M.interface()` guards, so
+All three are `makeExo()` objects with `M.interface()` guards, so
 `__getMethodNames__()` and other CapTP introspection patterns work.
 
 `ProcessHandle.stdout()` and `stderr()` return separate eventual
@@ -935,13 +931,13 @@ Items intentionally deferred:
 - **In-slice `landlock_create_ruleset`** — same follow-up as the
   bwrap driver. Surface-level Landlock probing is bwrap-only;
   the podman runtime applies its own LSM hooks already.
-- **`fork()`** — Phase 3. The current stub matches the bwrap
-  driver and rejects with the same `notImplemented` error.
+- **Nested slices** — require a supported construction and ownership contract;
+  no stub `fork()` method is exposed.
 - **macOS / Windows** — bare-metal Linux only. Containerization
   on macOS and WSL2 on Windows are tracked as Phase 4–5.
 
 ## Next steps
 
 See the per-phase TODO files for the next deliverables checklist.
-Phase 3 lands `fork()` once the daemon's userns-nesting story is
-settled.
+Nested-slice provisioning remains deferred until its kernel and authority
+requirements are settled.

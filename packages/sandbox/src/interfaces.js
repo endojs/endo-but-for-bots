@@ -282,13 +282,6 @@ export const SandboxHandleInterface = M.interface('SandboxHandle', {
     .optional(SpawnOptsShape)
     .returns(M.promise()),
   policy: M.call().returns(M.promise()),
-  mount: M.call(M.remotable('Mount'), M.string())
-    .optional(MountModeShape)
-    .returns(M.promise()),
-  scratch: M.call(M.string()).returns(M.promise()),
-  open: M.call(M.string()).returns(M.promise()),
-  fork: M.call().optional(SandboxMakeOptsShape).returns(M.promise()),
-  reset: M.call().returns(M.promise()),
   dispose: M.call().returns(M.promise()),
 });
 
@@ -304,17 +297,6 @@ export const ProcessHandleInterface = M.interface('SandboxProcess', {
   stderr: M.call().returns(M.remotable('PassableBytesReader')),
   wait: M.call().returns(M.promise()),
   kill: M.call().optional(TerminationSignalShape).returns(M.promise()),
-});
-
-/**
- * A mount bound into a slice.
- */
-export const MountHandleInterface = M.interface('SandboxMount', {
-  help: M.call().optional(M.string()).returns(M.string()),
-  innerPath: M.call().returns(M.string()),
-  cap: M.call().returns(M.remotable('Mount')),
-  mode: M.call().returns(MountModeShape),
-  unmount: M.call().returns(M.promise()),
 });
 
 // ---------------------------------------------------------------------------

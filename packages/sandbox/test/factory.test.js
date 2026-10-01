@@ -2,8 +2,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
-import { makeExo } from '@endo/exo';
-import { M, matches } from '@endo/patterns';
+import { matches } from '@endo/patterns';
 
 import { makeSandboxFactory, makeSandboxFactoryKit } from '../src/factory.js';
 import {
@@ -303,9 +302,6 @@ test('a containment failure fails the whole slice, not just one process', async 
   await t.throwsAsync(() => E(handle).spawn(harden(['/bin/echo', 'hi'])), {
     message: /disposed/,
   });
-  await t.throwsAsync(() => E(handle).scratch('/tmp/work'), {
-    message: /disposed/,
-  });
   t.is(
     fixture.counts().spawnCalls,
     2,
@@ -547,7 +543,7 @@ test('a disposed slice does not attest to a confinement it no longer has', async
   await t.throwsAsync(E(handle).policy(), { message: /disposed/ });
 });
 
-test('a policy slice refuses to hand out mounts outside its own table', async t => {
+test('slice capability exposes only implemented execution and cleanup methods', async t => {
   const factory = makeSandboxFactory({
     drivers: harden([makePolicyStubDriver()]),
     scratchProvider: /** @type {any} */ (
@@ -564,20 +560,15 @@ test('a policy slice refuses to hand out mounts outside its own table', async t 
       policy: stubPolicyRequest,
     }),
   );
-  // `policy()` attests the declared table as exact, so a MountHandle
-  // for a path outside it would be a capability contradicting the
-  // attestation the same slice hands out.
-  await t.throwsAsync(E(handle).scratch('/data'), {
-    message: /not available on a policy slice/,
-  });
-  const stubMount = makeExo(
-    'Mount',
-    M.interface('Mount', { help: M.call().returns(M.string()) }),
-    { help: () => 'stub Mount' },
-  );
-  await t.throwsAsync(E(handle).mount(stubMount, '/data'), {
-    message: /not available on a policy slice/,
-  });
+  t.teardown(() => E(handle).dispose());
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = await E(/** @type {any} */ (handle)).__getMethodNames__();
+  t.deepEqual(methods.filter(method => !method.startsWith('__')).sort(), [
+    'dispose',
+    'help',
+    'policy',
+    'spawn',
+  ]);
 });
 
 test('generated files cannot silently extend an exact policy mount table', async t => {

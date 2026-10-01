@@ -111,7 +111,6 @@ test('native preparation consumes explicit paths without daemon mount authority'
     'dispose',
     'help',
     'policy',
-    'reset',
     'spawn',
   ]);
   const publicFactory = /** @type {any} */ (f.factory);

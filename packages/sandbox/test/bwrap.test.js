@@ -882,7 +882,7 @@ test.serial('prlimit nproc cap is enforced inside the slice', async t => {
   );
 });
 
-test.serial('fork() throws notImplemented before Phase 3', async t => {
+test.serial('bwrap slice has no unimplemented management methods', async t => {
   // eslint-disable-next-line @jessie.js/safe-await-separator
   if (!(await bwrapCheck(t))) {
     return;
@@ -909,9 +909,14 @@ test.serial('fork() throws notImplemented before Phase 3', async t => {
       }
     }
   });
-  await t.throwsAsync(() => E(handle).fork(), {
-    message: /Phase 3/,
-  });
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = await E(/** @type {any} */ (handle)).__getMethodNames__();
+  t.deepEqual(methods.filter(method => !method.startsWith('__')).sort(), [
+    'dispose',
+    'help',
+    'policy',
+    'spawn',
+  ]);
 });
 
 test.serial('bwrap serializes spawn and dispose in both orderings', async t => {

@@ -29,10 +29,7 @@ export type NativeSandboxMakeOpts = Omit<
 
 /** Static mounts only; no methods accept or create daemon Mount capabilities. */
 export type NativeSandboxHandle = FarRef<
-  Pick<
-    RemoteFunctions<SandboxHandle>,
-    'help' | 'policy' | 'reset' | 'dispose'
-  > & {
+  Pick<RemoteFunctions<SandboxHandle>, 'help' | 'policy' | 'dispose'> & {
     spawn(
       argv: readonly string[],
       opts?: NativeSpawnOpts,

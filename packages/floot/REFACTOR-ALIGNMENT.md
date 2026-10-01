@@ -116,9 +116,11 @@ SB-13 through SB-15 extractions.
 The recommended sequence remains deletion before abstraction.
 The subsequent environment investigation is recorded in
 [durable POSIX environments](../../designs/durable-posix-environments.md).
-It proposes portable Shell/process alignment and durable environment capabilities
-for Fae and Floot, not a second delegation platform or selected crash-recovery design.
-No runtime implementation or new acceptance result is claimed for that proposal.
+Implementation has started with deletion of the sandbox's misleading dynamic
+mount/scratch/open/fork/reset methods; static mounts and owned process cleanup remain.
+Shell/process alignment and durable environment capabilities for Fae and Floot
+remain pending, without a second delegation platform or selected crash-recovery design.
+This sandbox-package deletion does not change the four-package source metric above.
 
 Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
 and the rebuilt byte-only provider listener `cc639390…` on all three brokers.
