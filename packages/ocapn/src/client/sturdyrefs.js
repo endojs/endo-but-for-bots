@@ -4,6 +4,7 @@
 /**
  * @import { OcapnLocation } from '../codecs/components.js'
  * @import { InternalSession } from './types.js'
+ * @import { SturdyRef as PassStyleSturdyRef } from '@endo/pass-style'
  */
 
 import harden from '@endo/harden';
@@ -18,7 +19,7 @@ import {
 } from './util.js';
 
 /**
- * @typedef {import('@endo/pass-style').SturdyRef} SturdyRef
+ * @typedef {PassStyleSturdyRef} SturdyRef
  * An OCapN `SturdyRef` addresses a capability by `(location, secret)`. It is
  * a realm `SturdyRef` (see `@endo/sturdyref`): opaque, passable, and revived
  * with `SturdyRef.enliven`. The handler that OCapN mints it with closes over
