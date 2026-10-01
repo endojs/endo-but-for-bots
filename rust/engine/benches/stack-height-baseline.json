@@ -3,7 +3,7 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "commit": "5b5bcbf884a019b66bc8d9687f37d0cbf1f6fe41"
+    "commit": "358661e60902b5d1770f749ac68fb474adae0a71"
   },
   "slack": 0.02,
   "cases": {
@@ -16,7 +16,7 @@
       "outcome": "compiled"
     },
     "proxy-get-10k.run": {
-      "bytes": 496583,
+      "bytes": 12207,
       "outcome": "ReentryLimit"
     },
     "proxy-get-2016.compile": {
@@ -24,7 +24,7 @@
       "outcome": "compiled"
     },
     "proxy-get-2016.run": {
-      "bytes": 492743,
+      "bytes": 12199,
       "outcome": "completed"
     },
     "proxy-get-256.compile": {
@@ -32,7 +32,7 @@
       "outcome": "compiled"
     },
     "proxy-get-256.run": {
-      "bytes": 70343,
+      "bytes": 12151,
       "outcome": "completed"
     },
     "proxy-get-index-10k.compile": {
@@ -40,7 +40,7 @@
       "outcome": "compiled"
     },
     "proxy-get-index-10k.run": {
-      "bytes": 755991,
+      "bytes": 12199,
       "outcome": "ReentryLimit"
     },
     "proxy-set-10k.compile": {
@@ -48,7 +48,7 @@
       "outcome": "compiled"
     },
     "proxy-set-10k.run": {
-      "bytes": 853559,
+      "bytes": 12199,
       "outcome": "ReentryLimit"
     },
     "proxy-has-10k.compile": {
@@ -56,7 +56,7 @@
       "outcome": "compiled"
     },
     "proxy-has-10k.run": {
-      "bytes": 1275999,
+      "bytes": 12199,
       "outcome": "ReentryLimit"
     },
     "proxy-delete-10k.compile": {
@@ -64,7 +64,7 @@
       "outcome": "compiled"
     },
     "proxy-delete-10k.run": {
-      "bytes": 788359,
+      "bytes": 12199,
       "outcome": "ReentryLimit"
     },
     "proxy-keys-10k.compile": {
@@ -72,7 +72,7 @@
       "outcome": "compiled"
     },
     "proxy-keys-10k.run": {
-      "bytes": 1241719,
+      "bytes": 17031,
       "outcome": "ReentryLimit"
     },
     "proxy-getownproperty-10k.compile": {
@@ -80,7 +80,7 @@
       "outcome": "compiled"
     },
     "proxy-getownproperty-10k.run": {
-      "bytes": 693735,
+      "bytes": 17511,
       "outcome": "ReentryLimit"
     },
     "proxy-define-10k.compile": {
@@ -88,7 +88,7 @@
       "outcome": "compiled"
     },
     "proxy-define-10k.run": {
-      "bytes": 2016063,
+      "bytes": 17511,
       "outcome": "ReentryLimit"
     },
     "proxy-getprototypeof-10k.compile": {
@@ -96,7 +96,7 @@
       "outcome": "compiled"
     },
     "proxy-getprototypeof-10k.run": {
-      "bytes": 790151,
+      "bytes": 16839,
       "outcome": "ReentryLimit"
     },
     "proxy-setprototypeof-10k.compile": {
@@ -104,7 +104,7 @@
       "outcome": "compiled"
     },
     "proxy-setprototypeof-10k.run": {
-      "bytes": 919375,
+      "bytes": 17095,
       "outcome": "ReentryLimit"
     },
     "proxy-isextensible-10k.compile": {
@@ -112,7 +112,7 @@
       "outcome": "compiled"
     },
     "proxy-isextensible-10k.run": {
-      "bytes": 725895,
+      "bytes": 16999,
       "outcome": "ReentryLimit"
     },
     "proxy-preventextensions-10k.compile": {
@@ -120,7 +120,7 @@
       "outcome": "compiled"
     },
     "proxy-preventextensions-10k.run": {
-      "bytes": 693655,
+      "bytes": 16999,
       "outcome": "ReentryLimit"
     },
     "proxy-call-10k.compile": {
@@ -128,7 +128,7 @@
       "outcome": "compiled"
     },
     "proxy-call-10k.run": {
-      "bytes": 1827791,
+      "bytes": 12199,
       "outcome": "ReentryLimit"
     },
     "proxy-construct-10k.compile": {
@@ -136,7 +136,7 @@
       "outcome": "compiled"
     },
     "proxy-construct-10k.run": {
-      "bytes": 1503151,
+      "bytes": 12199,
       "outcome": "ReentryLimit"
     },
     "proxy-proto-cycle.compile": {
@@ -144,7 +144,7 @@
       "outcome": "compiled"
     },
     "proxy-proto-cycle.run": {
-      "bytes": 1065135,
+      "bytes": 1049087,
       "outcome": "ReentryLimit"
     },
     "join-self.compile": {
@@ -304,7 +304,7 @@
       "outcome": "compiled"
     },
     "regexp-deep.run": {
-      "bytes": 235999,
+      "bytes": 236087,
       "outcome": "completed"
     },
     "proto-chain-ordinary-20k.compile": {
@@ -320,7 +320,7 @@
       "outcome": "compiled"
     },
     "proto-chain-arrays-20k.run": {
-      "bytes": 15751,
+      "bytes": 15495,
       "outcome": "completed"
     },
     "bind-call-10k.compile": {
@@ -848,7 +848,7 @@
       "outcome": "compiled"
     },
     "proxy-trap-119.run": {
-      "bytes": 720111,
+      "bytes": 716303,
       "outcome": "completed"
     },
     "proxy-trap-120.compile": {
@@ -856,7 +856,7 @@
       "outcome": "compiled"
     },
     "proxy-trap-120.run": {
-      "bytes": 720383,
+      "bytes": 716575,
       "outcome": "ReentryLimit"
     },
     "replace-re-fn-42.compile": {
@@ -896,7 +896,7 @@
       "outcome": "compiled"
     },
     "species-41.run": {
-      "bytes": 1015631,
+      "bytes": 1015647,
       "outcome": "completed"
     },
     "species-42.compile": {
@@ -1024,7 +1024,7 @@
       "outcome": "compiled"
     },
     "jstr-obj-2014.run": {
-      "bytes": 2177735,
+      "bytes": 2177239,
       "outcome": "completed"
     },
     "jstr-obj-2015.compile": {
@@ -1032,7 +1032,7 @@
       "outcome": "compiled"
     },
     "jstr-obj-2015.run": {
-      "bytes": 2177911,
+      "bytes": 2177415,
       "outcome": "ReentryLimit"
     },
     "jstr-replacer-1999.compile": {
@@ -1344,7 +1344,7 @@
       "outcome": "compiled"
     },
     "u1-uncharged-bound-instanceof-2000.run": {
-      "bytes": 17071,
+      "bytes": 17127,
       "outcome": "completed"
     },
     "u2-tojson-flat-1022.compile": {

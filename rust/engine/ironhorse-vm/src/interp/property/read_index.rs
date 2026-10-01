@@ -1,6 +1,15 @@
 //! Property read index operations.
 use crate::interp::*;
 
+use super::HasLevels;
+
+/// Where the ordinary levels of an index-keyed `[[Get]]` end: an answer, or
+/// a Proxy whose own internal method takes over.
+enum IndexLevels {
+    Answered(Slot),
+    Proxy(crate::value::SlotIndex),
+}
+
 impl Interp {
     /// `[[Get]]` of an index key whose canonical name the key table has never
     /// held, with `receiver` as the `[[Get]]` receiver.
@@ -21,9 +30,10 @@ impl Interp {
         receiver: Slot,
     ) -> Result<Slot, Step> {
         // Charged against the native-recursion budget like every other MOP
-        // entry point: forwarding down a chain of untrapped proxies recurses
-        // here, and an unbudgeted recursion overflows the real stack and
-        // aborts the process instead of halting with `ReentryLimit`.
+        // entry point: forwarding down a chain of untrapped proxies charges
+        // one unit per layer ([`Self::uninterned_index_proxy_get`]), and an
+        // unbudgeted chain would run without bound instead of halting with
+        // `ReentryLimit`.
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.uninterned_index_get_inner(code, inst, index, receiver)
         })
@@ -36,6 +46,24 @@ impl Interp {
         index: u32,
         receiver: Slot,
     ) -> Result<Slot, Step> {
+        match self.uninterned_index_get_levels(code, inst, index, receiver)? {
+            IndexLevels::Answered(value) => Ok(value),
+            IndexLevels::Proxy(proxy) => {
+                self.uninterned_index_proxy_get(code, proxy, index, receiver)
+            }
+        }
+    }
+
+    /// The ordinary levels of the index-keyed `[[Get]]` from `inst`: the
+    /// Array Iterator's residual context, then the chain up to the answer or
+    /// the first Proxy.
+    fn uninterned_index_get_levels(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+        receiver: Slot,
+    ) -> Result<IndexLevels, Step> {
         // The Array Iterator's residual for a trap already taken, exactly as
         // `mop_get` charges it for an id-keyed read. An ordinary object's
         // index property has no name, so this arm — not that one — is where
@@ -49,34 +77,38 @@ impl Interp {
             .filter(|context| context.target == inst)
             .filter(|context| self.refresh_read_key(context.key) == ReadKey::Index(index))
         {
-            return self.mop_get_with_proxy_metering(
-                code,
-                inst,
-                ReadKey::Index(index),
-                receiver,
-                context.trap_metering,
-                context.meter_terminal_wrapper,
-                false,
-                true,
-            );
+            return self
+                .mop_get_with_proxy_metering(
+                    code,
+                    inst,
+                    ReadKey::Index(index),
+                    receiver,
+                    context.trap_metering,
+                    context.meter_terminal_wrapper,
+                    false,
+                    true,
+                )
+                .map(IndexLevels::Answered);
         }
         let mut cur = inst;
         while !cur.is_null() {
             if self.proxies.contains_key(&cur) {
-                return self.uninterned_index_proxy_get(code, cur, index, receiver);
+                return Ok(IndexLevels::Proxy(cur));
             }
             if let Some(&ta) = self.typed_arrays.get(&cur) {
                 // The integer-indexed exotic `[[Get]]` answers for the whole
                 // read, at the receiver or through a prototype, and never
                 // continues up the chain (ECMA-262 10.4.5.4).
-                return Ok(self.ta_indexed_element_get(ta, f64::from(index)));
+                return Ok(IndexLevels::Answered(
+                    self.ta_indexed_element_get(ta, f64::from(index)),
+                ));
             }
             if let Some(item) = self
                 .arrays
                 .get(&cur)
                 .and_then(|a| a.items().get(&index).copied())
             {
-                return Ok(self.array_item_value(cur, item));
+                return Ok(IndexLevels::Answered(self.array_item_value(cur, item)));
             }
             if let Some(Slot {
                 kind: Kind::String,
@@ -86,28 +118,34 @@ impl Interp {
             {
                 let unit = self.string_index_get(off, index);
                 if unit.kind != Kind::Undefined {
-                    return Ok(unit);
+                    return Ok(IndexLevels::Answered(unit));
                 }
             }
             // An ordinary object at this chain level answers from its index
             // store. Only a data property can live there, so this is the
             // value, not a descriptor to interpret.
             if let Some(item) = self.index_prop_item(cur, index) {
-                return Ok(Slot::of(item.kind, item.value));
+                return Ok(IndexLevels::Answered(Slot::of(item.kind, item.value)));
             }
             cur = self.instance_prototype(cur);
         }
-        Ok(Slot::undefined())
+        Ok(IndexLevels::Answered(Slot::undefined()))
     }
 
     /// The Proxy arm of [`Self::uninterned_index_get`]: `[[Get]]` (ECMA-262
     /// 10.5.8) of an index key the name table has no id for.
     ///
     /// The trap must still be CALLED, and it is handed the key as a string —
-    /// built here from the index, exactly as XS's `fxKeyAt` builds one for
+    /// built from the index, exactly as XS's `fxKeyAt` builds one for
     /// `XS_NO_ID`, so the trap sees the canonical numeric string without the
     /// engine minting a key id for it. A proxy that traps nothing forwards to
     /// its target with the key still unbuilt.
+    ///
+    /// The forwarding loop of `forwarding_loop`, written out because the
+    /// recursion's re-entry for a target, [`Self::uninterned_index_get`], runs
+    /// the Array Iterator's context check and the target's ordinary levels
+    /// first: a Proxy past them is the next layer.
+    #[inline(never)]
     pub(in crate::interp) fn uninterned_index_proxy_get(
         &mut self,
         code: &[u8],
@@ -115,22 +153,28 @@ impl Interp {
         index: u32,
         receiver: Slot,
     ) -> Result<Slot, Step> {
-        let (target, handler) = self.proxy_target_handler(proxy, "get")?;
-        let trap = match self.proxy_trap(code, handler, "get")? {
-            Some(trap) => trap,
-            None => return self.uninterned_index_get(code, target, index, receiver),
-        };
-        self.proxy_get_trapped(
-            code,
-            target,
-            handler,
-            trap,
-            ReadKey::Index(index),
-            receiver,
-            0,
-            false,
-            false,
-        )
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            loop {
+                let target = match vm.proxy_get_step(
+                    code,
+                    proxy,
+                    ReadKey::Index(index),
+                    receiver,
+                    0,
+                    false,
+                    false,
+                )? {
+                    ProxyStep::Done(value) => return Ok(value),
+                    ProxyStep::Forward(target) => target,
+                };
+                vm.forwarding_hop(held)?;
+                match vm.uninterned_index_get_levels(code, target, index, receiver)? {
+                    IndexLevels::Answered(value) => return Ok(value),
+                    IndexLevels::Proxy(next) => proxy = next,
+                }
+            }
+        })
     }
 
     /// Whether `o` has an OWN property at `index` whose name the table has
@@ -179,23 +223,38 @@ impl Interp {
         index: u32,
     ) -> Result<(bool, u64), Step> {
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-            let mut current = inst;
-            let mut frames = 0u64;
-            loop {
-                if vm.proxies.contains_key(&current) {
-                    return Ok((vm.uninterned_index_proxy_has(code, current, index)?, frames));
+            match vm.uninterned_index_has_levels(code, inst, index)? {
+                HasLevels::Answered(found, frames) => Ok((found, frames)),
+                HasLevels::Proxy(proxy, frames) => {
+                    Ok((vm.uninterned_index_proxy_has(code, proxy, index)?, frames))
                 }
-                if vm.uninterned_index_own_present(code, current, index)? {
-                    return Ok((true, frames));
-                }
-                frames += 1;
-                let prototype = vm.instance_prototype(current);
-                if prototype.is_null() {
-                    return Ok((false, frames));
-                }
-                current = prototype;
             }
         })
+    }
+
+    /// The ordinary levels of [`Self::uninterned_index_has`] from `inst`.
+    fn uninterned_index_has_levels(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<HasLevels, Step> {
+        let mut current = inst;
+        let mut frames = 0u64;
+        loop {
+            if self.proxies.contains_key(&current) {
+                return Ok(HasLevels::Proxy(current, frames));
+            }
+            if self.uninterned_index_own_present(code, current, index)? {
+                return Ok(HasLevels::Answered(true, frames));
+            }
+            frames += 1;
+            let prototype = self.instance_prototype(current);
+            if prototype.is_null() {
+                return Ok(HasLevels::Answered(false, frames));
+            }
+            current = prototype;
+        }
     }
 
     /// `[[GetOwnProperty]]` of an index key the name table has no id for —
@@ -317,17 +376,59 @@ impl Interp {
     /// The Proxy arm of [`Self::uninterned_index_has`]: `[[HasProperty]]`
     /// (ECMA-262 10.5.7) for an index key with no id. The trap is handed the
     /// key as a string; an untrapped proxy forwards with the key unbuilt.
+    #[inline(never)]
     pub(in crate::interp) fn uninterned_index_proxy_has(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
         index: u32,
     ) -> Result<bool, Step> {
+        // The forwarding loop of `forwarding_loop`, written out because the
+        // recursion's re-entry for a target, `uninterned_index_has`, first
+        // walks the target's ordinary levels.
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            loop {
+                let target = match vm.uninterned_index_proxy_has_step(code, proxy, index)? {
+                    ProxyStep::Done(found) => return Ok(found),
+                    ProxyStep::Forward(target) => target,
+                };
+                vm.forwarding_hop(held)?;
+                match vm.uninterned_index_has_levels(code, target, index)? {
+                    HasLevels::Answered(found, _) => return Ok(found),
+                    HasLevels::Proxy(next, _) => proxy = next,
+                }
+            }
+        })
+    }
+
+    /// One layer of [`Self::uninterned_index_proxy_has`].
+    fn uninterned_index_proxy_has_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        index: u32,
+    ) -> Result<ProxyStep<bool>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "has")?;
-        let trap = match self.proxy_trap(code, handler, "has")? {
-            Some(trap) => trap,
-            None => return Ok(self.uninterned_index_has(code, target, index)?.0),
-        };
+        match self.proxy_trap(code, handler, "has")? {
+            Some(trap) => self
+                .uninterned_index_proxy_has_trapped(code, target, handler, trap, index)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
+    }
+
+    /// The trap call and invariant checks of
+    /// [`Self::uninterned_index_proxy_has`].
+    #[inline(never)]
+    fn uninterned_index_proxy_has_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+        index: u32,
+    ) -> Result<bool, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let key = self.read_key_slot(ReadKey::Index(index))?;
@@ -354,33 +455,34 @@ impl Interp {
         Ok(boolean)
     }
 
-    /// The Proxy arm of [`Self::uninterned_index_own_descriptor`].
+    /// The Proxy arm of [`Self::uninterned_index_own_descriptor`], which
+    /// shares the step of `mop_get_own_property`, its id-keyed twin.
+    #[inline(never)]
     pub(in crate::interp) fn uninterned_index_proxy_own_descriptor(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
         index: u32,
     ) -> Result<Option<OrdinaryDescriptor>, Step> {
-        let (target, handler) = self.proxy_target_handler(proxy, "getOwnPropertyDescriptor")?;
-        let trap = match self.proxy_trap(code, handler, "getOwnPropertyDescriptor")? {
-            Some(trap) => trap,
-            None => return self.uninterned_index_own_descriptor(code, target, index),
-        };
-        self.proxy_get_own_property_trapped(code, target, handler, trap, ReadKey::Index(index))
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_get_own_property_step(code, proxy, ReadKey::Index(index)),
+            |vm, target| vm.uninterned_index_own_descriptor(code, target, index),
+        )
     }
 
     /// The Proxy arm of [`Self::uninterned_index_delete`].
+    #[inline(never)]
     pub(in crate::interp) fn uninterned_index_proxy_delete(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
         index: u32,
     ) -> Result<bool, Step> {
-        let (target, handler) = self.proxy_target_handler(proxy, "deleteProperty")?;
-        let trap = match self.proxy_trap(code, handler, "deleteProperty")? {
-            Some(trap) => trap,
-            None => return self.uninterned_index_delete(code, target, index),
-        };
-        self.proxy_delete_trapped(code, target, handler, trap, ReadKey::Index(index))
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_delete_step(code, proxy, ReadKey::Index(index)),
+            |vm, target| vm.uninterned_index_delete(code, target, index),
+        )
     }
 }

@@ -1,6 +1,8 @@
 //! Property proxy operations.
 use crate::interp::*;
 
+use super::HasLevels;
+
 impl Interp {
     // =====================================================================
     // Proxy (ECMA-262 10.5) — exotic behavior over the object MOP.
@@ -8,8 +10,10 @@ impl Interp {
     // A proxy is a `Kind::Instance` slot recorded in `self.proxies`. Its
     // thirteen internal methods dispatch here: each looks up the handler trap
     // (`GetMethod`), and — trap absent — forwards to the target's corresponding
-    // internal method through the `mop_*` dispatchers below, so a proxy over a
-    // proxy (or over an ordinary object) composes. Every trap enforces the
+    // internal method, so a proxy over a proxy (or over an ordinary object)
+    // composes: a loop takes each further Proxy layer (`forwarding_loop`), and
+    // a target that is not a Proxy goes through the `mop_*` dispatchers below
+    // (STACK-DEPTH-REFACTOR.md B1). Every trap enforces the
     // spec's target-consistency invariants, throwing a realm-local, catchable
     // `TypeError` on violation. All ordinary/`Object.*`/`Reflect.*`/syntax
     // property operations route through the same `mop_*` seam so a trap cannot
@@ -128,11 +132,25 @@ impl Interp {
     // -------------------------- the thirteen traps -----------------------
 
     /// `[[GetPrototypeOf]]` (ECMA-262 10.5.1).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_get_prototype(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
     ) -> Result<Slot, Step> {
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_get_prototype_step(code, proxy),
+            |vm, target| vm.mop_get_prototype(code, target),
+        )
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_get_prototype`].
+    pub(in crate::interp) fn proxy_get_prototype_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+    ) -> Result<ProxyStep<Slot>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "getPrototypeOf")?;
         // Inline GetMethod here because its non-callable rejection has a
         // distinct XS meter outcome from a throwing getter. Other proxy traps
@@ -146,8 +164,23 @@ impl Interp {
             } else {
                 PROXY_GET_PROTOTYPE_FORWARD_TARGET_METERING
             })?;
-            return self.mop_get_prototype(code, target);
+            return Ok(ProxyStep::Forward(target));
         }
+        self.proxy_get_prototype_trapped(code, target, handler, trap)
+            .map(ProxyStep::Done)
+    }
+
+    /// The trap-present half of [`Self::proxy_get_prototype_step`]: the
+    /// method's callability, the call and its invariant checks.
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_get_prototype_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+    ) -> Result<Slot, Step> {
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         if !self.is_callable_value(trap) {
             self.meter
                 .untick_raw(PROXY_GET_PROTOTYPE_NONCALLABLE_CREDIT);
@@ -187,17 +220,46 @@ impl Interp {
     }
 
     /// `[[SetPrototypeOf]]` (ECMA-262 10.5.2).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_set_prototype(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
         proto: Slot,
     ) -> Result<bool, Step> {
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_set_prototype_step(code, proxy, proto),
+            |vm, target| vm.mop_set_prototype(code, target, proto),
+        )
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_set_prototype`].
+    pub(in crate::interp) fn proxy_set_prototype_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        proto: Slot,
+    ) -> Result<ProxyStep<bool>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "setPrototypeOf")?;
-        let trap = match self.proxy_trap(code, handler, "setPrototypeOf")? {
-            Some(t) => t,
-            None => return self.mop_set_prototype(code, target, proto),
-        };
+        match self.proxy_trap(code, handler, "setPrototypeOf")? {
+            Some(trap) => self
+                .proxy_set_prototype_trapped(code, target, handler, trap, proto)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
+    }
+
+    /// The trap call and invariant checks of [`Self::proxy_set_prototype`].
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_set_prototype_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+        proto: Slot,
+    ) -> Result<bool, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let result = self.invoke_value(code, trap, handler_slot, &[target_slot, proto])?;
@@ -218,16 +280,43 @@ impl Interp {
     }
 
     /// `[[IsExtensible]]` (ECMA-262 10.5.3).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_is_extensible(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
     ) -> Result<bool, Step> {
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_is_extensible_step(code, proxy),
+            |vm, target| vm.mop_is_extensible(code, target),
+        )
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_is_extensible`].
+    pub(in crate::interp) fn proxy_is_extensible_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+    ) -> Result<ProxyStep<bool>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "isExtensible")?;
-        let trap = match self.proxy_trap(code, handler, "isExtensible")? {
-            Some(t) => t,
-            None => return self.mop_is_extensible(code, target),
-        };
+        match self.proxy_trap(code, handler, "isExtensible")? {
+            Some(trap) => self
+                .proxy_is_extensible_trapped(code, target, handler, trap)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
+    }
+
+    /// The trap call and invariant check of [`Self::proxy_is_extensible`].
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_is_extensible_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+    ) -> Result<bool, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let result = self.invoke_value(code, trap, handler_slot, &[target_slot])?;
@@ -247,16 +336,43 @@ impl Interp {
     }
 
     /// `[[PreventExtensions]]` (ECMA-262 10.5.4).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_prevent_extensions(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
     ) -> Result<bool, Step> {
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_prevent_extensions_step(code, proxy),
+            |vm, target| vm.mop_prevent_extensions(code, target),
+        )
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_prevent_extensions`].
+    pub(in crate::interp) fn proxy_prevent_extensions_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+    ) -> Result<ProxyStep<bool>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "preventExtensions")?;
-        let trap = match self.proxy_trap(code, handler, "preventExtensions")? {
-            Some(t) => t,
-            None => return self.mop_prevent_extensions(code, target),
-        };
+        match self.proxy_trap(code, handler, "preventExtensions")? {
+            Some(trap) => self
+                .proxy_prevent_extensions_trapped(code, target, handler, trap)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
+    }
+
+    /// The trap call and invariant check of [`Self::proxy_prevent_extensions`].
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_prevent_extensions_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+    ) -> Result<bool, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let result = self.invoke_value(code, trap, handler_slot, &[target_slot])?;
@@ -270,18 +386,36 @@ impl Interp {
     }
 
     /// `[[GetOwnProperty]]` (ECMA-262 10.5.5).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_get_own_property(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
         id: u16,
     ) -> Result<Option<OrdinaryDescriptor>, Step> {
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_get_own_property_step(code, proxy, ReadKey::Id(id)),
+            |vm, target| vm.mop_get_own_property(code, target, id),
+        )
+    }
+
+    /// One layer of `[[GetOwnProperty]]` for either spelling of the key, for
+    /// the forwarding loops of [`Self::proxy_get_own_property`] and
+    /// [`Self::uninterned_index_proxy_own_descriptor`].
+    pub(in crate::interp) fn proxy_get_own_property_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        key: ReadKey,
+    ) -> Result<ProxyStep<Option<OrdinaryDescriptor>>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "getOwnPropertyDescriptor")?;
-        let trap = match self.proxy_trap(code, handler, "getOwnPropertyDescriptor")? {
-            Some(t) => t,
-            None => return self.mop_get_own_property(code, target, id),
-        };
-        self.proxy_get_own_property_trapped(code, target, handler, trap, ReadKey::Id(id))
+        match self.proxy_trap(code, handler, "getOwnPropertyDescriptor")? {
+            Some(trap) => self
+                .proxy_get_own_property_trapped(code, target, handler, trap, key)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
     }
 
     /// The `getOwnPropertyDescriptor` trap call and its invariant checks,
@@ -289,6 +423,7 @@ impl Interp {
     /// [`Self::uninterned_index_proxy_own_descriptor`]. The trap is passed in
     /// ALREADY RESOLVED: looking it up a second time would re-run a handler's
     /// accessor and double-meter the lookup.
+    #[inline(never)]
     pub(in crate::interp) fn proxy_get_own_property_trapped(
         &mut self,
         code: &[u8],
@@ -359,6 +494,7 @@ impl Interp {
     }
 
     /// `[[DefineOwnProperty]]` (ECMA-262 10.5.6).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_define_own_property(
         &mut self,
         code: &[u8],
@@ -366,11 +502,42 @@ impl Interp {
         id: u16,
         desc: OrdinaryDescriptor,
     ) -> Result<bool, Step> {
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_define_own_property_step(code, proxy, id, desc),
+            |vm, target| vm.mop_define_own_property(code, target, id, desc),
+        )
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_define_own_property`].
+    pub(in crate::interp) fn proxy_define_own_property_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+        desc: OrdinaryDescriptor,
+    ) -> Result<ProxyStep<bool>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "defineProperty")?;
-        let trap = match self.proxy_trap(code, handler, "defineProperty")? {
-            Some(t) => t,
-            None => return self.mop_define_own_property(code, target, id, desc),
-        };
+        match self.proxy_trap(code, handler, "defineProperty")? {
+            Some(trap) => self
+                .proxy_define_own_property_trapped(code, target, handler, trap, id, desc)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
+    }
+
+    /// The trap call and invariant checks of
+    /// [`Self::proxy_define_own_property`].
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_define_own_property_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+        id: u16,
+        desc: OrdinaryDescriptor,
+    ) -> Result<bool, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let key = self.property_key_slot(id)?;
@@ -411,17 +578,58 @@ impl Interp {
     }
 
     /// `[[HasProperty]]` (ECMA-262 10.5.7).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_has(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
         id: u16,
     ) -> Result<bool, Step> {
+        // The forwarding loop of `forwarding_loop`, written out because the
+        // recursion's re-entry for a target, `mop_has`, first walks the
+        // target's ordinary levels: a Proxy past them is the next layer.
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            loop {
+                let target = match vm.proxy_has_step(code, proxy, id)? {
+                    ProxyStep::Done(found) => return Ok(found),
+                    ProxyStep::Forward(target) => target,
+                };
+                vm.forwarding_hop(held)?;
+                match vm.mop_has_ordinary_levels(code, target, id)? {
+                    HasLevels::Answered(found, _) => return Ok(found),
+                    HasLevels::Proxy(next, _) => proxy = next,
+                }
+            }
+        })
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_has`].
+    pub(in crate::interp) fn proxy_has_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<ProxyStep<bool>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "has")?;
-        let trap = match self.proxy_trap(code, handler, "has")? {
-            Some(t) => t,
-            None => return self.mop_has(code, target, id),
-        };
+        match self.proxy_trap(code, handler, "has")? {
+            Some(trap) => self
+                .proxy_has_trapped(code, target, handler, trap, id)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
+    }
+
+    /// The trap call and invariant checks of [`Self::proxy_has`].
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_has_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+        id: u16,
+    ) -> Result<bool, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let key = self.property_key_slot(id)?;
@@ -464,6 +672,7 @@ impl Interp {
         )
     }
 
+    #[inline(never)]
     pub(in crate::interp) fn proxy_get_with_metering(
         &mut self,
         code: &[u8],
@@ -475,42 +684,144 @@ impl Interp {
         meter_forwarded_target: bool,
         after_active_trap: bool,
     ) -> Result<Slot, Step> {
-        let (target, handler) = self.proxy_target_handler(proxy, "get")?;
-        let trap = match self.proxy_trap(code, handler, "get")? {
-            Some(t) => t,
-            None => {
-                if proxy_trap_metering != 0 {
-                    self.meter.tick_raw(ARRAY_ITERATOR_PROXY_FORWARD_METERING);
-                }
-                return self.mop_get_with_proxy_metering(
+        let target = match self.proxy_get_step(
+            code,
+            proxy,
+            key,
+            receiver,
+            proxy_trap_metering,
+            meter_terminal_wrapper,
+            meter_forwarded_target,
+        )? {
+            ProxyStep::Done(result) => return Ok(result),
+            ProxyStep::Forward(target) => target,
+        };
+        // A forward past the Array Iterator's trap turns on the target's
+        // forwarded metering for the rest of the walk.
+        let meter_forwarded_target = meter_forwarded_target || proxy_trap_metering != 0;
+        if !self.proxies.contains_key(&target) {
+            return self.mop_get_with_proxy_metering(
+                code,
+                target,
+                key,
+                receiver,
+                proxy_trap_metering,
+                meter_terminal_wrapper,
+                meter_forwarded_target,
+                after_active_trap,
+            );
+        }
+        self.proxy_get_forwarded(
+            code,
+            target,
+            key,
+            receiver,
+            proxy_trap_metering,
+            meter_terminal_wrapper,
+            meter_forwarded_target,
+            after_active_trap,
+        )
+    }
+
+    /// The rest of [`Self::proxy_get_with_metering`] when its target is
+    /// another Proxy: the forwarding loop of `forwarding_loop`, written out
+    /// for the forwarded metering, and out of line so that one Proxy over an
+    /// ordinary target (a Proxy in a prototype cycle) keeps the single
+    /// layer's frame.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn proxy_get_forwarded(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        key: ReadKey,
+        receiver: Slot,
+        proxy_trap_metering: u64,
+        meter_terminal_wrapper: bool,
+        meter_forwarded_target: bool,
+        after_active_trap: bool,
+    ) -> Result<Slot, Step> {
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            let mut meter_forwarded_target = meter_forwarded_target;
+            loop {
+                // The unit `mop_get_with_proxy_metering(proxy)` charged.
+                vm.forwarding_hop(held)?;
+                let target = match vm.proxy_get_step(
                     code,
-                    target,
+                    proxy,
                     key,
                     receiver,
                     proxy_trap_metering,
                     meter_terminal_wrapper,
-                    meter_forwarded_target || proxy_trap_metering != 0,
-                    after_active_trap,
-                );
+                    meter_forwarded_target,
+                )? {
+                    ProxyStep::Done(result) => return Ok(result),
+                    ProxyStep::Forward(target) => target,
+                };
+                meter_forwarded_target = meter_forwarded_target || proxy_trap_metering != 0;
+                if !vm.proxies.contains_key(&target) {
+                    return vm.mop_get_with_proxy_metering(
+                        code,
+                        target,
+                        key,
+                        receiver,
+                        proxy_trap_metering,
+                        meter_terminal_wrapper,
+                        meter_forwarded_target,
+                        after_active_trap,
+                    );
+                }
+                proxy = target;
             }
-        };
-        self.proxy_get_trapped(
-            code,
-            target,
-            handler,
-            trap,
-            key,
-            receiver,
-            proxy_trap_metering,
-            meter_forwarded_target,
-            meter_terminal_wrapper,
-        )
+        })
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_get_with_metering`].
+    /// A forward past the Array Iterator's trap charges its residual here;
+    /// the loop then meters the target as forwarded (`meter_forwarded_target
+    /// || proxy_trap_metering != 0`), as the recursive shape passed down.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::interp) fn proxy_get_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        key: ReadKey,
+        receiver: Slot,
+        proxy_trap_metering: u64,
+        meter_terminal_wrapper: bool,
+        meter_forwarded_target: bool,
+    ) -> Result<ProxyStep<Slot>, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "get")?;
+        match self.proxy_trap(code, handler, "get")? {
+            Some(trap) => self
+                .proxy_get_trapped(
+                    code,
+                    target,
+                    handler,
+                    trap,
+                    key,
+                    receiver,
+                    proxy_trap_metering,
+                    meter_forwarded_target,
+                    meter_terminal_wrapper,
+                )
+                .map(ProxyStep::Done),
+            None => {
+                if proxy_trap_metering != 0 {
+                    self.meter.tick_raw(ARRAY_ITERATOR_PROXY_FORWARD_METERING);
+                }
+                Ok(ProxyStep::Forward(target))
+            }
+        }
     }
 
     /// The `get` trap call of `[[Get]]` (ECMA-262 10.5.8 steps 7-10) and its
     /// non-configurable-target invariant checks, shared by the id-keyed read
-    /// and by [`Self::uninterned_index_proxy_get`], whose key has no id.
+    /// and by the index-keyed read of [`Self::uninterned_index_get`], whose key
+    /// has no id.
     #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
     pub(in crate::interp) fn proxy_get_trapped(
         &mut self,
         code: &[u8],
@@ -593,6 +904,7 @@ impl Interp {
     }
 
     /// `[[Set]]` (ECMA-262 10.5.9).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_set(
         &mut self,
         code: &[u8],
@@ -601,11 +913,44 @@ impl Interp {
         value: Slot,
         receiver: Slot,
     ) -> Result<bool, Step> {
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_set_step(code, proxy, id, value, receiver),
+            |vm, target| vm.mop_set(code, target, id, value, receiver),
+        )
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_set`].
+    pub(in crate::interp) fn proxy_set_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<ProxyStep<bool>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "set")?;
-        let trap = match self.proxy_trap(code, handler, "set")? {
-            Some(t) => t,
-            None => return self.mop_set(code, target, id, value, receiver),
-        };
+        match self.proxy_trap(code, handler, "set")? {
+            Some(trap) => self
+                .proxy_set_trapped(code, target, handler, trap, id, value, receiver)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
+    }
+
+    /// The trap call and invariant checks of [`Self::proxy_set`].
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_set_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+        id: u16,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<bool, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let key = self.property_key_slot(id)?;
@@ -638,24 +983,43 @@ impl Interp {
     }
 
     /// `[[Delete]]` (ECMA-262 10.5.10).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_delete(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
         id: u16,
     ) -> Result<bool, Step> {
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_delete_step(code, proxy, ReadKey::Id(id)),
+            |vm, target| vm.mop_delete(code, target, id),
+        )
+    }
+
+    /// One layer of `[[Delete]]` for either spelling of the key, for the
+    /// forwarding loops of [`Self::proxy_delete`] and
+    /// [`Self::uninterned_index_proxy_delete`].
+    pub(in crate::interp) fn proxy_delete_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        key: ReadKey,
+    ) -> Result<ProxyStep<bool>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "deleteProperty")?;
-        let trap = match self.proxy_trap(code, handler, "deleteProperty")? {
-            Some(t) => t,
-            None => return self.mop_delete(code, target, id),
-        };
-        self.proxy_delete_trapped(code, target, handler, trap, ReadKey::Id(id))
+        match self.proxy_trap(code, handler, "deleteProperty")? {
+            Some(trap) => self
+                .proxy_delete_trapped(code, target, handler, trap, key)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
     }
 
     /// The `deleteProperty` trap call and its invariant checks, shared by the
     /// id-keyed path and by [`Self::uninterned_index_proxy_delete`]. The trap
     /// arrives ALREADY RESOLVED, for the same reason as
     /// [`Self::proxy_get_own_property_trapped`].
+    #[inline(never)]
     pub(in crate::interp) fn proxy_delete_trapped(
         &mut self,
         code: &[u8],
@@ -695,16 +1059,43 @@ impl Interp {
     }
 
     /// `[[OwnPropertyKeys]]` (ECMA-262 10.5.11).
+    #[inline(never)]
     pub(in crate::interp) fn proxy_own_keys(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
     ) -> Result<Vec<Slot>, Step> {
+        self.forwarding_loop(
+            proxy,
+            |vm, proxy| vm.proxy_own_keys_step(code, proxy),
+            |vm, target| vm.mop_own_keys(code, target),
+        )
+    }
+
+    /// One layer of the forwarding loop of [`Self::proxy_own_keys`].
+    pub(in crate::interp) fn proxy_own_keys_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+    ) -> Result<ProxyStep<Vec<Slot>>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "ownKeys")?;
-        let trap = match self.proxy_trap(code, handler, "ownKeys")? {
-            Some(t) => t,
-            None => return self.mop_own_keys(code, target),
-        };
+        match self.proxy_trap(code, handler, "ownKeys")? {
+            Some(trap) => self
+                .proxy_own_keys_trapped(code, target, handler, trap)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
+    }
+
+    /// The trap call and invariant checks of [`Self::proxy_own_keys`].
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_own_keys_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+    ) -> Result<Vec<Slot>, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let trap_result_array = self.invoke_value(code, trap, handler_slot, &[target_slot])?;
@@ -793,8 +1184,9 @@ impl Interp {
     }
 
     /// `[[Call]]` (ECMA-262 10.5.12). A light frame of the native-recursion
-    /// budget, like the `mop_*` entries: a proxy over a callable proxy
-    /// forwards `[[Call]]` here once per layer.
+    /// budget, like the `mop_*` entries. The dispatch path's first Proxy layer
+    /// comes here; `invoke_value` takes every further layer as a turn of its
+    /// loop, charging each the same unit.
     pub(in crate::interp) fn proxy_call(
         &mut self,
         code: &[u8],
@@ -814,34 +1206,15 @@ impl Interp {
         this: Slot,
         args: &[Slot],
     ) -> Result<Slot, Step> {
+        // The same layer as `proxy_call_step`, written out so the dispatch
+        // path's frame does not carry a `ProxyCall` between the step and the
+        // call; `invoke_value` takes any further Proxy layer as a turn.
         let (target, handler) = self.proxy_target_handler(proxy, "apply")?;
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
         let trap = match self.proxy_trap(code, handler, "apply")? {
             Some(t) => t,
             None => {
-                let metering = if self.proxies.contains_key(&target) {
-                    PROXY_CALL_FORWARD_PROXY_METERING
-                } else if self.bound_functions.contains_key(&target) {
-                    PROXY_CALL_FORWARD_BOUND_METERING
-                } else if self.native_of(target).is_some() {
-                    PROXY_CALL_FORWARD_NATIVE_METERING
-                } else if let Some(method) = self.method_of(target) {
-                    if matches!(
-                        method,
-                        NativeMethod::CollForEach
-                            | NativeMethod::CollEntries
-                            | NativeMethod::CollKeys
-                            | NativeMethod::CollValues
-                            | NativeMethod::CollClear
-                    ) {
-                        PROXY_CALL_FORWARD_METHOD_METERING
-                    } else {
-                        PROXY_CALL_FORWARD_NATIVE_METERING
-                    }
-                } else {
-                    PROXY_CALL_FORWARD_USER_METERING
-                };
-                self.charge_and_check(metering)?;
+                self.charge_and_check(self.proxy_call_forward_metering(target))?;
                 return self.invoke_value(code, target_slot, this, args);
             }
         };
@@ -849,6 +1222,62 @@ impl Interp {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let arg_array = self.array_from_slots(args);
         self.invoke_value(code, trap, handler_slot, &[target_slot, this, arg_array])
+    }
+
+    /// What forwarding `[[Call]]` to `target` costs, by the kind of callable
+    /// it is.
+    fn proxy_call_forward_metering(&self, target: crate::value::SlotIndex) -> u64 {
+        if self.proxies.contains_key(&target) {
+            PROXY_CALL_FORWARD_PROXY_METERING
+        } else if self.bound_functions.contains_key(&target) {
+            PROXY_CALL_FORWARD_BOUND_METERING
+        } else if self.native_of(target).is_some() {
+            PROXY_CALL_FORWARD_NATIVE_METERING
+        } else if let Some(method) = self.method_of(target) {
+            if matches!(
+                method,
+                NativeMethod::CollForEach
+                    | NativeMethod::CollEntries
+                    | NativeMethod::CollKeys
+                    | NativeMethod::CollValues
+                    | NativeMethod::CollClear
+            ) {
+                PROXY_CALL_FORWARD_METHOD_METERING
+            } else {
+                PROXY_CALL_FORWARD_NATIVE_METERING
+            }
+        } else {
+            PROXY_CALL_FORWARD_USER_METERING
+        }
+    }
+
+    /// One layer of `[[Call]]`: the forward's classification charge, or the
+    /// trap's tick and its argument array, in the order the recursive shape
+    /// made them. `invoke_value` takes the result as its next turn.
+    pub(in crate::interp) fn proxy_call_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        this: Slot,
+        args: &[Slot],
+    ) -> Result<ProxyCall, Step> {
+        let (target, handler) = self.proxy_target_handler(proxy, "apply")?;
+        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
+        let trap = match self.proxy_trap(code, handler, "apply")? {
+            Some(t) => t,
+            None => {
+                self.charge_and_check(self.proxy_call_forward_metering(target))?;
+                return Ok(ProxyCall::Forward(target));
+            }
+        };
+        self.meter.tick_raw(PROXY_CALL_TRAP_METERING);
+        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
+        let arg_array = self.array_from_slots(args);
+        Ok(ProxyCall::Trap {
+            trap,
+            handler: handler_slot,
+            args: [target_slot, this, arg_array],
+        })
     }
 
     /// `[[Construct]]` (ECMA-262 10.5.13). A light frame of the
@@ -872,12 +1301,47 @@ impl Interp {
         args: &[Slot],
         new_target: Slot,
     ) -> Result<Slot, Step> {
+        match self.proxy_construct_step(code, proxy, args, new_target)? {
+            ProxyStep::Forward(target) => self.construct_value(
+                code,
+                Slot::of(Kind::Reference, Payload::Reference(target)),
+                args,
+                new_target,
+            ),
+            ProxyStep::Done(result) => Ok(result),
+        }
+    }
+
+    /// One layer of `[[Construct]]`, for the forwarding loop of
+    /// `construct_value`.
+    pub(in crate::interp) fn proxy_construct_step(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        args: &[Slot],
+        new_target: Slot,
+    ) -> Result<ProxyStep<Slot>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "construct")?;
+        match self.proxy_trap(code, handler, "construct")? {
+            Some(trap) => self
+                .proxy_construct_trapped(code, target, handler, trap, args, new_target)
+                .map(ProxyStep::Done),
+            None => Ok(ProxyStep::Forward(target)),
+        }
+    }
+
+    /// The trap call and result check of `[[Construct]]`.
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_construct_trapped(
+        &mut self,
+        code: &[u8],
+        target: crate::value::SlotIndex,
+        handler: crate::value::SlotIndex,
+        trap: Slot,
+        args: &[Slot],
+        new_target: Slot,
+    ) -> Result<Slot, Step> {
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
-        let trap = match self.proxy_trap(code, handler, "construct")? {
-            Some(t) => t,
-            None => return self.construct_value(code, target_slot, args, new_target),
-        };
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let arg_array = self.array_from_slots(args);
         let result = self.invoke_value(

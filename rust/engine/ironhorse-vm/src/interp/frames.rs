@@ -89,6 +89,65 @@ impl Interp {
         result
     }
 
+    /// Hold the native-recursion units of a forwarding walk
+    /// (STACK-DEPTH-REFACTOR.md B1): `f` adds each unit it charges to the
+    /// count it is handed, through [`Self::forwarding_hop`], and every one is
+    /// released when `f` returns, on every return path.
+    #[inline]
+    pub(super) fn with_forwarding_walk<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self, &mut usize) -> Result<T, Step>,
+    ) -> Result<T, Step> {
+        let mut held = 0usize;
+        let result = f(self, &mut held);
+        self.leave_native_frame(held);
+        result
+    }
+
+    /// One hop of a forwarding walk ([`Self::with_forwarding_walk`]): the
+    /// check-and-charge the recursive shape's guarded entry performed, added
+    /// to the units the walk holds.
+    #[inline]
+    pub(super) fn forwarding_hop(&mut self, held: &mut usize) -> Result<(), Step> {
+        self.enter_native_frame(LIGHT_FRAME_COST)?;
+        *held += LIGHT_FRAME_COST;
+        Ok(())
+    }
+
+    /// The Proxy arm of an internal method, entered with whatever its caller
+    /// holds for `proxy` (the method's guarded entry's unit, or none on the
+    /// opcode paths that call the arm directly, as before). A Proxy whose trap is
+    /// absent forwards the method to its target, and the recursive shape
+    /// re-entered the guarded entry for it: one more unit, and one more host
+    /// frame chain, per layer. The loop instead takes `step` on each Proxy
+    /// layer, charging a forwarded-to Proxy the unit its entry would have
+    /// ([`Self::forwarding_hop`]) and holding every unit until the method
+    /// returns, so `native_depth` at each point is what the recursion held
+    /// and the budget halts the same programs at the same depth. A target
+    /// that is not a Proxy goes back through the guarded entry, `forwarded`,
+    /// which charges its own unit as it always did.
+    #[inline(always)]
+    pub(super) fn forwarding_loop<T>(
+        &mut self,
+        proxy: crate::value::SlotIndex,
+        mut step: impl FnMut(&mut Self, crate::value::SlotIndex) -> Result<ProxyStep<T>, Step>,
+        forwarded: impl FnOnce(&mut Self, crate::value::SlotIndex) -> Result<T, Step>,
+    ) -> Result<T, Step> {
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            loop {
+                match step(vm, proxy)? {
+                    ProxyStep::Done(result) => return Ok(result),
+                    ProxyStep::Forward(target) if vm.proxies.contains_key(&target) => {
+                        vm.forwarding_hop(held)?;
+                        proxy = target;
+                    }
+                    ProxyStep::Forward(target) => return forwarded(vm, target),
+                }
+            }
+        })
+    }
+
     /// One step of an iterative prototype-chain walk that may pass through a
     /// Proxy (`OrdinaryHasInstance`, `Object.prototype.isPrototypeOf`). A
     /// Proxy forwards `[[GetPrototypeOf]]` to its target, and a spec-legal

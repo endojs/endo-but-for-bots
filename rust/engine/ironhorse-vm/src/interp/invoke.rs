@@ -347,16 +347,45 @@ impl Interp {
         this: Slot,
         initial_args: &[Slot],
     ) -> Result<Slot, Step> {
+        // A Proxy's `[[Call]]` forwards to its target when `apply` is absent
+        // and calls the trap otherwise; both are tail calls, taken as further
+        // turns of the loop in `invoke_value_turns`, each Proxy layer charged
+        // one unit that is held until the call returns, as the recursion
+        // through `proxy_call` held it (STACK-DEPTH-REFACTOR.md B1). A local
+        // holds the units, not a closure: a closure around this frame made
+        // every heavy callback level larger (the report's A3).
+        let mut held = 0usize;
+        let result = self.invoke_value_turns(code, func, this, initial_args, &mut held);
+        self.leave_native_frame(held);
+        result
+    }
+
+    /// The loop of [`Self::invoke_value`], charging each Proxy layer it
+    /// passes into `held`.
+    #[inline(always)]
+    fn invoke_value_turns(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        this: Slot,
+        initial_args: &[Slot],
+        held: &mut usize,
+    ) -> Result<Slot, Step> {
         // The bound-function fold and the `Function.prototype.call`/`apply`
         // trampolines below each redispatch to another callable. They loop
         // here rather than recurse: neither enters a charged frame, so a chain
         // `c = c.call.bind(c)` (bound wrapper → `call` → bound wrapper …) of
         // 10,000 links overflowed the host stack while the pinned XS completes
         // it. `owned_args` is the argument list the last step rebuilt; until a
-        // step rebuilds one, `initial_args` serves.
+        // step rebuilds one, `initial_args` serves. `args_fresh` is whether
+        // this turn received its list as a fresh `invoke_value` call would
+        // (the first turn, and every turn after a Proxy layer): a bound
+        // target then copies it into admitted scratch rather than taking over
+        // a list a step rebuilt.
         let mut func = func;
         let mut this = this;
         let mut owned_args: Option<Vec<Slot>> = None;
+        let mut args_fresh = true;
         loop {
             let args: &[Slot] = owned_args.as_deref().unwrap_or(initial_args);
             let f = match func.value {
@@ -364,7 +393,13 @@ impl Interp {
                 _ => return Err(self.catchable_type_error_msg("call: not a function".into())),
             };
             if self.proxies.contains_key(&f) {
-                return self.proxy_call(code, f, this, args);
+                if let Some(trap_args) =
+                    self.invoke_proxy_turn(code, f, &mut func, &mut this, args, held)?
+                {
+                    owned_args = Some(trap_args);
+                }
+                args_fresh = true;
+                continue;
             }
             // Promise resolve/reject functions carry a native-method marker for
             // reflection, but their [[Call]] settles the captured promise.
@@ -400,12 +435,10 @@ impl Interp {
                 // exists, so the chain is acyclic and this terminates.
                 let mut current = f;
                 let mut this_arg = this;
-                let mut combined: Vec<Slot> = match owned_args.take() {
-                    Some(rebuilt) => rebuilt,
-                    None => Self::fill_scratch(
-                        self.reserve_work_scratch(initial_args.len())?,
-                        initial_args.iter().copied(),
-                    ),
+                let mut combined: Vec<Slot> = if args_fresh {
+                    Self::fill_scratch(self.reserve_work_scratch(args.len())?, args.iter().copied())
+                } else {
+                    owned_args.take().expect("a step rebuilt the argument list")
                 };
                 while let Some(data) = self.bound_functions.get(&current) {
                     let target = data.target;
@@ -426,6 +459,7 @@ impl Interp {
                 func = Slot::of(Kind::Reference, Payload::Reference(current));
                 this = this_arg;
                 owned_args = Some(combined);
+                args_fresh = false;
                 continue;
             }
             let fi = match self.functions.get(&f) {
@@ -459,6 +493,7 @@ impl Interp {
                 func = this;
                 this = this_arg;
                 owned_args = Some(forwarded);
+                args_fresh = false;
                 continue;
             }
             if method == Some(NativeMethod::FunctionApply) {
@@ -485,6 +520,7 @@ impl Interp {
                 func = this;
                 this = this_arg;
                 owned_args = Some(forwarded);
+                args_fresh = false;
                 continue;
             }
             if native.is_some() || method.is_some() {
@@ -527,16 +563,79 @@ impl Interp {
         args: &[Slot],
         new_target: Slot,
     ) -> Result<Slot, Step> {
-        let f = match func.value {
-            Payload::Reference(f) if func.kind == Kind::Reference => f,
-            _ => return Err(self.catchable_type_error_msg("new: not a constructor".into())),
+        // A Proxy with no `construct` trap forwards to its target: the loop
+        // in `construct_value_turns` takes each forward as a further turn,
+        // charging the layer one unit held until the construction returns,
+        // as the recursion through `proxy_construct` held it (B1).
+        let mut held = 0usize;
+        let result = self.construct_value_turns(code, func, args, new_target, &mut held);
+        self.leave_native_frame(held);
+        result
+    }
+
+    /// One Proxy layer of [`Self::invoke_value_turns`], out of line so the
+    /// step's trap lookup never widens the frame every call level shares:
+    /// charge the layer, then either forward to the target (the argument list
+    /// is unchanged) or turn to the `apply` trap, whose fresh argument list
+    /// is returned.
+    #[inline(never)]
+    fn invoke_proxy_turn(
+        &mut self,
+        code: &[u8],
+        proxy: crate::value::SlotIndex,
+        func: &mut Slot,
+        this: &mut Slot,
+        args: &[Slot],
+        held: &mut usize,
+    ) -> Result<Option<Vec<Slot>>, Step> {
+        self.forwarding_hop(held)?;
+        match self.proxy_call_step(code, proxy, *this, args)? {
+            ProxyCall::Forward(target) => {
+                *func = Slot::of(Kind::Reference, Payload::Reference(target));
+                Ok(None)
+            }
+            ProxyCall::Trap {
+                trap,
+                handler,
+                args: trap_args,
+            } => {
+                *func = trap;
+                *this = handler;
+                Ok(Some(trap_args.to_vec()))
+            }
+        }
+    }
+
+    /// The loop of [`Self::construct_value`].
+    #[inline(always)]
+    fn construct_value_turns(
+        &mut self,
+        code: &[u8],
+        func: Slot,
+        args: &[Slot],
+        new_target: Slot,
+        held: &mut usize,
+    ) -> Result<Slot, Step> {
+        let mut func = func;
+        let f = loop {
+            let f = match func.value {
+                Payload::Reference(f) if func.kind == Kind::Reference => f,
+                _ => return Err(self.catchable_type_error_msg("new: not a constructor".into())),
+            };
+            if !self.is_constructor_value(func) {
+                return Err(self.catchable_type_error_msg("new: not a constructor".into()));
+            }
+            if !self.proxies.contains_key(&f) {
+                break f;
+            }
+            self.forwarding_hop(held)?;
+            match self.proxy_construct_step(code, f, args, new_target)? {
+                ProxyStep::Forward(target) => {
+                    func = Slot::of(Kind::Reference, Payload::Reference(target));
+                }
+                ProxyStep::Done(result) => return Ok(result),
+            }
         };
-        if !self.is_constructor_value(func) {
-            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
-        }
-        if self.proxies.contains_key(&f) {
-            return self.proxy_construct(code, f, args, new_target);
-        }
         if let Some(n) = self.native_of(f) {
             let target = match new_target.value {
                 Payload::Reference(target) if new_target.kind == Kind::Reference => target,

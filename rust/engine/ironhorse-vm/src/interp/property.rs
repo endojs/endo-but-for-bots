@@ -10,6 +10,14 @@ mod ordinary;
 mod proxy;
 mod read_index;
 
+/// Where the ordinary levels of a `[[HasProperty]]` walk end: an answer and
+/// its `fxOrdinaryHasProperty` frame count, or a Proxy (and the frames
+/// counted before it), whose own internal method takes over.
+pub(super) enum HasLevels {
+    Answered(bool, u64),
+    Proxy(crate::value::SlotIndex, u64),
+}
+
 impl Interp {
     /// Read a computed (`AT`-key) property (`GET_PROPERTY_AT`): an array index
     /// reads the item (or `undefined` for a hole / past the end); a named key
@@ -644,7 +652,11 @@ impl Interp {
     // each of these is where a guest-shaped chain recurses on the host stack.
     // The `_inner` body is the internal method; the guarded entry charges
     // [`LIGHT_FRAME_COST`] around it and halts with [`Halt::ReentryLimit`]
-    // past [`NATIVE_DEPTH_LIMIT`].
+    // past [`NATIVE_DEPTH_LIMIT`]. A Proxy whose trap is absent forwards the
+    // method to its target; the `proxy_*` arm walks such layers in a loop
+    // ([`Self::forwarding_loop`]) instead of re-entering the guarded entry
+    // per layer, charging each layer the unit that entry would have and
+    // holding them all until the method returns (STACK-DEPTH-REFACTOR.md B1).
 
     /// `O.[[GetPrototypeOf]]()` as a slot (`Reference(proto)` or `Null`).
     pub(super) fn mop_get_prototype(
@@ -1024,17 +1036,32 @@ impl Interp {
         inst: crate::value::SlotIndex,
         id: u16,
     ) -> Result<(bool, u64), Step> {
+        match self.mop_has_ordinary_levels(code, inst, id)? {
+            HasLevels::Answered(found, frames) => Ok((found, frames)),
+            // A Proxy answers through `fxProxyHasProperty`, which does not
+            // run the ordinary push/pop at its own level.
+            HasLevels::Proxy(proxy, frames) => Ok((self.proxy_has(code, proxy, id)?, frames)),
+        }
+    }
+
+    /// The ordinary levels of `[[HasProperty]]` from `inst`: the answer and
+    /// its frame count, or the first Proxy the chain reaches and the frames
+    /// counted before it.
+    pub(super) fn mop_has_ordinary_levels(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        id: u16,
+    ) -> Result<HasLevels, Step> {
         let mut current = inst;
         let mut frames = 0u64;
         loop {
             if self.proxies.contains_key(&current) {
-                // A Proxy answers through `fxProxyHasProperty`, which does not
-                // run the ordinary push/pop at its own level.
-                return Ok((self.proxy_has(code, current, id)?, frames));
+                return Ok(HasLevels::Proxy(current, frames));
             }
             if self.object_own_property_present(code, current, id)? {
                 // Found own: `fxOrdinaryHasProperty` returns before its push.
-                return Ok((true, frames));
+                return Ok(HasLevels::Answered(true, frames));
             }
             // This level did not find the property own, so XS's
             // `fxOrdinaryHasProperty` ran its `mxPushUndefined`/`mxPop` pair
@@ -1045,7 +1072,7 @@ impl Interp {
             frames += 1;
             let prototype = self.instance_prototype(current);
             if prototype.is_null() {
-                return Ok((false, frames));
+                return Ok(HasLevels::Answered(false, frames));
             }
             current = prototype;
         }
