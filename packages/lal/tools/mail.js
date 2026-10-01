@@ -126,14 +126,10 @@ settled.`,
         },
         petNamePaths: {
           type: 'array',
-          items: {
-            oneOf: [
-              { type: 'string' },
-              { type: 'array', items: { type: 'string' } },
-            ],
-          },
+          items: { type: 'array', items: { type: 'string' }, minItems: 1 },
           description:
-            'Pet-name paths of the values to include (same length as edgeNames).',
+            'Pet-name paths of the values to include (same length as edgeNames). ' +
+            'Each is an array of path segments, e.g. ["counter"] or ["dir", "counter"].',
         },
         done: {
           type: 'boolean',

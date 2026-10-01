@@ -30,7 +30,7 @@ export type ToolCallArgs = {
   responseNamePath?: NamePath | string;
   strings?: string[];
   edgeNames?: Name[];
-  petNames?: (NamePath | string)[];
+  petNamePaths?: (NamePath | string)[];
   // The dispatcher also maps the LLM's literal `'undefined'` sentinel to
   // absent before forwarding any other string for the daemon to refuse.
   workerNamePath?: NamePath | string;
