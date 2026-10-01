@@ -59,7 +59,6 @@ test/intrinsics/GeneratorPrototype/intrinsic-metadata.js
 test/intrinsics/Math/intrinsic-metadata.js
 test/intrinsics/RegExpPrototype/intrinsic-metadata.js
 test/intrinsics/StringIteratorPrototype/intrinsic-metadata.js
-test/intrinsics/ThrowTypeError/intrinsic-metadata.js
 test/modules/module-source-reflection/ses-legacy/duplicate-import.js
 test/modules/module-source-reflection/ses-legacy/export-all-from.js
 test/modules/module-source-reflection/ses-legacy/export-default.js

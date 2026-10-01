@@ -1442,6 +1442,21 @@ impl Interp {
         self.proto_methods.push((func_proto, "apply", fp_apply));
         let fp_bind = self.alloc_method(NativeMethod::FunctionBind);
         self.proto_methods.push((func_proto, "bind", fp_bind));
+        // `%ThrowTypeError%`, one per realm: AddRestrictedFunctionProperties
+        // gives `%Function.prototype%` `caller` and `arguments` accessors
+        // whose getter and setter are both this function, as XS's
+        // `fxBuildFunction` does; a strict `arguments.callee` reuses it
+        // ([`Self::throw_type_error_function`]). Link freezes it.
+        let thrower = self.alloc_named_method(NativeMethod::ThrowTypeError, "", 0);
+        for name in ["caller", "arguments"] {
+            self.proto_accessors.push((
+                func_proto,
+                ProtoAccessorKey::String(name),
+                thrower,
+                Some(thrower),
+                "Function",
+            ));
+        }
         // `toString` lives on `%Error.prototype%` alone; each NativeError
         // prototype inherits it (ES2024 20.5.6.3 lists only `constructor`,
         // `message` and `name` there, as XS's `fxBuildError` installs).

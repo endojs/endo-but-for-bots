@@ -40,7 +40,7 @@ proxy-construct	new (new Proxy(function(){},{construct:function(){return {x:4}}}
 async-await	var x=0; async function f(){x=await Promise.resolve(4)} f(); 1	return	1	5168768	78
 async-generator	async function* g(){yield 1} g().next(); 1	return	1	3676272	56
 disposal	var x=0;var d=new DisposableStack();d.defer(function(){x=1});d.dispose();x	return	1	4084840	62
-harden	harden({x:{y:1}}).x.y	return	1	10993272	167
+harden	harden({x:{y:1}}).x.y	return	1	11258440	171
 petrify	petrify({x:1}).x	return	1	1509960	23
 integrity	Object.freeze({x:1}).x	return	1	1575496	24
 weakmap	var k={};new WeakMap([[k,3]]).get(k)	return	3	4297192	65

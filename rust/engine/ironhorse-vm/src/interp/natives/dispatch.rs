@@ -2511,7 +2511,8 @@ impl Interp {
             | NativeMethod::JsonStringify
             | NativeMethod::JsonParse
             | NativeMethod::ErrorStackGetter
-            | NativeMethod::ErrorStackSetter => {
+            | NativeMethod::ErrorStackSetter
+            | NativeMethod::ThrowTypeError => {
                 self.native_method_function(m, base, argc, code, this, arg0)?
             }
         };
@@ -7643,6 +7644,9 @@ impl Interp {
                         self.new_string_units(&text)
                     }
                 }
+            }
+            NativeMethod::ThrowTypeError => {
+                return Err(self.catchable_type_error_msg("strict mode".into()));
             }
             NativeMethod::ErrorStackSetter => {
                 let inst = match this.value {
