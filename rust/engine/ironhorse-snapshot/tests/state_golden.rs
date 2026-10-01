@@ -101,9 +101,9 @@ fn crank(m: &mut Interp, source: &str) -> String {
 
 #[test]
 fn carried_state_has_frozen_bytes_manifests_costs_and_continuations() {
-    assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-5");
+    assert_eq!(ironhorse_vm::COST_TABLE_VERSION, "ironhorse-meter-6");
     let corpus = corpus();
-    assert!(corpus.starts_with("# ironhorse-meter-5 "));
+    assert!(corpus.starts_with("# ironhorse-meter-6 "));
     let format_21_corpus = include_str!("fixtures/state_golden_format_21.tsv");
     let format_20_corpus = include_str!("fixtures/state_golden_format_20.tsv");
     let format_19_corpus = include_str!("fixtures/state_golden_format_19.tsv");

@@ -16,7 +16,11 @@ impl Interp {
         code: &[u8],
         obj: crate::value::SlotIndex,
     ) -> Result<Slot, Step> {
-        self.meter.tick_raw(FOR_IN_ENUMERATOR_METERING);
+        self.meter.tick_raw(if obj.is_null() {
+            FOR_IN_NULLISH_ENUMERATOR_METERING
+        } else {
+            FOR_IN_ENUMERATOR_METERING
+        });
         if self.arrays.contains_key(&obj) {
             self.meter.tick_raw(ARRAY_FOR_IN_EXTRA_METERING);
         }

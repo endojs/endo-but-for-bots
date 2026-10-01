@@ -1,4 +1,4 @@
-# ironhorse-meter-5 source, lexical whole, compilation raw, compilation whole
+# ironhorse-meter-6 source, lexical whole, compilation raw, compilation whole
 1 + 2 * 3	8	2895872	44
 (a, b) => a + b	13	4521984	69
 if (x) { y } else { z }	17	4337664	66

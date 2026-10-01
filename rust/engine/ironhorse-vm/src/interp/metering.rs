@@ -1148,6 +1148,13 @@ pub(super) use ironhorse_meter::ENUMERATOR_NEXT_METERING;
 /// refinement.
 pub(super) use ironhorse_meter::FOR_IN_ENUMERATOR_METERING;
 
+/// The raw 16.16 cost of `XS_CODE_FOR_IN` over `null` or `undefined`, in
+/// place of [`FOR_IN_ENUMERATOR_METERING`]: `fx_Enumerator` builds the
+/// enumerator and its result but lists no keys and leaves no first level to
+/// walk. Calibrated against the pin as that cluster less XS's own-keys
+/// collection, 102,400 raw, which the empty-object calibration includes.
+pub(super) use ironhorse_meter::FOR_IN_NULLISH_ENUMERATOR_METERING;
+
 /// The raw 16.16 cost of `XS_CODE_FOR_OF` (`fxRunForOf` → `fxGetIterator`)
 /// beyond the `values()` iterator creation it performs: the `fxGetIterator`
 /// host frame, the `arr[Symbol.iterator]` lookup, and the zero-argument call
