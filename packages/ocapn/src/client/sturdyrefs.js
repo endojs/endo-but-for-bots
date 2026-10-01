@@ -65,14 +65,17 @@ export const isSturdyRef = value => sturdyRefDetails.has(value);
 export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
 
 /**
- * The coordinates an OCapN SturdyRef is constructed from, in the vocabulary
- * every CapTP layer shares (compare `@endo/captp`'s `makeSturdyRefFromData`).
+ * The coordinates an OCapN SturdyRef is constructed from. The field names
+ * follow `@endo/captp`'s `SturdyRefData`, but the shape is OCapN's own and
+ * stricter: `designator` is required because every OCapN location names a
+ * network, and `objectId` may be raw bytes because OCapN swiss numbers may be
+ * arbitrary bytes. As in captp, every hint value is a string.
  *
  * @typedef {object} SturdyRefData
  * @property {string} peerId the peer's designator (its public key)
  * @property {string | Uint8Array} objectId the swiss number
  * @property {string} designator the network the peer is reachable on
- * @property {Record<string, any>} [hints] how to connect to the peer
+ * @property {Record<string, string>} [hints] how to connect to the peer
  */
 
 /**
@@ -97,8 +100,13 @@ export const sturdyRefDataToDetails = data => {
     // Intentionally do NOT include `objectId`: it is the secret.
     throw TypeError('ocapn: SturdyRef objectId must be a string or bytes');
   }
-  if (hints !== undefined && (typeof hints !== 'object' || hints === null)) {
-    throw TypeError('ocapn: SturdyRef hints must be a record');
+  if (
+    hints !== undefined &&
+    (typeof hints !== 'object' ||
+      hints === null ||
+      !Object.values(hints).every(hint => typeof hint === 'string'))
+  ) {
+    throw TypeError('ocapn: SturdyRef hints must be a record of strings');
   }
   return {
     location: harden({
@@ -229,6 +237,10 @@ export const enlivenSturdyRef = async (
 /**
  * @typedef {object} SturdyRefTracker
  * @property {(location: OcapnLocation, secret: string | Uint8Array) => SturdyRef} makeSturdyRef
+ * @property {(sturdyRef: SturdyRef) => SturdyRefDetails | undefined} getDetails
+ *   The `(location, secret)` pair of a SturdyRef this tracker minted, or
+ *   `undefined` for any other value, including a SturdyRef another
+ *   tracker minted.
  * @property {(secretBytes: Uint8Array) => Promise<any | undefined>} lookup
  *   Async look up a locally-held capability by the on-wire secret
  *   bytes. Calls through to the injected locator with either the
@@ -243,9 +255,16 @@ export const enlivenSturdyRef = async (
  * @returns {SturdyRefTracker}
  */
 export const makeSturdyRefTracker = (locator, enlivenDetails) => {
+  /** @type {WeakSet<SturdyRef>} */
+  const minted = new WeakSet();
   return harden({
-    makeSturdyRef: (location, secret) =>
-      makeSturdyRef(location, secret, enlivenDetails),
+    makeSturdyRef: (location, secret) => {
+      const sturdyRef = makeSturdyRef(location, secret, enlivenDetails);
+      minted.add(sturdyRef);
+      return sturdyRef;
+    },
+    getDetails: sturdyRef =>
+      minted.has(sturdyRef) ? sturdyRefDetails.get(sturdyRef) : undefined,
     lookup: async secretBytes => {
       const swissNum = swissnumFromBytes(thawedBytes(secretBytes));
       // Try ASCII decoding first so locators keyed by friendly string

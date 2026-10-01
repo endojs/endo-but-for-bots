@@ -17,7 +17,6 @@ import {
   makeSturdyRefTracker,
   enlivenSturdyRef,
   enlivenSturdyRefDetails,
-  getSturdyRefDetails,
   sturdyRefDataToDetails,
   sturdyRefDetailsToData,
 } from './sturdyrefs.js';
@@ -960,16 +959,16 @@ export const makeOcapn = async ({
       return sturdyRefTracker.makeSturdyRef(location, secret);
     },
     /**
-     * The coordinates of a SturdyRef OCapN minted, from which
+     * The coordinates of a SturdyRef this client minted, from which
      * `makeSturdyRefFromData` reconstructs an equivalent ref, or `undefined`
-     * for any other value. The data includes the secret, so this capability
-     * is closely held.
+     * for any other value, including a SturdyRef another client minted. The
+     * data includes the secret, so this capability is closely held.
      *
      * @param {SturdyRef} sturdyRef
      * @returns {SturdyRefData | undefined}
      */
     getSturdyRefData(sturdyRef) {
-      const details = getSturdyRefDetails(sturdyRef);
+      const details = sturdyRefTracker.getDetails(sturdyRef);
       return details && sturdyRefDetailsToData(details);
     },
     /**

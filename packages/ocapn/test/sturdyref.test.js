@@ -386,7 +386,19 @@ test('OCapN SturdyRef data checks peerId and hints, and round-trips hints', asyn
           hints: null,
         }),
       ),
-    { message: /hints must be a record/ },
+    { message: /hints must be a record of strings/ },
+  );
+  t.throws(
+    () =>
+      client.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'p',
+          objectId: 'x',
+          designator: 'tcp',
+          hints: { port: 1234 },
+        }),
+      ),
+    { message: /hints must be a record of strings/ },
   );
   const data = {
     peerId: 'p',
@@ -398,4 +410,24 @@ test('OCapN SturdyRef data checks peerId and hints, and round-trips hints', asyn
   t.deepEqual(getSturdyRefDetails(ref)?.location.hints, data.hints);
   t.deepEqual(client.getSturdyRefData(ref), data);
   client.shutdown();
+});
+
+test('a client reveals SturdyRef data only for refs it minted', async t => {
+  const { client: clientA } = await makeTestClient({ debugLabel: 'A' });
+  const { client: clientB } = await makeTestClient({ debugLabel: 'B' });
+  const data = { peerId: 'p', objectId: 'x', designator: 'tcp' };
+  const fromData = clientA.makeSturdyRefFromData(data);
+  t.deepEqual(clientA.getSturdyRefData(fromData), data);
+  t.is(clientB.getSturdyRefData(fromData), undefined);
+  const location = /** @type {const} */ ({
+    type: 'ocapn-peer',
+    designator: 'p',
+    transport: 'tcp',
+    hints: false,
+  });
+  const minted = clientA.makeSturdyRef(location, 'y');
+  t.truthy(clientA.getSturdyRefData(minted));
+  t.is(clientB.getSturdyRefData(minted), undefined);
+  clientA.shutdown();
+  clientB.shutdown();
 });

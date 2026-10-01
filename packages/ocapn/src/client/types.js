@@ -378,7 +378,8 @@
  *   (designator), object id (swiss number), network designator, and
  *   connection hints. Closely held, like the client.
  * @property {(sturdyRef: SturdyRef) => SturdyRefData | undefined} getSturdyRefData
- *   The coordinates of a SturdyRef OCapN minted, including its secret.
+ *   The coordinates of a SturdyRef this client minted, including its
+ *   secret, or `undefined` for any other value.
  * @property {(sturdyRef: SturdyRef) => Promise<any>} enlivenSturdyRef
  *   Resolve a SturdyRef to a live capability: local SturdyRefs go
  *   through the injected locator; remote SturdyRefs fetch from the
