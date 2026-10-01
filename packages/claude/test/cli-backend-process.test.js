@@ -6,7 +6,7 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { spawn } from 'node:child_process';
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,7 +25,11 @@ const fakeClaude = fileURLToPath(
  * @param {ExecutionContext} t
  */
 const makeBackend = async t => {
-  const parentDirectory = await mkdtemp(join(tmpdir(), 'endo-claude-process-'));
+  // Resolve symlinks (macOS `/tmp` is `/private/tmp`) so the paths the backend
+  // hands the child match the `process.cwd()` it reports.
+  const parentDirectory = await realpath(
+    await mkdtemp(join(tmpdir(), 'endo-claude-process-')),
+  );
   t.teardown(() => rm(parentDirectory, { recursive: true, force: true }));
   const source = makeCredentialSource();
   const backend = makeClaudeCliBackend({
@@ -55,7 +59,11 @@ test('a real process sees only the constructed environment and its prompt', asyn
   const report = JSON.parse(result.text);
   t.is(report.prompt, 'write then read');
   t.is(report.home, join(report.cwd, 'config'));
-  t.deepEqual(report.environmentKeys, [
+  // Node's spawn itself adds NODE_V8_COVERAGE under a coverage run.
+  const environmentKeys = report.environmentKeys.filter(
+    key => key !== 'NODE_V8_COVERAGE',
+  );
+  t.deepEqual(environmentKeys, [
     'ANTHROPIC_AUTH_TOKEN',
     'CLAUDE_CODE_DISABLE_AUTO_MEMORY',
     'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC',

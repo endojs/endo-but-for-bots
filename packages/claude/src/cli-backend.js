@@ -185,7 +185,10 @@ export const makeClaudeCliBackend = ({
       let stderrByteCount = 0;
       const spawned = spawn(executablePath, argv, {
         cwd: scratch.path,
-        env,
+        // A fresh copy: Node's spawn writes into `options.env` (it adds
+        // NODE_V8_COVERAGE when the parent has it), which throws on a frozen
+        // record.
+        env: { ...env },
         stdio: ['pipe', 'pipe', 'pipe'],
         detached: true,
       });
