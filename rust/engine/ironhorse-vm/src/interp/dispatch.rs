@@ -4190,11 +4190,10 @@ impl Interp {
         return_depth: usize,
         size: i8,
     ) -> Flow {
-        // `new asyncFn()` is a `TypeError` in XS (async functions are
-        // not constructors); self-name rather than mis-handle.
-        if self.cur_target {
-            return Flow::Exit(Step::Host(Halt::NotImplemented("async:new-target")));
-        }
+        // `new asyncFn()` throws before the body is entered (an async
+        // function has no [[Construct]]), so a target frame here is an async
+        // arrow that took its enclosing constructor's `new.target`
+        // (`RETRIEVE_TARGET`), which its activation keeps across `await`.
         let resume_pc = pc + size as usize;
         let inst = self.new_async_instance(resume_pc);
         // Run to the first await/completion. An un-modeled surface in

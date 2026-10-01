@@ -697,7 +697,14 @@ impl Interp {
                 Payload::Reference(f) if func.kind == Kind::Reference => f,
                 _ => return Err(self.catchable_type_error_msg("new: not a constructor".into())),
             };
-            if !self.is_constructor_value(func) {
+            // A revoked Proxy layer is left to its construct step, which
+            // throws the revocation error.
+            let refused = if self.proxies.contains_key(&f) {
+                self.proxy_construct_refused(f)
+            } else {
+                !self.is_constructor_value(func)
+            };
+            if refused {
                 return Err(self.catchable_type_error_msg("new: not a constructor".into()));
             }
             if self.bound_functions.contains_key(&f) {

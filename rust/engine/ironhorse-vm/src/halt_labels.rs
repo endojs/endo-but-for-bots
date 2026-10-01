@@ -43,7 +43,6 @@ pub const NOT_IMPLEMENTED_LABELS: &[&str] = &[
     "array-buffer-resize:unsupported",
     "array-species:symbol",
     "async-generator:new-target",
-    "async:new-target",
     "atomics:access-index",
     "atomics:coerce",
     "atomics:decode",
