@@ -509,7 +509,7 @@ harden(parseImagePathFromConfigEnv);
  * @param {SliceSpec} spec
  * @param {string} containerName
  * @param {RootlessNetBackend} netBackend
- * @param {{ seccompProfilePath: string | null, pathInjection: string | null, ownerId: string, operationId: string, policyArgv?: readonly string[] }} extras
+ * @param {{ seccompProfilePath: string | null, pathInjection: string | null, ownerId: string, operationId: string, policyArgv?: readonly string[], runAs?: {uid: number, gid: number} }} extras
  *   `pathInjection` is the `PATH` value to inject as `-e PATH=…` when
  *   the caller did not set one.  `null` means "leave the image's
  *   `Config.Env` PATH alone" — used when the caller's `spec.env`
@@ -549,6 +549,18 @@ const assembleCreateArgv = (spec, containerName, netBackend, extras) => {
   if (extras.policyArgv !== undefined) {
     argv.push(...extras.policyArgv);
   } else {
+    if (extras.runAs !== undefined) {
+      const { uid, gid } = extras.runAs;
+      // Native operator configuration, not a client option. Map the rootless
+      // host owner to the guest identity so its private writable binds remain
+      // usable without chowning them or running model commands as uid 0.
+      argv.push(
+        '--user',
+        `${uid}:${gid}`,
+        '--userns',
+        `keep-id:uid=${uid},gid=${gid}`,
+      );
+    }
     argv.push(
       '--security-opt',
       'no-new-privileges',
@@ -695,6 +707,7 @@ const encodeMount = fields =>
  * @param {import('@endo/eventual-send').ERef<{observe: (request: {name: string, mountpoint: string}) => Promise<import('../xfs-volume-quota.js').VolumeQuotaEvidence>}>} [input.volumeQuota] Trusted host kernel-quota observer; never model-facing. A promise is accepted: this is only ever eventual-sent to, and an adapter that builds its observer asynchronously (Codex's XFS bridge resolves the quota executable first) would otherwise have to construct the driver inside an await, after the owner already retains its close().
  * @param {GeneratedFileStorage} [input.generatedFileStorage] Host-owned allocator; required for literal files.
  * @param {SeccompFilePowers} [input.fs] Host filesystem powers; injectable for cleanup failures.
+ * @param {{uid: number, gid: number}} [input.runAs] Fixed native operator identity for non-policy slices; no public launch option.
  * @returns {Omit<SandboxDriver, 'prepareSlice' | 'prepareSliceKit'> & { prepareSlice(spec: SliceSpec): Promise<PodmanSliceContext>, prepareSliceKit(spec: SliceSpec): DriverPreparation<PodmanSliceContext>, closeSlices(): Promise<void>, close(): Promise<void> }}
  */
 export const makePodmanDriver = ({
@@ -706,7 +719,17 @@ export const makePodmanDriver = ({
   volumeQuota,
   generatedFileStorage,
   fs: fsPower,
+  runAs,
 } = {}) => {
+  if (
+    runAs !== undefined &&
+    (Object.keys(runAs).sort().join(',') !== 'gid,uid' ||
+      ![runAs.uid, runAs.gid].every(
+        n => Number.isInteger(n) && n > 0 && n < 0xffff_ffff,
+      ))
+  )
+    throw makeError(X`Invalid Podman native execution identity`);
+  const nativeIdentity = runAs === undefined ? undefined : harden({ ...runAs });
   const hostEnvironment = makePodmanHostEnvironment(process.env, env);
   if (
     generatedFileStorage !== undefined &&
@@ -2503,6 +2526,7 @@ export const makePodmanDriver = ({
           pathInjection,
           ownerId: owner,
           operationId,
+          ...(nativeIdentity === undefined ? {} : { runAs: nativeIdentity }),
           // The same frozen array the anchor was attested under, so this
           // operation cannot run at a weaker configuration than the one
           // `policy()` proved.

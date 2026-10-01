@@ -23,6 +23,7 @@ import {
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
+import { assertEnvironmentRecipe } from '@endo/exo-shell/environment-interfaces.js';
 import { cancelPendingIterator } from './cancelable-iterator.js';
 import {
   assertPetName,
@@ -47,7 +48,6 @@ import { toHex, fromHex } from './hex.js';
 import { makePetSitter } from './pet-sitter.js';
 
 import { makeDeferredTasks } from './deferred-tasks.js';
-import { assertEnvironmentRecipe } from './environment.js';
 import { makeFormulaRecord } from './formula-record.js';
 import { makeSerialJobs } from './serial-jobs.js';
 import { makeSessionOwner } from './session-owner.js';

@@ -4,10 +4,8 @@ import test from 'ava';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
-import {
-  makeEnvironment,
-  assertEnvironmentRecipe,
-} from '../src/environment.js';
+import { assertEnvironmentRecipe } from '@endo/exo-shell/environment-interfaces.js';
+import { makeEnvironment } from '../src/environment.js';
 
 test.beforeEach(t => t.timeout(5000));
 

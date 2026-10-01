@@ -13,7 +13,7 @@ import {
   rangeReadMethodGuards,
   getInfoMethodGuard,
 } from '@endo/platform/fs/lite';
-import { EnvironmentRecipeShape } from './environment.js';
+import { EnvironmentRecipeShape } from '@endo/exo-shell/environment-interfaces.js';
 import {
   NamePathShape,
   NameOrPathShape,

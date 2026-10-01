@@ -139,7 +139,21 @@ Explicit disposal deletes owned development storage only after stop, never the
 workspace. Automatic GC remains deferred.
 Nine owner tests and one real daemon cold-restoration test pass. The latter
 proves passive inspection and exact dependency capture after petname rebinding.
-Native development storage, preset integration and live acceptance remain pending.
+The Podman runner now composes the same native scopes, Shell spawner, inode-owned
+allocation store and managed network-only listener. The portable recipe and
+private runner/controller guards live with Shell, not in a backend-specific
+session contract. Provisioning returns an inert controller. Acquiring a scope,
+projecting the exact workspace Mount over 9P and opening public egress belong to
+explicit open. Stop reaches pending acquisitions outside their queue and waits
+for original native cleanup before unmounting.
+Only the native `home` child is bound writable at `/home/node`; Cargo/Rustup and
+build output use it. The workspace is a separate projection. The Podman operator
+maps uid/gid 1000 with `keep-id`, preserving host ownership without chowning
+shared storage; the attested hosted-policy path is unchanged. No scratch mount,
+inference grant, Secret, host path or Podman controller reaches Shell.
+The runner's five tests and nearest daemon/native lifecycle suites pass 79 tests.
+Types and ESLint pass. Live Podman identity/network and installation persistence
+are still unverified; preset integration and Tokyo acceptance remain pending.
 No admitted inbox command or inference is replayed to discover its result.
 The delegation registry's closed-ask and unsolicited-sender routing remains
 process-local; published claimed-reply receipts prevent their replay, but an
