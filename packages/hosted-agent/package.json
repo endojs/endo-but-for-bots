@@ -21,6 +21,7 @@
     "./account.js": "./src/account.js",
     "./account-bindings.js": "./src/account-bindings.js",
     "./account-oracle.js": "./src/account-oracle.js",
+    "./snapshot-journal.js": "./src/snapshot-journal.js",
     "./account-oracle-module.js": "./src/account-oracle-module.js",
     "./account-source.js": "./src/account-source.js",
     "./latest-topic.js": "./src/latest-topic.js",

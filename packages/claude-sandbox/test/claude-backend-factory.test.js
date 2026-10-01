@@ -362,10 +362,8 @@ test('create() refuses a network policy, an effort the runtime has no setting fo
 });
 
 test('send() carries the turn\u2019s options, not just the model and persona', async t => {
-  // The factory used to rebuild this record from named fields, so the stack's
-  // transcript never reached the client. The session still remembered —
-  // Claude's own store survives on a host bind and `--continue` finds it — so
-  // the loss was invisible until an adapter without a durable store needed it.
+  // The host-selected transcript must reach the client for restoration;
+  // forwarding only model/persona fields would discard continuity authority.
   const { factory, turns } = makeHarness();
   const { run } = await E(factory).create(
     harden({
@@ -495,6 +493,10 @@ test('interrupt() tolerates an idle session; acknowledge() is a no-op; status() 
   t.is(interrupts(), 2);
   t.is(turns.length, 1);
   await t.notThrowsAsync(() => E(run).acknowledge('whatever'));
+  t.regex(
+    await E(run).help(),
+    /operational no-op; Floot retains native context/,
+  );
   t.like(await E(run).status(), { sessionId: 'x' });
 });
 

@@ -16,17 +16,21 @@
 //   Only JSON crosses that socket; the guest capabilities stay in Floot's
 //   worker on the far end of `E(toolSet).execute`.
 // - Turn events are translated from the CLI's stream-json wire into the
-//   provider-neutral hosted events (src/claude-hosted-events.js), so nothing
-//   Claude-specific reaches Floot.
+//   provider-neutral hosted events (src/claude-hosted-events.js). Floot also
+//   retains validated opaque native-context records for Claude restoration;
+//   it does not interpret the CLI's wire vocabulary.
 // - The reasoning effort is the runtime's own axis: checked in shape here,
 //   and against the efforts the runtime drives each model at in the
 //   provisioner.
 //
-// Continuity is the CLI's own transcript: every turn resumes the conversation
-// persisted in the session's config dir, so there is no checkpoint to
-// acknowledge and `acknowledge()` is a no-op. The descriptor says so
-// (`continuity: 'transcript'`) so a consumer can mirror what that transcript
-// retains — a delivered prompt survives an aborted or failed turn there.
+// Floot's host journal owns conversation continuity. The client restores its
+// selected native-context checkpoint plus portable suffix before a turn, or
+// reconstructs portable records when no native checkpoint is available.
+// `transcript` declares per-turn reconstruction and permits portable fallback
+// when native context would hide tool evidence. Partial turns remain journalled
+// after failure/cancellation; arbitrary surviving CLI files are not authority.
+// Native context is emitted through turn events; `acknowledge()` is a separate
+// operational no-op here, not the operation that saves that context.
 
 import { E } from '@endo/eventual-send';
 import {
@@ -123,12 +127,9 @@ export const makeClaudeBackendFactory = ({
        */
       async send(prompt, options = {}) {
         const systemPrompt = options.systemPrompt || spec.systemPrompt;
-        // Forward the turn's options rather than rebuilding them. Naming the
-        // fields here meant every continuity option the stack added — the
-        // transcript above all — was dropped on the way to the client. The
-        // session still remembered, because Claude's own store survives on a
-        // host bind and `--continue` found it, so the stack's record was
-        // never what was carrying the conversation.
+        // Forward continuity options intact: the host-selected transcript,
+        // including native context, must reach the client for restoration.
+        // Rebuilding only model/persona fields would discard that authority.
         const raw = await E(client).send(
           prompt,
           harden({
@@ -157,7 +158,9 @@ export const makeClaudeBackendFactory = ({
           if (!isIdleInterrupt(error)) throw error;
         }
       },
-      // Continuity is the CLI transcript; there is no checkpoint to commit.
+      // No separate operational checkpoint is pending acknowledgement here.
+      // Native context is carried by turn events and retained by Floot's
+      // journal, not committed by this hook.
       async acknowledge(_checkpoint) {
         await null;
       },
@@ -167,7 +170,7 @@ export const makeClaudeBackendFactory = ({
       help: method =>
         method
           ? `Hosted Claude CLI backend run method: ${method}`
-          : 'Hosted Claude CLI backend: send, models, interrupt, acknowledge (no-op; the CLI transcript is the continuity), and status.',
+          : 'Hosted Claude CLI backend: send, models, interrupt, acknowledge (operational no-op; Floot retains native context), and status.',
     }),
     adminHelp:
       'Factory-only Claude CLI lifecycle administration: terminate (the daemon owner stops the native controller and its tool bridge; keeps the workspace and transcript).',

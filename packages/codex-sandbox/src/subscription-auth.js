@@ -2,6 +2,7 @@
 
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
+import { boundedJson } from '@endo/hosted-agent/bounded-json.js';
 import { makeBrokerOAuthCredential } from '@endo/hosted-agent/provider-broker.js';
 
 // Matches the stock Codex public OAuth client. Never accept an endpoint or
@@ -110,19 +111,12 @@ export const makeCodexSubscriptionRefresh = ({ fetch, now }) =>
         }
         reader = response.body?.getReader();
         if (!reader) throw Error('Missing response');
-        const decoder = new TextDecoder('utf-8', { fatal: true });
-        let text = '';
-        let size = 0;
-        for (;;) {
-          // eslint-disable-next-line no-await-in-loop
-          const { done, value } = await reader.read();
-          if (done) break;
-          size += value.byteLength;
-          if (size > MAX_TOKEN_BYTES) throw Error('Oversized response');
-          text += decoder.decode(value, { stream: true });
-        }
-        text += decoder.decode();
-        const result = JSON.parse(text);
+        const result = await boundedJson(
+          response,
+          MAX_TOKEN_BYTES,
+          'Codex subscription renewal',
+          reader,
+        );
         const accessToken = assertToken(result.access_token);
         const claims = tokenClaims(accessToken);
         if (

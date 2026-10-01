@@ -10,6 +10,16 @@ const descriptor = harden({
   toolOwnership: 'endo',
 });
 
+test('the unsupported storage-bound descriptor field is refused', t => {
+  for (const enforcesStorageBound of [true, false, undefined]) {
+    t.throws(
+      () =>
+        assertHostedBackendDescriptor({ ...descriptor, enforcesStorageBound }),
+      { message: /Hosted backend descriptor must be a record/ },
+    );
+  }
+});
+
 test('native context requirement is explicit and validated', t => {
   t.is(
     assertHostedBackendDescriptor({

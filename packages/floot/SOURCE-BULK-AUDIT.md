@@ -16,8 +16,8 @@ This is not the size of the whole repository or the whole Floot implementation.
 account for 58.0% of that shared package.
 The ten largest files hold 30.7% of the four-package total.
 
-Concrete unused surfaces and legacy compatibility paths remain, alongside
-several small repetitions worth consolidating locally.
+The snapshot identifies concrete unused surfaces and legacy compatibility paths,
+alongside several small repetitions worth consolidating locally.
 The immediate evidenced deletions are small, not thousands of lines.
 The optional sharing/delegation subsystem is a larger scope decision, not dead code.
 No evidence justifies replacing the current ownership layers with another framework.
@@ -26,7 +26,11 @@ The original smaller-combined-implementation target remains unproven.
 The tables describe the initial audit snapshot; the progress section records
 subsequent implementation.
 The concrete deletion and compatibility candidates SB-01 through SB-08 are now
-removed, reducing this same source metric to 42,610 lines.
+removed, and local repetition SB-09 through SB-12 is consolidated.
+This same source metric is now 42,561 lines.
+Scope item 3's unsupported delegated storage-bound extension is removed.
+Scope item 4 gives the existing snapshot journal a neutral name and module.
+Scope item 5 corrects Claude's native-context versus acknowledgement documentation.
 Further implementation should follow deletion before abstraction, with independent
 adversarial review and focused regression tests before each commit.
 
@@ -159,6 +163,8 @@ None of these candidates warrants a new framework or a broader lifecycle rewrite
 
 ## Repetition to reduce after the deletions
 
+These rows describe the initial findings; implementation status is recorded below.
+
 | ID | Repetition | Bounded consolidation and important difference |
 |---|---|---|
 | SB-09 | Four guest-publication loops in `hosted-setup.js` | The loops near 333, 445, 654 and 842 move guest handles/names only when source exists and destination is free. A local helper can remove repeated mechanics while retaining publication order, partial-setup behavior and no-overwrite rules. Keep account, reset, share and runner ownership separate. |
@@ -194,14 +200,22 @@ not evidence that whole clients can be merged safely.
    This is an unimplemented extension point rather than supported native storage
    enforcement.
    Removing it must preserve refusal, not silently accept a bound without enforcement.
+   **Done:** only explicit `storage: 'unbounded'` is accepted; bounded requests
+   are refused during limit validation before setup or session-slot acquisition.
+   The descriptor flag and forwarded session-bound field are removed.
 4. **Generic journal placement.** `makeAccountJournal` in `account-oracle.js` is
    reused by pools, reset intents, shares and runners.
    It is one storage mechanism, not five parallel account journals.
    A clearer name/location may improve ontology, but is not a source-size saving.
+   **Done:** `makeSnapshotJournal` lives in `snapshot-journal.js`; all five
+   callers retain their namespaces, prefixes, record shapes and state ownership.
+   The account-specific export is removed without a compatibility alias.
 5. **Claude checkpoint comments.** Comments claiming there is no checkpoint
    predate native capture.
    Distinguish native context capture from the adapter's operational acknowledgement;
    fix misleading documentation rather than deleting a working acknowledgement path.
+   **Done:** factory/translator comments, README and run help distinguish
+   Floot-retained native context from the operational no-op acknowledgement hook.
 6. **Reset-provider response guesses.** Codex reset response normalization accepts
    several provider outcome/status names.
    The provider protocol needs evidence before reducing that live boundary.
@@ -246,6 +260,8 @@ The source review does not establish that either branch is dead.
 4. Decide whether optional sharing/delegation and inert weight/storage knobs
    belong in this release.
    Do not bury that scope decision in an abstraction commit.
+   Sharing/delegation and pool weight remain undecided; scope item 3 removes
+   the unsupported storage-bound extension rather than implementing quotas.
 5. Only then consider pure framing/common-profile extraction SB-13 through SB-15,
    with differential protocol and closed-shape tests.
 6. Remeasure this same committed four-package scope after each slice and update
@@ -329,6 +345,172 @@ The source review does not establish that either branch is dead.
   All eight concrete candidates are closed; SB-09 through SB-12 local repetition
   and the separate scope decisions remain next, not implemented by this slice.
   No host configuration, image pin, stored authority or workspace changes; not deployed.
+- **SB-09 done:** four guest-publication loops now use one private
+  `finishGuestMoves` helper in `hosted-setup.js`.
+  Source-exists/destination-free checks, short-circuiting, handle-before-powers
+  ordering and rejected-move propagation are unchanged; `has` plus `move` is
+  still not an atomic publication protocol.
+  Account, reset, share and runner owners keep their separate setup and journals.
+  Twelve regressions cover the four callers' held first moves, interrupted
+  second moves with the same retained namespace, and occupied destinations with
+  stray root names preserved.
+  Focused setup/backend-setup tests pass: 47; hosted types, scoped ESLint and
+  formatting pass.
+  Independent review checks publication semantics and reruns tests.
+  This removes 21 source lines, bringing the committed count to 42,589.
+  No durable format, formula identity or release pin changes; not deployed.
+- **SB-10 done:** delegated create and turn paths share one private pure
+  validator for model, reasoning effort and system prompt.
+  Creation still requires a named model only when the operator supplies a model
+  allowlist; a turn can retain its current model by omitting or emptying that field.
+  Exact refusal order, narrow turn keys, network/storage admission and durable
+  slot/revocation accounting remain in their existing owners.
+  New tests combine invalid fields to check refusal precedence and verify that
+  allowed turn options are forwarded unchanged without admitting session-only fields.
+  The implementer passes 26 runner/module tests; independent review reruns the
+  24 runner tests successfully.
+  Hosted types, scoped ESLint and formatting pass.
+  This removes four source lines, bringing the committed count to 42,585.
+  No new public surface, durable format or release pin changes; not deployed.
+- **SB-11 done:** Codex renewal uses the existing shared bounded JSON parser
+  instead of its own byte/decode/parse loop.
+  An optional already-owned reader leaves cancellation entirely with its caller;
+  existing three-argument callers keep their original behavior.
+  Codex retains its unconditional awaited `finally` cancellation, including on
+  overflow, parse/claim failure and success; tests prove exactly one cancellation,
+  delayed settlement until acknowledgement, and swallowed cleanup rejection.
+  Strict fatal UTF-8, the 64 KiB bound, fixed endpoint, 15-second abort signal,
+  sanitized errors, account/expiry checks and durable no-replay/CAS rules remain.
+  The accepted timing difference is explicit: malformed UTF-8 is decoded after
+  the bounded body read instead of failing on its first invalid chunk.
+  No second parser mode is added to preserve that timing.
+  Focused tests pass: 29 Codex renewal/account/reset, 48 shared parser/account/model
+  and 11 Claude renewal; independent review reruns six parser and 23 renewal tests.
+  Full Codex tests pass: 445; hosted/Codex/Claude types, scoped ESLint and formatting pass.
+  Only ignored shared declarations were refreshed to match the new reader argument.
+  This removes six Codex source lines and adds three shared lines: net minus
+  three, bringing the committed count to 42,582.
+  No credential edits, actual renewal calls, durable format or release pin changes;
+  not deployed.
+- **SB-12 done:** admission and the session picker share one private account/model
+  projection in `backend-catalog.js`.
+  Eligible accounts, current/stale usability and the first-descriptor-wins model
+  union are selected once; distinct admission refusals stay in `resolve`.
+  Defaults, effort admission, labels, pinned lanes and empty/current versus
+  unavailable catalogs keep their existing contracts.
+  New tests check conflicting descriptor defaults/efforts across lanes and unread
+  accounts, a stale pinned account, and an empty current catalog.
+  All 15 catalog tests pass in both implementation and independent review;
+  hosted types, scoped ESLint and formatting pass.
+  This removes one source line, bringing the committed count to **42,581**.
+  The four local consolidations remove **29** net source lines; combined with
+  SB-01 through SB-08 and validation reconciliation, the reduction is **205**
+  from the initial 42,786-line snapshot, not source moved outside the metric.
+  Counts are hosted-agent 24,011, Claude 7,057, Codex 6,878 and OpenCode 4,635,
+  across the same 160 source files.
+  Fresh full suites pass: shared 798 (one existing skip), Claude 539, Codex 445
+  and OpenCode 298, totaling 2,080 passes.
+  Shared/Codex/Claude types, changed-file ESLint/formatting and root docs pass;
+  warnings remain, and ignored declarations are not committed.
+  Whole-repository lint is not green: Prettier stops on five unchanged files in
+  `endo-fs-asset-server` and `space-floot`.
+  The separate repository ESLint run also reports errors in other unchanged
+  files, including 93 project-resolution failures in Chat.
+  Its `add-space-modal` test lints clean in isolation,
+  consistent with the recorded bucketing problem, not proof of its exact cause.
+  Shell checks pass.
+  These unrelated lint issues are not fixed or represented as a clean CI gate here.
+  No new framework, public projection API, durable owner, host configuration,
+  credential edit or release pin changes; not deployed.
+  SB-01 through SB-12 are closed.
+  Next is the explicit sharing/delegation and inert-knob scope decision, followed
+  by SB-13 through SB-15 only with their required cross-adapter evidence.
+
+- **Scope item 3 done:** removed the unsupported delegated storage-bound
+  extension, not sharing/delegation itself.
+  No native adapter implemented the descriptor flag or quota enforcement.
+  Runner limits now require explicit `storage: 'unbounded'`; missing, malformed
+  and bounded storage choices refuse before setup publication or taking a slot.
+  The closed backend descriptor rejects the retired `enforcesStorageBound` field,
+  including false or undefined; it is not accepted as a compatibility alias.
+  There is no bound forwarded to the backend and no newly implemented quota.
+  A retained bounded runner limit also fails closed; no migration is added.
+  Tests cover normalization, pre-publication setup refusal, no slot/backend
+  acquisition on refusal, and successful creation after correcting the limits.
+  All 67 runner/module/descriptor/setup tests pass; shared types pass.
+  Independent review passes 77 tests including backend setup, shared types,
+  scoped ESLint (0 errors, 21 warnings), formatting and diff checks.
+  Root docs passes (0 errors, 180 warnings).
+  This removes **26** source lines: hosted-agent 23,985; the same 160 files total
+  **42,555**, down **231** from the initial snapshot.
+  No state format, journal prefix, credential, owner, host config or pin changes;
+  not deployed.
+  Scope items 4 and 5 are the next approved slices.
+
+- **Scope item 4 done:** moved the existing pet-store snapshot mechanism from
+  `account-oracle.js` to `snapshot-journal.js`, named `makeSnapshotJournal`.
+  All five callers use the new export; there is no old-name alias or second
+  implementation.
+  The account oracle now names its existing `account-snapshot-v1-` prefix
+  explicitly, as the pool/reset/share/runner callers already did.
+  Every persisted prefix and record shape stays unchanged; no migration or
+  new durable owner is added.
+  The helper's sequence arithmetic, queued write acknowledgement, failure
+  behavior, publish-before-prune order and best-effort pruning are unchanged.
+  Documentation states its single-writer assumption and distinguishes complete
+  snapshots from Floot's event journal and from owner-specific records.
+  Nine direct tests cover the five retained prefixes/re-creation, exact sequence
+  arithmetic beyond the number range, delayed publication, pruning and queued
+  failure followed by a successful write.
+  The 70 focused journal/account/module/pool tests and shared types pass.
+  Root docs passes with 0 errors and 180 warnings.
+  Repository composite declaration build fails on existing generated-file
+  TS5055 conflicts outside this slice; it is not represented as a passing gate.
+  The full shared suite passes **808** tests with one existing skip.
+  Independent review confirms a byte-for-byte identical journal body and passes
+  54 focused tests, shared types, formatting and diff checks.
+  Scoped ESLint passes with warnings; the two new test-JSDoc warnings were fixed.
+  This is ontology clarification, not a source-size saving: **+2** source lines
+  and one source file, hosted-agent 23,987; combined **42,557** across **161** files,
+  down **229** from the initial snapshot.
+  No host, credential, lifecycle authority or release pin changes; not deployed.
+  Scope item 5 is next; sharing/delegation and pool weight remain undecided.
+
+- **Scope item 5 done:** corrected the Claude factory and hosted translator's
+  comments, README and run help; `acknowledge()` remains an operational no-op.
+  Floot retains validated native-context checkpoints through hosted events and
+  the host journal, including signed/opaque context, for restoration before a
+  turn; portable reconstruction is the fallback when no native checkpoint exists.
+  The `transcript` continuity mode permits per-turn reconstruction and portable
+  fallback when native restoration would hide tool evidence.
+  Floot records delivered partial turns independently of that flag; arbitrary
+  surviving CLI files are not conversation authority.
+  No dispatch, capture, persistence, restoration or acknowledgement behavior
+  changes; the only runtime-value change is the corrected help text.
+  The existing no-op test also checks that help distinguishes retained native
+  context from operational acknowledgement.
+  All 40 focused factory/translator tests and the full 539-test Claude suite pass.
+  Independent review passes the same 40 focused tests, Claude types, scoped
+  ESLint (0 errors, 8 warnings), formatting and diff checks; it confirms only
+  the help string changes runtime values.
+  Fresh full suites for the other packages also pass: shared **808** with one
+  existing skip, Codex **445**, OpenCode **298**; **2,090** passes in total.
+  Shared/Claude/Codex types, four-package JavaScript ESLint (0 errors, 490 warnings),
+  changed-file formatting and root docs (0 errors, 180 warnings) pass.
+  Ignored hosted declarations were narrowly regenerated to match the removed
+  exports/fields; no generated files are committed.
+  Repository lint still stops on the same five unchanged formatting files;
+  the composite declaration build remains blocked by the recorded TS5055 conflicts.
+  Neither repository-wide gate is claimed green.
+  Documentation adds **4** physical source lines, making Claude 7,061;
+  combined source is **42,561** across **161** files, down **20** this pass and
+  **225** from the original snapshot.
+  This is contract clarification, not new machinery or a size reduction for this
+  individual slice.
+  No secrets, owner identities, host config, runtime pins or deployed state changed;
+  not deployed.
+  The three requested scope items are closed; sharing/delegation and pool weight
+  remain separate decisions, and SB-13 through SB-15 remain unimplemented.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.

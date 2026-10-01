@@ -96,6 +96,122 @@ test('invalid, expired, switched-account, and oversized responses fail without s
   }
 });
 
+const renewalFailure =
+  'Codex subscription renewal failed; sign in again if the renewal outcome cannot be recovered';
+/** @param {string} text */
+const encoded = text => new TextEncoder().encode(text);
+const splitReply = encoded(
+  JSON.stringify({ access_token: token(), note: '🐙 café' }),
+);
+const splitAt = splitReply.indexOf(0xf0) + 2;
+
+/** @type {[string, Uint8Array[], boolean][]} */
+const renewalReplies = [
+  [
+    'split multibyte JSON',
+    [splitReply.subarray(0, splitAt), splitReply.subarray(splitAt)],
+    true,
+  ],
+  ['oversized bytes', [new Uint8Array(64 * 1024 + 1).fill(0x20)], false],
+  ['invalid UTF-8', [Uint8Array.of(0xc3), Uint8Array.of(0x28)], false],
+  ['incomplete UTF-8', [Uint8Array.of(0xc3)], false],
+  ['invalid JSON', [encoded('PRIVATE-RESPONSE')], false],
+  [
+    'switched account claims',
+    [encoded(JSON.stringify({ access_token: token('other') }))],
+    false,
+  ],
+];
+for (const [name, chunks, succeeds] of renewalReplies) {
+  for (const rejectsCancellation of [false, true]) {
+    test(`renewal awaits one owned cancellation for ${name} (rejects=${rejectsCancellation})`, async t => {
+      t.timeout(5000);
+      let release = () => {};
+      const cancellationBarrier = new Promise(resolve => {
+        release = () => resolve(undefined);
+      });
+      t.teardown(release);
+      let entered = () => {};
+      const cancellationStarted = new Promise(resolve => {
+        entered = () => resolve(undefined);
+      });
+      let cancellations = 0;
+      const response = new Response(
+        new ReadableStream({
+          start(controller) {
+            for (const chunk of chunks) controller.enqueue(chunk);
+            controller.close();
+          },
+        }),
+      );
+      const body = response.body;
+      if (!body) throw Error('Expected synthetic response body');
+      const getReader = body.getReader.bind(body);
+      Object.defineProperty(body, 'getReader', {
+        value: () => {
+          const reader = getReader();
+          const cancel = reader.cancel.bind(reader);
+          reader.cancel = async () => {
+            cancellations += 1;
+            entered();
+            await cancellationBarrier;
+            await cancel();
+            if (rejectsCancellation) throw Error('PRIVATE-CANCEL-FAILURE');
+          };
+          return reader;
+        },
+      });
+      let exchanges = 0;
+      const refresh = makeCodexSubscriptionRefresh({
+        now,
+        fetch: async () => {
+          exchanges += 1;
+          return response;
+        },
+      });
+      const renewing = refresh.refresh({
+        refreshToken: 'renewal',
+        accountId: 'account-1',
+      });
+      let settled = false;
+      void renewing.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await cancellationStarted;
+      await null;
+      t.is(cancellations, 1);
+      t.false(settled, 'renewal must await cancellation acknowledgement');
+      release();
+      if (succeeds) {
+        t.is((await renewing).accessToken, token());
+      } else {
+        await t.throwsAsync(renewing, { message: renewalFailure });
+      }
+      t.is(cancellations, 1, 'the parser must not cancel its borrowed reader');
+      t.is(exchanges, 1, 'parsing and cleanup must never retry renewal');
+    });
+  }
+}
+
+test('renewal accepts an exact 64 KiB JSON response', async t => {
+  const text = JSON.stringify({ access_token: token() }).padEnd(64 * 1024);
+  t.is(encoded(text).byteLength, 64 * 1024);
+  const refresh = makeCodexSubscriptionRefresh({
+    now,
+    fetch: async () => new Response(text),
+  });
+  t.is(
+    (await refresh.refresh({ refreshToken: 'renewal', accountId: 'account-1' }))
+      .accessToken,
+    token(),
+  );
+});
+
 const store = () => {
   /** @type {ReturnType<typeof initial> & {pendingRefresh?: {startedAt: number}}} */
   let state = initial();

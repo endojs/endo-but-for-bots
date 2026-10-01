@@ -5,8 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 
-import { makeAccountJournal } from './account-oracle.js';
 import { makeResetCreditAdmin } from './reset-credit-admin.js';
+import { makeSnapshotJournal } from './snapshot-journal.js';
 
 /**
  * Subscription-admin caplet: the retained `make-unconfined` entrypoint for
@@ -45,7 +45,7 @@ export const make = async powers => {
     },
     observe: async () => E(await provide('account-source')).observe(),
     refreshReading: async () => E(await provide('account-source')).refresh(),
-    journal: makeAccountJournal({ powers, prefix: 'reset-intent-v1-' }),
+    journal: makeSnapshotJournal({ powers, prefix: 'reset-intent-v1-' }),
     makeKey: () => randomUUID(),
   });
 };

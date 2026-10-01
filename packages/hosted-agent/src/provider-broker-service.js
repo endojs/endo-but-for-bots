@@ -28,7 +28,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { makeAccountJournal } from './account-oracle.js';
+import { makeSnapshotJournal } from './snapshot-journal.js';
 import { makePoolIdentityJournal } from './pool-identity-journal.js';
 import { makePoolMemberLifecycle } from './pool-member-lifecycle.js';
 
@@ -1496,7 +1496,7 @@ export const makeOwnedProviderBrokerService = ({
       // set, a stored value an operator rewrites to add a member), each
       // member's secret under its `secretName`, and what the pool keeps.
       const namespace = /** @type {BrokerPoolNamespace} */ (secret);
-      const state = makeAccountJournal({
+      const state = makeSnapshotJournal({
         powers: namespace,
         prefix: 'pool-state-v2-',
       });

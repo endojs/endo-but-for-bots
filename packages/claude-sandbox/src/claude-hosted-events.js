@@ -7,13 +7,14 @@
 //   { type: 'text-delta', text }              next chunk of assistant text
 //   { type: 'tool-call', id, name, args }     a tool the CLI is invoking
 //   { type: 'tool-result', id, name, result } that tool's output
+//   { type: 'native-context', checkpoint }  validated opaque native context
 //   { type: 'usage', ...counts, context? }     see @endo/hosted-agent/token-usage.js
 //   { type: 'end' } | { type: 'abort', reason }
 //
-// Nothing Claude-specific crosses the hosted seam: Floot persists the tool
-// activity and the final text from these events exactly as it does for any
-// other hosted backend, and the CLI's own event vocabulary stays behind this
-// package's capability boundary.
+// Floot persists tool activity and text through the same hosted vocabulary as
+// other backends. It also retains opaque native-context records for restoration
+// without interpreting their Claude-specific contents; the CLI's wire event
+// vocabulary stays behind this package's capability boundary.
 
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { makeHostedTurnChannel } from '@endo/hosted-agent/turn-channel.js';

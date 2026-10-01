@@ -3,7 +3,8 @@
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
 
-import { makeAccountJournal, makeAccountOracleKit } from './account-oracle.js';
+import { makeAccountOracleKit } from './account-oracle.js';
+import { makeSnapshotJournal } from './snapshot-journal.js';
 
 /**
  * Account-oracle caplet: the retained `make-unconfined` entrypoint.
@@ -83,7 +84,7 @@ export const make = async (powers, context, { env } = {}) => {
         await E(source).refresh();
       }
     },
-    journal: makeAccountJournal({ powers }),
+    journal: makeSnapshotJournal({ powers, prefix: 'account-snapshot-v1-' }),
   });
   if (context !== undefined) {
     await E(context).addDisposalHook(

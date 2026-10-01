@@ -68,15 +68,50 @@ old broker/source compatibility, redundant acquisition conveniences, an unused
 version export, and Codex's identity-only persistence fallback.
 Current ownership and complete persistence contracts remain; no replacement
 framework or durable owner is added.
-After type-validation reconciliation the metric is 42,610, down 176 lines, across
-the same 160 files. The audit records each slice and its validation.
-Full shared, Claude, Codex and OpenCode suites pass, along with shared/Claude/Codex
-type checks, ESLint and root docs (warnings remain).
-These source-only deletions are not deployed; generation 190 and its pins remain
+SB-09 through SB-12 then consolidate local guest publication, delegated inference
+validation, bounded JSON reading and account/model projection.
+Their helpers stay with existing owners; the shared reader retains Codex's
+caller-owned cancellation contract.
+Scope item 3 then removes the unsupported delegated storage-bound extension.
+Limits require explicit `storage: 'unbounded'`; bounded requests refuse before
+setup publication or session-slot acquisition, rather than silently losing a bound.
+The retired descriptor flag is rejected; sharing/delegation itself remains.
+Scope item 4 moves the existing snapshot journal out of the account oracle into
+`snapshot-journal.js` as `makeSnapshotJournal`, without an old-name alias.
+The five callers keep identical persisted prefixes and separate state ownership.
+The move adds two source lines and is ontology clarification, not a size reduction.
+Scope item 5 corrects Claude's native-context versus acknowledgement documentation
+and help; `acknowledge()` remains an operational no-op, not the persistence hook.
+The final metric is 42,561, down 225 lines, across 161 files.
+The audit records each slice and its validation.
+For SB-01 through SB-12, full shared, Claude, Codex and OpenCode suites passed,
+along with shared/Claude/Codex type checks, scoped ESLint/formatting and root docs
+(warnings remain).
+Scope item 3 passes 67 focused runner/module/descriptor/setup tests; independent
+review passes 77 including backend setup, shared types, scoped lint and formatting.
+Root docs also passes for this slice; warnings remain.
+Scope item 4 passes 70 focused journal/account/module/pool tests and shared types;
+root docs passes with warnings.
+Its full shared suite passes 808 tests with one existing skip; independent review
+confirms unchanged storage mechanics and passes 54 focused tests and shared types.
+The composite declaration build fails on existing generated-file TS5055 conflicts
+outside the slice; that repository-wide gate is not green.
+For the complete scope-item 3–5 pass, fresh full suites pass: shared 808 (one
+existing skip), Claude 539, Codex 445 and OpenCode 298, totaling 2,090 passes.
+Shared/Claude/Codex types, four-package JavaScript ESLint and changed-file formatting
+pass; warnings remain.
+Root docs passes with 0 errors and 180 warnings.
+Ignored declarations were narrowly regenerated, not committed.
+Whole-repository lint remains unclean on unchanged formatting and other lint
+errors, including Chat project-resolution failures.
+The source audit records those limitations and suspected bucketing separately.
+These source-only changes are not deployed; generation 190 and its pins remain
 the live acceptance baseline.
 The smaller-combined-implementation target is still unproven.
-Next are SB-09 through SB-12 local repetitions and the separate scope decisions;
-the recommended sequence remains deletion before abstraction.
+The requested scope items 3–5 are done.
+Next are the sharing/delegation and pool-weight scope decisions before the
+cross-adapter SB-13 through SB-15 extractions.
+The recommended sequence remains deletion before abstraction.
 
 Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
 and the rebuilt byte-only provider listener `cc639390…` on all three brokers.

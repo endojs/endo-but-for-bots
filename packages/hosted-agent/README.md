@@ -30,6 +30,19 @@ structure into Floot's metadata.
 
 ## Turn durability
 
+### Snapshot storage
+
+`snapshot-journal.js` provides `makeSnapshotJournal` for versioned snapshots in
+a caller-owned Endo namespace.
+Accounts, pool routing, reset intents, shares and delegated runners each choose
+their own fixed prefix and record shape; the helper does not own those states.
+It publishes the new snapshot before pruning older ones and reads the newest
+sequence, rather than replaying events like Floot's conversation journal.
+The caller must keep one writer per namespace/prefix and drain writes at handoff.
+The helper does not coordinate independent writers or native process cleanup.
+
+### Turn acknowledgement
+
 `turn-ledger.js` is the protocol between dispatching a turn and the consumer
 acknowledging it. A hosted turn is not durable because the provider says it
 finished: Floot commits its own conversation on the terminal event and

@@ -31,7 +31,6 @@ const makeBeneath = () => {
   const state = {
     failCreate: '',
     failDestroy: false,
-    bounded: false,
     nativeContextFormat: '',
     /** @type {Promise<void> | undefined} */
     hang: undefined,
@@ -51,7 +50,6 @@ const makeBeneath = () => {
         ...(state.nativeContextFormat
           ? { nativeContextFormat: state.nativeContextFormat }
           : {}),
-        ...(state.bounded ? { enforcesStorageBound: true } : {}),
       }),
     modelCatalog: async subscriptionId =>
       harden({
@@ -148,12 +146,12 @@ const makeHarness = ({
   return { ...kit, beneath, store, state, logged };
 };
 
-test('limits are validated, and storage is said one way or the other', t => {
+test('limits require explicit acceptance of unbounded storage', t => {
   t.deepEqual(
     normalizeRunnerLimits({
       subscription: 'lane',
       maxSessions: 3,
-      storage: { maxSessionBytes: 1_000_000, other: 1 },
+      storage: 'unbounded',
       models: ['small'],
       expiresAt: '2026-10-01T00:00:00Z',
       anything: 'else',
@@ -163,7 +161,7 @@ test('limits are validated, and storage is said one way or the other', t => {
       maxSessions: 3,
       networkPolicies: ['off'],
       models: ['small'],
-      storage: { maxSessionBytes: 1_000_000 },
+      storage: 'unbounded',
       expiresAt: '2026-10-01T00:00:00.000Z',
     },
   );
@@ -174,6 +172,11 @@ test('limits are validated, and storage is said one way or the other', t => {
     { subscription: 'lane', maxSessions: 0, storage: 'unbounded' },
     { subscription: 'lane', maxSessions: 1 },
     { subscription: 'lane', maxSessions: 1, storage: {} },
+    {
+      subscription: 'lane',
+      maxSessions: 1,
+      storage: { maxSessionBytes: 1_000_000 },
+    },
     {
       subscription: 'lane',
       maxSessions: 1,
@@ -538,19 +541,73 @@ test('models are the operator’s allowlist, in a session’s spec and on every 
   t.is(await E(session.run).send('hi', harden({ model: 'small' })), 'a turn');
 });
 
-test('a storage bound needs a backend that enforces one', async t => {
-  const { factory, beneath } = makeHarness({
+test('creation keeps admission and inference refusal order', async t => {
+  const { factory, beneath, close } = makeHarness({
+    limits: { models: ['small'] },
+  });
+  t.teardown(close);
+  for (const [extra, message] of [
+    [
+      { workspaceHostPath: '/', networkPolicy: 7, model: 7 },
+      'A delegated runner does not take that in a session',
+    ],
+    [
+      { cwd: '/', subscription: 'work', networkPolicy: 7, model: 7 },
+      'A delegated runner’s sessions work in /workspace',
+    ],
+    [
+      { subscription: 'work', networkPolicy: 7, model: 7 },
+      'A delegated runner chooses the subscription',
+    ],
+    [
+      { networkPolicy: 7, model: 7 },
+      'This runner does not allow that network policy',
+    ],
+    [{ model: 7, reasoningEffort: 7 }, 'Invalid session model'],
+    [
+      { model: 'large', reasoningEffort: 7 },
+      'This runner does not allow that model',
+    ],
+    [
+      { reasoningEffort: 7, systemPrompt: 7 },
+      'This runner needs a model named',
+    ],
+    [{ model: '', reasoningEffort: 7 }, 'This runner needs a model named'],
+    [
+      { model: 'small', reasoningEffort: 7, systemPrompt: 7 },
+      'Invalid session reasoning effort',
+    ],
+    [{ model: 'small', systemPrompt: 7 }, 'Invalid session system prompt'],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () => E(factory).create(harden({ sessionId: 's', ...extra }), tools),
+      { message },
+    );
+  }
+  t.deepEqual(beneath.calls, []);
+});
+
+test('a storage bound is refused before a slot or backend is acquired', async t => {
+  const { factory, beneath, store, state, logged, close } = makeHarness({
     limits: { storage: { maxSessionBytes: 5_000_000 } },
   });
+  t.teardown(close);
   await t.throwsAsync(
     () => E(factory).create(harden({ sessionId: 't' }), tools),
     {
-      message: /cannot bound a session’s storage/,
+      message: 'Runner unavailable',
     },
   );
-  beneath.state.bounded = true;
+  t.deepEqual(beneath.calls, []);
+  t.deepEqual(store.written, []);
+  t.true(
+    logged.some(line => line.includes('storage bounds are not supported')),
+  );
+  // Refusal did not take a slot: a corrected operator decision can proceed.
+  state.limits.storage = 'unbounded';
   await E(factory).create(harden({ sessionId: 't' }), tools);
-  t.is(beneath.calls.at(-1).spec.storageBoundBytes, 5_000_000);
+  t.false(Object.hasOwn(beneath.calls.at(-1).spec, 'storageBoundBytes'));
 });
 
 test('a second kit’s revocation reaches the first', async t => {
@@ -741,4 +798,68 @@ test('a turn’s options are checked like a session’s spec', async t => {
     'a turn',
   );
   t.is(beneath.calls.filter(call => call.verb === 'send').length, 1);
+});
+
+test('turns keep their narrower options and may retain the current model', async t => {
+  const { factory, beneath, close } = makeHarness({
+    limits: { models: ['small'], networkPolicies: ['off', 'public-internet'] },
+  });
+  t.teardown(close);
+  const session = await E(factory).create(
+    harden({ sessionId: 's', model: 'small' }),
+    tools,
+  );
+  for (const [options, message] of [
+    [
+      { networkPolicy: 'public-internet', model: 7 },
+      'A delegated runner does not take that in a turn',
+    ],
+    [
+      { subscription: 'auto' },
+      'A delegated runner does not take that in a turn',
+    ],
+    [{ cwd: '/workspace' }, 'A delegated runner does not take that in a turn'],
+    [
+      { storageBoundBytes: 1 },
+      'A delegated runner does not take that in a turn',
+    ],
+    [{ model: 7, reasoningEffort: 7 }, 'Invalid session model'],
+    [
+      { model: 'large', reasoningEffort: 7 },
+      'This runner does not allow that model',
+    ],
+    [
+      { reasoningEffort: 7, systemPrompt: 7 },
+      'Invalid session reasoning effort',
+    ],
+    [{ model: '', systemPrompt: 7 }, 'Invalid session system prompt'],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(session.run).send('hi', harden(options)), {
+      message,
+    });
+  }
+  t.is(beneath.calls.filter(call => call.verb === 'send').length, 0);
+  const accepted = harden([
+    undefined,
+    {},
+    { reasoningEffort: 'low' },
+    {
+      model: '',
+      reasoningEffort: '',
+      systemPrompt: '',
+      acknowledgedCheckpoint: 'c1',
+      transcript: [],
+    },
+  ]);
+  for (const options of accepted) {
+    // eslint-disable-next-line no-await-in-loop
+    t.is(await E(session.run).send('hi', options), 'a turn');
+  }
+  t.deepEqual(
+    beneath.calls
+      .filter(call => call.verb === 'send')
+      .map(call => call.options),
+    accepted,
+  );
 });
