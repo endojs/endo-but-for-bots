@@ -7,12 +7,8 @@
     ]
   },
   "expected_traps": [
-    "parse-call-chain-2044",
-    "parse-elseif-chain-2044",
-    "parse-ifelse-block-2041",
     "parse-tagged-chain-2043",
     "proxy-proto-cycle",
-    "u3-eval-nest-tagged-2038",
-    "u4-function-callchain-in-tojson-1900"
+    "u3-eval-nest-tagged-2038"
   ]
 }
