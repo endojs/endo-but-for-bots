@@ -149,8 +149,9 @@ The daemon socket lives under `$XDG_RUNTIME_DIR`, the user's home, or the host
 tests start a listening socket outside the grants and assert that a connect
 from inside fails with `ENOENT`, while the same probe without the slice
 connects. They skip where `bwrap` is absent or cannot create namespaces; CI's
-`sandbox-drivers` job installs `bwrap` and sets `ENDO_CLAUDE_REQUIRE_BWRAP=1`
-so the skip becomes a failure there.
+`sandbox-drivers` job installs `bwrap`, lifts Ubuntu's AppArmor restriction on
+unprivileged user namespaces, and sets `ENDO_CLAUDE_REQUIRE_BWRAP=1` so the
+skip becomes a failure there.
 
 The network namespace is shared, because `claude` must reach the inference
 API. A loopback TCP listener on the host is therefore still reachable from the
