@@ -26,6 +26,22 @@ const makeConfig = root => ({
 });
 
 /**
+ * Resolve a pet name in a provisioned guest's namespace to its formula
+ * identifier. A guest neither produces nor consumes identifiers, so the host
+ * reads them by traversing into the guest agent beside the guest handle.
+ *
+ * @param {any} host
+ * @param {{ persistence: { guestHandlePath: string[] } }} session
+ * @param {...string} names
+ */
+export const identifyInGuest = (host, session, ...names) =>
+  E(host).identify(
+    ...session.persistence.guestHandlePath.slice(0, -1),
+    'guest-agent',
+    ...names,
+  );
+
+/**
  * @param {import('ava').ExecutionContext} t
  */
 export const makeProvisioningFixture = async t => {

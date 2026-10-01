@@ -20,7 +20,10 @@ import {
 } from '../../agentry/code-mode-provisioning.js';
 /* eslint-enable import/no-relative-packages */
 
-import { makeProvisioningFixture } from './_code-mode-provisioning-fixture.js';
+import {
+  identifyInGuest,
+  makeProvisioningFixture,
+} from './_code-mode-provisioning-fixture.js';
 import { quiesceGitMaintenance } from './_git-fixture.js';
 
 const execFileAsync = promisify(execFile);
@@ -68,7 +71,11 @@ test.serial(
     const oldRemote = /** @type {GitRemote} */ (
       await E(credentialSession.powers).lookup('upstream')
     );
-    const oldRemoteId = await E(credentialSession.powers).identify('upstream');
+    const oldRemoteId = await identifyInGuest(
+      host,
+      credentialSession,
+      'upstream',
+    );
 
     await E(host).provideBearerCredential(['credentials', 'github'], {
       audience: 'https://github.com',
@@ -83,7 +90,7 @@ test.serial(
         spec,
       }),
     );
-    const newRemoteId = await E(reprovisioned.powers).identify('upstream');
+    const newRemoteId = await identifyInGuest(host, reprovisioned, 'upstream');
     t.not(oldRemoteId, newRemoteId);
     await t.throwsAsync(E(oldRemote).inspect(), {
       message: /has been revoked/,

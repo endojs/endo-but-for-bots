@@ -23,7 +23,10 @@ import {
 import { realizeEndoProvisionOnHost } from '../../agentry/src/code-mode-provision-host.js';
 /* eslint-enable import/no-relative-packages */
 
-import { makeProvisioningFixture } from './_code-mode-provisioning-fixture.js';
+import {
+  identifyInGuest,
+  makeProvisioningFixture,
+} from './_code-mode-provisioning-fixture.js';
 import { quiesceGitMaintenance } from './_git-fixture.js';
 
 const execFileAsync = promisify(execFile);
@@ -161,7 +164,7 @@ test.serial(
       'workspace',
       'mount',
     );
-    const guestGitId = await E(localRemote.powers).identify('git');
+    const guestGitId = await identifyInGuest(host, localRemote, 'git');
     t.is(
       await E(host).identify(...controllerPath, 'gits', 'git', 'git'),
       guestGitId,
@@ -197,8 +200,11 @@ test.serial(
         sockPath: fixture.sockPath,
       }),
     );
-    t.is(await E(reconnected.powers).identify('git'), guestGitId);
-    t.is(await E(reconnected.powers).identify('calendar'), originalCalendarId);
+    t.is(await identifyInGuest(host, reconnected, 'git'), guestGitId);
+    t.is(
+      await identifyInGuest(host, reconnected, 'calendar'),
+      originalCalendarId,
+    );
     const reconnectedCalendar = await E(reconnected.powers).lookup('calendar');
     t.is(await E(reconnectedCalendar).lookup('value'), 'original');
     t.is(await E(reconnected.powers).lookup('answer'), 42);
@@ -211,8 +217,11 @@ test.serial(
         sockPath: fixture.sockPath,
       }),
     );
-    t.is(await E(recovered.powers).identify('git'), guestGitId);
-    t.is(await E(recovered.powers).identify('calendar'), originalCalendarId);
+    t.is(await identifyInGuest(restartedHost, recovered, 'git'), guestGitId);
+    t.is(
+      await identifyInGuest(restartedHost, recovered, 'calendar'),
+      originalCalendarId,
+    );
     const recoveredCalendar = await E(recovered.powers).lookup('calendar');
     t.is(await E(recoveredCalendar).lookup('value'), 'original');
     t.is(
@@ -324,8 +333,8 @@ test.serial(
     // The guest holds no binding for the persistence record or any controller
     // infrastructure name, so no absolute host path or reconstruction record
     // is reachable through the guest.
-    t.is(await E(session.powers).identify('persistence'), undefined);
-    t.is(await E(session.powers).identify('remotes'), undefined);
+    t.is(await identifyInGuest(host, session, 'persistence'), undefined);
+    t.is(await identifyInGuest(host, session, 'remotes'), undefined);
     await t.throwsAsync(() => E(session.powers).lookup('persistence'));
 
     const controllerPath = session.persistence.guestHandlePath.slice(0, -1);
@@ -484,7 +493,7 @@ test.serial(
       'grants',
       'counter',
     );
-    const childGuestId = await E(child.powers).identify('counter');
+    const childGuestId = await identifyInGuest(host, child, 'counter');
 
     t.notDeepEqual(
       child.persistence.guestHandlePath,
