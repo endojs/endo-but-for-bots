@@ -165,7 +165,6 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @param {(error: Error) => void | Promise<void>} [options.reportCleanupFailure]
  * @param {(kind: string, payload: Record<string, unknown>) => void | Promise<void>} [options.auditEvent]
  * @param {string} [options.threadId]
- * @param {(threadId: string) => Promise<void>} [options.saveThreadId]
  * @param {string} [options.cwd]
  * @param {string} [options.model]
  * @param {string} [options.reasoningEffort]
@@ -178,7 +177,7 @@ const CODEX_SANDBOX_MODE = 'danger-full-access';
  * @param {{capture: (request: any) => Promise<any>, restore: (request: any) => Promise<any>, cancel: () => Promise<void>, close: () => Promise<void>}} [options.nativeContext]
  * @param {() => {sessionId: string, timestamp: string}} [options.makeNativeIdentity]
  * @param {{ baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string }} [options.savedRecovery]
- * @param {(state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>} [options.saveThreadState]
+ * @param {(state: { threadId: string, toolSetId?: string, recovery?: { baseTurnId: string | null, turnId?: string, status?: string, previousCheckpoint?: string } }) => Promise<void>} options.saveThreadState
  * @param {number} [options.requestTimeoutMs]
  * @param {number} [options.maxTurnItems] Distinct item, call and request
  *   identities one turn may retain for deduplication; the one per-turn
@@ -206,7 +205,6 @@ export const makeCodexClient = ({
   reportCleanupFailure = () => undefined,
   auditEvent = () => undefined,
   threadId: savedThreadId,
-  saveThreadId = async () => undefined,
   saveThreadState,
   cwd = '/workspace',
   model,
@@ -230,6 +228,9 @@ export const makeCodexClient = ({
   toolCallTimeoutMs = 0,
   turnWallTimeoutMs = 0,
 }) => {
+  if (typeof saveThreadState !== 'function') {
+    throw makeError(X`Codex requires a thread-state writer`);
+  }
   /** @type {AppServerTransport | undefined} */
   let transport;
   /** @type {Promise<void> | undefined} */
@@ -382,7 +383,7 @@ export const makeCodexClient = ({
         }
       : {}),
     persist: async record => {
-      if (!threadId || !saveThreadState) return;
+      if (!threadId) return;
       await saveThreadState(
         harden({
           threadId,
@@ -1792,24 +1793,20 @@ export const makeCodexClient = ({
       // Persistence is part of thread creation: never execute a turn whose
       // continuation identity was not durably accepted by the caller.
       try {
-        if (saveThreadState) {
-          await saveThreadState(
-            harden({
-              threadId: created,
-              ...(toolSetId ? { toolSetId } : {}),
-              // A crash after creation but before first dispatch must not
-              // revive this empty thread as though it retained the dialogue.
-              recovery: {
-                baseTurnId: restoredBase,
-                ...(continuityCheckpoint
-                  ? { previousCheckpoint: continuityCheckpoint }
-                  : {}),
-              },
-            }),
-          );
-        } else {
-          await saveThreadId(created);
-        }
+        await saveThreadState(
+          harden({
+            threadId: created,
+            ...(toolSetId ? { toolSetId } : {}),
+            // A crash after creation but before first dispatch must not
+            // revive this empty thread as though it retained the dialogue.
+            recovery: {
+              baseTurnId: restoredBase,
+              ...(continuityCheckpoint
+                ? { previousCheckpoint: continuityCheckpoint }
+                : {}),
+            },
+          }),
+        );
       } catch (error) {
         failSession(error);
         throw error;

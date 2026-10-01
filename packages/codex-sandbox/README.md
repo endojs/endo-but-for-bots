@@ -8,6 +8,11 @@ The lifecycle factory provisions through an injected resource owner and refuses
 to run unless it receives the exact effective sandbox attestation.
 The low-level client remains injectable for protocol tests and adapters:
 
+`saveThreadState` is required and accepts the complete operational thread record:
+identity, tool-set binding and recovery markers.
+Thread creation and subsequent write-ahead/settlement updates await that writer;
+a failed write prevents dispatch or continuation rather than saving identity alone.
+
 ```js
 import { makeCodexClient } from '@endo/codex-sandbox';
 import { startAppServerTransport } from '@endo/codex-sandbox/app-server-transport.js';

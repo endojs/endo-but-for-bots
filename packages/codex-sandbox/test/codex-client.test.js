@@ -18,6 +18,27 @@ const INITIALIZE_RESULT = harden({
   userAgent: 'codex-test',
 });
 
+test('a complete thread-state writer is required before transport startup', t => {
+  let starts = 0;
+  for (const writer of [undefined, null, 'invalid']) {
+    // Deliberately untyped boundary input; an old identity-only callback
+    // cannot satisfy the operational persistence contract.
+    const options = /** @type {any} */ ({
+      sessionId: 'missing-state-writer',
+      saveThreadState: writer,
+      saveThreadId: async () => undefined,
+      start: async () => {
+        starts += 1;
+        throw Error('must not start');
+      },
+    });
+    t.throws(() => makeCodexClient(options), {
+      message: 'Codex requires a thread-state writer',
+    });
+  }
+  t.is(starts, 0);
+});
+
 test('obsolete per-turn instructions refuse before transport work without reserving a turn', async t => {
   t.timeout(5000);
   const fixture = makeFixture({
@@ -479,7 +500,7 @@ const makeQueue = () => {
  * @param {{
  *   injectFails?: boolean,
  *   threadId?: string,
- *   saveThreadId?: (threadId: string) => Promise<void>,
+ *   saveThreadState?: Parameters<typeof makeCodexClient>[0]['saveThreadState'],
  *   clientOptions?: Record<string, any>,
  *   interruptError?: string,
  *   interruptTerminal?: boolean,
@@ -501,7 +522,7 @@ const makeQueue = () => {
 const makeFixture = ({
   injectFails = false,
   threadId,
-  saveThreadId,
+  saveThreadState = async () => undefined,
   clientOptions = {},
   interruptError,
   interruptTerminal = true,
@@ -693,7 +714,7 @@ const makeFixture = ({
     start: async () => transport,
     sessionId: 'session-1',
     threadId,
-    saveThreadId,
+    saveThreadState,
     ...clientOptions,
   });
   return {
@@ -1487,11 +1508,10 @@ const STARTED_TURN_1 = harden({
 });
 
 test('initializes, persists a new thread, and streams normalized events', async t => {
-  /** @type {string | undefined} */
-  let persisted;
+  const persisted = [];
   const fixture = makeFixture({
-    saveThreadId: async value => {
-      persisted = value;
+    saveThreadState: async value => {
+      persisted.push(value);
     },
   });
   const reader = await fixture.client.send('do it', {
@@ -1553,7 +1573,14 @@ test('initializes, persists a new thread, and streams normalized events', async 
   });
 
   const events = await drain(reader);
-  t.is(persisted, 'thread-new');
+  t.deepEqual(persisted[0], {
+    threadId: 'thread-new',
+    recovery: { baseTurnId: null },
+  });
+  t.like(persisted.at(-1), {
+    threadId: 'thread-new',
+    recovery: { baseTurnId: null, turnId: 'turn-1', status: 'completed' },
+  });
   t.deepEqual(
     fixture.sent.slice(0, 4).map(message => message.method),
     ['initialize', 'initialized', 'account/read', 'thread/start'],
@@ -1841,7 +1868,7 @@ test('malformed method results poison the pinned protocol session', async t => {
 
 test('thread persistence failure prevents a turn from starting', async t => {
   const fixture = makeFixture({
-    saveThreadId: async () => {
+    saveThreadState: async () => {
       throw Error('disk full');
     },
   });
@@ -3111,6 +3138,7 @@ test('terminate surfaces transport teardown failure', async t => {
   const queue = makeQueue();
   const client = makeCodexClient({
     sessionId: 'failed-close',
+    saveThreadState: async () => undefined,
     start: async () => ({
       messages: queue.messages,
       send: async (/** @type {any} */ message) => {
@@ -3140,6 +3168,7 @@ test('automatic protocol failure reports teardown failure', async t => {
   const reported = [];
   const client = makeCodexClient({
     sessionId: 'failed-protocol-close',
+    saveThreadState: async () => undefined,
     reportCleanupFailure: error => {
       reported.push(error.message);
     },
@@ -3172,6 +3201,7 @@ test('a blocked write is bounded by the request deadline', async t => {
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'blocked',
+    saveThreadState: async () => undefined,
     requestTimeoutMs: 10,
     start: async () => ({
       messages: queue.messages,
@@ -3193,6 +3223,7 @@ test('a blocked initialized notification is bounded and closes the session', asy
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'blocked-initialized',
+    saveThreadState: async () => undefined,
     requestTimeoutMs: 10,
     start: async () => ({
       messages: queue.messages,
@@ -3220,6 +3251,7 @@ test('malformed matching responses poison the session', async t => {
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'malformed-response',
+    saveThreadState: async () => undefined,
     start: async () => ({
       messages: queue.messages,
       send: async (/** @type {any} */ message) => {
@@ -3241,6 +3273,7 @@ test('malformed initialize results poison the pinned protocol session', async t 
   const queue = makeQueue();
   const client = makeCodexClient({
     sessionId: 'malformed-initialize',
+    saveThreadState: async () => undefined,
     start: async () => ({
       messages: queue.messages,
       send: async (/** @type {any} */ message) => {
@@ -3267,6 +3300,7 @@ test('ambiguous turn-start write failure poisons the session', async t => {
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'failed-turn-write',
+    saveThreadState: async () => undefined,
     threadId: 'thread-saved',
     start: async () => ({
       messages: queue.messages,
@@ -3327,6 +3361,7 @@ test('an interrupt requested while turn/start is unanswered waits for the announ
   let heldTurnStart;
   const client = makeCodexClient({
     sessionId: 'deferred-turn-start',
+    saveThreadState: async () => undefined,
     threadId: 'thread-saved',
     start: async () => ({
       messages: queue.messages,
@@ -3479,6 +3514,7 @@ for (const phase of ['thread/start', 'thread/inject_items']) {
     let closed = false;
     const client = makeCodexClient({
       sessionId: 'deferred-thread-start',
+      saveThreadState: async () => undefined,
       requestTimeoutMs: 2000,
       start: async () => ({
         messages: queue.messages,
@@ -3683,6 +3719,7 @@ test('JSON-RPC error metadata is preserved without unsafe replay', async t => {
   let sends = 0;
   const client = makeCodexClient({
     sessionId: 'overloaded',
+    saveThreadState: async () => undefined,
     start: async () => ({
       messages: queue.messages,
       send: async (/** @type {any} */ message) => {
@@ -3725,6 +3762,7 @@ test('terminate closes a transport that resolves after lazy startup', async t =>
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'late-start',
+    saveThreadState: async () => undefined,
     start: async () => {
       started();
       return deferred;
@@ -3762,6 +3800,7 @@ test('startup-win termination race reports close failure', async t => {
   const reported = [];
   const client = makeCodexClient({
     sessionId: 'startup-win-termination-race',
+    saveThreadState: async () => undefined,
     reportCleanupFailure: error => {
       reported.push(error.message);
     },
@@ -3802,6 +3841,7 @@ test('startup timeout retains and closes a late transport', async t => {
   let closed = false;
   const client = makeCodexClient({
     sessionId: 'late-timeout',
+    saveThreadState: async () => undefined,
     requestTimeoutMs: 5,
     start: async () => deferred,
   });
@@ -3834,6 +3874,7 @@ test('a late transport cleanup failure is operator-visible', async t => {
   const reported = [];
   const client = makeCodexClient({
     sessionId: 'late-cleanup-failure',
+    saveThreadState: async () => undefined,
     requestTimeoutMs: 5,
     reportCleanupFailure: error => {
       reported.push(error.message);
@@ -3863,6 +3904,7 @@ test('oversized prompts are rejected before transport startup', async t => {
   let starts = 0;
   const client = makeCodexClient({
     sessionId: 'bounded-input',
+    saveThreadState: async () => undefined,
     maxPromptBytes: 3,
     start: async () => {
       starts += 1;

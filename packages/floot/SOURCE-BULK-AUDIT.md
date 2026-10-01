@@ -290,9 +290,21 @@ The source review does not establish that either branch is dead.
   The full shared suite above includes this slice; hosted types and scoped ESLint pass.
   No stored credential, renewal owner, journal format or release pin changes;
   not deployed.
-- **SB-08 pending:** the operator authorizes removing the alternate
-  identity-only persistence API after in-repository caller migration.
-  No compatibility shim or replacement framework is required.
+- **SB-08 done:** removed Codex's identity-only `saveThreadId` fallback.
+  The required `saveThreadState` writer accepts identity, tool-set binding and
+  recovery state; a missing or invalid writer is rejected before transport setup.
+  The controller already supplies the complete durable writer.
+  Synthetic client fixtures now explicitly supply full-state writers, and tests
+  check both initial and terminal records and refusal on persistence failure.
+  Creation, write-ahead, settlement, reconciliation and acknowledgement ordering
+  stay on the existing state writer and ledger; no second journal or continuation
+  owner is added.
+  This removes three source lines; the committed count after this slice is 42,609.
+  The full Codex suite passes 432 tests; independent review reruns all 116 client
+  tests, including restore, cancellation, rotation and failed persistence.
+  Scoped ESLint and the runtime type check pass; fixture/declaration typing is
+  reconciled separately rather than hidden by casts or suppressions.
+  Existing native records and release pins are unchanged; not deployed.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.
