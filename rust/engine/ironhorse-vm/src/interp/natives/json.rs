@@ -6,7 +6,6 @@ use super::super::*;
 /// nodes retain both the original value and its exact token byte range so the
 /// reviver's modern third argument can expose `{ source }` iff the property was
 /// not observably replaced before its post-order visit.
-#[derive(Clone, Debug)]
 enum JsonSource {
     Empty,
     Primitive {
@@ -16,6 +15,67 @@ enum JsonSource {
     },
     Array(Vec<JsonSource>),
     Object(Vec<(ReadKey, JsonSource)>),
+}
+
+impl JsonSource {
+    /// Move this node's children, if any, onto `into`.
+    fn detach_children(&mut self, into: &mut Vec<JsonSource>) {
+        match self {
+            JsonSource::Array(children) => into.append(children),
+            JsonSource::Object(children) => into.extend(children.drain(..).map(|(_, child)| child)),
+            JsonSource::Empty | JsonSource::Primitive { .. } => {}
+        }
+    }
+}
+
+impl Drop for JsonSource {
+    /// Free the tree without recursing: a node's children are detached onto a
+    /// worklist before it drops, so the derived drop glue, which would recurse
+    /// once per level of a deeply nested parse (STACK-DEPTH-REFACTOR.md B6),
+    /// only ever sees childless nodes.
+    fn drop(&mut self) {
+        let mut pending = Vec::new();
+        self.detach_children(&mut pending);
+        while let Some(mut node) = pending.pop() {
+            node.detach_children(&mut pending);
+        }
+    }
+}
+
+/// One property `InternalizeJSONProperty` has entered and not yet finished:
+/// the explicit stack that stands in for its recursion. It holds the light
+/// unit of the native-recursion budget charged on entry, the value read from
+/// its holder, and where the walk of that value's own properties stands.
+struct ReviveFrame<'s> {
+    holder: crate::value::SlotIndex,
+    name: ReadKey,
+    source: Option<&'s JsonSource>,
+    value: Slot,
+    walk: ReviveWalk<'s>,
+}
+
+/// A property to revive next: its holder, its key and its retained source.
+type ReviveChild<'s> = (crate::value::SlotIndex, ReadKey, Option<&'s JsonSource>);
+
+/// The walk of one revived value's own properties. `key` is the property
+/// whose revival is under way, to be written back when it returns.
+enum ReviveWalk<'s> {
+    /// Not an object: nothing to walk.
+    Leaf,
+    Array {
+        object: crate::value::SlotIndex,
+        length: u64,
+        next: u64,
+        key: ReadKey,
+    },
+    Object {
+        object: crate::value::SlotIndex,
+        keys: Vec<ReadKey>,
+        next: usize,
+        /// The retained sources by (refreshed) key, borrowed from the tree.
+        sources: Option<std::collections::HashMap<ReadKey, &'s JsonSource>>,
+        key: ReadKey,
+    },
 }
 
 /// One container `JSON.parse` has opened and not yet closed: the explicit
@@ -371,7 +431,7 @@ impl Interp {
                     &input,
                     holder,
                     ReadKey::Id(root_id),
-                    Some(source),
+                    Some(&source),
                     reviver,
                 )
             }
@@ -1602,97 +1662,71 @@ impl Interp {
     /// — with a structure of any depth, so each level of the walk is one light
     /// frame of the native-recursion budget (XS's `mxCheckCStack` boundary,
     /// as a counter).
+    ///
+    /// The walk is an explicit stack of properties entered and not yet
+    /// finished (STACK-DEPTH-REFACTOR.md B6), so the host stack stays flat
+    /// whatever the depth. A property charges its light unit on entry, before
+    /// its `Get`, and holds it through its reviver call, as the recursion did;
+    /// each child's revived value is written back to its parent between the
+    /// same operations. The retained sources are borrowed from the tree, not
+    /// cloned per level.
     fn json_internalize_property(
         &mut self,
         code: &[u8],
         input: &[u8],
         holder: crate::value::SlotIndex,
         name: ReadKey,
-        source: Option<JsonSource>,
+        source: Option<&JsonSource>,
         reviver: Slot,
     ) -> Result<Slot, Step> {
-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-            vm.json_internalize_property_inner(code, input, holder, name, source, reviver)
-        })
+        let base = self.native_depth;
+        let mut frames = Vec::new();
+        let result =
+            self.json_internalize_nested(code, input, holder, name, source, reviver, &mut frames);
+        // An error leaves the units of every entered property charged; the
+        // recursion released them on its way out.
+        debug_assert!(result.is_err() || self.native_depth == base);
+        self.native_depth = base;
+        result
     }
 
-    fn json_internalize_property_inner(
+    #[allow(clippy::too_many_arguments)]
+    fn json_internalize_nested<'s>(
         &mut self,
         code: &[u8],
         input: &[u8],
-        holder: crate::value::SlotIndex,
-        name: ReadKey,
-        source: Option<JsonSource>,
+        mut holder: crate::value::SlotIndex,
+        mut name: ReadKey,
+        mut source: Option<&'s JsonSource>,
         reviver: Slot,
+        frames: &mut Vec<ReviveFrame<'s>>,
     ) -> Result<Slot, Step> {
-        let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
-        let value = self.mop_get_read(code, holder, name, holder_slot)?;
-        if let Payload::Reference(object) = value.value {
-            if value.kind == Kind::Reference {
-                if self.array_generic_is_array(object)? {
-                    let length = self.array_generic_length(code, object)?;
-                    for index in 0..length {
-                        // The walk VISITS each element; it creates nothing
-                        // that was not already parsed. Naming every index of
-                        // a 70,000-element array to visit it exhausted the
-                        // `u16` id space, so `JSON.parse(json, function (k,
-                        // v) { return v })` — an identity reviver, the most
-                        // common one there is — poisoned the machine.
-                        let key = self.array_index_read_key(index)?;
-                        let child_source = match source.as_ref() {
-                            Some(JsonSource::Array(children)) => usize::try_from(index)
-                                .ok()
-                                .and_then(|i| children.get(i).cloned()),
-                            _ => None,
+        'enter: loop {
+            self.enter_native_frame(LIGHT_FRAME_COST)?;
+            let frame = self.json_internalize_enter(code, holder, name, source)?;
+            frames
+                .try_reserve(1)
+                .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+            frames.push(frame);
+            loop {
+                let frame = frames.last_mut().expect("an entered property is open");
+                if let Some((object, key, child)) = self.json_internalize_next(frame)? {
+                    holder = object;
+                    name = key;
+                    source = child;
+                    continue 'enter;
+                }
+                let frame = frames.pop().expect("an entered property is open");
+                let revived = self.json_internalize_finish(code, input, frame, reviver)?;
+                self.leave_native_frame(LIGHT_FRAME_COST);
+                match frames.last() {
+                    None => return Ok(revived),
+                    Some(parent) => {
+                        let (object, key) = match parent.walk {
+                            ReviveWalk::Array { object, key, .. }
+                            | ReviveWalk::Object { object, key, .. } => (object, key),
+                            ReviveWalk::Leaf => unreachable!("a leaf has no children"),
                         };
-                        let revived = self.json_internalize_property(
-                            code,
-                            input,
-                            object,
-                            key,
-                            child_source,
-                            reviver,
-                        )?;
-                        // The reviver is guest code and can have named this
-                        // index while it ran.
-                        let key = self.refresh_read_key(key);
-                        if revived.kind == Kind::Undefined {
-                            let _ = self.mop_delete_read(code, object, key)?;
-                        } else {
-                            self.json_create_data_property_read(code, object, key, revived)?;
-                        }
-                    }
-                } else {
-                    let keys = self.json_enumerable_own_string_keys(code, object)?;
-                    // Index the retained sources ONCE. Scanning them per key
-                    // is quadratic in the object's size, and measurably so:
-                    // reviving a 70,000-key object spent seventeen minutes
-                    // here while the parse that produced it took under a
-                    // second. Key order here is `[[OwnPropertyKeys]]` order
-                    // and the sources are in parse order, so this cannot be
-                    // done positionally.
-                    let child_sources: Option<std::collections::HashMap<ReadKey, JsonSource>> =
-                        match source.as_ref() {
-                            Some(JsonSource::Object(children)) => Some(
-                                children
-                                    .iter()
-                                    .map(|(k, child)| (self.refresh_read_key(*k), child.clone()))
-                                    .collect(),
-                            ),
-                            _ => None,
-                        };
-                    for key in keys {
-                        let child_source = child_sources
-                            .as_ref()
-                            .and_then(|m| m.get(&self.refresh_read_key(key)).cloned());
-                        let revived = self.json_internalize_property(
-                            code,
-                            input,
-                            object,
-                            key,
-                            child_source,
-                            reviver,
-                        )?;
                         // The reviver is guest code and can have named this
                         // key while it ran.
                         let key = self.refresh_read_key(key);
@@ -1705,9 +1739,134 @@ impl Interp {
                 }
             }
         }
-        let key = self.read_key_slot(name)?;
-        let context = self.json_reviver_context(input, source.as_ref(), value);
-        self.run_callback(code, reviver, holder_slot, &[key, value, context])
+    }
+
+    /// Enter one property: the live `Get` of `name` on `holder`, then, for an
+    /// object, the snapshot its walk runs over.
+    fn json_internalize_enter<'s>(
+        &mut self,
+        code: &[u8],
+        holder: crate::value::SlotIndex,
+        name: ReadKey,
+        source: Option<&'s JsonSource>,
+    ) -> Result<ReviveFrame<'s>, Step> {
+        let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
+        let value = self.mop_get_read(code, holder, name, holder_slot)?;
+        let walk = match value.value {
+            Payload::Reference(object) if value.kind == Kind::Reference => {
+                if self.array_generic_is_array(object)? {
+                    let length = self.array_generic_length(code, object)?;
+                    ReviveWalk::Array {
+                        object,
+                        length,
+                        next: 0,
+                        key: name,
+                    }
+                } else {
+                    let keys = self.json_enumerable_own_string_keys(code, object)?;
+                    // Index the retained sources ONCE. Scanning them per key
+                    // is quadratic in the object's size, and measurably so:
+                    // reviving a 70,000-key object spent seventeen minutes
+                    // here while the parse that produced it took under a
+                    // second. Key order here is `[[OwnPropertyKeys]]` order
+                    // and the sources are in parse order, so this cannot be
+                    // done positionally.
+                    let sources = match source {
+                        Some(JsonSource::Object(children)) => Some(
+                            children
+                                .iter()
+                                .map(|(k, child)| (self.refresh_read_key(*k), child))
+                                .collect(),
+                        ),
+                        _ => None,
+                    };
+                    ReviveWalk::Object {
+                        object,
+                        keys,
+                        next: 0,
+                        sources,
+                        key: name,
+                    }
+                }
+            }
+            _ => ReviveWalk::Leaf,
+        };
+        Ok(ReviveFrame {
+            holder,
+            name,
+            source,
+            value,
+            walk,
+        })
+    }
+
+    /// The next own property of an entered value to revive: its holder, key
+    /// and retained source; none once the walk is done.
+    fn json_internalize_next<'s>(
+        &mut self,
+        frame: &mut ReviveFrame<'s>,
+    ) -> Result<Option<ReviveChild<'s>>, Step> {
+        match &mut frame.walk {
+            ReviveWalk::Leaf => Ok(None),
+            ReviveWalk::Array {
+                object,
+                length,
+                next,
+                key,
+            } => {
+                if *next >= *length {
+                    return Ok(None);
+                }
+                let index = *next;
+                *next += 1;
+                // The walk VISITS each element; it creates nothing that was
+                // not already parsed. Naming every index of a 70,000-element
+                // array to visit it exhausted the `u16` id space, so
+                // `JSON.parse(json, function (k, v) { return v })` — an
+                // identity reviver, the most common one there is — poisoned
+                // the machine.
+                *key = self.array_index_read_key(index)?;
+                let child = match frame.source {
+                    Some(JsonSource::Array(children)) => {
+                        usize::try_from(index).ok().and_then(|i| children.get(i))
+                    }
+                    _ => None,
+                };
+                Ok(Some((*object, *key, child)))
+            }
+            ReviveWalk::Object {
+                object,
+                keys,
+                next,
+                sources,
+                key,
+            } => {
+                if *next >= keys.len() {
+                    return Ok(None);
+                }
+                *key = keys[*next];
+                *next += 1;
+                let child = sources
+                    .as_ref()
+                    .and_then(|m| m.get(&self.refresh_read_key(*key)).copied());
+                Ok(Some((*object, *key, child)))
+            }
+        }
+    }
+
+    /// Finish one property: the reviver call with its key, value and source
+    /// context, its unit still held.
+    fn json_internalize_finish(
+        &mut self,
+        code: &[u8],
+        input: &[u8],
+        frame: ReviveFrame<'_>,
+        reviver: Slot,
+    ) -> Result<Slot, Step> {
+        let holder_slot = Slot::of(Kind::Reference, Payload::Reference(frame.holder));
+        let key = self.read_key_slot(frame.name)?;
+        let context = self.json_reviver_context(input, frame.source, frame.value);
+        self.run_callback(code, reviver, holder_slot, &[key, frame.value, context])
     }
 
     /// Snapshot the enumerable own string keys used by the object branch of

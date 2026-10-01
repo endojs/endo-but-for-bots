@@ -7,11 +7,6 @@
     ]
   },
   "expected_traps": [
-    "jrevive-arr-2000",
-    "jrevive-arr-2001",
-    "jrevive-obj-1999",
-    "jrevive-obj-2000",
-    "json-reviver-10k",
     "parse-and-2045",
     "parse-binary-chain-2045",
     "parse-blocks-512",
