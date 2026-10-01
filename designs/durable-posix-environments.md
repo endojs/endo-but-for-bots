@@ -20,7 +20,15 @@ HOME/workspace storage, and keeps the private admin for manual disposal. Missing
 private administration fails closed, including on revival of an existing Shell.
 Focused publication, cancellation and factory tests pass; the full Floot/UI
 regression suite passed 872 tests before the final revival regression addition.
-Operator provisioning, live Rust/compaction and remote acceptance remain pending.
+Operator provisioning is deployed on Tokyo generation 191, with a private
+development runner and the credential-free listener. Real two-daemon Shell
+execution and explicit-stop/cold-restoration tests pass locally. Live
+Rust/compaction acceptance remains pending: the first Luna request failed before
+tool admission because ChatGPT completed output items in stream events but sent
+an empty terminal output list. The Responses adapter now retains the complete
+indexed item snapshots, preserves opaque context and rejects unfinished observed
+items, duplicate native identities, missing or conflicting completions; it does
+not reconstruct arguments from deltas.
 Actual daemon testing also found that daemon exit does not run manager-owned
 environment cancellation hooks. Planned restart must explicitly acknowledge
 `admin.stop()` before stopping the daemon; exit alone leaves the active-intent

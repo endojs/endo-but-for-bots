@@ -188,6 +188,39 @@ test('subscription Responses preserves opaque reasoning and call identities acro
   t.is(subject.revocations(), 2);
 });
 
+test('subscription item completion retains native context when terminal output is empty', async t => {
+  const opaque = {
+    type: 'reasoning',
+    id: 'reason1',
+    encrypted_content: 'opaque',
+    summary: [],
+  };
+  // Item completions can interleave; output_index defines the retained order.
+  const subject = fixture([
+    { type: 'response.output_item.added', output_index: 0, item: opaque },
+    { type: 'response.output_item.added', output_index: 1, item: callItem },
+    { type: 'response.output_item.done', output_index: 1, item: callItem },
+    { type: 'response.output_item.done', output_index: 0, item: opaque },
+    completion([]),
+  ]);
+  t.teardown(() => subject.provider.dispose());
+  const first = await subject.provider.chat(
+    [{ role: 'user', content: 'Use shell' }],
+    [],
+  );
+  t.is(first.message.tool_calls?.[0].id, 'call1');
+  t.deepEqual(first.message.responsesOutput.items, [opaque, callItem]);
+  await subject.provider.chat(
+    [first.message, { role: 'tool', tool_call_id: 'call1', content: 'found' }],
+    [],
+  );
+  t.deepEqual(JSON.parse(subject.requests[1].body).input, [
+    opaque,
+    callItem,
+    { type: 'function_call_output', call_id: 'call1', output: 'found' },
+  ]);
+});
+
 /** @type {Array<[string, any[], RegExp]>} */
 const refusals = [
   [
@@ -214,6 +247,112 @@ const refusals = [
   ],
   ['duplicate call', [completion([callItem, callItem])], /Duplicate/],
   ['duplicate completion', [completion(), completion()], /completion/],
+  [
+    'unfinished added item',
+    [
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: textItem('Done'),
+      },
+      {
+        type: 'response.output_item.added',
+        output_index: 1,
+        item: { ...callItem, status: 'in_progress', arguments: '' },
+      },
+      completion([]),
+    ],
+    /Unfinished/,
+  ],
+  [
+    'changed item identity',
+    [
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { ...textItem(''), id: 'first' },
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { ...textItem('Done'), id: 'second' },
+      },
+      completion([]),
+    ],
+    /identity changed/,
+  ],
+  [
+    'duplicate native identity in terminal output',
+    [
+      completion([
+        { ...textItem('Done'), id: 'same' },
+        { ...textItem('Done'), id: 'same' },
+      ]),
+    ],
+    /Duplicate/,
+  ],
+  [
+    'duplicate native identity in item completions',
+    [
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: { ...textItem('Done'), id: 'same' },
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 1,
+        item: { ...textItem('Done'), id: 'same' },
+      },
+      completion([]),
+    ],
+    /Duplicate/,
+  ],
+  [
+    'duplicate completed item',
+    [
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: textItem('Done'),
+      },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: textItem('Done'),
+      },
+      completion([]),
+    ],
+    /Duplicate/,
+  ],
+  [
+    'missing completed item index',
+    [
+      { type: 'response.output_item.done', output_index: 1, item: callItem },
+      completion([]),
+    ],
+    /Incomplete/,
+  ],
+  [
+    'terminal item disagreement',
+    [
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: textItem('Other'),
+      },
+      completion(),
+    ],
+    /disagrees/,
+  ],
+  [
+    'invalid completed item index',
+    [
+      { type: 'response.output_item.done', output_index: -1, item: callItem },
+      completion([]),
+    ],
+    /Invalid/,
+  ],
 ];
 for (const [title, events, message] of refusals) {
   test(`subscription Responses refuses ${title} without replay`, async t => {
