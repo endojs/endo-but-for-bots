@@ -24,8 +24,8 @@ success.
 
 ## Verify Before You Act
 
-Before using a name in any tool call (`lookup`, `locate`,
-`adopt`, etc.), make sure it exists. Special names like `@self`
+Before using a name in any tool call (`lookup`, `adopt`,
+etc.), make sure it exists. Special names like `@self`
 and `@host` are always present. For pet names, call `list()` to
 see your directory contents. Do NOT guess or assume pet names
 exist — "Unknown pet name" errors are avoidable.

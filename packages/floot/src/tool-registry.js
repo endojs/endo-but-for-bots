@@ -20,7 +20,7 @@ import { HostedToolSetInterface } from '@endo/hosted-agent';
 import { makeAccountStatusTool } from './account-tool.js';
 import { makeWorkflowTools } from './workflow-tools.js';
 
-const TOOL_POLICY_VERSION = 'floot-endo-tools-v1';
+const TOOL_POLICY_VERSION = 'floot-endo-tools-v2';
 const MAX_SCHEMA_DEPTH = 32;
 const MAX_SCHEMA_NODES = 10_000;
 const MAX_SCHEMA_RECORD_KEYS = 1024;
@@ -249,7 +249,7 @@ export const makeFlootToolRegistry = (
           function: {
             name: 'listMessages',
             description:
-              'List inbox messages with their number, sender, text, and attached object edge names.',
+              'List inbox messages with their number, the pet names of their sender, text, and attached object edge names.',
             parameters: { type: 'object', properties: {}, required: [] },
           },
         }),
@@ -258,7 +258,9 @@ export const makeFlootToolRegistry = (
         const summary = (Array.isArray(messages) ? messages : []).map(
           message => ({
             number: Number(message.number),
-            from: message.from,
+            fromNames: Array.isArray(message.fromNames)
+              ? message.fromNames
+              : [],
             type: message.type,
             text: Array.isArray(message.strings)
               ? message.strings.join('')
@@ -310,16 +312,11 @@ export const makeFlootToolRegistry = (
     const providerSchemas = schemas.map(projectToolSchema);
     const dynamicTools = providerSchemas.map(toDynamicTool);
     const names = dynamicTools.map(tool => tool.name).sort();
-    const storedIdentities = await Promise.all(
-      storedTools.map(async ({ petName, functionName }) =>
-        harden({
-          functionName,
-          petName,
-          // Endo locators bind the schema to the durable formula/capability,
-          // not merely to a same-shaped replacement after reincarnation.
-          locator: await E(powers).locate('tools', petName),
-        }),
-      ),
+    // A guest cannot name a capability by formula identifier or locator, so
+    // a stored tool is pinned by the pet name it occupies under `tools`
+    // together with the schema it advertises (in `tools` below).
+    const storedIdentities = storedTools.map(({ petName, functionName }) =>
+      harden({ functionName, petName }),
     );
     return harden({
       providerSchemas,

@@ -35,14 +35,11 @@
 
 ## Identity
 
-- `locate(petNamePath)` — Get the locator URL for a name
-  (returns an `endo://...` URL, NOT a raw ID). Works with both
-  special names (`@self`, `@host`) and pet names (`my-counter`).
-- Compare message `from` field to your @self locator to determine
-  if you sent or received a message
-- IMPORTANT: Only call `locate()` with names you know exist.
-  Call `list()` first to see your pet names; special names like
-  `@self` and `@host` always exist.
+- Each message carries `fromNames` and `toNames`: your own pet
+  names for its sender and recipient. `fromNames` including
+  `@self` means you sent the message; `@host` means your host did.
+- You designate values only by pet name; there are no locators or
+  identifiers to look up.
 
 ## Capability Operations
 

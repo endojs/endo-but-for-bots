@@ -36,16 +36,16 @@ const messageNumberKey = value => String(normalizeMessageNumber(value));
 /**
  * Create mock guest powers for the Lal or Fae agent.
  *
- * Pass `attachments` to make `lookupById` resolve to real refs and let
- * `adopt(messageNumber, edgeName, ...)` install the actual capability
- * (e.g. a FaeTool) into the directory by walking the message's
- * names/ids arrays. Without attachments, `adopt` falls back to a
+ * Pass `attachments` to let `adopt(messageNumber, edgeName, ...)` install
+ * the actual capability (e.g. a FaeTool) into the directory by walking the
+ * message's names/ids arrays, which model the daemon's side and never reach
+ * the guest's view of a message. Without attachments, `adopt` falls back to a
  * placeholder string (suitable for tests that only care that adoption
  * happened, not what was adopted).
  *
  * @param {object} [options]
  * @param {object} [options.initialMessage] - Optional first inbox message to deliver (default: one from HOST)
- * @param {Map<string, unknown>} [options.attachments] - id -> ref map for lookupById and adopt
+ * @param {Map<string, unknown>} [options.attachments] - id -> ref map for adopt
  */
 export function makeMockPowers(options = {}) {
   const { initialMessage, attachments } = options;
@@ -269,13 +269,6 @@ export function makeMockPowers(options = {}) {
         petName: key,
       });
       return Promise.resolve();
-    },
-
-    lookupById(id) {
-      if (!attachments || !attachments.has(id)) {
-        return Promise.reject(new Error(`Unknown id: ${id}`));
-      }
-      return Promise.resolve(attachments.get(id));
     },
 
     dismiss(messageNumber) {

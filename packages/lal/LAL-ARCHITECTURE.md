@@ -216,7 +216,6 @@ const executeTool = async (name, args) => {
 | | `request` | Request a capability from another agent |
 | | `resolve` | Respond to a request with a value |
 | | `reject` | Decline a request |
-| **Identity** | `identify` | Get the formula ID for a petname |
 | **Inspection** | `inspectCapability` | Call `help()` on a capability |
 | **Evaluation** | `evaluate` | Evaluate code directly |
 

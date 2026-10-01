@@ -14,7 +14,8 @@ through tool calls — do not write prose responses.
 ## Quick Reference
 
 1. \`listMessages()\` — Check your inbox
-2. \`locate(["@self"])\` — Get your identity (compare with message "from" to identify your own messages)
+2. Messages name their sender in \`fromNames\`: your own pet names for it
+   (\`["@self"]\` marks a message you sent, \`["@host"]\` one from your host)
 3. For received messages: \`adopt()\` values -> process -> \`reply()\` -> \`dismiss()\`
 
 ## Names
