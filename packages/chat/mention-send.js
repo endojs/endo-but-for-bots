@@ -37,9 +37,13 @@ export const assembleMentionSend = ({
     const usedEdgeNames = new Set([edgeName]);
     for (let ri = 0; ri < recap.edgeNames.length; ri += 1) {
       // Ensure edge name uniqueness across the message
-      let recapEdge = recap.edgeNames[ri];
+      const baseEdge = recap.edgeNames[ri];
+      let recapEdge = baseEdge;
       if (usedEdgeNames.has(recapEdge)) {
-        recapEdge = `${recapEdge}-author`;
+        recapEdge = `${baseEdge}-author`;
+        for (let n = 2; usedEdgeNames.has(recapEdge); n += 1) {
+          recapEdge = `${baseEdge}-author-${n}`;
+        }
       }
       usedEdgeNames.add(recapEdge);
       edgeNames.push(recapEdge);

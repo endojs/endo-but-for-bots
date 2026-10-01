@@ -30,6 +30,26 @@ test('assembleMentionSend disambiguates a recap edge name equal to the channel',
   t.deepEqual(result.petNamePaths, [['general'], ['bob']]);
 });
 
+test('assembleMentionSend keeps three or more colliding edge names distinct', t => {
+  const result = assembleMentionSend({
+    channelPetName: 'general',
+    recap: {
+      strings: ['', '', '', '', ''],
+      edgeNames: ['bob', 'bob', 'bob', 'general'],
+      petNames: ['bob', 'bob-2', 'bob-3', 'carol'],
+    },
+    instructions: '',
+  });
+  t.deepEqual(result.edgeNames, [
+    'general',
+    'bob',
+    'bob-author',
+    'bob-author-2',
+    'general-author',
+  ]);
+  t.is(new Set(result.edgeNames).size, result.edgeNames.length);
+});
+
 test('assembleMentionSend with no recap sends only the channel reference', t => {
   const result = assembleMentionSend({
     channelPetName: 'general',
