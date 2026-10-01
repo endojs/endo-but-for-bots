@@ -499,8 +499,8 @@ pub struct Coder<'a, 'm> {
     /// binding (coded through the reference/assign path, never
     /// `code_declare`) is correctly exempt.
     error: Option<crate::parser::ParseError>,
-    /// Tree levels currently on the native stack (see
-    /// [`crate::ast::TREE_DEPTH_LIMIT`] and [`Self::code_node`]).
+    /// Tree levels currently entered, on the native stack or the walk's
+    /// (see [`crate::ast::TREE_DEPTH_LIMIT`] and [`Self::code_node`]).
     depth: u32,
 }
 
@@ -1410,7 +1410,9 @@ pub fn compile_module_atoms(source: &str) -> Result<(Vec<u8>, Vec<u8>), crate::p
 impl Coder<'_, '_> {
     /// `fxNodeDispatchCode` for one child slot. A real node dispatches by
     /// kind; the other `Item` shapes never appear where an expression/
-    /// statement is expected in the ported surface.
+    /// statement is expected in the ported surface. The chain-forming arms
+    /// run in the walk (`coder/walk.rs`), which enters the nodes it reaches
+    /// in place, as [`Coder::code_node`] does.
     fn code(&mut self, item: &Item) {
         match item {
             Item::Node(n) => self.code_node(n),
@@ -1423,35 +1425,33 @@ impl Coder<'_, '_> {
         self.meter.work(1);
         // The parser refuses to build a tree deeper than
         // [`crate::ast::TREE_DEPTH_LIMIT`] and the scoper re-checks it before
-        // coding starts; this backstop keeps the coder's own recursion bounded
-        // regardless of how it is driven. `report` records the first error
-        // and the node is skipped — the output is discarded once an error is
-        // recorded, as for every other code-time `fxReportParserError`.
+        // coding starts; this backstop keeps the coder's own depth bounded
+        // regardless of how it is driven. `report` records the error and
+        // unwinds out of the pass, as XS's `fxReportParserError` does.
         if self.depth >= crate::ast::TREE_DEPTH_LIMIT {
             self.report(node.line, "stack overflow");
         }
         self.depth += 1;
-        self.code_node_inner(node);
+        // XS's `mxExpressionNoValue` and `mxTailRecursionFlag` are staged
+        // for exactly this node; capture and clear them so they never leak
+        // into a nested expression.
+        let no_value = std::mem::take(&mut self.no_value);
+        let tail = std::mem::take(&mut self.tail);
+        if !self.walk(node, tail) {
+            self.code_arm(node, no_value, tail);
+        }
         self.depth -= 1;
     }
 
-    fn code_node_inner(&mut self, node: &Node) {
+    /// The arms the walk does not run, for an entered node. `no_value` and
+    /// `tail` are its staged flags, already cleared, so they reach only the
+    /// propagators and consumers below.
+    #[inline(never)]
+    fn code_arm(&mut self, node: &Node, no_value: bool, tail: bool) {
         use Token::*;
-        // XS's `mxExpressionNoValue` is staged for exactly this (the
-        // statement/for-iteration) expression; capture and clear it so it
-        // never leaks into nested expressions.
-        let no_value = std::mem::take(&mut self.no_value);
-        // XS's `mxTailRecursionFlag`, staged for exactly this node; capture
-        // and clear it so it reaches only the propagators/consumers below and
-        // never leaks into a nested expression.
-        let tail = std::mem::take(&mut self.tail);
         match node.token {
             Program => self.code_program(node),
             Module => self.code_module(node),
-            Statements => self.code_statements(node),
-            Statement => self.code_statement(node),
-            Block => self.code_block(node),
-            If => self.code_if(node),
             // value leaves (`fxValueNodeCode`: push the description code)
             True | False | Null | Undefined => {
                 self.add_byte(1, value_code(node.token));
@@ -1487,20 +1487,6 @@ impl Coder<'_, '_> {
                 let bytes = bigint_limbs_le(&lit.digits, lit.radix as u32, &self.meter);
                 self.add_bigint(1, XS_CODE_BIGINT_1, bytes);
             }
-            // unary (`fxUnaryExpressionNodeCode`): operand then op, delta 0
-            Void | Not | BitNot | Minus | Plus | Typeof => {
-                self.code(&node.children[0]);
-                self.add_byte(0, unary_code(node.token));
-            }
-            // binary (`fxBinaryExpressionNodeCode`): left, right, op, delta -1
-            Add | Subtract | Multiply | Divide | Modulo | Exponentiation | BitAnd | BitOr
-            | BitXor | LeftShift | SignedRightShift | UnsignedRightShift | Equal | NotEqual
-            | StrictEqual | StrictNotEqual | Less | LessEqual | More | MoreEqual | Instanceof
-            | In => self.code_binary_spine(node),
-            And => self.code_and(node, tail),
-            Or => self.code_or(node, tail),
-            Coalesce => self.code_coalesce(node, tail),
-            QuestionMark => self.code_question_mark(node, tail),
             Expressions => self.code_expressions(node, tail),
             // control flow (symbol-free surface)
             Label => self.code_label(node),
@@ -1530,18 +1516,11 @@ impl Coder<'_, '_> {
             // was not entered as a construct). A single stack-pushing byte.
             Target => self.add_byte(1, XS_CODE_TARGET),
             Regexp => self.code_regexp(node),
-            Template => self.code_template(node, tail),
+            Template => self.code_template(node),
             Access => self.code_access(node),
-            Chain => self.code_chain(node),
-            Option => self.code_option(node, tail),
-            Member => self.code_member(node),
-            PrivateMember => self.code_private_member(node),
             PrivateIdentifier => self.code_private_identifier(node),
-            MemberAt => self.code_member_at(node),
-            Call => self.code_call(node, tail),
             New => self.code_new(node),
             Params => self.code_params(node, false, false),
-            Assign => self.code_assign_node(node),
             AddAssign
             | SubtractAssign
             | MultiplyAssign
@@ -1581,68 +1560,6 @@ impl Coder<'_, '_> {
             // declaration statements themselves code to nothing.
             Import | Export => {}
             other => panic!("coder: unsupported node kind {:?}", other),
-        }
-    }
-
-    /// A left-nested run of binary operators (`a + b + c …`) coded with an
-    /// explicit spine instead of one host frame per operator
-    /// (STACK-DEPTH-REFACTOR.md D1b). Each nested operator on the left spine
-    /// takes `code_node`'s entry in place, in the recursion's order (the work
-    /// charge, the depth check, the depth, and clearing the staged no-value
-    /// and tail flags), then the deepest left operand is coded, then each
-    /// operator's right operand and opcode on the way back up.
-    #[inline(never)]
-    fn code_binary_spine(&mut self, root: &Node) {
-        fn is_binary(t: Token) -> bool {
-            use Token::*;
-            matches!(
-                t,
-                Add | Subtract
-                    | Multiply
-                    | Divide
-                    | Modulo
-                    | Exponentiation
-                    | BitAnd
-                    | BitOr
-                    | BitXor
-                    | LeftShift
-                    | SignedRightShift
-                    | UnsignedRightShift
-                    | Equal
-                    | NotEqual
-                    | StrictEqual
-                    | StrictNotEqual
-                    | Less
-                    | LessEqual
-                    | More
-                    | MoreEqual
-                    | Instanceof
-                    | In
-            )
-        }
-        let mut spine: Vec<&Node> = vec![root];
-        let mut left = &root.children[0];
-        while let Item::Node(n) = left {
-            if !is_binary(n.token) {
-                break;
-            }
-            self.meter.work(1);
-            if self.depth >= crate::ast::TREE_DEPTH_LIMIT {
-                self.report(n.line, "stack overflow");
-            }
-            self.depth += 1;
-            self.no_value = false;
-            self.tail = false;
-            spine.push(n);
-            left = &n.children[0];
-        }
-        self.code(left);
-        while let Some(n) = spine.pop() {
-            self.code(&n.children[1]);
-            self.add_byte(-1, binary_code(n.token));
-            if !std::ptr::eq(n, root) {
-                self.depth -= 1;
-            }
         }
     }
 
@@ -1955,37 +1872,6 @@ impl Coder<'_, '_> {
         count
     }
 
-    /// `fxStatementsNodeCode`.
-    #[inline(never)]
-    fn code_statements(&mut self, node: &Node) {
-        if let Some(Item::List(items)) = node.children.first() {
-            for item in items {
-                self.code(item);
-            }
-        }
-    }
-
-    /// `fxStatementNodeCode`. A program-level statement sets the program
-    /// result; a function-body statement discards its value with a `POP`,
-    /// except that a trailing `SET_LOCAL`/`SET_CLOSURE` is rewritten in
-    /// place to the fused `PULL_LOCAL`/`PULL_CLOSURE` (store-and-pop).
-    #[inline(never)]
-    fn code_statement(&mut self, node: &Node) {
-        if self.program_flag {
-            self.code(&node.children[0]);
-            self.add_byte(-1, XS_CODE_SET_RESULT);
-        } else {
-            // `self->expression->flags |= mxExpressionNoValue`.
-            self.no_value = true;
-            self.code(&node.children[0]);
-            match self.codes.last().map(|c| c.id) {
-                Some(XS_CODE_SET_CLOSURE_1) => self.fuse_pull(XS_CODE_PULL_CLOSURE_1),
-                Some(XS_CODE_SET_LOCAL_1) => self.fuse_pull(XS_CODE_PULL_LOCAL_1),
-                _ => self.add_byte(-1, XS_CODE_POP),
-            }
-        }
-    }
-
     /// The `fxStatementNodeCode` store-and-pop fusion: retag the last
     /// record (`SET_LOCAL`→`PULL_LOCAL`, `SET_CLOSURE`→`PULL_CLOSURE`) and
     /// account for the popped value.
@@ -1998,26 +1884,6 @@ impl Coder<'_, '_> {
             .expect("fuse_pull needs a last record");
         last.id = pull_id;
         last.stack_level = sl;
-    }
-
-    /// `fxBlockNodeCode` — a lexical block: code its scope's
-    /// declarations, dispatch the body, then unwind the block's slots.
-    /// `fxScopeCodeDefineNodes` (function/host defines) is deferred, and
-    /// `fxScopeCodeUsingStatement` with no disposables is just the
-    /// statement dispatch.
-    #[inline(never)]
-    fn code_block(&mut self, node: &Node) {
-        let scope = self.scope_of(node);
-        self.scope_coding_block(scope);
-        self.code_define_nodes(&node.children[0]);
-        if self.tree.scopes[scope].disposable_count > 0 {
-            let context = self.scope_code_using(scope);
-            self.code(&node.children[0]);
-            self.scope_code_used(scope, context);
-        } else {
-            self.code(&node.children[0]);
-        }
-        self.scope_coded(scope);
     }
 
     /// `fxWithNodeCode` — `with (expression) statement`. Push the object
@@ -2042,101 +1908,6 @@ impl Coder<'_, '_> {
         self.eval_flag = eval_flag;
         self.environment_level -= 1;
         self.add_byte(0, XS_CODE_WITHOUT);
-    }
-
-    /// `fxIfNodeCode` (program-flag branch: each arm sets the result to
-    /// `undefined` first, per XS).
-    #[inline(never)]
-    fn code_if(&mut self, node: &Node) {
-        self.code(&node.children[0]);
-        if self.program_flag {
-            let else_target = self.create_target();
-            let end_target = self.create_target();
-            self.add_branch(-1, XS_CODE_BRANCH_ELSE_1, else_target);
-            self.add_byte(1, XS_CODE_UNDEFINED);
-            self.add_byte(-1, XS_CODE_SET_RESULT);
-            self.code(&node.children[1]);
-            self.add_branch(0, XS_CODE_BRANCH_1, end_target);
-            self.place_target(0, else_target);
-            self.add_byte(1, XS_CODE_UNDEFINED);
-            self.add_byte(-1, XS_CODE_SET_RESULT);
-            if !matches!(node.children[2], Item::Null) {
-                self.code(&node.children[2]);
-            }
-            self.place_target(0, end_target);
-        } else {
-            let has_else = !matches!(node.children[2], Item::Null);
-            if has_else {
-                let else_target = self.create_target();
-                let end_target = self.create_target();
-                self.add_branch(-1, XS_CODE_BRANCH_ELSE_1, else_target);
-                self.code(&node.children[1]);
-                self.add_branch(0, XS_CODE_BRANCH_1, end_target);
-                self.place_target(0, else_target);
-                self.code(&node.children[2]);
-                self.place_target(0, end_target);
-            } else {
-                let end_target = self.create_target();
-                self.add_branch(-1, XS_CODE_BRANCH_ELSE_1, end_target);
-                self.code(&node.children[1]);
-                self.place_target(0, end_target);
-            }
-        }
-    }
-
-    /// `fxAndExpressionNodeCode`.
-    #[inline(never)]
-    fn code_and(&mut self, node: &Node, tail: bool) {
-        let end_target = self.create_target();
-        self.code(&node.children[0]);
-        self.add_byte(1, XS_CODE_DUB);
-        self.add_branch(-1, XS_CODE_BRANCH_ELSE_1, end_target);
-        self.add_byte(-1, XS_CODE_POP);
-        // `a && b()`: the right operand is the tail-position value.
-        self.tail = tail;
-        self.code(&node.children[1]);
-        self.place_target(0, end_target);
-    }
-
-    /// `fxOrExpressionNodeCode`.
-    #[inline(never)]
-    fn code_or(&mut self, node: &Node, tail: bool) {
-        let end_target = self.create_target();
-        self.code(&node.children[0]);
-        self.add_byte(1, XS_CODE_DUB);
-        self.add_branch(-1, XS_CODE_BRANCH_IF_1, end_target);
-        self.add_byte(-1, XS_CODE_POP);
-        self.tail = tail;
-        self.code(&node.children[1]);
-        self.place_target(0, end_target);
-    }
-
-    /// `fxCoalesceExpressionNodeCode`.
-    #[inline(never)]
-    fn code_coalesce(&mut self, node: &Node, tail: bool) {
-        let end_target = self.create_target();
-        self.code(&node.children[0]);
-        self.add_branch(-1, XS_CODE_BRANCH_COALESCE_1, end_target);
-        self.tail = tail;
-        self.code(&node.children[1]);
-        self.place_target(0, end_target);
-    }
-
-    /// `fxQuestionMarkNodeCode`.
-    #[inline(never)]
-    fn code_question_mark(&mut self, node: &Node, tail: bool) {
-        let else_target = self.create_target();
-        let end_target = self.create_target();
-        self.code(&node.children[0]);
-        self.add_branch(-1, XS_CODE_BRANCH_ELSE_1, else_target);
-        // Both arms are tail-position values (`return c ? f() : g()`).
-        self.tail = tail;
-        self.code(&node.children[1]);
-        self.add_branch(0, XS_CODE_BRANCH_1, end_target);
-        self.place_target(-1, else_target);
-        self.tail = tail;
-        self.code(&node.children[2]);
-        self.place_target(0, end_target);
     }
 
     /// `fxExpressionsNodeCode` (sequence): each item but the first is
@@ -2282,7 +2053,7 @@ impl Coder<'_, '_> {
         self.targets[continue_target].next_target = None;
 
         self.scope_coding_block(scope);
-        // The body's defines, as `code_block` does. A loop body is a
+        // The body's defines, as a block codes them. A loop body is a
         // Statement and the grammar forbids a bare FunctionDeclaration
         // there, so this finds none today — but "the grammar forbids it" is
         // the argument that failed for `code_catch`, whose identical call to
@@ -4772,85 +4543,6 @@ impl Coder<'_, '_> {
         self.add_branch(0, XS_CODE_BRANCH_1, rt);
     }
 
-    /// `fxMemberNodeCode`. Children `[reference, symbol]` → the reference
-    /// then a `GET_PROPERTY` (or `GET_SUPER` for a `super.x` reference;
-    /// `super` is deferred with classes).
-    /// `fxChainNodeCode` — the wrapper of an optional chain (`a?.b?.c`).
-    /// Child `[expression]`. Install a fresh short-circuit target, code the
-    /// chain expression (its `Option` links branch here when a base is
-    /// nullish), then place the target so a taken branch lands with the
-    /// nullish base as the chain's `undefined`/`null` value. The saved outer
-    /// chain target is restored (chains can nest through call arguments).
-    #[inline(never)]
-    fn code_chain(&mut self, node: &Node) {
-        let saved = self.chain_target;
-        let target = self.create_target();
-        self.chain_target = Some(target);
-        self.code(&node.children[0]);
-        self.place_target(0, target);
-        self.chain_target = saved;
-    }
-
-    /// `fxOptionNodeCode` — one `?.` link. Child `[base]`. Code the base,
-    /// then `BRANCH_CHAIN` to the enclosing chain's short-circuit target: the
-    /// branch is taken (leaving the nullish base as the result) exactly when
-    /// the base is `null`/`undefined`, otherwise the access continues.
-    #[inline(never)]
-    fn code_option(&mut self, node: &Node, tail: bool) {
-        self.tail = tail;
-        self.code(&node.children[0]);
-        let target = self.chain_target.expect("optional `?.` outside a chain");
-        self.add_branch(0, XS_CODE_BRANCH_CHAIN_1, target);
-    }
-
-    /// `fxChainNodeCodeThis` — the call-reference variant of
-    /// [`Coder::code_chain`]: install a fresh short-circuit target, code the
-    /// chain's `this`/value pair, place the target, restore the outer target.
-    #[inline(never)]
-    fn code_chain_this(&mut self, node: &Node, flag: i32) -> i32 {
-        let saved = self.chain_target;
-        let target = self.create_target();
-        self.chain_target = Some(target);
-        let flag = self.code_this(&node.children[0], flag);
-        self.place_target(0, target);
-        self.chain_target = saved;
-        flag
-    }
-
-    /// `fxOptionNodeCodeThis` — one `?.` link whose value is a call callee.
-    /// Unlike the plain [`Coder::code_option`], the callee left a
-    /// receiver/value pair on the stack, so a nullish base must drop the
-    /// receiver (`SWAP`/`POP`) before short-circuiting the whole chain to
-    /// `undefined`; a present base skips that dance and continues the call.
-    #[inline(never)]
-    fn code_option_this(&mut self, node: &Node, flag: i32) -> i32 {
-        let swap_target = self.create_target();
-        let skip_target = self.create_target();
-        let flag = self.code_this(&node.children[0], flag);
-        let chain_target = self.chain_target.expect("optional `?.` outside a chain");
-        self.add_branch(0, XS_CODE_BRANCH_CHAIN_1, swap_target);
-        self.add_branch(1, XS_CODE_BRANCH_1, skip_target);
-        self.place_target(0, swap_target);
-        self.add_byte(0, XS_CODE_SWAP);
-        self.add_byte(-1, XS_CODE_POP);
-        self.add_branch(0, XS_CODE_BRANCH_1, chain_target);
-        self.place_target(0, skip_target);
-        flag
-    }
-
-    #[inline(never)]
-    fn code_member(&mut self, node: &Node) {
-        self.code(&node.children[0]);
-        let is_super = self.node_is_super(&node.children[0]);
-        let name = Self::symbol_of(&node.children[1]);
-        let op = if is_super {
-            XS_CODE_GET_SUPER
-        } else {
-            XS_CODE_GET_PROPERTY
-        };
-        self.add_symbol(0, op, &name);
-    }
-
     /// The resolved private-declaration frame index for a `PrivateMember` /
     /// `PrivateIdentifier` node (XS's `self->declaration->index`): the
     /// scoper resolved the `#name` through the class-scope `symbolAccess`
@@ -4858,16 +4550,6 @@ impl Coder<'_, '_> {
     fn private_index(&self, node: &Node) -> i32 {
         let (scope, id) = self.resolution_of(node).expect("private member resolution");
         self.declare_index(scope, id)
-    }
-
-    /// `fxPrivateMemberNodeCode` — `obj.#x` read: code the reference, then
-    /// `GET_PRIVATE` by the resolved brand index. Children `[symbol,
-    /// reference]`.
-    #[inline(never)]
-    fn code_private_member(&mut self, node: &Node) {
-        self.code(&node.children[1]);
-        let index = self.private_index(node);
-        self.add_index(0, XS_CODE_GET_PRIVATE_1, index);
     }
 
     /// `fxPrivateIdentifierNodeCode` — the `#x in obj` brand check: code the
@@ -4882,49 +4564,6 @@ impl Coder<'_, '_> {
     /// Whether a reference child carries `mxSuperFlag` (a `super.x` base).
     fn node_is_super(&self, item: &Item) -> bool {
         matches!(item, Item::Node(n) if n.flags & crate::ast::flags::SUPER != 0)
-    }
-
-    /// `fxMemberAtNodeCode` — computed access `ref[at]`. Children
-    /// `[reference, at]`. Symbol-free (`AT` + `GET_PROPERTY_AT`); the
-    /// subexpressions carry any symbols.
-    #[inline(never)]
-    fn code_member_at(&mut self, node: &Node) {
-        let is_super = self.node_is_super(&node.children[0]);
-        self.code(&node.children[0]);
-        self.code(&node.children[1]);
-        self.add_byte(
-            0,
-            if is_super {
-                XS_CODE_SUPER_AT
-            } else {
-                XS_CODE_AT
-            },
-        );
-        self.add_byte(
-            -1,
-            if is_super {
-                XS_CODE_GET_SUPER_AT
-            } else {
-                XS_CODE_GET_PROPERTY_AT
-            },
-        );
-    }
-
-    /// `fxCallNodeCode`. Children `[reference, params]`: set up the callee
-    /// and its `this`, `CALL`, then the argument list + `RUN`.
-    #[inline(never)]
-    fn code_call(&mut self, node: &Node, tail: bool) {
-        // A syntactic `eval(...)` call (the callee is the identifier
-        // `eval` — XS keys on the name, not resolution) closes with the
-        // `EVAL` intrinsic instead of `RUN`; the scoper has already
-        // poisoned the surrounding scopes.
-        let is_eval = Self::is_direct_eval(&node.children[0]);
-        self.code_this(&node.children[0], 0);
-        self.add_byte(1, XS_CODE_CALL);
-        // XS: `fxCallNodeCode` relays the tail-recursion flag to the params
-        // node, whose `RUN` / `EVAL` becomes the `RUN_TAIL` / `EVAL_TAIL`
-        // variant. The callee reference is coded above, out of tail position.
-        self.code_params(node_of(&node.children[1]), is_eval, tail);
     }
 
     /// Whether a call's reference is the `eval` identifier
@@ -5364,37 +5003,10 @@ impl Coder<'_, '_> {
 
     // ---- the `codeThis` family (callee + receiver setup) ------------
 
-    /// `fxNodeDispatchCodeThis` — dispatch a callee reference in
-    /// receiver-setup mode, returning the residual `flag`.
-    #[inline(never)]
+    /// `fxNodeDispatchCodeThis` — code a callee reference in receiver-setup
+    /// mode, returning the residual `flag`. The arms run in the walk.
     fn code_this(&mut self, item: &Item, flag: i32) -> i32 {
-        match item {
-            Item::Node(n) => match n.token {
-                Token::Access => self.code_access_this(n, flag),
-                Token::Member => self.code_member_this(n, flag),
-                Token::PrivateMember => self.code_private_member_this(n, flag),
-                Token::MemberAt => self.code_member_at_this(n, flag),
-                Token::Expressions => self.code_expressions_this(n, flag),
-                // An optional call (`fn?.(…)`, `a?.b()`): the callee is a
-                // `Chain`/`Option` in call-reference position, so it must code
-                // the `this`/value pair and short-circuit the whole chain when
-                // a base is nullish — not fall through to the plain-value
-                // fallback (which would drop the receiver dance).
-                Token::Chain => self.code_chain_this(n, flag),
-                Token::Option => self.code_option_this(n, flag),
-                _ => self.code_node_this(item, flag),
-            },
-            _ => self.code_node_this(item, flag),
-        }
-    }
-
-    /// `fxNodeCodeThis` — the fallback: push `undefined` as the receiver,
-    /// then the value.
-    #[inline(never)]
-    fn code_node_this(&mut self, item: &Item, _flag: i32) -> i32 {
-        self.add_byte(1, XS_CODE_UNDEFINED);
-        self.code(item);
-        1
+        self.walk_this(item, flag)
     }
 
     /// `fxAccessNodeCodeThis`. A resolved local pushes its slot (with no
@@ -5429,108 +5041,7 @@ impl Coder<'_, '_> {
         flag
     }
 
-    /// `fxMemberNodeCodeThis` — the object is the receiver (`DUB`'d).
-    #[inline(never)]
-    fn code_member_this(&mut self, node: &Node, _flag: i32) -> i32 {
-        self.code(&node.children[0]);
-        let is_super = self.node_is_super(&node.children[0]);
-        let name = Self::symbol_of(&node.children[1]);
-        self.add_byte(1, XS_CODE_DUB);
-        self.add_symbol(
-            0,
-            if is_super {
-                XS_CODE_GET_SUPER
-            } else {
-                XS_CODE_GET_PROPERTY
-            },
-            &name,
-        );
-        1
-    }
-
-    /// `fxPrivateMemberNodeCodeThis` — `obj.#m(...)` callee: the object is
-    /// the receiver (`DUB`'d), then the private value is read by brand.
-    #[inline(never)]
-    fn code_private_member_this(&mut self, node: &Node, _flag: i32) -> i32 {
-        self.code(&node.children[1]);
-        self.add_byte(1, XS_CODE_DUB);
-        let index = self.private_index(node);
-        self.add_index(0, XS_CODE_GET_PRIVATE_1, index);
-        1
-    }
-
-    /// `fxMemberAtNodeCodeThis`.
-    #[inline(never)]
-    fn code_member_at_this(&mut self, node: &Node, flag: i32) -> i32 {
-        let is_super = self.node_is_super(&node.children[0]);
-        let mut flag = flag;
-        if flag != 0 {
-            // fxMemberAtNodeCodeReference(flag=0): reference, at, then AT.
-            self.code(&node.children[0]);
-            self.code(&node.children[1]);
-            self.add_byte(
-                0,
-                if is_super {
-                    XS_CODE_SUPER_AT
-                } else {
-                    XS_CODE_AT
-                },
-            );
-            self.add_byte(2, XS_CODE_DUB_AT);
-            flag = 2;
-        } else {
-            self.code(&node.children[0]);
-            self.add_byte(1, XS_CODE_DUB);
-            self.code(&node.children[1]);
-            self.add_byte(
-                0,
-                if is_super {
-                    XS_CODE_SUPER_AT
-                } else {
-                    XS_CODE_AT
-                },
-            );
-        }
-        self.add_byte(
-            -1,
-            if is_super {
-                XS_CODE_GET_SUPER_AT
-            } else {
-                XS_CODE_GET_PROPERTY_AT
-            },
-        );
-        flag
-    }
-
-    /// `fxExpressionsNodeCodeThis` — a single-item sequence forwards to its
-    /// item's `codeThis`; otherwise the fallback (`undefined` receiver +
-    /// the sequence's value), dispatched on the original node so scope
-    /// keying stays intact.
-    #[inline(never)]
-    fn code_expressions_this(&mut self, node: &Node, flag: i32) -> i32 {
-        if let Some(Item::List(items)) = node.children.first() {
-            if items.len() == 1 {
-                return self.code_this(&items[0], flag);
-            }
-        }
-        let _ = flag;
-        self.add_byte(1, XS_CODE_UNDEFINED);
-        self.code_node(node);
-        1
-    }
-
     // ---- assignment: the codeReference / codeAssign families --------
-
-    /// `fxAssignNodeCode` — plain `=`. Children `[reference, value]`:
-    /// prepare the reference, evaluate the value, store.
-    #[inline(never)]
-    fn code_assign_node(&mut self, node: &Node) {
-        // Name inference: `x = function(){}` names the anonymous value `x`.
-        self.set_pending_name(&node.children[0], &node.children[1]);
-        self.code_reference(&node.children[0], 1);
-        self.code(&node.children[1]);
-        self.code_assign(&node.children[0], 1);
-    }
 
     /// `fxCompoundExpressionNodeCode` — `+=`, `-=`, … and the short-circuit
     /// `&&=` / `||=` / `??=`. Children `[reference, value]`.
@@ -5754,21 +5265,19 @@ impl Coder<'_, '_> {
     /// `fxTemplateNodeCode`. Children `[reference, List(items)]`; the items
     /// alternate `TemplateMiddle` (a cooked + raw string pair) with
     /// substitution expressions. A `Null` reference is an untagged template
-    /// (string concatenation); a real reference is a tagged template — a
-    /// call `tag(strings, ...substitutions)` where `strings` is the frozen
-    /// template object (`strings.raw` the raw array), cached per call site.
+    /// (string concatenation), coded here; a real reference is a tagged
+    /// template, which the walk codes (`walk.rs`, then
+    /// [`Coder::code_tagged_template`]).
     #[inline(never)]
-    fn code_template(&mut self, node: &Node, tail: bool) {
+    fn code_template(&mut self, node: &Node) {
         let items = match &node.children[1] {
             Item::List(v) => v,
             _ => panic!("template without items list"),
         };
-        if !matches!(node.children[0], Item::Null) {
-            self.code_tagged_template(node, items, tail);
-            return;
-        }
-        // Untagged: the first item is always a `TemplateMiddle`; emit its
-        // cooked string, then fold each following part in with `+`.
+        // The walk runs the tagged branch (`walk.rs`), so the arm reaches
+        // here only untagged. The first item is always a `TemplateMiddle`;
+        // emit its cooked string, then fold each following part in with `+`.
+        debug_assert!(matches!(node.children[0], Item::Null));
         self.code(&node_of(&items[0]).children[0]);
         for item in &items[1..] {
             let n = node_of(item);
@@ -5782,32 +5291,29 @@ impl Coder<'_, '_> {
         }
     }
 
-    /// `fxTemplateNodeCode`, tagged branch. Builds (once per call site,
-    /// guarded by a `TEMPLATE_CACHE.#<tag>` lookup) the frozen template
-    /// object: a `strings` array of the cooked values (`undefined` for an
-    /// illegal escape), a `raws` array of the raw values, `strings.raw =
-    /// raws`, then `TEMPLATE` to freeze. The cached object is argument 0 of
-    /// the tag call, followed by each substitution expression.
+    /// `fxTemplateNodeCode`, tagged branch, after the walk has coded the tag
+    /// and its receiver (`walk.rs`). Builds (once per call site, guarded by a
+    /// `TEMPLATE_CACHE.#<tag>` lookup) the frozen template object: a
+    /// `strings` array of the cooked values (`undefined` for an illegal
+    /// escape), a `raws` array of the raw values, `strings.raw = raws`, then
+    /// `TEMPLATE` to freeze. The cached object is argument 0 of the tag
+    /// call, followed by each substitution expression. `string_count` is the
+    /// number of `TemplateMiddle` items, and `raws` and `strings` the two
+    /// temporaries the walk took before coding the tag.
     #[inline(never)]
-    fn code_tagged_template(&mut self, node: &Node, items: &[Item], tail: bool) {
-        let cache_target = self.create_target();
-        // The cooked/raw arrays are sized by the number of `TemplateMiddle`
-        // items, which the loop below then fills one index at a time. Under
-        // the parser's alternation that is `(items.len() / 2) + 1`, but
-        // deriving it that way makes the size rest on a shape this function
-        // cannot see; counting the items it is about to write keeps the two
-        // in step by construction (F063).
-        let string_count = items
-            .iter()
-            .filter(|item| node_of(item).token == Token::TemplateMiddle)
-            .count() as i32;
-        let raws = self.use_temporary();
-        let strings = self.use_temporary();
+    fn code_tagged_template(
+        &mut self,
+        items: &[Item],
+        tail: bool,
+        cache_target: usize,
+        string_count: i32,
+        raws: i32,
+        strings: i32,
+    ) {
         // XS_DONT_DELETE_FLAG (2) | XS_DONT_SET_FLAG (8): each cooked/raw
         // slot is a frozen own property.
         let prop_flag: i32 = 2 | 8;
 
-        self.code_this(&node.children[0], 0);
         self.add_byte(1, XS_CODE_CALL);
 
         let symbol = self.generate_tag();
@@ -5968,7 +5474,7 @@ impl Coder<'_, '_> {
             // No parameter: the primary scope is the body block.
             let statement_scope = self.scope_of(node);
             self.scope_coding_block(statement_scope);
-            // The BODY's defines, exactly as `code_block` codes a block's:
+            // The BODY's defines, exactly as a block codes its own:
             // a catch body is a block, and `function f(){}` directly inside
             // one is valid ES2022 (Annex B in sloppy mode, a lexical
             // declaration in strict). This used to call the asserting
@@ -6969,6 +6475,8 @@ fn binary_code(token: Token) -> i32 {
     }
 }
 
+mod walk;
+
 #[cfg(test)]
 mod target_invariants;
 
@@ -6977,53 +6485,6 @@ mod declaration_invariants;
 
 #[cfg(test)]
 mod scope_receipt_invariants;
-
-#[cfg(test)]
-mod binary_spine_tests {
-    /// `code_binary_spine`'s `is_binary` must name exactly the tokens of
-    /// `code_node_inner`'s binary arm and of `binary_code`: a token it
-    /// names that the arm does not would be coded as a binary operator when
-    /// it is a left operand.
-    #[test]
-    fn spine_operators_match_the_binary_arm() {
-        let source = include_str!("coder.rs");
-        fn tokens(text: &str) -> std::collections::BTreeSet<String> {
-            text.split(|c: char| !c.is_alphanumeric() && c != '_')
-                .filter(|word| word.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
-                .map(|word| word.trim_start_matches("Token").to_string())
-                .filter(|word| !word.is_empty())
-                .collect()
-        }
-        fn between<'s>(source: &'s str, start: &str, end: &str) -> &'s str {
-            let from = source.find(start).expect("start marker") + start.len();
-            let to = from + source[from..].find(end).expect("end marker");
-            &source[from..to]
-        }
-        let arm = between(
-            source,
-            "// binary (`fxBinaryExpressionNodeCode`): left, right, op, delta -1\n",
-            "=> self.code_binary_spine(node)",
-        );
-        let spine = between(source, "fn is_binary(t: Token) -> bool {", "\n        }");
-        let opcodes = between(
-            source,
-            "fn binary_code(token: Token) -> i32 {",
-            "_ => unreachable!",
-        );
-        let opcodes: std::collections::BTreeSet<String> = opcodes
-            .lines()
-            .filter_map(|line| line.trim().strip_prefix("Token::"))
-            .map(|rest| rest.split(' ').next().expect("a variant").to_string())
-            .collect();
-        let spine: std::collections::BTreeSet<String> = tokens(spine)
-            .into_iter()
-            .filter(|word| word != "Self")
-            .collect();
-        assert_eq!(tokens(arm), opcodes, "the binary arm and binary_code");
-        assert_eq!(spine, opcodes, "is_binary and binary_code");
-        assert_eq!(opcodes.len(), 22);
-    }
-}
 
 #[cfg(test)]
 mod symbol_hash_tests {

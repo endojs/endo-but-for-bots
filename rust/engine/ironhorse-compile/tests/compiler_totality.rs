@@ -81,7 +81,7 @@ fn the_findings_probes_return_rather_than_panic() {
 /// of unambiguously valid ES2022 and it aborted the compiler under EVERY goal.
 /// `code_catch` coded its body's defines through the asserting
 /// `scope_code_define_nodes`, whose contract is that the scope has none, where
-/// `code_block` uses the real `code_define_nodes`. test262 holds exactly one
+/// a block codes its defines for real. test262 holds exactly one
 /// function-declaration-in-catch case and it is a `negative: parse` fixture,
 /// so the parser rejects it before the coder ever runs — the one case that
 /// would have caught this is the one that cannot.

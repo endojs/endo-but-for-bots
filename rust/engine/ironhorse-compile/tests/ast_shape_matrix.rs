@@ -13,7 +13,7 @@
 //! So this is the corpus sweep's counterpart on the other side of the grammar:
 //! a Cartesian product of odd fragments spliced into the positions whose
 //! consumers appear in the coder audit's remaining-sites table — `node_of`,
-//! `code`, `code_node_inner`, `symbol_of`, `code_class`, `code_field`,
+//! `code`, `code_arm`, `symbol_of`, `code_class`, `code_field`,
 //! `code_params_binding`, `code_object_binding_assign`, `code_object`,
 //! `code_assign` and `code_template`.
 //!
@@ -158,7 +158,7 @@ const CONTEXTS: &[&str] = &[
     "(class{get FRAG(){}});",
     "(class{set FRAG(v){}});",
     "(class{static #p=FRAG;});",
-    // `code_template`, `symbol_of`, `node_of`, `code`, `code_node_inner`.
+    // `code_template`, `symbol_of`, `node_of`, `code`, `code_arm`.
     "`${FRAG}`;",
     "tag`${FRAG}`;",
     "({[FRAG]:1});",
@@ -195,7 +195,7 @@ const CONTEXTS: &[&str] = &[
     "function*f(){yield FRAG;}",
     // A body opened from a `for` head. `flags::FOR` is ambient across the whole
     // head, so a declaration in here is reached with it set although it is an
-    // ordinary statement — the shape that hid a reachable `code_node_inner`
+    // ordinary statement — the shape that hid a reachable `code_arm`
     // panic from every other row of this matrix.
     "for(()=>{var FRAG;};;);",
     "for(()=>{let FRAG=0;};;);",
