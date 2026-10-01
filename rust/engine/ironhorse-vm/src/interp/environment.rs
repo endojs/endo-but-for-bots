@@ -672,10 +672,19 @@ impl Interp {
         // so `(new F()) instanceof F` holds. Reading the prototype is a
         // property get (unmetered), already folded into the measured cost.
         //
-        // A Proxy `new.target` (a `Reflect.construct` newTarget) answers that
-        // get through its trap, so it takes the observable read; every other
+        // A `new.target` whose `prototype` is not an own data property — a
+        // Proxy answering through its trap, an accessor, or a bound function
+        // that inherits it — takes the observable read; every other
         // constructor's `prototype` is the data slot the cache reads.
-        let proto = if self.proxies.contains_key(&self.target_func) {
+        let target = self.target_func;
+        let observable = self.proxies.contains_key(&target)
+            || self.prototype_key_id.is_some_and(|pid| {
+                match self.ordinary_get_own_descriptor(target, pid) {
+                    Some(descriptor) => descriptor.is_accessor(),
+                    None => !self.ctor_prototype.contains_key(&target),
+                }
+            });
+        let proto = if observable {
             self.get_prototype_from_constructor(code, self.target_func, self.object_proto)?
         } else {
             self.prototype_of(self.target_func)

@@ -2,10 +2,12 @@
 //!
 //! Each constructor reads `newTarget.prototype` (GetPrototypeFromConstructor) at
 //! the step XS reads it, which a Proxy `newTarget` makes observable: after a
-//! length's ToNumber and before its range check for a TypedArray, after the
-//! length check for an ArrayBuffer, before an Array's elements, an Error's
-//! message or an AggregateError's iterable. A TypedArray source detached by
-//! that read is refused rather than copied.
+//! length's ToNumber and before its range check for a TypedArray, after an
+//! ArrayBuffer length's sign and safe-integer checks and before its allocation
+//! limit, before an Array's elements, an Error's message or an AggregateError's
+//! iterable. A TypedArray source detached by that read is refused rather than
+//! copied. An ordinary constructor reads an accessor or inherited `prototype` on
+//! its `newTarget` as observably as a Proxy's.
 //!
 //! Each case runs on its own machine. Every expectation is the XS oracle's
 //! answer, except where a case says the specification (and V8) is followed
@@ -66,6 +68,37 @@ fn the_prototype_read_happens_at_the_engines_step() {
             "detached_source",
             r#"var src = new Uint8Array(4); var NT = new Proxy(function () {}, {get: function (t, k, r) { if (k === 'prototype') src.buffer.transfer(); return Reflect.get(t, k, r); }}); var r; try { Reflect.construct(Uint8Array, [src], NT); r = 'copied'; } catch (e) { r = e.constructor.name; } r"#,
             r#"TypeError"#,
+        ),
+    ]);
+}
+
+#[test]
+fn an_ordinary_constructor_reads_a_new_target_prototype_observably() {
+    check(&[
+        (
+            "bound_accessor",
+            r#"function F() {} var G = function () {}.bind(); Object.defineProperty(G, 'prototype', {get: function () { return Array.prototype; }}); Object.getPrototypeOf(Reflect.construct(F, [], G)) === Array.prototype"#,
+            r#"true"#,
+        ),
+        (
+            "derived_class_bound_accessor",
+            r#"class B {} class D extends B {} var G = function () {}.bind(); Object.defineProperty(G, 'prototype', {get: function () { return Array.prototype; }}); Object.getPrototypeOf(Reflect.construct(D, [], G)) === Array.prototype"#,
+            r#"true"#,
+        ),
+        (
+            "bound_without_prototype",
+            r#"function F() {} var G = function () {}.bind(); Object.getPrototypeOf(Reflect.construct(F, [], G)) === Object.prototype"#,
+            r#"true"#,
+        ),
+        (
+            "bound_inherits_prototype",
+            r#"function F() {} var G = function () {}.bind(); Function.prototype.prototype = Array.prototype; var r = Object.getPrototypeOf(Reflect.construct(F, [], G)) === Array.prototype; delete Function.prototype.prototype; r"#,
+            r#"true"#,
+        ),
+        (
+            "data_prototype_not_an_object",
+            r#"function F() {} F.prototype = 3; Object.getPrototypeOf(new F()) === Object.prototype"#,
+            r#"true"#,
         ),
     ]);
 }
