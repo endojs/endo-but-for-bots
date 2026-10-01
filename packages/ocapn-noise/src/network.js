@@ -162,7 +162,12 @@ const DEFAULT_HANDSHAKE_TIMEOUT_MS = 30_000;
  * Cap on how many inbound handshakes can be mid-flight for one of our
  * local identities before the peer has proven itself. Combined with the
  * handshake timeout, this bounds the WASM instances and Diffie-Hellman
- * work a flood against a single one of our identities can pin.
+ * work a flood against a single one of our identities can pin. When the
+ * cap is full, the oldest unproven handshake is evicted to admit the new
+ * one, so a flood cannot hold every slot for a whole handshake timeout:
+ * a genuine peer, which proves itself within about one round trip, is
+ * only displaced by an attacker sustaining a full cap's worth of new
+ * handshakes per round trip.
  *
  * This is deliberately keyed on the responder's own identity, not on
  * the claimed peer: IK message 1 is replayable (Noise §7.7 destination
@@ -276,21 +281,15 @@ export const makeOcapnNoiseNetwork = ({
   /** @type {Map<KeyIdHex, number>} */
   const inProgress = new Map();
   /**
-   * Pre-authentication handshake count, keyed on our own local identity
-   * (the SYN's intended responder), not on the claimed peer. Bounds the
-   * work an inbound flood can pin before `exchangeIdentity` proves the
-   * peer. Incremented before the Noise SYN-decrypt and released when the
-   * handshake attempt concludes, in `handleIncoming`'s `finally`.
-   * @type {Map<KeyIdHex, number>}
+   * Unproven inbound handshakes, keyed on our own local identity (the
+   * SYN's intended responder), not on the claimed peer, oldest first.
+   * Each entry aborts its handshake. Bounds the work an inbound flood can
+   * pin before `exchangeIdentity` proves the peer. Admitted before the
+   * Noise SYN-decrypt and released when the handshake attempt concludes,
+   * in `handleIncoming`'s `finally`.
+   * @type {Map<KeyIdHex, Set<() => void>>}
    */
   const inFlightByLocalKey = new Map();
-  /**
-   * Returns true iff another inbound handshake to `localKeyId` would
-   * push us past `maxInProgressPerLocalKey`.
-   * @param {KeyIdHex} localKeyId
-   */
-  const localKeyInFlightFull = localKeyId =>
-    (inFlightByLocalKey.get(localKeyId) ?? 0) >= maxInProgressPerLocalKey;
   /** @type {Map<KeyIdHex, { resolve: (s: OcapnNoiseSession) => void, reject: (e: Error) => void }[]>} */
   const waiters = new Map();
   /** @type {Map<KeyIdHex, string[]>} */
@@ -319,22 +318,36 @@ export const makeOcapnNoiseNetwork = ({
     inProgress.set(peerId, (inProgress.get(peerId) ?? 0) + 1);
   };
 
-  /** @param {KeyIdHex} localKeyId */
-  const bumpLocalKeyInFlight = localKeyId => {
-    inFlightByLocalKey.set(
-      localKeyId,
-      (inFlightByLocalKey.get(localKeyId) ?? 0) + 1,
-    );
-  };
-
-  /** @param {KeyIdHex} localKeyId */
-  const releaseLocalKeyInFlight = localKeyId => {
-    const next = (inFlightByLocalKey.get(localKeyId) ?? 1) - 1;
-    if (next > 0) {
-      inFlightByLocalKey.set(localKeyId, next);
-    } else {
-      inFlightByLocalKey.delete(localKeyId);
+  /**
+   * Admit an inbound handshake against `localKeyId`'s budget, evicting
+   * the oldest unproven handshake if the budget is full. Returns the
+   * release function for `handleIncoming`'s `finally`.
+   *
+   * @param {KeyIdHex} localKeyId
+   * @param {() => void} abort
+   * @returns {() => void}
+   */
+  const admitInbound = (localKeyId, abort) => {
+    let admitted = inFlightByLocalKey.get(localKeyId);
+    if (!admitted) {
+      admitted = new Set();
+      inFlightByLocalKey.set(localKeyId, admitted);
     }
+    if (admitted.size >= maxInProgressPerLocalKey) {
+      const [oldest] = admitted;
+      if (oldest) {
+        admitted.delete(oldest);
+        oldest();
+      }
+    }
+    admitted.add(abort);
+    const set = admitted;
+    return () => {
+      set.delete(abort);
+      if (set.size === 0 && inFlightByLocalKey.get(localKeyId) === set) {
+        inFlightByLocalKey.delete(localKeyId);
+      }
+    };
   };
 
   /**
@@ -847,25 +860,29 @@ export const makeOcapnNoiseNetwork = ({
    */
   const runInitiator = async (localKey, location, peerEd25519) => {
     const { transport, hints } = selectOutgoingTransport(location);
-    const stream = await transport.connect(hints);
     const peerId = toHex(peerEd25519);
 
+    // Build the SYN before dialing: `initiatorWriteSyn` rejects a weak or
+    // malformed responder key, and a locator carrying one must not cause
+    // an outbound connection to the hints it names.
+    const noise = makeOcapnSessionCryptography({
+      wasmModule,
+      getRandomValues,
+      signingKeys: {
+        privateKey: localKey.privateKey,
+        publicKey: localKey.publicKey,
+      },
+    });
+    const asInit = noise.asInitiator();
+    const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
+    const { initiatorReadSynack } = asInit.initiatorWriteSyn(
+      peerEd25519,
+      prefixedSyn,
+    );
+    const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
+
+    const stream = await transport.connect(hints);
     try {
-      const noise = makeOcapnSessionCryptography({
-        wasmModule,
-        getRandomValues,
-        signingKeys: {
-          privateKey: localKey.privateKey,
-          publicKey: localKey.publicKey,
-        },
-      });
-      const asInit = noise.asInitiator();
-      const prefixedSyn = new Uint8Array(PREFIXED_SYN_LENGTH);
-      const { initiatorReadSynack } = asInit.initiatorWriteSyn(
-        peerEd25519,
-        prefixedSyn,
-      );
-      const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
       await stream.writer.next(prefixedSyn);
 
       const synack = await withTimeout(
@@ -949,8 +966,15 @@ export const makeOcapnNoiseNetwork = ({
     await null;
     /** @type {KeyIdHex | undefined} */
     let registeredPeerId;
-    /** @type {KeyIdHex | undefined} */
-    let localKeyInFlight;
+    /** @type {(() => void) | undefined} */
+    let releaseInbound;
+    /** @type {(reason: Error) => void} */
+    let rejectEvicted = () => {};
+    /** @type {Promise<never>} */
+    const evicted = new Promise((_resolve, reject) => {
+      rejectEvicted = reject;
+    });
+    evicted.catch(() => {});
     try {
       const prefixedSyn = await withTimeout(
         readFrame(stream.reader),
@@ -972,13 +996,17 @@ export const makeOcapnNoiseNetwork = ({
       // construction and a Diffie-Hellman). This is keyed on our own
       // identity, never the claimed peer: the peer's verifying key is
       // both encrypted and replayable, so it cannot bound anything
-      // before `exchangeIdentity`. The slot is released in `finally`.
-      if (localKeyInFlightFull(intendedKeyId)) {
-        await stream.writer.return(undefined);
-        return;
-      }
-      localKeyInFlight = intendedKeyId;
-      bumpLocalKeyInFlight(intendedKeyId);
+      // before `exchangeIdentity`. A full budget evicts its oldest
+      // unproven handshake (closing its stream and failing its pending
+      // `exchangeIdentity`) rather than refusing this one. The slot is
+      // released in `finally`.
+      releaseInbound = admitInbound(intendedKeyId, () => {
+        rejectEvicted(
+          Error('ocapn-noise: evicted by newer inbound handshakes'),
+        );
+        Promise.resolve(stream.writer.return(undefined)).catch(() => {});
+        Promise.resolve(stream.reader.return(undefined)).catch(() => {});
+      });
 
       const noise = makeOcapnSessionCryptography({
         wasmModule,
@@ -1016,17 +1044,31 @@ export const makeOcapnNoiseNetwork = ({
         return;
       }
 
+      // A proven candidate for this peer is already waiting for the
+      // other in-flight handshakes to it to finish (crossed-hello
+      // settlement). Refuse new SYNs for the peer until it settles, as
+      // for an adopted session above: the settlement set is fixed once a
+      // candidate is proven, so a replayed SYN re-sent before each
+      // timeout cannot keep extending it. A genuine peer whose new dial
+      // is refused here converges, in its own settlement, on the session
+      // this side is about to adopt.
+      if (candidates.has(initiatorKeyHex)) {
+        await stream.writer.return(undefined);
+        return;
+      }
+
       // Register this inbound against the peer now, before we answer, so
       // a concurrent outbound `provideSession` to the same peer waits for
       // it in `decrementAndSettle` and both directions run the
       // crossed-hello tiebreaker over the same pair of ephemerals.
       // Without this, the two sides can each settle on their own outbound
       // and then mutually close the other's session ("Session
-      // disconnected"). A replayed SYN reaches here too, but the only
-      // pre-liveness cost it can impose is a settlement slot, bounded by
-      // the per-local-key cap above; it cannot displace the peer's
-      // existing session (deferred to after `exchangeIdentity`). The
-      // count is released in the `catch` or in `decrementAndSettle`.
+      // disconnected"). A replayed SYN reaches here too and holds this
+      // slot until it times out, but once a proven candidate exists the
+      // check above refuses further SYNs, so a replay delays settlement
+      // by at most one `handshakeTimeoutMs`; it cannot displace the
+      // peer's existing session (deferred to after `exchangeIdentity`).
+      // The count is released in the `catch` or in `decrementAndSettle`.
       registeredPeerId = initiatorKeyHex;
       bumpInProgress(initiatorKeyHex);
       const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
@@ -1037,20 +1079,23 @@ export const makeOcapnNoiseNetwork = ({
         peerLocationSignature,
         location,
         locationSignature,
-      } = await withTimeout(
-        exchangeIdentity(
-          localKey,
-          stream.reader,
-          stream.writer,
-          encrypt,
-          decrypt,
-          initiatorVerifyingKey,
-          handshakeHash,
+      } = await Promise.race([
+        withTimeout(
+          exchangeIdentity(
+            localKey,
+            stream.reader,
+            stream.writer,
+            encrypt,
+            decrypt,
+            initiatorVerifyingKey,
+            handshakeHash,
+          ),
+          handshakeTimeoutMs,
+          'post-handshake identity exchange',
+          stream,
         ),
-        handshakeTimeoutMs,
-        'post-handshake identity exchange',
-        stream,
-      );
+        evicted,
+      ]);
 
       // The peer is now proven live under `initiatorKeyHex`. Displacing a
       // stale UNCLAIMED session for this peer (a reconnect whose old
@@ -1097,6 +1142,9 @@ export const makeOcapnNoiseNetwork = ({
       };
 
       recordCandidate(initiatorKeyHex, candidate);
+      // `decrementAndSettle` decrements before anything in it can throw,
+      // so the `catch` below must not decrement a second time.
+      registeredPeerId = undefined;
       decrementAndSettle(initiatorKeyHex);
     } catch (err) {
       if (registeredPeerId) {
@@ -1114,9 +1162,7 @@ export const makeOcapnNoiseNetwork = ({
         // ignore
       }
     } finally {
-      if (localKeyInFlight !== undefined) {
-        releaseLocalKeyInFlight(localKeyInFlight);
-      }
+      if (releaseInbound) releaseInbound();
     }
   };
 
@@ -1276,15 +1322,22 @@ export const makeOcapnNoiseNetwork = ({
     // wait for settlement: either our own handshake graduates, or a
     // concurrent inbound handshake (crossed hello) wins.
     bumpInProgress(peerId);
+    // Two-argument `then`: a throw while settling a successful handshake
+    // must not reach the failure handler and decrement a second time.
     runInitiator(rk, remote, peerEd25519)
-      .then(candidate => {
-        recordCandidate(peerId, candidate);
-        decrementAndSettle(peerId);
-      })
-      .catch(err => {
-        recordError(peerId, /** @type {Error} */ (err));
-        decrementAndSettle(peerId);
-      });
+      .then(
+        candidate => {
+          recordCandidate(peerId, candidate);
+          decrementAndSettle(peerId);
+        },
+        err => {
+          recordError(peerId, /** @type {Error} */ (err));
+          decrementAndSettle(peerId);
+        },
+      )
+      // Settlement can only throw from a candidate's teardown, which this
+      // module treats as best-effort everywhere else.
+      .catch(() => {});
     return awaitActiveSession(peerId);
   };
 
