@@ -12,7 +12,7 @@
 //   - the value assertion that `--tools` and `--setting-sources` each carry
 //     exactly the empty string (presence-only is the `"alg":"none"` shape),
 //     and that `--permission-mode` / `--permission-prompts` carry `dontAsk` /
-//     `none`;
+//     `none`, each exactly once;
 //   - `buildArgv`, which emits the prompt at NO index (it is delivered on stdin),
 //     so the construction invariant holds by construction.
 
@@ -44,21 +44,22 @@ export const REQUIRED_FLAGS = harden([
 ]);
 
 /**
- * `--tools` and `--setting-sources` carry their confinement in their *value*, not
- * their presence: `--tools Bash` re-opens the built-in set, and a non-empty
- * `--setting-sources` re-admits a discovered layer. Each must carry exactly `""`.
- */
-const EMPTY_VALUE_FLAGS = harden(['--tools', '--setting-sources']);
-
-/**
- * Flags whose value is pinned. Without `--permission-mode`, 2.1.280's `init`
- * reports `permissionMode: "default"`; `dontAsk` denies any tool not
- * pre-allowed, so a tool that leaks past the other layers is refused rather
- * than run (designs/endo-claude-inference-backends.md § Confinement recipe).
+ * Flags that carry their confinement in their *value*, not their presence. Each
+ * must appear exactly once with exactly this value: a later occurrence would
+ * override the pinned one (last flag wins).
+ *
+ * `--tools Bash` re-opens the built-in set, and a non-empty `--setting-sources`
+ * re-admits a discovered layer, so each must carry exactly `""`. Without
+ * `--permission-mode`, 2.1.280's `init` reports `permissionMode: "default"`;
+ * `dontAsk` denies any tool not pre-allowed, so a tool that leaks past the
+ * other layers is refused rather than run
+ * (designs/endo-claude-inference-backends.md § Confinement recipe).
  * `--permission-prompts none` (new in 2.1.280) denies anything that would
  * otherwise prompt.
  */
 const PINNED_VALUE_FLAGS = harden({
+  '--tools': '',
+  '--setting-sources': '',
   '--permission-mode': 'dontAsk',
   '--permission-prompts': 'none',
 });
@@ -176,31 +177,9 @@ export const assertRequiredFlags = argv => {
 harden(assertRequiredFlags);
 
 /**
- * `--tools` and `--setting-sources` are value-asserted, not presence-asserted:
- * the token immediately after each must be exactly the empty string.
- *
- * @param {readonly string[]} argv
- */
-export const assertEmptyValueFlags = argv => {
-  for (const flag of EMPTY_VALUE_FLAGS) {
-    const at = argv.indexOf(flag);
-    if (at === -1) {
-      throw makeError(X`confinement: value-bearing flag ${q(flag)} missing`);
-    }
-    if (argv[at + 1] !== '') {
-      throw makeError(
-        X`confinement: flag ${q(flag)} must carry exactly the empty string, got ${q(
-          argv[at + 1],
-        )}`,
-      );
-    }
-  }
-};
-harden(assertEmptyValueFlags);
-
-/**
- * `--permission-mode` and `--permission-prompts` must each be present and carry
- * exactly their pinned value.
+ * `--tools`, `--setting-sources`, `--permission-mode`, and `--permission-prompts`
+ * are value-asserted, not presence-asserted: each must appear exactly once, and
+ * the token immediately after it must be exactly its pinned value.
  *
  * @param {readonly string[]} argv
  */
@@ -242,8 +221,9 @@ harden(assertNoTranscriptResume);
 
 /**
  * The full structural confinement gate over an argv (version-independent):
- * required flags present, empty-value flags carry `""`, pinned-value flags
- * carry their value, no transcript resume.
+ * required flags present, pinned-value flags (including the empty-value
+ * `--tools` and `--setting-sources`) each appear once with their value, no
+ * transcript resume.
  * `buildArgv` output always passes this; the property tests feed it arbitrary
  * argvs.
  *
@@ -254,7 +234,6 @@ export const assertConfinedArgv = argv => {
     throw makeError(X`confinement: argv must be an array`);
   }
   assertRequiredFlags(argv);
-  assertEmptyValueFlags(argv);
   assertPinnedValueFlags(argv);
   assertNoTranscriptResume(argv);
 };

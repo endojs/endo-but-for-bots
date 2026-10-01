@@ -8,7 +8,6 @@ import {
   assertConfinedArgv,
   assertPinnedVersion,
   assertRequiredFlags,
-  assertEmptyValueFlags,
   assertPinnedValueFlags,
   REQUIRED_FLAGS,
   PINNED_CLI_VERSION,
@@ -78,7 +77,12 @@ test('buildArgv pins the permission mode to dontAsk with no prompting', t => {
 });
 
 test('a missing, altered, or repeated pinned-value flag is refused', t => {
-  for (const flag of ['--permission-mode', '--permission-prompts']) {
+  for (const flag of [
+    '--permission-mode',
+    '--permission-prompts',
+    '--tools',
+    '--setting-sources',
+  ]) {
     const missing = conformingArgv();
     missing.splice(missing.indexOf(flag), 2);
     t.throws(() => assertPinnedValueFlags(missing), { message: /missing/ });
@@ -91,6 +95,11 @@ test('a missing, altered, or repeated pinned-value flag is refused', t => {
     const repeated = [...conformingArgv(), flag, 'bypassPermissions'];
     t.throws(() => assertConfinedArgv(repeated), { message: /more than once/ });
   }
+});
+
+test('a trailing --tools Bash cannot re-open the built-in set', t => {
+  const argv = [...conformingArgv(), '--tools', 'Bash'];
+  t.throws(() => assertConfinedArgv(argv), { message: /more than once/ });
 });
 
 // --- property: five-flag spawn-refusal predicate -------------------------
@@ -129,7 +138,7 @@ test('property: a non-empty --tools / --setting-sources value is refused (presen
       (value, flag) => {
         const argv = conformingArgv();
         argv[argv.indexOf(flag) + 1] = value; // clobber the empty value
-        t.throws(() => assertEmptyValueFlags(argv));
+        t.throws(() => assertPinnedValueFlags(argv), { message: /must carry/ });
       },
     ),
     { numRuns: 200 },
