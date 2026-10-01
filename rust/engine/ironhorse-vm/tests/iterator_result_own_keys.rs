@@ -15,7 +15,10 @@
 //! a string, which is why the keys are read reflectively; a generator's must
 //! not `yield` either, since `yield` compiles both names. Every expected value
 //! was measured on the XS oracle; Node agrees except where
-//! `reused_results_are_protected_like_xs` says otherwise.
+//! `reused_results_are_protected_like_xs` says otherwise. The one value XS
+//! does not give is an async generator result's field attributes, where
+//! Ironhorse follows the specification and Node, as
+//! `an_async_generator_result_has_value_and_done` explains.
 
 use ironhorse_vm::{run_program_with_symbols, RunOutcome};
 
@@ -119,5 +122,42 @@ fn reused_results_are_protected_like_xs() {
          var d = Object.getOwnPropertyDescriptor(g().next(), 'value'); \
          [x.next() === x.next(), gi.next() === gi.next(), d.writable, d.configurable].join()",
         "false,false,true,true",
+    );
+}
+
+/// An async generator builds its result in a promise job, from the reaction
+/// that settles a `yield` or a `return` (`AsyncGeneratorYield` and
+/// `AsyncGeneratorReturn`), so these programs read `log` after the job queue
+/// drains. The first never spells either name and never yields: its results
+/// come from a body that completes and from `return(5)` on a generator that
+/// never started.
+///
+/// Each field is a writable, enumerable, configurable data property of a
+/// fresh object, as CreateIterResultObject defines it and V8 answers. XS
+/// departs here: its `fxNewGeneratorResult` defines both fields
+/// `XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG`, so it answers `false,true,false`
+/// for each.
+#[test]
+fn an_async_generator_result_has_value_and_done() {
+    assert_result(
+        "var log = []; async function* g() {} \
+         function show(r) { log.push(JSON.stringify(r) + ' ' + Object.keys(r).join('|')); } \
+         g().next().then(show); g().return(5).then(show); log",
+        r#"{"done":true} value|done,{"value":5,"done":true} value|done"#,
+    );
+    assert_result(
+        "var log = []; \
+         function attrs(r) { return Reflect.ownKeys(r).map(function (k) { \
+             var d = Object.getOwnPropertyDescriptor(r, k); \
+             return k + ':' + [d.writable, d.enumerable, d.configurable].join(); \
+         }).join(' '); } \
+         async function* g() { yield 1; return 2; } \
+         async function drain() { var it = g(); \
+             var a = await it.next(); var b = await it.next(); \
+             log.push(JSON.stringify(a), attrs(a), JSON.stringify(b), attrs(b), \
+                 Object.getPrototypeOf(a) === Object.prototype, a !== b); } \
+         drain(); log",
+        "{\"value\":1,\"done\":false},value:true,true,true done:true,true,true,\
+         {\"value\":2,\"done\":true},value:true,true,true done:true,true,true,true,true",
     );
 }
