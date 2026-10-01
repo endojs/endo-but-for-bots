@@ -32,3 +32,17 @@ export const assertWorkerId = workerId => {
     )}`;
 };
 harden(assertWorkerId);
+
+// A stored bundle is named by the SHA-256 of its bytes, as lowercase hex;
+// the digest becomes a file name, so its shape is checked before any
+// filesystem use.
+const BUNDLE_DIGEST_PATTERN = /^[0-9a-f]{64}$/;
+
+/** @param {string} digest */
+export const assertBundleDigest = digest => {
+  (typeof digest === 'string' && BUNDLE_DIGEST_PATTERN.test(digest)) ||
+    Fail`Bundle digest must match ${q(BUNDLE_DIGEST_PATTERN.source)}, got ${q(
+      digest,
+    )}`;
+};
+harden(assertBundleDigest);

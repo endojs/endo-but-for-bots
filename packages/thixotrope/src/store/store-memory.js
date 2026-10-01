@@ -1,8 +1,14 @@
 // @ts-check
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
-import { assertSessionToken, assertWorkerId } from './store-validators.js';
+import {
+  assertBundleDigest,
+  assertSessionToken,
+  assertWorkerId,
+} from './store-validators.js';
 
 /** @import { ThixotropeStore, WorkerStore, WorkerMeta, TablesRecord, SessionStore } from './store-fs.js' */
 
@@ -82,6 +88,12 @@ export const makeMemoryStore = () => {
     return harden(sessionStore);
   };
 
+  // Bundles by digest. They live in memory, so nothing can load one as a
+  // file: a daemon over this store cannot launch a native process.
+  /** @type {Map<string, string>} */
+  const bundles = new Map();
+  const encoder = new TextEncoder();
+
   /** @type {ThixotropeStore} */
   const store = {
     listWorkerIds: () => [...workers.keys()].sort(),
@@ -97,6 +109,24 @@ export const makeMemoryStore = () => {
     provideSessionStore,
     deleteSession: token => {
       sessions.delete(token);
+    },
+    putBundle: text => {
+      const digest = bytesToHex(sha256(encoder.encode(text)));
+      if (!bundles.has(digest)) bundles.set(digest, text);
+      return digest;
+    },
+    bundlePath: digest => {
+      assertBundleDigest(digest);
+      throw Fail`The memory store keeps bundles in memory, not at a path`;
+    },
+    readBundle: digest => {
+      assertBundleDigest(digest);
+      return bundles.get(digest);
+    },
+    listBundles: () => [...bundles.keys()].sort(),
+    deleteBundle: digest => {
+      assertBundleDigest(digest);
+      bundles.delete(digest);
     },
   };
   return harden(store);

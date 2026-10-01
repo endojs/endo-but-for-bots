@@ -3,15 +3,15 @@ import '@endo/init';
 import { decodeBase64, encodeBase64 } from '@endo/base64';
 import { makeOcapn } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
+import { createRequire } from 'node:module';
 import process from 'node:process';
 
-import { describeNativeResource } from '../../native/describe-resource.js';
 import { makePipeNetwork } from '../../net/pipe-network.js';
 import { silentLogger } from '../logging.js';
 import { makeNodePowers } from './powers.js';
 
-const [workerId, moduleUrl, identityJson] = process.argv.slice(2);
-const { files, paths, hashes, random } = makeNodePowers();
+const [workerId, bundlePath, bundleDigest] = process.argv.slice(2);
+const { files, hashes, random } = makeNodePowers();
 const pipe = makePipeNetwork({
   codec: syrupCodec,
   workerId,
@@ -25,20 +25,16 @@ process.on('message', message => {
 });
 
 try {
-  const identity = JSON.parse(identityJson ?? 'null');
-  if (identity !== null) {
-    // The digest is checked here, in the process that will import the
-    // module, so an edit between installation and start cannot slip in.
-    const actual = await describeNativeResource(
-      { files, paths, hashes },
-      identity.directory,
+  // The digest is checked here, in the process that will load the bundle,
+  // over the bytes that are there: a file that is not the one installed
+  // does not run.
+  const bytes = await files.readBytes(bundlePath);
+  const actual = hashes.sha256Hex(bytes);
+  if (actual !== bundleDigest)
+    throw Error(
+      `Native resource bundle ${bundlePath} does not match its installed digest ${bundleDigest}; remove the installation and install the resource again`,
     );
-    if (actual.digest !== identity.digest || actual.moduleUrl !== moduleUrl)
-      throw Error(
-        'Installed native resource has changed; install its new version explicitly',
-      );
-  }
-  const namespace = await import(moduleUrl);
+  const namespace = createRequire(import.meta.url)(bundlePath);
   if (typeof namespace.make !== 'function')
     throw Error('Native ephemeral module must export make(powers)');
   const root = await namespace.make(harden({}));

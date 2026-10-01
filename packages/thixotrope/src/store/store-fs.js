@@ -2,10 +2,16 @@
 /** @import { SyncFilePowers } from '../platform/sync-files.js' */
 /** @import { PathPowers } from '../platform/paths.js' */
 import harden from '@endo/harden';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/hashes/utils.js';
 
 import { Fail, q } from '@endo/errors';
 
-import { assertSessionToken, assertWorkerId } from './store-validators.js';
+import {
+  assertBundleDigest,
+  assertSessionToken,
+  assertWorkerId,
+} from './store-validators.js';
 
 export { assertWorkerId, isSessionToken } from './store-validators.js';
 
@@ -79,6 +85,10 @@ export { assertWorkerId, isSessionToken } from './store-validators.js';
  */
 
 /**
+ * Content-addressed storage for the bundles a native process loads: each is
+ * stored under the SHA-256 hex digest of its bytes, written once and never
+ * rewritten, so a digest names the same bytes for as long as it is stored.
+ *
  * @typedef {object} ThixotropeStore
  * @property {string} [statePath] filesystem ownership boundary
  * @property {() => any} getHubState the OCapN hub's persisted tables
@@ -90,7 +100,20 @@ export { assertWorkerId, isSessionToken } from './store-validators.js';
  * @property {() => Array<string>} listSessionTokens
  * @property {(token: string) => SessionStore} provideSessionStore
  * @property {(token: string) => void} deleteSession
+ * @property {(text: string) => string} putBundle store a bundle under the
+ *   digest of its bytes and return that digest; one already stored is left
+ *   as it is, since the same bytes are there
+ * @property {(digest: string) => string} bundlePath where a stored bundle
+ *   is, for the process that loads it; nothing here says it exists
+ * @property {(digest: string) => string | undefined} readBundle
+ * @property {() => Array<string>} listBundles the digests stored
+ * @property {(digest: string) => void} deleteBundle
  */
+
+const encoder = new TextEncoder();
+
+/** @param {string} text */
+const digestOf = text => bytesToHex(sha256(encoder.encode(text)));
 
 /**
  * Filesystem-backed {@link ThixotropeStore}. All writes are synchronous
@@ -103,6 +126,7 @@ export { assertWorkerId, isSessionToken } from './store-validators.js';
  * - `workers/<workerId>/journal.jsonl`
  * - `sessions/<token>/meta.json`
  * - `sessions/<token>/frames.jsonl`
+ * - `bundles/<digest>.cjs`
  *
  * @param {{ syncFiles: SyncFilePowers, paths: PathPowers }} powers
  * @param {string} statePath
@@ -123,8 +147,16 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
 
   const workersPath = join(statePath, 'workers');
   const sessionsPath = join(statePath, 'sessions');
+  const bundlesPath = join(statePath, 'bundles');
   syncFiles.makeDirectory(workersPath);
   syncFiles.makeDirectory(sessionsPath);
+  syncFiles.makeDirectory(bundlesPath);
+
+  /** @param {string} digest */
+  const bundlePath = digest => {
+    assertBundleDigest(digest);
+    return join(bundlesPath, `${digest}.cjs`);
+  };
 
   /** @param {string} token */
   const makeSessionStore = token => {
@@ -337,6 +369,30 @@ export const makeFsStore = ({ syncFiles, paths }, statePath) => {
         recursive: true,
         force: true,
       });
+    },
+    putBundle: text => {
+      const digest = digestOf(text);
+      const path = bundlePath(digest);
+      // The digest names the bytes: a file already there holds them.
+      if (!syncFiles.exists(path)) syncFiles.writeTextAtomic(path, text);
+      return digest;
+    },
+    bundlePath,
+    readBundle: digest => {
+      const path = bundlePath(digest);
+      return syncFiles.exists(path) ? syncFiles.readText(path) : undefined;
+    },
+    listBundles: () =>
+      syncFiles
+        .listDirectory(bundlesPath)
+        .flatMap(name => {
+          // A scratch file left by a crash before its rename is not a bundle.
+          const match = /^([0-9a-f]{64})\.cjs$/.exec(name);
+          return match ? [match[1]] : [];
+        })
+        .sort(),
+    deleteBundle: digest => {
+      syncFiles.remove(bundlePath(digest), { force: true });
     },
   };
   return harden(store);

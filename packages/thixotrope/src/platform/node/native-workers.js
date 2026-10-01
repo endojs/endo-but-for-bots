@@ -19,7 +19,7 @@ import { fork } from 'node:child_process';
  */
 export const makeNativeWorkerPowers = ({ timers, startupTimeoutMs = 30_000 }) =>
   harden({
-    start: ({ id, moduleUrl, resourceIdentity, onFrame, onExit }) =>
+    start: ({ id, bundlePath, bundleDigest, onFrame, onExit }) =>
       new Promise((resolve, reject) => {
         /** @type {ReturnType<typeof fork>} */
         let child;
@@ -59,7 +59,7 @@ export const makeNativeWorkerPowers = ({ timers, startupTimeoutMs = 30_000 }) =>
         try {
           child = fork(
             new URL('./native-worker-entry.js', import.meta.url),
-            [id, moduleUrl, JSON.stringify(resourceIdentity ?? null)],
+            [id, bundlePath, bundleDigest],
             {
               stdio: ['ignore', 'ignore', 'inherit', 'ipc'],
               execArgv: [],

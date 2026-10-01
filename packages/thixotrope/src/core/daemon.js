@@ -1124,6 +1124,7 @@ const buildDaemon = async (
             position: 0n,
           }),
         }),
+      bundlePath: digest => store.bundlePath(digest),
       // The owner hears of its adapter's own exit through the same held
       // object its start notice reaches, so a manager with anything desired
       // rebuilds between daemon starts as it does at one.
@@ -1270,6 +1271,27 @@ const buildDaemon = async (
     // still stop all transports before releasing exclusive store ownership.
     for (const key of Object.keys(store.getHubState()?.sessions ?? {})) {
       if (key.startsWith('transient:')) hub.forgetSession(key);
+    }
+    // A stored ephemeral bundle lives as long as a launcher names it. One
+    // that none does belonged to an installation since removed, or to one
+    // interrupted before its manager held the launcher, which a retry
+    // stores again; it is freed here, once the endpoint's records are the
+    // settled ones for this process.
+    /** @type {Set<string>} */
+    const namedBundles = new Set();
+    const endpointExports =
+      store.provideWorkerStore(ENDPOINT_ID).getTablesRecord()?.exports ?? {};
+    for (const recorded of Object.values(endpointExports)) {
+      const found = /** @type {any} */ (recorded);
+      if (
+        found?.kind === 'resource' &&
+        found.name === 'native-adapter' &&
+        typeof found.description?.bundleDigest === 'string'
+      )
+        namedBundles.add(found.description.bundleDigest);
+    }
+    for (const digest of store.listBundles()) {
+      if (!namedBundles.has(digest)) store.deleteBundle(digest);
     }
     await Promise.all(
       [...workers].map(async ([workerId, entry]) => {

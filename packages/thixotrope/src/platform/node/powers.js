@@ -128,21 +128,28 @@ export const makeNodePowers = () => {
     describe: value =>
       util.inspect(value, { customInspect: false, getters: false, depth: 3 }),
   });
+  // The compartment mapper is heavy and only needed to install something,
+  // so load it on first use to keep ordinary startup light.
+  const loadBundler = async () => {
+    const [{ makeBundlerPowers }, { makeReadPowers }] = await Promise.all([
+      import('../bundler.js'),
+      import('@endo/compartment-mapper/node-powers.js'),
+    ]);
+    return makeBundlerPowers({
+      readPowers: makeReadPowers({ fs, path, url, crypto }),
+      pathToFileURL: paths.pathToFileURL,
+      resolve: (...parts) => path.resolve(...parts),
+      sha256Hex: hashes.sha256Hex,
+    });
+  };
   const bundler = harden({
-    // The compartment mapper is heavy and only needed to install an
-    // application, so load it on first use to keep ordinary startup light.
     bundle: async file => {
-      const [{ makeBundlerPowers }, { makeReadPowers }] = await Promise.all([
-        import('../bundler.js'),
-        import('@endo/compartment-mapper/node-powers.js'),
-      ]);
-      const bundlerPowers = makeBundlerPowers({
-        readPowers: makeReadPowers({ fs, path, url, crypto }),
-        pathToFileURL: paths.pathToFileURL,
-        resolve: (...parts) => path.resolve(...parts),
-        sha256Hex: hashes.sha256Hex,
-      });
-      return bundlerPowers.bundle(file);
+      const loaded = await loadBundler();
+      return loaded.bundle(file);
+    },
+    bundleNative: async file => {
+      const loaded = await loadBundler();
+      return loaded.bundleNative(file);
     },
   });
   return harden({
