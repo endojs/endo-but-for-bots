@@ -23,6 +23,30 @@ impl Interp {
         Ok(capped as u64)
     }
 
+    /// `thisBooleanValue`, `thisNumberValue` and `thisStringValue`: a
+    /// primitive of `kind` (`Kind::Number` admits an integer too), or the
+    /// one a wrapper holds, else XS's TypeError (`this: not a number`).
+    pub(super) fn this_primitive(&mut self, this: Slot, kind: Kind) -> Result<Slot, Step> {
+        let of_kind = |slot: Slot| match kind {
+            Kind::Number => matches!(slot.kind, Kind::Integer | Kind::Number),
+            _ => slot.kind == kind,
+        };
+        if of_kind(this) {
+            return Ok(this);
+        }
+        if let (Kind::Reference, Payload::Reference(r)) = (this.kind, this.value) {
+            if let Some(prim) = self.wrapper_data.get(&r).copied().filter(|&p| of_kind(p)) {
+                return Ok(prim);
+            }
+        }
+        let name = match kind {
+            Kind::Boolean => "boolean",
+            Kind::Number => "number",
+            _ => "string",
+        };
+        Err(self.catchable_type_error_msg(format!("this: not a {name}")))
+    }
+
     /// Build a primitive-wrapper object (`new Boolean`/`Number`/`String`)
     /// around the already-computed primitive `prim`. Meters the native
     /// `Object` empty-object cost plus [`WRAPPER_CONSTRUCT_EXTRA`], chains the

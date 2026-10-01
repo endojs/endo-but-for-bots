@@ -408,10 +408,18 @@ impl Interp {
     /// serialization: `(owner slot, spec length, items ascending by
     /// index)`. Item values are ordinary [`Slot`]s — their slot/chunk
     /// references round-trip with the arenas.
+    ///
+    /// `%Array.prototype%`'s row is boot state: boot registers the empty
+    /// array, and a restore starts from a booted machine. It is stored only
+    /// once a program has given it a length, so a pristine image carries no
+    /// array rows.
     pub fn arrays_snapshot(&self) -> Vec<ArraySnapshot> {
         let mut out: Vec<ArraySnapshot> = self
             .arrays
             .iter()
+            .filter(|(owner, a)| {
+                **owner != self.array_proto || a.length != 0 || !a.items().is_empty()
+            })
             .map(|(owner, a)| {
                 (
                     owner.0,
@@ -1062,10 +1070,16 @@ impl Interp {
     /// each primitive wrapper instance's boxed value. The value is an
     /// ordinary [`Slot`] — its chunk reference (a boxed String)
     /// round-trips with the arenas.
+    ///
+    /// The String, Number and Boolean prototypes' rows are boot state that
+    /// no program can change (`""`, `+0`, `false`), and a restore starts
+    /// from a booted machine, so they are never stored.
     pub fn wrappers_snapshot(&self) -> Vec<(u32, Slot)> {
+        let boot = [self.string_proto, self.number_proto, self.boolean_proto];
         let mut out: Vec<(u32, Slot)> = self
             .wrapper_data
             .iter()
+            .filter(|(owner, _)| !boot.contains(owner))
             .map(|(owner, v)| (owner.0, *v))
             .collect();
         out.sort_unstable_by_key(|(owner, _)| *owner);

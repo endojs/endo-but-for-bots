@@ -399,10 +399,9 @@ impl Interp {
                 Native::DisposableStack | Native::AsyncDisposableStack => {
                     self.slots.alloc(Slot::instance(object_proto))
                 }
-                // `%Array.prototype%` is itself an (empty) exotic array in XS;
-                // ironhorse models it as an ordinary boot object chaining to
-                // %Object.prototype% (its own array-ness is unobservable to the
-                // covered grammar, which never reads `Array.prototype.length`).
+                // `%Array.prototype%` is itself an empty exotic array
+                // (ES2024 23.1.3), as XS's `fxNewArrayInstance` builds it: it
+                // joins `arrays` once it is known as `array_proto` below.
                 Native::Array => self.slots.alloc(Slot::instance(object_proto)),
                 // `%Map.prototype%` / `%Set.prototype%` / `%WeakMap.prototype%`
                 // / `%WeakSet.prototype%`: plain boot objects chaining to
@@ -522,6 +521,9 @@ impl Interp {
             .get("Array")
             .and_then(|&c| self.ctor_prototype.get(&c).copied())
             .unwrap_or(crate::value::SlotIndex::NULL);
+        if !self.array_proto.is_null() {
+            self.arrays.insert(self.array_proto, ArrayData::default());
+        }
         self.iterator_proto = self
             .intrinsics
             .get("Iterator")
@@ -1543,12 +1545,43 @@ impl Interp {
                     } else if native == Native::Boolean {
                         self.boolean_proto = p;
                     }
-                    let v = self.alloc_method(NativeMethod::WrapperValueOf);
+                    let (value_of, to_string) = match native {
+                        Native::Boolean => (
+                            NativeMethod::BooleanValueOf,
+                            Some(NativeMethod::BooleanToString),
+                        ),
+                        // `Number.prototype.toString` is radix-aware and
+                        // registered with the other Number methods below.
+                        Native::Number => (NativeMethod::NumberValueOf, None),
+                        _ => (
+                            NativeMethod::StringValueOf,
+                            Some(NativeMethod::StringToString),
+                        ),
+                    };
+                    let v = self.alloc_method(value_of);
                     self.proto_methods.push((p, "valueOf", v));
-                    let t = self.alloc_method(NativeMethod::WrapperToString);
-                    self.proto_methods.push((p, "toString", t));
+                    if let Some(to_string) = to_string {
+                        let t = self.alloc_method(to_string);
+                        self.proto_methods.push((p, "toString", t));
+                    }
                 }
             }
+        }
+        // `%String.prototype%`, `%Number.prototype%` and `%Boolean.prototype%`
+        // are themselves wrappers, of "", +0 and false (ES2024 22.1.3,
+        // 21.1.3, 20.3.3), as XS builds them with `fxNewStringInstance` and
+        // its siblings.
+        if !self.string_proto.is_null() {
+            let empty = self.new_string_units(&[]);
+            self.wrapper_data.insert(self.string_proto, empty);
+        }
+        if !self.number_proto.is_null() {
+            self.wrapper_data
+                .insert(self.number_proto, Slot::integer(0));
+        }
+        if !self.boolean_proto.is_null() {
+            self.wrapper_data
+                .insert(self.boolean_proto, Slot::boolean(false));
         }
         if let Some(&bigint_ctor) = self.intrinsics.get("BigInt") {
             if let Some(proto) = self.prototype_of(bigint_ctor) {
@@ -2379,9 +2412,8 @@ impl Interp {
                 self.proto_value_data.push((ctor, name, Slot::number(v)));
             }
         }
-        // `Number.prototype.toString` (radix-aware) overrides the wrapper's
-        // plain `toString` on `%Number.prototype%`; a later push wins the
-        // link-time set, so this must follow the wrapper registration.
+        // `Number.prototype.toString` (radix-aware) and the other Number
+        // methods on `%Number.prototype%`.
         if !self.number_proto.is_null() {
             let mf = self.alloc_method(NativeMethod::NumberToString);
             self.proto_methods.push((self.number_proto, "toString", mf));

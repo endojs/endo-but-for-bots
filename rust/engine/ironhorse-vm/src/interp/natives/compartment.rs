@@ -407,17 +407,40 @@ impl Interp {
         this: Slot,
         source: Slot,
     ) -> Result<Slot, Step> {
+        let (units, previous) = self.enter_compartment_evaluate(code, this, source)?;
+        // Compartment source is always strict: `fxPrepareCompartmentFunction`
+        // compiles the compartment's evaluators in strict mode, and every
+        // corpus case that reaches `evaluate` is `onlyStrict`.
+        let result = self.eval_source(&units, true);
+        self.leave_compartment_evaluate(previous);
+        result
+    }
+
+    /// The set-up of [`Self::compartment_evaluate`]: find the compartment,
+    /// coerce the source and switch to the compartment's environment,
+    /// returning the source and the environment to restore. It and
+    /// [`Self::leave_compartment_evaluate`] run out of line: switching
+    /// environments moves a whole environment through the frame, and the
+    /// frame a nested evaluation holds should be only the call's.
+    #[inline(never)]
+    fn enter_compartment_evaluate(
+        &mut self,
+        code: &[u8],
+        this: Slot,
+        source: Slot,
+    ) -> Result<(Vec<u16>, crate::SlotIndex), Step> {
         let instance = self.compartment_of(this, "evaluate")?;
         let global = self.guest_compartments[&instance].global;
         let units = self.to_string_units(code, source)?;
         let previous = self.current_environment_id();
         self.activate_environment(global).map_err(Step::Host)?;
-        // Compartment source is always strict: `fxPrepareCompartmentFunction`
-        // compiles the compartment's evaluators in strict mode, and every
-        // corpus case that reaches `evaluate` is `onlyStrict`.
-        let result = self.eval_source(&units, true);
+        Ok((units, previous))
+    }
+
+    /// Restore the environment [`Self::enter_compartment_evaluate`] left.
+    #[inline(never)]
+    fn leave_compartment_evaluate(&mut self, previous: crate::SlotIndex) {
         self.switch_environment(previous);
-        result
     }
 }
 
