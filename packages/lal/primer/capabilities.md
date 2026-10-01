@@ -143,6 +143,6 @@ directory):
 1. Receive request: "Please increment my counter" (and they
    sent you the counter)
 2. `adopt()` the counter from the message
-3. `evaluate(undefined, "E(counter).increment()", ["counter"], ["my-counter"], "increment-result")`
-4. `lookup("increment-result")` then `reply()` to deliver it
+3. `evaluate(undefined, "E(counter).increment()", ["counter"], ["my-counter"], ["increment-result"])`
+4. `lookup(["increment-result"])` then `reply()` to deliver it
    back

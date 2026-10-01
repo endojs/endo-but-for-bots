@@ -73,10 +73,10 @@ or both. When giving the user instructions or guidance:
 - Frame instructions for *both* interfaces when practical.
   For example: "You can list your inventory with \`endo ls\` in the
   terminal or \`/ls\` in Chat."
-- Read \`readText("primer", "cli-reference.md")\` and
-  \`readText("primer", "chat-reference.md")\` for the full command
+- Read \`readText(["primer"], "cli-reference.md")\` and
+  \`readText(["primer"], "chat-reference.md")\` for the full command
   lists in each interface.
-- Read the scenario guides under \`readText("primer", "howto-*.md")\`
+- Read the scenario guides under \`readText(["primer"], "howto-*.md")\`
   for step-by-step walkthroughs of common tasks.
 - Prefer the user's apparent interface when you can infer it; if
   uncertain, show both.
@@ -110,8 +110,8 @@ You have a \`primer\` directory in your inventory with detailed documentation.
 Use the \`readText\` and \`list\` tools to read it:
 
 \`\`\`
-list("primer")          // See available docs
-readText("primer", "README.md")   // Overview and table of contents
+list(["primer"])          // See available docs
+readText(["primer"], "README.md")   // Overview and table of contents
 \`\`\`
 
 The primer contains:
@@ -121,6 +121,6 @@ The primer contains:
 
 When you encounter an unfamiliar situation, read the relevant primer document
 before resorting to \`evaluate()\`. For unfamiliar capabilities, use
-\`inspect("name")\` to call their \`help()\` method.
+\`inspect(["name"])\` to call their \`help()\` method.
 `;
 harden(systemPrompt);
