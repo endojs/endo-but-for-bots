@@ -352,15 +352,18 @@ by the rebuilt adapter, and the key's idempotence makes it exactly-once.
 
 Registrations clean themselves up at their deadline, so a retired workspace's
 alarms cost at most one timer each; no retirement route is needed.
-The manager never needs the time: deadlines are pushed to the adapter, which
-owns the timers and its own clock.
-A guest does, to turn "in five minutes" into a deadline, and a vat cannot
-read a clock of its own, so the facet offers `now()`.
-`now()` stays inside the protocol: it is `when(0n)`, a registration whose
-timer fires at once and whose `fire(key, at)` carries the host time, after
-which the manager closes the handle.
-One verb between the halves, register a desire and the adapter reports, is
-enough for a clock.
+`now()` is dropped.
+The manager never needs the time, deadlines are pushed to the adapter, which
+owns the timers and its own clock, and a guest should not need it either.
+The facet takes both forms: an absolute deadline (`at`) and a relative delay
+(`after`), so a program can say "in five minutes" without ever learning what
+time it is.
+A relative registration is resolved in the adapter: `bind` computes the
+absolute deadline from its own clock, arms the timer, and returns the
+resolved spec `{ at }`, which the kit records as the registration's desired
+spec (8.3, item 4).
+A restart therefore restores `{ at }`, not the delay counted again from the
+restart, and `fire(key, at)` carries the deadline it fired for.
 
 Removed: everything section 7.1 removes, plus the host timer resource and the
 separate clock vat.
@@ -449,6 +452,17 @@ would run the hub's transport over a hub session.
    installation under a new name or after a removal, exactly as for an
    application; what becomes of the old manager's registrations across that
    is out of scope here.
+
+4. Let `bind` return a resolved spec.
+   Today the kit records the spec the manager sent, and `restore` sends it
+   back unchanged.
+   Some registrations are resolved at bind time: a relative delay becomes an
+   absolute deadline, and a port of zero becomes the port the listener got.
+   The adapter kit should take the value `bind` returns as the registration's
+   resolved spec, report it to the manager with the bind's answer, and have
+   the manager kit store it as the desired spec, so that `same`, `describe`
+   and `restore` all see the resolved form.
+   A `bind` that returns nothing keeps the spec it was sent, as today.
 
 ### 8.4 The host afterwards
 
