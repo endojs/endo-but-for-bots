@@ -746,13 +746,15 @@ fn copied_iterator_setters_fit_the_contract_stack() {
 #[test]
 fn instanceof_through_bound_functions_is_charged_only_through_has_instance() {
     // U1. `InstanceofOperator` on a bound function with no `@@hasInstance` in
-    // its chain unwraps the bound target inside `OrdinaryHasInstance` with no
-    // native frame charged, so the walk is unbounded by the budget: 2,000
-    // here, 5,000 in §3, as deep as the heap admits. It traps on the
-    // Worker-sized wasm stacks of lane B, and is the defect B2 fixes; this
-    // pin flips when it lands. A chain over an ordinary function inherits the
-    // intrinsic `@@hasInstance`, one charged native activation per layer, and
-    // halts at 126.
+    // its chain unwraps the bound target with no native frame charged, so the
+    // walk is unbounded by the budget: 2,000 here, 5,000 in §3, as deep as
+    // the heap admits. B2 made the walk a loop, so it no longer grows the
+    // host stack either, which the stack-height ratchet
+    // (`benches/stack_height.py`) pins; charging it instead would halt chains
+    // that complete today, a versioned release (§6). A chain over an ordinary
+    // function
+    // inherits the intrinsic `@@hasInstance`, one charged native activation
+    // per layer, and halts at 126.
     let uncharged = |layers: usize| {
         format!(
             "function F() {{}} Object.setPrototypeOf(F, null); var b = F; \

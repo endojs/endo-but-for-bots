@@ -63,41 +63,66 @@ impl Interp {
     /// present, called with `C` as `this` and `O` as its sole argument.
     /// Otherwise `C` must be callable and falls through to
     /// [`Self::ordinary_has_instance`].
+    ///
+    /// `OrdinaryHasInstance` on a bound function is a tail call of
+    /// `InstanceofOperator` on its target (step 2), so a chain of bound
+    /// functions with no `@@hasInstance` is walked here as a loop: one tick and
+    /// one `@@hasInstance` Get per layer, in the recursion's order (its second
+    /// callability check per layer was pure and is not repeated). The walk was
+    /// never charged against the native-recursion budget, so a loop keeps
+    /// acceptance unchanged while its host stack stays flat at any depth
+    /// (STACK-DEPTH-REFACTOR.md B2).
     pub(super) fn instanceof_operator(
         &mut self,
         code: &[u8],
         value: Slot,
         constructor: Slot,
     ) -> Result<bool, Step> {
-        let ctor = match constructor.value {
-            Payload::Reference(ctor) if constructor.kind == Kind::Reference => ctor,
-            _ => {
-                return Err(self.catchable_type_error_msg(
-                    match constructor.kind {
-                        Kind::Undefined => "cannot coerce undefined to object",
-                        Kind::Null => "cannot coerce null to object",
-                        _ => "call: not a function",
-                    }
-                    .into(),
-                ))
+        let mut constructor = constructor;
+        loop {
+            let ctor = match constructor.value {
+                Payload::Reference(ctor) if constructor.kind == Kind::Reference => ctor,
+                _ => {
+                    return Err(self.catchable_type_error_msg(
+                        match constructor.kind {
+                            Kind::Undefined => "cannot coerce undefined to object",
+                            Kind::Null => "cannot coerce null to object",
+                            _ => "call: not a function",
+                        }
+                        .into(),
+                    ))
+                }
+            };
+            self.meter.tick_raw(INSTANCEOF_METERING);
+            let has_instance_id = self
+                .well_known_symbol_property_id("hasInstance")
+                .expect("well-known hasInstance symbol");
+            let method = self.mop_get(code, ctor, has_instance_id, constructor)?;
+            if method.kind != Kind::Undefined && method.kind != Kind::Null {
+                if !self.is_callable_value(method) {
+                    return Err(self.catchable_type_error_msg("call: not a function".into()));
+                }
+                let result = self.invoke_value(code, method, constructor, &[value])?;
+                return Ok(self.truthy(&result));
             }
-        };
-        self.meter.tick_raw(INSTANCEOF_METERING);
-        let has_instance_id = self
-            .well_known_symbol_property_id("hasInstance")
-            .expect("well-known hasInstance symbol");
-        let method = self.mop_get(code, ctor, has_instance_id, constructor)?;
-        if method.kind != Kind::Undefined && method.kind != Kind::Null {
-            if !self.is_callable_value(method) {
+            if !self.is_callable_value(constructor) {
                 return Err(self.catchable_type_error_msg("call: not a function".into()));
             }
-            let result = self.invoke_value(code, method, constructor, &[value])?;
-            return Ok(self.truthy(&result));
+            // `ordinary_has_instance`'s own bound step, taken here in place:
+            // `constructor` is a callable reference, so its checks before that
+            // step pass, and they only read.
+            if let Some(target) = self.bound_target(ctor) {
+                constructor = Slot::of(Kind::Reference, Payload::Reference(target));
+                continue;
+            }
+            return self.ordinary_has_instance(code, constructor, value);
         }
-        if !self.is_callable_value(constructor) {
-            return Err(self.catchable_type_error_msg("call: not a function".into()));
-        }
-        self.ordinary_has_instance(code, constructor, value)
+    }
+
+    /// The `[[BoundTargetFunction]]` of a bound function exotic, `None` for
+    /// any other object.
+    fn bound_target(&self, ctor: crate::value::SlotIndex) -> Option<crate::value::SlotIndex> {
+        self.bound_functions.get(&ctor).map(|bound| bound.target)
     }
 
     /// ECMAScript `OrdinaryHasInstance(C, O)`, including bound-function
@@ -116,8 +141,8 @@ impl Interp {
             Payload::Reference(ctor) => ctor,
             _ => return Ok(false),
         };
-        if let Some(bound) = self.bound_functions.get(&ctor).cloned() {
-            let target = Slot::of(Kind::Reference, Payload::Reference(bound.target));
+        if let Some(target) = self.bound_target(ctor) {
+            let target = Slot::of(Kind::Reference, Payload::Reference(target));
             return self.instanceof_operator(code, value, target);
         }
         let mut object = match value.value {

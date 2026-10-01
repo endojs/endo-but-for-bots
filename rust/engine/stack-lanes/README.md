@@ -106,7 +106,9 @@ probe depth (the compact path halts at 2,015 like the generic one).
 The report's U1 reproduces as written: `instanceof` through 2,000 bound
 functions with null prototypes completes natively, the walk uncharged, while a
 chain over an ordinary function is charged one intrinsic `@@hasInstance` call
-per layer and halts at 126; `native_recursion_budget.rs` pins both.
+per layer and halts at 126; `native_recursion_budget.rs` pins both, and since
+B2 the uncharged walk is a loop that no host stack limits, so lane B no longer
+traps on it.
 The second is in `common.py`: over every heavy family, the worst per-function
 tier mix exceeds the larger pure tier by up to 17.5% (`take` and `iter-map`;
 `array-from` 13.5%), past the 13.6% the report allowed from the chains it
