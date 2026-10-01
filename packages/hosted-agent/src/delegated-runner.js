@@ -45,9 +45,9 @@ import {
  *   runner's own forwarders: a revoked or expired runner refuses turns on
  *   sessions it made earlier, and a turn cannot name a model the runner does
  *   not allow.
- * - **A storage bound, or the operator's explicit word that there is none.**
- *   Session directories have no quota today, so a runner refuses to be made
- *   without one or the other.
+ * - **The operator's explicit word that storage is unbounded.** Session
+ *   directories have no quota today; bounded storage requests are refused,
+ *   not passed to a backend that cannot enforce them.
  *
  * Keeping a store on one's own machine is not confidentiality from the
  * operator, who can read everything a harness on their machine does.
@@ -79,7 +79,7 @@ const KEPT_FRESH_MS = 5000;
  * @property {string[]} networkPolicies `['off']` unless the operator says
  *   more; always includes `off`.
  * @property {string[]} [models]
- * @property {{ maxSessionBytes: number } | 'unbounded'} storage
+ * @property {'unbounded'} storage Explicit acceptance of no storage quota.
  * @property {string} [expiresAt]
  */
 
@@ -122,14 +122,10 @@ export const normalizeRunnerLimits = limits => {
         model => typeof model === 'string' && MODEL_ID.test(model),
       )) ||
     Fail`Invalid runner models`;
-  // Said one way or the other, never left out: an unbounded session
-  // directory on somebody else's behalf is a decision, not a default.
+  // An unbounded session directory on somebody else's behalf is a decision,
+  // not a default. No native adapter supports a per-session storage quota.
   storage === 'unbounded' ||
-    (storage !== null &&
-      typeof storage === 'object' &&
-      Number.isSafeInteger(storage.maxSessionBytes) &&
-      Number(storage.maxSessionBytes) > 0) ||
-    Fail`A runner needs a storage bound per session, or storage: "unbounded"`;
+    Fail`A runner requires storage: "unbounded"; storage bounds are not supported`;
   expiresAt === undefined ||
     Number.isFinite(Date.parse(expiresAt)) ||
     Fail`Invalid runner expiry`;
@@ -138,10 +134,7 @@ export const normalizeRunnerLimits = limits => {
     maxSessions,
     networkPolicies: [...new Set(networkPolicies)],
     ...(models === undefined ? {} : { models: [...models] }),
-    storage:
-      storage === 'unbounded'
-        ? 'unbounded'
-        : { maxSessionBytes: storage.maxSessionBytes },
+    storage,
     ...(expiresAt === undefined
       ? {}
       : { expiresAt: new Date(Date.parse(expiresAt)).toISOString() }),
@@ -240,7 +233,6 @@ const RUNNER_WORDS = harden([
   'Invalid session model',
   'Invalid session reasoning effort',
   'Invalid session system prompt',
-  'The backend beneath cannot bound a session’s storage',
 ]);
 
 const RunnerAdminInterface = M.interface('RunnerAdmin', {
@@ -591,9 +583,6 @@ export const makeDelegatedRunner = ({
       ...(systemPrompt === undefined ? {} : { systemPrompt }),
       networkPolicy,
       subscription: limits.subscription,
-      ...(limits.storage === 'unbounded'
-        ? {}
-        : { storageBoundBytes: limits.storage.maxSessionBytes }),
     });
   };
 
@@ -686,11 +675,6 @@ export const makeDelegatedRunner = ({
         const limits = await checkLive();
         const allowed = checkSpec(spec, limits);
         const beneathId = ownId(spec);
-        if (limits.storage !== 'unbounded') {
-          const descriptor = await E(await provideFactory()).describe();
-          descriptor?.enforcesStorageBound === true ||
-            Fail`The backend beneath cannot bound a session’s storage`;
-        }
         return oneAtATime(beneathId, async () => {
           // The slot is taken, durably, before the session exists: a crash
           // in between costs a slot a destroy gives back, never a session

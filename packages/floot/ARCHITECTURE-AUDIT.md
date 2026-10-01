@@ -4045,6 +4045,16 @@ bounds; the descriptor declares `enforcesStorageBound`, so a delegated
 runner's bound is honoured; a session at its bound sees `ENOSPC`, never the
 host. The operator decides the mechanism (1 or 2) and the default bound.
 
+### Unsupported extension removed — 2026-10-01
+
+The scoping discussion above is historical, not a supported storage-quota contract.
+The delegated `enforcesStorageBound` descriptor flag and `storageBoundBytes`
+forwarding are removed because no native adapter enforced them.
+Runner limits now require explicit `storage: 'unbounded'`; bounded requests fail
+closed before setup publication or session-slot acquisition.
+The retired descriptor field is rejected, not treated as a compatibility alias.
+FA-09 remains deferred: this cleanup adds no durable local storage or byte/inode quota.
+
 ## FA-10 — Share representations without erasing authority distinctions
 
 Deduplication targets:

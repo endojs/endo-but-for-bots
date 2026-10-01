@@ -31,7 +31,6 @@ const makeBeneath = () => {
   const state = {
     failCreate: '',
     failDestroy: false,
-    bounded: false,
     nativeContextFormat: '',
     /** @type {Promise<void> | undefined} */
     hang: undefined,
@@ -51,7 +50,6 @@ const makeBeneath = () => {
         ...(state.nativeContextFormat
           ? { nativeContextFormat: state.nativeContextFormat }
           : {}),
-        ...(state.bounded ? { enforcesStorageBound: true } : {}),
       }),
     modelCatalog: async subscriptionId =>
       harden({
@@ -148,12 +146,12 @@ const makeHarness = ({
   return { ...kit, beneath, store, state, logged };
 };
 
-test('limits are validated, and storage is said one way or the other', t => {
+test('limits require explicit acceptance of unbounded storage', t => {
   t.deepEqual(
     normalizeRunnerLimits({
       subscription: 'lane',
       maxSessions: 3,
-      storage: { maxSessionBytes: 1_000_000, other: 1 },
+      storage: 'unbounded',
       models: ['small'],
       expiresAt: '2026-10-01T00:00:00Z',
       anything: 'else',
@@ -163,7 +161,7 @@ test('limits are validated, and storage is said one way or the other', t => {
       maxSessions: 3,
       networkPolicies: ['off'],
       models: ['small'],
-      storage: { maxSessionBytes: 1_000_000 },
+      storage: 'unbounded',
       expiresAt: '2026-10-01T00:00:00.000Z',
     },
   );
@@ -174,6 +172,11 @@ test('limits are validated, and storage is said one way or the other', t => {
     { subscription: 'lane', maxSessions: 0, storage: 'unbounded' },
     { subscription: 'lane', maxSessions: 1 },
     { subscription: 'lane', maxSessions: 1, storage: {} },
+    {
+      subscription: 'lane',
+      maxSessions: 1,
+      storage: { maxSessionBytes: 1_000_000 },
+    },
     {
       subscription: 'lane',
       maxSessions: 1,
@@ -585,19 +588,26 @@ test('creation keeps admission and inference refusal order', async t => {
   t.deepEqual(beneath.calls, []);
 });
 
-test('a storage bound needs a backend that enforces one', async t => {
-  const { factory, beneath } = makeHarness({
+test('a storage bound is refused before a slot or backend is acquired', async t => {
+  const { factory, beneath, store, state, logged, close } = makeHarness({
     limits: { storage: { maxSessionBytes: 5_000_000 } },
   });
+  t.teardown(close);
   await t.throwsAsync(
     () => E(factory).create(harden({ sessionId: 't' }), tools),
     {
-      message: /cannot bound a session’s storage/,
+      message: 'Runner unavailable',
     },
   );
-  beneath.state.bounded = true;
+  t.deepEqual(beneath.calls, []);
+  t.deepEqual(store.written, []);
+  t.true(
+    logged.some(line => line.includes('storage bounds are not supported')),
+  );
+  // Refusal did not take a slot: a corrected operator decision can proceed.
+  state.limits.storage = 'unbounded';
   await E(factory).create(harden({ sessionId: 't' }), tools);
-  t.is(beneath.calls.at(-1).spec.storageBoundBytes, 5_000_000);
+  t.false(Object.hasOwn(beneath.calls.at(-1).spec, 'storageBoundBytes'));
 });
 
 test('a second kit’s revocation reaches the first', async t => {

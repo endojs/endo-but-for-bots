@@ -183,10 +183,6 @@ const REQUIRED_DESCRIPTOR_KEYS = harden([
   'toolOwnership',
 ]);
 const OPTIONAL_DESCRIPTOR_KEYS = harden([
-  // The backend keeps a session's directory under the `storageBoundBytes`
-  // its spec names. None does yet; a delegated runner with a storage bound
-  // refuses to run on one that does not say so.
-  'enforcesStorageBound',
   'promptEnvironment',
   'providerId',
   // The bindings a reopen of a session on this backend may be authorized
@@ -277,9 +273,6 @@ export const assertHostedBackendDescriptor = descriptor => {
     (typeof descriptor.providerId === 'string' &&
       SUBSCRIPTION_ID.test(descriptor.providerId)) ||
     Fail`Hosted backend descriptor has an invalid provider id`;
-  descriptor.enforcesStorageBound === undefined ||
-    typeof descriptor.enforcesStorageBound === 'boolean' ||
-    Fail`Hosted backend descriptor has an invalid storage bound flag`;
   const nativeContextFormat = /** @type {unknown} */ (
     descriptor.nativeContextFormat
   );
@@ -314,9 +307,6 @@ export const assertHostedBackendDescriptor = descriptor => {
     ...(descriptor.providerId === undefined
       ? {}
       : { providerId: descriptor.providerId }),
-    ...(descriptor.enforcesStorageBound === true
-      ? { enforcesStorageBound: true }
-      : {}),
     ...(descriptor.subscriptions === undefined
       ? {}
       : {

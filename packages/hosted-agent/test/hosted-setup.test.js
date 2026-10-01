@@ -1266,6 +1266,15 @@ test('a delegated runner is a namespace, a kit and the name that is handed out, 
       limits: { subscription: 'lane-alice', maxSessions: 2 },
     }),
   );
+  await t.throwsAsync(
+    () =>
+      provideDelegatedRunner(world.host, {
+        ...dir,
+        runnerId: 'alice',
+        limits: { ...limits, storage: { maxSessionBytes: 5_000_000 } },
+      }),
+    { message: /storage bounds are not supported/ },
+  );
   for (const runnerId of ['alice-2', 'kit', 'bad id']) {
     // eslint-disable-next-line no-await-in-loop
     await t.throwsAsync(() =>

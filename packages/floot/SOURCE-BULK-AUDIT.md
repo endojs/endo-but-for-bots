@@ -27,7 +27,8 @@ The tables describe the initial audit snapshot; the progress section records
 subsequent implementation.
 The concrete deletion and compatibility candidates SB-01 through SB-08 are now
 removed, and local repetition SB-09 through SB-12 is consolidated.
-This same source metric is now 42,581 lines.
+This same source metric is now 42,555 lines.
+Scope item 3's unsupported delegated storage-bound extension is removed.
 Further implementation should follow deletion before abstraction, with independent
 adversarial review and focused regression tests before each commit.
 
@@ -197,6 +198,9 @@ not evidence that whole clients can be merged safely.
    This is an unimplemented extension point rather than supported native storage
    enforcement.
    Removing it must preserve refusal, not silently accept a bound without enforcement.
+   **Done:** only explicit `storage: 'unbounded'` is accepted; bounded requests
+   are refused during limit validation before setup or session-slot acquisition.
+   The descriptor flag and forwarded session-bound field are removed.
 4. **Generic journal placement.** `makeAccountJournal` in `account-oracle.js` is
    reused by pools, reset intents, shares and runners.
    It is one storage mechanism, not five parallel account journals.
@@ -412,6 +416,27 @@ The source review does not establish that either branch is dead.
   SB-01 through SB-12 are closed.
   Next is the explicit sharing/delegation and inert-knob scope decision, followed
   by SB-13 through SB-15 only with their required cross-adapter evidence.
+
+- **Scope item 3 done:** removed the unsupported delegated storage-bound
+  extension, not sharing/delegation itself.
+  No native adapter implemented the descriptor flag or quota enforcement.
+  Runner limits now require explicit `storage: 'unbounded'`; missing, malformed
+  and bounded storage choices refuse before setup publication or taking a slot.
+  The closed backend descriptor rejects the retired `enforcesStorageBound` field,
+  including false or undefined; it is not accepted as a compatibility alias.
+  There is no bound forwarded to the backend and no newly implemented quota.
+  A retained bounded runner limit also fails closed; no migration is added.
+  Tests cover normalization, pre-publication setup refusal, no slot/backend
+  acquisition on refusal, and successful creation after correcting the limits.
+  All 67 runner/module/descriptor/setup tests pass; shared types pass.
+  Independent review passes 77 tests including backend setup, shared types,
+  scoped ESLint (0 errors, 21 warnings), formatting and diff checks.
+  Root docs passes (0 errors, 180 warnings).
+  This removes **26** source lines: hosted-agent 23,985; the same 160 files total
+  **42,555**, down **231** from the initial snapshot.
+  No state format, journal prefix, credential, owner, host config or pin changes;
+  not deployed.
+  Scope items 4 and 5 are the next approved slices.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.
