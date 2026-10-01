@@ -509,3 +509,210 @@ pub(super) fn canonical_numeric_index_string(s: &str) -> Option<f64> {
         None
     }
 }
+
+/// The exact decimal expansion of a finite, positive `x`: its significant
+/// digits, without leading or trailing zeros, and `point`, with
+/// `x = 0.d₁d₂… × 10^point`. The `Number.prototype.toFixed` family rounds on
+/// the exact value of `x`, not on a shortest spelling.
+fn exact_decimal(x: f64) -> (Vec<u8>, i32) {
+    // 1100 places hold every finite double exactly (2⁻¹⁰⁷⁴ needs 1074), and
+    // Rust renders a fixed precision exactly.
+    let text = format!("{x:.1100}");
+    let (whole, fraction) = text.split_once('.').expect("a fixed-point rendering");
+    let mut digits: Vec<u8> = whole
+        .bytes()
+        .chain(fraction.bytes())
+        .map(|b| b - b'0')
+        .collect();
+    let leading = digits.iter().take_while(|&&d| d == 0).count();
+    digits.drain(..leading);
+    while digits.last() == Some(&0) {
+        digits.pop();
+    }
+    (digits, whole.len() as i32 - leading as i32)
+}
+
+/// The decimal digits of the integer `n` closest to `x × 10^shift`, the
+/// larger on a tie (the specification's rule), for
+/// `x = 0.digits × 10^point`.
+fn scaled_round(digits: &[u8], point: i32, shift: i32) -> Vec<u8> {
+    let whole = point + shift;
+    if whole < 0 {
+        return vec![0];
+    }
+    let whole = whole as usize;
+    let mut n: Vec<u8> = (0..whole)
+        .map(|i| digits.get(i).copied().unwrap_or(0))
+        .collect();
+    if digits.get(whole).is_some_and(|&next| next >= 5) {
+        let mut i = n.len();
+        loop {
+            if i == 0 {
+                n.insert(0, 1);
+                break;
+            }
+            i -= 1;
+            if n[i] == 9 {
+                n[i] = 0;
+            } else {
+                n[i] += 1;
+                break;
+            }
+        }
+    }
+    let leading = n
+        .iter()
+        .take_while(|&&d| d == 0)
+        .count()
+        .min(n.len().saturating_sub(1));
+    n.drain(..leading);
+    if n.is_empty() {
+        n.push(0);
+    }
+    n
+}
+
+/// The `precision` digits of `n` and the exponent `e` for which
+/// `n × 10^(e − precision + 1)` is closest to `x`, the larger `n` on a tie.
+fn significant_digits(x: f64, precision: usize) -> (Vec<u8>, i32) {
+    let (digits, point) = exact_decimal(x);
+    let precision = precision as i32;
+    let mut n = scaled_round(&digits, point, precision - point);
+    let mut e = point - 1;
+    // A carry out of the top digit (`9.99` to three digits): `n` gained a
+    // trailing zero and `e` a decade.
+    if n.len() > precision as usize {
+        n.pop();
+        e += 1;
+    }
+    (n, e)
+}
+
+fn digit_text(digits: &[u8]) -> String {
+    digits.iter().map(|&d| char::from(b'0' + d)).collect()
+}
+
+fn exponent_text(e: i32) -> String {
+    if e < 0 {
+        format!("e-{}", -e)
+    } else {
+        format!("e+{e}")
+    }
+}
+
+/// `Number.prototype.toFixed` steps 7-11 (ES2024 21.1.3.3) for a finite `x`
+/// below `10^21` in magnitude and `fraction_digits` in `0..=100`.
+pub(super) fn number_to_fixed(x: f64, fraction_digits: usize) -> String {
+    let (sign, x) = if x < 0.0 { ("-", -x) } else { ("", x) };
+    let n = if x == 0.0 {
+        vec![0]
+    } else {
+        let (digits, point) = exact_decimal(x);
+        scaled_round(&digits, point, fraction_digits as i32)
+    };
+    let mut m = digit_text(&n);
+    if fraction_digits != 0 {
+        if m.len() <= fraction_digits {
+            m = "0".repeat(fraction_digits + 1 - m.len()) + &m;
+        }
+        m.insert(m.len() - fraction_digits, '.');
+    }
+    format!("{sign}{m}")
+}
+
+/// `Number.prototype.toExponential` steps 5-12 (ES2024 21.1.3.2) for a finite
+/// `x`: `fraction_digits` in `0..=100`, or `None` for as many digits as
+/// uniquely identify `x`.
+pub(super) fn number_to_exponential(x: f64, fraction_digits: Option<usize>) -> String {
+    let (sign, x) = if x < 0.0 { ("-", -x) } else { ("", x) };
+    let (n, e) = if x == 0.0 {
+        (vec![0; fraction_digits.unwrap_or(0) + 1], 0)
+    } else if let Some(fraction_digits) = fraction_digits {
+        significant_digits(x, fraction_digits + 1)
+    } else {
+        // Rust's `{:e}` spells the shortest round-tripping digits.
+        let text = format!("{x:e}");
+        let (mantissa, exponent) = text.split_once('e').expect("an exponential rendering");
+        (
+            mantissa
+                .bytes()
+                .filter(u8::is_ascii_digit)
+                .map(|b| b - b'0')
+                .collect(),
+            exponent.parse().expect("a decimal exponent"),
+        )
+    };
+    let mut m = digit_text(&n);
+    if m.len() > 1 {
+        m.insert(1, '.');
+    }
+    format!("{sign}{m}{}", exponent_text(e))
+}
+
+/// `Number.prototype.toPrecision` steps 6-13 (ES2024 21.1.3.5) for a finite
+/// `x` and `precision` in `1..=100`.
+pub(super) fn number_to_precision(x: f64, precision: usize) -> String {
+    let (sign, x) = if x < 0.0 { ("-", -x) } else { ("", x) };
+    let (n, e) = if x == 0.0 {
+        (vec![0; precision], 0)
+    } else {
+        significant_digits(x, precision)
+    };
+    let mut m = digit_text(&n);
+    let p = precision as i32;
+    if e < -6 || e >= p {
+        if precision != 1 {
+            m.insert(1, '.');
+        }
+        return format!("{sign}{m}{}", exponent_text(e));
+    }
+    if e == p - 1 {
+        return format!("{sign}{m}");
+    }
+    if e >= 0 {
+        m.insert(e as usize + 1, '.');
+    } else {
+        m = format!("0.{}{m}", "0".repeat((-(e + 1)) as usize));
+    }
+    format!("{sign}{m}")
+}
+
+#[cfg(test)]
+mod number_format_tests {
+    use super::*;
+
+    #[test]
+    fn to_fixed_rounds_the_exact_value_ties_up() {
+        // An exact tie takes the larger `n`.
+        assert_eq!(number_to_fixed(0.5, 0), "1");
+        assert_eq!(number_to_fixed(2.5, 0), "3");
+        assert_eq!(number_to_fixed(0.125, 2), "0.13");
+        // `1.005` is `1.00499…` exactly, so it rounds down.
+        assert_eq!(number_to_fixed(1.005, 2), "1.00");
+        assert_eq!(number_to_fixed(-1.5, 0), "-2");
+        assert_eq!(number_to_fixed(-0.0, 2), "0.00");
+        assert_eq!(number_to_fixed(-0.0001, 2), "-0.00");
+        assert_eq!(number_to_fixed(0.0005, 3), "0.001");
+        assert_eq!(number_to_fixed(999.995, 2), "1000.00");
+        assert_eq!(number_to_fixed(99.5, 0), "100");
+        assert_eq!(number_to_fixed(1e20, 2), "100000000000000000000.00");
+        assert_eq!(number_to_fixed(0.1, 20), "0.10000000000000000555");
+    }
+
+    #[test]
+    fn to_exponential_and_to_precision_spell_like_the_specification() {
+        assert_eq!(number_to_exponential(123456.0, None), "1.23456e+5");
+        assert_eq!(number_to_exponential(0.00015, Some(1)), "1.5e-4");
+        assert_eq!(number_to_exponential(9.995, Some(2)), "9.99e+0");
+        assert_eq!(number_to_exponential(9.9999, Some(2)), "1.00e+1");
+        assert_eq!(number_to_exponential(0.0, Some(2)), "0.00e+0");
+        assert_eq!(number_to_exponential(5e-324, None), "5e-324");
+        assert_eq!(number_to_precision(123456.0, 7), "123456.0");
+        assert_eq!(number_to_precision(123456.0, 2), "1.2e+5");
+        assert_eq!(number_to_precision(0.000001234, 2), "0.0000012");
+        assert_eq!(number_to_precision(0.0000001234, 2), "1.2e-7");
+        assert_eq!(number_to_precision(0.0, 3), "0.00");
+        assert_eq!(number_to_precision(99.95, 3), "100");
+        assert_eq!(number_to_precision(1.5, 1), "2");
+    }
+}

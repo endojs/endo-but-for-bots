@@ -126,8 +126,9 @@ mod numeric;
 pub use numeric::slot_to_ecma_string;
 use numeric::{
     apply_arith, canonical_numeric_index_string, element_slot_to_i64, fx_pow, loose_equals,
-    math_to_integer, number_to_radix_string, numeric_of, parse_int, strict_equals,
-    string_to_array_like_index, string_to_index, string_to_number, to_number, unary_minus, ArithOp,
+    math_to_integer, number_to_exponential, number_to_fixed, number_to_precision,
+    number_to_radix_string, numeric_of, parse_int, strict_equals, string_to_array_like_index,
+    string_to_index, string_to_number, to_number, unary_minus, ArithOp,
 };
 
 mod bigint;
