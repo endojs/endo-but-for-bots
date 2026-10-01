@@ -62,11 +62,21 @@ across the four backend/shared packages: 56.5% in hosted-agent.
 It identifies small unused surfaces, legacy compatibility, local repetition and
 larger scope decisions, distinguishing them from justified parallel mechanisms.
 The operator confirms Tokyo is the only consumer, so unused exported surfaces
-need no external-compatibility bridge. SB-01/SB-07 remove seven unused setup
-wrappers and the OpenCode version export, reducing this metric by 51 lines to
-42,735. The audit records incremental candidate progress and validation.
+need no external-compatibility bridge.
+SB-01 through SB-08 are removed in reviewed slices: unused setup and pool APIs,
+old broker/source compatibility, redundant acquisition conveniences, an unused
+version export, and Codex's identity-only persistence fallback.
+Current ownership and complete persistence contracts remain; no replacement
+framework or durable owner is added.
+After type-validation reconciliation the metric is 42,610, down 176 lines, across
+the same 160 files. The audit records each slice and its validation.
+Full shared, Claude, Codex and OpenCode suites pass, along with shared/Claude/Codex
+type checks, ESLint and root docs (warnings remain).
+These source-only deletions are not deployed; generation 190 and its pins remain
+the live acceptance baseline.
 The smaller-combined-implementation target is still unproven.
-The recommended next sequence remains deletion before abstraction.
+Next are SB-09 through SB-12 local repetitions and the separate scope decisions;
+the recommended sequence remains deletion before abstraction.
 
 Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
 and the rebuilt byte-only provider listener `cc639390…` on all three brokers.

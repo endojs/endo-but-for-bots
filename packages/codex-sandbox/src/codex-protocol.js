@@ -156,6 +156,7 @@ harden(renderToolResult);
  * version-specific schema.
  *
  * @param {any} item
+ * @returns {Readonly<{ id: string, name: string, args: unknown, result: unknown, status?: unknown, ok?: boolean }> | undefined}
  */
 export const toolFromItem = item => {
   if (!item || typeof item !== 'object') return undefined;

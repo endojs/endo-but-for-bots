@@ -23,8 +23,11 @@ The optional sharing/delegation subsystem is a larger scope decision, not dead c
 No evidence justifies replacing the current ownership layers with another framework.
 The original smaller-combined-implementation target remains unproven.
 
-No audit candidate below has been removed by this document.
-Implementation should follow deletion before abstraction, with independent
+The tables describe the initial audit snapshot; the progress section records
+subsequent implementation.
+The concrete deletion and compatibility candidates SB-01 through SB-08 are now
+removed, reducing this same source metric to 42,610 lines.
+Further implementation should follow deletion before abstraction, with independent
 adversarial review and focused regression tests before each commit.
 
 ## Measurement and scope
@@ -305,6 +308,27 @@ The source review does not establish that either branch is dead.
   Scoped ESLint and the runtime type check pass; fixture/declaration typing is
   reconciled separately rather than hidden by casts or suppressions.
   Existing native records and release pins are unchanged; not deployed.
+- **Validation reconciliation done:** narrow declaration regeneration exposed
+  stale protocol/test inference rather than runtime defects.
+  Codex's tool projection now declares its actual optional result fields, keeping
+  unvalidated wire values unknown; Claude fixtures name their reader and tuple domains.
+  No assertion or hostile-input case is removed, and no suppression or runtime
+  parser change is introduced.
+  Independent review identified an overstrong status type; it was corrected to
+  unknown and rechecked before commit.
+  Both full Claude and Codex type checks pass, as does the hosted type check.
+  Independent focused validation passes 42 tests; fresh full suites pass Claude
+  539, Codex 432 and OpenCode 298, alongside the 776 shared tests above.
+  Four-package ESLint reports zero errors (480 warnings); root docs reports zero
+  errors (180 warnings). Formatting and diff checks pass.
+  Ignored generated declarations are not committed.
+  The one added source annotation brings the final count to **42,610**, a net
+  reduction of **176** from the 42,786-line audit snapshot, not source moved elsewhere.
+  Counts are hosted-agent 24,034, Claude 7,057, Codex 6,884 and OpenCode 4,635
+  across the same 160 files.
+  All eight concrete candidates are closed; SB-09 through SB-12 local repetition
+  and the separate scope decisions remain next, not implemented by this slice.
+  No host configuration, image pin, stored authority or workspace changes; not deployed.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.

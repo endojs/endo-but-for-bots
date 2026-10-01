@@ -9,6 +9,11 @@ import {
   translateClaudeTurn,
 } from '../src/claude-hosted-events.js';
 
+/** @import { ERef } from '@endo/eventual-send' */
+/** @import { PassableReader } from '@endo/exo-stream' */
+/** @import { HostedTurnEvent } from '../src/claude-hosted-events.js' */
+
+/** @param {ERef<PassableReader<HostedTurnEvent>>} reader */
 const drain = async reader => {
   const events = [];
   for await (const value of iterateReader(reader)) {
@@ -69,7 +74,7 @@ test('malformed capture fails translation without publishing a checkpoint', asyn
   raw.push({ type: 'end' });
   const events = await drain(translateClaudeTurn(raw.reader));
   t.false(events.some(event => event.type === 'native-context'));
-  t.is(events.at(-1).type, 'abort');
+  t.is(events.at(-1)?.type, 'abort');
 });
 
 test('translated delivery backpressures bursts and drains in order', async t => {
@@ -92,7 +97,7 @@ test('translated delivery backpressures bursts and drains in order', async t => 
       .join(''),
     Array.from({ length: 3000 }, (_, i) => `${i},`).join(''),
   );
-  t.is(events.at(-1).type, 'end');
+  t.is(events.at(-1)?.type, 'end');
 });
 
 test('closing a backpressured translated reader closes its raw producer', async t => {

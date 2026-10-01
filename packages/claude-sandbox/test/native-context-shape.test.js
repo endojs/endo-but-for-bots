@@ -69,7 +69,8 @@ test('parallel result ancestry names its own tool in the current assistant messa
     },
   };
   t.true(isNativeToolResultParent(row, parent, 'group'));
-  for (const [candidate, owner, group] of [
+  /** @type {[unknown, unknown, string | undefined][]} */
+  const invalidParents = [
     [row, parent, 'other-group'],
     [row, parent, undefined],
     [row, undefined, 'group'],
@@ -98,7 +99,8 @@ test('parallel result ancestry names its own tool in the current assistant messa
       { ...parent, message: { ...parent.message, content: [null] } },
       'group',
     ],
-  ]) {
+  ];
+  for (const [candidate, owner, group] of invalidParents) {
     t.false(isNativeToolResultParent(candidate, owner, group));
   }
 });
