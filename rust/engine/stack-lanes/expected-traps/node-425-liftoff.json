@@ -7,7 +7,6 @@
     ]
   },
   "expected_traps": [
-    "parse-functions-512",
     "proxy-proto-cycle"
   ]
 }
