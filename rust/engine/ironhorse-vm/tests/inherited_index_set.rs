@@ -197,3 +197,120 @@ fn a_proxy_or_typed_array_prototype_takes_the_index() {
         ),
     ]);
 }
+
+/// Every path that stores an element reaches an inherited setter, not only a
+/// plain `a[i] = v`. Each log is a string: an array log would itself be an
+/// Array receiver and re-enter the setter it records.
+#[test]
+fn an_inherited_index_setter_sees_every_array_write() {
+    check(&[
+        // Every method that writes an element by [[Set]] calls it; those that create
+        // their result's elements define them.
+        (
+            "array_methods",
+            r#"var log = ''; Object.defineProperty(Array.prototype, 0, {set: function (v) { log += 's' + v; }, get: function () { return 'g'; }, configurable: true}); var r = ''; function t(n, f) { log = ''; try { var a = f(); r += ' | ' + n + ':' + log + ':' + Object.prototype.hasOwnProperty.call(a, 0) + ':' + a.length; } catch (e) { r += ' | ' + n + '!' + e.constructor.name; } } t('push', function () { var a = []; a.push(1); return a; }); t('unshift', function () { var a = []; a.unshift(1); return a; }); t('fill', function () { var a = [,]; a.fill(1); return a; }); t('splice', function () { var a = []; a.splice(0, 0, 1); return a; }); t('copyWithin', function () { var a = [, 9]; a.copyWithin(0, 1); return a; }); t('reverse', function () { var a = [, 9]; a.reverse(); return a; }); t('sort', function () { var a = [, 9]; a.sort(); return a; }); t('from', function () { return Array.from([8]); }); t('of', function () { return Array.of(1); }); t('map', function () { return [1].map(function (x) { return x; }); }); delete Array.prototype[0]; r.slice(3)"#,
+            r#"push:s1:false:1 | unshift:s1:false:1 | fill:s1:false:1 | splice:s1:false:1 | copyWithin:s9:false:2 | reverse:s9:false:2 | sort:s9:false:2 | from::true:1 | of::true:1 | map::true:1"#,
+        ),
+        // Every assignment form that stores into an element, including a pattern
+        // target and a loop head; a logical assignment that the getter's truthy
+        // `g` short-circuits stores nothing.
+        (
+            "assignment_forms",
+            r#"var log = ''; Object.defineProperty(Array.prototype, 0, {set: function (v) { log += 's' + v; }, get: function () { return 'g'; }, configurable: true}); var r = ''; function t(n, f) { log = ''; try { var a = f(); r += ' | ' + n + ':' + log + ':' + Object.prototype.hasOwnProperty.call(a, 0) + ':' + a.length; } catch (e) { r += ' | ' + n + '!' + e.constructor.name; } } t('compound', function () { var a = []; a[0] += 'x'; return a; }); t('inc', function () { var a = []; a[0]++; return a; }); t('and', function () { var a = []; a[0] &&= 3; return a; }); t('or', function () { var a = []; a[0] ||= 3; return a; }); t('nullish', function () { var a = []; a[0] ??= 3; return a; }); t('array_pattern', function () { var a = []; [a[0]] = [5]; return a; }); t('default', function () { var a = []; [a[0] = 6] = []; return a; }); t('object_pattern', function () { var a = []; ({x: a[0]} = {x: 4}); return a; }); t('forof', function () { var a = []; for (a[0] of [6]); return a; }); t('forin', function () { var a = []; for (a[0] in {k: 1}); return a; }); t('reflect', function () { var a = []; Reflect.set(a, 0, 7); return a; }); delete Array.prototype[0]; r.slice(3)"#,
+            r#"compound:sgx:false:0 | inc:sNaN:false:0 | and:s3:false:0 | or::false:0 | nullish::false:0 | array_pattern:s5:false:0 | default:s6:false:0 | object_pattern:s4:false:0 | forof:s6:false:0 | forin:sk:false:0 | reflect:s7:false:0"#,
+        ),
+    ]);
+}
+
+/// The same walk for every receiver kind that keeps its own indices, and the
+/// same refusal from an inherited read-only index on a function, an arguments
+/// object or a Map.
+#[test]
+fn an_inherited_index_decides_a_write_on_every_receiver_kind() {
+    check(&[
+        // An unmapped arguments index, a function, a Map, a class instance, an Error,
+        // a String wrapper past its length, an ordinary object and a RegExp all walk
+        // to the setter; a null-prototype object has no chain, and a mapped
+        // arguments index is its own.
+        (
+            "receivers",
+            r#"var log = ''; Object.defineProperty(Object.prototype, 0, {set: function (v) { log += 's' + v; }, configurable: true}); var r = ''; function t(o, v) { log = ''; o[0] = v; r += log + Object.prototype.hasOwnProperty.call(o, 0) + ' '; } t((function () { return arguments; })(), 1); t(function () {}, 2); t(new Map(), 3); t(new (class {})(), 4); t(new Error(), 5); t(new String(''), 6); t({}, 7); t(Object.create(null), 8); t(/x/, 9); log = ''; (function (a) { arguments[0] = 10; r += log + a; })(1); delete Object.prototype[0]; r"#,
+            r#"s1false s2false s3false s4false s5false s6false s7false true s9false 10"#,
+        ),
+        // `Object.assign` sets; a parse, a spread, `fromEntries` and a literal define.
+        (
+            "define_versus_set",
+            r#"var log = ''; Object.defineProperty(Object.prototype, 0, {set: function (v) { log += 's' + v; }, configurable: true}); var r = ''; var o = {}; Object.assign(o, {0: 1}); r += log + Object.prototype.hasOwnProperty.call(o, 0); log = ''; var o2 = JSON.parse('{"0":1}'); r += ' ' + log + Object.prototype.hasOwnProperty.call(o2, 0); log = ''; var o3 = {...{0: 1}}; r += ' ' + log + Object.prototype.hasOwnProperty.call(o3, 0); log = ''; var o4 = Object.fromEntries([[0, 1]]); r += ' ' + log + Object.prototype.hasOwnProperty.call(o4, 0); log = ''; var o5 = {0: 1}; r += ' ' + log + Object.prototype.hasOwnProperty.call(o5, 0); delete Object.prototype[0]; r"#,
+            r#"s1false true true true true"#,
+        ),
+        // A TypedArray answers every index itself and never walks the chain.
+        (
+            "typed_array_receiver",
+            r#"var log = ''; Object.defineProperty(Object.prototype, 0, {set: function (v) { log += 's' + v; }, configurable: true}); var t = new Uint8Array(0); t[0] = 1; var u = new Uint8Array(1); u[0] = 2; var b = new BigInt64Array(0); b[0] = 3n; delete Object.prototype[0]; [log, u[0], Object.prototype.hasOwnProperty.call(t, 0)].join('|')"#,
+            r#"|2|false"#,
+        ),
+        (
+            "read_only_on_function_prototype",
+            r#"var a = function () {}; Object.defineProperty(a, 3, {value: 'ro', writable: false}); var o = Object.create(a); o[3] = 'w'; var r = o[3]; (function () { 'use strict'; try { o[3] = 'x'; r += ':ok'; } catch (e) { r += ':' + e.name; } })(); r"#,
+            r#"ro:TypeError"#,
+        ),
+        (
+            "read_only_on_arguments_prototype",
+            r#"var args = (function () { return arguments; })(1, 2); Object.defineProperty(args, 1, {writable: false}); var o = Object.create(args); o[1] = 'w'; var r = o[1] + ':' + o.hasOwnProperty(1); (function () { 'use strict'; try { o[1] = 'x'; r += ':ok'; } catch (e) { r += ':' + e.name; } })(); r"#,
+            r#"2:false:TypeError"#,
+        ),
+        (
+            "read_only_on_map_prototype",
+            r#"var m = new Map(); Object.defineProperty(m, 0, {value: 'ro', writable: false}); var o = Object.create(m); o[0] = 'w'; var r = o[0] + ':' + o.hasOwnProperty(0); (function () { 'use strict'; try { o[0] = 'x'; r += ':ok'; } catch (e) { r += ':' + e.name; } })(); r"#,
+            r#"ro:false:TypeError"#,
+        ),
+        (
+            "class_and_function_receivers",
+            r#"var log = ''; class C { static set 0(v) { log += 's' + v; } } class D extends C {} D[0] = 1; var F = function () {}; Object.setPrototypeOf(F, {set 0(v) { log += 'f' + v; }}); F[0] = 2; [log, D.hasOwnProperty(0), F.hasOwnProperty(0)].join()"#,
+            r#"s1f2,false,false"#,
+        ),
+        (
+            "super_index",
+            r#"var log = ''; class B { set 0(v) { log += 's' + v; } } class D extends B { m() { super[0] = 1; } } var d = new D(); d.m(); [log, d.hasOwnProperty(0)].join()"#,
+            r#"s1,false"#,
+        ),
+    ]);
+}
+
+/// `Reflect.set` with a receiver, `Object.assign`, the boundary keys and a
+/// Proxy prototype all hand the inherited index the receiver and key the
+/// write named.
+#[test]
+fn an_inherited_index_receives_the_receiver_and_key_intact() {
+    check(&[
+        (
+            "reflect_set_receiver",
+            r#"var log = ''; var p = {}; Object.defineProperty(p, 0, {set: function (v) { log += 's' + v + (this === r); }}); var r = {}; var o = Object.create(p); Reflect.set(o, 0, 1, r); [log, r.hasOwnProperty(0), o.hasOwnProperty(0)].join()"#,
+            r#"s1true,false,false"#,
+        ),
+        (
+            "reflect_set_read_only",
+            r#"var p = {}; Object.defineProperty(p, 0, {value: 1, writable: false}); var o = Object.create(p); var r = {}; [Reflect.set(o, 0, 2), Reflect.set(o, '0', 2), Reflect.set(o, 0, 2, r), o.hasOwnProperty(0), r.hasOwnProperty(0)].join()"#,
+            r#"false,false,false,false,false"#,
+        ),
+        (
+            "assign_read_only",
+            r#"var p = {}; Object.defineProperty(p, 0, {value: 1, writable: false}); var o = Object.create(p); [Object.assign(o, {}) === o, (function () { try { Object.assign(o, {0: 2}); return 'ok'; } catch (e) { return e.name; } })()].join()"#,
+            r#"true,TypeError"#,
+        ),
+        // The largest array index, on an ordinary object and on an Array, and a
+        // non-canonical `01` all find their setter.
+        (
+            "boundary_keys",
+            r#"var log = ''; var p = {}; Object.defineProperty(p, 4294967294, {set: function (v) { log += 'big' + v; }}); var o = Object.create(p); o[4294967294] = 1; var q = {}; Object.defineProperty(q, '01', {set: function (v) { log += '01' + v; }}); var o2 = Object.create(q); o2['01'] = 2; var a = Object.setPrototypeOf([], p); a[4294967294] = 3; log"#,
+            r#"big1012big3"#,
+        ),
+        // A Proxy prototype's `set` trap receives each key as its canonical string,
+        // with the original receiver.
+        (
+            "proxy_prototype_keys",
+            r#"var log = ''; var o; var p = new Proxy({}, {set: function (t, k, v, r) { log += typeof k + k + (r === o) + ' '; return true; }}); o = Object.create(p); o[1.5] = 1; o[-1] = 1; o[2 ** 32] = 1; o[-0] = 1; log"#,
+            r#"string1.5true string-1true string4294967296true string0true "#,
+        ),
+    ]);
+}

@@ -334,6 +334,200 @@ fn a_function_lists_and_freezes_its_stored_index_keys() {
     );
 }
 
+/// The function fix above is one member of a class: every object kind keeps
+/// its index keys in one ascending run ahead of its named keys, whatever it
+/// stores them in. Each subject here gets a `3` and a `1` by index, a `z` by
+/// name between them, and a `2` promoted to a named slot by its accessor;
+/// `Reflect.ownKeys`, `Object.keys` and `for-in` all answer the indices first,
+/// then the kind's own boot keys, then `z`.
+#[test]
+fn every_object_kind_lists_its_index_keys_first() {
+    for (subject, expected) in [
+        (
+            "class {}",
+            "1+2+3+length+name+prototype+z | 1+2+3+z | 1+2+3+z",
+        ),
+        ("() => 1", "1+2+3+length+name+z | 1+2+3+z | 1+2+3+z"),
+        (
+            "function () {}.bind(null)",
+            "1+2+3+length+name+z | 1+2+3+z | 1+2+3+z",
+        ),
+        (
+            "function* () {}",
+            "1+2+3+length+name+prototype+z | 1+2+3+z | 1+2+3+z",
+        ),
+        // V8 lists an own `stack` ahead of `message`.
+        ("new Error('m')", "1+2+3+message+z | 1+2+3+z | 1+2+3+z"),
+        ("new Date(0)", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+        ("/x/g", "1+2+3+lastIndex+z | 1+2+3+z | 1+2+3+z"),
+        ("new Map()", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+        ("new Set()", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+        ("new WeakMap()", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+        ("Promise.resolve()", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+        ("new Boolean(true)", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+        ("new Number(5)", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+        ("Object(Symbol())", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+        ("new ArrayBuffer(2)", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+        (
+            "new DataView(new ArrayBuffer(2))",
+            "1+2+3+z | 1+2+3+z | 1+2+3+z",
+        ),
+        ("Object.create(null)", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+        ("[].values()", "1+2+3+z | 1+2+3+z | 1+2+3+z"),
+    ] {
+        assert_result(
+            &format!(
+                "var o = {subject}; o[3] = 1; o.z = 1; o[1] = 1; \
+                 Object.defineProperty(o, '2', {{get: function () {{ return 0; }}, \
+                     enumerable: true, configurable: true}}); \
+                 var r = []; for (var k in o) r.push(k); \
+                 [Reflect.ownKeys(o).map(String).join('+'), Object.keys(o).join('+'), \
+                     r.join('+')].join(' | ')"
+            ),
+            expected,
+        );
+    }
+}
+
+/// The exotic and instance kinds that keep some indices in their own storage
+/// order a promoted accessor index among those too: an arguments object
+/// (mapped or not), an Array with holes, a String wrapper past its length, a
+/// class instance whose constructor wrote names and indices interleaved, and
+/// a Proxy, whose writes land on its target in the same order.
+#[test]
+fn an_exotic_object_orders_a_promoted_index_among_its_own() {
+    for mode in ["", "'use strict'; "] {
+        assert_result(
+            &format!(
+                "function f() {{ {mode}var a = arguments; a.x = 1; a[5] = 1; \
+                 Object.defineProperty(a, '3', {{get: function () {{ return 0; }}, \
+                     enumerable: true, configurable: true}}); \
+                 a[4] = 1; var r = []; for (var k in a) r.push(k); \
+                 return Reflect.ownKeys(a).map(String).join('+') + ' | ' + r.join('+'); }} \
+                 f(1, 2)"
+            ),
+            "0+1+3+4+5+length+callee+x+Symbol(Symbol.iterator) | 0+1+3+4+5+x",
+        );
+    }
+    assert_result(
+        "var a = [1, 2, 3]; a.x = 1; a[10] = 1; \
+         Object.defineProperty(a, '5', {get: function () { return 0; }, \
+             enumerable: true, configurable: true}); \
+         var r = []; for (var k in a) r.push(k); \
+         [Reflect.ownKeys(a).join('+'), r.join('+'), JSON.stringify(a)].join(' | ')",
+        "0+1+2+5+10+length+x | 0+1+2+5+10+x | [1,2,3,null,null,0,null,null,null,null,1]",
+    );
+    assert_result(
+        "var s = new String('ab'); \
+         Object.defineProperty(s, '4', {get: function () { return 1; }, \
+             enumerable: true, configurable: true}); \
+         s[3] = 1; s.y = 1; var r = []; for (var k in s) r.push(k); \
+         Reflect.ownKeys(s).join('+') + ' | ' + r.join('+')",
+        "0+1+3+4+length+y | 0+1+3+4+y",
+    );
+    assert_result(
+        "class C { constructor() { this.b = 1; this[2] = 1; this.a = 1; this[0] = 1; } } \
+         var c = new C(); \
+         Object.defineProperty(c, '1', {get: function () { return 0; }, \
+             enumerable: true, configurable: true}); \
+         var r = []; for (var k in c) r.push(k); \
+         Reflect.ownKeys(c).join('+') + ' | ' + r.join('+')",
+        "0+1+2+b+a | 0+1+2+b+a",
+    );
+    assert_result(
+        "var t = {}; var p = new Proxy(t, {}); p[3] = 1; p.z = 1; p[1] = 1; \
+         Object.defineProperty(p, '2', {get: function () { return 0; }, \
+             enumerable: true, configurable: true}); \
+         var r = []; for (var k in p) r.push(k); \
+         [Reflect.ownKeys(p).join('+'), r.join('+'), Object.keys(t).join('+')].join(' | ')",
+        "1+2+3+z | 1+2+3+z | 1+2+3+z",
+    );
+    // A TypedArray drops an out-of-range index and every other canonical
+    // numeric string (`-0`, `1.5`); only a non-canonical `01` is an expando,
+    // and it follows `z`.
+    assert_result(
+        "var t = new Uint8Array(2); t.z = 1; t[5] = 1; t['-0'] = 1; t['1.5'] = 1; \
+         t['01'] = 1; var r = []; for (var k in t) r.push(k); \
+         [Reflect.ownKeys(t).join('+'), r.join('+'), String(t[5])].join(' | ')",
+        "0+1+z+01 | 0+1+z+01 | undefined",
+    );
+}
+
+/// An array index is at most `4294967294`; `4294967295`, `01`, `-0` and
+/// `1e3` are names and keep their insertion order after the named `z`. Every
+/// kind draws that line in the same place, and `Object.keys` and `for-in`
+/// agree on it.
+#[test]
+fn the_largest_array_index_is_the_last_integer_key() {
+    let names = "3+7+4294967294+z+4294967295+01+-0+1e3";
+    assert_result(
+        "var r = []; [[], new String('ab'), function () {}, {}, \
+             (function () { return arguments; })(), new Map()].forEach(function (o) { \
+             o.z = 1; o['4294967295'] = 1; o['01'] = 1; o['4294967294'] = 1; o['-0'] = 1; \
+             o['7'] = 1; o['1e3'] = 1; o['3'] = 1; \
+             var s = []; for (var k in o) s.push(k); \
+             r.push(Object.keys(o).join('+') === s.join('+') ? s.join('+') \
+                 : 'keys ' + Object.keys(o).join('+')); \
+         }); r.join(' | ')",
+        &format!("{names} | 0+1+{names} | {names} | {names} | {names} | {names}"),
+    );
+}
+
+/// Seventeen kinds of object, each able to hold an index property.
+const KINDS: &str = "[function () {}, () => 1, class {}, function () {}.bind(null), \
+     async function () {}, function* () {}, new Error('x'), new Map(), new Date(0), /x/, \
+     Promise.resolve(), new String('a'), [], Object.create(null), new Proxy({}, {}), \
+     new Boolean(true), Symbol.prototype]";
+
+/// The integrity operations reach a stored index on every kind that has an
+/// index store, not only the ordinary object and the function above.
+#[test]
+fn the_integrity_operations_bind_a_stored_index_on_every_kind() {
+    let each = |answer: &str| {
+        (0..17)
+            .map(|i| format!("{i}:{answer}"))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    assert_result(
+        &format!(
+            "var r = []; {KINDS}.forEach(function (o, i) {{ o[5] = {{}}; Object.freeze(o); \
+             o[5] = 2; var d = Object.getOwnPropertyDescriptor(o, '5'); \
+             r.push(i + ':' + typeof o[5] + d.writable + Object.isFrozen(o)); }}); r.join(' ')"
+        ),
+        &each("objectfalsetrue"),
+    );
+    assert_result(
+        &format!(
+            "var r = []; {KINDS}.forEach(function (o, i) {{ o[5] = 1; Object.seal(o); \
+             o[6] = 1; r.push(i + ':' + delete o[5] + Object.isSealed(o) + (6 in o)); }}); \
+             r.join(' ')"
+        ),
+        &each("falsetruefalse"),
+    );
+    // harden is transitive through every kind's store.
+    assert_result(
+        &format!(
+            "var r = []; {KINDS}.forEach(function (o, i) {{ o[5] = {{}}; harden(o); \
+             o[5].x = 1; r.push(i + ':' + Object.isFrozen(o) + Object.isFrozen(o[5]) + o[5].x); \
+             }}); r.join(' ')"
+        ),
+        &each("truetrueundefined"),
+    );
+    assert_result(
+        "function f() { arguments[5] = {}; Object.freeze(arguments); arguments[5] = 1; \
+         return [typeof arguments[5], Object.isFrozen(arguments), \
+             Object.getOwnPropertyDescriptor(arguments, '5').writable].join(); } f(1)",
+        "object,true,false",
+    );
+    assert_result(
+        "function f() { arguments[5] = {}; harden(arguments); arguments[5].x = 1; \
+         return [Object.isFrozen(arguments), Object.isFrozen(arguments[5]), \
+             arguments[5].x].join(); } f(1)",
+        "true,true,",
+    );
+}
+
 /// Index keys a program adds to an intrinsic prototype list ahead of its boot
 /// properties, as every own-keys order puts array indices first
 /// (`fxOrdinaryOwnKeys` queues the index chunk before the named chain). A `1`
@@ -378,6 +572,21 @@ fn an_intrinsic_prototype_lists_its_index_keys_first() {
         "Map.prototype, new Map()",
         "String.prototype, new String('')",
         "Array.prototype, []",
+        "Number.prototype, new Number(0)",
+        "Boolean.prototype, new Boolean(false)",
+        "Function.prototype, function () {}",
+        "Object.prototype, {}",
+        "RegExp.prototype, /x/",
+        "Error.prototype, new Error('m')",
+        // V8 leaves the inherited index keys out of a TypedArray's `for-in`
+        // and answers `zz` there; XS walks them.
+        "Object.getPrototypeOf(Uint8Array.prototype), new Uint8Array(0)",
+        "Array, class extends Array {}",
+        "Iterator.prototype, [].values()",
+        "Object.getPrototypeOf([].values()), [].values()",
+        "Symbol.prototype, Object(Symbol())",
+        "Date.prototype, new Date(0)",
+        "Promise.prototype, Promise.resolve()",
     ] {
         assert_result(
             &format!("{probe} probe({target})"),
