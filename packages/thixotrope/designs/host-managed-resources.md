@@ -113,7 +113,93 @@ retire once no pre-rename state directories remain.
 - `installNative` returns the installation record; `thix install` prints it. A `thix install`
   retry that hits "name has a different installation" should say what differed.
 
-## Order
+## 6. Reuse of building blocks
+
+A survey of what the package writes more than once, and of what other Endo packages already
+provide.
+Each entry names the copies; the fix is the one piece they should share.
+
+### Written more than once inside the package
+
+- **Bounded error text.**
+  `String(reason).slice(0, 512)` appears in `mailbox.js`, `mail-contact.js`, `installations.js`,
+  `manager-kit.js` and `adapter-kit.js`.
+  Four of the five are shipped into vats by source, so the helper belongs in the guest prelude
+  beside `makeSerialQueue`.
+- **Remotable checks that must not throw.**
+  `passStyleOf` throws on a non-passable value, so `mail-address-book.js`, `installations.js` and
+  `native/manager.js` each wrap it in a try/catch `isRemotable`; `@endo/pass-style`'s own
+  `isRemotable` throws the same way and is not a drop-in.
+  One prelude helper.
+- **Bytes to hex.**
+  `hub.js`, `durable-netlayer.js` and `random-id.js` each spell `byte.toString(16).padStart(2,
+  '0')`; `@endo/hex` exports `encodeHex` and is already in the Ironhorse bundle's graph.
+- **Versioned records on disk.**
+  The alarm ledger (version 2), workspace metadata (version 8), the runtime manifest (format 2) and
+  worker metadata each check a version and compose their own "newer than this build" and
+  "migrate or use a fresh directory" messages.
+  One `versionedRecord` over `SyncStringAtom`, with the three outcomes (current, newer, older)
+  and one message shape.
+- **Length-prefixed framing.**
+  `unix-netlayer.js` and `local-control.js` each read and write four-byte length frames over a
+  socket with their own size cap and error path; `pipe-network.js` frames worker pipes.
+  One framing function for sockets, and further, the control connection could be a transient hub
+  session over the Unix netlayer rather than a separate OCapN peer per socket, which also gives
+  section 3 its references.
+- **Keeping one incarnation.**
+  `adapter-keeper.js` (in a vat) and `durable-worker-transport.js` (in the host) both hold one
+  incarnation, probe it, retire it when dead, rebuild it and serialise the operations around it.
+  The shapes match but the authority and the state do not (the transport also owns journal cuts
+  and images), and the keeper is sixty lines; leave them separate and say so.
+- **Views.**
+  The inventory view subscribes through a host-side bridge (`inventory-view-lifetime.js`) and
+  renders live; the mail view polls on a keystroke, although the mailbox already exposes
+  `subscribeInbox` and `subscribeOutbox` and nothing on the host uses them.
+  Generalise the bridge to `watch(map)` for the inventory, the inbox, the outbox and the contacts,
+  and every view is live through one lifetime.
+- **Test fixtures.**
+  Twenty-three test files construct a daemon by hand, eleven a memory store, fourteen a control
+  client, thirty-four a temporary directory, and four an adapter double.
+  The Ironhorse lane already has `_fixture.js`; the Node suite wants the same: `withDaemon`,
+  `withSupervisor`, `fakeAdapter`, `fakeIntroductions`.
+
+### Already provided by another Endo package
+
+- **Serial queue.**
+  `makeSerialQueue` duplicates `@endo/daemon`'s `makeSerialJobs`, itself built on `@endo/stream`'s
+  `makeQueue`.
+  Both daemons need it and the guest prelude ships it, so it belongs in one small package (under
+  `@endo/promise-kit` or `@endo/stream`) that both import.
+- **Change notification.**
+  `@endo/pubsub` exports `makeLatestTopic` and `makeChangeTopic`: one outstanding notification per
+  subscriber, the newest value coalesced, which is exactly the observable map's subscription
+  policy.
+  The map is shipped into vats and may import only the prelude, so it cannot import the package
+  today; if the latest topic were in the prelude, the map would be the topic plus a key index.
+- **Platform ports.**
+  `@endo/platform` already defines filesystem port types (`fs/lite`) with a Node implementation,
+  and process helpers.
+  Thixotrope's `platform/files.js` and `platform/processes.js` are a second set of ports for the
+  same concerns; converge on one, in whichever package keeps the stricter plain-data discipline.
+- **State locations.**
+  `@endo/where` gives the conventional state, ephemeral-state and socket locations per platform;
+  `thix` requires an explicit state directory on every command and could default to them.
+- **Mail.**
+  `@endo/daemon` has a mailbox, a pet store and invitations as host-side objects; Thixotrope's are
+  guest exos in a vat, so code cannot be shared across that boundary.
+  The invitation text format and the `help()` conventions can be, in a package both depend on;
+  low priority.
+
+### Order
+
+1. The prelude helpers (error text, remotable check) and `@endo/hex`: small, mechanical.
+2. The view bridge generalised to `watch(map)`; the mail view goes live.
+3. The versioned-record helper, when the registry move of section 1 touches those files anyway.
+4. The serial queue moved to a shared package, with `@endo/daemon` switched to it.
+5. Framing and the control connection as a transient hub session, together with section 3.
+6. Test fixtures, as tests are touched.
+
+## Order of the larger changes
 
 1. Section 1, since sections 2 and 3 are simpler once installations are the host's.
 2. Section 2.
