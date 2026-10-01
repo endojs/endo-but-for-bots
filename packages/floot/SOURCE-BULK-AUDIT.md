@@ -16,8 +16,8 @@ This is not the size of the whole repository or the whole Floot implementation.
 account for 58.0% of that shared package.
 The ten largest files hold 30.7% of the four-package total.
 
-Concrete unused surfaces and legacy compatibility paths remain, alongside
-several small repetitions worth consolidating locally.
+The snapshot identifies concrete unused surfaces and legacy compatibility paths,
+alongside several small repetitions worth consolidating locally.
 The immediate evidenced deletions are small, not thousands of lines.
 The optional sharing/delegation subsystem is a larger scope decision, not dead code.
 No evidence justifies replacing the current ownership layers with another framework.
@@ -26,7 +26,8 @@ The original smaller-combined-implementation target remains unproven.
 The tables describe the initial audit snapshot; the progress section records
 subsequent implementation.
 The concrete deletion and compatibility candidates SB-01 through SB-08 are now
-removed, reducing this same source metric to 42,610 lines.
+removed, and local repetition SB-09 through SB-12 is consolidated.
+This same source metric is now 42,581 lines.
 Further implementation should follow deletion before abstraction, with independent
 adversarial review and focused regression tests before each commit.
 
@@ -158,6 +159,8 @@ not a requirement here.
 None of these candidates warrants a new framework or a broader lifecycle rewrite.
 
 ## Repetition to reduce after the deletions
+
+These rows describe the initial findings; implementation status is recorded below.
 
 | ID | Repetition | Bounded consolidation and important difference |
 |---|---|---|
@@ -376,6 +379,39 @@ The source review does not establish that either branch is dead.
   three, bringing the committed count to 42,582.
   No credential edits, actual renewal calls, durable format or release pin changes;
   not deployed.
+- **SB-12 done:** admission and the session picker share one private account/model
+  projection in `backend-catalog.js`.
+  Eligible accounts, current/stale usability and the first-descriptor-wins model
+  union are selected once; distinct admission refusals stay in `resolve`.
+  Defaults, effort admission, labels, pinned lanes and empty/current versus
+  unavailable catalogs keep their existing contracts.
+  New tests check conflicting descriptor defaults/efforts across lanes and unread
+  accounts, a stale pinned account, and an empty current catalog.
+  All 15 catalog tests pass in both implementation and independent review;
+  hosted types, scoped ESLint and formatting pass.
+  This removes one source line, bringing the committed count to **42,581**.
+  The four local consolidations remove **29** net source lines; combined with
+  SB-01 through SB-08 and validation reconciliation, the reduction is **205**
+  from the initial 42,786-line snapshot, not source moved outside the metric.
+  Counts are hosted-agent 24,011, Claude 7,057, Codex 6,878 and OpenCode 4,635,
+  across the same 160 source files.
+  Fresh full suites pass: shared 798 (one existing skip), Claude 539, Codex 445
+  and OpenCode 298, totaling 2,080 passes.
+  Shared/Codex/Claude types, changed-file ESLint/formatting and root docs pass;
+  warnings remain, and ignored declarations are not committed.
+  Whole-repository lint is not green: Prettier stops on five unchanged files in
+  `endo-fs-asset-server` and `space-floot`.
+  The separate repository ESLint run also reports errors in other unchanged
+  files, including 93 project-resolution failures in Chat.
+  Its `add-space-modal` test lints clean in isolation,
+  consistent with the recorded bucketing problem, not proof of its exact cause.
+  Shell checks pass.
+  These unrelated lint issues are not fixed or represented as a clean CI gate here.
+  No new framework, public projection API, durable owner, host configuration,
+  credential edit or release pin changes; not deployed.
+  SB-01 through SB-12 are closed.
+  Next is the explicit sharing/delegation and inert-knob scope decision, followed
+  by SB-13 through SB-15 only with their required cross-adapter evidence.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.

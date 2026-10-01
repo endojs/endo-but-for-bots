@@ -150,6 +150,32 @@ export const revisedPin = (recorded, requested) =>
 harden(revisedPin);
 
 /**
+ * The same eligible accounts and first-descriptor-wins model union serve both
+ * admission and the session picker. Only admission refuses an empty projection.
+ *
+ * @param {BackendCatalogAccount[]} accounts
+ * @param {string | undefined} pinned
+ */
+const projectAccounts = (accounts, pinned) => {
+  const eligible = accounts.filter(account =>
+    pinned === undefined
+      ? account.pinnedOnly !== true
+      : account.subscriptionId === pinned,
+  );
+  const usable = eligible.filter(
+    account => account.state === 'current' || account.state === 'stale',
+  );
+  /** @type {Map<string, HostedModelDescriptor>} */
+  const listed = new Map();
+  for (const account of usable) {
+    for (const entry of account.models) {
+      if (!listed.has(entry.id)) listed.set(entry.id, entry);
+    }
+  }
+  return { eligible, usable, listed };
+};
+
+/**
  * A backend's view of its broker's per-account catalogs.
  *
  * `catalog(subscriptionId?)` is what a picker is shown: every account (or
@@ -296,27 +322,13 @@ export const makeBackendCatalog = ({
       (typeof model === 'string' && model.length <= 256) ||
       Fail`${q(label)} model id must be a bounded string`;
     const { accounts } = await catalog(pinned);
-    const eligible = accounts.filter(account =>
-      pinned === undefined
-        ? account.pinnedOnly !== true
-        : account.subscriptionId === pinned,
-    );
+    const { eligible, usable, listed } = projectAccounts(accounts, pinned);
     eligible.length > 0 ||
       (pinned === undefined
         ? Fail`No ${q(label)} account serves an automatic session; every account is set aside`
         : Fail`Unknown ${q(label)} subscription`);
-    const usable = eligible.filter(
-      account => account.state === 'current' || account.state === 'stale',
-    );
     usable.length > 0 ||
       Fail`${q(label)} model catalog is unavailable; no model can be admitted now`;
-    /** @type {Map<string, HostedModelDescriptor>} */
-    const listed = new Map();
-    for (const account of usable) {
-      for (const entry of account.models) {
-        if (!listed.has(entry.id)) listed.set(entry.id, entry);
-      }
-    }
     const unnamed = model === undefined || model === '';
     const found = unnamed
       ? [...listed.values()].find(entry => entry.default)
@@ -353,20 +365,7 @@ export const makeBackendCatalog = ({
         ? undefined
         : subscription;
     const { accounts } = await catalog(pinned);
-    /** @type {Map<string, HostedModelDescriptor>} */
-    const listed = new Map();
-    for (const account of accounts) {
-      if (
-        (pinned === undefined
-          ? account.pinnedOnly !== true
-          : account.subscriptionId === pinned) &&
-        (account.state === 'current' || account.state === 'stale')
-      ) {
-        for (const entry of account.models) {
-          if (!listed.has(entry.id)) listed.set(entry.id, entry);
-        }
-      }
-    }
+    const { listed } = projectAccounts(accounts, pinned);
     return harden([...listed.values()]);
   };
 

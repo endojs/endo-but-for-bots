@@ -481,6 +481,71 @@ test('what a backend answers is validated before Floot believes it, labels and l
   );
 });
 
+test('offering and admission share the first eligible descriptor, not a lane or unread account', async t => {
+  const first = model('shared', {
+    efforts: ['low'],
+    effort: 'low',
+    isDefault: true,
+  });
+  const second = model('shared', {
+    efforts: ['high'],
+    effort: 'high',
+    isDefault: true,
+  });
+  const catalog = makeBackendCatalog({
+    label: 'Test',
+    readCatalog: async () => ({
+      accounts: [
+        { ...account('lane', [second]), pinnedOnly: true },
+        account('down', [second], 'unavailable'),
+        account('quiet', [second], 'unsupported'),
+        account('work', [first, model('a')]),
+        account('home', [second, model('b')], 'stale'),
+      ],
+    }),
+    listSubscriptions: async () =>
+      ['lane', 'down', 'quiet', 'work', 'home'].map(id => ({ id, label: id })),
+  });
+  t.deepEqual(await catalog.offered(), [first, model('a'), model('b')]);
+  t.deepEqual(await catalog.resolve({}), {
+    model: 'shared',
+    reasoningEffort: 'low',
+  });
+  await t.throwsAsync(
+    () => catalog.resolve({ model: 'shared', reasoningEffort: 'high' }),
+    { message: /Unsupported "Test" reasoning effort/ },
+  );
+  t.deepEqual(await catalog.offered('home'), [second, model('b')]);
+  t.deepEqual(await catalog.resolve({ subscription: 'home' }), {
+    model: 'shared',
+    reasoningEffort: 'high',
+  });
+  t.deepEqual(await catalog.offered('lane'), [second]);
+  t.deepEqual(await catalog.resolve({ subscription: 'lane' }), {
+    model: 'shared',
+    reasoningEffort: 'high',
+  });
+  t.deepEqual(await catalog.offered('down'), []);
+  await t.throwsAsync(
+    () => catalog.resolve({ model: 'shared', subscription: 'down' }),
+    { message: /"Test" model catalog is unavailable/ },
+  );
+});
+
+test('empty current catalogs are available but have no default or named model', async t => {
+  const catalog = makeBackendCatalog({
+    label: 'Test',
+    readCatalog: async () => ({ accounts: [account('default', [])] }),
+  });
+  t.deepEqual(await catalog.offered(), []);
+  await t.throwsAsync(() => catalog.resolve({}), {
+    message: /No "Test" model named, and the account marks no default/,
+  });
+  await t.throwsAsync(() => catalog.resolve({ model: 'a' }), {
+    message: /Unknown "Test" model "a"/,
+  });
+});
+
 test('the read says which accounts are lanes, so an `auto` pin is refused a lane-only model even when the declared set cannot be listed', async t => {
   const catalog = makeBackendCatalog({
     label: 'Test',

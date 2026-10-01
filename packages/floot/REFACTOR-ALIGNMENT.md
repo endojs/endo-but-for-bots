@@ -68,15 +68,23 @@ old broker/source compatibility, redundant acquisition conveniences, an unused
 version export, and Codex's identity-only persistence fallback.
 Current ownership and complete persistence contracts remain; no replacement
 framework or durable owner is added.
-After type-validation reconciliation the metric is 42,610, down 176 lines, across
-the same 160 files. The audit records each slice and its validation.
+SB-09 through SB-12 then consolidate local guest publication, delegated inference
+validation, bounded JSON reading and account/model projection.
+Their helpers stay with existing owners; the shared reader retains Codex's
+caller-owned cancellation contract.
+The metric is now 42,581, down 205 lines, across the same 160 files.
+The audit records each slice and its validation.
 Full shared, Claude, Codex and OpenCode suites pass, along with shared/Claude/Codex
-type checks, ESLint and root docs (warnings remain).
-These source-only deletions are not deployed; generation 190 and its pins remain
+type checks, scoped ESLint/formatting and root docs (warnings remain).
+Whole-repository lint remains unclean on unchanged formatting and other lint
+errors, including Chat project-resolution failures.
+The source audit records those limitations and suspected bucketing separately.
+These source-only changes are not deployed; generation 190 and its pins remain
 the live acceptance baseline.
 The smaller-combined-implementation target is still unproven.
-Next are SB-09 through SB-12 local repetitions and the separate scope decisions;
-the recommended sequence remains deletion before abstraction.
+Next are the sharing/delegation and inert-knob scope decisions, before the
+cross-adapter SB-13 through SB-15 extractions.
+The recommended sequence remains deletion before abstraction.
 
 Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
 and the rebuilt byte-only provider listener `cc639390…` on all three brokers.
