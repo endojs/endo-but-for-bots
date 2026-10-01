@@ -145,6 +145,8 @@ export const helpTextEntries = harden([
         "makeArchive(workerName, archiveName, options?) -> Promise<any>\nInstantiate a module from a source-only ZIP archive (a\n`compartment-map.json` plus modules in their original mjs/cjs\nsources, with no precompiled module formats).\n- workerName: Worker to use (undefined for new worker)\n- archiveName: Pet name of the readable blob holding the archive\n- options: Optional object with:\n  - powersName: Pet name of the powers to grant (default: '@none')\n  - resultName: Pet name or path to store the result\n  - env: Environment variables as { KEY: \"value\" } record\n\nThe module's make(powers, context, { env }) function is called.\nThe archive bytes are streamed to the worker and parsed via\n`@endo/compartment-mapper`'s `parseArchive`.  The Rust supervisor's\nworkers read the same archive content directly from the CAS.",
       cancel:
         'cancel(petNameOrPath, reason?) -> Promise<void>\nCancel a value, triggering cleanup and releasing resources.\nCancellation propagates to dependent values.',
+      guestBootstrapPath:
+        'guestBootstrapPath(id) -> Promise<string>\nServe one local guest on its own private Unix socket and return the path.\nA connection to that socket bootstraps to the guest facet itself, so it\nreaches that guest and nothing else: no host, no enumeration of other\nformulas. Issuing again for the same guest returns the same path. The socket\nlives until the daemon stops. The id is a guest formula identifier or a bare\nformula number on this node.',
       greeter:
         'greeter() -> Promise<EndoGreeter>\nGet the greeter for accepting network connections.',
       gateway:

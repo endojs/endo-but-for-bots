@@ -18,6 +18,7 @@ import {
   makeFilePowers,
   makeNetworkPowers,
   makeCryptoPowers,
+  makeNodeGuestPathIssuer,
   gunzip,
 } from './manager-node-powers.js';
 import { makeDaemonicBusPowers } from './bus-manager-node-powers.js';
@@ -157,6 +158,13 @@ const main = async () => {
       {},
       {
         defaultWorkerKind: 'locked',
+        guestPathIssuer: makeNodeGuestPathIssuer({
+          fs,
+          path,
+          servePath: networkPowers.servePath,
+          sockPath,
+          cancelled,
+        }),
       },
     );
 
