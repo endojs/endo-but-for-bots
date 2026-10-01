@@ -24,3 +24,17 @@ export type {
   StdioTransport,
   Subscription,
 } from './src/claude.types.js';
+
+export type {
+  ChildProcessLike,
+  ClaudeCliBackendOptions,
+  ClaudeCodeResponse,
+  ClaudeSdkBackendOptions,
+  ClaudeStreamReducer,
+  ScratchDirectory,
+  SdkQuery,
+  Spawn,
+  StdioProjection,
+  StreamReduction,
+  StreamTerminal,
+} from './src/backends.types.js';

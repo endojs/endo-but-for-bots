@@ -30,6 +30,13 @@
       "types": "./claude.types.d.ts",
       "default": "./index.js"
     },
+    "./cli-backend.js": "./src/cli-backend.js",
+    "./sdk-backend.js": "./src/sdk-backend.js",
+    "./confinement-options.js": "./src/confinement-options.js",
+    "./constructed-environment.js": "./src/constructed-environment.js",
+    "./stream-reducer.js": "./src/stream-reducer.js",
+    "./response-shapes.js": "./src/response-shapes.js",
+    "./scratch-directory.js": "./src/scratch-directory.js",
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -46,13 +53,17 @@
   },
   "dependencies": {
     "@endo/agent-tools": "workspace:^",
+    "@endo/bytes": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
+    "@endo/inference": "workspace:^",
     "@endo/pass-style": "workspace:^",
-    "@endo/patterns": "workspace:^"
+    "@endo/patterns": "workspace:^",
+    "@endo/utf8": "workspace:^"
   },
   "devDependencies": {
+    "@endo/far": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/ses-ava": "workspace:^",
     "ava": "catalog:dev",

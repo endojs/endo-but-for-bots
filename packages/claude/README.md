@@ -118,6 +118,32 @@ externally authored bytes, since that result re-enters the model's context. The
 child is spawned with a constructed env allowlist (not inherited-minus-one), so
 an inherited `ANTHROPIC_API_KEY` cannot silently bypass the pool.
 
+## Inference backends over `@endo/inference`
+
+[`designs/endo-claude-inference-backends.md`](../../designs/endo-claude-inference-backends.md)
+(phase 2) adds two `InferenceBackend` plugins over the provider-neutral
+[`@endo/inference`](../inference/README.md) seam. Each is made over **one**
+`CredentialSource`; choosing a credential is choosing which backend instance to
+hold. Neither depends on `@endo/claude-sandbox`; OS containment composes on top
+of them.
+
+| Subpath                                   | Export                                                                                                                                                                                                                                                                       |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@endo/claude/cli-backend.js`             | `makeClaudeCliBackend`: one `claude -p` process per turn. The guest's tools reach it through one stdio MCP server that the deployment's `stdioProjection(guest)` launches over the projection.                                                                               |
+| `@endo/claude/sdk-backend.js`             | `makeClaudeSdkBackend`: one Agent SDK `query` per turn, with the projection's MCP server handed over in process. The SDK's `query` is injected, so this package does not depend on the SDK.                                                                                  |
+| `@endo/claude/confinement-options.js`     | `buildCliArguments` and `buildSdkOptions`: the design's Decision 3 recipe (`--bare`, `--strict-mcp-config`, `--setting-sources ""`, `--tools ""`, `--disable-slash-commands`, the exact `mcp__<server>__<tool>` allow-list, `--permission-mode dontAsk`) for each front end. |
+| `@endo/claude/constructed-environment.js` | `buildConstructedEnvironment`: the process environment, built from nothing plus the grant. A grant may deliver only `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_BASE_URL`; `CLAUDE_CODE_OAUTH_TOKEN`, which `--bare` ignores, fails the turn.                |
+| `@endo/claude/stream-reducer.js`          | `makeClaudeStreamReducer`: reduces stream-json stdout or SDK messages to one terminal outcome, counting model turns by message id.                                                                                                                                           |
+| `@endo/claude/response-shapes.js`         | `CLAUDE_CODE_RESPONSE_SHAPES`, the pinned failure-shape table, and `turnOutcome`. The table is empty until verification gate 3 captures shapes against a pinned binary, so every failure is `unavailable` and never `needs-auth`.                                            |
+| `@endo/claude/scratch-directory.js`       | `makeNodeScratchDirectoryMaker`: the per-turn private directory used as `HOME`, `CLAUDE_CONFIG_DIR`, and working directory.                                                                                                                                                  |
+
+Both backends acquire the credential before any work, map a refusal to the
+matching tag, enforce the wall-clock, output-byte, and turn limits through the
+`@endo/inference` limit enforcer (the CLI backend kills the process group), and
+release the grant on every path. The projection's `formulaIdentifier` is never
+forwarded to the provider. Wrap an unsliced backend in the `@endo/inference`
+prompt-origin gate, and record usage with its usage recorder.
+
 ## Known gaps (prerequisites)
 
 This increment is honest about what it does **not** yet do:
