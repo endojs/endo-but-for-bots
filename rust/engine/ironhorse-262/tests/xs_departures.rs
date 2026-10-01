@@ -237,6 +237,13 @@ const UNPAIRED: &[Row] = &[
         v8: "ok",
         why: "TypedArraySpeciesCreate refuses a species of the other content type, BigInt against Number, even for an empty result; XS and V8 skip the check",
     },
+    Row {
+        program: "[String(new DisposableStack()), String(new AsyncDisposableStack()), Object.prototype.hasOwnProperty.call(DisposableStack.prototype, 'toString'), Object.prototype.hasOwnProperty.call(AsyncDisposableStack.prototype, 'toString')].join('|')",
+        ironhorse: "[object DisposableStack]|[object AsyncDisposableStack]|false|false",
+        xs: "Error|Error|true|true",
+        v8: "throw ReferenceError: DisposableStack is not defined",
+        why: "the specification gives DisposableStack.prototype and AsyncDisposableStack.prototype no toString, so a stack stringifies by its @@toStringTag; XS gives each prototype its own toString answering \"Error\"; Node 22 has neither constructor",
+    },
 ];
 
 const KEPT: &[Row] = &[
@@ -498,6 +505,13 @@ const GAPS: &[Row] = &[
         xs: "function function",
         v8: "function function",
         why: "WeakRef and FinalizationRegistry are absent from Ironhorse's realm",
+    },
+    Row {
+        program: "[typeof Uint8Array.prototype.toSorted, typeof Uint8Array.prototype.toReversed, typeof Uint8Array.prototype.with].join()",
+        ironhorse: "undefined,undefined,undefined",
+        xs: "function,function,function",
+        v8: "function,function,function",
+        why: "%TypedArray.prototype% lacks ES2023's toSorted, toReversed and with",
     },
     Row {
         program: "var log = []; Object.defineProperty(Number.prototype, 'z', { set: function (v) { log.push(typeof this); }, configurable: true }); (5).z = 1; delete Number.prototype.z; log.join()",
