@@ -299,10 +299,9 @@ export const provisionDevReview = async ({
     new URL('./review-connection.js', import.meta.url).href,
     { powersName: [connectionPowersName], resultName: [connectionName] },
   );
-  await E(initiator).storeValue(
-    await E(host).lookup([connectionName]),
-    ['dev-review'],
-  );
+  await E(initiator).storeValue(await E(host).lookup([connectionName]), [
+    'dev-review',
+  ]);
   return result;
 };
 harden(provisionDevReview);
