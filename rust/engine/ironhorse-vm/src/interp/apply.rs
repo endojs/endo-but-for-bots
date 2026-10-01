@@ -420,7 +420,7 @@ impl Interp {
         base: usize,
         argc: usize,
     ) -> Result<Slot, Step> {
-        let args = self.stack[base + 4..base + 4 + argc].to_vec();
+        let args = self.frame_arguments(base, argc)?;
         let new_target = self.pending_new_target.take().unwrap_or(bf);
         self.stack.truncate(base);
         self.construct_value(

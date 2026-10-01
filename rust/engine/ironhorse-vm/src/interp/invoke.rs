@@ -45,67 +45,67 @@ impl Interp {
         if self.bound_functions.contains_key(&f) {
             return self.invoke_value(code, func, this, args);
         }
-        let (this_eff, func_eff, args_eff): (Slot, Slot, Vec<Slot>) =
-            if let Some(m) = self.method_of(f) {
-                // A **native-method** callback (`a.map(nf.format)` — the
-                // NumberFormat bound-format function; or any prototype method
-                // passed by reference). Dispatch it through the same seam
-                // `invoke_getter` uses: build the [THIS, FUNCTION, RESULT, FRAME]
-                // frame + args and call `call_native_method`. A bound native
-                // (`nf.format`) recovers its owning instance from its side table,
-                // not from `this`, so the callback's `this` is irrelevant. On a
-                // throw `call_native_method` returns WITHOUT truncating, so the
-                // stack is restored to `base` before propagating.
-                let base = self.stack.len();
-                self.push(this);
-                self.push(func);
-                self.push(Slot::undefined());
-                self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                for a in args {
-                    self.push(*a);
+        if let Some(m) = self.method_of(f) {
+            // A **native-method** callback (`a.map(nf.format)` — the
+            // NumberFormat bound-format function; or any prototype method
+            // passed by reference). Dispatch it through the same seam
+            // `invoke_getter` uses: build the [THIS, FUNCTION, RESULT, FRAME]
+            // frame + args and call `call_native_method`. A bound native
+            // (`nf.format`) recovers its owning instance from its side table,
+            // not from `this`, so the callback's `this` is irrelevant. On a
+            // throw `call_native_method` returns WITHOUT truncating, so the
+            // stack is restored to `base` before propagating.
+            let base = self.stack.len();
+            self.push(this);
+            self.push(func);
+            self.push(Slot::undefined());
+            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+            for a in args {
+                self.push(*a);
+            }
+            return match self.call_native_method(m, base, args.len(), code) {
+                Ok(()) => self.pop_checked(),
+                Err(h) => {
+                    self.stack.truncate(base);
+                    Err(h)
                 }
-                return match self.call_native_method(m, base, args.len(), code) {
-                    Ok(()) => self.pop_checked(),
-                    Err(h) => {
-                        self.stack.truncate(base);
-                        Err(h)
-                    }
-                };
-            } else if let Some(native) = self.functions[&f].native {
-                // A native *callable* callback (`[..].map(parseInt)`,
-                // `[..].forEach(print)`, `arr.filter(Boolean)`, …). It reaches
-                // the `call_native` seam rather than `call_native_method`; drive
-                // it through the same in-place frame the native-method branch
-                // uses. A native *constructor* invoked as a callback (no `new`,
-                // so `has_target = false`) either produces its call-completion
-                // or throws a catchable TypeError inside `call_native`, matching
-                // the oracle. On a throw `call_native` may return WITHOUT
-                // truncating, so restore the stack to `base` before propagating.
-                let base = self.stack.len();
-                self.push(this);
-                self.push(func);
-                self.push(Slot::undefined());
-                self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                for a in args {
-                    self.push(*a);
-                }
-                return match self.call_native(native, base, args.len(), false, code) {
-                    Ok(()) => self.pop_checked(),
-                    Err(h) => {
-                        self.stack.truncate(base);
-                        Err(h)
-                    }
-                };
-            } else {
-                (this, func, args.to_vec())
             };
-        let argc = args_eff.len();
-        // Push the callee frame geometry [THIS, FUNCTION, RESULT, FRAME] + args.
-        self.push(this_eff);
-        self.push(func_eff);
+        } else if let Some(native) = self.functions[&f].native {
+            // A native *callable* callback (`[..].map(parseInt)`,
+            // `[..].forEach(print)`, `arr.filter(Boolean)`, …). It reaches
+            // the `call_native` seam rather than `call_native_method`; drive
+            // it through the same in-place frame the native-method branch
+            // uses. A native *constructor* invoked as a callback (no `new`,
+            // so `has_target = false`) either produces its call-completion
+            // or throws a catchable TypeError inside `call_native`, matching
+            // the oracle. On a throw `call_native` may return WITHOUT
+            // truncating, so restore the stack to `base` before propagating.
+            let base = self.stack.len();
+            self.push(this);
+            self.push(func);
+            self.push(Slot::undefined());
+            self.push(Slot::of(Kind::Uninitialized, Payload::None));
+            for a in args {
+                self.push(*a);
+            }
+            return match self.call_native(native, base, args.len(), false, code) {
+                Ok(()) => self.pop_checked(),
+                Err(h) => {
+                    self.stack.truncate(base);
+                    Err(h)
+                }
+            };
+        }
+        let argc = args.len();
+        // Push the callee frame geometry [THIS, FUNCTION, RESULT, FRAME] + args,
+        // straight from the caller's list. Copying it into a fresh `Vec` first
+        // was an allocation whose failure aborts the host, which a list the
+        // caller had reserved fallibly (a Proxy `apply` trap's) then reached.
+        self.push(this);
+        self.push(func);
         self.push(Slot::undefined());
         self.push(Slot::of(Kind::Uninitialized, Payload::None));
-        for a in &args_eff {
+        for a in args {
             self.push(*a);
         }
         let body_start = self.enter_call(argc, 0, false)?;
@@ -117,7 +117,7 @@ impl Interp {
         // a native driver such as `Array.prototype.map`, or the `Function`
         // result invoked as a callback). Same-segment callbacks keep using the
         // passed `code` with no allocation.
-        let callee_seg = match func_eff.value {
+        let callee_seg = match func.value {
             Payload::Reference(f) => self.callee_segment(f),
             _ => None,
         };
@@ -356,6 +356,36 @@ impl Interp {
         // every heavy callback level larger (the report's A3).
         let mut held = 0usize;
         let result = self.invoke_value_turns(code, func, this, initial_args, &mut held);
+        self.leave_native_frame(held);
+        result
+    }
+
+    /// `boundF(...)` from the dispatch loop's `RUN` arm: take the call frame
+    /// at `base` apart and run BoundFunction.[[Call]], ordinary abstract Call
+    /// redispatch through the shared dispatcher, so user, native and method
+    /// targets have the same semantics at opcode and callback call sites.
+    /// It is [`Self::invoke_value`] with the frame's arguments copied in its
+    /// own frame: the `RUN` arm, which every native re-entry holds, does not
+    /// carry the list, and a bound call's recursion holds one frame per level
+    /// here, as it held `invoke_value`'s.
+    #[inline(never)]
+    pub(super) fn call_bound_frame(
+        &mut self,
+        code: &[u8],
+        bf: crate::value::SlotIndex,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Step> {
+        let args = self.frame_arguments(base, argc)?;
+        let this = self
+            .stack
+            .get(base)
+            .copied()
+            .unwrap_or_else(Slot::undefined);
+        let func = Slot::of(Kind::Reference, Payload::Reference(bf));
+        self.stack.truncate(base);
+        let mut held = 0usize;
+        let result = self.invoke_value_turns(code, func, this, &args, &mut held);
         self.leave_native_frame(held);
         result
     }

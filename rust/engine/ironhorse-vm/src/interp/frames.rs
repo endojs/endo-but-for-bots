@@ -245,6 +245,17 @@ impl Interp {
         Ok(())
     }
 
+    /// The `argc` arguments of the frame at `base`, copied into a list
+    /// reserved fallibly: a host that refuses the allocation halts the run
+    /// with `HeapExhausted` rather than aborting it, as `enter_call`'s copy
+    /// does. A frame shorter than `argc` gives what it holds.
+    pub(super) fn frame_arguments(&self, base: usize, argc: usize) -> Result<Vec<Slot>, Step> {
+        let held = self.stack.get(base + 4..base + 4 + argc).unwrap_or(&[]);
+        let mut args = Self::reserved_vec(held.len())?;
+        args.extend_from_slice(held);
+        Ok(args)
+    }
+
     /// The `new.target` a `super(...)` frame at `base` carries in its RESULT
     /// slot (see the dispatch loop's `SUPER` arm). The RESULT slot of every
     /// other frame is `undefined`, so this is `None` for them.
@@ -311,8 +322,11 @@ impl Interp {
             .ok_or(Step::Host(Halt::EngineInvariant("call:stack-underflow")))?; // THIS
         let func_slot = self.stack[base + 1];
         // Collect arguments (arg0 is the deepest of the argc; XS's
-        // `mxFrameArgv(i) = mxFrame - 1 - i`).
-        let args: Vec<Slot> = self.stack[base + 4..base + 4 + argc].to_vec();
+        // `mxFrameArgv(i) = mxFrame - 1 - i`), reserved fallibly: a host
+        // that refuses the list halts the run with `HeapExhausted` rather
+        // than aborting it.
+        let mut args: Vec<Slot> = Self::reserved_vec(argc)?;
+        args.extend_from_slice(&self.stack[base + 4..base + 4 + argc]);
         let this_val = self.stack[base];
         // Keep the existing conservative overflow decision, which includes
         // the pending tuple, but retire that tuple before any validation can
