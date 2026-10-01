@@ -1333,6 +1333,44 @@ impl Interp {
         }
     }
 
+    /// The ids of `value` and `done`, interning and caching them on first use.
+    ///
+    /// An intrinsic iterator's `{value, done}` result must carry both own
+    /// properties whether or not the program ever spells either name, and
+    /// [`Self::bind_program_symbols`] caches them only when it does. Writing
+    /// the fields under the optional caches left `[1].values().next()` an
+    /// empty object (`JSON.stringify` gave `{}`) until some read such as
+    /// `r.value` happened to intern the name. Both are XS boot default keys,
+    /// so interning them is unmetered.
+    pub(in crate::interp) fn iterator_result_ids(&mut self) -> (u16, u16) {
+        let value_id = match self.value_id {
+            Some(id) => id,
+            None => self.intern_static_key("value"),
+        };
+        let done_id = match self.done_id {
+            Some(id) => id,
+            None => self.intern_static_key("done"),
+        };
+        self.value_id = Some(value_id);
+        self.done_id = Some(done_id);
+        (value_id, done_id)
+    }
+
+    /// The `{value, done}` object an intrinsic iterator reuses for every
+    /// `next()` (XS's `fxNewIteratorInstance`), with XS's attributes for both
+    /// fields: non-writable and non-configurable, so a guest can neither
+    /// delete nor redefine a field `next()` keeps rewriting. Plain writable
+    /// fields let `delete r.value; Object.freeze(r)` be undone by the next
+    /// `next()`, which re-added the property to a frozen object.
+    pub(in crate::interp) fn new_reused_iterator_result(&mut self) -> crate::value::SlotIndex {
+        let result = self.slots.alloc(Slot::instance(self.object_proto));
+        let (value_id, done_id) = self.iterator_result_ids();
+        let fixed = XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG;
+        self.set_own_unmetered_with_flag(result, value_id, Slot::undefined(), fixed);
+        self.set_own_unmetered_with_flag(result, done_id, Slot::boolean(false), fixed);
+        result
+    }
+
     /// Build an Array Iterator over `arr` with the given `kind` (0 values, 1
     /// keys, 2 entries): `fxNewIteratorInstance` — allocate the iterator
     /// instance (chained to `%Array Iterator.prototype%`) and its reused
@@ -1345,13 +1383,7 @@ impl Interp {
     ) -> Slot {
         self.meter.tick_raw(ARRAY_ITERATOR_CREATE_METERING);
         // The reused result object `{ value: undefined, done: false }`.
-        let result = self.slots.alloc(Slot::instance(self.object_proto));
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::undefined());
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(false));
-        }
+        let result = self.new_reused_iterator_result();
         let iter = self.slots.alloc(Slot::instance(self.array_iterator_proto));
         self.iterators.insert(
             iter,
@@ -1497,12 +1529,9 @@ impl Interp {
                 s.done = true;
             }
         }
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(new_done));
-        }
+        let (vid, did) = self.iterator_result_ids();
+        self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
+        self.set_own_unmetered(result, did, Slot::boolean(new_done));
         Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
     }
 

@@ -128,8 +128,8 @@ impl Interp {
         // interned a cached name ("length", "value", …) without
         // seeding its cache would gate the exotic fast paths
         // differently from its own resumed twin — a result AND
-        // computron divergence, checked by
-        // `runtime_interned_special_name_gates_like_resumed`. The
+        // computron divergence, checked for `value`/`done` by
+        // `ironhorse-snapshot/tests/iterator_result_carry.rs`. The
         // refresh is additive (fills only `None` caches) and O(a few
         // map lookups) on the rare novel-intern path.
         self.refresh_special_ids_from_symbols();

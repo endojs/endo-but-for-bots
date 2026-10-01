@@ -155,32 +155,23 @@ impl Interp {
     /// Build a generator `{value, done}` result object (`fxNewGeneratorResult`):
     /// a fresh `%Object.prototype%`-chained object with `value`/`done` own data
     /// properties, metering the calibrated [`GENERATOR_RESULT_METERING`]. The
-    /// property ids are the program-local `value`/`done` symbols (resolved in
-    /// `link_intrinsics`); a program that never names them still runs (the
-    /// object is unread), so a `None` id just omits that property.
+    /// property ids are the program-local `value`/`done` symbols, interned on
+    /// first use when the program never names them.
     pub(super) fn new_generator_result(&mut self, value: Slot, done: bool) -> Slot {
         self.meter.tick_raw(GENERATOR_RESULT_METERING);
         let result = self.slots.alloc(Slot::instance(self.object_proto));
-        // The `value`/`done` key ids are cached from the top-level program's
-        // symbols (`bind_program_symbols`). When the generator was defined in
-        // an `eval` / dynamic-`Function` unit that the *outer* program never
-        // named `value`/`done` for, those caches are `None` — but the eval
-        // unit's relink interned the names into the realm table, so fall back
-        // to that shared table before omitting the property (else a completed
-        // eval-generator's host-built `{value, done}` result would silently
-        // drop both keys, rendering `{}` where XS renders `{done:true}`).
-        let vid = self
-            .value_id
-            .or_else(|| self.symbol_ids.get("value").copied());
-        let did = self
-            .done_id
-            .or_else(|| self.symbol_ids.get("done").copied());
-        if let Some(vid) = vid {
-            self.set_own_unmetered(result, vid, value);
-        }
-        if let Some(did) = did {
-            self.set_own_unmetered(result, did, Slot::boolean(done));
-        }
+        // `iterator_result_ids` interns `value` and `done` when no program
+        // has named them (a generator from an `eval` unit, or one that never
+        // `yield`s), as every intrinsic iterator's result does: XS boot
+        // defines both keys, so the interning is unmetered. The object is
+        // fresh per step and its fields are writable and configurable, as
+        // CreateIterResultObject makes them and V8 does. XS's
+        // `fxNewGeneratorResult`, which builds a completed or async
+        // generator's results, protects both fields; its yields, built in
+        // bytecode, do not (`ironhorse-262/tests/xs_departures.rs`).
+        let (vid, did) = self.iterator_result_ids();
+        self.set_own_unmetered(result, vid, value);
+        self.set_own_unmetered(result, did, Slot::boolean(done));
         Slot::of(Kind::Reference, Payload::Reference(result))
     }
 
