@@ -379,3 +379,45 @@ fn a_direct_construction_keeps_the_intrinsic_prototype() {
         "true,true,true,true",
     );
 }
+
+/// A method whose result the specification builds from the intrinsic, not
+/// from the receiver's constructor or species, returns a base instance for a
+/// subclass receiver. `DisposableStack.prototype.move` copied its receiver's
+/// prototype, which only matched the specification while a subclass instance
+/// wrongly had the intrinsic prototype. Each answer was measured on the XS
+/// oracle. The TypedArray `toSorted`, `toReversed` and `with` belong here too,
+/// but Ironhorse does not have them yet (a row in `xs_departures.rs`).
+#[test]
+fn a_subclass_receiver_gets_an_intrinsic_result_where_the_specification_says_so() {
+    assert_eq!(
+        run(r#"function base(name, make, B) {
+  try {
+    out.push(name + ":" + (Object.getPrototypeOf(make()) === B.prototype));
+  } catch (e) { out.push(name + ":" + e.name + " " + e.message); }
+}
+class DS extends DisposableStack {}
+class ADS extends AsyncDisposableStack {}
+class A extends Array {}
+class AB extends ArrayBuffer {}
+base("DisposableStack.move", function () { return new DS().move(); }, DisposableStack);
+base("AsyncDisposableStack.move", function () { return new ADS().move(); }, AsyncDisposableStack);
+base("Array.toSorted", function () { return new A(3, 1, 2).toSorted(); }, Array);
+base("Array.toReversed", function () { return new A(3, 1, 2).toReversed(); }, Array);
+base("Array.with", function () { return new A(3, 1, 2).with(0, 9); }, Array);
+base("Array.toSpliced", function () { return new A(3, 1, 2).toSpliced(0, 1); }, Array);
+base("ArrayBuffer.transfer", function () { return new AB(4).transfer(); }, ArrayBuffer);
+base("ArrayBuffer.transferToFixedLength", function () { return new AB(4).transferToFixedLength(); }, ArrayBuffer);
+var moved = new DS().move();
+out.push("moved:" + (moved instanceof DS) + "," + moved.disposed + "," + Object.prototype.toString.call(moved));
+out.join("\n")"#),
+        "DisposableStack.move:true
+AsyncDisposableStack.move:true
+Array.toSorted:true
+Array.toReversed:true
+Array.with:true
+Array.toSpliced:true
+ArrayBuffer.transfer:true
+ArrayBuffer.transferToFixedLength:true
+moved:false,false,[object DisposableStack]",
+    );
+}
