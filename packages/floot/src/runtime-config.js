@@ -14,7 +14,7 @@ import { Fail } from '@endo/errors';
 /**
  * Runtime selection is incarnation-local, never a persisted credential owner.
  * Provider lookup runs per turn; hosted construction runs after tool admission.
- * @typedef {{ kind: 'provider', provideProvider: () => StreamingProvider | Promise<StreamingProvider> } |
+ * @typedef {{ kind: 'provider', provideProvider: () => StreamingProvider | Promise<StreamingProvider>, providerFormat?: string, disposeProvider?: () => Promise<void> } |
  * { kind: 'hosted', provideHostedClient: (snapshot: any) => any } |
  * { kind: 'records-only' }} RuntimeConfig
  */
@@ -39,8 +39,21 @@ export const assertRuntimeConfig = config => {
       : kind === 'hosted'
         ? 'provideHostedClient'
         : undefined;
-  Reflect.ownKeys(config).every(key => key === 'kind' || key === field) ||
-    Fail`Unexpected Floot runtime configuration field`;
+  Reflect.ownKeys(config).every(
+    key =>
+      key === 'kind' ||
+      key === field ||
+      (kind === 'provider' &&
+        ['providerFormat', 'disposeProvider'].includes(String(key))),
+  ) || Fail`Unexpected Floot runtime configuration field`;
+  if (kind === 'provider') {
+    config.providerFormat === undefined ||
+      config.providerFormat === 'responses-output-v1' ||
+      Fail`Unknown direct provider context format`;
+    config.disposeProvider === undefined ||
+      typeof config.disposeProvider === 'function' ||
+      Fail`Invalid provider disposal`;
+  }
   if (field !== undefined) {
     (Object.hasOwn(config, field) && typeof config[field] === 'function') ||
       Fail`Floot runtime configuration requires its backend constructor`;

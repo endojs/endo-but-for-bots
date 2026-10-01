@@ -46,8 +46,11 @@ import {
  */
 export const importedTurnsFor = records => {
   const { active } = selectActiveTranscript(records);
-  active.every(record => record.kind !== 'native-context') ||
-    Fail`OpenCode cannot restore this backend-specific native context`;
+  active.every(
+    record =>
+      record.kind !== 'native-context' &&
+      !(record.kind === 'message' && record.providerContext),
+  ) || Fail`OpenCode cannot restore this backend-specific native context`;
   const { pairs } = pairToolCalls(active, { perTurn: true });
   const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
   /** @type {ImportedTurn[]} */

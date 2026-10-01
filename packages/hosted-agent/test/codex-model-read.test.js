@@ -81,6 +81,28 @@ test('no reasoning default is represented as null without invented options', t =
   t.is(entry.description, '');
 });
 
+test('context window comes only from exact provider metadata', t => {
+  for (const contextWindow of [undefined, null]) {
+    const [entry] = modelsFromCodexCatalog({
+      models: [
+        model({ context_window: contextWindow, max_context_window: 999_999 }),
+      ],
+    });
+    t.is(entry.contextLength, undefined);
+  }
+  const [entry] = modelsFromCodexCatalog({
+    models: [model({ context_window: 128_000 })],
+  });
+  t.is(entry.contextLength, 128_000);
+  for (const contextWindow of [-1, 0, 1.5, '128000', 0x1_0000_0000]) {
+    t.throws(() =>
+      modelsFromCodexCatalog({
+        models: [model({ context_window: contextWindow })],
+      }),
+    );
+  }
+});
+
 test('malformed and duplicate provider metadata is rejected, including hidden entries', t => {
   const bad = [
     { slug: '' },

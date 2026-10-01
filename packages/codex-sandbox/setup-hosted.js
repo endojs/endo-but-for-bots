@@ -506,6 +506,7 @@ export const main = async (host, { exec } = {}) => {
     providerId: 'codex',
     flootDir,
     backendId: 'codex',
+    additionalBackendIds: ['fae-codex'],
     accountAuthority,
     ...(subscriptionIds === undefined ? {} : { subscriptionIds }),
     // ChatGPT plans bank rate-limit resets; an operator redeems them here.
@@ -514,6 +515,12 @@ export const main = async (host, { exec } = {}) => {
   // The broker as a Subscription, which shares are made over
   // (`provideSubscriptionShare`); re-minted here so they follow a new broker.
   await publishBrokerSubscription(host, { label: 'Codex', dir: SANDBOX_DIR });
+  if (await E(host).has(flootDir, 'controller-profile')) {
+    await E(host).copy(
+      [SANDBOX_DIR, 'subscription'],
+      [flootDir, 'controller-profile', 'codex-inference'],
+    );
+  }
   // Delegated runners (`provideDelegatedRunner`) follow the backend that was
   // bound above.
   await republishDelegatedRunners(host, { label: 'Codex', dir: SANDBOX_DIR });

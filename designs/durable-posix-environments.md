@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-01 |
-| **Updated** | 2026-10-01 |
+| **Updated** | 2026-10-02 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 
@@ -24,13 +24,111 @@ read/stdin failures, delayed admission, and termination refusal.
 Durable environment provisioning, independent egress composition, and live
 Fae/Floot/two-daemon acceptance remain to be implemented.
 No new native recovery mechanism or deployment is included in these slices.
+The next implementation adds a Floot development preset, Fae inference through
+the existing Codex subscription pool, and durable Fae context compaction.
+These are authorized work, not implemented or deployed capabilities.
+The first new slice implements the shared capability-backed Responses adapter
+in `packages/lal/providers/subscription-responses.js`.
+It uses the existing Subscription model-id contract, opens one listener-free
+endpoint per request, retains late-acquisition cleanup, and preserves complete
+provider output including opaque reasoning on the common assistant message.
+Focused tests cover a real broker Subscription, text/tool continuation, failure
+and refusal handling, SSE framing, cancellation, and retried cleanup.
+The adapter's 25 tests and the nearest OpenRouter/configuration suites pass
+72 tests together. Lal ESLint and Lal/hosted-agent type checks pass;
+root documentation builds with 0 errors and 180 warnings.
+Standalone Fae now accepts a `subscription-responses` recipe containing the
+retained subscription, model, and optional reasoning/catalog metadata.
+The driver derives pool affinity from the retained agent's full locator identity.
+The former token cache is replaced by one local provider owner: HTTP providers
+still follow Secret rotation, subscription adapters never read a Secret, and
+injected providers remain borrowed.
+Cancellation fences late inference and unadmitted tools while retaining completed
+tool outcomes and waiting for their tree publication; it does not wait for a
+borrowed provider that ignores cancellation.
+The adapter's disposal is an acknowledged cancellation hook, not a GC hook.
+Focused tests cover the actual driver, opaque tool continuation, late endpoint
+acquisition, batch cancellation, stalled inference, and delayed evidence writes.
+The 27 focused tests pass; the full Fae suite passes 186 tests with two existing
+known failures.
+Fae ESLint reports 0 errors and 141 warnings, the nearest Floot turn/transcript
+suites pass 35 tests, and root documentation still builds with 0 errors and 180 warnings.
+Standalone inbox restoration now uses the existing conversation tree for messages
+and admission receipts, with one retained `fae-conversation` branch selection.
+The selection also records an active turn before inference or tool effects.
+Graceful cancellation drains startup, tool, final-response, and claimed-reply
+publications before clearing that fence.
+An abruptly interrupted turn or failed publication stays fenced for explicit
+admin inspection or retirement; this is not automatic effect recovery.
+Restoration reads every retained tree node, including unselected or orphaned
+receipts, and rejects failed lookups rather than silently allowing replay.
+It rejects missing, cyclic, wrong-root, malformed, and pre-selection state.
+The tree remains the conversation authority; the branch selection stores no
+duplicate transcript, and no old-name compatibility path is added.
+Fresh inbox-incarnation tests preserve encrypted Responses reasoning and tool outputs.
+A real isolated daemon test also preserves the branch, receipt, and opaque
+context across a cold restart using retained guest formulas.
+The full Fae suite passes 200 tests with two existing known failures;
+conversation-tree passes 9 tests and the nearby Floot suites pass 35 tests.
+Fae and conversation-tree ESLint have no errors; root documentation builds with
+0 errors and 180 warnings.
+Floot now offers a distinct `Fae · Codex pool` inference choice.
+It captures the existing Subscription capability, catalog model and reasoning
+option in the private session registry, not an endpoint, Secret or CLI sandbox.
+Restoration and child sessions retain that exact inference authority even after
+the pool's petname is rebound; the same account/renewal owners serve both choices.
+Registry validation rejects malformed recipes before guest acquisition.
+Factory tests cover passive creation, failed model/effort discovery, interrupted
+creation cleanup, retained opaque context and deletion.
+The development preset, live acceptance, and deployment remain pending.
+Floot's journal now carries validated per-assistant provider context. Responses
+restoration preserves complete output, encrypted reasoning and native call IDs,
+and checks dialogue/calls against their canonical records. These annotations do
+not replace earlier history. Compaction tails can retain them; incompatible
+exporters refuse rather than silently flattening them. The existing journal
+remains Floot's only conversation authority.
+Pool selection is locally tested; live acceptance is not yet claimed.
+Automatic environment GC is a recorded design gap, not implementation scope for
+this PR; cleanup remains explicit on the administration facet.
+Shared Fae compaction now selects only older completed turns and retains the last
+two user turns, their complete tool groups and backend-specific context verbatim.
+Standalone checkpoints live in the existing conversation tree; Floot checkpoints
+live in its journal, not another transcript store.
+Publication checks the captured source head/frontier and provider identity before
+selecting a checkpoint; cancellation, ambiguous writes and stale summaries do not
+replace newer context.
+The common turn engine accepts an owner-selected context head before committing
+the next step, allowing compaction between tool rounds as well as between turns.
+The Codex catalog projects its optional `context_window` field.
+The minimum observed window across eligible pool routes is captured, or unknown
+if any route is unknown; fixed HTTP models may capture their catalog window.
+Unpinned HTTP models and OpenRouter auto routes retain no fixed capacity claim.
+No model size is invented when metadata is absent.
+Planning uses last-request occupancy and a conservative wire-byte heuristic
+(including tool schemas and opaque context), with 30% headroom.
+This can compact early; it is not a tokenizer or a provider-sized token estimate.
+An oversized recent tail or one large unfinished turn fails explicitly instead
+of dropping evidence.
+Original history remains available; restart restores the checkpoint without
+repeating summarization or tool effects.
+Focused tests cover forced compaction/continuation and factory reconstruction,
+unknown capacity, malformed summaries, recent opaque context, cancelled/stale
+publication and ambiguous checkpoint writes.
+Live pool/compaction acceptance is not yet claimed.
+No admitted inbox command or inference is replayed to discover its result.
+The delegation registry's closed-ask and unsolicited-sender routing remains
+process-local; published claimed-reply receipts prevent their replay, but an
+interrupted late-reply receipt outside an active turn is not a durable exchange
+restoration guarantee.
+Automatic resumption of subagent asks and native process-loss recovery remain
+outside this slice.
 Focused factory, native-factory, ownership, lifecycle, and runtime suites pass
 78 tests in each of the four SES configurations; package types and ESLint pass
 with warnings, and root documentation builds with 0 errors and 180 warnings.
 The full sandbox suite is not green: two unchanged direct Podman-driver
 environment-extensibility assertions fail in the unsafe configuration.
 No live Podman acceptance is claimed on this macOS development host.
-The adapter adds eight passing tests in each SES configuration.
+The sandbox-to-Shell adapter adds eight passing tests in each SES configuration.
 The Shell suite passes 17 tests and package types/ESLint (3 warnings, 0 errors);
 the daemon's host-Shell composition suite passes 7 tests, including real child
 termination, and sandbox types/ESLint pass (29 warnings, 0 errors).
@@ -276,9 +374,38 @@ do not copy a native supervisor into the environment caplet.
 Failed or uncertain cleanup keeps the environment fenced, with operator-assisted
 cleanup where needed; this does not select process-loss recovery from #1323.
 
+### Formula collection and permanent cleanup
+
+Permanent collection is distinct from cancelling a native incarnation.
+Endo's collector currently cancels live controllers before reclaiming formula
+records and daemon-owned scratch mounts; the worker Context exposes disposal
+hooks for cancellation, not a separate permanent-collection hook.
+The sandbox factory observes cancellation and closes its slices, but those
+observers alone do not give the collector an acknowledged per-slice cleanup barrier.
+Individual slices are not independently durable formulas today.
+Do not claim a complete GC integration from the existing shutdown path.
+
+The operator has deferred automatic environment GC beyond this PR.
+Keep native and owned-storage cleanup explicit on the administration facet.
+The operator must retain that facet until cleanup is acknowledged, then remove its
+durable roots; merely dropping a Shell or administration reference is not cleanup.
+Ordinary cancellation preserves the recipe and development storage for reconstruction.
+Explicit deletion must first stop native work, then dispose only owned storage;
+failed or uncertain cleanup keeps the environment fenced and its storage retained.
+
+The remaining design gap is acknowledged permanent cleanup after the last durable
+root is removed, including a dormant environment that has no installed live hook.
+A future design must keep a retained Shell's environment dependencies alive and
+retain the cleanup obligation until native disposal is proved.
+It should use existing formula collection and ownership mechanisms rather than
+introduce another GC platform.
+Active/dormant collection, retained Shells, and failed collection cleanup are
+follow-up tests, separate from this PR's explicit disposal and restart acceptance.
+
 These constraints need formula-backed tests for passive lookup, exact dependency
 retention after name rebinding, stop during acquisition, failed cleanup, and
 graceful restart before environment provisioning is described as complete.
+Automatic permanent collection remains explicitly unsupported.
 
 ## Network and development storage
 
@@ -318,6 +445,96 @@ Before deploying persistent managed environments, reconcile these sweeps with ex
 ownership and storage retention; a matching name alone is not adoption or cleanup proof.
 This is host integration work, not a requirement to expose host-specific service management
 through the portable shell.
+
+## Floot development preset and Fae inference
+
+Agent execution, inference, and POSIX execution are independent choices.
+A development session should use Fae's agent loop with the Codex subscription
+pool while holding a Shell capability for its own Podman environment.
+Selecting that pool does not select the Codex CLI harness.
+In Floot this means its existing direct-agent loop, Fae tools, and shared turn
+machinery, not replacing that loop with the standalone Fae inbox driver.
+Floot keeps its effect journal as conversation owner; standalone Fae keeps its
+conversation tree.
+Share the provider adapter and equivalent compaction mechanics, not a second
+conversation owner inside one session.
+
+The new development preset provisions one environment and puts its public
+Shell in the session inventory as `shell`.
+Floot retains the administration facet; the model receives neither environment
+destruction authority, a Podman socket, nor inference credentials.
+Use the existing Shell tool projection with an unambiguous `runCommand` name:
+Floot's `exec` already means JavaScript capability evaluation.
+File tools and commands must share the same workspace view.
+Do not fall back to Fae's host-local command executor when a supplied Shell fails.
+
+Keep the shared development image immutable and give each session owned native
+storage for its home, installed tools, caches, and build output.
+Every operation container mounts that same storage.
+User-space tools therefore survive subsequent commands and graceful restart;
+operation-local tmpfs and the 9P source mount are not installation targets.
+Stop preserves storage.
+Deletion explicitly disposes session-owned storage after acknowledged cleanup,
+without deleting shared or adopted workspaces.
+An interrupted command is reported as interrupted or unknown, never replayed.
+Pin the actual environment recipe and dependencies, rather than reinterpreting
+an edited preset catalog when a session is reconstructed.
+
+Derive command network settings from the environment, not the inference backend.
+Compose the existing managed public HTTP/HTTPS egress without a fake provider
+or credentialed broker listener.
+Fence execution before changing the network configuration and preserve storage.
+Reconcile Tokyo's native cleanup sweeps with explicit retained ownership before
+deployment; this does not add systemd to the portable Shell interface.
+
+### Codex subscription provider adapter
+
+The existing Subscription exposes `openEndpoint` for inference without a listener.
+Fae should use a local provider adapter over this eventual-send capability.
+Reuse the current pool's account routing, renewal owners, model catalog, capacity
+readings, and optional bounded shares; do not create a second credential owner.
+Retain the subscription dependency, model, reasoning option, and stable session
+identity as the recipe, not a live endpoint or a credential.
+Acquire endpoints lazily and revoke them on cancellation or disposal.
+
+Translate dialogue, tools, and tool outcomes into Responses requests, with
+non-stored streaming responses as required by the current subscription policy.
+Decode text, complete tool calls, terminal errors, usage, and opaque continuation
+items; do not flatten backend-specific context into dialogue.
+Reject malformed, truncated, incomplete, or unsuccessful streams before exposing
+tool execution, and do not blindly repeat uncertain inference.
+Use the same adapter in standalone Fae and Floot's direct-agent provider path.
+The UI must distinguish Fae using the Codex pool from the hosted Codex CLI agent.
+Model and reasoning choices come from the pool's catalog; live Codex acceptance
+uses the catalog's Luna model.
+
+### Fae context compaction
+
+The user has lifted the earlier hold on Fae compaction.
+Long-running development sessions are not ready until compaction is exercised.
+Use the selected or actually serving model's context window and observed usage,
+with space reserved for the next reply and tools, rather than a fixed message cap.
+If the model's window is unknown, report that limitation instead of pretending
+that an arbitrary limit is its context capacity.
+
+Compact completed conversation segments into a continuation checkpoint.
+Preserve unresolved tool calls and outcomes verbatim, required call identifiers,
+and backend-specific opaque context required for valid continuation.
+The provider adapter owns its wire/context rules; the agent owns conversation
+selection and durable checkpoint publication.
+Share equivalent checkpoint validation and selection machinery with Floot rather
+than copying its conversation loop or creating another transcript authority.
+
+Persist a checkpoint's source boundary, summary, retained context, and provider
+identity before selecting it for the next inference request.
+Select it only when that boundary is on the current conversation branch and its
+provider/context identity is compatible with the next request.
+Late publication onto a different branch must not replace that branch's context.
+Keep the original transcript available and restore the selected checkpoint after
+restart without repeating compaction or tool effects merely to infer their status.
+Cancelled, failed, or invalid compaction must leave the previous context selected
+and expose a clear error.
+Compaction itself uses the granted inference capability and its existing budget.
 
 ## Dependencies and existing documentation
 
@@ -360,6 +577,23 @@ are reviewed; no additional critical-path duration is assigned.
    Add VM or adopted-machine implementations only when needed; a full VM provisioning API
    is not required to establish the portable Shell contract.
 
+The next delivery order is:
+
+1. Record this expanded plan, then implement and test the capability-backed
+   Codex provider adapter independently of environment provisioning.
+2. Wire the provider recipe into standalone Fae and Floot, preserving context,
+   cancellation, model discovery, and existing subscription ownership.
+3. Implement and exercise durable Fae compaction, including forced compaction
+   followed by tool use and daemon restart.
+4. Finish durable environment provisioning, native development storage, and
+   independent network policy under the constraints above.
+5. Add the development preset and run the combined Fae/Codex/Rust acceptance,
+   followed by remote Shell acceptance and Tokyo deployment.
+
+Use the adversarial subagent review loop before every commit.
+Update this document after each slice and distinguish unit tests, formula-backed
+tests, live acceptance, and deployment rather than treating one as proof of another.
+
 ## Acceptance and unresolved decisions
 
 Acceptance must cover create, inspect without activation, tool use, nonzero exit, spawn/read
@@ -370,6 +604,16 @@ and retained cleanup after failed acquisition or removal.
 Keep the existing cross-backend lifecycle and restoration matrix for Floot consumers.
 Existing focused factory/runtime and exo-shell tests passed during investigation;
 they do not establish the proposed integration, remote execution, or crash recovery.
+
+Provider acceptance covers a reply, multiple tool calls/results, malformed and
+failed streams, cancellation during endpoint acquisition and reading, account
+exhaustion, credential isolation, retained opaque context, and graceful restart.
+The combined development task installs Rust, compiles and tests a small program,
+reuses installed binaries across commands, observes a nonzero exit, cancels a
+command, exceeds the compaction threshold, restarts and continues, changes
+network policy, and deletes only its owned environment resources.
+Compaction tests also cover stale or late publication, wrong-branch selection,
+and incompatible provider restoration, leaving the previous valid selection intact.
 
 Before implementation, decide where a durable environment is minted and how its execution
 and administration facets are retained, whether process streaming is needed by Fae initially,
@@ -388,3 +632,12 @@ or automatic native-resource recovery project.
 > code. ideally the shell capability would not be specific to podman and would have
 > the same interface if its a vm or remote machine. consider the design and what it
 > would take to get us there
+
+> so in Floot id like to create a new preset that includes a new podman slice whose
+> shell can be placed in the inventory. it would need to work in such a way that the
+> session can install tools and use them. map out what needs to be done to make that
+> work. additionally, id like to use fae against the codex provider pool
+
+> ill just add we need a compaction mechanism on fae
+
+> document the plan, then enact the plan

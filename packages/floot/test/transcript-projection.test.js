@@ -1,7 +1,12 @@
 // @ts-check
 import test from '@endo/ses-ava/prepare-endo.js';
 
-import { pairToolCalls } from '@endo/hosted-agent/transcript-records.js';
+import {
+  pairToolCalls,
+  encodeTranscriptRecord,
+  renderTranscriptDialogue,
+  responsesApiItems,
+} from '@endo/hosted-agent/transcript-records.js';
 
 import {
   projectTranscript,
@@ -10,6 +15,160 @@ import {
 } from '../src/transcript-projection.js';
 import { encodeJournalTranscript } from '../src/journal-transcript.js';
 import { projectContextTranscript } from '../src/context-transcript.js';
+
+test('Responses output survives the journal with native call ids and opaque reasoning', t => {
+  const messages = [
+    { role: 'user', content: 'run it' },
+    {
+      role: 'assistant',
+      content: '',
+      tool_calls: [
+        {
+          id: 'native-call',
+          type: 'function',
+          function: { name: 'runCommand', arguments: '{"command":"true"}' },
+        },
+      ],
+      responsesOutput: {
+        model: 'luna',
+        items: [
+          {
+            type: 'reasoning',
+            id: 'reasoning-id',
+            encrypted_content: 'opaque',
+            summary: [],
+          },
+          {
+            type: 'function_call',
+            id: 'item-id',
+            call_id: 'native-call',
+            name: 'runCommand',
+            arguments: '{"command":"true"}',
+          },
+        ],
+      },
+    },
+    {
+      role: 'tool',
+      tool_call_id: 'native-call',
+      content: 'failed',
+      failed: true,
+    },
+    {
+      role: 'assistant',
+      content: 'done',
+      responsesOutput: {
+        model: 'luna',
+        items: [
+          {
+            type: 'message',
+            id: 'answer-id',
+            role: 'assistant',
+            phase: 'final_answer',
+            content: [{ type: 'output_text', text: 'done' }],
+          },
+        ],
+      },
+    },
+  ];
+  const records = projectTranscript(messages).map(record =>
+    JSON.parse(encodeJournalTranscript(record)),
+  );
+  t.deepEqual(
+    transcriptToProviderMessages(records, 'responses-output-v1'),
+    messages,
+  );
+  t.throws(() => transcriptToProviderMessages(records), {
+    message: /Incompatible per-message provider context/,
+  });
+  const altered = records.map(record =>
+    record.kind === 'tool-call' ? { ...record, name: 'other' } : record,
+  );
+  t.throws(() => projectTranscript([{ ...messages[1], content: 'invented' }]), {
+    message: /projection differs/,
+  });
+  t.throws(
+    () =>
+      transcriptToProviderMessages(
+        [
+          ...records.slice(0, 3),
+          { kind: 'tool-call', id: 'extra', name: 'runCommand', args: '{}' },
+          { kind: 'tool-result', id: 'extra', content: 'done' },
+          ...records.slice(3),
+        ],
+        'responses-output-v1',
+      ),
+    { message: /Responses call differs/ },
+  );
+  t.throws(() => transcriptToProviderMessages(altered, 'responses-output-v1'), {
+    message: /Responses call differs/,
+  });
+  t.throws(() =>
+    transcriptToProviderMessages(
+      records.filter(record => record.kind !== 'tool-call'),
+      'responses-output-v1',
+    ),
+  );
+});
+
+test('per-message provider context is canonical and cannot be silently flattened', t => {
+  const base = { kind: 'message', role: 'assistant', content: 'answer' };
+  const one = {
+    ...base,
+    providerContext: { format: 'responses-output-v1', payload: '{}' },
+  };
+  const two = {
+    ...base,
+    providerContext: { payload: '{}', format: 'responses-output-v1' },
+  };
+  t.is(encodeTranscriptRecord(one), encodeTranscriptRecord(two));
+  t.throws(() =>
+    encodeTranscriptRecord({
+      ...base,
+      providerContext: {
+        __proto__: { payload: '{}' },
+        format: 'responses-output-v1',
+        extra: true,
+      },
+    }),
+  );
+  t.throws(() => renderTranscriptDialogue([one]));
+  t.throws(() => responsesApiItems([one]));
+});
+
+test('compaction retains exact Responses tail rather than resurrecting superseded output', t => {
+  const tail = projectTranscript([
+    {
+      role: 'assistant',
+      content: 'kept',
+      responsesOutput: {
+        model: 'luna',
+        items: [
+          { type: 'reasoning', encrypted_content: 'kept-context' },
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'kept' }],
+          },
+        ],
+      },
+    },
+  ]);
+  const record = JSON.parse(
+    encodeJournalTranscript({
+      kind: 'compaction',
+      summary: 'earlier work',
+      retainedTail: tail,
+    }),
+  );
+  const restored = transcriptToProviderMessages(
+    [{ kind: 'message', role: 'assistant', content: 'superseded' }, record],
+    'responses-output-v1',
+  );
+  t.is(restored.length, 2);
+  t.is(restored[0].content, 'earlier work');
+  t.is(restored[1].responsesOutput.items[0].encrypted_content, 'kept-context');
+});
 
 test('a sealed failed native checkpoint restores with its failure notice, not as success', async t => {
   const native = {

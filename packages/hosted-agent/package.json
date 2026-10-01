@@ -39,6 +39,7 @@
     "./token-usage.js": "./src/token-usage.js",
     "./package.json": "./package.json",
     "./provider-broker.js": "./src/provider-broker.js",
+    "./provider-usage.js": "./src/provider-usage.js",
     "./provider-paths.js": "./src/provider-paths.js",
     "./provider-transport.js": "./src/provider-transport.js",
     "./provider-http.js": "./src/provider-http.js",

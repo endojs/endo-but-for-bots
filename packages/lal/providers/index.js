@@ -121,3 +121,12 @@ export { makeLlamaCppProvider } from './llamacpp.js';
 export { findMockTrace, makeMockProvider } from './mock.js';
 export { makeOllamaProvider } from './ollama.js';
 export { makeOpenRouterProvider } from './openrouter.js';
+export {
+  makeSubscriptionResponsesProvider,
+  messageFromResponsesOutput,
+  assertSubscriptionResponsesRecipe,
+} from './subscription-responses.js';
+export {
+  planContextCompaction,
+  summarizeContext,
+} from './context-compaction.js';

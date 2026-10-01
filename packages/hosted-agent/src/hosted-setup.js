@@ -877,6 +877,7 @@ harden(provideSubscriptionShare);
  * @param {string} options.providerId
  * @param {string} options.flootDir
  * @param {string} options.backendId The hosted backend's descriptor id.
+ * @param {string[]} [options.additionalBackendIds] Other consumers of the same accounts.
  * @param {string} options.accountAuthority The operator's explicit account identity.
  * @param {string[]} [options.subscriptionIds] For a broker over several
  *   subscriptions: one oracle each, explicitly associated with its member ID.
@@ -892,6 +893,7 @@ export const publishAccountOracle = async (
     providerId,
     flootDir,
     backendId,
+    additionalBackendIds = [],
     accountAuthority,
     subscriptionIds,
     resetCredits,
@@ -945,12 +947,10 @@ export const publishAccountOracle = async (
               adminId: await E(hostAgent).identify(...adminPath),
               admin: await E(hostAgent).lookup(adminPath),
             }),
-        uses: [
-          {
-            backendId,
-            ...(subscriptionId === undefined ? {} : { subscriptionId }),
-          },
-        ],
+        uses: [backendId, ...additionalBackendIds].map(consumerId => ({
+          backendId: consumerId,
+          ...(subscriptionId === undefined ? {} : { subscriptionId }),
+        })),
       });
     }
     /* eslint-enable no-await-in-loop */

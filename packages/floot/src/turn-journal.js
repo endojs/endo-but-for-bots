@@ -1020,9 +1020,12 @@ export const makeTurnJournal = powers => {
      * @param {string} turnId
      * @param {string} ordinal
      * @param {unknown} value
+     * @param {string} [expectedFrontier] Compaction's captured journal cut.
      */
-    recordTranscript: (turnId, ordinal, value) =>
+    recordTranscript: (turnId, ordinal, value, expectedFrontier) =>
       serialized(async () => {
+        if (expectedFrontier !== undefined)
+          expectedFrontier === `${next}` || Fail`Compaction source changed`;
         const record = records.get(turnId);
         record || Fail`Unknown turn journal turn`;
         /** @type {Array<{kind: string, ordinal: string, sequence: string, payload: string, payloadRef?: {name: string, chars: number}}>} */
@@ -1107,6 +1110,7 @@ export const makeTurnJournal = powers => {
     readView: () =>
       serialized(async () =>
         harden({
+          frontier: `${next}`,
           retained: JSON.parse(JSON.stringify([...records.values()])),
           archivedTurns,
           archiveCursor: `0:${archiveChunks}`,
