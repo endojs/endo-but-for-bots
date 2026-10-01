@@ -34,8 +34,6 @@ take a pet name only as a **pet-name path**, an array of path components:
 A bare string is refused by `namePathFrom` (`src/pet-name.js`) with a
 `TypeError` telling the caller to retry with an array; it is never split on
 a delimiter.
-The argument guards use `NamePathArgumentShape`, which admits a string only
-so that `namePathFrom` can produce that error.
 The `adopt` edge name is a message edge label, not a path, and stays a string.
 The Mount and ReadableTree surfaces are the exception (see below).
 
