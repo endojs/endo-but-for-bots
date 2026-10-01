@@ -14,10 +14,18 @@ the standard library seeds its hash tables randomly in each process, which
 changes what runs at a case's deepest point. The baseline's 2% slack
 (`DEFAULT_SLACK`) absorbs that variation.
 
-The baseline also records the commit it was measured at. `--write-baseline`
-refuses a tree with uncommitted engine changes, whose marks HEAD would not
-reproduce: commit the change, write the baseline, and commit the baseline on
-its own. `--allow-dirty` writes one anyway and records `"dirty": true`.
+The baseline also records the engine tree it was measured at: the hash of
+HEAD's `rust/engine` tree with the baseline file left out. A tree hash names
+content, so it survives the rebase-merge that rewrites the commit a baseline
+was measured at, after which that commit is on no branch. The baseline file is
+left out because it lies inside the tree it describes: no file can hold the
+hash of a tree that holds that file, and without it, writing and committing
+the baseline leaves the hash where it was, so the baseline's own commit holds
+the tree it names. `--write-baseline` refuses a tree with uncommitted engine
+changes, which HEAD's tree would not reproduce: commit the change, write the
+baseline, and commit the baseline on its own. `--allow-dirty` writes one
+anyway and records `"dirty": true`. The check says whether the checkout holds
+the baseline's tree.
 """
 import argparse
 import json
@@ -102,20 +110,85 @@ def uncommitted_changes(baseline, root=ROOT):
     return [line[3:] for line in output.splitlines() if line.strip()]
 
 
-def provenance(changed=()):
-    """The build and commit the marks belong to; `dirty` when the tree had
-    uncommitted engine changes, so `commit` alone does not reproduce them."""
+def git(root, *args, stdin=None):
+    return subprocess.run(["git", *args], cwd=root, input=stdin, stdout=subprocess.PIPE,
+                          check=True).stdout
+
+
+def tree_without(root, tree, path):
+    """The hash of `tree` with the entry at `path` (a tuple of byte-string
+    names) left out, as git would write it: `tree` itself when it has no such
+    entry, None when nothing is left. The pruned trees are hashed, never
+    written to the object store."""
+    name, rest = path[0], path[1:]
+    entries = []
+    pruned = False
+    # `--full-tree`: run in a subdirectory, ls-tree lists only the entries
+    # under that subdirectory's path.
+    for record in git(root, "ls-tree", "--full-tree", "-z", tree).split(b"\0"):
+        if not record:
+            continue
+        meta, entry = record.split(b"\t", 1)
+        mode, kind, oid = meta.decode().split()
+        if entry == name and not rest:
+            pruned = True
+            continue
+        if entry == name and kind == "tree":
+            inner = tree_without(root, oid, rest)
+            pruned = inner != oid
+            if inner is None:
+                continue  # git keeps no empty directory
+            oid = inner
+        entries.append(b"%o %s\0" % (int(mode, 8), entry) + bytes.fromhex(oid))
+    if not pruned:
+        return tree
+    if not entries:
+        return None
+    return git(root, "hash-object", "-t", "tree", "--stdin", stdin=b"".join(entries)).decode().strip()
+
+
+def engine_tree(baseline, root=ROOT, revision="HEAD"):
+    """The hash of the engine `root`'s tree at `revision` with the baseline
+    file left out: the tree a baseline names (see the module docstring)."""
+    root = Path(root).resolve()
+    tree = git(root, "rev-parse", "--verify", f"{revision}:./").decode().strip()
+    try:
+        relative = Path(baseline).resolve().relative_to(root)
+    except ValueError:
+        return tree  # a baseline outside the engine is not in its tree
+    return tree_without(root, tree, tuple(os.fsencode(part) for part in relative.parts))
+
+
+def provenance(baseline, changed=()):
+    """The build and engine tree the marks belong to; `dirty` when the
+    checkout had uncommitted engine changes, which HEAD's tree does not
+    hold."""
     verbose = subprocess.check_output(["rustc", "-vV"], cwd=ROOT, text=True)
     host = next(line.split(": ", 1)[1] for line in verbose.splitlines() if line.startswith("host: "))
     record = {
         "target": host,
         "rustc": verbose.splitlines()[0].strip(),
         "profile": "release",
-        "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
+        "engine_tree": engine_tree(baseline),
     }
     if changed:
         record["dirty"] = True
     return record
+
+
+def describe_tree(baseline, current):
+    """Whether the checkout (`current` provenance) holds the engine tree the
+    `baseline` provenance was measured at."""
+    def tree(record):
+        dirty = " with uncommitted changes" if record.get("dirty") else ""
+        return f"{record['engine_tree'][:12]}{dirty}"
+
+    if "engine_tree" not in baseline:
+        return "the baseline records no engine tree"
+    if (baseline["engine_tree"] == current["engine_tree"]
+            and not baseline.get("dirty") and not current.get("dirty")):
+        return f"the baseline was measured at this engine tree, {tree(current)}"
+    return f"the baseline was measured at engine tree {tree(baseline)}; this one is {tree(current)}"
 
 
 def refuse_dirty(changed, allow_dirty):
@@ -123,9 +196,9 @@ def refuse_dirty(changed, allow_dirty):
     if not changed or allow_dirty:
         return None
     shown = ", ".join(changed[:10]) + (f" and {len(changed) - 10} more" if len(changed) > 10 else "")
-    return (f"uncommitted engine changes ({shown}): the baseline would name a commit that does "
-            "not reproduce its marks. Commit them, write the baseline and commit it on its own, "
-            "or pass --allow-dirty to record a dirty baseline")
+    return (f"uncommitted engine changes ({shown}): the baseline would name an engine tree that "
+            "does not reproduce its marks. Commit them, write the baseline and commit it on its "
+            "own, or pass --allow-dirty to record a dirty baseline")
 
 
 def measure():
@@ -163,7 +236,7 @@ def main():
         reason = refuse_dirty(changed, args.allow_dirty)
         if reason:
             raise SystemExit(f"stack height: {reason}")
-    current = provenance(changed)
+    current = provenance(args.baseline, changed)
     metrics = measure()
     report = {"provenance": current, "cases": metrics}
 
@@ -194,6 +267,7 @@ def main():
         expected = baseline["cases"].get(name)
         ratio = f"{measured['bytes'] / expected['bytes']:.3f}x" if expected and expected["bytes"] else "new"
         print(f"{name:{width}s} {measured['bytes']:>9d} B  {ratio:>7s}  {measured['outcome']}")
+    print(f"stack height: {describe_tree(baseline['provenance'], current)}")
     for note in notes:
         print(f"note: {note}")
     for problem in problems:

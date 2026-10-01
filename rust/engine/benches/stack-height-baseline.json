@@ -3,7 +3,7 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "commit": "1c581a59d240194b5cca0040dcdf8621bd06562a"
+    "engine_tree": "edf4835451f5abeda4855a6808aa2e61ed0c7551"
   },
   "slack": 0.02,
   "cases": {

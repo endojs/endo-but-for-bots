@@ -157,6 +157,17 @@ python3 rust/engine/benches/stack_height.py --write-baseline
 
 That is the ratchet: each refactor that lands lowers the marks it claims to lower, and the
 baseline follows.
+The baseline names the engine tree it was measured at rather than the commit: the hash of
+HEAD's `rust/engine` tree with the baseline file left out.
+A rebase-merge rewrites the commit but not the tree, so the name still finds the measured
+source on the target branch.
+The baseline file is left out because it lies inside the tree it names; without it, writing and
+committing the baseline leaves the hash where it was, so the baseline's own commit holds the
+tree it records.
+`--write-baseline` refuses a checkout with uncommitted engine changes, which HEAD's tree does
+not hold: commit them, write the baseline, and commit it on its own.
+`--allow-dirty` writes one anyway and records `"dirty": true`.
+The check prints whether the checkout holds the baseline's tree.
 The marks are native; they show whether a refactor shrinks frames, and they do not predict
 which cases trap on Wasmtime or V8, whose frames differ (report §1.2-§1.4).
 The wasm lanes of Phase 0, which run the same corpus under Wasmtime, Node and
