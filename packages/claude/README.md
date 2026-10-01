@@ -131,15 +131,18 @@ the files.
 ### The `bwrap` slice
 
 With `sandbox`, `claude` runs under `bwrap` (`src/bwrap-slice.js`) in fresh
-user, mount, PID, IPC, and UTS namespaces with every capability dropped. The
+user, mount, PID, IPC, and UTS namespaces with every capability dropped and
+nested user namespaces disabled. The
 slice root is an empty tmpfs. Into it are mounted:
 
 - read-only: `/usr`, `/bin`, `/sbin`, `/lib*` (top-level symlinks recreated as
   symlinks) and the `/etc` entries for name resolution, TLS roots, the user
   database, and the dynamic linker (a symlinked `/etc/resolv.conf` is bound
   from its target, so `/run` stays unbound);
-- read-only: the installation directory of `claudePath` (resolved through
-  symlinks; `claude` is run by its real path), the relay's `node` and script,
+- read-only: `claudePath` resolved through symlinks (`claude` is run by its
+  real path), widened to its directory only when that directory is a package
+  holding `package.json`, so a binary in `/usr/local/bin` does not expose its
+  neighbors; the relay's `node` and script,
   the broker socket's directory, and that spawn's files directory;
 - writable: the turn's working directory;
 - fresh tmpfs: `/tmp` and a scratch `HOME` (`/home/endo-claude`, set only

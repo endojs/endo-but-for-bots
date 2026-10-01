@@ -4,6 +4,7 @@ import test from '@endo/ses-ava/prepare-endo.js';
 import childProcess from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { makeExo } from '@endo/exo';
@@ -253,7 +254,9 @@ test('resultFromStream maps terminal outcomes', t => {
  * directory the slice grants.
  */
 const listenLikeDaemon = async () => {
-  const directory = fs.mkdtempSync('/tmp/ect-daemon-');
+  const directory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'endo-claude-turn-daemon-'),
+  );
   const socketPath = path.join(directory, 'endo.sock');
   const server = net.createServer(socket => socket.end());
   await new Promise(resolve => server.listen(socketPath, () => resolve(null)));
@@ -358,7 +361,9 @@ test('the sandbox wraps claude in bwrap, granting the broker and spawn directori
 });
 
 test('the sandbox runs a symlinked claudePath by its real path', async t => {
-  const linkDirectory = fs.mkdtempSync('/tmp/ect-link-');
+  const linkDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'endo-claude-turn-link-'),
+  );
   t.teardown(() => fs.rmSync(linkDirectory, { recursive: true, force: true }));
   const claudeLink = path.join(linkDirectory, 'claude');
   fs.symlinkSync(FAKE_CLAUDE, claudeLink);
@@ -375,8 +380,37 @@ test('the sandbox runs a symlinked claudePath by its real path', async t => {
   const realClaude = fs.realpathSync(FAKE_CLAUDE);
   t.is(bwrapArguments[separator + 1], realClaude);
   const granted = bwrapArguments.slice(0, separator);
-  t.true(granted.includes(path.dirname(realClaude)));
+  t.true(granted.includes(realClaude));
+  t.false(
+    granted.includes(path.dirname(realClaude)),
+    'the directory around a lone binary is not granted',
+  );
   t.false(granted.includes(claudeLink), 'the link itself is not bound');
+});
+
+test('the sandbox grants a package-installed claude its package directory', async t => {
+  const packageDirectory = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'endo-claude-turn-package-'),
+  );
+  t.teardown(() =>
+    fs.rmSync(packageDirectory, { recursive: true, force: true }),
+  );
+  fs.writeFileSync(path.join(packageDirectory, 'package.json'), '{}');
+  const claudeScript = path.join(packageDirectory, 'cli.mjs');
+  fs.copyFileSync(FAKE_CLAUDE, claudeScript);
+  fs.chmodSync(claudeScript, 0o755);
+  /** @type {unknown[][]} */
+  const recorded = [];
+  const { result } = await turn({
+    claudePath: claudeScript,
+    spawn: makeRecordingSpawn(recorded),
+    sandbox: { bwrapPath: '/usr/bin/bwrap' },
+  });
+  t.is(result.type, 'ok', JSON.stringify(result));
+  const [[, bwrapArguments]] = /** @type {[string, string[]][]} */ (recorded);
+  const separator = bwrapArguments.indexOf('--');
+  const granted = bwrapArguments.slice(0, separator);
+  t.true(granted.includes(fs.realpathSync(packageDirectory)));
 });
 
 /** Find a `bwrap` that can create the slice's namespaces on this host. */

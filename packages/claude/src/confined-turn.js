@@ -213,9 +213,19 @@ export const runConfinedTurn = async ({
         sandbox.systemMounts ?? (await resolveSystemMounts());
       // Inside the slice `claude` is run by its real path, so a symlinked
       // install (`/usr/local/bin/claude -> .../cli.js`) still resolves its
-      // siblings from the installation directory it is granted.
+      // siblings from the installation directory it is granted. Only a
+      // package directory (one holding `package.json`) is granted whole; a
+      // binary in a shared directory such as `/usr/local/bin` is granted alone.
       const realClaudePath = await fs.realpath(claudePath);
-      const toolPaths = [path.dirname(realClaudePath), nodePath, envCommand];
+      const claudeDirectory = path.dirname(realClaudePath);
+      const isPackageDirectory = await fs
+        .access(path.join(claudeDirectory, 'package.json'))
+        .then(
+          () => true,
+          () => false,
+        );
+      const claudeGrant = isPackageDirectory ? claudeDirectory : realClaudePath;
+      const toolPaths = [claudeGrant, nodePath, envCommand];
       launch = async spec => {
         // The spawn files (`--settings`, `--mcp-config`) share one directory.
         const settingsIndex = spec.argv.indexOf('--settings');
