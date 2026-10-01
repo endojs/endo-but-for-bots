@@ -115,8 +115,10 @@ What it shows:
   callback re-entry, in line with §4.3's 1.04-1.17× table-routing figures.
   A1 alone is within noise, so the cost is the split itself: a second `match` on the opcode per
   instruction, a non-inlined call, and a `Flow` value re-matched in the loop.
-  `benches/run.py`'s gate is a 1.25× floor with no re-entry workload, so A2a as prototyped
-  would pass the gate while regressing every workload above.
+  `benches/run.py`'s gate was then a 1.25× floor with no re-entry workload, so A2a as
+  prototyped would pass the gate while regressing every workload above; Phase 1 added the
+  re-entry workloads (`reentry_bench`) and measured A2a at 1.02-1.16× on them
+  (`STACK-DEPTH-REFACTOR.md` §5 Phase 1).
 - B1-B4 are within noise.
   The `proxies` lookup B1 adds to every ordinary MOP call costs at most 3%.
   B2's loop reads 1.08× on bound `instanceof` across three samples, probably real and small.

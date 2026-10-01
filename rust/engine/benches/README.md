@@ -1,6 +1,6 @@
 # Performance instruments (F106/F122)
 
-Run the general snapshot controls across four test targets, serially in release mode:
+Run the general snapshot controls across five test targets, serially in release mode:
 
 ```sh
 export CARGO_INCREMENTAL=0
@@ -34,7 +34,24 @@ Reports identify same-host comparisons separately from historical context.
 Both measured sides record a SHA-256 digest of the fixture sources and toolchain pin,
 plus the compiler and relevant build environment; a check refuses mismatched provenance.
 The archived reference uses its own build directory even if `CARGO_TARGET_DIR` is set.
-The pinned revision, 48-metric roster, 1.25x floor, and growth policies are unchanged.
+The pinned revision, 1.25x floor, and growth policies are unchanged.
+The roster is 52 metrics.
+`reentry_bench` added four call and re-entry workloads (guest calls, guest recursion,
+`forEach` callbacks and getter reads) for the dispatch-split gate of
+[`STACK-DEPTH-REFACTOR.md`](../STACK-DEPTH-REFACTOR.md) §4.3, which `dispatch_bench`'s
+straight-line loops do not cross.
+Their checked-in medians were measured at the pinned revision on a Linux x86_64 host, not the
+host of the other 48 (`provenance.reentry_medians`).
+A check remeasures both sides on its own host either way, but the `BENCH_RATIO` lines of a run
+without `--check-baseline` compare against medians from two different hosts.
+
+The pinned revision cannot build today's `attached_bench` and `gc_bench`, which call
+`Interp::slots()` and `Interp::chunks()`, so `--check-baseline` against it stops before it
+measures the candidate.
+Until the baseline is re-pinned, compare against a revision that builds every target by
+passing a copy of `baseline.json` whose `provenance.commit` names it:
+`run.py --check-baseline --baseline <copy>` remeasures that revision on the same host.
+`STACK-DEPTH-REFACTOR.md` §5 Phase 1 ("As run") records two such comparisons.
 The 1A records below also retain local predecessor and original-branch comparisons.
 Those additional references provide diagnostic evidence; they do not replace the
 repository gate against `baseline.json` or create additional CI thresholds.

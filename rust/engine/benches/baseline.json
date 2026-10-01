@@ -6,12 +6,17 @@
     "machine": "arm64",
     "cpu": "arm",
     "measurement": "integrated-final.json: before runs, same fixture/toolchain/host as candidate",
-    "RUST_MIN_STACK": 33554432
+    "RUST_MIN_STACK": 33554432,
+    "reentry_medians": "calls_ms, recursion_ms, callbacks_ms and getter_ms: measured at this commit on Linux x86_64 (rustc 1.91.1, CARGO_INCREMENTAL=0, RUST_MIN_STACK=33554432) on 2026-10-01, as the reference side of a --check-baseline run; the other medians are the host above"
   },
   "medians": {
     "dispatch_ms": 985.77,
     "slots_ms": 447.705209,
     "chunks_ms": 28.069833,
+    "calls_ms": 1012.669812,
+    "recursion_ms": 313.799562,
+    "callbacks_ms": 624.028219,
+    "getter_ms": 1102.00063,
     "attached_detached_ms": 17.900875,
     "attached_resident_ms": 26.692292,
     "attached_faulting_ms": 26.894,

@@ -13,7 +13,7 @@ import shutil
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-TARGETS = ("dispatch_bench", "attached_bench", "gc_bench", "wake_latency_bench")
+TARGETS = ("dispatch_bench", "reentry_bench", "attached_bench", "gc_bench", "wake_latency_bench")
 
 
 def fixture_digest(root=ROOT):
