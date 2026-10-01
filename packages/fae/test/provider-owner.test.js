@@ -163,7 +163,7 @@ test('a subscription cannot carry ambient host, secret or injected provider opti
     t.throws(
       () =>
         makeProviderOwner({ config: { ...config, ...fields }, sessionId: 's' }),
-      { message: /cannot carry/ },
+      { message: /Invalid subscription Responses recipe/ },
     );
   }
   t.throws(() => makeProviderOwner({ config }), {

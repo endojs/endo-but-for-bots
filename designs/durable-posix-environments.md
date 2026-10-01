@@ -72,15 +72,23 @@ The full Fae suite passes 200 tests with two existing known failures;
 conversation-tree passes 9 tests and the nearby Floot suites pass 35 tests.
 Fae and conversation-tree ESLint have no errors; root documentation builds with
 0 errors and 180 warnings.
-Floot provider wiring, context-window metadata integration, compaction, the
-development preset, live acceptance, and deployment remain pending.
+Floot now offers a distinct `Fae · Codex pool` inference choice.
+It captures the existing Subscription capability, catalog model and reasoning
+option in the private session registry, not an endpoint, Secret or CLI sandbox.
+Restoration and child sessions retain that exact inference authority even after
+the pool's petname is rebound; the same account/renewal owners serve both choices.
+Registry validation rejects malformed recipes before guest acquisition.
+Factory tests cover passive creation, failed model/effort discovery, interrupted
+creation cleanup, retained opaque context and deletion.
+Context-window metadata integration, compaction, the development preset, live
+acceptance, and deployment remain pending.
 Floot's journal now carries validated per-assistant provider context. Responses
 restoration preserves complete output, encrypted reasoning and native call IDs,
 and checks dialogue/calls against their canonical records. These annotations do
 not replace earlier history. Compaction tails can retain them; incompatible
 exporters refuse rather than silently flattening them. The existing journal
-remains Floot's only conversation authority. Pool selection and live acceptance
-are not claimed by this slice.
+remains Floot's only conversation authority.
+Pool selection is locally tested; live acceptance is not yet claimed.
 Automatic environment GC is a recorded design gap, not implementation scope for
 this PR; cleanup remains explicit on the administration facet.
 The Codex catalog currently omits context-window metadata; the adapter reports

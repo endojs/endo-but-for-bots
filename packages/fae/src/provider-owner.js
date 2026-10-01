@@ -4,6 +4,7 @@ import { Fail } from '@endo/errors';
 import {
   createProvider,
   makeSubscriptionResponsesProvider,
+  assertSubscriptionResponsesRecipe,
 } from '@endo/lal/providers/index.js';
 
 /**
@@ -42,16 +43,7 @@ export const makeProviderOwner = ({
     Fail`Unsupported Fae provider kind`;
   const subscriptionBacked = config.kind === 'subscription-responses';
   if (subscriptionBacked) {
-    const fields = harden([
-      'kind',
-      'subscription',
-      'model',
-      'reasoningEffort',
-      'contextLength',
-    ]);
-    Object.keys(config).every(key => fields.includes(key)) ||
-      Fail`Subscription provider cannot carry host, secret, or injected-provider configuration`;
-    config.subscription !== undefined || Fail`Subscription capability required`;
+    assertSubscriptionResponsesRecipe(config);
     sessionId !== undefined || Fail`Stable inference session identity required`;
   } else {
     !Object.hasOwn(config, 'subscription') ||

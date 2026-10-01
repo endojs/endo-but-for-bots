@@ -36,6 +36,10 @@ import {
 } from '@endo/fae/src/subagent.js';
 import { DEFAULT_MAX_SUBAGENT_DEPTH } from '@endo/fae/src/subagent-host.js';
 import { resolveAuthToken } from '@endo/fae/src/credentials.js';
+import {
+  makeSubscriptionResponsesProvider,
+  assertSubscriptionResponsesRecipe,
+} from '@endo/lal/providers/index.js';
 import { assertHostedBackendDescriptor } from '@endo/hosted-agent';
 import { makeAnthropicModelRead } from '@endo/hosted-agent/anthropic-model-read.js';
 import { normalizeBackendCatalog } from '@endo/hosted-agent/backend-catalog.js';
@@ -1018,7 +1022,10 @@ export const makeStreamingAgent = async (
         // Model context is not a UI history projection: the latter deliberately
         // carries previews. Hydrate the same full transcript hosted runners use.
         const transcript = await getContextTranscript(turnId);
-        const path = transcriptToProviderMessages(transcript);
+        const path = transcriptToProviderMessages(
+          transcript,
+          runtime.providerFormat,
+        );
         return [
           { role: 'system', content: effectivePrompt },
           ...path.filter(message => message.role !== 'system'),
@@ -1820,6 +1827,13 @@ export const makeStreamingAgent = async (
     const failures = /** @type {PromiseRejectedResult[]} */ (settled)
       .filter(result => result.status === 'rejected')
       .map(result => result.reason);
+    if (runtime.kind === 'provider') {
+      try {
+        await runtime.disposeProvider?.();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
     if (failures.length > 0) {
       throw new AggregateError(failures, 'Floot session agent shutdown failed');
     }
@@ -2460,6 +2474,12 @@ export const make = async (
             default: model.id === defaultModel,
             defaultReasoningEffort: null,
             reasoningEfforts: [],
+            ...(model.contextLength === undefined
+              ? {}
+              : { contextLength: model.contextLength }),
+            ...(model.maxOutputTokens === undefined
+              ? {}
+              : { maxOutputTokens: model.maxOutputTokens }),
             subscriptionIds: ['default'],
           }),
         });
@@ -2468,6 +2488,10 @@ export const make = async (
     }
     if (backendId !== 'provider') {
       const hosted = await getHostedBackends();
+      // Catalog projection is shared; this alias is inference, not a CLI runner.
+      if (hosted.has('codex') && (await E(powers).has('codex-inference'))) {
+        hosted.set('fae-codex', hosted.get('codex'));
+      }
       if (backendId !== undefined && !hosted.has(backendId)) {
         throw Error(`Unknown hosted backend "${backendId}"`);
       }
@@ -2482,7 +2506,11 @@ export const make = async (
             /** @type {const} */ ([id, await readHostedCatalog(id, backend)]),
         ),
       );
-      for (const [id, accounts] of read) {
+      for (const [id, listedAccounts] of read) {
+        const accounts =
+          id === 'fae-codex'
+            ? listedAccounts.filter(account => !account.pinnedOnly)
+            : listedAccounts;
         catalogs.push(
           harden({
             backendId: id,
@@ -2502,7 +2530,10 @@ export const make = async (
         );
         /** @type {Map<string, { model: any, subscriptionIds: string[] }>} */
         const byModel = new Map();
-        for (const account of accounts) {
+        for (const account of accounts.filter(
+          item =>
+            id !== 'fae-codex' || ['current', 'stale'].includes(item.state),
+        )) {
           for (const model of account.models) {
             const entry = byModel.get(model.id);
             if (entry === undefined) {
@@ -2533,6 +2564,12 @@ export const make = async (
               default: backendId === undefined ? false : model.default,
               defaultReasoningEffort: model.defaultReasoningEffort,
               reasoningEfforts: model.reasoningEfforts,
+              ...(model.contextLength === undefined
+                ? {}
+                : { contextLength: model.contextLength }),
+              ...(model.maxOutputTokens === undefined
+                ? {}
+                : { maxOutputTokens: model.maxOutputTokens }),
               subscriptionIds,
             }),
           });
@@ -3119,6 +3156,15 @@ export const make = async (
           }
           for (const entry of stored.sessions) {
             assertSessionIdentity(entry);
+            if (entry.backendId === 'fae-codex') {
+              assertSubscriptionResponsesRecipe(entry.inferenceRecipe);
+              (entry.inferenceRecipe.model === entry.modelId &&
+                (entry.inferenceRecipe.reasoningEffort || '') ===
+                  (entry.reasoningEffort || '')) ||
+                Fail`Floot inference recipe differs from session identity`;
+            } else
+              !Object.hasOwn(entry, 'inferenceRecipe') ||
+                Fail`Unexpected Floot inference recipe`;
             if (
               typeof entry.systemPrompt !== 'string' ||
               entry.systemPrompt.trim() === ''
@@ -3738,6 +3784,7 @@ export const make = async (
       let journalPowers;
       /** @type {Awaited<ReturnType<typeof makeStreamingAgent>> | undefined} */
       let constructedAgent;
+      let ownedProvider;
       agentP = (async () => {
         const host = getHost();
         journalPowers = await providePrivateTurnStorage(host, id);
@@ -4027,6 +4074,23 @@ export const make = async (
               return makeSendOnlyClient(mountClient.run);
             },
           };
+        } else if (entry.backendId === 'fae-codex') {
+          const recipe = entry.inferenceRecipe;
+          assertSubscriptionResponsesRecipe(recipe);
+          (recipe?.kind === 'subscription-responses' &&
+            recipe.model === entry.modelId &&
+            (recipe.reasoningEffort || '') === (entry.reasoningEffort || '')) ||
+            Fail`Invalid retained Floot inference recipe`;
+          ownedProvider = makeSubscriptionResponsesProvider({
+            ...recipe,
+            sessionId: `floot-${id}`,
+          });
+          agentConfig = {
+            kind: 'provider',
+            providerFormat: 'responses-output-v1',
+            provideProvider: () => ownedProvider,
+            disposeProvider: () => ownedProvider.dispose(),
+          };
         } else {
           // A thunk, not a resolved provider: `refreshCredentials()` clears
           // the factory's cache, and a session that had captured its provider
@@ -4118,6 +4182,7 @@ export const make = async (
         // session reachable through nothing.
         try {
           if (constructedAgent) await constructedAgent.shutdown(true);
+          else await ownedProvider?.dispose();
           const failedMountClient = hostedMountClients.get(id);
           if (failedMountClient) {
             await failedMountClient.close();
@@ -4773,7 +4838,7 @@ export const make = async (
    * @param {Record<string, any>} options
    * @returns {Promise<string>} the new session id
    */
-  const provisionSession = async options => {
+  const provisionSession = async (options, inheritedInferenceRecipe) => {
     if (
       options.systemPrompt !== undefined &&
       (typeof options.systemPrompt !== 'string' ||
@@ -4802,6 +4867,7 @@ export const make = async (
     const selectedModel = options.modelId || '';
     const backendId = options.backendId || 'provider';
     const modelId = selectedModel;
+    let inferenceRecipe;
     const providerConfig = await getProviderConfig().catch(() => undefined);
     const openRouter = providerConfig?.provider === 'openrouter';
     if (
@@ -4814,7 +4880,38 @@ export const make = async (
     }
     /** @type {import('@endo/hosted-agent').PromptEnvironment} */
     let promptEnvironment = PROVIDER_PROMPT_ENVIRONMENT;
-    if (backendId !== 'provider') {
+    if (backendId === 'fae-codex') {
+      !options.subscription ||
+        options.subscription === 'auto' ||
+        Fail`Fae Codex currently uses automatic subscription routing only`;
+      if (inheritedInferenceRecipe) {
+        assertSubscriptionResponsesRecipe(inheritedInferenceRecipe);
+        (inheritedInferenceRecipe.model === modelId &&
+          (inheritedInferenceRecipe.reasoningEffort || '') ===
+            (options.reasoningEffort || '')) ||
+          Fail`Delegated inference identity differs from its parent`;
+        inferenceRecipe = inheritedInferenceRecipe;
+      } else {
+        const rows = (await readCatalogs('fae-codex')).models;
+        const model = rows.find(row => row.modelId === modelId);
+        model || Fail`Unknown model for Fae Codex subscription`;
+        !options.reasoningEffort ||
+          model.reasoningEfforts.includes(options.reasoningEffort) ||
+          Fail`Unsupported reasoning effort for Fae Codex subscription`;
+        inferenceRecipe = harden({
+          kind: 'subscription-responses',
+          subscription: await E(powers).lookup('codex-inference'),
+          model: modelId,
+          ...(options.reasoningEffort
+            ? { reasoningEffort: options.reasoningEffort }
+            : {}),
+          ...(model.contextLength === undefined
+            ? {}
+            : { contextLength: model.contextLength }),
+        });
+        assertSubscriptionResponsesRecipe(inferenceRecipe);
+      }
+    } else if (isHostedSession({ backendId })) {
       const backend = (await getHostedBackends()).get(backendId);
       if (!backend) throw Error(`Unknown hosted backend "${backendId}"`);
       if (
@@ -4903,7 +5000,10 @@ export const make = async (
         );
       }
     }
-    if (backendId === 'provider' && options.networkPolicy !== undefined) {
+    if (
+      !isHostedSession({ backendId }) &&
+      options.networkPolicy !== undefined
+    ) {
       throw Error('Only a hosted backend has a sandbox network policy');
     }
     // Snapshot the preset's id and prompt so later catalog edits don't change
@@ -4921,7 +5021,7 @@ export const make = async (
     const promptContext = normalizePromptContext({
       environment: promptEnvironment,
       spoken: !delegated && options.spoken === true,
-      containerMounts: backendId !== 'provider',
+      containerMounts: isHostedSession({ backendId }),
     });
     const sessionPrompt = composeSessionSystemPrompt({
       presetPrompt: composePresetPrompt({
@@ -4946,6 +5046,7 @@ export const make = async (
       ...delegationFields,
       backendId,
       modelId,
+      ...(inferenceRecipe ? { inferenceRecipe } : {}),
       ...(backendId !== 'provider'
         ? {
             ...(options.reasoningEffort
@@ -5166,15 +5267,18 @@ export const make = async (
           // not have its delegates drain another.
           ...(parent.subscription ? { subscription: parent.subscription } : {}),
         };
-        const childId = await provisionSession({
-          title: `${parent?.title || 'Session'} / ${name}`,
-          presetId: parent?.presetId,
-          ...inheritedModel,
-          ...(childPrompt ? { systemPrompt: childPrompt } : {}),
-          parentSessionId: parentId,
-          subagentName: name,
-          subagentDepth: depth,
-        });
+        const childId = await provisionSession(
+          {
+            title: `${parent?.title || 'Session'} / ${name}`,
+            presetId: parent?.presetId,
+            ...inheritedModel,
+            ...(childPrompt ? { systemPrompt: childPrompt } : {}),
+            parentSessionId: parentId,
+            subagentName: name,
+            subagentDepth: depth,
+          },
+          parent.inferenceRecipe,
+        );
         const locator = await E(getHost()).locate(`session-${childId}`);
         return harden({ name, locator });
       },
@@ -5468,6 +5572,17 @@ export const make = async (
           continuity: 'explicit',
           toolOwnership: 'endo',
         }),
+        ...((await E(powers).has('codex-inference'))
+          ? [
+              {
+                id: 'fae-codex',
+                title: 'Fae · Codex pool',
+                kind: 'api',
+                continuity: 'explicit',
+                toolOwnership: 'endo',
+              },
+            ]
+          : []),
         ...[...hosted.values()].map(({ descriptor }) => descriptor),
       ]);
     },

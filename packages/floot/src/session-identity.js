@@ -20,5 +20,7 @@ harden(assertSessionIdentity);
 
 /** @param {{ backendId: string } | undefined} entry */
 export const isHostedSession = entry =>
-  entry !== undefined && entry.backendId !== 'provider';
+  entry !== undefined &&
+  entry.backendId !== 'provider' &&
+  entry.backendId !== 'fae-codex';
 harden(isHostedSession);

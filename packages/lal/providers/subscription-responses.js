@@ -6,9 +6,11 @@ import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { usageFromProviderEvent } from '@endo/hosted-agent/provider-usage.js';
 import { makePromiseKit } from '@endo/promise-kit';
+import { M, mustMatch } from '@endo/patterns';
 
 // A transport bound matching the Codex broker, not a model context limit.
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
+const reasoningEffortPattern = /^[a-z][a-z0-9_-]{0,63}$/;
 
 /** @param {any} call */
 const assertCall = call => {
@@ -99,6 +101,36 @@ export const messageFromResponsesOutput = output => {
   });
 };
 harden(messageFromResponsesOutput);
+
+/** @param {any} recipe */
+export const assertSubscriptionResponsesRecipe = recipe => {
+  const fields = harden([
+    'kind',
+    'subscription',
+    'model',
+    'reasoningEffort',
+    'contextLength',
+  ]);
+  (recipe &&
+    recipe.kind === 'subscription-responses' &&
+    ['kind', 'subscription', 'model'].every(key =>
+      Object.hasOwn(recipe, key),
+    ) &&
+    Reflect.ownKeys(recipe).every(key => fields.includes(String(key))) &&
+    typeof recipe.model === 'string' &&
+    recipe.model !== '' &&
+    (recipe.reasoningEffort === undefined ||
+      (typeof recipe.reasoningEffort === 'string' &&
+        reasoningEffortPattern.test(recipe.reasoningEffort))) &&
+    (recipe.contextLength === undefined ||
+      (typeof recipe.contextLength === 'number' &&
+        Number.isInteger(recipe.contextLength) &&
+        Number(recipe.contextLength) > 0 &&
+        Number(recipe.contextLength) <= 0xffff_ffff))) ||
+    Fail`Invalid subscription Responses recipe`;
+  mustMatch(recipe.subscription, M.remotable(), 'subscription capability');
+};
+harden(assertSubscriptionResponsesRecipe);
 
 /**
  * @param {any[]} messages
@@ -248,7 +280,7 @@ export const makeSubscriptionResponsesProvider = ({
     Fail`Invalid inference session identity`;
   reasoningEffort === undefined ||
     (typeof reasoningEffort === 'string' &&
-      /^[a-z][a-z0-9_-]{0,63}$/.test(reasoningEffort)) ||
+      reasoningEffortPattern.test(reasoningEffort)) ||
     Fail`Invalid reasoning effort`;
   contextLength === undefined ||
     (Number.isInteger(contextLength) &&

@@ -124,4 +124,5 @@ export { makeOpenRouterProvider } from './openrouter.js';
 export {
   makeSubscriptionResponsesProvider,
   messageFromResponsesOutput,
+  assertSubscriptionResponsesRecipe,
 } from './subscription-responses.js';
