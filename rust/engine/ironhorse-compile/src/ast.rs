@@ -521,3 +521,24 @@ fn dump_string(units: &[u16]) -> String {
     out.push('"');
     out
 }
+
+/// Tear a tree down with a heap worklist instead of the recursive drop glue,
+/// which took one host frame chain per tree level: a refused 5,000-term
+/// `1+1+…` overflowed a 512 KiB wasm stack freeing its partial tree
+/// (STACK-DEPTH-REFACTOR.md D1c). Children are moved out before a node
+/// drops, so the glue only ever sees childless nodes.
+impl Drop for Node {
+    fn drop(&mut self) {
+        if self.children.is_empty() {
+            return;
+        }
+        let mut stack = std::mem::take(&mut self.children);
+        while let Some(item) = stack.pop() {
+            match item {
+                Item::Node(mut n) => stack.append(&mut n.children),
+                Item::List(mut v) => stack.append(&mut v),
+                Item::Symbol(_) | Item::Null => {}
+            }
+        }
+    }
+}

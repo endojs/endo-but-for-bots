@@ -1424,7 +1424,8 @@ impl Parser<'_> {
         };
         let line = node.line;
         let elision = node.flags & flags::ELISION != 0;
-        let Some(Item::List(items)) = node.children.into_iter().next() else {
+        let Some(Item::List(items)) = std::mem::take(&mut { node }.children).into_iter().next()
+        else {
             return Ok(None);
         };
         let n = items.len();
@@ -1472,7 +1473,8 @@ impl Parser<'_> {
             return Ok(None);
         };
         let line = node.line;
-        let Some(Item::List(props)) = node.children.into_iter().next() else {
+        let Some(Item::List(props)) = std::mem::take(&mut { node }.children).into_iter().next()
+        else {
             return Ok(None);
         };
         let n = props.len();
@@ -1582,7 +1584,7 @@ impl Parser<'_> {
             return Ok(None);
         };
         let line = node.line;
-        let expr = match node.children.into_iter().next() {
+        let expr = match std::mem::take(&mut { node }.children).into_iter().next() {
             Some(e) => e,
             None => return Ok(None),
         };

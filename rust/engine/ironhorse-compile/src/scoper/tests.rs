@@ -531,3 +531,63 @@ fn duplicate_private_names_are_error() {
     )
     .is_ok());
 }
+
+/// The default-arm predicates must name exactly the tokens without an arm of
+/// their own in the dispatches: a token wrongly classified default would skip
+/// its arm when the work stack enters it in place.
+#[test]
+fn default_arm_predicates_match_the_dispatch_arms() {
+    let source = include_str!("../scoper.rs");
+    fn tokens_in(text: &str) -> std::collections::BTreeSet<String> {
+        text.split("Token::")
+            .skip(1)
+            .map(|rest| rest.chars().take_while(|c| c.is_alphanumeric()).collect())
+            .collect()
+    }
+    fn arm_tokens(source: &str, function: &str) -> std::collections::BTreeSet<String> {
+        let start = source
+            .find(&format!("fn {function}("))
+            .expect("dispatch function");
+        let body = &source[start..];
+        let body = &body[body.find("match node.token {").expect("dispatch match")..];
+        let end = body.find("\n            _ =>").expect("default arm");
+        // The arm patterns are the lines at the match's arm indentation (a
+        // pattern rustfmt splits continues there with `|`); arm bodies sit
+        // deeper. Every pattern must name its tokens as `Token::…`: a pattern
+        // that does not (a binding with a guard, a constant, a glob-imported
+        // variant) would hide its tokens from this check.
+        body[..end]
+            .lines()
+            .skip(1)
+            .filter(|line| {
+                line.starts_with("            ")
+                    && !line.trim().is_empty()
+                    && !line[12..].starts_with(' ')
+                    && !line[12..].starts_with("//")
+                    && !matches!(line.trim(), "}" | "}," | ")" | "),")
+            })
+            .flat_map(|line| {
+                assert!(
+                    line.contains("Token::"),
+                    "{function}: an arm pattern without `Token::`: {line}"
+                );
+                tokens_in(line.split("=>").next().expect("a pattern"))
+            })
+            .collect()
+    }
+    fn predicate_tokens(source: &str, function: &str) -> std::collections::BTreeSet<String> {
+        let start = source.find(&format!("fn {function}(")).expect("predicate");
+        let body = &source[start..];
+        tokens_in(&body[..body.find("\n}").expect("predicate end")])
+    }
+    for (dispatch, predicate) in [
+        ("hoist_dispatch_inner", "hoist_is_default"),
+        ("bind_dispatch_inner", "bind_is_default"),
+    ] {
+        assert_eq!(
+            arm_tokens(source, dispatch),
+            predicate_tokens(source, predicate),
+            "{predicate} must list exactly the tokens with an arm in {dispatch}"
+        );
+    }
+}

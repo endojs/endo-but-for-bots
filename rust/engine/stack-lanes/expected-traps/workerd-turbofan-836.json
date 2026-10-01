@@ -9,13 +9,9 @@
   "expected_traps": [
     "parse-and-2045",
     "parse-call-chain-2044",
-    "parse-computed-2045",
     "parse-elseif-chain-2044",
-    "parse-functions-512",
     "parse-ifelse-block-2041",
-    "parse-member-chain-2045",
     "parse-nullish-2045",
-    "parse-optchain-1022",
     "parse-or-2045",
     "parse-tagged-chain-2043",
     "proxy-proto-cycle",

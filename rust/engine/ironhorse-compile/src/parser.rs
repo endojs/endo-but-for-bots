@@ -138,35 +138,42 @@ pub const OPERAND_COST: u32 = 1;
 /// Return the line of the second `__proto__:` setter in an object literal.
 /// Converted assignment/parameter covers are `ObjectBinding` nodes, so only
 /// nodes that remain `Object` are subject to Annex B.3.1.
-fn duplicate_proto_setter_line(item: &Item) -> Option<u32> {
-    match item {
-        Item::Node(node) => {
-            if node.token == Token::Object {
-                let mut found = false;
-                if let Some(Item::List(properties)) = node.children.first() {
-                    for property in properties {
-                        if let Item::Node(property) = property {
-                            let is_proto_setter = property.token == Token::Property
-                                && property.flags & flags::SHORTHAND == 0
-                                && matches!(
-                                    property.children.first(),
-                                    Some(Item::Symbol(symbol)) if SymbolName::from_units(symbol) == "__proto__"
-                                );
-                            if is_proto_setter {
-                                if found {
-                                    return Some(property.line);
+fn duplicate_proto_setter_line(root: &Item) -> Option<u32> {
+    // The recursion's pre-order search as a worklist (STACK-DEPTH-REFACTOR.md
+    // D1b): children are pushed in reverse, so the first duplicate found is
+    // the same one.
+    let mut stack: Vec<&Item> = vec![root];
+    while let Some(item) = stack.pop() {
+        match item {
+            Item::Node(node) => {
+                if node.token == Token::Object {
+                    let mut found = false;
+                    if let Some(Item::List(properties)) = node.children.first() {
+                        for property in properties {
+                            if let Item::Node(property) = property {
+                                let is_proto_setter = property.token == Token::Property
+                                    && property.flags & flags::SHORTHAND == 0
+                                    && matches!(
+                                        property.children.first(),
+                                        Some(Item::Symbol(symbol)) if SymbolName::from_units(symbol) == "__proto__"
+                                    );
+                                if is_proto_setter {
+                                    if found {
+                                        return Some(property.line);
+                                    }
+                                    found = true;
                                 }
-                                found = true;
                             }
                         }
                     }
                 }
+                stack.extend(node.children.iter().rev());
             }
-            node.children.iter().find_map(duplicate_proto_setter_line)
+            Item::List(items) => stack.extend(items.iter().rev()),
+            Item::Symbol(_) | Item::Null => {}
         }
-        Item::List(items) => items.iter().find_map(duplicate_proto_setter_line),
-        Item::Symbol(_) | Item::Null => None,
     }
+    None
 }
 
 /// The parser: the token window (`states[0]`/`states[1]`), the mode-flag
@@ -433,6 +440,7 @@ impl<'a> Parser<'a> {
         self.stack.push(Item::Symbol(symbol.to_units()));
     }
 
+    #[inline(never)]
     fn push_integer(&mut self, value: i32, line: u32) {
         self.push(Item::Node(Box::new(self.new_node(
             Token::Integer,
@@ -443,6 +451,7 @@ impl<'a> Parser<'a> {
         ))));
     }
 
+    #[inline(never)]
     fn push_number(&mut self, value: f64, line: u32) {
         self.push(Item::Node(Box::new(self.new_node(
             Token::Number,
@@ -461,6 +470,7 @@ impl<'a> Parser<'a> {
     /// `mxStringLegacyFlag` (bit 2) when its escape scan saw a legacy
     /// octal or `\8`/`\9`. `fxStringNodeHoist` turns that into a
     /// SyntaxError in a strict scope; sloppy code keeps the value.
+    #[inline(never)]
     fn push_string_legacy(&mut self, value: Vec<u16>, line: u32, escaped: bool, legacy: bool) {
         let mut flags = if escaped { 1 } else { 0 };
         if legacy {
@@ -480,6 +490,7 @@ impl<'a> Parser<'a> {
     /// carries `mxStringErrorFlag` (bit 1) when its escape scan failed, so
     /// the coder can turn it into `undefined` (tagged) or a SyntaxError
     /// (everywhere else). Kept faithful; not surfaced in the dump.
+    #[inline(never)]
     fn push_string_flagged(&mut self, value: Vec<u16>, line: u32, escaped: bool, error: bool) {
         let mut flags = if escaped { 1 } else { 0 };
         if error {
@@ -500,6 +511,7 @@ impl<'a> Parser<'a> {
     /// octal in template position). A *tagged* template never codes the cooked
     /// slot (it emits `undefined` instead), so this fires only for the untagged
     /// primary-position template just built on the stack top.
+    #[inline(never)]
     fn reject_untagged_template_cooked_error(&self) -> PResult<()> {
         let Some(Item::Node(node)) = self.stack.last() else {
             return Ok(());
@@ -521,6 +533,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    #[inline(never)]
     fn push_raw(&mut self, value: Vec<u16>, line: u32) {
         self.push(Item::Node(Box::new(self.new_node(
             Token::String,
@@ -531,6 +544,7 @@ impl<'a> Parser<'a> {
         ))));
     }
 
+    #[inline(never)]
     fn push_bigint(&mut self, value: crate::lexer::BigIntLiteral, line: u32) {
         self.push(Item::Node(Box::new(self.new_node(
             Token::Bigint,
@@ -1401,6 +1415,7 @@ impl<'a> Parser<'a> {
 
     /// The cooked / raw strings of the current `Template`/`TemplateHead`
     /// lexeme.
+    #[inline(never)]
     fn cur_template_strings(&self) -> (Vec<u16>, Vec<u16>) {
         (
             self.cur.string.clone().unwrap_or_default(),
@@ -1410,6 +1425,7 @@ impl<'a> Parser<'a> {
 
     /// `import` in expression position: dynamic `import(...)` or
     /// `import.meta`.
+    #[inline(never)]
     fn import_literal(&mut self, no_call: bool, line: u32) -> PResult<()> {
         self.match_token(Token::Import)?;
         if !no_call && self.cur.token == Token::LeftParenthesis {
@@ -1465,6 +1481,7 @@ impl<'a> Parser<'a> {
     }
 
     /// `super(...)` / `super.x` / `super[e]`.
+    #[inline(never)]
     fn super_literal(&mut self, line: u32) -> PResult<()> {
         self.match_token(Token::Super)?;
         if self.cur.token == Token::LeftParenthesis {
@@ -1494,6 +1511,7 @@ impl<'a> Parser<'a> {
     /// covers (`async function` / `async (…)` / `async x =>`), or a bare
     /// single-identifier arrow head (`x =>`). Transliterates the
     /// `XS_TOKEN_IDENTIFIER` arm of `fxLiteralExpression`.
+    #[inline(never)]
     fn identifier_literal(&mut self, line: u32) -> PResult<()> {
         let escaped = self.cur.escaped;
         let mut symbol = self.cur.symbol.clone().unwrap_or_default();
@@ -1560,6 +1578,7 @@ impl<'a> Parser<'a> {
     }
 
     /// `fxArrayExpression` — array literal (elision, spread, elements).
+    #[inline(never)]
     fn array_expression(&mut self) -> PResult<()> {
         let mut count = 0usize;
         let mut elision = true;
@@ -1615,6 +1634,7 @@ impl<'a> Parser<'a> {
     /// string/number keys, `...spread`) and method / accessor / generator
     /// / async shorthand (`{ m() {} }`, `{ get x() {} }`, `{ *g() {} }`,
     /// `{ async f() {} }`).
+    #[inline(never)]
     fn object_expression(&mut self) -> PResult<()> {
         let mut count = 0usize;
         let line = self.cur.line;
@@ -1705,6 +1725,7 @@ impl<'a> Parser<'a> {
     /// `PropertyAt`). The accessor/generator/async lookahead
     /// (`token2`) is recognized so callers can reject the deferred
     /// method forms precisely.
+    #[inline(never)]
     fn property_name(&mut self) -> PResult<(Option<SymbolName>, Token, Token, Token)> {
         let mut symbol: Option<SymbolName> = None;
         let mut token1 = Token::NoToken;
@@ -1909,6 +1930,7 @@ impl<'a> Parser<'a> {
     /// `fxTemplateExpression` — a template with substitutions
     /// (`TemplateHead` … `${ expr }` … `TemplateTail`). Leaves a node
     /// list of the items on the stack.
+    #[inline(never)]
     fn template_expression(&mut self) -> PResult<()> {
         let mut count = 0usize;
         let line = self.cur.line;
@@ -1986,6 +2008,7 @@ impl<'a> Parser<'a> {
 
     /// `fxParameters` — a parenthesized argument list (`( a, b, ...c )`),
     /// yielding a `Params` node wrapping the argument list.
+    #[inline(never)]
     fn parameters(&mut self) -> PResult<()> {
         let mut count = 0usize;
         let line = self.cur.line;
@@ -2027,6 +2050,7 @@ impl<'a> Parser<'a> {
         self.nested(STATEMENT_COST, |p| p.new_expression_inner())
     }
 
+    #[inline(never)]
     fn new_expression_inner(&mut self) -> PResult<()> {
         let line = self.cur.line;
         self.match_token(Token::New)?;
@@ -2107,6 +2131,7 @@ impl<'a> Parser<'a> {
     /// reparsed via [`Self::parameters_binding_from_expressions`]) and,
     /// when `flag` (async) is set but no `=>` follows, an `async(args)`
     /// call.
+    #[inline(never)]
     fn group_expression(&mut self, flag: u32) -> PResult<()> {
         let mut comma_flag = false;
         let mut spread_flag = false;

@@ -758,6 +758,7 @@ impl Scoper<'_> {
     /// its body) inside it so their inner scopes chain through the field
     /// function. `is_static` members carry a `Body` static block whose body is
     /// child 0; a data field's value is child 1. Returns the scope index.
+    #[inline(never)]
     fn hoist_field_init_scope(
         &mut self,
         members: &[&Node],
@@ -1171,8 +1172,59 @@ impl Scoper<'_> {
             Token::Export => self.hoist_export(node),
             Token::Class => self.hoist_class(node),
             // fold: Host — deferred (see report).
-            _ => self.hoist_children(node),
+            _ => self.hoist_default_iter(node),
         }
+    }
+
+    /// The default hoist arm (visit every child in order) as an explicit work
+    /// stack (STACK-DEPTH-REFACTOR.md D1b). A child that is itself default-arm
+    /// is entered in place — `descend`'s work charge and depth check, in the
+    /// same order the recursion made them — instead of recursing on the host
+    /// stack. Out of line: inlined into `hoist_dispatch_inner`, its state
+    /// widened every hoist level, including chains that never reach this arm
+    /// (a 2,044-link call chain needed 96 KiB more wasm stack).
+    ///
+    /// Unlike `descend`, it releases the levels it entered only on success:
+    /// an error ends the walk, and `run_goal_with_access_log` returns it and
+    /// drops the `Scoper` without reading `depth` again.
+    #[inline(never)]
+    fn hoist_default_iter(&mut self, root: &Node) -> Result<(), ParseError> {
+        enum W<'t> {
+            Items(&'t [Item], usize),
+            Leave,
+        }
+        let mut stack: Vec<W<'_>> = vec![W::Items(&root.children, 0)];
+        while let Some(top) = stack.last_mut() {
+            match top {
+                W::Leave => {
+                    stack.pop();
+                    self.depth -= 1;
+                }
+                W::Items(items, i) => {
+                    if *i >= items.len() {
+                        stack.pop();
+                        continue;
+                    }
+                    let item = &items[*i];
+                    *i += 1;
+                    match item {
+                        Item::List(v) => stack.push(W::Items(v, 0)),
+                        Item::Node(n) if hoist_is_default(n.token) => {
+                            self.meter.work(1);
+                            if self.depth >= TREE_DEPTH_LIMIT {
+                                return Err(err(n.line, "stack overflow"));
+                            }
+                            self.depth += 1;
+                            stack.push(W::Leave);
+                            stack.push(W::Items(&n.children, 0));
+                        }
+                        Item::Node(n) => self.hoist_dispatch(n)?,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// `fxClassNodeHoist` — create the class's block scopes: a `symbolScope`
@@ -1181,6 +1233,7 @@ impl Scoper<'_> {
     /// keys, private method values and the instance initializer closure.
     /// Children `[symbol, heritage, items, constructorInit,
     /// instanceInit, constructor]`.
+    #[inline(never)]
     fn hoist_class(&mut self, node: &Node) -> Result<(), ParseError> {
         let former = self.class_node;
         let symbol = child_sym(node, 0);
@@ -1374,6 +1427,7 @@ impl Scoper<'_> {
         }
     }
 
+    #[inline(never)]
     fn hoist_program(&mut self, node: &Node) -> Result<(), ParseError> {
         // XS: XS_TOKEN_EVAL when parser->flags has mxEvalFlag, else PROGRAM.
         let token = if self.node_flags(node) & SCOPE_EVAL != 0 {
@@ -1395,6 +1449,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_module(&mut self, node: &Node) -> Result<(), ParseError> {
         let si = self.scope_new(node, Token::Module);
         self.function_scope = Some(si);
@@ -1409,6 +1464,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_block(&mut self, node: &Node) -> Result<(), ParseError> {
         let si = self.scope_new(node, Token::Block);
         self.node_scope.insert(node_id(node), (si, None));
@@ -1419,6 +1475,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_body(&mut self, node: &Node) -> Result<(), ParseError> {
         let si = self.scope_new(node, Token::Block);
         self.body_scope = Some(si);
@@ -1433,6 +1490,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_function(&mut self, node: &Node) -> Result<(), ParseError> {
         let function_scope = self.function_scope;
         let body_scope = self.body_scope;
@@ -1478,6 +1536,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_call(&mut self, node: &Node) -> Result<(), ParseError> {
         // children[0] = reference, children[1] = params
         if let Some(reference) = child_node(node, 0) {
@@ -1506,6 +1565,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_catch(&mut self, node: &Node) -> Result<(), ParseError> {
         // children[0] = parameter (or Null), children[1] = statement
         let has_param = matches!(child(node, 0), Some(Item::Node(_)));
@@ -1550,6 +1610,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_coalesce(&mut self, node: &Node) -> Result<(), ParseError> {
         // early error: mixing ?? with && / || without parentheses
         if let Some(l) = child_node(node, 0) {
@@ -1571,6 +1632,7 @@ impl Scoper<'_> {
         self.hoist_children(node)
     }
 
+    #[inline(never)]
     fn hoist_declare(&mut self, node: &Node) -> Result<(), ParseError> {
         let symbol = child_sym(node, 0).map(Sym::Named);
         let symbol = match symbol {
@@ -1626,6 +1688,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_var(
         &mut self,
         symbol: &Sym,
@@ -1681,6 +1744,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_define(&mut self, node: &Node) -> Result<(), ParseError> {
         // children[0] = symbol, children[1] = initializer (function)
         let symbol = match child_sym(node, 0) {
@@ -1739,6 +1803,7 @@ impl Scoper<'_> {
 
     /// Hoist a function node but suppress the named-expression self CONST
     /// (used for a function *declaration*'s initializer).
+    #[inline(never)]
     fn hoist_function_no_self(&mut self, node: &Node) -> Result<(), ParseError> {
         if node.token != Token::Function && node.token != Token::Generator {
             return self.hoist_dispatch(node);
@@ -1789,6 +1854,7 @@ impl Scoper<'_> {
         }
     }
 
+    #[inline(never)]
     fn hoist_for(&mut self, node: &Node) -> Result<(), ParseError> {
         let si = self.scope_new(node, Token::Block);
         self.node_scope.insert(node_id(node), (si, None));
@@ -1801,6 +1867,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_for_in_of(&mut self, node: &Node) -> Result<(), ParseError> {
         let si = self.scope_new(node, Token::Block);
         self.node_scope.insert(node_id(node), (si, None));
@@ -1813,6 +1880,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_switch(&mut self, node: &Node) -> Result<(), ParseError> {
         // children[0] = expression, children[1] = items (list of Case)
         if let Some(expr) = child(node, 0) {
@@ -1827,6 +1895,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_with(&mut self, node: &Node) -> Result<(), ParseError> {
         // children[0] = expression, children[1] = statement
         if let Some(expr) = child(node, 0) {
@@ -1842,6 +1911,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn hoist_string(&mut self, node: &Node) -> Result<(), ParseError> {
         // `fxStringNodeHoist`: a string carrying `mxStringLegacyFlag` (a
         // legacy octal or `\8`/`\9`) inside a strict scope becomes
@@ -1869,6 +1939,7 @@ impl Scoper<'_> {
     /// a bare `import "m"` declares one anonymous slot. The `from`/`with`
     /// re-export attributes are coder-side. Modules are strict, so
     /// importing `arguments`/`eval` is an early error.
+    #[inline(never)]
     fn hoist_import(&mut self, node: &Node) -> Result<(), ParseError> {
         let scope = self.scope.unwrap();
         let strict = self.node_flags(node) & SCOPE_STRICT != 0;
@@ -1923,6 +1994,7 @@ impl Scoper<'_> {
     /// name in the export-link set, raising a duplicate-export early
     /// error. The `export … from` re-export indirection (which synthesizes
     /// indirect `let` bindings) is folded (see report).
+    #[inline(never)]
     fn hoist_export(&mut self, node: &Node) -> Result<(), ParseError> {
         // `export … from "m"` — a re-export. XS synthesizes one anonymous
         // module-scope `let` per specifier (its `importSpecifier` *and*
@@ -2098,8 +2170,51 @@ impl Scoper<'_> {
             Token::PrivateMember | Token::PrivateIdentifier => self.bind_private_member(node),
             Token::Delete => self.bind_delete(node),
             // fold: Field — deferred.
-            _ => self.bind_children(node),
+            _ => self.bind_default_iter(node),
         }
+    }
+
+    /// The default bind arm as an explicit work stack, as
+    /// [`Self::hoist_default_iter`] does for hoisting, out of line for the
+    /// same reason, and like it leaving `depth` raised on an error.
+    #[inline(never)]
+    fn bind_default_iter(&mut self, root: &Node) -> Result<(), ParseError> {
+        enum W<'t> {
+            Items(&'t [Item], usize),
+            Leave,
+        }
+        let mut stack: Vec<W<'_>> = vec![W::Items(&root.children, 0)];
+        while let Some(top) = stack.last_mut() {
+            match top {
+                W::Leave => {
+                    stack.pop();
+                    self.depth -= 1;
+                }
+                W::Items(items, i) => {
+                    if *i >= items.len() {
+                        stack.pop();
+                        continue;
+                    }
+                    let item = &items[*i];
+                    *i += 1;
+                    match item {
+                        Item::List(v) => stack.push(W::Items(v, 0)),
+                        Item::Node(n) if bind_is_default(n.token) => {
+                            self.meter.work(1);
+                            if self.depth >= TREE_DEPTH_LIMIT {
+                                return Err(err(n.line, "stack overflow"));
+                            }
+                            self.depth += 1;
+                            stack.push(W::Leave);
+                            stack.push(W::Items(&n.children, 0));
+                        }
+                        Item::Node(n) => self.bind_dispatch(n)?,
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// `fxClassNodeBind` — reserve the two frame slots the class coder uses
@@ -2108,6 +2223,7 @@ impl Scoper<'_> {
     /// constructor, and members. Hoisting already created the class/symbol
     /// scopes and any instance/static initializer function scopes; binding
     /// fills their capture and frame-count receipts for the coder.
+    #[inline(never)]
     fn bind_class(&mut self, node: &Node) -> Result<(), ParseError> {
         let former = self.class_node;
         self.push_variables(2);
@@ -2246,6 +2362,7 @@ impl Scoper<'_> {
     /// captures interleave), or, for a `static { … }` block, its body.
     /// `scopeCount == scopeMaximum` = the captured closures plus the peak
     /// temporary depth of the field values. Records each member's fi aliases.
+    #[inline(never)]
     fn bind_field_init_scope(
         &mut self,
         fi: usize,
@@ -2331,6 +2448,7 @@ impl Scoper<'_> {
         *self.node_scope.get(&node_id(node)).expect("scope for node")
     }
 
+    #[inline(never)]
     fn bind_program(&mut self, node: &Node) -> Result<(), ParseError> {
         let (si, _) = self.scope_of(node);
         self.fx_scope_binding(si);
@@ -2342,6 +2460,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_module(&mut self, node: &Node) -> Result<(), ParseError> {
         let (si, _) = self.scope_of(node);
         self.fx_scope_binding(si);
@@ -2353,6 +2472,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_block(&mut self, node: &Node) -> Result<(), ParseError> {
         let (si, _) = self.scope_of(node);
         self.fx_scope_binding(si);
@@ -2370,6 +2490,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_function(&mut self, node: &Node) -> Result<(), ParseError> {
         let (si, _) = self.scope_of(node);
         let level = self.scope_level;
@@ -2407,6 +2528,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_access(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
@@ -2424,6 +2546,7 @@ impl Scoper<'_> {
     /// The target is found by unwrapping a single-item parenthesized
     /// sequence exactly as the coder's `codeDelete` dispatch does (a
     /// multi-item `delete (a, b.#x)` is a value-`delete`, not an error).
+    #[inline(never)]
     fn bind_delete(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(target) = node.children.first() {
             if delete_target_is_private(target) {
@@ -2442,6 +2565,7 @@ impl Scoper<'_> {
     /// environment from which a missing brand could be supplied.
     /// The reference (child 1)
     /// binds after the lookup, matching `fxPrivateMemberNodeDistribute`.
+    #[inline(never)]
     fn bind_private_member(&mut self, node: &Node) -> Result<(), ParseError> {
         // A private member accessed on `super` (`super.#x`, `super.#m()`)
         // is invalid syntax: the reference base carries the `super` flag.
@@ -2467,6 +2591,7 @@ impl Scoper<'_> {
 
     /// `fxDeclareNodeBind` — a declaration node in the tree resolves its
     /// own symbol (so the coder learns its slot).
+    #[inline(never)]
     fn bind_declare_node(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
@@ -2483,6 +2608,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_define(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
@@ -2500,6 +2626,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_assign(&mut self, node: &Node) -> Result<(), ParseError> {
         // children[0]=reference, children[1]=value
         if let Some(reference) = child(node, 0) {
@@ -2511,6 +2638,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_binding(&mut self, node: &Node) -> Result<(), ParseError> {
         // children[0]=target, children[1]=initializer
         if let Some(target) = child(node, 0) {
@@ -2522,6 +2650,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_catch(&mut self, node: &Node) -> Result<(), ParseError> {
         let (scope, statement_scope) = self.scope_of(node);
         let has_param = matches!(child(node, 0), Some(Item::Node(_)));
@@ -2564,6 +2693,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_for(&mut self, node: &Node) -> Result<(), ParseError> {
         let (si, _) = self.scope_of(node);
         self.fx_scope_binding(si);
@@ -2583,6 +2713,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_for_in_of(&mut self, node: &Node) -> Result<(), ParseError> {
         let (si, _) = self.scope_of(node);
         self.push_variables(6);
@@ -2597,6 +2728,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_switch(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(expr) = child(node, 0) {
             self.bind_item(expr)?;
@@ -2617,6 +2749,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_with(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(expr) = child(node, 0) {
             self.bind_item(expr)?;
@@ -2630,6 +2763,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_try(&mut self, node: &Node) -> Result<(), ParseError> {
         self.push_variables(3);
         for i in 0..3 {
@@ -2641,6 +2775,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_array(&mut self, node: &Node) -> Result<(), ParseError> {
         self.push_variables(1);
         let spread = node.flags & flags::SPREAD != 0;
@@ -2655,6 +2790,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_array_binding(&mut self, node: &Node) -> Result<(), ParseError> {
         self.push_variables(6);
         self.bind_children(node)?;
@@ -2662,6 +2798,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_object(&mut self, node: &Node) -> Result<(), ParseError> {
         self.push_variables(1);
         // `fxObjectNodeBind`: copy each property's method/getter/setter flag
@@ -2692,6 +2829,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_object_binding(&mut self, node: &Node) -> Result<(), ParseError> {
         self.push_variables(2);
         self.bind_children(node)?;
@@ -2699,6 +2837,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_params(&mut self, node: &Node) -> Result<(), ParseError> {
         let spread = node.flags & flags::SPREAD != 0;
         if spread {
@@ -2711,6 +2850,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_params_binding(&mut self, node: &Node) -> Result<(), ParseError> {
         // `fxParamsBindingNodeBind`: getter/setter/plain parameter-count
         // early errors — a getter takes no parameters, a setter exactly one
@@ -2771,6 +2911,7 @@ impl Scoper<'_> {
         self.bind_children(node)
     }
 
+    #[inline(never)]
     fn bind_spread(&mut self, node: &Node) -> Result<(), ParseError> {
         self.push_variables(1);
         self.bind_children(node)?;
@@ -2778,6 +2919,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_delegate(&mut self, node: &Node) -> Result<(), ParseError> {
         self.push_variables(5);
         if let Some(expr) = child(node, 0) {
@@ -2787,6 +2929,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_template(&mut self, node: &Node) -> Result<(), ParseError> {
         // children[0]=reference (Null for untagged), children[1]=items
         let tagged = matches!(child(node, 0), Some(Item::Node(_)));
@@ -2800,11 +2943,13 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_this_target(&mut self, _node: &Node) -> Result<(), ParseError> {
         self.scope_arrow(self.scope);
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_super(&mut self, node: &Node) -> Result<(), ParseError> {
         self.scope_arrow(self.scope);
         if let Some(params) = child(node, 0) {
@@ -2828,6 +2973,7 @@ impl Scoper<'_> {
         Ok(())
     }
 
+    #[inline(never)]
     fn bind_postfix(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(left) = child(node, 0) {
             self.bind_item(left)?;
@@ -2841,6 +2987,7 @@ impl Scoper<'_> {
     /// local name and mark its declaration a closure|useClosure indirect
     /// binding, or raise `unknown variable` if it does not resolve. A
     /// re-export (`export … from`) is bound at load time, not here.
+    #[inline(never)]
     fn bind_export(&mut self, node: &Node) -> Result<(), ParseError> {
         if matches!(child(node, 1), Some(Item::Node(_))) {
             return Ok(());
@@ -3097,4 +3244,89 @@ mod compiler_access_log_tests {
             assert!(!run_goal(&root, Goal::Script).unwrap().accesses.is_empty());
         }
     }
+}
+
+/// The tokens `hoist_dispatch_inner` sends to its default arm: exactly those
+/// without an arm of their own, which `scoper::tests` checks against the
+/// dispatch's source.
+fn hoist_is_default(t: Token) -> bool {
+    !matches!(
+        t,
+        Token::Program
+            | Token::Module
+            | Token::Block
+            | Token::Body
+            | Token::Function
+            | Token::Generator
+            | Token::Call
+            | Token::New
+            | Token::Catch
+            | Token::Coalesce
+            | Token::Arg
+            | Token::Var
+            | Token::Let
+            | Token::Const
+            | Token::Using
+            | Token::Define
+            | Token::For
+            | Token::ForIn
+            | Token::ForOf
+            | Token::ForAwaitOf
+            | Token::Switch
+            | Token::With
+            | Token::String
+            | Token::Import
+            | Token::Export
+            | Token::Class
+    )
+}
+
+/// The tokens `bind_dispatch_inner` sends to its default arm, checked the
+/// same way as [`hoist_is_default`].
+fn bind_is_default(t: Token) -> bool {
+    !matches!(
+        t,
+        Token::Program
+            | Token::Module
+            | Token::Block
+            | Token::Body
+            | Token::Function
+            | Token::Generator
+            | Token::Access
+            | Token::Arg
+            | Token::Var
+            | Token::Let
+            | Token::Const
+            | Token::Using
+            | Token::Define
+            | Token::Assign
+            | Token::Binding
+            | Token::Catch
+            | Token::For
+            | Token::ForIn
+            | Token::ForOf
+            | Token::ForAwaitOf
+            | Token::Switch
+            | Token::With
+            | Token::Try
+            | Token::Array
+            | Token::ArrayBinding
+            | Token::Object
+            | Token::ObjectBinding
+            | Token::Params
+            | Token::ParamsBinding
+            | Token::Spread
+            | Token::Delegate
+            | Token::Template
+            | Token::This
+            | Token::Target
+            | Token::Super
+            | Token::Increment
+            | Token::Decrement
+            | Token::Export
+            | Token::Class
+            | Token::PrivateMember
+            | Token::PrivateIdentifier
+            | Token::Delete
+    )
 }

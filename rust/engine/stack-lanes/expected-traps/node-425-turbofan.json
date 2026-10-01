@@ -8,12 +8,8 @@
   },
   "expected_traps": [
     "parse-and-2045",
-    "parse-binary-chain-2045",
-    "parse-blocks-512",
     "parse-call-chain-2044",
-    "parse-cmpchain-2045",
     "parse-computed-2045",
-    "parse-cond-chain-1011",
     "parse-elseif-chain-2044",
     "parse-functions-512",
     "parse-ifelse-block-2041",
@@ -23,7 +19,6 @@
     "parse-or-2045",
     "parse-tagged-chain-2043",
     "proxy-proto-cycle",
-    "u3-eval-nest-callchain-2044",
     "u3-eval-nest-tagged-2038",
     "u4-function-callchain-in-tojson-1900"
   ]

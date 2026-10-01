@@ -1877,6 +1877,16 @@ The scratch data file names still say E1-E4: `d1a-compiler-outline-only.patch` i
     stack frames, or their interaction with D1a's outlined arms, are the likely cause
     *(inferred, not isolated)*.
     Find and fix it before Phase 1 lands D1.
+  - **As landed (Phase 1):** the cause was inlining.
+    LLVM inlined the two explicit-stack functions into `hoist_dispatch_inner` and
+    `bind_dispatch_inner`, so their work-stack state widened every level of every hoist and bind
+    walk, including chains that never take the default arm.
+    With both `#[inline(never)]`, D1 as landed needs, on WT: `callchain`-2044 888,832 B,
+    `function`-512 684,032 B, `block`-512 315,392 B, `elseif`-2044 856,064 B, `member`-2045
+    724,992 B and the tagged-template chain 1,277,952 B (the probe's parse cases, bisected at
+    4 KiB).
+    A test checks that the default-arm predicates name exactly the tokens without an arm of
+    their own, and another that the coder's binary spine names exactly the binary arm's tokens.
   - D1c's iterative `Drop` is what clears the five pin+1 refusal traps of §1.3, including the
     proposed tagged pin's 2,044, and a refused 5,000-term `1+1+…`, the chain inside
     `eval-deep`, at 524,288 B (`revise3/pinplus1_d1.txt`: they trap with D1a, and the four run
