@@ -18,6 +18,9 @@ const trapStackFrames = Number(process.env.TRAP_STACK_FRAMES || 0);
 if (trapStackFrames > 0) Error.stackTraceLimit = trapStackFrames;
 
 async function main() {
+  // The painter both hosts share (../shadow-paint.mjs). Only with
+  // PAINT_SHADOW_STACK=1 and only when the module exports __stack_pointer.
+  const { paint, highWater } = await import('../shadow-paint.mjs');
   const [wasmPath, ...args] = process.argv.slice(2);
   const wasi = new WASI({
     version: 'preview1',
@@ -54,32 +57,6 @@ async function main() {
 }
 
 class HostError extends Error {}
-
-// Shadow-stack painting (STACK-DEPTH-REFACTOR.md §5 lane A): the module links
-// its shadow stack first in linear memory, so the region below the initial
-// __stack_pointer is the shadow stack. Fill it with a sentinel before the run
-// and find the lowest byte the run dirtied afterwards; the difference from the
-// initial pointer is the shadow stack's high-water mark in bytes. Only with
-// PAINT_SHADOW_STACK=1 and only when the module exports __stack_pointer.
-const SENTINEL = 0xa5;
-const PAINT_MARGIN = 1024; // leave the lowest addresses alone
-
-function paint(instance) {
-  const sp = instance.exports.__stack_pointer;
-  const memory = instance.exports.memory;
-  if (!sp || !memory) return null;
-  const top = sp.value;
-  new Uint8Array(memory.buffer, PAINT_MARGIN, top - PAINT_MARGIN).fill(SENTINEL);
-  return { top };
-}
-
-function highWater(instance, painted) {
-  const bytes = new Uint8Array(instance.exports.memory.buffer, 0, painted.top);
-  for (let addr = PAINT_MARGIN; addr < painted.top; addr++) {
-    if (bytes[addr] !== SENTINEL) return painted.top - addr;
-  }
-  return 0;
-}
 
 function report(error) {
   const message = error && error.message ? error.message : String(error);

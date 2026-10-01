@@ -1,3 +1,4 @@
+from pathlib import Path
 import shutil
 import subprocess
 import unittest
@@ -179,6 +180,62 @@ class LaneB(unittest.TestCase):
             common.lane_b_expected(self.path, self.cfg, self.args)
         self.args.shard = "all"
         self.assertFalse(common.lane_b_expected(self.path, self.cfg, self.args).config_matches())
+
+
+def painted_module(stack_top, dirty_address):
+    """A wasm module exporting `memory`, a mutable `__stack_pointer` at
+    `stack_top` and a `_start` that writes one byte at `dirty_address`."""
+    def leb(value):
+        out = bytearray()
+        while True:
+            byte = value & 0x7F
+            value >>= 7
+            if value:
+                out.append(byte | 0x80)
+            else:
+                out.append(byte)
+                return bytes(out)
+
+    def section(kind, body):
+        return bytes([kind]) + leb(len(body)) + body
+
+    def name(text):
+        return leb(len(text)) + text.encode()
+
+    exports = (b"\x03" + name("memory") + b"\x02\x00" + name("__stack_pointer") + b"\x03\x00"
+               + name("_start") + b"\x00\x00")
+    code = b"\x00\x41" + leb(dirty_address) + b"\x41\x01\x3a\x00\x00\x0b"
+    return (b"\x00asm\x01\x00\x00\x00"
+            + section(1, b"\x01\x60\x00\x00")
+            + section(3, b"\x01\x00")
+            + section(5, b"\x01\x00\x01")
+            + section(6, b"\x01\x7f\x01\x41" + leb(stack_top) + b"\x0b")
+            + section(7, exports)
+            + section(10, b"\x01" + leb(len(code)) + code))
+
+
+@unittest.skipUnless(shutil.which("node"), "needs node")
+class ShadowPaint(unittest.TestCase):
+    """node/run.cjs paints with the painter it shares with workerd's Worker."""
+
+    def test_the_node_runner_reports_the_high_water_mark(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            wasm = Path(directory) / "painted.wasm"
+            wasm.write_bytes(painted_module(stack_top=4096, dirty_address=3000))
+            completed = subprocess.run(["node", str(common.NODE_RUNNER), str(wasm)], text=True,
+                                       capture_output=True, env=dict(os.environ, PAINT_SHADOW_STACK="1"))
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("SHADOW_STACK_TOP: 4096\n", completed.stderr)
+        self.assertIn("SHADOW_STACK: 1096\n", completed.stderr)
+
+    def test_the_workerd_worker_embeds_the_same_painter(self):
+        config = (common.LANES / "workerd/config.capnp.in").read_text()
+        self.assertIn('esModule = embed "shadow-paint.mjs"', config)
+        worker = (common.LANES / "workerd/worker.js").read_text()
+        self.assertIn('from "shadow-paint.mjs"', worker)
+        self.assertNotIn("SENTINEL", worker)
 
 
 class StackLimit(unittest.TestCase):

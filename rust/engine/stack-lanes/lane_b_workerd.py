@@ -59,6 +59,7 @@ class Workerd:
     def __init__(self, binary, wasm, v8_flags):
         self.dir = tempfile.mkdtemp(prefix="stack-lanes-workerd-")
         shutil.copyfile(HERE / "worker.js", Path(self.dir) / "worker.js")
+        shutil.copyfile(common.LANES / "shadow-paint.mjs", Path(self.dir) / "shadow-paint.mjs")
         shutil.copyfile(wasm, Path(self.dir) / "probe.wasm")
         self.port = free_port()
         flags = ", ".join(json.dumps(f) for f in v8_flags)

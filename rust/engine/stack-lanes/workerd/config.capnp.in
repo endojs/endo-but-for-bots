@@ -1,6 +1,6 @@
 # The stack-lanes probe served by workerd. lane_b_workerd.py fills in the V8
-# flags, copies worker.js and the wasm probe beside this file and starts
-# `workerd serve` on the socket below.
+# flags, copies worker.js, the shared shadow-stack painter and the wasm probe
+# beside this file and starts `workerd serve` on the socket below.
 using Workerd = import "/workerd/workerd.capnp";
 
 const config :Workerd.Config = (
@@ -12,6 +12,7 @@ const config :Workerd.Config = (
 const probe :Workerd.Worker = (
   modules = [
     (name = "worker.js", esModule = embed "worker.js"),
+    (name = "shadow-paint.mjs", esModule = embed "shadow-paint.mjs"),
     (name = "probe.wasm", wasm = embed "probe.wasm"),
   ],
   compatibilityDate = "2026-09-01",
