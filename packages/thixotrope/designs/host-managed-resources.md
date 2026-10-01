@@ -352,6 +352,10 @@ by the rebuilt adapter, and the key's idempotence makes it exactly-once.
 
 Registrations clean themselves up at their deadline, so a retired workspace's
 alarms cost at most one timer each; no retirement route is needed.
+The manager never needs the time: deadlines are pushed to the adapter, which
+owns the timers and its own clock.
+A guest does, to turn "in five minutes" into a deadline, and a vat cannot
+read a clock of its own, so the facet offers `now()`.
 `now()` stays inside the protocol: it is `when(0n)`, a registration whose
 timer fires at once and whose `fire(key, at)` carries the host time, after
 which the manager closes the handle.
