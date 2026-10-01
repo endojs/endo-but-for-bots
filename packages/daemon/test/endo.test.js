@@ -8199,6 +8199,58 @@ test('makeUnconfinedFromTree refuses a bare-string worker name before staging', 
   t.false(await E(host).has('scratch-refused-worker'));
 });
 
+/**
+ * @param {import('ava').ExecutionContext} t
+ * @param {string} label
+ */
+const prepareRefuseTree = async (t, label) => {
+  const { host, config } = await prepareHost(t);
+  const sourceDirectory = path.join(config.statePath, '..', `${label}-src`);
+  fs.mkdirSync(sourceDirectory, { recursive: true });
+  fs.writeFileSync(
+    path.join(sourceDirectory, 'index.js'),
+    'export const make = () => 1;',
+  );
+  await E(host).provideMount(sourceDirectory, [label], { readOnly: true });
+  return host;
+};
+
+/** @param {any} host */
+const listScratchNames = async host =>
+  (await E(host).list()).filter(name => name.startsWith('scratch-'));
+
+test('makeUnconfinedFromTree refuses an unknown special powers name before staging', async t => {
+  const host = await prepareRefuseTree(t, 'refuse-powers-special');
+  await t.throwsAsync(
+    E(host).makeUnconfinedFromTree(undefined, ['refuse-powers-special'], {
+      powersName: ['@bogus'],
+      resultName: ['refused-powers'],
+    }),
+  );
+  t.deepEqual(await listScratchNames(host), []);
+});
+
+test('makeUnconfinedFromTree refuses a special-name result leaf before staging', async t => {
+  const host = await prepareRefuseTree(t, 'refuse-result-special');
+  await t.throwsAsync(
+    E(host).makeUnconfinedFromTree(undefined, ['refuse-result-special'], {
+      resultName: ['@x'],
+    }),
+  );
+  t.deepEqual(await listScratchNames(host), []);
+});
+
+test('makeUnconfinedFromTree refuses a result path too long for a scratch name before staging', async t => {
+  const host = await prepareRefuseTree(t, 'refuse-result-long');
+  await t.throwsAsync(
+    E(host).makeUnconfinedFromTree(undefined, ['refuse-result-long'], {
+      resultName: ['a'.repeat(100), 'b'.repeat(100), 'c'.repeat(60)],
+    }),
+    { message: /too long to derive a scratch mount name/ },
+  );
+  t.deepEqual(await listScratchNames(host), []);
+});
+
 test('Phase 7: makeFromTree errors clearly when compartment-map.json is missing', async t => {
   const { host, config } = await prepareHost(t);
 

@@ -25,6 +25,7 @@ import { cancelPendingIterator } from './cancelable-iterator.js';
 import {
   assertPetName,
   assertPetNamePath,
+  isPetName,
   namePathFrom,
   namePathLabel,
   petNamePathFrom,
@@ -1791,7 +1792,10 @@ export const makeHostMaker = ({
         namePathFrom(workerNamePath);
       }
       if (options?.powersName !== undefined) {
-        namePathFrom(options.powersName);
+        assertPowersNamePath(options.powersName);
+      }
+      if (options?.resultName !== undefined) {
+        petNamePathFrom(options.resultName);
       }
       const entry = options?.entry ?? 'index.js';
       const resultLabel =
@@ -1805,6 +1809,12 @@ export const makeHostMaker = ({
       // Scratch mount carries a derived pet name so the caller can
       // observe / cancel it explicitly if desired.
       const scratchPetName = `scratch-${resultLabel}`;
+      if (!isPetName(scratchPetName)) {
+        throw makeError(
+          X`Result name ${q(options?.resultName)} is too long to derive a scratch mount name; use a shorter result name`,
+          TypeError,
+        );
+      }
       const { scratchId } = await stageTreeInternal(
         treeName,
         /** @type {NamePath} */ ([scratchPetName]),
