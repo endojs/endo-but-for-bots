@@ -1,6 +1,17 @@
 //! Callable dispatch and callbacks that can re-enter the interpreter.
 use super::*;
 
+/// What `RUN` makes of a plain call of a bound function
+/// ([`Interp::bound_call`]).
+pub(super) enum BoundCall {
+    /// The target's frame is entered in the caller's loop: continue at its
+    /// body.
+    Entered(usize),
+    /// Call the target, with this receiver and these arguments, through
+    /// [`Interp::invoke_value`].
+    Call(Slot, Slot, Vec<Slot>),
+}
+
 impl Interp {
     /// Invoke a callback through the shared, complete ECMAScript `Call`
     /// dispatcher. Native algorithms use this name at callback-taking sites;
@@ -21,6 +32,11 @@ impl Interp {
     /// bound functions return through the shared Call operation. Bytecode
     /// callbacks run nested dispatch until their frame returns, restoring the
     /// caller's activation. Propagate callback throws and meter aborts.
+    // Out of line, as it was before the bound-call fold moved out of
+    // `invoke_value`: inlined there, it made `invoke_value`'s frame, which a
+    // native-to-native nest (`join` stringifying an array) holds twice a
+    // level, 160 B larger.
+    #[inline(never)]
     pub(super) fn run_user_callback(
         &mut self,
         code: &[u8],
@@ -362,34 +378,112 @@ impl Interp {
         result
     }
 
-    /// `boundF(...)` from the dispatch loop's `RUN` arm: take the call frame
-    /// at `base` apart and run BoundFunction.[[Call]], ordinary abstract Call
-    /// redispatch through the shared dispatcher, so user, native and method
-    /// targets have the same semantics at opcode and callback call sites.
-    /// It is [`Self::invoke_value`] with the frame's arguments copied in its
-    /// own frame: the `RUN` arm, which every native re-entry holds, does not
-    /// carry the list, and a bound call's recursion holds one frame per level
-    /// here, as it held `invoke_value`'s.
-    #[inline(never)]
-    pub(super) fn call_bound_frame(
+    /// BoundFunctionExoticObject.[[Call]] for the chain of bound functions
+    /// from `f`, with `this` and the argument list `args` the call received:
+    /// each link prepends its bound arguments and substitutes its bound
+    /// receiver, charged as the recursive form charged it. Returns the first
+    /// target that is not a bound function, with the receiver and arguments
+    /// to call it with. `bind` always allocates a fresh exotic whose target
+    /// already exists, so the chain is acyclic and this terminates.
+    pub(super) fn fold_bound_chain(
         &mut self,
-        code: &[u8],
+        f: crate::value::SlotIndex,
+        this: Slot,
+        args: Vec<Slot>,
+    ) -> Result<(Slot, Slot, Vec<Slot>), Step> {
+        let mut current = f;
+        let mut this_arg = this;
+        let mut combined = args;
+        while let Some(data) = self.bound_functions.get(&current) {
+            let target = data.target;
+            let receiver = data.this_arg;
+            let length = data
+                .args
+                .len()
+                .checked_add(combined.len())
+                .ok_or(Step::Host(Halt::HeapExhausted))?;
+            self.charge_and_check(BIND_CALL_METERING + length as u64 * BIND_CALL_PER_ARG)?;
+            let mut next = self.reserve_scratch(length)?;
+            next.extend_from_slice(&self.bound_functions[&current].args);
+            next.extend_from_slice(&combined);
+            combined = next;
+            this_arg = receiver;
+            current = target;
+        }
+        Ok((
+            Slot::of(Kind::Reference, Payload::Reference(current)),
+            this_arg,
+            combined,
+        ))
+    }
+
+    /// `RUN`'s plain call of the bound function `bf`, its frame of `argc`
+    /// arguments beginning at `base` (STACK-DEPTH-REFACTOR.md C1). The chain
+    /// folds as the first turn of [`Self::invoke_value`] folds it, with the
+    /// same charges. A target that [`Self::calls_in_place`] then gets the
+    /// frame [`Self::run_user_callback`] would build, entered in the caller's
+    /// loop to return to `ret_pc`: the nested `dispatch_at` the callee ran in
+    /// charged its activation after `enter_call` and checked no meter on
+    /// entry, so the frame holds that charge until its `END`, whose meter
+    /// check is the one `RUN` made after the call returned. Any other target
+    /// goes back to `RUN` to call through `invoke_value`.
+    #[inline(never)]
+    pub(super) fn bound_call(
+        &mut self,
         bf: crate::value::SlotIndex,
         base: usize,
         argc: usize,
-    ) -> Result<Slot, Step> {
+        ret_pc: usize,
+    ) -> Result<BoundCall, Step> {
         let args = self.frame_arguments(base, argc)?;
         let this = self
             .stack
             .get(base)
             .copied()
             .unwrap_or_else(Slot::undefined);
-        let func = Slot::of(Kind::Reference, Payload::Reference(bf));
         self.stack.truncate(base);
-        let mut held = 0usize;
-        let result = self.invoke_value_turns(code, func, this, &args, &mut held);
-        self.leave_native_frame(held);
-        result
+        let combined = Self::fill_scratch(self.reserve_work_scratch(args.len())?, args);
+        let (target, receiver, combined) = self.fold_bound_chain(bf, this, combined)?;
+        if !self.calls_in_place(target) {
+            return Ok(BoundCall::Call(target, receiver, combined));
+        }
+        let argc = combined.len();
+        self.push(receiver);
+        self.push(target);
+        self.push(Slot::undefined());
+        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+        for arg in combined {
+            self.push(arg);
+        }
+        let body_start = self.enter_call(argc, ret_pc, false)?;
+        self.enter_native_frame(HEAVY_FRAME_COST)?;
+        self.call_stack
+            .last_mut()
+            .expect("enter_call pushed the frame")
+            .held = HEAVY_FRAME_COST;
+        self.held_total += HEAVY_FRAME_COST;
+        Ok(BoundCall::Entered(body_start))
+    }
+
+    /// Whether a call of `func` reaches the bytecode path of
+    /// [`Self::run_user_callback`] over this loop's buffer: the turns of
+    /// [`Self::invoke_value`] pass it through (not a Proxy, a promise
+    /// resolving function, a bound function, a native function or a native
+    /// method) and its body lives in the active segment. Such a call can run
+    /// in place in the dispatch loop (STACK-DEPTH-REFACTOR.md C1).
+    pub(super) fn calls_in_place(&self, func: Slot) -> bool {
+        let Payload::Reference(f) = func.value else {
+            return false;
+        };
+        func.kind == Kind::Reference
+            && !self.proxies.contains_key(&f)
+            && !self.promise_functions.contains_key(&f)
+            && !self.bound_functions.contains_key(&f)
+            && self
+                .functions
+                .get(&f)
+                .is_some_and(|fi| fi.native.is_none() && fi.method.is_none())
+            && self.callee_segment(f) == self.active_segment
     }
 
     /// The loop of [`Self::invoke_value`], charging each Proxy layer it
@@ -457,39 +551,19 @@ impl Interp {
             // target.
             if self.bound_functions.contains_key(&f) {
                 // Fold the whole chain iteratively rather than recursing once
-                // per wrapper: a 20,000-link chain overflowed the real thread
-                // stack and aborted the host, while the pinned XS completes the
-                // same program. `enter_construct_bound` already folds the
-                // construct side this way. Each level prepends its own bound
-                // arguments and replaces the receiver, and is charged exactly
-                // as the recursive form charged it, so the meter is unchanged.
-                // `bind` always allocates a fresh exotic whose target already
-                // exists, so the chain is acyclic and this terminates.
-                let mut current = f;
-                let mut this_arg = this;
-                let mut combined: Vec<Slot> = if args_fresh {
+                // per wrapper (`fold_bound_chain`): a 20,000-link chain
+                // overflowed the real thread stack and aborted the host, while
+                // the pinned XS completes the same program.
+                // `enter_construct_bound` already folds the construct side this
+                // way.
+                let combined: Vec<Slot> = if args_fresh {
                     Self::fill_scratch(self.reserve_work_scratch(args.len())?, args.iter().copied())
                 } else {
                     owned_args.take().expect("a step rebuilt the argument list")
                 };
-                while let Some(data) = self.bound_functions.get(&current) {
-                    let target = data.target;
-                    let receiver = data.this_arg;
-                    let length = data
-                        .args
-                        .len()
-                        .checked_add(combined.len())
-                        .ok_or(Step::Host(Halt::HeapExhausted))?;
-                    self.charge_and_check(BIND_CALL_METERING + length as u64 * BIND_CALL_PER_ARG)?;
-                    let mut next = self.reserve_scratch(length)?;
-                    next.extend_from_slice(&self.bound_functions[&current].args);
-                    next.extend_from_slice(&combined);
-                    combined = next;
-                    this_arg = receiver;
-                    current = target;
-                }
-                func = Slot::of(Kind::Reference, Payload::Reference(current));
-                this = this_arg;
+                let (target, receiver, combined) = self.fold_bound_chain(f, this, combined)?;
+                func = target;
+                this = receiver;
                 owned_args = Some(combined);
                 args_fresh = false;
                 continue;
@@ -557,7 +631,8 @@ impl Interp {
             }
             // `invoke_regexp_protocol` (natives/regexp.rs) calls the intrinsic
             // RegExp protocol methods without this dispatch, after the same
-            // tests as the turns above: keep the two in step.
+            // tests as the turns above, and `calls_in_place` repeats them to
+            // enter a bound call's target in place: keep the three in step.
             if native.is_some() || method.is_some() {
                 // Native / native-method: build the [THIS, FUNCTION, RESULT,
                 // FRAME] frame + args, dispatch, and take the pushed result.

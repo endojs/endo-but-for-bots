@@ -51,6 +51,7 @@ const FRESH_ORDER: &[&str] = &[
     "n_dispatched",
     "boot_slot_count",
     "native_depth",
+    "held_total",
     "eval_direct",
     "code_segments",
     "active_segment",

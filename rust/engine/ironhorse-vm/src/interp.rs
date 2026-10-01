@@ -1918,6 +1918,15 @@ struct CallerState {
     /// stack to it so operands the body abandoned (a `switch` discriminant a
     /// `return` jumped over, say) cannot survive into the caller's expression.
     stack_base: usize,
+    /// Native-recursion budget units this frame holds for the activation it
+    /// replaces (STACK-DEPTH-REFACTOR.md §4.5): a call the dispatch loop runs
+    /// in place, which the recursive shape ran in a nested `dispatch_at`,
+    /// charges that loop's [`HEAVY_FRAME_COST`] here. `Interp::leave_call`
+    /// releases them when the frame is popped, and the dispatch loop that owns
+    /// the frame releases them when it exits with the frame still on the call
+    /// stack, so the depth is released where the nested loop released it.
+    /// Zero for every other frame.
+    held: usize,
 }
 
 /// One entry of the exception jump-buffer chain (XS's `txJump`, pushed by
@@ -2630,6 +2639,7 @@ impl Interp {
                 // All native activations have unwound. The interrupted heap
                 // remains non-quiescent and must be rewound by the supervisor.
                 self.native_depth = 0;
+                self.clear_held();
                 self.last_crank_completed = false;
                 // A lazy Iterator helper's "already running" latch rides
                 // `IterState::generation`, cleared by the step's own exit path
@@ -2669,6 +2679,7 @@ impl Interp {
                 // not retain native recursion charges for frames that no
                 // longer exist. A later explicit run resets guest activation.
                 self.native_depth = 0;
+                self.clear_held();
                 self.last_crank_completed = false;
                 std::panic::resume_unwind(payload)
             }
@@ -2680,9 +2691,15 @@ impl Interp {
         self.gen_run_stack.clear();
         self.async_run_stack.clear();
         self.async_gen_run_stack.clear();
+        // Retained frames hold no charge by now (their loops released it on
+        // exit, or a reset cleared it); clear it anyway so popping them can
+        // never release units `native_depth` no longer holds.
+        self.clear_held();
         while !self.call_stack.is_empty() {
             let _ = self.leave_call();
         }
+        // No native activation is live between runs.
+        debug_assert_eq!(self.native_depth, 0, "a native charge outlived its crank");
         self.stack.clear();
         self.jumps.clear();
         self.locals.clear();

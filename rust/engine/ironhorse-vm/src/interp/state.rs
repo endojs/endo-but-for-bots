@@ -425,6 +425,23 @@ pub struct Interp {
     /// native entry; accepting it would make a restored twin halt at a different
     /// recursion depth, so the boundary policy refuses it.
     native_depth: usize,
+    #[boot_new(0)]
+    #[gc_root(none)]
+    #[quiescent(zero)]
+    #[persist_refs(none)]
+    #[runtime_keys(none)]
+    #[gc_hook(unborrowed, direct)]
+    #[gc_chunk(none)]
+    #[gc_slots(none, none)]
+    #[gc_weak(none)]
+    #[snapshot_table(none)]
+    /// The part of [`Self::native_depth`] that frames on [`Self::call_stack`]
+    /// hold (the sum of their `CallerState::held`; STACK-DEPTH-REFACTOR.md
+    /// §4.5), so that a path restoring the depth it saved can tell the units
+    /// those frames released in between, which the recursive shape released
+    /// later, from its own. An `eval` that parks the call stack parks this
+    /// with it. Always `0` at a crank boundary.
+    held_total: usize,
     #[boot_new(Tracked::new(
         Vec::new(),
         snapshot_dirt.clone(),

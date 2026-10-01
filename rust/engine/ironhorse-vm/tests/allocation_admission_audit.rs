@@ -794,7 +794,7 @@ fn every_call_path_copies_a_frames_arguments_fallibly() {
     assert!(method("frame_arguments").contains("reserved_vec("));
     for name in [
         "exec_run",
-        "call_bound_frame",
+        "bound_call",
         "construct_bound_native",
         "call_host",
     ] {
