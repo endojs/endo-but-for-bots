@@ -147,6 +147,10 @@ impl Interp {
                 }
                 let source = arg(0);
                 let options_arg = arg(1);
+                // Every ECMA-402 constructor here creates its object, reading
+                // a subclass's prototype, before it examines either argument.
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
                 let text = self.intl_locale_argument(code, source)?;
                 let mut locale = match canonicalize_locale(&text) {
                     Some(locale) => locale,
@@ -160,13 +164,17 @@ impl Interp {
                     self.apply_locale_options(code, options, &mut locale)?;
                 }
                 locale.tag = locale_to_tag(&locale);
-                let inst = self.slots.alloc(Slot::instance(self.locale_proto));
+                let inst = self
+                    .slots
+                    .alloc(Slot::instance(proto.unwrap_or(self.locale_proto)));
                 self.locales.insert(inst, locale);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
             Native::Collator => {
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
                 let locale = self
                     .intl_first_locale(code, locale_arg)?
                     .unwrap_or_else(|| "en".to_string());
@@ -198,7 +206,9 @@ impl Interp {
                 if let Payload::Reference(options) = options_arg.value {
                     self.apply_collator_options(code, options, &mut data)?;
                 }
-                let inst = self.slots.alloc(Slot::instance(self.collator_proto));
+                let inst = self
+                    .slots
+                    .alloc(Slot::instance(proto.unwrap_or(self.collator_proto)));
                 self.collators.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
@@ -210,6 +220,8 @@ impl Interp {
                 }
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
                 let resolved = self.intl_resolve_locale(code, locale_arg)?;
                 let options = self.intl_get_options_object(options_arg)?;
                 if let Some(opts) = options {
@@ -248,7 +260,9 @@ impl Interp {
                     kind,
                     style,
                 };
-                let inst = self.slots.alloc(Slot::instance(self.list_format_proto));
+                let inst = self
+                    .slots
+                    .alloc(Slot::instance(proto.unwrap_or(self.list_format_proto)));
                 self.list_formats.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
@@ -260,6 +274,8 @@ impl Interp {
                 }
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
                 let resolved = self.intl_resolve_locale(code, locale_arg)?;
                 let options = self.intl_get_options_object(options_arg)?;
                 if let Some(opts) = options {
@@ -309,7 +325,9 @@ impl Interp {
                 if let Some(opts) = options {
                     self.set_number_digit_options(code, opts, &mut data, 0, 3, false)?;
                 }
-                let inst = self.slots.alloc(Slot::instance(self.plural_rules_proto));
+                let inst = self
+                    .slots
+                    .alloc(Slot::instance(proto.unwrap_or(self.plural_rules_proto)));
                 self.plural_rules.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
@@ -321,6 +339,8 @@ impl Interp {
                 }
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
                 let resolved = self.intl_resolve_locale(code, locale_arg)?;
                 let options = self.intl_get_options_object(options_arg)?;
                 if let Some(opts) = options {
@@ -346,7 +366,9 @@ impl Interp {
                     locale: resolved,
                     granularity,
                 };
-                let inst = self.slots.alloc(Slot::instance(self.segmenter_proto));
+                let inst = self
+                    .slots
+                    .alloc(Slot::instance(proto.unwrap_or(self.segmenter_proto)));
                 self.segmenters.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
@@ -358,10 +380,12 @@ impl Interp {
                 }
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
                 let data = self.build_date_time_format(code, locale_arg, options_arg)?;
                 let inst = self
                     .slots
-                    .alloc(Slot::instance(self.date_time_format_proto));
+                    .alloc(Slot::instance(proto.unwrap_or(self.date_time_format_proto)));
                 self.date_time_formats.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
@@ -371,8 +395,12 @@ impl Interp {
                 // instance chaining to `%NumberFormat.prototype%`.
                 let locale_arg = arg(0);
                 let options_arg = arg(1);
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
                 let data = self.build_number_format(code, locale_arg, options_arg)?;
-                let inst = self.slots.alloc(Slot::instance(self.number_format_proto));
+                let inst = self
+                    .slots
+                    .alloc(Slot::instance(proto.unwrap_or(self.number_format_proto)));
                 self.number_formats.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
@@ -425,7 +453,12 @@ impl Interp {
                         "Temporal.Instant: epochNanoseconds must be a supported BigInt".into(),
                     )
                 })?;
-                self.temporal_new_instant(ns)?
+                let instant = self.temporal_new_instant(ns)?;
+                // Each CreateTemporal… operation reads a subclass's prototype
+                // only after every argument is converted and validated.
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                self.adopt_prototype(instant, proto)
             }
             Native::TemporalDuration => {
                 if !has_target {
@@ -448,7 +481,10 @@ impl Interp {
                         "Temporal.Duration: fields must have a consistent sign".into(),
                     ));
                 }
-                self.temporal_new_duration(record)?
+                let duration = self.temporal_new_duration(record)?;
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                self.adopt_prototype(duration, proto)
             }
             Native::TemporalPlain(kind) => {
                 if !has_target {
@@ -457,7 +493,10 @@ impl Interp {
                     );
                 }
                 let values = (0..10).map(arg).collect::<Vec<_>>();
-                self.temporal_plain_construct(kind, &values, code)?
+                let plain = self.temporal_plain_construct(kind, &values, code)?;
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                self.adopt_prototype(plain, proto)
             }
             Native::TemporalZonedDateTime => {
                 // `new Temporal.ZonedDateTime(epochNanoseconds, timeZone[, calendar])`.
@@ -495,7 +534,10 @@ impl Interp {
                         );
                     }
                 }
-                self.temporal_new_zoned(ns, time_zone, offset_ns)?
+                let zoned = self.temporal_new_zoned(ns, time_zone, offset_ns)?;
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                self.adopt_prototype(zoned, proto)
             }
             Native::Date => {
                 let now = 0.0;
@@ -626,10 +668,17 @@ impl Interp {
                     )));
                 }
                 let a = arg(0);
-                let byte_length = self.to_index_arg(code, a)?;
+                // ToIndex before a subclass's prototype, as XS's
+                // `fxArgToSafeByteLength` runs before
+                // `fxGetPrototypeFromConstructor`; a length too large to
+                // allocate fails after the read.
+                let length = self.safe_byte_length(code, a)?;
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                let byte_length = self.index_from_number(length)?;
                 self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
                 let inst = self.alloc_array_buffer(byte_length)?;
-                Slot::of(Kind::Reference, Payload::Reference(inst))
+                self.adopt_prototype(Slot::of(Kind::Reference, Payload::Reference(inst)), proto)
             }
             // `new SharedArrayBuffer(byteLength)` (`xsAtomics.c`
             // `fx_SharedArrayBuffer`). Single-agent: a plain byte buffer marked
@@ -643,11 +692,18 @@ impl Interp {
                     )));
                 }
                 let a = arg(0);
-                let byte_length = self.to_index_arg(code, a)?;
+                // ToIndex before a subclass's prototype, as XS's
+                // `fxArgToSafeByteLength` runs before
+                // `fxGetPrototypeFromConstructor`; a length too large to
+                // allocate fails after the read.
+                let length = self.safe_byte_length(code, a)?;
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                let byte_length = self.index_from_number(length)?;
                 self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
                 let inst = self.alloc_array_buffer(byte_length)?;
                 self.shared_buffers.insert(inst);
-                Slot::of(Kind::Reference, Payload::Reference(inst))
+                self.adopt_prototype(Slot::of(Kind::Reference, Payload::Reference(inst)), proto)
             }
             // `new <TypedArray>(...)` (`fx_TypedArray` + `fxConstructTypedArray`
             // + `fxNewTypedArrayInstance`). Two covered forms:
@@ -663,17 +719,21 @@ impl Interp {
             Native::TypedArray(idx) if has_target => {
                 let ty = TYPED_ARRAY_TYPES[idx as usize];
                 let shift = ty.shift as u32;
-                let proto = self
-                    .intrinsics
-                    .get(ty.name)
-                    .and_then(|&c| self.ctor_prototype.get(&c).copied())
-                    .unwrap_or(self.object_proto);
                 // Snapshot the arguments up front so the general-coercion path
                 // can take a `&mut self` borrow (`to_index_arg`) without keeping
                 // the `arg` closure's immutable borrow of `self.stack` alive.
                 let a = arg(0);
                 let a1 = arg(1);
                 let a2 = arg(2);
+                // An object argument is allocated for (AllocateTypedArray, so
+                // the prototype read) before it is examined; a length is
+                // converted first, as XS's `fx_TypedArray` does — that read
+                // happens in the length arm below.
+                let proto = if a.kind == Kind::Reference {
+                    self.typed_array_prototype(code, ty.name, new_target, derived_native_construct)?
+                } else {
+                    self.object_proto
+                };
                 match a.value {
                     // View over an existing ArrayBuffer.
                     Payload::Reference(r) if self.array_buffers.contains_key(&r) => {
@@ -811,6 +871,13 @@ impl Interp {
                             (src.length, None)
                         } else {
                             let src = self.typed_arrays[&r];
+                            // The prototype read above is guest code that can
+                            // detach the source (InitializeTypedArrayFromTypedArray;
+                            // XS's `fxGetBufferInfo`): copying it then read
+                            // stale bytes out of a detached buffer.
+                            if self.detached_buffers.contains(&src.buffer) {
+                                return Err(self.catchable_type_error_msg("detached buffer".into()));
+                            }
                             (src.length, Some(src))
                         };
                         // A sparse snapshot is valid only with the intrinsic
@@ -960,7 +1027,13 @@ impl Interp {
                             code,
                         );
                         match constructed {
-                            Ok(()) => self.pop_checked()?,
+                            // The re-entry constructs with no `new.target` of
+                            // its own; the prototype this construct already
+                            // read is the one the result takes.
+                            Ok(()) => {
+                                let constructed = self.pop_checked()?;
+                                self.adopt_prototype(constructed, Some(proto))
+                            }
                             Err(halt) => {
                                 self.stack.truncate(construct_base);
                                 return Err(halt);
@@ -969,7 +1042,17 @@ impl Interp {
                     }
                     // Length form: `new TA(n)`. `n` is `ToIndex`-coerced.
                     _ => {
-                        let length = self.to_index_arg(code, a)?;
+                        // XS's order (`fx_TypedArray`): `ToNumber`, then the
+                        // prototype, then the range check, so a Symbol length
+                        // throws before the read and a negative one after it.
+                        let number = self.to_number_f64(code, a)?;
+                        let proto = self.typed_array_prototype(
+                            code,
+                            ty.name,
+                            new_target,
+                            derived_native_construct,
+                        )?;
+                        let length = self.index_from_number(number)?;
                         if length > (0x7FFF_FFFFu32 >> shift) {
                             return Err(self.catchable_range_error_msg("byteLength too big".into()));
                         }
@@ -1045,8 +1128,17 @@ impl Interp {
                 } else {
                     size = buf_len - offset;
                 }
+                let proto = self
+                    .derived_construct_prototype(code, new_target, derived_native_construct)?
+                    .unwrap_or(self.dataview_proto);
+                // A subclass's prototype read is guest code that can detach
+                // the buffer (ECMA-262 DataView step 11; XS's `fxGetBufferInfo`
+                // throws the same way).
+                if self.detached_buffers.contains(&buf) {
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
+                }
                 self.meter.tick_raw(DATA_VIEW_CTOR_FRAME_METERING);
-                let inst = self.slots.alloc(Slot::instance(self.dataview_proto));
+                let inst = self.slots.alloc(Slot::instance(proto));
                 self.data_views.insert(
                     inst,
                     DataViewData {
@@ -1087,6 +1179,28 @@ impl Interp {
             _ => unreachable!("not one of the ArrayBuffer, TypedArray and DataView constructors"),
         };
         Ok(result)
+    }
+
+    /// A TypedArray construct's prototype: a subclass's (or a
+    /// `Reflect.construct` newTarget's) `prototype`, else the element type's
+    /// intrinsic one.
+    fn typed_array_prototype(
+        &mut self,
+        code: &[u8],
+        name: &str,
+        new_target: Option<crate::value::SlotIndex>,
+        derived_native_construct: bool,
+    ) -> Result<crate::value::SlotIndex, Step> {
+        Ok(
+            match self.derived_construct_prototype(code, new_target, derived_native_construct)? {
+                Some(proto) => proto,
+                None => self
+                    .intrinsics
+                    .get(name)
+                    .and_then(|&c| self.ctor_prototype.get(&c).copied())
+                    .unwrap_or(self.object_proto),
+            },
+        )
     }
 
     /// The Promise natives of [`Self::call_native_inner`], out of line
@@ -1254,7 +1368,12 @@ impl Interp {
             | Native::GeneratorFunction
             | Native::AsyncFunction
             | Native::AsyncGeneratorFunction => {
-                self.create_dynamic_function(native, base, argc, code)?
+                let function = self.create_dynamic_function(native, base, argc, code)?;
+                // CreateDynamicFunction reads the prototype after the source
+                // compiles, as XS's `fx_Function` does.
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                self.adopt_prototype(function, proto)
             }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
@@ -1271,7 +1390,10 @@ impl Interp {
             Native::Boolean => {
                 let v = arg(0);
                 let prim = Slot::boolean(self.truthy(&v));
-                self.build_wrapper(Native::Boolean, prim)
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                let wrapper = self.build_wrapper(Native::Boolean, prim);
+                self.adopt_prototype(wrapper, proto)
             }
             // `Number(v)` / `new Number(v)`: the primitive number is
             // ToNumber(v). ironhorse handles the numeric fast path (identity), the
@@ -1325,7 +1447,13 @@ impl Interp {
                     }
                 };
                 if has_target {
-                    self.build_wrapper(Native::Number, prim)
+                    let proto = self.derived_construct_prototype(
+                        code,
+                        new_target,
+                        derived_native_construct,
+                    )?;
+                    let wrapper = self.build_wrapper(Native::Number, prim);
+                    self.adopt_prototype(wrapper, proto)
                 } else {
                     prim
                 }
@@ -1368,7 +1496,13 @@ impl Interp {
                     }
                 };
                 if has_target {
-                    self.build_wrapper(Native::String, prim)
+                    let proto = self.derived_construct_prototype(
+                        code,
+                        new_target,
+                        derived_native_construct,
+                    )?;
+                    let wrapper = self.build_wrapper(Native::String, prim);
+                    self.adopt_prototype(wrapper, proto)
                 } else {
                     prim
                 }
@@ -1519,22 +1653,46 @@ impl Interp {
             // completion/abort value stringifies as `name` or `name: message`
             // (XS's `Error.prototype.toString`), not a primitive. `has_target`
             // is immaterial — an Error called as a function constructs too.
-            Native::Error => self.build_native_error(code, "Error", base, argc)?,
-            Native::EvalError => self.build_native_error(code, "EvalError", base, argc)?,
-            Native::RangeError => self.build_native_error(code, "RangeError", base, argc)?,
-            Native::ReferenceError => {
-                self.build_native_error(code, "ReferenceError", base, argc)?
+            //
+            // A subclass's prototype is read first, before the message's
+            // ToString (`fx_Error_aux`).
+            Native::Error
+            | Native::EvalError
+            | Native::RangeError
+            | Native::ReferenceError
+            | Native::SyntaxError
+            | Native::TypeError
+            | Native::URIError => {
+                let name = match native {
+                    Native::EvalError => "EvalError",
+                    Native::RangeError => "RangeError",
+                    Native::ReferenceError => "ReferenceError",
+                    Native::SyntaxError => "SyntaxError",
+                    Native::TypeError => "TypeError",
+                    Native::URIError => "URIError",
+                    _ => "Error",
+                };
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                let error = self.build_native_error(code, name, base, argc)?;
+                self.adopt_prototype(error, proto)
             }
-            Native::SyntaxError => self.build_native_error(code, "SyntaxError", base, argc)?,
-            Native::TypeError => self.build_native_error(code, "TypeError", base, argc)?,
-            Native::URIError => self.build_native_error(code, "URIError", base, argc)?,
             // `new AggregateError(errors, message)` (`fx_AggregateError`):
             // the base error (name "AggregateError", message from arg **1**),
             // plus an own `errors` Array built by iterating arg 0.
-            Native::AggregateError => self.build_aggregate_error(code, base, argc)?,
+            Native::AggregateError => {
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                let error = self.build_aggregate_error(code, base, argc)?;
+                self.adopt_prototype(error, proto)
+            }
             Native::SuppressedError => {
+                let (error, suppressed) = (arg(0), arg(1));
                 let message = (argc >= 3).then(|| arg(2));
-                self.build_suppressed_error(arg(0), arg(1), message)
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                let error = self.build_suppressed_error(error, suppressed, message);
+                self.adopt_prototype(error, proto)
             }
             Native::DisposableStack | Native::AsyncDisposableStack => {
                 if !has_target {
@@ -1542,13 +1700,20 @@ impl Interp {
                         self.catchable_type_error_msg(format!("call: {}", native.display_name()))
                     );
                 }
+                let proto = match self.derived_construct_prototype(
+                    code,
+                    new_target,
+                    derived_native_construct,
+                )? {
+                    Some(proto) => proto,
+                    None => self
+                        .intrinsics
+                        .get(native.display_name())
+                        .and_then(|&ctor| self.prototype_of(ctor))
+                        .unwrap_or(self.object_proto),
+                };
                 // Measured constructor residue (see the constant).
                 self.meter.tick_raw(DISPOSABLE_STACK_CONSTRUCT_METERING);
-                let proto = self
-                    .intrinsics
-                    .get(native.display_name())
-                    .and_then(|&ctor| self.prototype_of(ctor))
-                    .unwrap_or(self.object_proto);
                 let inst = self.slots.alloc(Slot::instance(proto));
                 self.disposable_stacks.insert(
                     inst,
@@ -1634,11 +1799,15 @@ impl Interp {
             // item-chunk allocation of `count` slots (a single `fxSetIndexSize`,
             // not per-item growth).
             Native::Array => {
+                let first = arg(0);
+                let proto = self
+                    .derived_construct_prototype(code, new_target, derived_native_construct)?
+                    .unwrap_or(self.array_proto);
                 self.meter.tick_raw(ARRAY_CTOR_BASE_METERING);
-                let inst = self.slots.alloc(Slot::instance(self.array_proto));
+                let inst = self.slots.alloc(Slot::instance(proto));
                 let mut data = ArrayData::default();
                 if argc == 1 {
-                    let a = arg(0);
+                    let a = first;
                     match a.kind {
                         Kind::Integer | Kind::Number => match self.checked_array_length(a) {
                             Some(n) => data.length = n,
@@ -1693,6 +1862,9 @@ impl Interp {
                     Native::Map => (self.map_proto, CollKind::Map),
                     _ => (self.set_proto, CollKind::Set),
                 };
+                let proto = self
+                    .derived_construct_prototype(code, new_target, derived_native_construct)?
+                    .unwrap_or(proto);
                 self.meter.tick_raw(MAP_CTOR_FRAME_METERING);
                 self.meter.tick_slot_alloc(); // instance
                 self.meter.tick_slot_alloc(); // table
@@ -1731,6 +1903,9 @@ impl Interp {
                     Native::WeakMap => (self.weakmap_proto, CollKind::WeakMap),
                     _ => (self.weakset_proto, CollKind::WeakSet),
                 };
+                let proto = self
+                    .derived_construct_prototype(code, new_target, derived_native_construct)?
+                    .unwrap_or(proto);
                 self.meter.tick_raw(WEAK_CTOR_FRAME_METERING);
                 self.meter.tick_slot_alloc(); // instance
                 self.meter.tick_slot_alloc(); // weak list
@@ -1754,7 +1929,13 @@ impl Interp {
             // a fresh global object holding references to the one shared
             // intrinsic graph, plus a fresh `eval`/`Function` bound to it.
             // See `interp/natives/compartment.rs`.
-            Native::Compartment if has_target => self.construct_compartment(code, argc, arg(0))?,
+            Native::Compartment if has_target => {
+                let options = arg(0);
+                let proto =
+                    self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                let compartment = self.construct_compartment(code, argc, options)?;
+                self.adopt_prototype(compartment, proto)
+            }
             // Constructor-only, like `Map`/`Set`/`Proxy` above.
             Native::Compartment => {
                 return Err(self.catchable_type_error_msg("call: Compartment".into()));

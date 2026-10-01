@@ -58,6 +58,60 @@ impl Interp {
         })
     }
 
+    /// `GetPrototypeFromConstructor(newTarget, …)` for an object a native
+    /// constructor creates, when a derived constructor's `super()` or a
+    /// `Reflect.construct` names the `new.target`.
+    ///
+    /// `None` keeps the intrinsic prototype the constructor allocates with.
+    /// That is the answer when `newTarget.prototype` is not an object, and the
+    /// answer for a direct `new`, whose `new.target` is the native itself: its
+    /// `prototype` is a non-writable, non-configurable data property holding
+    /// that intrinsic, so the read observes nothing and is skipped, leaving the
+    /// meter of every plain `new Map()` as it was.
+    ///
+    /// The read itself is observable — a getter, or a Proxy `new.target`'s
+    /// `get` trap — so call this at the step where the specification and XS's
+    /// `fxGetPrototypeFromConstructor` perform it, then give the new object
+    /// the prototype with [`Self::adopt_prototype`] once it exists.
+    pub(super) fn derived_construct_prototype(
+        &mut self,
+        code: &[u8],
+        new_target: Option<crate::value::SlotIndex>,
+        derived: bool,
+    ) -> Result<Option<crate::value::SlotIndex>, Step> {
+        let Some(target) = new_target.filter(|_| derived) else {
+            return Ok(None);
+        };
+        let id = self.intern_static_key("prototype");
+        let receiver = Slot::of(Kind::Reference, Payload::Reference(target));
+        Ok(match self.mop_get(code, target, id, receiver)? {
+            Slot {
+                kind: Kind::Reference,
+                value: Payload::Reference(prototype),
+                ..
+            } => Some(prototype),
+            _ => None,
+        })
+    }
+
+    /// Give a just-created native instance the prototype
+    /// [`Self::derived_construct_prototype`] chose, if it chose one. The
+    /// instance keeps every internal slot its side tables hold, so a Map
+    /// subclass instance is still a Map and an Array subclass instance is
+    /// still an exotic Array.
+    pub(super) fn adopt_prototype(
+        &mut self,
+        object: Slot,
+        prototype: Option<crate::value::SlotIndex>,
+    ) -> Slot {
+        if let (Some(prototype), Payload::Reference(instance)) = (prototype, object.value) {
+            if object.kind == Kind::Reference {
+                self.slots.get_mut(instance).value = Payload::Reference(prototype);
+            }
+        }
+        object
+    }
+
     /// ECMAScript `InstanceofOperator(O, C)`. The right operand must be an
     /// object; its `@@hasInstance` method is read through the full MOP and, if
     /// present, called with `C` as `this` and `O` as its sole argument.

@@ -282,6 +282,31 @@ impl Interp {
     /// target, or an escaping `Throw`) the caller propagates with `?`.
     pub(super) fn to_index_arg(&mut self, code: &[u8], value: Slot) -> Result<u32, Step> {
         let n = self.to_number_f64(code, value)?;
+        self.index_from_number(n)
+    }
+
+    /// XS's `fxArgToSafeByteLength`, the half of an `ArrayBuffer` length
+    /// check that precedes a subclass's prototype read: ToNumber, then a
+    /// negative or unsafe length fails. The allocation ceiling
+    /// ([`Self::index_from_number`]) is applied after the read.
+    pub(super) fn safe_byte_length(&mut self, code: &[u8], value: Slot) -> Result<f64, Step> {
+        let n = self.to_number_f64(code, value)?;
+        let t = if n.is_nan() { 0.0 } else { n.trunc() };
+        if t < 0.0 {
+            return Err(self.catchable_range_error_msg("byteLength < 0".into()));
+        }
+        if t > 9_007_199_254_740_991.0 {
+            return Err(self.catchable_range_error_msg("byteLength too big".into()));
+        }
+        Ok(t)
+    }
+
+    /// The range half of [`Self::to_index_arg`], for a value already
+    /// converted with `ToNumber`. XS's TypedArray constructor converts its
+    /// length, then reads a subclass's prototype, and only then rejects an
+    /// out-of-range length; its buffer constructors apply this allocation
+    /// ceiling after the read too.
+    pub(super) fn index_from_number(&mut self, n: f64) -> Result<u32, Step> {
         let t = if n.is_nan() { 0.0 } else { n.trunc() };
         if t < 0.0 {
             return Err(self.catchable_range_error_msg("byteLength < 0".into()));

@@ -233,7 +233,7 @@ impl Interp {
         // AND no `add`/`set` descriptor exists anywhere on the receiver's chain
         // (a truly unbound intrinsic); a user who cleared `add` to `undefined`
         // leaves a descriptor, so that case still throws per specification.
-        if adder.kind == Kind::Undefined && !self.chain_has_descriptor(inst, method_id) {
+        if adder.kind == Kind::Undefined && self.adder_awaits_installation(inst, kind, method_id) {
             debug_assert!(
                 self.functions
                     .values()
@@ -381,6 +381,42 @@ impl Interp {
         }
     }
 
+    /// Whether an absent `set`/`add` is the intrinsic adder that sparse
+    /// installation has not yet put on the collection prototype — the only
+    /// absence the constructors may recover from. The name must never have
+    /// been installed (its id is above the machine-wide installation floor,
+    /// so no guest can have deleted it) and the receiver's chain must reach
+    /// the intrinsic prototype. Recovering on bare absence substituted the
+    /// intrinsic adder after `delete Map.prototype.set`, or for a subclass
+    /// whose prototype no longer inherits from `Map.prototype`, where XS and
+    /// V8 throw a TypeError.
+    fn adder_awaits_installation(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        kind: CollKind,
+        method_id: u16,
+    ) -> bool {
+        let intrinsic = match kind {
+            CollKind::Map => self.map_proto,
+            CollKind::Set => self.set_proto,
+            CollKind::WeakMap => self.weakmap_proto,
+            CollKind::WeakSet => self.weakset_proto,
+        };
+        if usize::from(method_id) <= self.installed_names_len
+            || self.chain_has_descriptor(inst, method_id)
+        {
+            return false;
+        }
+        let mut level = inst;
+        while !level.is_null() {
+            if level == intrinsic {
+                return true;
+            }
+            level = self.instance_prototype(level);
+        }
+        false
+    }
+
     fn populate_collection_from_iterable_inner(
         &mut self,
         code: &[u8],
@@ -412,7 +448,7 @@ impl Interp {
         // can be absent from the prototype until this constructor reaches it.
         // Recover only genuine absence; an explicit guest `undefined` remains
         // observable and fails the callable check.
-        if adder.kind == Kind::Undefined && !self.chain_has_descriptor(inst, method_id) {
+        if adder.kind == Kind::Undefined && self.adder_awaits_installation(inst, kind, method_id) {
             debug_assert!(
                 self.functions
                     .values()
