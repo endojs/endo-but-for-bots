@@ -324,7 +324,7 @@ test('the sandbox wraps claude in bwrap, granting the broker and spawn directori
   );
   t.is(command, '/usr/bin/bwrap');
   const separator = bwrapArguments.indexOf('--');
-  t.is(bwrapArguments[separator + 1], FAKE_CLAUDE);
+  t.is(bwrapArguments[separator + 1], fs.realpathSync(FAKE_CLAUDE));
 
   /** @param {string} flag */
   const sourcesOf = flag =>
@@ -355,6 +355,28 @@ test('the sandbox wraps claude in bwrap, granting the broker and spawn directori
   const turnDirectory = path.dirname(writable[0]);
   t.is(path.dirname(spawnDirectory), turnDirectory);
   t.false([...readOnly, ...writable].includes(turnDirectory));
+});
+
+test('the sandbox runs a symlinked claudePath by its real path', async t => {
+  const linkDirectory = fs.mkdtempSync('/tmp/ect-link-');
+  t.teardown(() => fs.rmSync(linkDirectory, { recursive: true, force: true }));
+  const claudeLink = path.join(linkDirectory, 'claude');
+  fs.symlinkSync(FAKE_CLAUDE, claudeLink);
+  /** @type {unknown[][]} */
+  const recorded = [];
+  const { result } = await turn({
+    claudePath: claudeLink,
+    spawn: makeRecordingSpawn(recorded),
+    sandbox: { bwrapPath: '/usr/bin/bwrap' },
+  });
+  t.is(result.type, 'ok', JSON.stringify(result));
+  const [[, bwrapArguments]] = /** @type {[string, string[]][]} */ (recorded);
+  const separator = bwrapArguments.indexOf('--');
+  const realClaude = fs.realpathSync(FAKE_CLAUDE);
+  t.is(bwrapArguments[separator + 1], realClaude);
+  const granted = bwrapArguments.slice(0, separator);
+  t.true(granted.includes(path.dirname(realClaude)));
+  t.false(granted.includes(claudeLink), 'the link itself is not bound');
 });
 
 /** Find a `bwrap` that can create the slice's namespaces on this host. */

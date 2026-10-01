@@ -47,7 +47,7 @@ import { PINNED_CLI_VERSION } from './argv.js';
 /** @import { SpawnOptions, ChildProcess } from 'node:child_process' */
 /** @import { InferResult } from './claude.types.js' */
 /** @import { DaemonConnection } from '@endo/agent-mcp-stdio' */
-/** @import { SliceMount } from './bwrap-slice.js' */
+/** @import { SliceMount } from './claude.types.js' */
 
 /**
  * Read `claude --version` (for example `2.1.232 (Claude Code)`) under the
@@ -188,8 +188,6 @@ export const runConfinedTurn = async ({
       },
     });
 
-    /** @type {Map<string, string>} */
-    const spawnDirectoryByTag = new Map();
     const prepareSpawnFiles = makeSpawnFilesPreparer({
       parentDir: turnDir,
       pathValue,
@@ -213,11 +211,17 @@ export const runConfinedTurn = async ({
     if (sandbox !== undefined) {
       const systemMounts =
         sandbox.systemMounts ?? (await resolveSystemMounts());
-      const claudeDirectory = path.dirname(await fs.realpath(claudePath));
-      const toolPaths = [claudePath, claudeDirectory, nodePath, envCommand];
+      // Inside the slice `claude` is run by its real path, so a symlinked
+      // install (`/usr/local/bin/claude -> .../cli.js`) still resolves its
+      // siblings from the installation directory it is granted.
+      const realClaudePath = await fs.realpath(claudePath);
+      const toolPaths = [path.dirname(realClaudePath), nodePath, envCommand];
       launch = async spec => {
-        const spawnDirectory = spawnDirectoryByTag.get(spec.sessionTag);
-        if (broker === undefined || spawnDirectory === undefined) {
+        // The spawn files (`--settings`, `--mcp-config`) share one directory.
+        const settingsIndex = spec.argv.indexOf('--settings');
+        const settingsPath =
+          settingsIndex < 0 ? undefined : spec.argv[settingsIndex + 1];
+        if (broker === undefined || settingsPath === undefined) {
           throw makeError(X`sandbox: no broker or spawn files for this spawn`);
         }
         return makeLaunch({
@@ -229,12 +233,12 @@ export const runConfinedTurn = async ({
               ...toolPaths,
               RELAY_PATH,
               path.dirname(broker.socketPath),
-              spawnDirectory,
+              path.dirname(settingsPath),
             ],
             writablePaths: [workDir],
             home: sandbox.home,
           }),
-          claudePath,
+          claudePath: realClaudePath,
           cwd: workDir,
           onStderr,
         })(spec);
@@ -268,14 +272,7 @@ export const runConfinedTurn = async ({
           tagCount += 1;
           return `${path.basename(turnDir)}-${tagCount}`;
         },
-        prepareSpawnFiles: async request => {
-          const files = await prepareSpawnFiles(request);
-          spawnDirectoryByTag.set(
-            request.sessionTag,
-            path.dirname(files.mcpConfigPath),
-          );
-          return files;
-        },
+        prepareSpawnFiles,
         launch,
         ...(limits === undefined ? {} : { limits }),
       },
