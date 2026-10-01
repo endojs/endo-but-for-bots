@@ -222,3 +222,23 @@ test.serial('a rejected global does not stop a later one', async t => {
     delete (/** @type {any} */ (globalThis).SturdyRef);
   }
 });
+
+test.serial('a trusted global is not replaced by a later one', async t => {
+  // Once a well-shaped global is captured, a second, equally well-shaped
+  // constructor installed afterward does not displace it.
+  instance += 1;
+  const { isSturdyRefObject } = await import(
+    `../src/sturdyref.js?instance=${instance}`
+  );
+  const first = makeImpostor();
+  const second = makeImpostor();
+  try {
+    /** @type {any} */ (globalThis).SturdyRef = first;
+    t.true(isSturdyRefObject(freeze(create(first.prototype))));
+    /** @type {any} */ (globalThis).SturdyRef = second;
+    t.false(isSturdyRefObject(freeze(create(second.prototype))));
+    t.true(isSturdyRefObject(freeze(create(first.prototype))));
+  } finally {
+    delete (/** @type {any} */ (globalThis).SturdyRef);
+  }
+});
