@@ -3607,6 +3607,7 @@ __metadata:
     "@endo/exo": "workspace:^"
     "@endo/far": "workspace:^"
     "@endo/harden": "workspace:^"
+    "@endo/hex": "workspace:^"
     "@endo/immutable-arraybuffer": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/ironhorse-prelude": "workspace:^"
