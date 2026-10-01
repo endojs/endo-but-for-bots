@@ -1,6 +1,6 @@
 {
   "name": "@endo/inference",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Provider-neutral seam for one confined inference turn: the guarded InferenceBackend and CredentialSource interfaces, the limit-enforcer and pinned-table classifier libraries a provider plugin calls, and the prompt-origin gate and usage recorder enrichers.",
   "keywords": [
