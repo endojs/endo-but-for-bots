@@ -95,7 +95,7 @@ test.serial(
   'an iterator abandoned before its first pull does not leak a stream rejection',
   async t => {
     // iterateReader opens the stream eagerly but only observes the head of
-    // the acknowledgement chain on the first next().  A consumer that never
+    // the acknowledgment chain on the first next().  A consumer that never
     // pulls (or stops before its first pull) while the peer disconnects must
     // not surface that disconnection as an unhandled rejection — in the
     // daemon suites that failed whole test files at teardown with
@@ -1112,3 +1112,37 @@ test('iterateReader throw() closes syn chain', async t => {
   t.is(synNode.promise, null);
   t.is(synNode.value, undefined);
 });
+
+test.serial(
+  'an iterator abandoned after a pull does not leak a later stream rejection',
+  async t => {
+    // Every link of the acknowledgment chain, not only the head, is observed
+    // only by the following next(), so a consumer that stops after pulling
+    // some values must not leak a later disconnection either.
+    /** @type {unknown[]} */
+    const unhandledReasons = [];
+    /** @param {unknown} reason */
+    const onUnhandledRejection = reason => {
+      unhandledReasons.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    t.teardown(() => {
+      process.off('unhandledRejection', onUnhandledRejection);
+    });
+
+    const lost = harden(Error('connection lost after the first pull'));
+    const secondLink = makePromiseKit();
+    const lostReader = Far('LostReader', {
+      stream: async () => harden({ value: 1, promise: secondLink.promise }),
+    });
+    const iterator = iterateReader(/** @type {any} */ (lostReader));
+    const first = await iterator.next();
+    t.deepEqual(first, { done: false, value: 1 });
+    secondLink.reject(lost);
+    await delay(10);
+
+    t.deepEqual(unhandledReasons, []);
+    // The rejection is still reported to a consumer that pulls again.
+    await t.throwsAsync(() => iterator.next(), { is: lost });
+  },
+);

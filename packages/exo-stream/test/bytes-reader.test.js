@@ -405,3 +405,39 @@ test.serial(
     await t.throwsAsync(() => iterator.next(), { is: lost });
   },
 );
+
+test.serial(
+  'a bytes reader iterator abandoned after a pull does not leak a later stream rejection',
+  async t => {
+    // See the iterateReader test of the same name in reader.test.js.
+    /** @type {unknown[]} */
+    const unhandledReasons = [];
+    /** @param {unknown} reason */
+    const onUnhandledRejection = reason => {
+      unhandledReasons.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandledRejection);
+    t.teardown(() => {
+      process.off('unhandledRejection', onUnhandledRejection);
+    });
+
+    const lost = harden(Error('connection lost after the first pull'));
+    const secondLink = makePromiseKit();
+    const lostBytesReader = Far('LostBytesReader', {
+      streamBase64: async () =>
+        harden({ value: 'AQID', promise: secondLink.promise }),
+    });
+    const iterator = iterateBytesReader(/** @type {any} */ (lostBytesReader));
+    const first = await iterator.next();
+    t.deepEqual(first, {
+      done: false,
+      value: new Uint8Array([1, 2, 3]),
+    });
+    secondLink.reject(lost);
+    await delay(10);
+
+    t.deepEqual(unhandledReasons, []);
+    // The rejection is still reported to a consumer that pulls again.
+    await t.throwsAsync(() => iterator.next(), { is: lost });
+  },
+);
