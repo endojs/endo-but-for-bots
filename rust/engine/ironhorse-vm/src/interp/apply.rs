@@ -456,8 +456,11 @@ impl Interp {
         for a in acc {
             self.stack.push(a);
         }
-        // `new.target` resolves to the ultimate target (see the doc comment).
-        self.pending_new_target = Some(target);
+        // `new.target` resolves to the ultimate target (see the doc comment),
+        // unless a `super()` names its own: BoundFunction [[Construct]]
+        // substitutes the target only for a `newTarget` that is the bound
+        // function itself.
+        self.pending_new_target = Some(self.pending_new_target.take().unwrap_or(target));
         self.charge_and_check(BIND_CALL_METERING + total as u64 * BIND_CALL_PER_ARG)?;
         self.enter_call(total, ret_pc, true)
     }

@@ -657,7 +657,7 @@ impl Interp {
     /// ([`crate::meter::SLOT_ALLOCATION_METERING`], 256 raw) exactly where
     /// `fxNewHostInstance` allocates it — measured against the pin as the
     /// whole construct overhead over a plain call.
-    pub(super) fn run_constructor(&mut self) {
+    pub(super) fn run_constructor(&mut self, code: &[u8]) -> Result<(), Step> {
         // `fxRunConstructor` runs `fxBeginHost`/`fxEndHost` around
         // `fxGetPrototypeFromConstructor` and then `fxNewHostInstance`. Beyond
         // the instance `fxNewSlot` ([`crate::meter::SLOT_ALLOCATION_METERING`],
@@ -671,11 +671,19 @@ impl Interp {
         // (fxGetPrototypeFromConstructor), defaulting to %Object.prototype% —
         // so `(new F()) instanceof F` holds. Reading the prototype is a
         // property get (unmetered), already folded into the measured cost.
-        let proto = self
-            .prototype_of(self.target_func)
-            .unwrap_or(self.object_proto);
+        //
+        // A Proxy `new.target` (a `Reflect.construct` newTarget) answers that
+        // get through its trap, so it takes the observable read; every other
+        // constructor's `prototype` is the data slot the cache reads.
+        let proto = if self.proxies.contains_key(&self.target_func) {
+            self.get_prototype_from_constructor(code, self.target_func, self.object_proto)?
+        } else {
+            self.prototype_of(self.target_func)
+                .unwrap_or(self.object_proto)
+        };
         let inst = self.slots.alloc(Slot::instance(proto));
         self.this_val = Slot::of(Kind::Reference, Payload::Reference(inst));
+        Ok(())
     }
 
     pub(super) fn bind_this_sloppy(&mut self) {

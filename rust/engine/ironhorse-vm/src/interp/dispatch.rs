@@ -315,7 +315,9 @@ impl Interp {
             use Opcode::*;
             match op {
                 // ---- program prologue / frame -----------------------
-                XS_CODE_BEGIN_SLOPPY => dispatch_flow!(self.exec_begin_sloppy(pc, size), pc),
+                XS_CODE_BEGIN_SLOPPY => {
+                    dispatch_flow!(self.exec_begin_sloppy(code, pc, return_depth, size), pc)
+                }
                 XS_CODE_BEGIN_STRICT
                 | XS_CODE_BEGIN_STRICT_BASE
                 | XS_CODE_BEGIN_STRICT_DERIVED
@@ -1141,7 +1143,13 @@ impl Interp {
 
     /// The dispatch loop's `BEGIN_SLOPPY` arm.
     #[inline(never)]
-    fn exec_begin_sloppy(&mut self, mut pc: usize, size: i8) -> Flow {
+    fn exec_begin_sloppy(
+        &mut self,
+        code: &[u8],
+        mut pc: usize,
+        return_depth: usize,
+        size: i8,
+    ) -> Flow {
         // `this` setup (`XS_CODE_BEGIN_SLOPPY` in `xsRun.c`):
         // an `undefined`/`null` `this` in a sloppy frame binds
         // to the realm global. The program-frame + eval-env
@@ -1158,7 +1166,7 @@ impl Interp {
         } else if self.cur_target {
             // A constructor frame (`new f(...)`): allocate the
             // `this` instance (`fxRunConstructor`) before the body.
-            self.run_constructor();
+            dispatch_result_flow!(self.run_constructor(code), self, return_depth, code);
         } else {
             self.bind_this_sloppy();
         }
@@ -1198,7 +1206,7 @@ impl Interp {
                         let error = self.internal_error("TypeError", "call: class".into());
                         dispatch_halt_flow!(self.raise_js(error), self, return_depth, code);
                     }
-                    self.run_constructor();
+                    dispatch_result_flow!(self.run_constructor(code), self, return_depth, code);
                 }
                 XS_CODE_BEGIN_STRICT_DERIVED => {
                     // A derived constructor starts with an
@@ -1210,7 +1218,7 @@ impl Interp {
                     self.this_val = Slot::uninitialized();
                 }
                 XS_CODE_BEGIN_STRICT if self.cur_target => {
-                    self.run_constructor();
+                    dispatch_result_flow!(self.run_constructor(code), self, return_depth, code);
                 }
                 // Field initializers run as strict methods with an
                 // already-supplied receiver.
@@ -2288,10 +2296,19 @@ impl Interp {
             let error = self.internal_error("TypeError", "super: not a constructor".into());
             dispatch_halt_flow!(self.raise_js(error), self, return_depth, code);
         }
-        self.pending_new_target = Some(self.target_func);
+        // The frame carries `new.target` in its RESULT slot, as XS's frame
+        // carries its target, and `run_*` hands it to the construct once the
+        // arguments have run. Setting the one-shot `pending_new_target` latch
+        // here let any construct inside the arguments — `super(new
+        // Array(n))` — take it: that object got the derived prototype and the
+        // super object the intrinsic one.
         self.push(Slot::uninitialized());
         self.push(Slot::of(Kind::Reference, Payload::Reference(parent)));
-        self.push(Slot::undefined());
+        self.push(if self.target_func.is_null() {
+            Slot::undefined()
+        } else {
+            Slot::of(Kind::Reference, Payload::Reference(self.target_func))
+        });
         self.push(Slot::of(Kind::Uninitialized, Payload::None));
         pc += size as usize;
         Flow::Next(pc)
@@ -2392,6 +2409,13 @@ impl Interp {
             .and_then(|b| self.stack.get(b))
             .map(|s| s.kind == Kind::Uninitialized)
             .unwrap_or(false);
+        // A `super(...)` frame's `new.target` (see `XS_CODE_SUPER`), armed
+        // for the construct this frame enters.
+        if has_target {
+            if let Some(base) = base_opt {
+                self.arm_super_frame_target(base);
+            }
+        }
         let func_ref = base_opt.and_then(|base| match self.stack.get(base + 1).map(|s| s.value) {
             Some(Payload::Reference(f)) => Some((f, base)),
             _ => None,
@@ -2613,9 +2637,14 @@ impl Interp {
                 .get(base)
                 .copied()
                 .unwrap_or_else(Slot::undefined);
+            let nt = self.proxy_construct_new_target(base, px);
             self.stack.truncate(base);
             let result = if has_target {
-                let nt = Slot::of(Kind::Reference, Payload::Reference(px));
+                // A Proxy takes its `new.target` as an argument, never from
+                // the latch, which nothing on this path would consume: left
+                // set, it leaked into the next construct, so a later plain
+                // `new Map()` built a subclass instance.
+                self.pending_new_target = None;
                 dispatch_result_flow!(
                     self.proxy_construct(code, px, &args, nt),
                     self,

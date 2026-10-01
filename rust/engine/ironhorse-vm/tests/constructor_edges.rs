@@ -91,3 +91,29 @@ fn symbol_and_bigint_are_constructors_that_refuse_new() {
         ),
     ]);
 }
+
+#[test]
+fn super_new_target_belongs_to_the_super_call() {
+    check(&[
+        (
+            "argument_construct",
+            r#"class D extends Array { constructor() { super(new Map()); } } var d = new D(); [d instanceof D, d[0] instanceof Map, Object.getPrototypeOf(d[0]) === Map.prototype].join()"#,
+            r#"true,true,true"#,
+        ),
+        (
+            "nested_super",
+            r#"class M extends Map {} class D extends Array { constructor() { super(new M()); } } var d = new D(); [d instanceof D, d[0] instanceof M].join()"#,
+            r#"true,true"#,
+        ),
+        (
+            "native_after_user",
+            r#"class B { constructor(x) { this.x = x; } } class D extends B { constructor() { super(new Set([1])); } } var d = new D(); [d instanceof D, d.x instanceof Set, Object.getPrototypeOf(d.x) === Set.prototype].join()"#,
+            r#"true,true,true"#,
+        ),
+        (
+            "proxy_parent",
+            r#"var P = new Proxy(Map, {}); class D extends P {} var d = new D(); [d instanceof D, d instanceof Map].join()"#,
+            r#"true,true"#,
+        ),
+    ]);
+}

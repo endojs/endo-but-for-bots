@@ -699,7 +699,13 @@ impl Interp {
                 "proxy:construct-nonuser-target",
             )));
         }
-        let _ = new_target;
+        // `Reflect.construct(F, args, G)` (and a Proxy forwarding a construct)
+        // names G as `new.target`. Discarding it built the object from F's
+        // prototype and reported F as `new.target`.
+        let new_target = match new_target.value {
+            Payload::Reference(target) if new_target.kind == Kind::Reference => target,
+            _ => f,
+        };
         let argc = args.len();
         self.push(Slot::of(Kind::Uninitialized, Payload::None)); // THIS (construct)
         self.push(func);
@@ -708,6 +714,7 @@ impl Interp {
         for a in args {
             self.push(*a);
         }
+        self.pending_new_target = (new_target != f).then_some(new_target);
         let body_start = self.enter_call(argc, 0, true)?;
         let return_depth = self.call_stack.len();
         let callee_seg = self.callee_segment(f);

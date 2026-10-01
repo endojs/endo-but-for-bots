@@ -245,6 +245,41 @@ impl Interp {
         Ok(())
     }
 
+    /// The `new.target` a `super(...)` frame at `base` carries in its RESULT
+    /// slot (see the dispatch loop's `SUPER` arm). The RESULT slot of every
+    /// other frame is `undefined`, so this is `None` for them.
+    fn super_frame_target(&self, base: usize) -> Option<crate::value::SlotIndex> {
+        self.stack.get(base + 2).and_then(|slot| match slot.value {
+            Payload::Reference(target) if slot.kind == Kind::Reference => Some(target),
+            _ => None,
+        })
+    }
+
+    /// Arm `pending_new_target` with the `new.target` of the construct frame
+    /// at `base`, if a `super(...)` pushed it: the latch is set only as the
+    /// construct starts, after the arguments have run, so no construct among
+    /// them can take it. Out of line, as the dispatch loop's `RUN` arm, which
+    /// every native re-entry holds, calls it.
+    #[inline(never)]
+    pub(super) fn arm_super_frame_target(&mut self, base: usize) {
+        if let Some(target) = self.super_frame_target(base) {
+            self.pending_new_target = Some(target);
+        }
+    }
+
+    /// The `new.target` argument of a Proxy construct from the frame at
+    /// `base`: the one a `super(...)` pushed, or else the Proxy `px` itself.
+    /// Out of line for the reason [`Self::arm_super_frame_target`] is.
+    #[inline(never)]
+    pub(super) fn proxy_construct_new_target(
+        &self,
+        base: usize,
+        px: crate::value::SlotIndex,
+    ) -> Slot {
+        let target = self.super_frame_target(base).unwrap_or(px);
+        Slot::of(Kind::Reference, Payload::Reference(target))
+    }
+
     /// `XS_CODE_RUN`'s inline argument count (pushed as an integer just
     /// below the frame). The variadic `run` reads it off the stack.
     pub(super) fn pop_run_count(&mut self) -> Result<usize, Step> {
