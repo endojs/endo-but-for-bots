@@ -179,7 +179,9 @@ export const sturdyRefDetailsToData = ({ location, secret }) =>
     peerId: location.designator,
     objectId: copySecret(secret),
     network: location.network ?? location.transport,
-    ...(location.hints ? { hints: location.hints } : {}),
+    // A fresh `hints`, so hardening the data never freezes the record the
+    // SturdyRef holds.
+    ...(location.hints ? { hints: { ...location.hints } } : {}),
   });
 
 /** @type {EnlivenSturdyRefDetails} */
@@ -202,8 +204,18 @@ const enlivenUnbound = async _details => {
  * @returns {SturdyRef}
  */
 const makeBoundSturdyRef = (location, secret, enlivenDetails) => {
+  // Copy the location, its hints, and the secret bytes when minting, so a
+  // later change to the caller's objects cannot change which object the
+  // SturdyRef names, and reading its data never freezes the caller's
+  // objects.
   /** @type {SturdyRefDetails} */
-  const details = { location, secret };
+  const details = {
+    location: harden({
+      ...location,
+      hints: location.hints ? { ...location.hints } : location.hints,
+    }),
+    secret: copySecret(secret),
+  };
   const sturdyRef = /** @type {SturdyRef} */ (
     makeRealmSturdyRef(
       harden({

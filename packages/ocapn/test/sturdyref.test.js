@@ -547,6 +547,37 @@ test('mutating returned SturdyRef data bytes leaves the ref unchanged', async t 
   client.shutdown();
 });
 
+test('a minted SturdyRef copies its location and secret', async t => {
+  const { client } = await makeTestClient({ debugLabel: 'A' });
+  /** @type {Record<string, string>} */
+  const hints = { host: '127.0.0.1' };
+  const secret = Uint8Array.of(0x80, 0x81);
+  /** @type {any} */
+  const location = {
+    type: 'ocapn-peer',
+    designator: 'p',
+    transport: 'tcp',
+    hints,
+  };
+  const ref = client.makeSturdyRef(location, secret);
+  // Mutate the caller's objects before the first read.
+  secret[0] = 0;
+  hints.host = 'evil.example';
+  location.designator = 'q';
+  t.deepEqual(client.getSturdyRefData(ref), {
+    peerId: 'p',
+    objectId: Uint8Array.of(0x80, 0x81),
+    network: 'tcp',
+    hints: { host: '127.0.0.1' },
+  });
+  // Reading the data does not freeze the caller's objects in place.
+  hints.port = '1234';
+  location.network = 'other';
+  t.is(hints.port, '1234');
+  t.is(location.network, 'other');
+  client.shutdown();
+});
+
 test('OCapN SturdyRef data refuses non-enumerable extra properties', t => {
   const data = { peerId: 'p', objectId: 'x', network: 'tcp' };
   Object.defineProperty(data, 'smuggled', { value: true, enumerable: false });
