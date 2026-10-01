@@ -5,8 +5,5 @@
       "--liftoff-only"
     ]
   },
-  "expected_traps": [
-    "parse-tagged-chain-2043",
-    "u3-eval-nest-tagged-2038"
-  ]
+  "expected_traps": []
 }
