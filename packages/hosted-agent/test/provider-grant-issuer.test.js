@@ -2,9 +2,12 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 
+import { makeBrokerSubscription } from '../src/broker-subscription.js';
 import { makeProviderBrokerGrantIssuer } from '../src/provider-grant-issuer.js';
 import { makePoolMemberLifecycle } from '../src/pool-member-lifecycle.js';
+import { makeSubscriptionShare } from '../src/subscription-share.js';
 import { admitsModels } from './admits-models.js';
 
 const digest = `sha256:${'a'.repeat(64)}`;
@@ -54,6 +57,116 @@ const makeIssuer = options =>
           },
         },
   );
+
+for (const streaming of [false, true]) {
+  test(`large inference survives endpoint, share and pool wrappers (streaming=${streaming})`, async t => {
+    const largeBody = JSON.stringify({
+      model: 'allowed',
+      input: 'x'.repeat(100_100),
+    });
+    let dispatched = 0;
+    let secretReads = 0;
+    const roomierPolicy = { ...policy, maxRequestBytes: 200_000n };
+    const inner = makeIssuer({
+      runtime: {},
+      policy: roomierPolicy,
+      imageDigest: digest,
+      accountRef: 'account',
+      secret: Far('secret', {
+        readBase64: async () => {
+          secretReads += 1;
+          return globalThis.btoa('host-secret');
+        },
+      }),
+      fetch: async (_url, init) => {
+        dispatched += 1;
+        t.is(init?.body, largeBody);
+        return new Response('ok');
+      },
+    });
+    t.teardown(() => inner.dispose());
+    const broker = makeBrokerSubscription({
+      providerId: 'codex',
+      label: 'Codex',
+      readModels: async () => ['allowed'],
+      readings: async () => [{ id: 'account', rateLimits: undefined }],
+      openEndpoint: requested => inner.openEndpoint(requested),
+    });
+    t.teardown(broker.close);
+    let stored;
+    const share = makeSubscriptionShare({
+      shareId: 'large',
+      provideUnderlying: async () => broker.subscription,
+      provideLimits: async () => ({ createdAt: '2026-09-20T00:00:00Z' }),
+      journal: {
+        read: async () => stored,
+        write: async value => {
+          stored = value;
+        },
+      },
+      log: () => {},
+    });
+    t.teardown(() => E(share.admin).revoke());
+    const lifecycle = makePoolMemberLifecycle();
+    t.teardown(() => lifecycle.close());
+    const outer = makeIssuer({
+      runtime: {},
+      secret: undefined,
+      policy: roomierPolicy,
+      imageDigest: digest,
+      accountRef: 'account',
+      pool: {
+        members: () => [{ id: 'shared', lifecycle, subscription: share.share }],
+        forSession: () => ({
+          select: () => ['shared'],
+          served: () => {},
+          exhausted: () => {},
+        }),
+      },
+    });
+    t.teardown(() => outer.dispose());
+    const endpoints = [
+      await inner.openEndpoint({ sessionId: 'direct' }),
+      await E(share.share).openEndpoint({ sessionId: 'shared' }),
+      await outer.openEndpoint({ sessionId: 'wrapped' }),
+    ];
+    const verb = streaming ? 'requestByteStream' : 'request';
+    for (const endpoint of endpoints) {
+      // eslint-disable-next-line no-await-in-loop
+      const response = await E(endpoint)[verb](
+        harden({ ...inference, body: largeBody }),
+      );
+      t.is(response.status, 200);
+      if (streaming) {
+        const parts = [];
+        // eslint-disable-next-line no-await-in-loop
+        for await (const bytes of iterateBytesReader(response.reader)) {
+          parts.push(new TextDecoder().decode(bytes));
+        }
+        t.is(parts.join(''), 'ok');
+      } else {
+        t.is(response.body, 'ok');
+      }
+      for (const input of ['é'.repeat(110_000), '€'.repeat(80_000)]) {
+        // Both fit the wrapper envelope; the configured byte quota must
+        // refuse them, including UTF-8 that fits by characters but not bytes.
+        // eslint-disable-next-line no-await-in-loop
+        await t.throwsAsync(
+          () =>
+            E(endpoint)[verb](
+              harden({
+                ...inference,
+                body: JSON.stringify({ model: 'allowed', input }),
+              }),
+            ),
+          { message: 'Request byte quota exceeded' },
+        );
+      }
+    }
+    t.is(dispatched, endpoints.length);
+    t.is(secretReads, endpoints.length);
+  });
+}
 
 for (const wrapped of [false, true]) {
   test(`failed pool construction releases earlier ${wrapped ? 'wrapped' : 'direct'} member resources`, async t => {
@@ -1284,8 +1397,6 @@ const wrappedPoolFixture = async (makeFar, options = {}) => {
 };
 
 test('a pool that holds a share of itself neither deadlocks nor goes round for ever', async t => {
-  const { makeSubscriptionShare } =
-    await import('../src/subscription-share.js');
   const f = await wrappedPoolFixture(issuer => {
     // The operator's own pool as a Subscription, and a share of it, put back
     // into that pool.

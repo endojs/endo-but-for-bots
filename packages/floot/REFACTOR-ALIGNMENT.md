@@ -105,8 +105,8 @@ Ignored declarations were narrowly regenerated, not committed.
 Whole-repository lint remains unclean on unchanged formatting and other lint
 errors, including Chat project-resolution failures.
 The source audit records those limitations and suspected bucketing separately.
-These source-only changes are not deployed; generation 190 and its pins remain
-the live acceptance baseline.
+Generation 190 was the live baseline for that source-only pass; the subsequent
+environment delivery below supersedes it.
 The smaller-combined-implementation target is still unproven.
 The requested scope items 3–5 are done.
 The operator has decided to keep sharing/delegation, including budgets, nested
@@ -118,9 +118,16 @@ The subsequent environment investigation is recorded in
 [durable POSIX environments](../../designs/durable-posix-environments.md).
 Implementation has started with deletion of the sandbox's misleading dynamic
 mount/scratch/open/fork/reset methods; static mounts and owned process cleanup remain.
-The portable Shell adapter is now tested, including CapTP byte streams and
-failure/cancellation paths; durable environments and live Fae/Floot acceptance
-remain pending, without a second delegation platform or selected crash-recovery design.
+Initial environment implementation and Tokyo acceptance are complete on generation
+194 (app `854a4c5aa`, host `1f2a4bd`). Fae/Codex Luna installed Rust and passed
+Cargo tests; OpenRouter `openrouter/free` passed the workspace pilot. Forced
+compaction, policy replacement, native/Floot cancellation, explicitly stopped
+restart/recall and scoped deletion/disposal passed. The portable Shell adapter
+also has CapTP byte-stream/failure tests and real two-daemon capability routing
+with a fixture runner, not live remote Podman acceptance. Automatic environment
+GC and daemon-wide native crash recovery remain deferred, without a second
+delegation platform. The linked design records exact evidence, defects fixed
+during testing and the explicit-stop restart limitation.
 This sandbox-package deletion does not change the four-package source metric above.
 
 Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins

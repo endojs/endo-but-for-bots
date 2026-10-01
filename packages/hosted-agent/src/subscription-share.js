@@ -215,7 +215,14 @@ export const estimateRequest = (body, data, outputEstimate) => {
 harden(estimateRequest);
 
 const MessageShape = M.splitRecord(
-  { method: M.string(), path: M.string(), body: M.string() },
+  {
+    method: M.string(),
+    path: M.string(),
+    // Match the broker/transport's largest admission envelope, not the
+    // implicit 100,000-character string guard. The core still applies its
+    // configured UTF-8 byte quota before reading a credential or dispatching.
+    body: M.string({ stringLengthLimit: 8_388_608 }),
+  },
   { headers: M.recordOf(M.string(), M.string()) },
 );
 

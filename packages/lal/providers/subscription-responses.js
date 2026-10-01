@@ -5,6 +5,7 @@ import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { iterateBytesReader } from '@endo/exo-stream/iterate-bytes-reader.js';
 import { usageFromProviderEvent } from '@endo/hosted-agent/provider-usage.js';
+import { canonicalJson } from '@endo/hosted-agent/canonical-json.js';
 import { makePromiseKit } from '@endo/promise-kit';
 import { M, mustMatch } from '@endo/patterns';
 
@@ -41,9 +42,16 @@ const commonMessage = items => {
   let content = '';
   const calls = [];
   const ids = new Set();
+  const itemIds = new Set();
   for (const item of items) {
     (item && (item.status === undefined || item.status === 'completed')) ||
       Fail`Unfinished Responses output item`;
+    if (item.id !== undefined) {
+      (typeof item.id === 'string' && item.id !== '') ||
+        Fail`Invalid Responses output item identity`;
+      !itemIds.has(item.id) || Fail`Duplicate Responses output item identity`;
+      itemIds.add(item.id);
+    }
     if (item?.type === 'reasoning') {
       // Opaque provider context: preserve, never execute or interpret it.
     } else if (item?.type === 'function_call') {
@@ -403,6 +411,8 @@ export const makeSubscriptionResponsesProvider = ({
       iterator = iterateBytesReader(response.reader);
       const events = responseEvents(iterator);
       let completed;
+      const addedItems = new Map();
+      const completedItems = new Map();
       let doneMarker = false;
       let usage;
       for (;;) {
@@ -443,7 +453,35 @@ export const makeSubscriptionResponsesProvider = ({
             `Subscription inference ended unsuccessfully (${event.type})`,
           );
         }
-        if (event.type === 'response.output_text.delta') {
+        if (
+          event.type === 'response.output_item.added' ||
+          event.type === 'response.output_item.done'
+        ) {
+          const index = event.output_index;
+          (typeof index === 'number' &&
+            Number.isSafeInteger(index) &&
+            index >= 0 &&
+            index <= 0xffff_ffff &&
+            event.item &&
+            typeof event.item.type === 'string') ||
+            Fail`Invalid Responses completed item`;
+          if (event.type === 'response.output_item.added') {
+            (!addedItems.has(index) && !completedItems.has(index)) ||
+              Fail`Duplicate Responses added item`;
+            addedItems.set(index, {
+              type: event.item.type,
+              id: event.item.id,
+            });
+          } else {
+            !completedItems.has(index) ||
+              Fail`Duplicate Responses completed item`;
+            const added = addedItems.get(index);
+            !added ||
+              (added.type === event.item.type && added.id === event.item.id) ||
+              Fail`Responses item identity changed`;
+            completedItems.set(index, event.item);
+          }
+        } else if (event.type === 'response.output_text.delta') {
           (completed === undefined && typeof event.delta === 'string') ||
             Fail`Invalid Responses text delta`;
           onToken?.(event.delta);
@@ -455,8 +493,26 @@ export const makeSubscriptionResponsesProvider = ({
       }
       completed !== undefined ||
         Fail`Responses stream ended without completion`;
+      Array.isArray(completed.output) ||
+        Fail`Invalid Responses completed output`;
+      [...addedItems.keys()].every(index => completedItems.has(index)) ||
+        Fail`Unfinished Responses added item`;
+      const streamed = [...completedItems.entries()].sort(([a], [b]) => a - b);
+      streamed.every(([index], position) => index === position) ||
+        Fail`Incomplete Responses completed item sequence`;
+      const streamedOutput = streamed.map(([, item]) => item);
+      // ChatGPT subscription streams complete each item, then acknowledge the
+      // response with an empty output array. Retain those completed snapshots,
+      // never reconstruct tool arguments or opaque context from partial deltas.
+      if (completed.output.length && streamedOutput.length) {
+        canonicalJson(completed.output) === canonicalJson(streamedOutput) ||
+          Fail`Responses completion disagrees with completed items`;
+      }
+      const output = completed.output.length
+        ? completed.output
+        : streamedOutput;
       return harden({
-        message: messageFromResponsesOutput({ model, items: completed.output }),
+        message: messageFromResponsesOutput({ model, items: output }),
         ...(usage ? { usage } : {}),
       });
     } finally {

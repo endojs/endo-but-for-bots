@@ -2,9 +2,17 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { passStyleOf } from '@endo/pass-style';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import {
+  mkdtemp,
+  realpath,
+  readdir,
+  rm,
+  unlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { makeEnvironmentRunnerKit } from '../src/environment-runner.js';
@@ -27,10 +35,16 @@ test.beforeEach(t => t.timeout(5000));
 const fixture = async t => {
   const directory = await mkdtemp(join(tmpdir(), 'environment-test-'));
   t.teardown(() => rm(directory, { force: true, recursive: true }));
+  const socketRoot = await realpath(await mkdtemp('/tmp/en9p-'));
+  t.teardown(() => rm(socketRoot, { force: true, recursive: true }));
   const calls = [];
   let mountGate;
   const mountEntered = gate();
   let scopeFails = false;
+  let scopeGate;
+  const scopeEntered = gate();
+  let scopeClosed = false;
+  let requireScopeBeforeListener = false;
   let launch;
   const scope = Far('Scope', {
     makeResolved: async options => {
@@ -61,7 +75,11 @@ const fixture = async t => {
     },
     close: async () => {
       calls.push('scope-close');
-      if (scopeFails) throw Error('scope cleanup pending');
+      scopeEntered.resolve();
+      await scopeGate?.promise;
+      if (scopeFails)
+        throw Object.assign(Error('scope cleanup pending'), { code: 'EBUSY' });
+      scopeClosed = true;
     },
   });
   const native = Far('Native', {
@@ -85,18 +103,22 @@ const fixture = async t => {
       calls.push(['remove', key]);
     },
   };
-  const makeMounter = () => ({
-    mounter: Far('Mounter', {
-      mount: async () => {
-        calls.push('mount');
-        mountEntered.resolve();
-        await mountGate?.promise;
+  let mounterEnv;
+  const makeMounter = env => {
+    mounterEnv = env;
+    return {
+      mounter: Far('Mounter', {
+        mount: async () => {
+          calls.push('mount');
+          mountEntered.resolve();
+          await mountGate?.promise;
+        },
+      }),
+      close: async () => {
+        calls.push('unmount');
       },
-    }),
-    close: async () => {
-      calls.push('unmount');
-    },
-  });
+    };
+  };
   const closed = gate();
   const listener = {
     open: async () => ({
@@ -118,12 +140,16 @@ const fixture = async t => {
           }),
           stop: async () => {
             calls.push('network-stop');
+            if (requireScopeBeforeListener && !scopeClosed)
+              throw Error('network container has dependents');
           },
         };
       },
     }),
     close: async () => {
       calls.push('listener-close');
+      if (requireScopeBeforeListener && !scopeClosed)
+        throw Error('listener runtime has dependents');
     },
   };
   const makeEgress = () => ({
@@ -139,7 +165,18 @@ const fixture = async t => {
       imageRef: `localhost/base@sha256:${'c'.repeat(64)}`,
       publicInternet: true,
     },
-    { runtime, listener, storage, makeMounter, makeEgress },
+    {
+      env: {
+        XDG_RUNTIME_DIR: socketRoot,
+        ENDO_NINEP_MOUNT_PROGRAM: '/trusted/mount',
+        ENDO_NINEP_UMOUNT_PROGRAM: '/trusted/umount',
+      },
+      runtime,
+      listener,
+      storage,
+      makeMounter,
+      makeEgress,
+    },
   );
   t.teardown(() => kit.close());
   const runner = await kit.open();
@@ -156,6 +193,15 @@ const fixture = async t => {
     dependencies,
     calls,
     getLaunch: () => launch,
+    getMounterEnv: () => mounterEnv,
+    socketRoot,
+    blockScope: () => {
+      scopeGate = gate();
+      return { ...scopeGate, entered: scopeEntered.promise };
+    },
+    requireScopeBeforeListener: () => {
+      requireScopeBeforeListener = true;
+    },
     blockMount: () => {
       mountGate = gate();
       return { ...mountGate, entered: mountEntered.promise };
@@ -202,7 +248,17 @@ test('Shell uses retained native HOME and exact projected workspace without scra
     launch.mounts.map(m => m.innerPath),
     ['/workspace', '/home/node'],
   );
+  const mountEnv = f.getMounterEnv();
+  t.true(mountEnv.NINEP_SOCKET_DIR.startsWith(`${f.socketRoot}/env-9p-`));
+  t.true(
+    new TextEncoder().encode(
+      `${mountEnv.NINEP_SOCKET_DIR}/endo-9p-1234567890123456`,
+    ).length <= 103,
+  );
+  t.is(mountEnv.NINEP_MOUNT_PROGRAM, '/trusted/mount');
+  t.is(mountEnv.NINEP_UMOUNT_PROGRAM, '/trusted/umount');
   await E(controller).stop();
+  t.deepEqual(await readdir(f.socketRoot), []);
   t.true(f.calls.indexOf('scope-close') < f.calls.indexOf('unmount'));
   t.false(f.calls.some(c => Array.isArray(c) && c[0] === 'remove'));
 });
@@ -258,7 +314,10 @@ test('failed scope cleanup retains deletion fence and original mounter until ret
   );
   await E(controller).open();
   f.failScope(true);
-  await t.throwsAsync(E(controller).stop(), { message: /cleanup pending/ });
+  const failure = await t.throwsAsync(E(controller).stop(), {
+    message: /cleanup pending/,
+  });
+  t.is(passStyleOf(harden(failure)), 'error');
   t.false(f.calls.includes('unmount'));
   await t.throwsAsync(E(f.runner).removeEnvironmentStorage(id), {
     message: /must stop/,
@@ -267,4 +326,69 @@ test('failed scope cleanup retains deletion fence and original mounter until ret
   await E(controller).stop();
   await E(f.runner).removeEnvironmentStorage(id);
   t.true(f.calls.includes('unmount'));
+});
+
+test('socket directory removal failure retains the owner for explicit retry', async t => {
+  const f = await fixture(t);
+  const controller = await E(f.runner).provideEnvironment(
+    id,
+    recipe,
+    f.dependencies,
+  );
+  await E(controller).open();
+  const obstruction = join(
+    f.getMounterEnv().NINEP_SOCKET_DIR,
+    'fixture-obstruction',
+  );
+  await writeFile(obstruction, 'do not sweep');
+  await t.throwsAsync(E(controller).stop(), { message: /ENOTEMPTY/ });
+  await t.throwsAsync(E(f.runner).removeEnvironmentStorage(id), {
+    message: /must stop/,
+  });
+  t.is((await readdir(f.socketRoot)).length, 1);
+  await unlink(obstruction);
+  await E(controller).stop();
+  t.deepEqual(await readdir(f.socketRoot), []);
+  await E(f.runner).removeEnvironmentStorage(id);
+});
+
+test('joined native scope cleanup acknowledges before network listener removal', async t => {
+  const f = await fixture(t);
+  const controller = await E(f.runner).provideEnvironment(
+    id,
+    harden({ ...recipe, networkPolicy: 'public-internet' }),
+    f.dependencies,
+  );
+  await E(controller).open();
+  f.requireScopeBeforeListener();
+  const scope = f.blockScope();
+  const stopped = E(controller).stop();
+  await scope.entered;
+  t.false(f.calls.includes('network-stop'));
+  t.false(f.calls.includes('unmount'));
+  scope.resolve();
+  await stopped;
+  t.true(f.calls.indexOf('scope-close') < f.calls.indexOf('network-stop'));
+  t.true(f.calls.indexOf('network-stop') < f.calls.indexOf('unmount'));
+  await E(f.runner).removeEnvironmentStorage(id);
+});
+
+test('runner-wide shutdown retains listeners until dependent scopes acknowledge', async t => {
+  const f = await fixture(t);
+  const controller = await E(f.runner).provideEnvironment(
+    id,
+    harden({ ...recipe, networkPolicy: 'public-internet' }),
+    f.dependencies,
+  );
+  await E(controller).open();
+  f.requireScopeBeforeListener();
+  const scope = f.blockScope();
+  const stopped = f.kit.close();
+  await scope.entered;
+  t.false(f.calls.includes('network-stop'));
+  t.false(f.calls.includes('listener-close'));
+  scope.resolve();
+  await stopped;
+  t.true(f.calls.indexOf('network-stop') < f.calls.indexOf('listener-close'));
+  t.deepEqual(await readdir(f.socketRoot), []);
 });
