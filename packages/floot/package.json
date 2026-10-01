@@ -39,6 +39,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.124.0",
+    "@endo/agent-tools": "workspace:^",
     "@endo/claude-sandbox": "workspace:^",
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",

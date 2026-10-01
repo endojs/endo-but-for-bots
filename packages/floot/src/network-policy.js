@@ -17,7 +17,7 @@ const assertNote = note =>
  * `onChange` runs after every record is durable — a request the model raised,
  * an approval, a denial, a change — so a view can show it without asking again
  * on a timer. It is an observer: what it throws is logged and dropped.
- * @param {{host:any,id:string,supported:()=>Promise<string[]>,prepare:()=>Promise<void>,change:()=>Promise<void>,onChange?:()=>void}} options
+ * @param {{host:any,id:string,supported:()=>Promise<string[]>,prepare:()=>Promise<void>,change:(policy:string)=>Promise<void>,onChange?:()=>void}} options
  */
 export const makeSessionNetworkPolicy = ({
   host,
@@ -153,7 +153,7 @@ export const makeSessionNetworkPolicy = ({
         action: 'change-intent',
       });
     }
-    await change();
+    await change(policy);
     await write({ policy, action: 'change-completed', note });
     return project();
   };

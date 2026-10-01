@@ -120,3 +120,105 @@ test('owned provider shutdown waits for admitted tool evidence', async t => {
     ),
   );
 });
+
+for (const cleanupFails of [false, true]) {
+  test(`development cancellation drains native stop and quarantines cleanup failure (${cleanupFails})`, async t => {
+    t.timeout(5000);
+    const toolEntered = Promise.withResolvers();
+    const toolReleased = Promise.withResolvers();
+    const stopEntered = Promise.withResolvers();
+    const stopReleased = Promise.withResolvers();
+    const store = new Map();
+    const powers = harden({
+      list: prefix => harden(prefix === 'tools' ? [] : [...store.keys()]),
+      has: name => store.has(name),
+      lookup: name => store.get(name),
+      remove: name => store.delete(name),
+      storeValue: (value, name) => {
+        store.set(name, value);
+      },
+    });
+    const tool = harden({
+      schema: () =>
+        harden({
+          type: 'function',
+          function: {
+            name: 'effect',
+            description: 'Test',
+            parameters: { type: 'object', properties: {} },
+          },
+        }),
+      execute: async () => {
+        toolEntered.resolve();
+        await toolReleased.promise;
+        return 'stopped';
+      },
+      help: () => '',
+    });
+    let requests = 0;
+    const provider = harden({
+      chatStream: async () => {
+        requests += 1;
+        return harden({
+          message: {
+            role: 'assistant',
+            content: '',
+            tool_calls: [
+              {
+                id: 'call',
+                type: 'function',
+                function: { name: 'effect', arguments: '{}' },
+              },
+            ],
+          },
+        });
+      },
+    });
+    const agent = await makeStreamingAgent(
+      powers,
+      undefined,
+      { kind: 'provider', provideProvider: () => provider },
+      'Test',
+      {
+        journalPowers: powers,
+        extraTools: new Map([['effect', tool]]),
+        stopEnvironment: async () => {
+          stopEntered.resolve();
+          toolReleased.resolve();
+          await stopReleased.promise;
+          if (cleanupFails) throw Error('Stop acknowledgement refused');
+        },
+      },
+    );
+    t.teardown(async () => {
+      stopReleased.resolve();
+      toolReleased.resolve();
+      await agent.shutdown(true);
+    });
+    const abort = new AbortController();
+    let finished = false;
+    const running = agent
+      .converse('run', makeReplyChannel().writer, undefined, abort.signal)
+      .finally(() => {
+        finished = true;
+      });
+    await toolEntered.promise;
+    abort.abort();
+    await stopEntered.promise;
+    await setImmediate();
+    t.false(finished);
+    stopReleased.resolve();
+    await running.catch(() => {});
+    t.is(requests, 1);
+    t.is(
+      (await agent.getTurns())[0].state,
+      cleanupFails ? 'outcome-unknown' : 'cancelled',
+    );
+    if (cleanupFails) {
+      await t.throwsAsync(agent.converse('retry', makeReplyChannel().writer), {
+        message: /cleanup remains pending/,
+      });
+      t.is(requests, 1);
+    }
+  });
+}

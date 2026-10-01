@@ -66,6 +66,14 @@ import {
 import { makeJournalUsageReader } from './src/journal-usage.js';
 import { hostedTurnPartialOf, runHostedTurn } from './src/hosted-turn.js';
 import { makePublishTool } from './src/publish-tool.js';
+import {
+  DEVELOPMENT_PRESET_ID,
+  DEVELOPMENT_BACKENDS,
+  DEVELOPMENT_NETWORK_POLICIES,
+  lookupEnvironmentAdmin,
+  provideDevelopmentEnvironment,
+  makeDevelopmentTools,
+} from './src/development-environment.js';
 import { makeSessionTurnSlot } from './src/session-turn-slot.js';
 import { makeSessionListWatch, makeSessionWatch } from './src/session-watch.js';
 import { makeAccountsWatch } from './src/account-watch.js';
@@ -263,9 +271,19 @@ const FlootSessionInterface = M.interface('FlootSession', {
 // Catalog of session presets. Each preset declares a set of
 // objects to provision (idempotently) into the session guest's petstore the
 // first time the session's agent is built. Provisioned objects are referenced
-// ONLY by the session guest, so the daemon's GC reaps them (and their on-disk
-// backing) when the session is deleted — there is no manual cleanup.
+// by the session guest. The development environment additionally keeps its
+// private admin rooted on the factory host for explicit native storage cleanup.
 const PRESETS = [
+  {
+    id: DEVELOPMENT_PRESET_ID,
+    title: 'Development environment',
+    description:
+      'A git workspace and isolated POSIX Shell with a persistent home for installed tools. Native storage cleanup is manual on its private admin.',
+    objects: [
+      { kind: 'git-workspace', petName: 'workspace' },
+      { kind: 'development-environment', petName: 'shell' },
+    ],
+  },
   {
     id: 'general',
     title: 'General assistant',
@@ -337,10 +355,10 @@ harden(getPreset);
 const hostedModelId = (backendId, modelId) => `${backendId}:${modelId}`;
 
 /**
- * Provision a preset's objects into a session guest's petstore, referenced ONLY
- * by the guest so deleting the session collects them (and their on-disk backing)
- * automatically. Idempotent: an object whose petname already exists is left
- * untouched, so this is safe to call on every revival.
+ * Provision the preset's public objects into the session guest's petstore.
+ * Development environments additionally retain a private admin on the factory
+ * host: their native storage requires manual disposal, not automatic GC.
+ * Idempotent publication is checked again on every revival.
  *
  * @param {any} host - the factory's own host powers
  * @param {string} agentName - petname (in the host) of the session's guest agent
@@ -350,6 +368,7 @@ const hostedModelId = (backendId, modelId) => `${backendId}:${modelId}`;
  * @param {string} [codePath] - absolute host path to the Endo codebase, for the
  *   `code-mount` object kind (read-only). Absent when the daemon host has no
  *   source on disk; such objects are then skipped.
+ * @param {string} [networkPolicy] Recorded development environment policy.
  */
 const provisionPresetObjects = async (
   host,
@@ -358,6 +377,7 @@ const provisionPresetObjects = async (
   id,
   objects,
   codePath,
+  networkPolicy = 'off',
 ) => {
   for (const obj of objects) {
     const alreadyPresent = await E(sessionGuest).has(obj.petName);
@@ -390,6 +410,14 @@ const provisionPresetObjects = async (
           `[floot-factory] optional grant "${grantName}" is unavailable; skipping "${obj.petName}" for session ${id}`,
         );
       }
+    } else if (obj.kind === 'development-environment') {
+      await provideDevelopmentEnvironment({
+        host,
+        guest: sessionGuest,
+        agentName,
+        id,
+        networkPolicy,
+      });
     } else if (alreadyPresent) {
       // Idempotent: a revived session already has its provisioned objects.
     } else if (obj.kind === 'git-workspace') {
@@ -497,6 +525,7 @@ const provisionPresetObjects = async (
  *   the factory built (see `makeFlootToolRegistry`).
  * @param {number} [options.contextLength] Exact selected-model catalog reading.
  * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
+ * @param {() => Promise<void>} [options.stopEnvironment] Private execution stop barrier, distinct from inference cancellation.
  * @param {(kind: 'turn-started' | 'turn-settled' | 'turn-resolved', detail?: { input: string, from?: string }) => void} [options.onChange]
  *   Told when this session's turn records change, whoever started the turn —
  *   the UI, the mailbox, a queued submission. It is how a view learns that the
@@ -547,6 +576,7 @@ export const makeStreamingAgent = async (
     extraTools,
     contextLength,
     forceCompaction = false,
+    stopEnvironment,
     journalPowers,
     onChange,
   } = { journalPowers: undefined },
@@ -1381,6 +1411,28 @@ export const makeStreamingAgent = async (
     // must not be recorded as served by the previous turn's models.
     activeJournalServedBy = [];
     activeJournalOutcomeUnknown = false;
+    let environmentStop;
+    let environmentStopFailure;
+    const stopOnAbort = () => {
+      if (!stopEnvironment || environmentStop) return;
+      // Registered only for the active admitted turn, never for a queued
+      // cancellation that could stop a different turn's Shell command.
+      environmentStop = Promise.resolve()
+        .then(stopEnvironment)
+        .catch(error => {
+          environmentStopFailure = error;
+          quarantineError = Error(
+            'Development environment cancellation failed; native cleanup remains pending',
+          );
+          stopInbox();
+        });
+    };
+    if (signal?.aborted) stopOnAbort();
+    else signal?.addEventListener('abort', stopOnAbort, { once: true });
+    const stoppedEnvironment = async () => {
+      await environmentStop;
+      if (environmentStopFailure) throw quarantineError;
+    };
     journalToolSequence = 0n;
     notifyChange(
       'turn-started',
@@ -1415,6 +1467,7 @@ export const makeStreamingAgent = async (
         }
       }
       if (signal?.aborted) {
+        await stoppedEnvironment();
         await turnJournal.append(turnId, {
           type: 'finish',
           state: activeJournalOutcomeUnknown ? 'outcome-unknown' : 'cancelled',
@@ -1422,6 +1475,7 @@ export const makeStreamingAgent = async (
         return;
       }
       await runTurnBody(text, observedWriter, meta, signal, turnId);
+      await stoppedEnvironment();
       if (signal?.aborted && completedJournalTurn !== turnId) {
         await turnJournal.append(turnId, {
           type: 'finish',
@@ -1432,12 +1486,14 @@ export const makeStreamingAgent = async (
         });
       }
     } catch (error) {
+      await environmentStop;
       // A failed journal write fences further calls. Never hide that failure by
       // claiming that an unrecorded tool outcome is safe to retry.
       if (completedJournalTurn !== turnId) {
         await turnJournal.append(turnId, {
           type: 'finish',
           state:
+            environmentStopFailure ||
             hostedTurnPartialOf(error)?.outcomeUnknown ||
             `${error?.message || ''}`.includes(
               'Hosted turn cancellation failed:',
@@ -1447,13 +1503,19 @@ export const makeStreamingAgent = async (
                 ? 'cancelled'
                 : 'failed',
           output,
-          error: error instanceof Error ? error.message : String(error),
+          error: environmentStopFailure
+            ? quarantineError.message
+            : error instanceof Error
+              ? error.message
+              : String(error),
           usage: hostedTurnPartialOf(error)?.usage || activeJournalUsage,
           ...servedByOfTurn(),
         });
       }
       throw error;
     } finally {
+      signal?.removeEventListener('abort', stopOnAbort);
+      await environmentStop;
       activeJournalTurn = undefined;
       activeJournalSignal = undefined;
       notifyChange('turn-settled');
@@ -2875,10 +2937,14 @@ export const make = async (
    *
    * @param {string} id
    * @param {any} sessionGuest
-   * @param {{ objects: Array<{ kind: string, petName: string }> }} preset
+   * @param {{ id: string, objects: Array<{ kind: string, petName: string }> }} preset
    * @returns {Promise<Map<string, any>>}
    */
   const buildExtraTools = async (id, sessionGuest, preset) => {
+    const tools =
+      preset.id === DEVELOPMENT_PRESET_ID
+        ? makeDevelopmentTools(await E(sessionGuest).lookup('shell'))
+        : new Map();
     // A fresh agent replaces the tool instance and nothing else: the
     // publication belongs to the session, is recorded with it, and is served
     // by the asset server whether or not any tool instance exists. It ends
@@ -2886,7 +2952,7 @@ export const make = async (
     const workspaceObject = preset.objects.find(
       object => object.kind === 'git-workspace',
     );
-    if (!workspaceObject) return new Map();
+    if (!workspaceObject) return tools;
     const publishTool = makePublishTool({
       getAssetServer,
       getWorkspace: async () => {
@@ -2920,7 +2986,8 @@ export const make = async (
       label: `floot session ${id}`,
     });
     publishers.set(id, { revoke: publishTool.revoke });
-    return new Map([['publishWorkspace', publishTool]]);
+    tools.set('publishWorkspace', publishTool);
+    return tools;
   };
 
   /**
@@ -3794,6 +3861,12 @@ export const make = async (
    * @type {Map<string, readonly string[]>}
    */
   const pendingRebinds = new Map();
+  const developmentAdmin = async id => {
+    const entry = (await loadRegistry()).find(item => item.id === id);
+    return entry?.presetId === DEVELOPMENT_PRESET_ID
+      ? lookupEnvironmentAdmin(getHost(), id, { checkGuest: true })
+      : undefined;
+  };
   const networkController = id => {
     if (!networkControllers.has(id)) {
       networkControllers.set(
@@ -3805,14 +3878,24 @@ export const make = async (
           supported: async () => {
             const entry = (await loadRegistry()).find(item => item.id === id);
             if (!entry) throw Error('Unknown Floot session');
+            if (entry.presetId === DEVELOPMENT_PRESET_ID)
+              return DEVELOPMENT_NETWORK_POLICIES;
             if (!isHostedSession(entry)) return [];
             return (
               (await getHostedBackends()).get(entry.backendId)?.descriptor
                 .supportedNetworkPolicies || []
             );
           },
-          prepare: () => stopIncarnation(id),
-          change: () => releaseIncarnation(id),
+          prepare: async () => {
+            const admin = await developmentAdmin(id);
+            if (admin) await E(admin).stop();
+            await stopIncarnation(id);
+          },
+          change: async policy => {
+            const admin = await developmentAdmin(id);
+            if (admin) await E(admin).setNetworkPolicy(policy);
+            await releaseIncarnation(id);
+          },
         }),
       );
     }
@@ -3954,6 +4037,7 @@ export const make = async (
           id,
           preset.objects,
           codePath,
+          networkPolicy,
         );
         // Session-scoped extra tools (the bounded workspace publisher for a
         // session with a git workspace). Threaded into the tool registry, so
@@ -4031,6 +4115,7 @@ export const make = async (
             );
           }
         } catch (error) {
+          if (preset.id === DEVELOPMENT_PRESET_ID) throw error;
           console.error(
             `[floot-factory] could not build extra tools for session ${id}:`,
             error instanceof Error ? error.message : String(error),
@@ -4236,6 +4321,16 @@ export const make = async (
             contextLength:
               entry.inferenceRecipe?.contextLength ?? entry.contextLength,
             forceCompaction: env?.FLOOT_FORCE_COMPACTION === 'true',
+            ...(preset.id === DEVELOPMENT_PRESET_ID
+              ? {
+                  stopEnvironment: async () => {
+                    const admin = await lookupEnvironmentAdmin(host, id, {
+                      required: true,
+                    });
+                    await E(admin).stop();
+                  },
+                }
+              : {}),
             reasoningEffort: entry?.reasoningEffort || '',
             onChange: (kind, detail) => {
               const watch = sessionWatches.get(id);
@@ -4769,6 +4864,7 @@ export const make = async (
 
   const cleanupSessionResources = async entry => {
     const { id } = entry;
+    const environmentAdmin = await developmentAdmin(id);
     const failures = [];
     const agentP = agents.get(id);
     if (agentP) {
@@ -4777,7 +4873,19 @@ export const make = async (
         // A hosted backend's admin/factory termination below is the
         // authoritative barrier for a quarantined native turn. Allow cleanup
         // to reach it; provider-only sessions still fail closed here.
-        if (agent) await agent.shutdown(isHostedSession(entry));
+        // Abort the turn before stop can reopen Shell admission. Observe and
+        // drain both promises: the stop releases an outstanding native tool,
+        // while shutdown drains its durable outcome before guest retirement.
+        const stopped = await Promise.allSettled([
+          agent?.shutdown(isHostedSession(entry)),
+          environmentAdmin && E(environmentAdmin).stop(),
+        ]);
+        const failed = stopped.filter(result => result.status === 'rejected');
+        if (failed.length)
+          throw new AggregateError(
+            failed.map(result => result.reason),
+            'Session shutdown failed',
+          );
       } catch (error) {
         // Do not tear down the guest beneath live turn or inbox activity.
         throw new AggregateError(
@@ -4786,6 +4894,8 @@ export const make = async (
           { cause: error },
         );
       }
+    } else if (environmentAdmin) {
+      await E(environmentAdmin).stop();
     }
     // A container-mount recreate still in flight would otherwise create a
     // successor backend session underneath the teardown below.
@@ -4972,6 +5082,14 @@ export const make = async (
     }
     await loadRegistry();
     const preset = getPreset(options.presetId || DEFAULT_PRESET_ID);
+    if (preset.id === DEVELOPMENT_PRESET_ID) {
+      if (!DEVELOPMENT_BACKENDS.includes(options.backendId || 'provider'))
+        throw Error(
+          'The development preset uses Fae inference; hosted CLI backends already own their environment',
+        );
+      if (!(await E(getHost()).has('environment-runner')))
+        throw Error('No development environment runner is configured');
+    }
     const id = `${newSessionId()}-${creationOrdinal.toString(36)}`;
     creationOrdinal += 1n;
     const { parentSessionId, subagentName, subagentDepth } = options;
@@ -5132,6 +5250,7 @@ export const make = async (
     }
     if (
       !isHostedSession({ backendId }) &&
+      preset.id !== DEVELOPMENT_PRESET_ID &&
       options.networkPolicy !== undefined
     ) {
       throw Error('Only a hosted backend has a sandbox network policy');
@@ -5681,14 +5800,23 @@ export const make = async (
     },
 
     /**
-     * @returns {Promise<Array<{ id: string, title: string, description: string }>>}
+     * @returns {Promise<Array<{ id: string, title: string, description: string, backendIds?: readonly string[], supportedNetworkPolicies?: readonly string[] }>>}
      */
     async listPresets() {
+      const configured = await E(getHost()).has('environment-runner');
       return harden(
-        PRESETS.map(({ id, title, description }) => ({
+        PRESETS.filter(
+          preset => preset.id !== DEVELOPMENT_PRESET_ID || configured,
+        ).map(({ id, title, description }) => ({
           id,
           title,
           description,
+          ...(id === DEVELOPMENT_PRESET_ID
+            ? {
+                backendIds: DEVELOPMENT_BACKENDS,
+                supportedNetworkPolicies: DEVELOPMENT_NETWORK_POLICIES,
+              }
+            : {}),
         })),
       );
     },

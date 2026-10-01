@@ -704,6 +704,20 @@ ${
  * @type {Record<string, Array<(context: PromptContext) => string>>}
  */
 const PRESET_SECTIONS = harden({
+  development: [
+    workspaceSection,
+    () => `## Development Shell
+The inventory contains a Shell capability named "shell" over this same workspace.
+Use runCommand({command:"sh",args:["-lc","..."]}) for POSIX commands. The tool uses
+structured argv and returns stdout, stderr, exitCode, signal and truncated; inspectShell
+reports its execution bounds. Floot's exec tool runs JavaScript, not Bash.
+HOME=/home/node is persistent native disk; install toolchains and binaries there.
+CARGO_HOME, RUSTUP_HOME and CARGO_TARGET_DIR already point into that home. The workspace
+is a 9P projection: keep executable dependencies and build output in HOME, not on 9P.
+Public network access, when enabled, uses HTTP_PROXY/HTTPS_PROXY and managed DNS.
+Use getSandboxNetworkPolicy/requestSandboxNetworkPolicy for policy status/change requests.
+You hold Shell only, not environment administration, Podman, host paths or credentials.`,
+  ],
   // Every hosted session is handed the mount tools, whatever its preset, so
   // every preset says what they are, to a session that has them.
   general: [context => mountsSection(context, undefined)],

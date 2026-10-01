@@ -9,6 +9,19 @@
 
 ## Implementation status
 
+2026-10-02 current slice: the Floot development preset publishes only the common
+Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
+tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
+hosted CLI sessions already own their execution environment. The preset has its
+own recorded network policy and private retained admin. Cancellation aborts
+inference and waits for native stop; failed cleanup journals uncertainty and
+quarantines the incarnation. Deletion aborts before stopping, preserves native
+HOME/workspace storage, and keeps the private admin for manual disposal. Missing
+private administration fails closed, including on revival of an existing Shell.
+Focused publication, cancellation and factory tests pass; the full Floot/UI
+regression suite passed 872 tests before the final revival regression addition.
+Operator provisioning, live Rust/compaction and remote acceptance remain pending.
+
 Implementation is authorized; the first slice removes the misleading dynamic
 `mount`, `scratch`, `open`, `fork`, and unused `reset` methods from public and native
 slice contracts, together with the tracker-only `SandboxMount` capability.
