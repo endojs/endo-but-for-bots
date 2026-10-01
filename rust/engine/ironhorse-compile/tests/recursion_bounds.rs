@@ -71,6 +71,25 @@ fn pin(name: &str, source: impl Fn(usize) -> String + Send + 'static, ok: usize)
     });
 }
 
+/// The ceiling `sweep.py` records for one of its shapes in
+/// `stack-lanes/sweep-pins.json`, the one place a sweep ceiling is written:
+/// re-pinning with `sweep.py --write-pins` moves the nightly sweep's check and
+/// the pins here together. Each shape's source below is the sweep's own.
+fn sweep_pin(shape: &str) -> usize {
+    const PINS: &str = include_str!("../../stack-lanes/sweep-pins.json");
+    let key = format!("\"{shape}\":");
+    let at = PINS
+        .find(&key)
+        .unwrap_or_else(|| panic!("sweep-pins.json pins no shape {shape}"));
+    let value = PINS[at + key.len()..].trim_start();
+    let digits = &value[..value
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(value.len())];
+    digits
+        .parse()
+        .unwrap_or_else(|_| panic!("sweep-pins.json gives {shape} no ceiling: {value:.20}"))
+}
+
 #[test]
 fn cascade_re_entry_is_bounded_at_about_ninety_levels() {
     // Every one of these re-enters the whole precedence cascade per level.
@@ -86,7 +105,7 @@ fn cascade_re_entry_is_bounded_at_about_ninety_levels() {
     pin(
         "template substitutions",
         |d| wrapped("`${", "1", "}`", d),
-        91,
+        sweep_pin("template-nested"),
     );
 }
 
@@ -150,14 +169,15 @@ fn flat_chains_the_grammar_folds_into_deep_trees_are_bounded_by_the_tree_depth_l
 fn productions_found_by_the_grammar_sweep_are_bounded() {
     // The remaining productions that fold operands into a deep tree or nest
     // on the right: the chain kinds of `rust/engine/stack-lanes/cases.rs` and
-    // the shapes of its `sweep.py` (STACK-DEPTH-REFACTOR §5, lane C). The
+    // the shapes of its `sweep.py` (STACK-DEPTH-REFACTOR §5, lane C), whose
+    // ceilings are read from the sweep's pins (`sweep_pin`). The
     // tagged-template chain is the corner the report found unpinned; each of
     // the others is a contract in the same sense as above.
     pin("tagged templates", |d| format!("f{}", "``".repeat(d)), 2043);
     pin(
         "tagged templates with substitutions",
         |d| format!("f{}", "`${1}`".repeat(d)),
-        2043,
+        sweep_pin("tagged-with-substitution"),
     );
     pin("logical and", |d| format!("a{}", " && a".repeat(d)), 2045);
     pin("logical or", |d| format!("a{}", " || a".repeat(d)), 2045);
@@ -177,8 +197,16 @@ fn productions_found_by_the_grammar_sweep_are_bounded() {
         2045,
     );
     pin("optional chains", |d| format!("a{}", "?.b".repeat(d)), 1022);
-    pin("optional calls", |d| format!("a{}", "?.()".repeat(d)), 1022);
-    pin("member calls", |d| format!("a{}", ".b()".repeat(d)), 1022);
+    pin(
+        "optional calls",
+        |d| format!("a{}", "?.()".repeat(d)),
+        sweep_pin("optional-call"),
+    );
+    pin(
+        "member calls",
+        |d| format!("a{}", ".b()".repeat(d)),
+        sweep_pin("call-then-member"),
+    );
     pin(
         "else-if chains with blocks",
         |d| {
@@ -208,46 +236,62 @@ fn productions_found_by_the_grammar_sweep_are_bounded() {
                 " }".repeat(d)
             )
         },
-        256,
+        sweep_pin("labeled-block"),
     );
     pin(
         "try blocks",
         |d| wrapped("try { ", "", " } catch (e) {}", d),
-        511,
+        sweep_pin("try"),
     );
     pin(
         "switch cases",
         |d| wrapped("switch (a) { case 1: ", "", " }", d),
-        506,
+        sweep_pin("switch"),
     );
     pin(
         "for bodies",
         |d| wrapped("for (;;) { ", "break;", " }", d),
-        255,
+        sweep_pin("for"),
     );
     pin(
         "while bodies",
         |d| wrapped("while (a) { ", "", " }", d),
-        253,
+        sweep_pin("while"),
     );
     pin(
         "do-while bodies",
         |d| wrapped("do { ", "", " } while (a);", d),
-        253,
+        sweep_pin("do-while"),
     );
-    pin("with bodies", |d| wrapped("with (a) { ", "", " }", d), 253);
-    pin("array spreads", |d| wrapped("[...", "a", "]", d), 91);
-    pin("call spreads", |d| wrapped("f(...", "a", ")", d), 91);
+    pin(
+        "with bodies",
+        |d| wrapped("with (a) { ", "", " }", d),
+        sweep_pin("with"),
+    );
+    pin(
+        "array spreads",
+        |d| wrapped("[...", "a", "]", d),
+        sweep_pin("spread-array"),
+    );
+    pin(
+        "call spreads",
+        |d| wrapped("f(...", "a", ")", d),
+        sweep_pin("spread-call"),
+    );
     pin(
         "arrow block bodies",
         |d| wrapped("() => { return ", "1", "; }", d),
-        77,
+        sweep_pin("arrow-block"),
     );
-    pin("new with arguments", |d| wrapped("new f(", "1", ")", d), 77);
+    pin(
+        "new with arguments",
+        |d| wrapped("new f(", "1", ")", d),
+        sweep_pin("new-with-args"),
+    );
     pin(
         "function expressions in call arguments",
         |d| wrapped("f(function () { return ", "1", "; })", d),
-        42,
+        sweep_pin("function-in-call"),
     );
     pin(
         "default parameters",
@@ -257,32 +301,32 @@ fn productions_found_by_the_grammar_sweep_are_bounded() {
                 wrapped("(function (b = ", "1", ") {})", d)
             )
         },
-        42,
+        sweep_pin("default-params"),
     );
     pin(
         "object getters",
         |d| format!("({})", wrapped("{ get a() { return ", "1", "; } }", d)),
-        76,
+        sweep_pin("object-getter"),
     );
     pin(
         "class heritage",
         |d| format!("({})", wrapped("class extends (", "Object", ") {}", d)),
-        52,
+        sweep_pin("class-extends"),
     );
     pin(
         "class static blocks",
         |d| wrapped("(class { static { ", "", " } })", d),
-        42,
+        sweep_pin("class-static-block"),
     );
     pin(
         "await chains",
         |d| format!("async function f() {{ return {}a; }}", "await ".repeat(d)),
-        1008,
+        sweep_pin("await"),
     );
     pin(
         "yield chains",
         |d| format!("function* f() {{ return {}a; }}", "yield ".repeat(d)),
-        1009,
+        sweep_pin("yield"),
     );
 }
 
