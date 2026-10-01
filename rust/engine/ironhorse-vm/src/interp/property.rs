@@ -1193,15 +1193,21 @@ impl Interp {
         after_active_trap: bool,
     ) -> Result<Slot, Step> {
         if self.proxies.contains_key(&inst) {
+            // The Proxy path takes the metering as one argument
+            // (STACK-DEPTH-REFACTOR.md A3); this body and its guarded entry
+            // keep the four scalars, as packing them here changed how LLVM
+            // inlined their callers on the heavy re-entry paths.
             return self.proxy_get_with_metering(
                 code,
                 inst,
                 key,
                 receiver,
-                proxy_trap_metering,
-                meter_terminal_wrapper,
-                meter_forwarded_target,
-                after_active_trap,
+                GetMetering {
+                    proxy_trap: proxy_trap_metering,
+                    terminal_wrapper: meter_terminal_wrapper,
+                    forwarded_target: meter_forwarded_target,
+                    after_active_trap,
+                },
             );
         }
         if meter_forwarded_target {

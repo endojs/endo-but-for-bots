@@ -161,9 +161,7 @@ impl Interp {
                     proxy,
                     ReadKey::Index(index),
                     receiver,
-                    0,
-                    false,
-                    false,
+                    GetMetering::default(),
                 )? {
                     ProxyStep::Done(value) => return Ok(value),
                     ProxyStep::Forward(target) => target,

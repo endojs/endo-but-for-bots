@@ -665,10 +665,7 @@ impl Interp {
             proxy,
             ReadKey::Id(id),
             receiver,
-            0,
-            false,
-            false,
-            false,
+            GetMetering::default(),
         )
     }
 
@@ -679,48 +676,28 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         key: ReadKey,
         receiver: Slot,
-        proxy_trap_metering: u64,
-        meter_terminal_wrapper: bool,
-        meter_forwarded_target: bool,
-        after_active_trap: bool,
+        mut metering: GetMetering,
     ) -> Result<Slot, Step> {
-        let target = match self.proxy_get_step(
-            code,
-            proxy,
-            key,
-            receiver,
-            proxy_trap_metering,
-            meter_terminal_wrapper,
-            meter_forwarded_target,
-        )? {
+        let target = match self.proxy_get_step(code, proxy, key, receiver, metering)? {
             ProxyStep::Done(result) => return Ok(result),
             ProxyStep::Forward(target) => target,
         };
         // A forward past the Array Iterator's trap turns on the target's
         // forwarded metering for the rest of the walk.
-        let meter_forwarded_target = meter_forwarded_target || proxy_trap_metering != 0;
+        metering.forwarded_target |= metering.proxy_trap != 0;
         if !self.proxies.contains_key(&target) {
             return self.mop_get_with_proxy_metering(
                 code,
                 target,
                 key,
                 receiver,
-                proxy_trap_metering,
-                meter_terminal_wrapper,
-                meter_forwarded_target,
-                after_active_trap,
+                metering.proxy_trap,
+                metering.terminal_wrapper,
+                metering.forwarded_target,
+                metering.after_active_trap,
             );
         }
-        self.proxy_get_forwarded(
-            code,
-            target,
-            key,
-            receiver,
-            proxy_trap_metering,
-            meter_terminal_wrapper,
-            meter_forwarded_target,
-            after_active_trap,
-        )
+        self.proxy_get_forwarded(code, target, key, receiver, metering)
     }
 
     /// The rest of [`Self::proxy_get_with_metering`] when its target is
@@ -728,7 +705,6 @@ impl Interp {
     /// for the forwarded metering, and out of line so that one Proxy over an
     /// ordinary target (a Proxy in a prototype cycle) keeps the single
     /// layer's frame.
-    #[allow(clippy::too_many_arguments)]
     #[inline(never)]
     fn proxy_get_forwarded(
         &mut self,
@@ -736,40 +712,29 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         key: ReadKey,
         receiver: Slot,
-        proxy_trap_metering: u64,
-        meter_terminal_wrapper: bool,
-        meter_forwarded_target: bool,
-        after_active_trap: bool,
+        metering: GetMetering,
     ) -> Result<Slot, Step> {
         self.with_forwarding_walk(|vm, held| {
             let mut proxy = proxy;
-            let mut meter_forwarded_target = meter_forwarded_target;
+            let mut metering = metering;
             loop {
                 // The unit `mop_get_with_proxy_metering(proxy)` charged.
                 vm.forwarding_hop(held)?;
-                let target = match vm.proxy_get_step(
-                    code,
-                    proxy,
-                    key,
-                    receiver,
-                    proxy_trap_metering,
-                    meter_terminal_wrapper,
-                    meter_forwarded_target,
-                )? {
+                let target = match vm.proxy_get_step(code, proxy, key, receiver, metering)? {
                     ProxyStep::Done(result) => return Ok(result),
                     ProxyStep::Forward(target) => target,
                 };
-                meter_forwarded_target = meter_forwarded_target || proxy_trap_metering != 0;
+                metering.forwarded_target |= metering.proxy_trap != 0;
                 if !vm.proxies.contains_key(&target) {
                     return vm.mop_get_with_proxy_metering(
                         code,
                         target,
                         key,
                         receiver,
-                        proxy_trap_metering,
-                        meter_terminal_wrapper,
-                        meter_forwarded_target,
-                        after_active_trap,
+                        metering.proxy_trap,
+                        metering.terminal_wrapper,
+                        metering.forwarded_target,
+                        metering.after_active_trap,
                     );
                 }
                 proxy = target;
@@ -779,36 +744,24 @@ impl Interp {
 
     /// One layer of the forwarding loop of [`Self::proxy_get_with_metering`].
     /// A forward past the Array Iterator's trap charges its residual here;
-    /// the loop then meters the target as forwarded (`meter_forwarded_target
-    /// || proxy_trap_metering != 0`), as the recursive shape passed down.
-    #[allow(clippy::too_many_arguments)]
+    /// the loop then meters the target as forwarded
+    /// (`forwarded_target || proxy_trap != 0`), as the recursive shape passed
+    /// down. `metering.after_active_trap` reaches only the terminal.
     pub(in crate::interp) fn proxy_get_step(
         &mut self,
         code: &[u8],
         proxy: crate::value::SlotIndex,
         key: ReadKey,
         receiver: Slot,
-        proxy_trap_metering: u64,
-        meter_terminal_wrapper: bool,
-        meter_forwarded_target: bool,
+        metering: GetMetering,
     ) -> Result<ProxyStep<Slot>, Step> {
         let (target, handler) = self.proxy_target_handler(proxy, "get")?;
         match self.proxy_trap(code, handler, "get")? {
             Some(trap) => self
-                .proxy_get_trapped(
-                    code,
-                    target,
-                    handler,
-                    trap,
-                    key,
-                    receiver,
-                    proxy_trap_metering,
-                    meter_forwarded_target,
-                    meter_terminal_wrapper,
-                )
+                .proxy_get_trapped(code, target, handler, trap, key, receiver, metering)
                 .map(ProxyStep::Done),
             None => {
-                if proxy_trap_metering != 0 {
+                if metering.proxy_trap != 0 {
                     self.meter.tick_raw(ARRAY_ITERATOR_PROXY_FORWARD_METERING);
                 }
                 Ok(ProxyStep::Forward(target))
@@ -830,10 +783,14 @@ impl Interp {
         trap: Slot,
         key_id: ReadKey,
         receiver: Slot,
-        proxy_trap_metering: u64,
-        meter_forwarded_target: bool,
-        meter_terminal_wrapper: bool,
+        metering: GetMetering,
     ) -> Result<Slot, Step> {
+        let GetMetering {
+            proxy_trap: proxy_trap_metering,
+            terminal_wrapper: meter_terminal_wrapper,
+            forwarded_target: meter_forwarded_target,
+            ..
+        } = metering;
         if meter_forwarded_target {
             self.charge_and_check(
                 if proxy_trap_metering == ARRAY_ITERATOR_PROXY_VALUE_METERING {
