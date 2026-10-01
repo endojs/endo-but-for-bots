@@ -377,11 +377,35 @@ test('namePathLabel keeps paths that differ only in segmentation apart', t => {
   t.not(namePathLabel(['a%2Fb']), namePathLabel(['a', 'b']));
 });
 
+test('namePathLabel accepts a valid name holding a lone surrogate', t => {
+  t.true(isValidName('a\uD800b'));
+  t.is(namePathLabel(['a\uD800b']), 'a%uD800b');
+  t.is(namePathLabel(['\uDC00', 'x']), '%uDC00%2Fx');
+  t.is(namePathLabel(['\uD83D\uDE00']), '%F0%9F%98%80');
+  t.not(namePathLabel(['a\uD800b']), namePathLabel(['a%uD800b']));
+  t.true(isValidName(namePathLabel(['a\uD800b', '\uDFFF'])));
+});
+
+// A pet name that always holds a lone surrogate, which `encodeURIComponent`
+// alone would throw on.
+const loneSurrogateNameArb = fc
+  .tuple(
+    fc.string({ maxLength: 8 }),
+    fc.integer({ min: 0xd800, max: 0xdfff }),
+    fc.string({ maxLength: 8 }),
+  )
+  .map(
+    ([before, unit, after]) => `${before}${String.fromCharCode(unit)}${after}`,
+  )
+  .filter(isPetName);
+
+const labelNameArb = fc.oneof(nameArb, loneSurrogateNameArb);
+
 test('namePathLabel is injective and yields a valid name', t => {
   fc.assert(
     fc.property(
-      fc.array(nameArb, { minLength: 1, maxLength: 4 }),
-      fc.array(nameArb, { minLength: 1, maxLength: 4 }),
+      fc.array(labelNameArb, { minLength: 1, maxLength: 4 }),
+      fc.array(labelNameArb, { minLength: 1, maxLength: 4 }),
       (left, right) => {
         const same =
           left.length === right.length &&
@@ -391,9 +415,12 @@ test('namePathLabel is injective and yields a valid name', t => {
     ),
   );
   fc.assert(
-    fc.property(fc.array(nameArb, { minLength: 1, maxLength: 4 }), path => {
-      const label = namePathLabel(path);
-      t.true(label.length > 255 || isValidName(label));
-    }),
+    fc.property(
+      fc.array(labelNameArb, { minLength: 1, maxLength: 4 }),
+      path => {
+        const label = namePathLabel(path);
+        t.true(label.length > 255 || isValidName(label));
+      },
+    ),
   );
 });

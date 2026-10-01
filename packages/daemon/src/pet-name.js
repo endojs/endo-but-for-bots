@@ -183,6 +183,28 @@ export const namePathFrom = namePath => {
 export const petNamePathFrom = namePath =>
   assertPetNamePath(namePathFrom(namePath));
 
+const loneSurrogatePattern =
+  /([\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF])/;
+
+/**
+ * Percent-encodes one segment. `encodeURIComponent` throws on a lone
+ * surrogate, which a valid name may contain, so each lone surrogate is
+ * written as `%uXXXX` instead. `encodeURIComponent` never emits `%u`, so
+ * the encoding stays injective.
+ *
+ * @param {string} segment
+ * @returns {string}
+ */
+const encodeNameSegment = segment =>
+  segment
+    .split(loneSurrogatePattern)
+    .map((part, index) =>
+      index % 2 === 1
+        ? `%u${part.charCodeAt(0).toString(16).toUpperCase()}`
+        : encodeURIComponent(part),
+    )
+    .join('');
+
 /**
  * Encodes a name path as a single string, for deriving one pet name from a
  * whole path. Each segment is percent-encoded and the segments are joined
@@ -194,4 +216,4 @@ export const petNamePathFrom = namePath =>
  * @returns {string}
  */
 export const namePathLabel = namePath =>
-  namePath.map(segment => encodeURIComponent(segment)).join('%2F');
+  namePath.map(encodeNameSegment).join('%2F');
