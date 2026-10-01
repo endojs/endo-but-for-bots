@@ -42,6 +42,13 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
   for (const name of capNames) {
     guestStore.set(name, harden({ kind: 'mount-cap' }));
   }
+  // A guest reveals no formula identifiers; the factory host resolves a
+  // path through its own name for the session guest.
+  /** @param {string[]} path */
+  const identifyInGuest = (...path) => {
+    const name = path.join('/');
+    return capNames.includes(name) ? `formula-${name}` : undefined;
+  };
   const guest = Far('TestGuest', {
     has: name => guestStore.has(name),
     lookup: name => guestStore.get(name),
@@ -52,11 +59,6 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
       guestStore.delete(name);
     },
     list: prefix => harden(prefix === 'tools' ? [] : [...guestStore.keys()]),
-    locate: () => 'test-locator',
-    identify: (...path) => {
-      const name = path.join('/');
-      return capNames.includes(name) ? `formula-${name}` : undefined;
-    },
     followMessages: () => {
       const inbox = makeBufferedReader();
       inboxes.push(inbox);
@@ -184,6 +186,8 @@ const makeWorld = ({ refuseTerminateOnce = false } = {}) => {
     list: () => harden([...hostStore.keys()]),
     has: name => hostStore.has(name),
     lookup: name => hostStore.get(name),
+    identify: (name, ...path) =>
+      name === 'session-agent-one' ? identifyInGuest(...path) : undefined,
     provideGuest: () => undefined,
     storeValue: (value, name) => {
       if (hostStore.has(name)) throw Error(`cannot overwrite ${name}`);

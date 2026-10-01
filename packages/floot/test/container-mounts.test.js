@@ -80,7 +80,21 @@ const makeHarness = () => {
   /** @type {number} */
   let failStoresAfter = Infinity;
   let storeCount = 0;
+  // Session guests' petstores, keyed by the factory's pet name for each
+  // guest: the factory resolves possession through its own name for the
+  // guest, since a guest itself does not reveal formula identifiers.
+  /** @type {Map<string, Map<string, string>>} */
+  const sessions = new Map();
   const powers = harden({
+    /**
+     * @param {string} sessionName
+     * @param {string[]} path
+     */
+    async identify(sessionName, ...path) {
+      const caps = sessions.get(sessionName);
+      if (!caps) throw Error(`missing ${sessionName}`);
+      return caps.get(path.join('/'));
+    },
     async list() {
       return harden([...names.keys()]);
     },
@@ -169,14 +183,17 @@ const makeHarness = () => {
     });
     return { sets, client };
   };
-  /** @param {Map<string, string>} caps */
-  const makeGuest = caps =>
-    harden({
-      /** @param {string[]} path */
-      async identify(...path) {
-        return caps.get(path.join('/'));
-      },
-    });
+  /**
+   * Provision a session guest whose petstore maps pet-name paths to cap
+   * formula ids, returning the factory's pet name for it.
+   *
+   * @param {Map<string, string>} caps
+   */
+  const makeGuest = caps => {
+    const sessionName = `session-agent-${sessions.size}`;
+    sessions.set(sessionName, caps);
+    return sessionName;
+  };
   const makeRegistrar = () =>
     makeContainerMountRegistrar({
       powers,
@@ -210,7 +227,7 @@ test('attach proves possession, bridges, persists, and pushes the bind', async t
   const guest = h.makeGuest(new Map([['workspace', 'cap-1']]));
   const kit = registrar.makeSessionKit({
     sessionId: 's1',
-    sessionGuest: guest,
+    sessionName: guest,
   });
   await kit.arm({ clientKey: 'client-k1', client });
   // Nothing persisted → arming pushes nothing.
@@ -272,7 +289,7 @@ test('attach validates slots, modes, and possession', async t => {
   );
   const kit = registrar.makeSessionKit({
     sessionId: 's1',
-    sessionGuest: guest,
+    sessionName: guest,
   });
   await kit.arm({ clientKey: 'ck', client });
 
@@ -316,7 +333,7 @@ test('an unarmed kit fails clearly and a failed bridge leaves no record', async 
   const guest = h.makeGuest(new Map([['workspace', 'cap-1']]));
   const kit = registrar.makeSessionKit({
     sessionId: 's1',
-    sessionGuest: guest,
+    sessionName: guest,
   });
   await t.throwsAsync(
     () => kit.attach({ petName: 'workspace', innerPath: '/mnt/x' }),
@@ -330,7 +347,7 @@ test('an unarmed kit fails clearly and a failed bridge leaves no record', async 
     getBridgeProvider: async () => undefined,
   });
   const { client } = h.makeClient();
-  const kit2 = failing.makeSessionKit({ sessionId: 's1', sessionGuest: guest });
+  const kit2 = failing.makeSessionKit({ sessionId: 's1', sessionName: guest });
   await kit2.arm({ clientKey: 'ck', client });
   await t.throwsAsync(
     () => kit2.attach({ petName: 'workspace', innerPath: '/mnt/x' }),
@@ -349,11 +366,11 @@ test('two sessions of one client ref-count; the last detach releases', async t =
   const guestB = h.makeGuest(new Map([['adopted-ws', 'cap-shared']]));
   const kitA = registrar.makeSessionKit({
     sessionId: 'a',
-    sessionGuest: guestA,
+    sessionName: guestA,
   });
   const kitB = registrar.makeSessionKit({
     sessionId: 'b',
-    sessionGuest: guestB,
+    sessionName: guestB,
   });
   await kitA.arm({ clientKey: 'ck', client });
   await kitB.arm({ clientKey: 'ck', client });
@@ -405,7 +422,7 @@ test('a fresh registrar (daemon restart) replays persisted attaches on arm', asy
   const guest = h.makeGuest(new Map([['data', 'cap-9']]));
   const kitBefore = registrarBefore.makeSessionKit({
     sessionId: 's',
-    sessionGuest: guest,
+    sessionName: guest,
   });
   await kitBefore.arm({ clientKey: 'ck9', client: before.client });
   await kitBefore.attach({
@@ -422,7 +439,7 @@ test('a fresh registrar (daemon restart) replays persisted attaches on arm', asy
   const after = h.makeClient();
   const kitAfter = registrarAfter.makeSessionKit({
     sessionId: 's',
-    sessionGuest: guest,
+    sessionName: guest,
   });
   await kitAfter.arm({ clientKey: 'ck9', client: after.client });
   t.is(h.bridgeCalls.length, 2);
@@ -447,7 +464,7 @@ test('releaseSession drops references and tears down orphaned bridges', async t 
   const guest = h.makeGuest(new Map([['data', 'cap-5']]));
   const kit = registrar.makeSessionKit({
     sessionId: 's5',
-    sessionGuest: guest,
+    sessionName: guest,
   });
   await kit.arm({ clientKey: 'ck5', client });
   await kit.attach({ petName: 'data', innerPath: '/mnt/data' });
@@ -473,7 +490,7 @@ test('the session tools drive attach, list, and detach end to end', async t => {
   const guest = h.makeGuest(new Map([['workspace', 'cap-1']]));
   const kit = registrar.makeSessionKit({
     sessionId: 's1',
-    sessionGuest: guest,
+    sessionName: guest,
   });
 
   // Tools exist (and are discoverable) before the client resolves, but say
@@ -520,11 +537,11 @@ test('releaseSession pushes the shrunken set to an armed survivor of a shared cl
   const { sets, client } = h.makeClient();
   const kitA = registrar.makeSessionKit({
     sessionId: 'a',
-    sessionGuest: h.makeGuest(new Map([['data', 'cap-d']])),
+    sessionName: h.makeGuest(new Map([['data', 'cap-d']])),
   });
   const kitB = registrar.makeSessionKit({
     sessionId: 'b',
-    sessionGuest: h.makeGuest(new Map()),
+    sessionName: h.makeGuest(new Map()),
   });
   await kitA.arm({ clientKey: 'ck', client });
   await kitB.arm({ clientKey: 'ck', client });
@@ -592,7 +609,7 @@ test('malformed persisted records are dropped on load and never replayed', async
   const { sets, client } = h.makeClient();
   const kit = registrar.makeSessionKit({
     sessionId: 's1',
-    sessionGuest: h.makeGuest(new Map()),
+    sessionName: h.makeGuest(new Map()),
   });
   await kit.arm({ clientKey: 'ck', client });
   t.is(sets.length, 1);
@@ -636,7 +653,7 @@ test('one unbridgeable record does not wedge the rest, and heals on a later push
   const guest = h.makeGuest(new Map([['third', 'cap-3']]));
   const kit = registrar.makeSessionKit({
     sessionId: 's1',
-    sessionGuest: guest,
+    sessionName: guest,
   });
 
   // Replay: the bad record is skipped with a warning; the good one still
@@ -666,7 +683,7 @@ test('a failed journal write is reported and leaves the previous snapshot intact
   const { sets, client } = h.makeClient();
   const kit = registrar.makeSessionKit({
     sessionId: 's1',
-    sessionGuest: h.makeGuest(
+    sessionName: h.makeGuest(
       new Map([
         ['a', 'cap-a'],
         ['b', 'cap-b'],
@@ -722,7 +739,7 @@ test('concurrent attaches at one innerPath serialize; the loser is refused', asy
   );
   const kit = registrar.makeSessionKit({
     sessionId: 's1',
-    sessionGuest: guest,
+    sessionName: guest,
   });
   await kit.arm({ clientKey: 'ck', client });
 
@@ -753,7 +770,7 @@ test('re-arming a client identity with a fresh presence replays onto it', async 
   const first = h.makeClient();
   const kitA = registrar.makeSessionKit({
     sessionId: 'a',
-    sessionGuest: h.makeGuest(new Map([['data', 'cap-d']])),
+    sessionName: h.makeGuest(new Map([['data', 'cap-d']])),
   });
   await kitA.arm({ clientKey: 'ck', client: first.client });
   await kitA.attach({ petName: 'data', innerPath: '/mnt/d' });
@@ -766,7 +783,7 @@ test('re-arming a client identity with a fresh presence replays onto it', async 
   const second = h.makeClient();
   const kitB = registrar.makeSessionKit({
     sessionId: 'b',
-    sessionGuest: h.makeGuest(new Map()),
+    sessionName: h.makeGuest(new Map()),
   });
   await kitB.arm({ clientKey: 'ck', client: second.client });
   t.is(second.sets.length, 1);
@@ -782,15 +799,15 @@ test('a shared bind does not disclose the other session’s pet name', async t =
   const { client } = h.makeClient();
   const kitA = registrar.makeSessionKit({
     sessionId: 'a',
-    sessionGuest: h.makeGuest(new Map([['my-secret-repo', 'cap-shared']])),
+    sessionName: h.makeGuest(new Map([['my-secret-repo', 'cap-shared']])),
   });
   const kitB = registrar.makeSessionKit({
     sessionId: 'b',
-    sessionGuest: h.makeGuest(new Map([['borrowed', 'cap-shared']])),
+    sessionName: h.makeGuest(new Map([['borrowed', 'cap-shared']])),
   });
   const kitC = registrar.makeSessionKit({
     sessionId: 'c',
-    sessionGuest: h.makeGuest(new Map()),
+    sessionName: h.makeGuest(new Map()),
   });
   await kitA.arm({ clientKey: 'ck', client });
   await kitB.arm({ clientKey: 'ck', client });

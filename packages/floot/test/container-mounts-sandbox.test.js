@@ -100,7 +100,20 @@ const makeWorld = () => {
   // The registrar's own persistence lives in the floot factory's petstore.
   /** @type {Map<string, unknown>} */
   const factoryNames = new Map();
+  // Session guests' petstores, keyed by the factory's pet name for each
+  // guest: the factory resolves possession through its own name for it.
+  /** @type {Map<string, Map<string, string>>} */
+  const sessionStores = new Map();
   const factoryPowers = harden({
+    /**
+     * @param {string} sessionName
+     * @param {string[]} path
+     */
+    async identify(sessionName, ...path) {
+      const caps = sessionStores.get(sessionName);
+      if (!caps) throw Error(`missing ${sessionName}`);
+      return caps.get(path.join('/'));
+    },
     async list() {
       return harden([...factoryNames.keys()]);
     },
@@ -199,16 +212,16 @@ const makeWorld = () => {
     });
 
   /**
-   * A session guest whose petstore resolves pet names to cap formula ids.
+   * Provision a session guest whose petstore resolves pet names to cap
+   * formula ids, returning the factory's pet name for it.
    *
    * @param {[string, string][]} entries - pet name → cap formula id
    */
-  const makeGuest = entries =>
-    harden({
-      async identify(...path) {
-        return new Map(entries).get(path.join('/'));
-      },
-    });
+  const makeGuest = entries => {
+    const sessionName = `session-agent-${sessionStores.size}`;
+    sessionStores.set(sessionName, new Map(entries));
+    return sessionName;
+  };
 
   return {
     capsById,
@@ -275,7 +288,7 @@ test('a held capability becomes a /mnt/ bind in the slice, and survives a restar
   const first = world.makeIncarnation(t);
   const kit = registrar.makeSessionKit({
     sessionId: 'sess-mnt',
-    sessionGuest: world.makeGuest([['project', 'cap-project']]),
+    sessionName: world.makeGuest([['project', 'cap-project']]),
   });
   await kit.arm({ clientKey: 'client-formula-1', client: first.client });
 
@@ -327,7 +340,7 @@ test('a held capability becomes a /mnt/ bind in the slice, and survives a restar
   const second = world.makeIncarnation(t);
   const kitAfter = restarted.makeSessionKit({
     sessionId: 'sess-mnt',
-    sessionGuest: world.makeGuest([['project', 'cap-project']]),
+    sessionName: world.makeGuest([['project', 'cap-project']]),
   });
   await kitAfter.arm({ clientKey: 'client-formula-1', client: second.client });
   t.is(world.attachMounts().length, 2);
@@ -354,7 +367,7 @@ test('a read-only capability is bound read-only at every layer', async t => {
   const incarnation = world.makeIncarnation(t);
   const kit = registrar.makeSessionKit({
     sessionId: 'sess-mnt',
-    sessionGuest: world.makeGuest([['endo-src', 'cap-src']]),
+    sessionName: world.makeGuest([['endo-src', 'cap-src']]),
   });
   await kit.arm({ clientKey: 'ck-ro', client: incarnation.client });
 
@@ -383,7 +396,7 @@ test('the last detach recreates without the bind, then releases the 9P mount', a
   const incarnation = world.makeIncarnation(t);
   const kit = registrar.makeSessionKit({
     sessionId: 'sess-mnt',
-    sessionGuest: world.makeGuest([['work', 'cap-work']]),
+    sessionName: world.makeGuest([['work', 'cap-work']]),
   });
   await kit.arm({ clientKey: 'ck-detach', client: incarnation.client });
   await kit.attach({ petName: 'work', innerPath: '/mnt/work' });
@@ -413,7 +426,7 @@ test('terminate leaves the bridges to the registrar that minted them', async t =
   const incarnation = world.makeIncarnation(t);
   const kit = registrar.makeSessionKit({
     sessionId: 'sess-mnt',
-    sessionGuest: world.makeGuest([
+    sessionName: world.makeGuest([
       ['a', 'cap-a'],
       ['b', 'cap-b'],
     ]),
@@ -456,7 +469,7 @@ test('an attach the bridge refuses leaves no record and no bind', async t => {
   const incarnation = world.makeIncarnation(t);
   const kit = registrar.makeSessionKit({
     sessionId: 'sess-mnt',
-    sessionGuest: world.makeGuest([['opaque', 'cap-opaque']]),
+    sessionName: world.makeGuest([['opaque', 'cap-opaque']]),
   });
   await kit.arm({ clientKey: 'ck-bad', client: incarnation.client });
   await runTurn(incarnation.client, 'hello');

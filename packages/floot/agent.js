@@ -2954,7 +2954,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           // refuses to let shadow a built-in.
           const mountKit = containerMountRegistrar.makeSessionKit({
             sessionId: id,
-            sessionGuest,
+            sessionName: agentName,
           });
           for (const [name, tool] of mountKit.tools) {
             extraTools.set(name, tool);
