@@ -70,6 +70,12 @@ fn compile(source: &str) -> (Vec<u8>, Vec<ironhorse_vm::SymbolName>) {
     (bytecode, parse_symbols(&symbols))
 }
 
+/// Timed samples per measurement. These timings are short — most a few
+/// milliseconds — and on a shared host the median of five or six samples moved
+/// by up to 2.2x between runs of one binary (`benches/README.md`), far past
+/// `run.py`'s 1.25x floor.
+const SAMPLES: usize = 21;
+
 fn median(mut times: Vec<f64>) -> f64 {
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     times[times.len() / 2]
@@ -102,7 +108,7 @@ fn gc_cost_across_heap_sizes() {
         let mut first_ms = Vec::new();
         let mut steady_ms = Vec::new();
         let mut slots_total = 0u32;
-        for _ in 0..5 {
+        for _ in 0..SAMPLES {
             let mut m = Interp::new();
             m.link_intrinsics(&names);
             assert!(m.run(&b).completed);
@@ -143,7 +149,7 @@ fn gc_cost_across_heap_sizes() {
         let mut query_ms = Vec::new();
         let mut free_ms = Vec::new();
         let mut partial_ms = Vec::new();
-        for round in 0..6 {
+        for round in 0..=SAMPLES {
             let mut store = MemoryStore::new();
             let mut m = Interp::new();
             m.link_intrinsics(&names);
@@ -211,7 +217,7 @@ fn gc_cost_across_heap_sizes() {
         m.collect_garbage().require_collection();
         let free_len = m.slots().free_list().len();
         let mut sweep_times = Vec::new();
-        for _ in 0..5 {
+        for _ in 0..SAMPLES {
             let t0 = Instant::now();
             m.collect_garbage().require_collection();
             sweep_times.push(t0.elapsed().as_secs_f64() * 1e9 / m.slots().capacity() as f64);
@@ -277,7 +283,7 @@ fn generational_steady_state_cost() {
         let mut part_ms = Vec::new();
         let mut freed_gen = 0u32;
         let mut slots_total = 0u32;
-        for _ in 0..5 {
+        for _ in 0..SAMPLES {
             let mut store = MemoryStore::new();
             let mut m = Interp::new();
             m.link_intrinsics(&names);
@@ -376,7 +382,7 @@ fn compaction_slide_checkpoint_cost() {
         let row = |label: &str, source: &str| {
             let mut times = Vec::new();
             let mut rows_written = None;
-            for round in 0..6 {
+            for round in 0..=SAMPLES {
                 let (b, names) = compile(source);
                 let mut m = Interp::new();
                 m.link_intrinsics(&names);
