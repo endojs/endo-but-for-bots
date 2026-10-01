@@ -70,12 +70,11 @@ import { toCurrentSpecifier } from './current-specifier.js';
  * narrow at the read site.
  *
  * @typedef {object} InboxMessage
- * @property {string} from
+ * @property {string[]} fromNames - this guest's own pet names for the sender
  * @property {'form' | 'value' | string} type
  * @property {string} [messageId]
  * @property {string} [replyTo]
  * @property {number} number
- * @property {string} [valueId]
  */
 
 /**
@@ -335,7 +334,25 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
   const runFactory = async () => {
     await E(powers).form('@host', FORM_DESCRIPTION, FORM_FIELDS);
     const hostAgent = await E(powers).lookup('host-agent');
-    const selfId = await E(powers).locate('@self');
+
+    // A guest reads no locators: it knows its own outbound mail because the
+    // message names its sender `@self`, and it reaches a reply's value by
+    // adopting the message's `value` edge under a scratch name.
+    /** @param {InboxMessage} msg */
+    const isOwnForm = msg =>
+      msg.type === 'form' &&
+      Array.isArray(msg.fromNames) &&
+      msg.fromNames.includes('@self');
+    /** @param {number} messageNumber */
+    const adoptValue = async messageNumber => {
+      const scratchName = `form-value-${messageNumber}`;
+      await E(powers).adopt(messageNumber, 'value', scratchName);
+      try {
+        return await E(powers).lookup(scratchName);
+      } finally {
+        await E(powers).remove(scratchName);
+      }
+    };
 
     /** @type {string | undefined} */
     let formMessageId;
@@ -343,7 +360,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
       await E(powers).listMessages()
     );
     for (const msg of existingMessages) {
-      if (msg.from === selfId && msg.type === 'form') {
+      if (isOwnForm(msg)) {
         formMessageId = msg.messageId;
       }
     }
@@ -357,7 +374,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         break;
       }
       const msg = /** @type {InboxMessage} */ (message);
-      const isOurForm = msg.from === selfId && msg.type === 'form';
+      const isOurForm = isOwnForm(msg);
       const isFormReply =
         msg.type === 'value' &&
         formMessageId !== undefined &&
@@ -370,7 +387,7 @@ export const make = (guestPowers, _context, contextOrDeps = {}) => {
         seenFormReplies.add(msg.number);
         try {
           const submission = /** @type {CredentialsFormSubmission} */ (
-            await E(powers).lookupById(msg.valueId)
+            await adoptValue(msg.number)
           );
           const { name, apiKey, kind = 'apiKey' } = submission;
           if (!name) throw new Error('Missing "name".');
