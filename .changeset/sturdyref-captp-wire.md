@@ -1,6 +1,6 @@
 ---
 '@endo/captp': minor
-'@endo/ocapn': minor
+'@endo/ocapn': major
 ---
 
 CapTP layers mint realm SturdyRefs (`@endo/sturdyref`) and carry them over the
