@@ -1203,7 +1203,7 @@ impl<'a> Parser<'a> {
                         // enclosing arrow (`fxArrowExpression`) onto the nearest
                         // non-arrow function node — the parse-time half of the
                         // enclosing-function synthetic capture-closure fold. The
-                        // scoper's `hoist_call` sets the *scope* eval poison; this
+                        // scoper's hoist `Call` arm sets the *scope* eval poison; this
                         // sets the *node* flag the scoper never wired.
                         if self
                             .top_access_symbol()

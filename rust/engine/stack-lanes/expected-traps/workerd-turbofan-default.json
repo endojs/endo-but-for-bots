@@ -6,7 +6,6 @@
     ]
   },
   "expected_traps": [
-    "proxy-proto-cycle",
-    "u3-eval-nest-tagged-2038"
+    "proxy-proto-cycle"
   ]
 }

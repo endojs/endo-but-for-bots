@@ -9,15 +9,15 @@
 //! a crash, so the shapes are probed here rather than argued.
 //!
 //! The one shape whose safety is NOT scope lifetime is
-//! `self.body_scope.unwrap()` (scoper.rs:1600, 1621, 1689). `hoist_function`
-//! and `hoist_function_no_self` CLEAR `body_scope` to `None` on entry
-//! (scoper.rs:1439, 1748) and only `hoist_body` re-establishes it
-//! (scoper.rs:1422), which runs after the parameters. So there is a real
-//! window — inside a parameter list, outside any nested function body — in
-//! which `body_scope` is `None` while a scope is open, and the three readers
-//! survive it only because they sit in the non-`Token::Arg` arms of the
-//! dispatch at scoper.rs:1580: a `Const`/`Let`/`Using`/`Var` declarator is
-//! not a parameter.
+//! `self.body_scope.unwrap()` (in `hoist_declare` and `hoist_define`). The
+//! hoist walk's function arm (`hoist_function_enter`, scoper/walk.rs) CLEARs
+//! `body_scope` to `None` on entry and only its `Body` arm re-establishes it,
+//! which runs after the parameters. So there is a real window — inside a
+//! parameter list, outside any nested function body — in which `body_scope`
+//! is `None` while a scope is open, and the three readers survive it only
+//! because they sit in the non-`Token::Arg` arms of `hoist_declare` and in
+//! `hoist_define`: a `Const`/`Let`/`Using`/`Var` declarator is not a
+//! parameter.
 //!
 //! That argument is about the GRAMMAR of a parameter list, which is exactly
 //! the kind of argument `code_catch` disproved. The roster below is the
@@ -247,16 +247,16 @@ fn the_roster_contains_sources_that_compile_end_to_end() {
 }
 
 /// `scope_of`'s cross-pass invariant: the hoist pass inserted a `node_scope`
-/// entry for every node the bind pass looks one up for (scoper.rs:2329).
+/// entry for every node the bind pass looks one up for.
 ///
-/// The two passes agree by dispatch: each of the ten `scope_of` callers
-/// (`bind_program`, `bind_module`, `bind_block`, `bind_function`,
-/// `bind_catch`, `bind_for`, `bind_for_in_of`, `bind_switch`, `bind_with`,
-/// `bind_class`) is routed the same tokens as a `hoist_*` that inserts. That
-/// much is checkable by reading the two match arms, and it holds.
+/// The two passes agree by dispatch: each `scope_of` caller (`bind_program`,
+/// `bind_module`, `bind_class`, and the bind walk's block and body,
+/// function, catch, `for`, `for-in/of`, `switch` and `with` arms in
+/// scoper/walk.rs) is routed the same tokens as a hoist arm that inserts.
+/// That much is checkable by reading the two walks' arms, and it holds.
 ///
 /// What reading them does not settle is asymmetric child traversal: a
-/// subtree `bind_X` descends into that `hoist_X` skips would reach
+/// subtree a bind arm descends into that its hoist arm skips would reach
 /// `scope_of` with nothing inserted, and no dispatch table shows it. This is
 /// the `code_catch` shape exactly — two passes that must agree on a node
 /// roster — so the positions where a scope-bearing node can hide are probed.
@@ -322,7 +322,7 @@ fn scope_bearing_children_are_hoisted_before_they_are_bound() {
 }
 
 /// `with` is rejected before scoping in strict code. Require compilation in
-/// both sloppy goals to exercise `bind_with`, and pin the strict rejection
+/// both sloppy goals to exercise the bind walk's `with` arm, and pin the strict rejection
 /// separately rather than counting it as successful traversal coverage.
 #[test]
 fn with_scope_traversal_requires_a_sloppy_program() {
