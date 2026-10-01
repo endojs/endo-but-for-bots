@@ -171,3 +171,45 @@ test('a SturdyRef crosses CapTP with custom import/export tables', async t => {
   const live = /** @type {any} */ (await SturdyRef.enliven(imported));
   t.is(await E(live).hello(), 'hi');
 });
+
+test('a CapTP SturdyRef enliven facet refuses other methods and arguments', async t => {
+  /** @type {any[]} */
+  const sent = [];
+  const connection = makeCapTP('alice', obj => sent.push(obj), undefined);
+  const origin = new SturdyRef({ enliven: () => 'live' });
+  const { slots } = connection.serialize(harden(origin));
+  t.deepEqual(slots, ['s+1']);
+
+  /**
+   * @param {string} questionID
+   * @param {any[]} method
+   */
+  const call = async (questionID, method) => {
+    connection.dispatch({
+      type: 'CTP_CALL',
+      epoch: 0,
+      questionID,
+      target: 's-1',
+      method: connection.serialize(harden(method)),
+    });
+    await new Promise(resolve => setTimeout(resolve, 10));
+    const reply = sent.find(m => m.answerID === questionID);
+    if (!reply) throw Error(`no reply to ${questionID}`);
+    return reply;
+  };
+
+  const ok = await call('q-1', ['enliven', []]);
+  t.is(ok.exception, undefined);
+  t.is(connection.unserialize(ok.result), 'live');
+
+  for (const [questionID, method] of /** @type {const} */ ([
+    ['q-2', ['enliven', ['extra']]],
+    ['q-3', ['toString', []]],
+    ['q-4', ['hasOwnProperty', ['enliven']]],
+    ['q-5', ['enliven']],
+  ])) {
+    // eslint-disable-next-line no-await-in-loop
+    const reply = await call(questionID, [...method]);
+    t.not(reply.exception, undefined, `${method[0]} is refused`);
+  }
+});
