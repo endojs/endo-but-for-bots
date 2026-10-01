@@ -14,7 +14,7 @@ import { isPromise, makePromiseKit } from '@endo/promise-kit';
 import { passStyleOf } from '@endo/pass-style';
 import { makeSturdyRef, enliven } from '@endo/sturdyref';
 
-import { X, Fail, annotateError } from '@endo/errors';
+import { X, Fail, annotateError, makeError, q } from '@endo/errors';
 import { makeTrap } from './trap.js';
 
 import { makeFinalizingMap } from './finalize.js';
@@ -819,11 +819,20 @@ export const makeCapTP = (
         val = answers.get(target);
       } else if (typeof target === 'string' && target[0] === 's') {
         // The peer is enlivening a SturdyRef we exported. The target is
-        // an enliven facet for it, not the SturdyRef itself.
+        // an enliven facet for it, not the SturdyRef itself. The peer picks
+        // the method and arguments, so the facet answers only `enliven()`
+        // and refuses anything else, including methods it inherits.
         const slot = reverseSlot(target);
         importExportTables.hasExport(slot) || Fail`Unknown export ${slot}`;
         const sturdyRef = importExportTables.getExport(slot);
-        val = harden({ enliven: () => enliven(sturdyRef) });
+        val =
+          prop === 'enliven' && args && args.length === 0
+            ? Far('SturdyRefEnlivener', { enliven: () => enliven(sturdyRef) })
+            : Promise.reject(
+                makeError(
+                  X`SturdyRef export ${slot} answers only enliven(), not ${q(prop)}`,
+                ),
+              );
       } else {
         val = unserialize({
           body: JSON.stringify({
