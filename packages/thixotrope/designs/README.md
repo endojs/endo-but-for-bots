@@ -8,6 +8,9 @@ This directory holds the implementation notes behind contracts that are implemen
 [layered message delivery](message-delivery.md), together with proposals that remain exploratory.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
+[Host-managed resources](host-managed-resources.md) gathers the changes proposed while reviewing
+the current implementation: the installation registry out of the user's workspace, many
+workspaces per daemon, and typed resource descriptions.
 Two notes that argued for the manager and adapter model before it was built are kept under
 [archive](archive/): [what a host service had to write](archive/host-service-template.md) and
 [manual persistence vats](archive/manual-persistence-vats.md).
