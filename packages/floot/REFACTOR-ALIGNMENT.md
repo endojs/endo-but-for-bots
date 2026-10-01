@@ -76,7 +76,11 @@ Scope item 3 then removes the unsupported delegated storage-bound extension.
 Limits require explicit `storage: 'unbounded'`; bounded requests refuse before
 setup publication or session-slot acquisition, rather than silently losing a bound.
 The retired descriptor flag is rejected; sharing/delegation itself remains.
-The metric is now 42,555, down 231 lines, across the same 160 files.
+Scope item 4 moves the existing snapshot journal out of the account oracle into
+`snapshot-journal.js` as `makeSnapshotJournal`, without an old-name alias.
+The five callers keep identical persisted prefixes and separate state ownership.
+The metric is now 42,557, down 229 lines, across 161 files; the move adds two lines
+and is ontology clarification, not a size reduction.
 The audit records each slice and its validation.
 For SB-01 through SB-12, full shared, Claude, Codex and OpenCode suites passed,
 along with shared/Claude/Codex type checks, scoped ESLint/formatting and root docs
@@ -84,14 +88,20 @@ along with shared/Claude/Codex type checks, scoped ESLint/formatting and root do
 Scope item 3 passes 67 focused runner/module/descriptor/setup tests; independent
 review passes 77 including backend setup, shared types, scoped lint and formatting.
 Root docs also passes for this slice; warnings remain.
+Scope item 4 passes 70 focused journal/account/module/pool tests and shared types;
+root docs passes with warnings.
+Its full shared suite passes 808 tests with one existing skip; independent review
+confirms unchanged storage mechanics and passes 54 focused tests and shared types.
+The composite declaration build fails on existing generated-file TS5055 conflicts
+outside the slice; that repository-wide gate is not green.
 Whole-repository lint remains unclean on unchanged formatting and other lint
 errors, including Chat project-resolution failures.
 The source audit records those limitations and suspected bucketing separately.
 These source-only changes are not deployed; generation 190 and its pins remain
 the live acceptance baseline.
 The smaller-combined-implementation target is still unproven.
-Next are the approved generic-journal placement and Claude checkpoint-comment
-slices, then the sharing/delegation and pool-weight scope decisions before the
+Next is the approved Claude checkpoint-comment slice, then the sharing/delegation
+and pool-weight scope decisions before the
 cross-adapter SB-13 through SB-15 extractions.
 The recommended sequence remains deletion before abstraction.
 

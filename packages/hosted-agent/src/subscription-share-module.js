@@ -5,7 +5,7 @@ import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 
-import { makeAccountJournal } from './account-oracle.js';
+import { makeSnapshotJournal } from './snapshot-journal.js';
 import { makeSubscriptionShare } from './subscription-share.js';
 
 /**
@@ -43,7 +43,7 @@ export const make = async (powers, _context, { env } = {}) => {
     shareId,
     provideUnderlying: () => provide('subscription'),
     provideLimits: () => provide('share-limits'),
-    journal: makeAccountJournal({ powers, prefix: 'share-state-v1-' }),
+    journal: makeSnapshotJournal({ powers, prefix: 'share-state-v1-' }),
   });
   return makeExo(
     'ShareKit',

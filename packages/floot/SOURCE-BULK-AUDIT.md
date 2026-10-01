@@ -27,8 +27,9 @@ The tables describe the initial audit snapshot; the progress section records
 subsequent implementation.
 The concrete deletion and compatibility candidates SB-01 through SB-08 are now
 removed, and local repetition SB-09 through SB-12 is consolidated.
-This same source metric is now 42,555 lines.
+This same source metric is now 42,557 lines.
 Scope item 3's unsupported delegated storage-bound extension is removed.
+Scope item 4 gives the existing snapshot journal a neutral name and module.
 Further implementation should follow deletion before abstraction, with independent
 adversarial review and focused regression tests before each commit.
 
@@ -205,6 +206,9 @@ not evidence that whole clients can be merged safely.
    reused by pools, reset intents, shares and runners.
    It is one storage mechanism, not five parallel account journals.
    A clearer name/location may improve ontology, but is not a source-size saving.
+   **Done:** `makeSnapshotJournal` lives in `snapshot-journal.js`; all five
+   callers retain their namespaces, prefixes, record shapes and state ownership.
+   The account-specific export is removed without a compatibility alias.
 5. **Claude checkpoint comments.** Comments claiming there is no checkpoint
    predate native capture.
    Distinguish native context capture from the adapter's operational acknowledgement;
@@ -437,6 +441,35 @@ The source review does not establish that either branch is dead.
   No state format, journal prefix, credential, owner, host config or pin changes;
   not deployed.
   Scope items 4 and 5 are the next approved slices.
+
+- **Scope item 4 done:** moved the existing pet-store snapshot mechanism from
+  `account-oracle.js` to `snapshot-journal.js`, named `makeSnapshotJournal`.
+  All five callers use the new export; there is no old-name alias or second
+  implementation.
+  The account oracle now names its existing `account-snapshot-v1-` prefix
+  explicitly, as the pool/reset/share/runner callers already did.
+  Every persisted prefix and record shape stays unchanged; no migration or
+  new durable owner is added.
+  The helper's sequence arithmetic, queued write acknowledgement, failure
+  behavior, publish-before-prune order and best-effort pruning are unchanged.
+  Documentation states its single-writer assumption and distinguishes complete
+  snapshots from Floot's event journal and from owner-specific records.
+  Nine direct tests cover the five retained prefixes/re-creation, exact sequence
+  arithmetic beyond the number range, delayed publication, pruning and queued
+  failure followed by a successful write.
+  The 70 focused journal/account/module/pool tests and shared types pass.
+  Root docs passes with 0 errors and 180 warnings.
+  Repository composite declaration build fails on existing generated-file
+  TS5055 conflicts outside this slice; it is not represented as a passing gate.
+  The full shared suite passes **808** tests with one existing skip.
+  Independent review confirms a byte-for-byte identical journal body and passes
+  54 focused tests, shared types, formatting and diff checks.
+  Scoped ESLint passes with warnings; the two new test-JSDoc warnings were fixed.
+  This is ontology clarification, not a source-size saving: **+2** source lines
+  and one source file, hosted-agent 23,987; combined **42,557** across **161** files,
+  down **229** from the initial snapshot.
+  No host, credential, lifecycle authority or release pin changes; not deployed.
+  Scope item 5 is next; sharing/delegation and pool weight remain undecided.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.
