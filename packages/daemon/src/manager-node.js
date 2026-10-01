@@ -220,7 +220,7 @@ const main = async () => {
     const agentIdPath = filePowers.joinPath(statePath, 'root');
     await filePowers.writeFileText(agentIdPath, `${agentId}\n`);
 
-    // Record self as the official daemon process BEFORE signalling ready.
+    // Record self as the official daemon process BEFORE signaling ready.
     // A resolved start() promises a fully usable daemon, and callers act on
     // endo.pid immediately: stop() reads it to kill the daemon, and a launcher
     // may exit right after start() resolves.  Recording it only after ready
