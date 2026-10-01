@@ -952,9 +952,21 @@ rustup component add rust-src
 RUSTFLAGS="-C panic=unwind" cargo build --release --target wasm32-wasip1
 # B1 workaround; for exnref (Wasmtime) add -C llvm-args=-wasm-use-legacy-eh=false:
 RUSTC_BOOTSTRAP=1 \
-RUSTFLAGS="-C panic=unwind -C target-feature=+exception-handling -C link-arg=-zstack-size=8388608" \
+RUSTFLAGS="-C panic=unwind -C target-feature=+exception-handling -C link-arg=-zstack-size=4194304" \
   cargo build -Zbuild-std=std,panic_unwind --release --target wasm32-wasip1
 ```
+
+The shadow stack is 4 MiB, per E1 of
+[STACK-DEPTH-REFACTOR.md §4.7](STACK-DEPTH-REFACTOR.md#47-class-e-host-level-escape-hatches):
+the worst accepted composition measured needs 2,611,856 B, so 2 MiB is too small today.
+Keep 4 MiB until that report's D1, D2, B5, B6 and B7 land, and lower it (to 2 MiB on
+Cloudflare, whose 128 MB isolate limit counts it) only once the painted shadow marks (lane
+B, `--paint`) for the U2-U4 compositions support it.
+The figures above were measured with 8 MiB; link with `-zstack-size=8388608` to reproduce
+them.
+`stack-lanes/build_probe.py` builds the probe with this recipe in its exnref form and also
+exports `__stack_pointer`, and lane B's hosts, run with `--paint`, paint the shadow stack
+and fail when a mark comes within 64 KiB of it.
 
 Running each host:
 
