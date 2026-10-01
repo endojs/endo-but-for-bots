@@ -198,7 +198,7 @@ const commands = {
     if (agentName) {
       target = await E(host).lookup([agentName]);
     }
-    const value = await E(target).lookup(name.split('/'));
+    const value = await E(target).lookup([name]);
     // Try to get method names for introspection
     try {
       // eslint-disable-next-line no-underscore-dangle

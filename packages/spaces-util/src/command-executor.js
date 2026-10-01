@@ -106,7 +106,7 @@ export const createCommandExecutor = ({
         case 'adopt': {
           const { messageNumber, edgeName, petName } = params;
           const targetNameStr = petName ? String(petName) : String(edgeName);
-          const targetNamePath = targetNameStr.split('/');
+          const targetNamePath = [targetNameStr];
 
           // In channel mode, adopt from channel message by formula ID
           const channelRef = getChannelRef ? getChannelRef() : null;
@@ -193,10 +193,7 @@ export const createCommandExecutor = ({
             // Resolve pet names to formula IDs for the channel
             const resolvedIds = await Promise.all(
               petNames.map(async petName => {
-                const petPath = petName.split('/');
-                const id = await E(powers).identify(
-                  .../** @type {[string, ...string[]]} */ (petPath),
-                );
+                const id = await E(powers).identify(petName);
                 return id || '';
               }),
             );
@@ -313,14 +310,12 @@ export const createCommandExecutor = ({
             /** @type {Array<{codeName: string, petName: string}>} */ (
               endowments
             ).map(e => e.codeName);
-          // Split dot-notation pet names into paths for the evaluate API
+          // Wrap each pet name as a one-segment path for the evaluate API
           const petNamePaths =
             /** @type {Array<{codeName: string, petName: string}>} */ (
               endowments
-            ).map(e => e.petName.split('/'));
-          const resultPath = resultName
-            ? String(resultName).split('/')
-            : undefined;
+            ).map(e => [e.petName]);
+          const resultPath = resultName ? [String(resultName)] : undefined;
 
           let result;
           try {

@@ -198,7 +198,7 @@ const ValueActions = ({
       defaultValue: messageContext.edgeName,
       buttonText: 'Adopt',
       handler: async name => {
-        const targetPath = name.split('/');
+        const targetPath = [name];
         await E(powers).adopt(
           messageContext.number,
           messageContext.edgeName,
@@ -211,11 +211,12 @@ const ValueActions = ({
     nameActionProps = {
       key: `rename-${petNamePath.join('/')}`,
       label: 'Rename to:',
-      defaultValue: petNamePath.join('/'),
+      defaultValue: petNamePath[petNamePath.length - 1],
       buttonText: 'Rename',
       handler: async newName => {
         const fromPath = /** @type {string[]} */ (getCurrentPetNamePath());
-        const toPath = newName.split('/');
+        // Rename within the same directory: the new name is one segment.
+        const toPath = [...fromPath.slice(0, -1), newName];
         await E(powers).move(fromPath, toPath);
         clearValue();
       },
@@ -227,7 +228,7 @@ const ValueActions = ({
       defaultValue: '',
       buttonText: 'Save',
       handler: async name => {
-        const targetPath = name.split('/');
+        const targetPath = [name];
         await E(powers).storeValue(
           /** @type {import('@endo/pass-style').Passable} */ (value),
           targetPath,

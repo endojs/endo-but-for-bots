@@ -200,7 +200,11 @@ test.serial(
     await waitFor(() => calls.some(c => c.method === 'storeValue'));
     const storeCall = calls.find(c => c.method === 'storeValue');
     t.truthy(storeCall, 'storeValue invoked');
-    t.deepEqual(storeCall.args[1], ['my', 'value'], 'path split on /');
+    t.deepEqual(
+      storeCall.args[1],
+      ['my/value'],
+      'a slash stays inside one segment',
+    );
   },
 );
 

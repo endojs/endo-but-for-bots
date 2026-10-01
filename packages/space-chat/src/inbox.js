@@ -363,7 +363,7 @@ const RequestBody = ({ message, powers, setError, reportError }) => {
               onClick: () => {
                 setError('');
                 E(powers)
-                  .resolve(number, value.split('/'))
+                  .resolve(number, [value])
                   .catch(error => {
                     setError(` ${/** @type {Error} */ (error).message}`);
                   });
@@ -1061,7 +1061,7 @@ const EditPanel = ({ message, powers, setError, onClose }) => {
           number,
           [text],
           kept.map(e => e.name),
-          kept.map(e => e.petName.split('/')),
+          kept.map(e => [e.petName]),
         );
       })
       .then(

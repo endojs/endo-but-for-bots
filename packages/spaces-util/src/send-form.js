@@ -606,10 +606,7 @@ export const sendFormComponent = ({
         petNames.length > 0
           ? Promise.all(
               petNames.map(async petName => {
-                const petPath = petName.split('/');
-                const id = await E(powers).identify(
-                  .../** @type {[string, ...string[]]} */ (petPath),
-                );
+                const id = await E(powers).identify(petName);
                 return id || '';
               }),
             )
@@ -624,7 +621,7 @@ export const sendFormComponent = ({
             ? E(/** @type {SendFormChannelRef} */ (channelRef)).post(
                 messageStrings,
                 edgeNames,
-                petNames.map(petName => petName.split('/')),
+                petNames.map(petName => [petName]),
                 replyTo,
                 ids,
                 sendReplyType,
@@ -632,7 +629,7 @@ export const sendFormComponent = ({
             : E(/** @type {SendFormChannelRef} */ (channelRef)).post(
                 messageStrings,
                 edgeNames,
-                petNames.map(petName => petName.split('/')),
+                petNames.map(petName => [petName]),
                 replyTo,
                 ids,
               ),
@@ -702,7 +699,7 @@ export const sendFormComponent = ({
           conversationRecipient,
           messageStrings,
           edgeNames,
-          petNames.map(petName => petName.split('/')),
+          petNames.map(petName => [petName]),
         )
         .then(
           () => {

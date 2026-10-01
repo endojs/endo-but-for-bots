@@ -77,7 +77,7 @@ const resolveIds = (powers, petNames) => {
   return Promise.all(
     petNames.map(name =>
       E(/** @type {ERef<EndoHost>} */ (powers))
-        .identify(.../** @type {[string, ...string[]]} */ (name.split('/')))
+        .identify(name)
         .catch(() => ''),
     ),
   ).then(ids => /** @type {string[]} */ (ids));
@@ -109,7 +109,7 @@ export const postEdit = ({
       const postP = E(/** @type {ChannelRef} */ (channel)).post(
         parsed.strings,
         parsed.edgeNames,
-        parsed.petNames.map(petName => petName.split('/')),
+        parsed.petNames.map(petName => [petName]),
         replyTo,
         ids,
         'edit',
@@ -162,7 +162,7 @@ export const postDraft = ({
       const postP = E(/** @type {ChannelRef} */ (channel)).post(
         parsed.strings,
         parsed.edgeNames,
-        parsed.petNames.map(petName => petName.split('/')),
+        parsed.petNames.map(petName => [petName]),
         parentKey,
         ids,
         replyType,

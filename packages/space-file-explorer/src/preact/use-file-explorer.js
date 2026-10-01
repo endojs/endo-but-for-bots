@@ -1487,7 +1487,7 @@ export function useFileExplorer(powers, profilePath = []) {
         ENDO_FS_READONLY_MODULE_URL,
         {
           powersName: ['@agent'],
-          resultName: petName.split('/'),
+          resultName: [petName],
           env: { SOURCE_NAME: source.petName },
         },
       );
@@ -1558,7 +1558,7 @@ export function useFileExplorer(powers, profilePath = []) {
       const layer = /** @type {Cap} */ (
         await E(host).makeUnconfined(['@node'], ENDO_FS_LAYER_MODULE_URL, {
           powersName: ['@agent'],
-          resultName: layerName.split('/'),
+          resultName: [layerName],
           env: { BACKING_NAME: source.petName },
         })
       );
@@ -1567,7 +1567,7 @@ export function useFileExplorer(powers, profilePath = []) {
           ['@node'],
           'E(layer).asFilesystem()',
           ['layer'],
-          [layerName.split('/')],
+          [[layerName]],
           [composedName],
         )
       );
