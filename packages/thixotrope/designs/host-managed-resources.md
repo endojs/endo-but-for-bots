@@ -1,8 +1,10 @@
 # Host-managed resources and workspaces that hold references
 
-Status: proposed.
+Status: largely implemented; each section keeps its proposal, and a Done paragraph records what
+landed.
 This note gathers the system changes suggested while reviewing #1220 so they are not lost.
-None is implemented; each names what exists today, what should change, and what it costs.
+When it was written none was implemented; each names what existed then, what should change, and
+what it costs.
 
 ## The model
 
@@ -76,7 +78,8 @@ address book, and provided mailbox, allocated under an **allocation key** rather
 `workspace` debug label (the label is identity in one place today, `supervisor.js` first start).
 The control connection selects a workspace by name and `thix` takes `--workspace NAME`;
 `serve` creates one named `default` unless told otherwise.
-The hub, the peers socket, the alarm ledger and the registry vat of section 1 stay shared.
+The hub, the peers socket and the registry vat of section 1 stay shared; the clock is one for the
+daemon (8.1).
 
 Cost: `workspace.json` becomes a table; the admin facet becomes per workspace; the TUI and the CLI
 gain a selector.
@@ -374,10 +377,10 @@ it.
 Hub tables, peer session frames, the endpoint's export records, the runtime
 manifest and the store lease are the mechanism beneath vats.
 A vat exists only through them, so nothing can hold them in a vat.
-`workspace.json` shrinks to its version gate: the worker id is already found by
-label when the file is absent, and the publication name is derived from it.
-The gate must be read before any vat is restored, so it stays a file, and
-section 2 gives it the list of workspaces.
+`workspace.json` is the version gate and the table of names served: each
+workspace's vat is found again under the allocation key derived from its name,
+so the file records nothing a start could not recover.
+The gate must be read before any vat is restored, so it stays a file.
 
 Section 7.1 depends on nothing else and can go first; 7.2 follows section 1.
 
@@ -394,8 +397,8 @@ Everything else is a vat or a native resource the host installed.
 ### 8.1 Alarms (Done.)
 
 The clock is a native resource the package ships, `resources/clock`, and the
-supervisor installs it at every start under `clock`, as it did the guest
-clock.
+supervisor provides it at every start under `clock`, installing it when
+missing, as it did the guest clock.
 `durable.js` makes a manager labelled `Alarm`.
 A spec is `{ at, sink }` or `{ after, sink }`, where `sink` is one exo of the
 manager with `fire(key, now)`; `same` compares the sink and, when the wanted
@@ -433,7 +436,7 @@ row cap, the release and retry protocol of the guest clock
 `onRetireWorker` and `beforeStartNotices` hooks, the supervisor's `alarmNow`
 test power, and `alarm-settlement.md`; section 7.1 is superseded.
 `alarmStatus` asks the clock for its count and reports `{ pending }`.
-Workspace metadata is version 9.
+Workspace metadata was version 9 at this step; sections 1, 2 and 4 took it to 12.
 
 ### 8.2 The control socket (Done.)
 
@@ -505,13 +508,12 @@ would run the hub's transport over a hub session.
    consecutive quicker exits double the delay from one second up to thirty.
    No per-resource flag is needed, since an empty desired set has nothing to
    restore.
-2. Built-in resources the host installs. (Clock done; control socket with 8.2.)
-   The supervisor installs `resources/clock` under `clock` at every start
-   through the same `provide` rule as the mailbox, and will install
-   `resources/control` the same way; a missing or broken control resource is
-   reinstalled at start, since it is the operator's only way in.
-   The registry of section 1 and the per-workspace grant of section 2 follow
-   when those land.
+2. Built-in resources the host installs. (Done.)
+   The supervisor provides `resources/clock` under `clock` and
+   `resources/control` under `control` at every start through the same
+   `provide` rule as the mailbox, replacing a control resource that failed,
+   since it is the operator's only way in; the clock is held daemon-wide by
+   the registry and handed to every workspace.
 3. Bundle the ephemeral module at install, as the durable one already is.
    (Done.)
    `installNative` bundled `durable.js` with `makeBundle` and evaluated the
@@ -529,18 +531,19 @@ would run the hub's transport over a hub session.
    `makeManager` is already frozen in the manager's heap.
    The bundle is stored in the state directory under its digest
    (`bundles/<sha256>.cjs`), the content-addressed store that section 7.2
-   wants for application bundles as well: manually persisted, immutable,
+   now uses for application bundles as well: manually persisted, immutable,
    verified by digest in the process that loads it, and freed at the next
    daemon start once no launcher record names it.
-   The launcher's description names the bundle digest and the owning vat
-   instead of a module URL and a directory, and the digest check at launch
-   replaced `describeNativeResource` there, which now only locates the two
-   entries; a launcher recorded before this refuses to launch and says the
-   resource is to be installed again.
-   The installation's identity is the pair of bundle digests, so the
-   directory's real path dropped out of it; an edited directory no longer
-   matters, and a new version is a new installation under a new name or
-   after a removal, exactly as for an application.
+   The launcher is bound to the owning vat with the bundle digest as its
+   key instead of described by a module URL and a directory, and the digest
+   check at launch replaced `describeNativeResource` there, which now only
+   locates the two entries; a launcher recorded before this refuses to
+   launch and says the resource is to be installed again.
+   The installation's identity is its workspace, its name and the digest over
+   the pair of bundle digests, so the directory's real path dropped out of it;
+   an edited directory no longer matters, and a new version is a new
+   installation under a new name or after a removal, exactly as for an
+   application.
    A default import of a Node builtin has no binding in the bundle, since
    the mapper's exit cells are the host namespace's own names; builtins are
    imported by name or as a namespace.
@@ -567,11 +570,12 @@ facade, the adapter launcher and publication; the peer netlayer; the startup
 sequence.
 The supervisor becomes the main of `thix serve`: take the lease, check
 versions, start the daemon, install the built-ins if missing.
-Alarm status is `describe` over the manager's registrations, and the
-operator's administration facet is an exo in a vat.
+Alarm status is the clock facet's count of pending alarms, and the operator's
+administration stays a host resource, `control-admin`, provided to the control
+socket (8.2).
 
-Order: the monitor (8.3.1) first, then alarms (8.1, in place of 7.1), then
-the control socket once section 1 and the administration facet move are done.
+Order, as it went: the monitor (8.3.1) first, then alarms (8.1, in place of
+7.1), then the control socket after section 1.
 
 ## 9. Collection hooks for native resources
 

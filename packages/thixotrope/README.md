@@ -67,7 +67,7 @@ They distinguish intended behavior from current implementation gaps.
 
 The package-level `resources/` directory holds the native resources the package ships, each a
 durable manager and a native adapter: `resources/http/`, installable with `thix install-native`,
-and `resources/clock/`, which the supervisor installs at every start.
+and `resources/clock/` and `resources/control/`, which the supervisor provides at every start.
 
 Each module directly under `platform/` names one capability — `timers`,
 `random`, `files`, `processes`, `sockets`, and so on — whose methods take
@@ -111,8 +111,8 @@ Only the supervisor opens the persistence store.
 The socket grants full local administration; anyone running as the same OS user
 can administer every workspace.
 
-A state directory serves many workspaces, each a vat of its own with its own inventory, mailbox
-and address book; `serve` makes one named `default`.
+A state directory serves many workspaces, each a vat of its own with an inventory and an address
+book of its own, and a mailbox provided to it in a vat of its own; `serve` makes one named `default`.
 A connection speaks for one workspace at a time, `default` unless it selects another, and every
 `thix` command of a workspace's takes `--workspace NAME` (or `--workspace=NAME`) ahead of it to
 select one:
@@ -127,8 +127,8 @@ A workspace name is letters, digits, dot, dash and underscore, 64 at most, start
 or digit.
 Its vat is allocated under a key derived from the name, so a start finds it again with no record
 to lose; `workspace.json` is the table of names the host serves.
-The hub, the peers socket, the registry of installations and the clock are the daemon's, shared by
-every workspace.
+The hub, the peers socket, the registry of installations, the clock and the control socket are the
+daemon's, shared by every workspace.
 A service manager can restart the foreground process; clients never start it implicitly.
 
 `attach` evaluates one JavaScript line at a time in the same persisted workspace vat.
@@ -272,7 +272,7 @@ This initial version provides installation, not live code upgrades.
 
 ## Persistent applications serving HTTP
 
-Install the native resource into this daemon's workspace inventory, then grant its facet to an
+Install the native resource into the selected workspace's inventory, then grant its facet to an
 application:
 
 ```sh
@@ -286,7 +286,8 @@ curl http://127.0.0.1:8080/read
 
 A trusted native-resource directory supplies `durable.js` and `ephemeral.js`.
 Each installation runs its durable module in a dedicated manager vat with its own heap and limits.
-Its `make({ adapters, makeKeeper, makeManager })` returns `{ facet, lifecycle }`;
+Its `make({ adapters, makeKeeper, makeManager })` returns `{ facet, lifecycle }`, the record also
+carrying whatever the installation was granted or provided, such as the control socket's `admin`;
 `makeManager` writes the manager's bookkeeping once, so the module supplies only what identifies a
 registration and how to describe its status.
 The ephemeral module runs in a separate Node process with native platform APIs; its `make()`
@@ -318,8 +319,9 @@ A closed registration cannot close a later registration that reuses its port.
 The initial HTTP profile uses ports 1024–65535 on IPv4 loopback, text bodies up to 64 KiB,
 16 concurrent requests, and a five-second deadline.
 Daemon restart creates a fresh adapter and reconstructs desired listeners, never pending requests.
-After an adapter exits while the daemon stays alive, its replacement is created on the next
-registration, status, or close operation; there is no autonomous restart monitor.
+After an adapter exits on its own while the daemon stays alive, the host reports the exit to its
+manager after a backoff that grows with consecutive quick exits, and a manager with anything
+registered rebuilds it then; one with nothing registered rebuilds on the next registration.
 Already accepted calls into durable application vats may still complete.
 A failed port bind does not prevent other registrations from being restored.
 
@@ -340,13 +342,15 @@ A module's dependencies are frozen in its bundle at installation.
 In the ephemeral module only Node builtins are resolved by the process, imported by name or as a
 namespace (`import * as http from 'node:http'`); a default import of a builtin has no binding in
 the bundle.
-The selected state directory currently identifies the daemon's single user workspace.
+A state directory serves a table of workspaces; `install-native` installs into the one the
+connection selected, `default` unless `--workspace NAME` names another.
 See [native resource installation](designs/native-resource-installation.md) for the module contract.
 
 ## Durable alarms and reminders
 
-Every workspace holds the daemon's clock under `clock`, a native resource the supervisor installs
-at every start and hands to each workspace; grant it to an application like any inventory entry:
+Every workspace holds the daemon's clock under `clock`, a native resource the supervisor provides
+at every start, installed when missing, and hands to each workspace; grant it to an application like
+any inventory entry:
 
 ```sh
 thix install ./private-state reminders ./examples/reminder.js clock=clock
@@ -795,7 +799,7 @@ outlives its socket, its worker process, and the daemon itself.
 A **transient client** is a disposable host-side OCapN session, opened by
 `daemon.openTransientClient()` and implemented in `src/net/transient-hub-client.js`.
 The supervisor does not use one: its administrative calls go through the endpoint's own
-durable session to the workspace vat.
+durable session to the workspace vats and the registry vat.
 The mechanism remains for embedders that want a request whose answers and imports die with
 the request; calls it delivers are durable once accepted, but its own pending answers and
 imported references end with the client.
@@ -834,8 +838,8 @@ The durable host **endpoint** is an in-process OCapN client hosting system resou
 the worker controller, and the embedder's admin route.
 Disposable host clients and native adapters have separate reifying endpoints; routed traffic
 between other sessions is handled by the hub without reifying its values.
-Its session records shrink to resource descriptions (re-instantiated
-by name at recorded positions) and at-most-once answer obligations —
+Its session records shrink to resource bindings (a name, a worker and
+a key, re-instantiated at recorded positions) and at-most-once answer obligations —
 the one kind of pending obligation that genuinely dies with the
 process, since worker-owed answers now survive restarts by heap
 replay.
@@ -843,7 +847,7 @@ replay.
 A daemon restart is: reload hub tables, reattach worker transports
 (asleep), restore the endpoint session, and let remote peers resume by
 rebinding their ducts.
-Routed guest references remain hub rows; host resources are re-created from their recorded descriptions.
+Routed guest references remain hub rows; host resources are re-created from their recorded bindings.
 Native adapters are replaced through their durable managers.
 A promise minted in worker A and held in worker B settles after a
 daemon restart with both workers starting asleep — the subscription is
@@ -1101,8 +1105,10 @@ resolves to a daemon (`idleSleepMs` parks any worker that has seen no
 deliveries for that long; workers run to quiescence per delivery and
 have no timer queue, so frame silence is exact dormancy):
 
-- `createWorker({ debugLabel? })` — makes a fresh worker under a
-  generated unguessable id and resolves to its worker object.
+- `createWorker({ debugLabel?, ephemeral?, allocationKey? })` — makes a
+  fresh worker under a generated unguessable id, or finds the one made
+  under the allocation key, and resolves to its worker object; an
+  ephemeral worker is discarded at the next start.
 - `getWorker(workerId)` — the worker object of an existing worker;
   throws for unknown ids (the embedder's admin route).
 - `listWorkerIds()` — sorted ids of the live workers (admin/debug).

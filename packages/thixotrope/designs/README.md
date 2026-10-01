@@ -8,10 +8,11 @@ This directory holds the implementation notes behind contracts that are implemen
 together with proposals that remain exploratory.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
-[Host-managed resources](host-managed-resources.md) gathers the changes proposed while reviewing
-the current implementation: the installation registry out of the user's workspace, many
-workspaces per daemon, typed resource descriptions, and where the package can reuse its own
-building blocks and other Endo packages instead of a second implementation.
+[Host-managed resources](host-managed-resources.md) records the changes proposed while reviewing
+the implementation, and which of them are done: the installation registry in a vat of the daemon's
+own, many workspaces per daemon, resources bound to workers, alarms and the control socket as native
+resources, and where the package can reuse its own building blocks and other Endo packages instead
+of a second implementation.
 Two notes that argued for the manager and adapter model before it was built are kept under
 [archive](archive/): [what a host service had to write](archive/host-service-template.md) and
 [manual persistence vats](archive/manual-persistence-vats.md).
@@ -239,12 +240,13 @@ Direction matters:
   web server.
   Directory-installed native resources now exercise this direction: a dedicated manager vat retains
   desired state, and a separate disposable process owns the platform resources.
-  The workspace retains installation bookkeeping and the resource's facet in its inventory.
+  The registry vat and the host's index keep the installation bookkeeping; the workspace holds only
+  the resource's facet in its inventory.
 
 The adapter keeper serializes creation and replacement and restores the manager's desired state.
 An incarnation's references break permanently when its process exits.
-Replacement occurs on the next manager use or daemon startup, and pending external operations
-are never replayed into the replacement.
+Replacement occurs on the next manager use, at daemon startup, or on the host's report of the
+adapter's own exit; pending external operations are never replayed into the replacement.
 Recreating a listener does not recreate its accepted sockets, and restarting a process does not
 establish whether a previous request produced an external effect.
 
