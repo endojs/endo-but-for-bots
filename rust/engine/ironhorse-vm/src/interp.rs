@@ -220,6 +220,23 @@ pub enum SourceCompileError {
     HeapExhausted,
 }
 
+/// What a direct `eval` inherits from the code that calls it, as XS's
+/// `fxRunEval` passes it to the parse: its strictness; whether `new.target`
+/// is allowed (the caller can construct); whether `super` property access is
+/// (the caller has a home object); whether it runs in a class field
+/// initializer, where `arguments` is a SyntaxError; and whether the caller's
+/// environment can supply a class's private names, which a strict eval then
+/// binds at run time (`EVAL_PRIVATE`) instead of rejecting. An indirect eval
+/// and the `Function` constructor compile with `strict` alone.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EvalContext {
+    pub strict: bool,
+    pub new_target: bool,
+    pub super_property: bool,
+    pub field: bool,
+    pub private_environment: bool,
+}
+
 /// The compiler seam the runtime source-execution bridge drives (design
 /// `designs/ironhorse-engine.md` § roadmap — the compiler/VM boundary).
 ///
@@ -268,6 +285,20 @@ pub trait SourceCompiler {
             SourceCompileError::Unsupported("compiler does not accept UTF-16 source".into())
         })?;
         self.compile_source(&text, strict, raw_budget, charge)
+    }
+
+    /// Compile a direct eval's source in its caller's [`EvalContext`]. A
+    /// compiler that does not override this compiles with the context's
+    /// strictness alone, so `super`, `new.target` and private names in the
+    /// eval'd source are SyntaxErrors there.
+    fn compile_eval_units(
+        &self,
+        source: &[u16],
+        context: &EvalContext,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<CompiledSource, SourceCompileError> {
+        self.compile_source_units(source, context.strict, raw_budget, charge)
     }
 }
 

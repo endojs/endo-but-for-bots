@@ -283,6 +283,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "eval:compiler-invariant",
     "eval:frame-underflow",
     "eval:relink",
+    "eval_private:unbound",
     "exponentiation:stack-underflow",
     "function:missing-segment",
     "gc:previous-collection-failed",

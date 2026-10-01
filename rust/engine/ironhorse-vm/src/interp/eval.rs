@@ -33,10 +33,47 @@ impl Interp {
     ///   eval unit's promise reactions drain with the outer program's job
     ///   pump (not a nested drain), matching a single host crank.
     pub(super) fn eval_source(&mut self, source: &[u16], strict: bool) -> Result<Slot, Step> {
+        self.eval_source_in(source, strict, false)
+    }
+
+    /// [`Self::eval_source`], told whether a direct eval's caller is a class
+    /// field initializer (`field`).
+    ///
+    /// A direct eval compiles in its caller's [`EvalContext`], as XS's
+    /// `fxRunEval` parses: `new.target` when the caller can construct,
+    /// `super` property access when it has a home object, and the caller's
+    /// private names through its environment. The unit runs with the
+    /// caller's function and `new.target`, which those reads consult.
+    pub(super) fn eval_source_in(
+        &mut self,
+        source: &[u16],
+        strict: bool,
+        field: bool,
+    ) -> Result<Slot, Step> {
         // Whether this is a direct eval (its declaration instantiation observes
         // the caller's lexical environment). Captured before the nested-frame
         // setup clears `eval_direct`.
         let is_direct = self.eval_direct;
+        let context = if is_direct {
+            let caller = self.cur_func;
+            let home = self
+                .functions
+                .get(&caller)
+                .map(|info| info.home)
+                .unwrap_or(crate::value::SlotIndex::NULL);
+            EvalContext {
+                strict,
+                new_target: !caller.is_null() && self.slot_is_constructor(caller),
+                super_property: !home.is_null(),
+                field,
+                private_environment: true,
+            }
+        } else {
+            EvalContext {
+                strict,
+                ..EvalContext::default()
+            }
+        };
         let compiler = match self.environment.source_compiler.clone().or_else(|| {
             self.environment
                 .shared_compiler
@@ -50,7 +87,7 @@ impl Interp {
         let raw_budget = u64::MAX - self.meter_index();
         let mut charged = 0u64;
         let mut refused = false;
-        let result = compiler.compile_source_units(source, strict, raw_budget, &mut |raw| {
+        let result = compiler.compile_eval_units(source, &context, raw_budget, &mut |raw| {
             if refused {
                 return false;
             }
@@ -140,9 +177,14 @@ impl Interp {
 
         self.result = Slot::undefined();
         self.strict = false;
-        self.cur_func = crate::value::SlotIndex::NULL;
-        self.cur_target = false;
-        self.target_func = crate::value::SlotIndex::NULL;
+        // A direct eval runs as its caller's function, so `super` finds the
+        // caller's home object and `new.target` its target (XS hands both to
+        // `fxRunScript`). An indirect eval runs as the realm's program.
+        if !is_direct {
+            self.cur_func = crate::value::SlotIndex::NULL;
+            self.cur_target = false;
+            self.target_func = crate::value::SlotIndex::NULL;
+        }
         self.pending_new_target = None;
         self.frame_slots = 0;
         self.eval_direct = false;
@@ -197,6 +239,62 @@ impl Interp {
             // A coverage gap, meter abort, step-limit, or decode fault the
             // nested unit hit: propagate as-is (honest, non-result outcome).
             other => Err(other),
+        }
+    }
+
+    /// Whether the running function is a class field initializer, which
+    /// opens with `BEGIN_STRICT_FIELD` (XS's `XS_FIELD_FLAG` frame).
+    pub(super) fn running_field_initializer(&self) -> bool {
+        let Some(start) = self
+            .functions
+            .get(&self.cur_func)
+            .and_then(|info| info.body_start)
+        else {
+            return false;
+        };
+        self.func_segments
+            .get(&self.cur_func)
+            .and_then(|&segment| self.code_segments.get(segment))
+            .and_then(|code| code.get(start))
+            .is_some_and(|&op| op == crate::Opcode::XS_CODE_BEGIN_STRICT_FIELD as u8)
+    }
+
+    /// The closure cell a direct eval's caller publishes for the private name
+    /// `id` (XS's `XS_CODE_EVAL_PRIVATE` walk of `mxEnvironment`), or `None`
+    /// when no enclosing class declares it.
+    pub(super) fn eval_private_brand(&self, id: u16) -> Option<crate::value::SlotIndex> {
+        let mut env = match (self.env.kind, self.env.value) {
+            (Kind::Reference, Payload::Reference(env)) => env,
+            _ => return None,
+        };
+        while !env.is_null() {
+            if let Some(property) = self.environment_property(env, id) {
+                let slot = self.slots.get(property);
+                if let (Kind::Closure, Payload::Reference(cell)) = (slot.kind, slot.value) {
+                    return Some(cell);
+                }
+            }
+            env = self.instance_prototype(env);
+        }
+        None
+    }
+
+    /// Bind scope closure `k`, a direct eval's private name, to the class's
+    /// brand cell, both in the frame and in the environment the eval already
+    /// published, so a nested eval finds the same brand.
+    pub(super) fn alias_eval_private(&mut self, k: usize, brand: crate::value::SlotIndex) {
+        let id = self.local_index(k).map(|i| self.locals[i].id);
+        self.repoint_closure(k, brand);
+        let (Some(id), Kind::Reference, Payload::Reference(env)) =
+            (id, self.env.kind, self.env.value)
+        else {
+            return;
+        };
+        if let Some(property) = self.environment_property(env, id) {
+            let slot = self.slots.get_mut(property);
+            if slot.kind == Kind::Closure {
+                slot.value = Payload::Reference(brand);
+            }
         }
     }
 

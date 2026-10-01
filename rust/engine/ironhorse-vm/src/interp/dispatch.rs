@@ -330,6 +330,9 @@ impl Interp {
                 XS_CODE_EVAL_ENVIRONMENT | XS_CODE_PROGRAM_ENVIRONMENT => {
                     dispatch_flow!(self.exec_eval_environment(code, pc, return_depth, size), pc)
                 }
+                XS_CODE_EVAL_PRIVATE => {
+                    dispatch_flow!(self.exec_eval_private(code, pc, return_depth, ilen), pc)
+                }
                 XS_CODE_EVAL_REFERENCE | XS_CODE_PROGRAM_REFERENCE => {
                     dispatch_flow!(self.exec_eval_reference(code, pc, return_depth, ilen), pc)
                 }
@@ -1406,6 +1409,56 @@ impl Interp {
         std::rc::Rc::make_mut(&mut self.id_map).clear();
         pc += size as usize;
         Flow::Next(pc)
+    }
+
+    // `eval_private` (xsRun.c:XS_CODE_EVAL_PRIVATE): a direct eval's private
+    // name, found as the closure its caller's environment publishes; the
+    // following `CONST_CLOSURE` binds it. A name no enclosing class declares
+    // is XS's SyntaxError.
+    /// The dispatch loop's `EVAL_PRIVATE` arm.
+    #[inline(never)]
+    fn exec_eval_private(
+        &mut self,
+        code: &[u8],
+        pc: usize,
+        return_depth: usize,
+        ilen: usize,
+    ) -> Flow {
+        use Opcode::*;
+        let name = operand_id(code, pc, 1);
+        let Some(brand) = self.eval_private_brand(name) else {
+            let error = self.internal_error(
+                "SyntaxError",
+                format!("eval {}: undefined private property", self.id_name(name)),
+            );
+            dispatch_halt_flow!(self.raise_js(error), self, return_depth, code);
+        };
+        // The coder always follows `EVAL_PRIVATE` with the `CONST_CLOSURE`
+        // that binds the eval's private name. Bind it here, to the brand's
+        // own cell, since a brand is its cell's identity, not a value it
+        // holds: the brand never enters the stack, where another
+        // `CONST_CLOSURE` could bind it. The bound instruction is metered and
+        // counted as XS dispatches it, and `undefined` stands for the value
+        // its `POP` drops.
+        let next = pc + ilen;
+        let bind = code
+            .get(next)
+            .copied()
+            .and_then(Opcode::from_u8)
+            .filter(|op| {
+                matches!(op, XS_CODE_CONST_CLOSURE_1 | XS_CODE_CONST_CLOSURE_2)
+                    && next + op.size() as usize <= code.len()
+            });
+        let Some(bind) = bind else {
+            return Flow::Exit(Step::Host(Halt::EngineInvariant("eval_private:unbound")));
+        };
+        let k = self.closure_index(bind, code, next);
+        self.alias_eval_private(k, brand);
+        self.meter.tick_code();
+        self.n_dispatched += 1;
+        self.cost.on_dispatch(bind);
+        self.push(Slot::undefined());
+        Flow::Next(next + bind.size() as usize)
     }
 
     /// The dispatch loop's `EVAL_REFERENCE` arm, which also runs `PROGRAM_REFERENCE`.

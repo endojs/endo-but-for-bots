@@ -257,6 +257,18 @@ impl<'a> Parser<'a> {
         })
     }
 
+    /// Seed the program-level flags a direct eval inherits from its caller
+    /// (`super`, `new.target`): XS's `fxRunEval` passes them to the parse.
+    pub(crate) fn add_flags(&mut self, flags: u32) {
+        self.flags |= flags;
+    }
+
+    /// Whether the parsed program refers to `arguments` outside any
+    /// non-arrow function.
+    pub(crate) fn uses_arguments(&self) -> bool {
+        self.flags & flags::ARGUMENTS != 0
+    }
+
     /// Allocate identities at every construction site, including nodes built
     /// off the stack. IDs need not be contiguous after cover-grammar rewrites.
     fn new_node(
