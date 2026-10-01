@@ -19,7 +19,6 @@ less a margin.
 import argparse
 from pathlib import Path
 import sys
-import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_probe  # noqa: E402
@@ -32,7 +31,6 @@ CONFIGS = {
     "500-eager": (f"--stack-size={common.CHROMIUM_WORKER_STACK_KB}", "--wasm-tiering-budget=2000000000"),
 }
 PINNED_CONFIGS = [f"{PINNED_STACK}-liftoff", f"{PINNED_STACK}-turbofan"]
-SHADOW_MARGIN = 64 * 1024
 
 
 def expected_path(config, function=None):
@@ -40,53 +38,14 @@ def expected_path(config, function=None):
     return common.LANES / f"expected-traps/node-{config}{suffix}.json"
 
 
-def run_config(config, flags, selected, native, wasm, args, function=None):
-    """One configuration over the selected cases: verdicts, records and problems."""
+def run_config(config, flags, selected, wasm, args, function=None):
+    """One configuration over the selected cases: its report and problems."""
     label = config if function is None else f"{config} fn{function}"
     cfg = {"v8_flags": list(flags), "shadow_stack": args.shadow_stack}
-    expected = common.ExpectedTraps(expected_path(config, function), cfg)
-    if not expected.config_matches():
-        if not args.update_expected:
-            raise SystemExit(f"{expected.path} was recorded with {expected.recorded_config}, not {cfg}; "
-                             "pass --update-expected to re-record it")
-        if args.case or args.shard != "all":
-            raise SystemExit(f"re-recording {expected.path} under a new configuration needs the whole "
-                             "corpus: --shard all and no --case")
-    results, records, marks = {}, {}, {}
-    width = max(len(c["name"]) for c in selected)
-    for case in selected:
-        probe_args = ["case", case["name"]]
-        t0 = time.monotonic()
-        try:
-            ref = args.reference[case["name"]]
-            host = common.run_node(wasm, probe_args, v8_flags=flags, paint=args.paint)
-        except common.HarnessError as error:
-            raise SystemExit(f"lane B ({label}) cannot run {case['name']}: {error}") from None
-        verdict = common.classify(case["name"], ref, host, expected.names)
-        results[case["name"]] = verdict
-        records[case["name"]] = {"host": host.as_dict(), "verdict": verdict,
-                                 "seconds": round(time.monotonic() - t0, 3)}
-        if host.shadow_stack is not None:
-            marks[case["name"]] = host.shadow_stack
-        if host.shadow_stack_top is not None and host.shadow_stack_top != args.shadow_stack:
-            raise SystemExit(f"the probe was linked with a {host.shadow_stack_top} B shadow stack, not "
-                             f"{args.shadow_stack}; pass --shadow-stack {host.shadow_stack_top}")
-        print(f"{label:22s} {case['name']:{width}s}  {verdict}", flush=True)
-    problems, trapped, undecided = common.summarize(results)
-    if args.update_expected:
-        problems, wrote = expected.update([c["name"] for c in selected], trapped, problems,
-                                          args.allow_grow, undecided)
-        if wrote:
-            print(f"wrote {expected.path} ({len(expected.names)} expected traps)")
-    limit = args.shadow_stack - SHADOW_MARGIN
-    for name, mark in sorted(marks.items(), key=lambda kv: -kv[1]):
-        if mark > limit:
-            problems.append(f"{name}: shadow stack {mark} B exceeds the linked {args.shadow_stack} B less "
-                            f"the {SHADOW_MARGIN} B margin ({label})")
-    passed = sum(1 for v in results.values() if v == "pass")
-    print(f"lane B {label}: {passed} pass, {len(trapped)} trap ({len(trapped & expected.names)} expected) "
-          f"of {len(results)}" + (f"; shadow stack peak {max(marks.values())} B" if marks else ""))
-    return {"config": cfg, "cases": records, "problems": problems, "shadow_stack": marks}, problems
+    expected = common.lane_b_expected(expected_path(config, function), cfg, args)
+    return common.run_lane_b(
+        "lane B", label, f"{label:22s}", expected, selected, args.reference,
+        lambda name: common.run_node(wasm, ["case", name], v8_flags=flags, paint=args.paint), args)
 
 
 def main():
@@ -138,11 +97,11 @@ def main():
         if config == "500-eager":
             for function in args.eager_function:
                 result, problems = run_config(config, flags + (f"--wasm-eager-tier-up-function={function}",),
-                                              selected, native, wasm, args, function)
+                                              selected, wasm, args, function)
                 report["configs"][f"{config}-fn{function}"] = result
                 all_problems += problems
         else:
-            result, problems = run_config(config, flags, selected, native, wasm, args)
+            result, problems = run_config(config, flags, selected, wasm, args)
             report["configs"][config] = result
             all_problems += problems
     if args.output:

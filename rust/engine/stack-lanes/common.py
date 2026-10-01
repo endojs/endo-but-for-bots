@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import resource
 import subprocess
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 LANES = ROOT / "stack-lanes"
@@ -284,6 +285,69 @@ class ExpectedTraps:
         self.names = untested | trapped
         write_json(self.path, {"config": self.config, "expected_traps": sorted(self.names)})
         return [p for p in problems if not resolved_by_update(p, allow_grow)], True
+
+
+# ---- lane B, shared by its hosts (lane_b_node.py, lane_b_workerd.py) ----
+
+# A painted shadow-stack mark must stay this far under the linked size.
+LANE_B_SHADOW_MARGIN = 64 * 1024
+
+
+def lane_b_expected(path, cfg, args):
+    """The expected-trap list of one lane B configuration. A list recorded
+    under another configuration is refused, and is re-recorded only from the
+    whole corpus."""
+    expected = ExpectedTraps(path, cfg)
+    if not expected.config_matches():
+        if not args.update_expected:
+            raise SystemExit(f"{expected.path} was recorded with {expected.recorded_config}, not {cfg}; "
+                             "pass --update-expected to re-record it")
+        if args.case or args.shard != "all":
+            raise SystemExit(f"re-recording {expected.path} under a new configuration needs the whole "
+                             "corpus: --shard all and no --case")
+    return expected
+
+
+def run_lane_b(lane, label, row_label, expected, selected, reference, run_case, args):
+    """One lane B configuration over the selected cases, the same for every
+    host: `run_case(name)` runs a case on the host and returns its Outcome.
+    Each case is classified against the native reference and the expected-trap
+    list, the list is updated with --update-expected, and every painted
+    shadow-stack mark must leave LANE_B_SHADOW_MARGIN under the linked size.
+    Returns the configuration's report and its problems."""
+    results, records, marks = {}, {}, {}
+    width = max(len(c["name"]) for c in selected)
+    for case in selected:
+        t0 = time.monotonic()
+        try:
+            host = run_case(case["name"])
+        except HarnessError as error:
+            raise SystemExit(f"{lane} ({label}) cannot run {case['name']}: {error}") from None
+        verdict = classify(case["name"], reference[case["name"]], host, expected.names)
+        results[case["name"]] = verdict
+        records[case["name"]] = {"host": host.as_dict(), "verdict": verdict,
+                                 "seconds": round(time.monotonic() - t0, 3)}
+        if host.shadow_stack is not None:
+            marks[case["name"]] = host.shadow_stack
+        if host.shadow_stack_top is not None and host.shadow_stack_top != args.shadow_stack:
+            raise SystemExit(f"the probe was linked with a {host.shadow_stack_top} B shadow stack, not "
+                             f"{args.shadow_stack}; pass --shadow-stack {host.shadow_stack_top}")
+        print(f"{row_label} {case['name']:{width}s}  {verdict}", flush=True)
+    problems, trapped, undecided = summarize(results)
+    if args.update_expected:
+        problems, wrote = expected.update([c["name"] for c in selected], trapped, problems,
+                                          args.allow_grow, undecided)
+        if wrote:
+            print(f"wrote {expected.path} ({len(expected.names)} expected traps)")
+    limit = args.shadow_stack - LANE_B_SHADOW_MARGIN
+    for name, mark in sorted(marks.items(), key=lambda kv: -kv[1]):
+        if mark > limit:
+            problems.append(f"{name}: shadow stack {mark} B exceeds the linked {args.shadow_stack} B less "
+                            f"the {LANE_B_SHADOW_MARGIN} B margin ({label})")
+    passed = sum(1 for v in results.values() if v == "pass")
+    print(f"{lane} {label}: {passed} pass, {len(trapped)} trap ({len(trapped & expected.names)} expected) "
+          f"of {len(results)}" + (f"; shadow stack peak {max(marks.values())} B" if marks else ""))
+    return {"config": expected.config, "cases": records, "problems": problems, "shadow_stack": marks}, problems
 
 
 def select_cases(cases, names, shard, slow_cases):
