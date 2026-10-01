@@ -117,6 +117,15 @@ export const makeSocketPowers = ({ net, chmod }) => {
 
   return harden({
     connectPath: path => wrap(net.createConnection(path)),
+    probePath: path =>
+      new Promise(resolve => {
+        const socket = net.createConnection(path);
+        socket.once('connect', () => {
+          socket.destroy();
+          resolve(true);
+        });
+        socket.once('error', () => resolve(false));
+      }),
     listenPath: async ({ path, mode, onConnection, onError }) => {
       const server = net.createServer();
       server.on('connection', socket => onConnection(wrap(socket)));

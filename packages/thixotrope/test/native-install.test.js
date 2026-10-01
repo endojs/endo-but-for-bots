@@ -89,11 +89,13 @@ test.serial(
       '0',
     );
     const status = await host.client.call('status');
-    // The two installed here; the clock the supervisor provides is native too.
+    // The two installed here; the clock and the control socket the
+    // supervisor provides are native too.
     const managers = status.workers.filter(
       worker =>
         worker.debugLabel?.startsWith('native:') &&
-        worker.debugLabel !== 'native:clock',
+        worker.debugLabel !== 'native:clock' &&
+        worker.debugLabel !== 'native:control',
     );
     t.is(managers.length, 2);
     t.not(managers[0].workerId, managers[1].workerId);
@@ -410,11 +412,12 @@ test.serial(
     t.teardown(() => rm(path, { recursive: true, force: true }));
     let host = await serve(t, path);
     const store = makeFsStore(powers, path);
-    // What the supervisor provides: the clock's two bundles and the
-    // mailbox's one, all still in the store at the start that installed
-    // them; a bundle leaves the store only at a later start's sweep.
+    // What the supervisor provides: the clock's and the control socket's
+    // two bundles each and the mailbox's one, all still in the store at the
+    // start that installed them; a bundle leaves the store only at a later
+    // start's sweep.
     const provided = store.listBundles();
-    t.is(provided.length, 3);
+    t.is(provided.length, 5);
     await host.client.call(
       'installNative',
       'one',
@@ -438,11 +441,11 @@ test.serial(
     await host.supervisor.close();
     host = await serve(t, path);
     // The orphan and the bundles whose vats hold their code are freed; the
-    // two a launcher names, the clock's and the installation's ephemeral
-    // bundles, are kept.
+    // three a launcher names, the clock's, the control socket's and the
+    // installation's ephemeral bundles, are kept.
     const kept = store.listBundles();
-    t.is(kept.length, 2);
-    t.is(kept.filter(digest => provided.includes(digest)).length, 1);
+    t.is(kept.length, 3);
+    t.is(kept.filter(digest => provided.includes(digest)).length, 2);
     t.is(kept.filter(digest => installed.includes(digest)).length, 1);
     t.true(await host.client.call('remove', 'one'));
     host.client.close();
@@ -545,7 +548,7 @@ test.serial(
     const listed = await host.client.call('installations');
     t.deepEqual(
       listed.map((/** @type {{name: string}} */ entry) => entry.name).sort(),
-      ['clock', 'mailbox', 'one'],
+      ['clock', 'control', 'mailbox', 'one'],
       'the index lists what the registry held',
     );
     const one = listed.find(

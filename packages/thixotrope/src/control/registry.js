@@ -22,6 +22,8 @@ import { makeSerialQueue } from '../serial-queue.js';
  * @property {string} allocationKey the host's idempotent vat allocation key
  * @property {ReadonlyArray<string[]>} [grants] `[power, inventory key]`
  *   pairs, resolved in the workspace before any vat exists
+ * @property {Record<string, unknown>} [powers] powers the host provides
+ *   the installation beside its grants, by name
  * @property {any} [access] the workspace's access facet, with the workspace
  * @property {string} [bundleDigest] an application's bundle, in the store
  * @property {string} [durableDigest] a native resource's durable bundle
@@ -104,6 +106,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
       workspace: M.string(),
       access: M.remotable('workspace'),
       grants: GrantsShape,
+      powers: M.recordOf(M.string(), M.remotable()),
       bundleDigest: DigestShape,
       durableDigest: DigestShape,
       ephemeralDigest: DigestShape,
@@ -267,6 +270,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
             entry.workerId,
             durableDigest,
             ephemeralDigest,
+            entry.powers,
           ),
         );
       } finally {
@@ -390,14 +394,19 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
             typeof request.ephemeralDigest === 'string') ||
             Fail`A native resource names its two bundles`;
         }
-        // Grants are checked before any vat exists, in the workspace.
+        // Grants are checked before any vat exists, in the workspace; what
+        // the host provides comes beside them, under names of its own.
         /** @type {Record<string, unknown>} */
-        let powers = harden({});
+        let granted = harden({});
         if (access !== undefined) {
-          powers = await E(access).lookupGrants(canonical);
+          granted = await E(access).lookupGrants(canonical);
           !(await E(access).has(name)) ||
             Fail`Inventory name is already occupied`;
         }
+        const provided = request.powers ?? harden({});
+        for (const power of Object.keys(provided))
+          !(power in granted) || Fail`Duplicate power name`;
+        const powers = harden({ ...provided, ...granted });
         entry = {
           workspace,
           kind,

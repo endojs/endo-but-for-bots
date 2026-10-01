@@ -11,12 +11,15 @@ import { passStyleOf } from '@endo/pass-style';
  * @param {any} makeManagerKit the manager kit factory, bound here to this
  *   installation's launcher and keeper
  * @param {any} adapters
+ * @param {Record<string, unknown>} [powers] what the installation was
+ *   granted and provided, by name, beside the kit's own
  */
 export const makeNativeManager = (
   load,
   makeKeeper,
   makeManagerKit,
   adapters,
+  powers = harden({}),
 ) => {
   // A module's facets are checked, not marshalled: a value that is not even
   // passable is refused with the contract's message, not the marshaller's.
@@ -32,8 +35,13 @@ export const makeNativeManager = (
     const namespace = load();
     if (typeof namespace.make !== 'function')
       throw Error('Native durable module must export make(powers)');
+    for (const name of ['adapters', 'makeKeeper', 'makeManager']) {
+      if (name in powers)
+        throw Error(`A native module's power cannot be named ${name}`);
+    }
     const kit = namespace.make(
       harden({
+        ...powers,
         makeKeeper,
         adapters,
         /** @param {any} options */

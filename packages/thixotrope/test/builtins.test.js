@@ -8,16 +8,31 @@ import { join } from 'node:path';
 import { serveThixotrope } from '../src/control/supervisor.js';
 import { connectLocalControl } from '../src/control/local-control.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
+import { makeLogPowers } from '../src/platform/logging.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
 
 const powers = makeNodePowers();
+/** The supervisor's diagnostics, for what a start says of its socket. */
+/** @type {string[]} */
+const diagnostics = [];
+const observed = harden({
+  ...powers,
+  logging: makeLogPowers({
+    log: (...args) => powers.logging.log(...args),
+    info: () => {},
+    error: (...args) => {
+      diagnostics.push(args.map(String).join(' '));
+      powers.logging.error(...args);
+    },
+  }),
+});
 
 /**
  * @param {import('ava').ExecutionContext} t
  * @param {string} path
  */
 const start = async (t, path) => {
-  const supervisor = await serveThixotrope(powers, path, {
+  const supervisor = await serveThixotrope(observed, path, {
     engine: harden({
       ...makePeerJournalReplayEngine(powers),
       acquireStore: async () => async () => {},
@@ -43,6 +58,21 @@ test.serial(
     t.teardown(() => rm(path, { recursive: true, force: true }));
     let host = await start(t, path);
     t.teardown(() => host.stop());
+    // The control socket this connection came through is the resource's,
+    // not the host's own listener.
+    t.false(
+      diagnostics.some(line => line.includes('control socket served by')),
+      diagnostics.join('\n'),
+    );
+    t.like(
+      (await host.client.call('installations')).find(
+        (/** @type {{name: string}} */ entry) => entry.name === 'control',
+      ),
+      { kind: 'native', digest: 'builtin:control', status: 'ready' },
+    );
+    await t.throwsAsync(() => host.client.call('remove', 'control'), {
+      message: /cannot be removed/,
+    });
     const listed = await host.client.call('installations');
     t.like(
       listed.find(entry => entry.name === 'clock'),

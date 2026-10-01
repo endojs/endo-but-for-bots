@@ -18,6 +18,9 @@
  * an empty record of powers and returns the adapter root the manager talks
  * to.
  *
+ * Beside these, a durable module receives what its installation was
+ * granted from the inventory and provided by the host, by name.
+ *
  * @typedef {object} NativeDurablePowers
  * @property {any} adapters the launcher: `create()` starts a fresh adapter
  *   process from this installation and returns its incarnation, whose

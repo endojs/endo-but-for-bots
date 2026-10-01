@@ -15,6 +15,7 @@ import { makeManager } from '../src/native/manager-kit.js';
 import { makeNativeManager } from '../src/native/manager.js';
 import { makeObservableMap } from '../src/observable-map.js';
 import { make as makeClock } from '../resources/clock/durable.js';
+import { make as makeControl } from '../resources/control/durable.js';
 
 /**
  * The supervisor ships these factories into vats as source, by
@@ -162,4 +163,42 @@ test('the clock the supervisor provides is whole', async t => {
   t.deepEqual(await E(kit.facet).status(), { pending: 1 });
   t.true(await E(canceller).cancel());
   t.deepEqual(await E(kit.facet).status(), { pending: 0 });
+});
+
+test('the control socket the supervisor provides is whole', async t => {
+  // A launcher whose adapter takes every registration, so the facet reports
+  // a listener it never opened.
+  const adapters = Far('Launcher', {
+    create: () =>
+      Far('Incarnation', {
+        getRoot: () =>
+          Far('Adapter', {
+            bind: () => undefined,
+            unbind: () => true,
+            restore: () => harden([]),
+            keys: () => harden([]),
+          }),
+        retire: () => {},
+      }),
+  });
+  const admin = Far('Admin', { connect: () => Far('Connection', {}) });
+  const kit = evaluateShipped(makeControl)(
+    harden({
+      admin,
+      makeManager: (/** @type {any} */ options) =>
+        makeManager({ adapters, makeKeeper: makeAdapterKeeper }, options),
+    }),
+  );
+  assertInterface(t, kit.facet, 'ControlSocket');
+  t.deepEqual(await E(kit.facet).status(), { status: 'closed' });
+  t.like(await E(kit.facet).serve('/tmp/control.sock'), {
+    path: '/tmp/control.sock',
+    status: 'listening',
+  });
+  t.like(await E(kit.facet).serve('/tmp/control.sock'), {
+    status: 'listening',
+  });
+  t.true(await E(kit.facet).close());
+  t.false(await E(kit.facet).close());
+  t.deepEqual(await E(kit.facet).status(), { status: 'closed' });
 });

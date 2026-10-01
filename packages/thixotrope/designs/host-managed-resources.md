@@ -89,7 +89,7 @@ registry and handed to every workspace, and the mailbox is provided to each.
 The default's name is fixed; the table is a cache of the names served, so a row naming a vat that
 is gone is dropped, the installations of that vat removed with it, and the name served afresh.
 
-## 3. The control socket stays host code
+## 3. The control socket stays host code (the administration does; see 8.2)
 
 The operator's control socket is a fresh OCapN session per connection whose first object is the
 administration facet.
@@ -100,6 +100,7 @@ Modelling the socket as a native resource would route repair through the thing b
 it stays in the host.
 The adapter half of the kit could still own the listening socket if one listener implementation is
 wanted, with the admin facet served by the host.
+(Section 8.2 does exactly that: the listener is the adapter's, the administration is the host's.)
 
 Two smaller changes follow:
 
@@ -417,7 +418,7 @@ test power, and `alarm-settlement.md`; section 7.1 is superseded.
 `alarmStatus` asks the clock for its count and reports `{ pending }`.
 Workspace metadata is version 9.
 
-### 8.2 The control socket
+### 8.2 The control socket (Done.)
 
 `resources/control/durable.js` is `make({ makeManager, admin })`: it registers
 one key with `{ path, admin }` and its facet reports status.
@@ -436,6 +437,31 @@ The adapter uses the package's own unix netlayer and framing, which section 6
 lists as duplicated in `local-control.js`; that file goes.
 The cost is one more hop (client, adapter, hub, target), acceptable on a local
 socket.
+
+Done, with two differences from the proposal: `admin` is not held in a vat
+but is a host resource, `control-admin`, the operator's administration as host
+code, provided to the installation as a power beside its grants (the registry
+takes `powers` from the host), so repair never routes through a vat, as
+section 3 asks; and `local-control.js` stays, as the one framing and session
+both halves share rather than a file that goes.
+Neither half takes a socket path a live listener serves: each listens first
+and reclaims only a file nobody answers at, so the host's own listener and the
+adapter's do not unlink each other (the daemon awaits its start notices, so an
+adapter rebuilt at a start has bound before the host considers the path; what
+remains is the instant between a probe and a reclaim, in which either half
+would still serve the same administration); a serve the adapter could not
+complete closes its registration, so nothing stays desired for the next
+rebuild.
+The control socket cannot be removed through itself, by either path.
+`resources/control/durable.js` keeps the one registration, `{ path, admin }`;
+`resources/control/ephemeral.js` listens with the package's own socket powers
+and `makeLocalControl`, which stays as the one framing both halves share, and
+starts each connection from `E(admin).connect()`, closing that facet with the
+connection.
+The supervisor provides `control` last and replaces one that failed, since
+it keeps nothing worth repairing; a start that cannot provide it at all (the
+registry vat quarantined) has the host listen itself, with the same framing
+and facets, so the repair path never depends on the resource.
 
 `peers.sock` stays in the host.
 It is the hub's own durable transport, correct because frames are committed

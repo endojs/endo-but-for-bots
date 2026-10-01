@@ -102,8 +102,15 @@ export const makeInstaller = ({
      * @param {string} workerId
      * @param {string} durableDigest
      * @param {string} ephemeralDigest
+     * @param {Record<string, unknown>} [powers] what the installation was
+     *   granted and provided, for its factory beside the kit's own
      */
-    installNativeModule: async (workerId, durableDigest, ephemeralDigest) => {
+    installNativeModule: async (
+      workerId,
+      durableDigest,
+      ephemeralDigest,
+      powers = harden({}),
+    ) => {
       const daemon = await daemonP;
       allocating.delete(workerId);
       const manager = daemon.getWorker(workerId);
@@ -131,12 +138,12 @@ export const makeInstaller = ({
           manager,
           `(endowments => {
             const result = (globalThis.nativeManager ??= (${makeNativeManager.toString()})(
-              () => (${bundle}), (${makeAdapterKeeper.toString()}), (${makeManager.toString()}), endowments.adapters
+              () => (${bundle}), (${makeAdapterKeeper.toString()}), (${makeManager.toString()}), endowments.adapters, endowments.powers
             ));
             if (result.error !== undefined) throw Error(result.error);
             return result.kit;
           })`,
-          { adapters },
+          { adapters, powers },
         );
       }
       // The lifecycle facet stays private to the manager and the host: the
