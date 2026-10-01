@@ -41,10 +41,13 @@ const makeFake = (name, methods) =>
 /**
  * @param {string} label
  * @param {unknown[][]} calls
+ * @param {string} [formulaNumber] - the number the guest names itself by.
  */
-const makeFakeGuest = (label, calls) =>
+const makeFakeGuest = (label, calls, formulaNumber = '00'.repeat(32)) =>
   makeFake('EndoGuest', {
     help: () => `help for ${label}`,
+    identify: name =>
+      name === '@agent' ? `${formulaNumber}:${NODE}` : undefined,
     has: () => false,
     list: () => {
       calls.push([label, 'list']);
@@ -190,6 +193,49 @@ test('the confined process has no daemon socket and no credential in its MCP chi
   // merged its whole environment into the spawn.
   t.deepEqual(report.mcpChildEnviron, []);
   t.false(report.mcpChildHasCredential);
+});
+
+test('a confined turn over a daemon-issued guest socket holds no host', async t => {
+  /** @type {unknown[][]} */
+  const calls = [];
+  let closes = 0;
+  const closed = makePromiseKit();
+  const { result, leftovers } = await turn({
+    connect: async () =>
+      harden({
+        guest: makeFakeGuest('scoped', calls, FORMULA_ID),
+        closed: closed.promise,
+        close: () => {
+          closes += 1;
+        },
+      }),
+  });
+  t.is(result.type, 'ok', JSON.stringify(result));
+  const report = JSON.parse(/** @type {any} */ (result).text);
+  t.true(JSON.stringify(report.call.result).includes('scoped-name'));
+  t.deepEqual(calls, [['scoped', 'list']]);
+  t.is(closes, 1);
+  t.deepEqual(leftovers, []);
+});
+
+test('by default a turn connects to its guest socket, not the root socket', async t => {
+  const parentDir = fs.mkdtempSync('/tmp/ect-');
+  t.teardown(() => fs.rmSync(parentDir, { recursive: true, force: true }));
+  const guestSockPath = `${parentDir}/absent-guest.sock`;
+  const error = await t.throwsAsync(
+    runConfinedTurn({
+      formulaId: FORMULA_ID,
+      credential: CREDENTIAL,
+      prompt: '{}',
+      model: MODEL,
+      claudePath: FAKE_CLAUDE,
+      guestSockPath,
+      parentDir,
+    }),
+  );
+  t.true(String(error?.message).includes(guestSockPath));
+  t.false(String(error?.message).includes(DAEMON_SOCK));
+  t.deepEqual(fs.readdirSync(parentDir), []);
 });
 
 test('a formula that is not a guest fails closed before any spawn', async t => {

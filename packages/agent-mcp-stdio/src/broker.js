@@ -26,12 +26,17 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { makeGuestMcpServer, resolveGuest, readFormulaId } from './server.js';
+import {
+  makeGuestMcpServer,
+  resolveGuest,
+  resolveScopedGuest,
+  readFormulaId,
+} from './server.js';
 import { makeAgentTools } from './agent-interface.js';
 import { serveStdio } from './stdio.js';
 
 /** @import { ToolDeclaration } from '@endo/agent-tools/adapters/mcp.js' */
-/** @import { DaemonConnection } from './types.js' */
+/** @import { DaemonConnection, GuestConnection } from './types.js' */
 
 /** The plain-Node relay the confined `claude` spawns (no SES, no imports but Node's). */
 export const RELAY_PATH = fileURLToPath(
@@ -74,11 +79,17 @@ harden(makeRelayTransport);
 /**
  * Stand up a broker for one guest over an already-open daemon connection.
  *
+ * The connection is either a guest-scoped session on a daemon-issued guest
+ * socket (`connectToGuestBootstrap`), whose bootstrap is the one guest and
+ * which carries no host, or a root-host session (`connectToDaemon`), which
+ * the broker narrows to the one guest by `lookupById`. Either way every call
+ * dispatches to that one guest.
+ *
  * The caller owns `connection`; `close()` stops the listener and removes the
  * private directory but does not close the connection.
  *
  * @param {object} options
- * @param {DaemonConnection} options.connection
+ * @param {GuestConnection | DaemonConnection} options.connection
  * @param {string} options.formulaId - the guest's 64-hex formula number (or
  *   `<number>:<node>`).
  * @param {string} options.version - reported as the MCP server version.
@@ -101,7 +112,10 @@ export const startGuestBroker = async ({
 }) => {
   // The same validation the single-tenant server applies to its environment.
   readFormulaId({ ENDO_GUEST_FORMULA_ID: formulaId });
-  const guest = await resolveGuest(connection.host, formulaId);
+  const guest =
+    'guest' in connection
+      ? await resolveScopedGuest(connection.guest, formulaId)
+      : await resolveGuest(connection.host, formulaId);
   // Validates the static catalog once, before anything listens.
   const { catalog } = makeGuestMcpServer({ guest, version, tools });
 

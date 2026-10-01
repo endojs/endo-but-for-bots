@@ -15,6 +15,7 @@ import { makeNodeReader, makeNodeWriter } from '@endo/stream-node';
 import { makeNetstringCapTP } from './connection.js';
 import { makePetStoreMaker } from './pet-store.js';
 import { servePrivatePath } from './serve-private-path.js';
+import { makeGuestPathIssuer } from './serve-guest-path.js';
 import {
   claimSocketLock,
   releaseSocketLock,
@@ -129,7 +130,7 @@ export const gunzip = async bytes => {
 
 /** @import { Reader, Writer } from '@endo/stream' */
 /** @import { ERef, FarRef } from '@endo/eventual-send' */
-/** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
+/** @import { CapTpConnectionRegistrar, Config, CryptoPowers, DaemonWorkerFacet, DaemonicPersistencePowers, DaemonicPowers, EndoReadable, FilePowers, Formula, FormulaNumber, GuestPathIssuer, NetworkPowers, SocketPowers, WorkerDaemonFacet } from './types.js' */
 /** @import { DaemonDatabase } from './manager-database.js' */
 
 /**
@@ -1236,5 +1237,51 @@ export const makeDaemonicPowers = async ({
       registryUrl: config.registryUrl,
     }),
     hostTools: makeNodeHostToolPowers(),
+  });
+};
+
+/**
+ * Serve guest-scoped bootstraps from a private directory beside the daemon's
+ * own socket, whose path is already chosen to fit a Unix socket address.
+ * Windows named pipes have no directory to make private, so there the daemon
+ * serves none.
+ *
+ * @param {object} powers
+ * @param {typeof import('fs')} powers.fs
+ * @param {typeof import('path')} powers.path
+ * @param {SocketPowers['servePath']} powers.servePath
+ * @param {string} powers.sockPath - the daemon's own socket.
+ * @param {Promise<never>} powers.cancelled
+ * @param {(err: Error, errorId?: string) => void} [powers.marshalSaveError]
+ * @returns {GuestPathIssuer | undefined}
+ */
+export const makeNodeGuestPathIssuer = ({
+  fs,
+  path,
+  servePath,
+  sockPath,
+  cancelled,
+  marshalSaveError,
+}) => {
+  if (process.platform === 'win32') return undefined;
+  const directory = path.join(
+    path.dirname(sockPath),
+    `${path.basename(sockPath, '.sock')}-guests`,
+  );
+  return makeGuestPathIssuer({
+    directory,
+    socketPathFor: name => path.join(directory, name),
+    makePrivateDirectory: async dir => {
+      await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+      await fs.promises.chmod(dir, 0o700);
+    },
+    servePath,
+    cancelled,
+    // A failed guest socket is that guest's harness's problem, not a reason
+    // to stop the daemon.
+    reportError: error => {
+      console.error('Endo daemon guest socket error:', error);
+    },
+    marshalSaveError,
   });
 };

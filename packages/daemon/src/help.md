@@ -478,6 +478,15 @@ workers read the same archive content directly from the CAS.
 Cancel a value, triggering cleanup and releasing resources.
 Cancellation propagates to dependent values.
 
+## guestBootstrapPath(id) -> Promise<string>
+
+Serve one local guest on its own private Unix socket and return the path.
+A connection to that socket bootstraps to the guest facet itself, so it
+reaches that guest and nothing else: no host, no enumeration of other
+formulas. Issuing again for the same guest returns the same path. The socket
+lives until the daemon stops. The id is a guest formula identifier or a bare
+formula number on this node.
+
 ## greeter() -> Promise<EndoGreeter>
 
 Get the greeter for accepting network connections.

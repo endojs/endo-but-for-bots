@@ -16,6 +16,19 @@ export type DaemonConnection = {
   close: (reason?: Error) => void;
 };
 
+/**
+ * An open session on a daemon-issued guest socket, as
+ * `connectToGuestBootstrap` returns it. The socket's bootstrap is the one
+ * guest facet; the session carries no host.
+ */
+export type GuestConnection = {
+  /** The guest facet the socket bootstraps to. */
+  guest: unknown;
+  /** Settles when the connection drops. */
+  closed: Promise<unknown>;
+  close: (reason?: Error) => void;
+};
+
 /** A record of JSON-primitive fields, as a `claude -p` stream carries them. */
 export type PrimitiveRecord = Record<string, string | number | boolean | null>;
 

@@ -1008,6 +1008,7 @@ export const EndoInterface = M.interface('Endo', {
   terminate: M.call().returns(M.promise()),
   host: M.call().returns(M.promise()),
   leastAuthority: M.call().returns(M.promise()),
+  guestBootstrapPath: M.call(IdShape).returns(M.promise()),
   greeter: M.call().returns(M.promise()),
   gateway: M.call().returns(M.promise()),
   nodeId: M.call().returns(M.string()),
