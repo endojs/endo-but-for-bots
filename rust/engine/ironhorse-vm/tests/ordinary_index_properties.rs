@@ -207,6 +207,98 @@ fn an_accessor_on_an_index_promotes_and_keeps_its_attributes() {
     );
 }
 
+/// A promoted index keeps its place among the integer keys. The store lists
+/// its indices and the named chain its names, so `[[OwnPropertyKeys]]` and
+/// `for-in` emitted a promoted `"2"` after a stored `3` — `0+3+2` where XS
+/// (one indexed chunk, `fxOrdinaryOwnKeys`) and OrdinaryOwnPropertyKeys give
+/// `0+2+3`. `for-in` also kept an exotic shape's index expandos in insertion
+/// order, and counted a stored index and a named one as two keys, so a
+/// shadowed index was yielded twice.
+#[test]
+fn a_promoted_index_keeps_its_place_among_the_integer_keys() {
+    let promoted = "var o = {0: 1, 2: 3, 3: 4, b: 1}; \
+         Object.defineProperty(o, '2', {get: function () { return 9; }, \
+             enumerable: true, configurable: true}); \
+         o[1] = 7; o.a = 2;";
+    for (probe, expected) in [
+        ("Object.keys(o).join('+')", "0+1+2+3+b+a"),
+        ("Object.getOwnPropertyNames(o).join('+')", "0+1+2+3+b+a"),
+        ("Reflect.ownKeys(o).join('+')", "0+1+2+3+b+a"),
+        (
+            "Object.entries(o).map(function (e) { return e[0]; }).join('+')",
+            "0+1+2+3+b+a",
+        ),
+        (
+            "JSON.stringify(o)",
+            r#"{"0":1,"1":7,"2":9,"3":4,"b":1,"a":2}"#,
+        ),
+        (
+            "var r = []; for (var k in o) r.push(k); r.join('+')",
+            "0+1+2+3+b+a",
+        ),
+        // Inherited keys follow every own key, index keys first per level.
+        (
+            "var p = Object.create(o); p[5] = 1; p.q = 1; \
+             Object.defineProperty(p, '4', {get: function () {}, enumerable: true}); \
+             var r = []; for (var k in p) r.push(k); r.join('+')",
+            "4+5+q+0+1+2+3+b+a",
+        ),
+    ] {
+        assert_result(&format!("{promoted} {probe}"), expected);
+    }
+    // An object `JSON.parse` built keeps its indices in the store too.
+    assert_result(
+        "var j = JSON.parse('{\"3\":1,\"1\":2}'); \
+         Object.defineProperty(j, '1', {get: function () { return 5; }, \
+             enumerable: true, configurable: true}); \
+         j[0] = 0; Object.keys(j).join('+')",
+        "0+1+3",
+    );
+    // An Array's promoted item, and the index expandos an exotic shape keeps
+    // by name, are ordered the same way under `for-in`.
+    assert_result(
+        "var a = [1, 2, 3]; a.x = 1; \
+         Object.defineProperty(a, '0', {get: function () { return 0; }, \
+             enumerable: true, configurable: true}); \
+         var r = []; for (var k in a) r.push(k); r.join('+')",
+        "0+1+2+x",
+    );
+    assert_result(
+        "var m = new Map(); m[3] = 1; m.k = 1; m[1] = 1; \
+         var r = []; for (var k in m) r.push(k); r.join('+')",
+        "1+3+k",
+    );
+    assert_result(
+        "var s = new String('ab'); s[5] = 1; s.y = 1; s[3] = 1; \
+         var r = []; for (var k in s) r.push(k); r.join('+')",
+        "0+1+3+5+y",
+    );
+    // An own named (promoted) index shadows an inherited stored one, and an
+    // own stored index an inherited named one: one key either way, not two.
+    assert_result(
+        "var o = {2: 1}; var p = Object.create(o); \
+         Object.defineProperty(p, '2', {get: function () { return 0; }, \
+             enumerable: true, configurable: true}); \
+         var r = []; for (var k in p) r.push(k); r.join('+')",
+        "2",
+    );
+    assert_result(
+        "var o = {}; Object.defineProperty(o, '2', {get: function () { return 0; }, \
+             enumerable: true, configurable: true}); \
+         var p = Object.create(o); Object.defineProperty(p, '2', {value: 1, \
+             writable: true, enumerable: true, configurable: true}); \
+         var r = []; for (var k in p) r.push(k); r.join('+') + '|' + Object.keys(p).join('+')",
+        "2|2",
+    );
+    // An exotic shape's index expandos, inherited, keep the same order per
+    // level and are shadowed by an own index of the same number.
+    assert_result(
+        "var m = new Map(); m[3] = 1; m.k = 1; m[1] = 1; var o = Object.create(m); \
+         o[2] = 1; o[1] = 0; o.z = 1; var r = []; for (var k in o) r.push(k); r.join('+')",
+        "1+2+z+3+k",
+    );
+}
+
 /// Every "this index is provably absent" claim in the engine enumerates the
 /// storages an index can live in, and adding one falsifies each of them. These
 /// are the sites that got it wrong: the generic-Array answerability probe, the

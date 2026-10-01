@@ -1830,17 +1830,56 @@ impl Interp {
         // Index keys ascending, then the named chain — `fxOrdinaryOwnKeys`
         // queues the internal index chunk before `fxQueueIDKeys`. These keys
         // are spelled from the index, so listing them mints nothing.
-        for index in self.index_prop_indices(inst) {
+        for index in self.own_index_keys(inst, &ids) {
             self.charge_builtin_work(1)?;
             let key = self.read_key_slot(ReadKey::Index(index))?;
             self.push_prepaid_scratch(&mut out, key)?;
         }
         for id in ids {
+            if self.key_id_index(id).is_some() {
+                continue;
+            }
             self.charge_builtin_work(1)?;
             let key = self.property_key_slot(id)?;
             self.push_prepaid_scratch(&mut out, key)?;
         }
         Ok(out)
+    }
+
+    /// The canonical array index a key id spells, or `None` for any other
+    /// string key and for every symbol key.
+    pub(super) fn key_id_index(&self, id: u16) -> Option<u32> {
+        // Read in place: an index name is ASCII, which CESU-8 spells as
+        // itself, and every own-key walk asks this of each key. The tables
+        // must agree, as in [`Self::scalar_key_text`].
+        let name = self.symbol_names.get((id as usize).checked_sub(1)?)?;
+        if self.symbol_ids.get(name) != Some(&id) {
+            return None;
+        }
+        std::str::from_utf8(name.as_bytes())
+            .ok()
+            .and_then(string_to_index)
+    }
+
+    /// Every array-index key `inst` owns, ascending: the index store merged
+    /// with the index-NAMED slots among `ordinary_ids`.
+    ///
+    /// An ordinary object keeps an index property in the store until an
+    /// accessor descriptor promotes it to a named slot, and an exotic shape
+    /// keeps its index expandos by name throughout. XS holds every index key
+    /// in the one `XS_ARRAY_KIND` chunk, so `fxOrdinaryOwnKeys` lists them
+    /// all ahead of the named chain; listing the store and then the names put
+    /// a promoted `"2"` after a stored `3`, against OrdinaryOwnPropertyKeys.
+    pub(super) fn own_index_keys(
+        &self,
+        inst: crate::value::SlotIndex,
+        ordinary_ids: &[u16],
+    ) -> Vec<u32> {
+        let mut indices = self.index_prop_indices(inst);
+        indices.extend(ordinary_ids.iter().filter_map(|&id| self.key_id_index(id)));
+        indices.sort_unstable();
+        indices.dedup();
+        indices
     }
 
     /// An ordinary object's own key ids in `[[OwnPropertyKeys]]` order:
