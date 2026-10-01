@@ -534,7 +534,8 @@ fn dump_string(units: &[u16]) -> String {
 /// outer worklist, as an [`Item::List`], into the slot that move frees,
 /// swapped to index 0 so it resumes once the inner one is exhausted. Every
 /// push lands in a slot a pop freed, so no buffer grows, and only childless
-/// nodes ever drop.
+/// nodes ever drop. `ironhorse-vm/tests/teardown_allocation.rs` drops deep,
+/// wide and branching trees on a small stack and requires no allocation.
 impl Drop for Node {
     fn drop(&mut self) {
         if self.children.is_empty() {
@@ -581,88 +582,4 @@ impl Drop for Node {
 fn push_in_place(list: &mut Vec<Item>, item: Item) {
     debug_assert!(list.len() < list.capacity());
     list.push(item);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn node(children: Vec<Item>) -> Item {
-        Item::Node(Box::new(Node::new(Token::Add, 1, 0, children, Value::None)))
-    }
-
-    /// Drop `tree` on a thread whose stack would not hold a recursion over
-    /// it, failing rather than hanging if the teardown does not finish. Debug
-    /// builds assert in `push_in_place` that every push lands in a slot a pop
-    /// freed, so no buffer grows while the tree is freed.
-    fn drop_on_small_stack(tree: Item) {
-        let (done, finished) = std::sync::mpsc::channel();
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(move || {
-                drop(tree);
-                let _ = done.send(());
-            })
-            .expect("spawn");
-        finished
-            .recv_timeout(std::time::Duration::from_secs(60))
-            .expect("the tree drops without recursing, in bounded time");
-    }
-
-    #[test]
-    fn a_deep_chain_drops_without_recursing() {
-        // `Node::new` measures depth from its children in constant time, so
-        // the chains are built far past `TREE_DEPTH_LIMIT`, as a refused
-        // flat chain's partial tree can be.
-        let mut node_chain = Item::Null;
-        let mut mixed_chain = Item::Null;
-        for level in 0..200_000u32 {
-            node_chain = node(vec![node_chain]);
-            mixed_chain = if level % 2 == 0 {
-                node(vec![mixed_chain, Item::Null])
-            } else {
-                Item::List(vec![mixed_chain])
-            };
-        }
-        drop_on_small_stack(node_chain);
-        drop_on_small_stack(Item::List(vec![mixed_chain]));
-    }
-
-    #[test]
-    fn wide_and_branching_trees_drop_without_growing_a_buffer() {
-        let wide = node(
-            (0..10_000)
-                .map(|i| match i % 4 {
-                    0 => Item::Null,
-                    1 => Item::Symbol(vec![u16::from(b'a')]),
-                    2 => Item::List(Vec::with_capacity(8)),
-                    _ => node(Vec::new()),
-                })
-                .collect(),
-        );
-        drop_on_small_stack(wide);
-        // A comb: every level holds siblings on both sides of the next
-        // level, so each worklist is resumed with children still pending.
-        let mut comb = Item::Null;
-        for level in 0..50_000u32 {
-            comb = if level % 2 == 0 {
-                node(vec![Item::Null, comb, node(vec![Item::Null])])
-            } else {
-                Item::List(vec![Item::Symbol(Vec::new()), comb, Item::List(vec![])])
-            };
-        }
-        drop_on_small_stack(node(vec![comb]));
-        fn full(depth: u32) -> Item {
-            if depth == 0 {
-                return Item::Null;
-            }
-            let children = vec![full(depth - 1), full(depth - 1), full(depth - 1)];
-            if depth % 2 == 0 {
-                node(children)
-            } else {
-                Item::List(children)
-            }
-        }
-        drop_on_small_stack(node(vec![full(9)]));
-    }
 }

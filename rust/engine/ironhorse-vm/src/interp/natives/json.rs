@@ -77,6 +77,8 @@ impl Drop for JsonSource {
     /// into the slot that move frees, swapped to index 0 so it resumes once
     /// the inner one is exhausted. Every push lands in a slot a pop freed, so
     /// no buffer grows, and only childless nodes ever drop.
+    /// `tests/teardown_allocation.rs` drops deep, wide and branching trees on
+    /// a small stack and requires no allocation.
     fn drop(&mut self) {
         if self.child_count() == 0 {
             return;
@@ -109,6 +111,46 @@ impl Drop for JsonSource {
                 break;
             }
         }
+    }
+}
+
+/// A `JsonSource` tree built from outside the crate, for
+/// `tests/teardown_allocation.rs`, which drops trees of every shape under an
+/// allocation counter on a small stack. Not an execution API.
+#[doc(hidden)]
+pub struct JsonSourceTree(JsonSource);
+
+impl JsonSourceTree {
+    /// A primitive's source.
+    pub fn leaf() -> Self {
+        JsonSourceTree(JsonSource::Primitive {
+            original: Slot::undefined(),
+            start: 0,
+            end: 0,
+        })
+    }
+
+    /// A child with no source, as a replaced property's.
+    pub fn empty() -> Self {
+        JsonSourceTree(JsonSource::Empty)
+    }
+
+    /// An array's source over `children`.
+    pub fn array(children: Vec<JsonSourceTree>) -> Self {
+        JsonSourceTree(JsonSource::Array(
+            children.into_iter().map(|child| child.0).collect(),
+        ))
+    }
+
+    /// An object's source over `children`. Keys play no part in a teardown,
+    /// so every child is given the same one.
+    pub fn object(children: Vec<JsonSourceTree>) -> Self {
+        JsonSourceTree(JsonSource::Object(
+            children
+                .into_iter()
+                .map(|child| (ReadKey::Index(0), child.0))
+                .collect(),
+        ))
     }
 }
 
@@ -2008,103 +2050,5 @@ impl Interp {
             }
         }
         Slot::of(Kind::Reference, Payload::Reference(context))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn leaf() -> JsonSource {
-        JsonSource::Primitive {
-            original: Slot::undefined(),
-            start: 0,
-            end: 0,
-        }
-    }
-
-    /// Drop `tree` on a thread whose stack would not hold a recursion over
-    /// it, failing rather than hanging if the teardown does not finish. Debug
-    /// builds assert in `push_child_in_place` that every push lands in a slot
-    /// a pop freed, so no buffer grows while the tree is freed.
-    fn drop_on_small_stack(tree: JsonSource) {
-        let (done, finished) = std::sync::mpsc::channel();
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(move || {
-                drop(tree);
-                let _ = done.send(());
-            })
-            .expect("spawn");
-        finished
-            .recv_timeout(std::time::Duration::from_secs(60))
-            .expect("the tree drops without recursing, in bounded time");
-    }
-
-    #[test]
-    fn a_deep_chain_drops_without_recursing() {
-        let mut array_chain = leaf();
-        let mut mixed_chain = leaf();
-        for level in 0..200_000u32 {
-            array_chain = JsonSource::Array(vec![array_chain]);
-            mixed_chain = if level % 2 == 0 {
-                JsonSource::Object(vec![(ReadKey::Index(level), mixed_chain)])
-            } else {
-                JsonSource::Array(vec![mixed_chain])
-            };
-        }
-        drop_on_small_stack(array_chain);
-        drop_on_small_stack(mixed_chain);
-    }
-
-    #[test]
-    fn wide_and_branching_trees_drop_without_growing_a_buffer() {
-        // Wide: one container of many leaves and empty containers, some
-        // with spare capacity.
-        let wide = JsonSource::Array(
-            (0..10_000)
-                .map(|i| match i % 3 {
-                    0 => leaf(),
-                    1 => JsonSource::Array(Vec::new()),
-                    _ => {
-                        let mut children = vec![(ReadKey::Id(1), leaf())];
-                        children.clear();
-                        JsonSource::Object(children)
-                    }
-                })
-                .collect(),
-        );
-        drop_on_small_stack(wide);
-        // A comb: every level holds leaves on both sides of the next level,
-        // so each worklist is resumed with children still pending.
-        let mut comb = leaf();
-        for level in 0..50_000u32 {
-            comb = if level % 2 == 0 {
-                JsonSource::Array(vec![leaf(), comb, leaf(), JsonSource::Empty])
-            } else {
-                JsonSource::Object(vec![
-                    (ReadKey::Id(1), leaf()),
-                    (ReadKey::Index(level), comb),
-                    (ReadKey::Id(2), JsonSource::Array(vec![leaf(), leaf()])),
-                ])
-            };
-        }
-        drop_on_small_stack(comb);
-        // Full branching: every container holds three subtrees.
-        fn full(depth: u32) -> JsonSource {
-            if depth == 0 {
-                return leaf();
-            }
-            if depth % 2 == 0 {
-                JsonSource::Array(vec![full(depth - 1), full(depth - 1), full(depth - 1)])
-            } else {
-                JsonSource::Object(vec![
-                    (ReadKey::Id(1), full(depth - 1)),
-                    (ReadKey::Id(2), full(depth - 1)),
-                    (ReadKey::Id(3), full(depth - 1)),
-                ])
-            }
-        }
-        drop_on_small_stack(full(9));
     }
 }

@@ -71,6 +71,8 @@ pub(crate) mod host;
 mod link;
 mod native_try;
 mod natives;
+#[doc(hidden)]
+pub use natives::JsonSourceTree;
 mod persist;
 mod shared_persist;
 pub use persist::RestoreError;

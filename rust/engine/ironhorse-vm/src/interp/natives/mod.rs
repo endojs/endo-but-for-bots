@@ -8,6 +8,7 @@ mod date;
 mod dispatch;
 mod intl;
 mod json;
+pub use json::JsonSourceTree;
 mod number;
 mod promise;
 mod reflect;
