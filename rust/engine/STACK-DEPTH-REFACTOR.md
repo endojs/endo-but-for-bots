@@ -1352,7 +1352,7 @@ stacks as well.
   ([`stack-depth-prototypes/README.md` § Runtime cost](stack-depth-prototypes/README.md#runtime-cost)).
   Gate it with `benches/run.py --check-baseline`, which reads its ratio from the baseline
   (`benches/run.py:78`, `maximum = 1.25 if baseline is None else baseline["maximum_ratio"]`;
-  `benches/baseline.json:61`, `"maximum_ratio": 1.25`).
+  `benches/baseline.json:65`, `"maximum_ratio": 1.25`).
 - **Test impact:** `tests/allocation_admission_audit.rs:82`, `:385` and `:614` `include_str!`
   this file, so new files join their rosters.
 
@@ -1378,6 +1378,8 @@ stacks as well.
 
   Run `benches/run.py --check-baseline` on the A2a prototype before committing to either
   (Phase 1, §5).
+  Done at the end of Phase 1 ("As run" in §5 Phase 1): A2a stays under the 1.25× floor on all
+  seven dispatch, call and re-entry workloads.
 - **Reduction (measured with
   [`a2-dispatch-split-table.patch`](stack-depth-prototypes/a2-dispatch-split-table.patch),
   8 group functions chosen by one `match`, with A1's forEach dispatcher):**
@@ -1459,8 +1461,8 @@ stacks as well.
   The cost is the group split itself: a second `match` on the opcode per instruction, a
   non-inlined call, and a `Flow` value re-matched in the loop.
 
-  `benches/run.py` does not exercise calls or re-entry.
-  Its targets are `dispatch_bench`, `attached_bench`, `gc_bench` and `wake_latency_bench`
+  `benches/run.py` did not exercise calls or re-entry until Phase 1 added `reentry_bench` (§5).
+  Its targets were `dispatch_bench`, `attached_bench`, `gc_bench` and `wake_latency_bench`
   (`benches/run.py:16`), and `dispatch_bench.rs:52-66` times three straight-line loops:
   arithmetic, property get/set and string concatenation.
   A2 restructures the call, callback and generator paths, so its gate must add the `calls`
@@ -2283,59 +2285,53 @@ Before Phase 2 commits to A2, run `benches/run.py --check-baseline` on the A2a g
 prototype, with the `calls` fixture and a callback-heavy workload added to its targets (§4.3);
 the wall-clock figures of §4.3 are not the benchmark gate.
 
-Expected afterwards *(est.; B1, B3, B4's fast path and D1 measured; B4's generic path, B5 and
-B6 estimated)*:
+**As run (end of Phase 1):** `benches/run.py` gained a fifth target, `reentry_bench`: the
+`calls` fixture fifty times longer (`calls_ms`, a million guest calls), guest recursion
+(`recursion_ms`), a million `forEach` callbacks (`callbacks_ms`) and a million getter reads
+(`getter_ms`).
+The pinned revision of `benches/baseline.json`, 51b99651, cannot build today's `attached_bench`
+and `gc_bench`: they call the `Interp::slots` and `Interp::chunks` accessor methods, which it
+does not have.
+So `--check-baseline` against it measures the reference's other targets and then stops before it
+measures the candidate.
+The nightly job's baseline step failed on every scheduled run on the base branch from
+2026-09-21 to 2026-09-30.
+Both gates were therefore run with `--check-baseline --baseline` on a copy of the baseline
+whose provenance names a revision that builds every target, which `run.py` remeasures on the
+same host: Phase 1 (c0a9708f) against the PR base (825c598b), and A2a
+(`stack-depth-prototypes/a2-dispatch-split-table.patch` applied to c0a9708f) against c0a9708f.
+Builds with `CARGO_INCREMENTAL=0`, runs with `RUST_MIN_STACK=33554432`, on a shared 4-core
+x86_64 host:
 
-- **workerd, either tier pinned:** all 25 family cases pass, and the 19 pins probably do
-  *(est.; D1 was measured on Node only, and Node's minima do not predict workerd's, §1.3)*.
-  The walker ceilings pass once B5, B6 with B3, and B4's generic path land.
-  `eval-callchain`-2044 probably passes too, since D1 cuts `callchain`-2044 to 741 KiB under
-  Node's TurboFan.
-  The 37 heavy ceilings already pass.
-  The tagged-template chain still traps under both pinned tiers until D2 (1,042 and 1,058 KiB
-  on Node after D1), and the trapped-Proxy ceilings still trap under `--no-liftoff` until B10.
-  B1's costlier trapped layers (§4.4) raise the `get`-trapped chain on Node from 779 to
-  889 KiB under TurboFan; whether they keep the ceilings passing on workerd under
-  `--liftoff-only` and default tiering was not measured.
-  The `&&`, `||`, `??` and `else if`-with-blocks chains that trap with `--no-liftoff` today were
-  not measured on workerd after D1, so they stay expected traps until D2 or a post-D1 run.
-- **Chromium Worker:** the 11 family traps and the walker-ceiling traps clear.
-  `function`-512 (601 KiB after D1 under Node's TurboFan), `callchain`-2044 (741 KiB),
-  `elseif`-2044 (516 KiB), `||`-2043 (500 KiB), `??`-2043 (675 KiB), the tagged-template chain
-  and the `eval-*` compositions probably remain until D2, `member`-2045 (453 KiB, and 484 KiB
-  under Liftoff) may remain until D2, and the trapped-Proxy ceilings remain until B10.
-- **WT 512 KiB:** the remaining traps among the 25 are:
-  - `async-64/10k`;
-  - `foreach-63/10k`;
-  - possibly `eval-deep`, although D1c clears its refused inner chain in the compile harness
-    (§4.6).
+| Workload | Phase 1 against 825c598b | A2a against c0a9708f |
+|---|---|---|
+| `dispatch_ms` | 0.99 | 1.10 |
+| `slots_ms` | 0.95 | 1.09 |
+| `chunks_ms` | 1.04 | 1.16 |
+| `calls_ms` | 0.98 | 1.11 |
+| `recursion_ms` | 1.01 | 1.16 |
+| `callbacks_ms` | 0.98 | 1.08 |
+| `getter_ms` | 0.96 | 1.02 |
 
-  That is 4 or 5 of 25, down from 18.
-  `parse-512-blocks` clears with D1: D1a alone compiles 512 nested blocks in 355,688 B in the
-  compile harness (`compiler/exp/wt_e1.jsonl`), whose baseline, 690,904 B, matches the probe's
-  674 KiB, and the probe's floor is 14 KiB.
-  The five pin+1 refusal traps, tagged-2044 included, clear with D1c.
-  Every heavy ceiling of §1.3 except the iterator helpers still traps until A2.
-  `function`-512, `member`-2045, `callchain`-2044 and `elseif`-2044 (747, 707, 962 and 834 KiB
-  after D1, §4.6) and the tagged-template chain (1,279,144 B after D1) still trap until D2, and
-  the trapped-Proxy ceilings until B10.
-- **Not yet measured:** the unpinned chain kinds of §1.3 on Wasmtime and workerd after D1, and
-  the `else if`-with-blocks chain on any host after D1.
-  On Node after D1, `||` and `&&` need 500-516 KiB and `??` 580-675 KiB
-  (`revise4/logical_chain_node.jsonl`), above lane B's 440 KiB.
-  Phase 0's sweep sets the expected-trap entries of the other chain kinds.
-
-Lower lane A's stack accordingly.
-
-**As landed (Phase 1):** lane A runs at 1,048,576 B.
-At that stack its expected traps are the heavy ceilings that cross the dispatch loop without a
-built-in (`async`, `bound`, `function-call`, `getter`, `setter`, `has-instance`, `iterator`,
-`iterator-spread`, `to-primitive`, `valueOf`, each at its ceiling and ceiling + 1, and
-`async-10k`), which A2 targets; the tagged-template chain and its `eval` composition, which D2
-targets; the trapped-Proxy ceiling (B10); and `proxy-proto-cycle`: 26 cases, all of them later
-phases' work.
-Lowering it further would list the callback ceilings as well: 76 cases trap at 786,432 B and
-87 at 524,288 B.
+The Phase 1 column is one `run.py` run; the A2a column is the median of four interleaved runs
+of each binary, and A2a's own `run.py` run puts the same seven at 1.13× or less.
+Phase 1 is within noise on every dispatch, call and re-entry workload.
+A2a stays under the 1.25× floor on all seven and costs 2-16%, in line with the 1.04-1.17× of
+§4.3 and the prototype README's 1.04-1.14×.
+Neither `run.py` run passed as a whole: each flagged a few of the 48 older metrics, all GC,
+placeholder or attached-store timings under 25 ms (the A2a run only `gc_20000_enum_ms`, at
+1.42×).
+Those are noise on this host.
+Three runs of one binary spread the GC and slide timings by up to 1.65× (`slide_2000_tail_ms`)
+and 1.46× (`gc_20000_gate_ms`), and in the Phase 1 run the GC ratios point both ways, from
+0.57× to 1.46×.
+The attached-store timing, `attached_detached_ms`, read 1.27× in the Phase 1 run, but five
+interleaved runs of each build put the base at 18.9-28.0 ms (median 23.1) and Phase 1 at
+23.9-24.9 ms (median 24.2); its workload is the property-read loop that `slots_ms` and
+`dispatch_ms` time, which show no cost.
+So A2a meets the 1.25× floor wherever it can cost anything; whether 10% on straight-line
+dispatch is worth its stack is the Phase 2 decision, and A2b's per-opcode handlers are the
+alternative.
 
 ### Phase 2: structural changes (M-L, release-neutral)
 
@@ -2392,8 +2388,8 @@ These need either L effort or a release:
 4. **Performance budget for A2.**
    What regression is acceptable beyond the 1.25× gate?
    The rough wall-clock ratios re-measured for this revision (1.04-1.17× best-of-7 with table
-   routing, §4.3) need the benchmark harness, extended with the `calls` fixture and a callback
-   workload, since `benches/run.py` exercises neither.
+   routing, §4.3) needed the benchmark harness, extended with the `calls` fixture and a callback
+   workload; Phase 1 added both, and A2a costs 2-16% on them (§5 Phase 1, "As run").
 5. **Pointer-width admission: a confirmed cross-host divergence.**
    `admit_scratch::<Vec<u16>>` scales with `size_of`: 24 B native, 12 B wasm32.
    `JSON.stringify(new Array(12e6)).length` halts with `HeapExhausted` at 15,000,022 computrons
