@@ -1,9 +1,14 @@
 // @ts-check
 /**
- * Lal `evaluate` dispatch forwards `workerName` as a pet-name path.
+ * Lal `evaluate` dispatch reads the `workerNamePath` and `resultNamePath`
+ * tool-call keys and forwards them to a powers object that narrows them
+ * with the daemon's real `namePathFrom`, so a bare string reaching the
+ * daemon is refused with the daemon's own retry hint.
  */
 
 import test from '@endo/ses-ava/prepare-endo.js';
+
+import { namePathFrom } from '@endo/daemon/pet-name.js';
 
 import { makeExecuteTool } from '../tool-dispatch.js';
 
@@ -11,17 +16,27 @@ const makeStub = () => {
   /** @type {unknown[][]} */
   const calls = [];
   const powers = {
-    // Refuse a bare-string worker name as the daemon's `namePathFrom` does.
-    evaluate(workerName, source, codeNames, edgeNames, resultName) {
-      calls.push([workerName, source, codeNames, edgeNames, resultName]);
-      if (workerName !== undefined && !Array.isArray(workerName)) {
-        return Promise.reject(
-          TypeError(
-            `Invalid pet-name path ${JSON.stringify(workerName)}: try again with an array of path components`,
-          ),
-        );
+    // Narrow the path arguments as `host.js` and `guest.js` do on entry to
+    // `evaluate`.
+    async evaluate(
+      workerNamePath,
+      source,
+      codeNames,
+      edgeNames,
+      resultNamePath,
+    ) {
+      calls.push([
+        workerNamePath,
+        source,
+        codeNames,
+        edgeNames,
+        resultNamePath,
+      ]);
+      if (workerNamePath !== undefined) {
+        namePathFrom(workerNamePath);
       }
-      return Promise.resolve(42);
+      namePathFrom(resultNamePath);
+      return 42;
     },
   };
   const executeTool = makeExecuteTool(powers);
@@ -33,43 +48,60 @@ const makeStub = () => {
   return { calls, run };
 };
 
-test('evaluate forwards a workerName path', async t => {
+test('evaluate forwards a workerNamePath', async t => {
   const { calls, run } = makeStub();
   const result = await run({
-    workerName: ['team', 'worker'],
+    workerNamePath: ['team', 'worker'],
     source: '6 * 7',
-    resultName: ['answer'],
+    resultNamePath: ['answer'],
   });
   t.is(result, 42);
   t.deepEqual(calls, [[['team', 'worker'], '6 * 7', [], [], ['answer']]]);
 });
 
-test('evaluate treats the "undefined" workerName sentinel as absent', async t => {
+test('evaluate treats the "undefined" workerNamePath sentinel as absent', async t => {
   const { calls, run } = makeStub();
   await run({
-    workerName: 'undefined',
+    workerNamePath: 'undefined',
     source: '1',
-    resultName: ['one'],
+    resultNamePath: ['one'],
   });
   t.deepEqual(calls, [[undefined, '1', [], [], ['one']]]);
 });
 
-test('evaluate forwards a bare-string workerName to the refusing daemon', async t => {
+test('evaluate forwards a bare-string workerNamePath for the daemon to refuse', async t => {
   const { calls, run } = makeStub();
   await t.throwsAsync(
-    () => run({ workerName: 'worker', source: '1', resultName: ['one'] }),
+    () =>
+      run({ workerNamePath: 'worker', source: '1', resultNamePath: ['one'] }),
     {
       instanceOf: TypeError,
-      message: /try again with an array of path components/,
+      message: /a string is not a pet-name path.*\["worker"\]/,
     },
   );
   t.deepEqual(calls, [['worker', '1', [], [], ['one']]]);
 });
 
-test('evaluate refuses a non-path workerName before dispatch', async t => {
+test('evaluate forwards a bare-string resultNamePath for the daemon to refuse', async t => {
+  const { run } = makeStub();
+  await t.throwsAsync(() => run({ source: '1', resultNamePath: 'team/one' }), {
+    instanceOf: TypeError,
+    message: /is never split on a delimiter/,
+  });
+});
+
+test('evaluate requires resultNamePath, not the retired resultName key', async t => {
+  const { calls, run } = makeStub();
+  await t.throwsAsync(() => run({ source: '1', resultName: ['one'] }), {
+    message: /missing properties \["resultNamePath"\]/,
+  });
+  t.deepEqual(calls, []);
+});
+
+test('evaluate refuses a non-path workerNamePath before dispatch', async t => {
   const { calls, run } = makeStub();
   await t.throwsAsync(() =>
-    run({ workerName: 7, source: '1', resultName: ['one'] }),
+    run({ workerNamePath: 7, source: '1', resultNamePath: ['one'] }),
   );
   t.deepEqual(calls, []);
 });
