@@ -1478,6 +1478,27 @@ stacks as well.
 - **Cheaper partial step:** route the raise sites through one
   `#[cold] #[inline(never)] raise_internal(kind, msg) -> Step`.
   That removes the 14 per-arm 24-B `error` temporaries, about 336 B N *(est.)*.
+- **As landed (Phase 2):** A2b's shape, per-opcode handlers.
+  111 arms move into `#[inline(never)] exec_*` functions that return a `Flow`
+  (`Next(pc)` or `Exit(Step)`), entered from the loop through `dispatch_flow!`; the 52 arms that
+  every loop body, call and property access runs (literals, stack, branches, locals, result,
+  arithmetic and comparison, `call`, `line`, the catch bookkeeping, `get`/`set` property) stay
+  inline.
+  An outlined arm consumes a transfer only through `dispatch_halt_flow!` and
+  `dispatch_result_flow!`, which keep the loop macros' ownership test and catch-landing meter
+  check.
+  The loop frame is 848 B N (from 4,560 B); the largest handler frame is 704 B
+  (`START_ASYNC_GENERATOR`).
+  At their ceilings the 74 re-entering cases above 300 KB need 24-64% less native stack
+  (getter-119 374,351 B from 819,119; function-call-63 216,047 from 602,655).
+  On WT, bisected at 4 KiB resolution, getter-119 needs 286,720 B (the prototype's estimate was
+  378,607 B), forEach-63 274,432, eval-direct-42 188,416, function-call-63 176,128 and async-126
+  126,976.
+  `tests/dispatch_loop_control_transfer.rs` learned the handler shape: its scans cover every
+  outlined arm, lock every `Flow::Exit` to an explicit private step and every function returning
+  a `Flow` to an outlined arm entered once from the loop; `allocation_admission_audit.rs`
+  needed no change.
+  The benchmark gate is in §5 Phase 2, "As run".
 
 **A3. Outline cold bodies on the forwarding paths.**
 
@@ -1727,6 +1748,23 @@ The common recipe is a `Vec<Frame>` loop in which:
   The restore recompile (`persist.rs:1149`) depends on it.
 - **Risks:** the named-capture scope surgery per disjunction, and restoring flags at pop for
   modifier groups.
+- **As landed (Phase 2):** all three parts.
+  The group parser is one loop over a stack of `Level`s, split at `group_open` (a group's
+  prefix: syntax, capture index and name, a modifier group's scoped flags) and `group_close`
+  (the node, the outer flags restored, a quantifier); the `v`-mode set parser is a loop over
+  `ClassLevel`s holding each open class's operator-loop state; `measure` and `emit` are loops
+  over `MeasureWork` and `EmitWork`.
+  A call-graph pass finds no recursion left in the compiler.
+  `regexp-deep` (512 groups parsed before a 5,000-deep literal is refused) needs 10,039 B N
+  (from 230,959) and the new lane case `regexp-nests-512` (lookbehind, modifiers, a named group
+  with the re-parse, nested and intersected `v`-mode classes, all at the limit) 10,039 B N
+  (from 230,591) and 12,288 B on WT.
+  `tests/compile_golden.rs` is the transitional old/new test: a digest over 4,737 generated
+  patterns of everything a caller observes (code, counts, meters, names, errors, work charged,
+  meter-check callbacks, validation and six budget stops), computed with the recursive
+  compiler.
+  The work stacks are heap linear in the pattern, as the spines' were; a 300,000-atom
+  lookbehind peaks 5% higher (4 MiB on 82 MB).
 
 **B8. Host renderer.**
 `Vec<(array, next_index, depth)>` writing into one `String`, calling `render_descend` at the same
@@ -1958,6 +1996,27 @@ The scratch data file names still say E1-E4: `d1a-compiler-outline-only.patch` i
   Worker limit *(est. for the Worker)*.
   With a 512-group RegExp literal inside it, it needs 553 KiB on WT unless B7 lands.
 - **Optional:** a full continuation-stack coder is L effort (7,119 lines).
+- **As landed (Phase 2):** in three commits.
+  D2a runs the coder's chain arms in one loop over a continuation stack (`coder/walk.rs`):
+  statements and blocks, `if`, unary and binary operators, `&&`, `||`, `??`, `?:`, member,
+  computed and private access, calls with `code_this`, optional chains, tagged templates and
+  plain assignment, each split where it codes a child.
+  D2b makes both scoper passes loops over typed continuation stacks (`scoper/walk.rs`) and
+  `scope_lookup` a loop.
+  D2c adds functions, bodies, defines, hoisted declarations, compound and logical assignment,
+  `yield` and `await` to the coder's walk.
+  Natively the `&&`, `||`, `??`, comparison, `else if`, member, optional, call and
+  tagged-template chains at their pins compile in 8,887 B (from 0.36-0.79 MB), the conditional
+  and assignment chains in 120 KB, which is their parse (D3), and 512 nested functions in
+  332 KB (from 513 KB, within 3 KB of their parse).
+  The tagged eval nest (`u3-eval-nest-tagged-2038`) fell from 904 KB N to 551 KB with D2 and to
+  279,255 B with A2; it needs 188,416 B on WT.
+  As predicted, the remaining compile peak is the parser's own nest: `parse-functions-512`
+  needs 405,504 B on WT, the largest of any case that lane A passes.
+  A test compiles 16 chains of every left-folded kind at or near the tree-depth limit on a
+  256 KiB thread.
+  Every one of the 79,800 test262 compiles (each file sloppy and strict) gave the same bytecode,
+  symbols, parse meter, charge sequence and refusal error after each commit.
 
 **D3. Parser.**
 
@@ -2344,6 +2403,50 @@ The trapped-Proxy ceilings stay on the expected-trap lists until B10 (Phase 4).
 The worst measured remaining heavy case is getter-119 at 378,607 B on WT.
 The ceilings not bisected on Wasmtime, other than the four in `revise3/a2_extra.txt`, were not
 measured after A2.
+
+**As run (end of Phase 2):** D2 landed as D2a-D2c, then A2 and B7 (§4.3, §4.4 and §4.6, "As
+landed").
+A2 took A2b's shape directly: with the 52 most frequent arms inline, per-opcode handlers stay
+within 0.98-1.12× of the base on interleaved runs, where A2a's group split cost 2-16%.
+Its gate, run as Phase 1's was, against D2c (5ab463e5) remeasured on the same host:
+
+| Workload | `run.py --check-baseline` | Four interleaved runs |
+|---|---|---|
+| `dispatch_ms` | 0.95 | 1.00 |
+| `slots_ms` | 0.94 | 1.03 |
+| `chunks_ms` | 1.03 | 1.12 |
+| `calls_ms` | 0.84 | 1.00 |
+| `recursion_ms` | 0.89 | 1.06 |
+| `callbacks_ms` | 0.93 | 1.06 |
+| `getter_ms` | 0.81 | 0.98 |
+
+The `run.py` run flagged six GC and chunk-slide timings of 0.03-8 ms, which run no dispatch
+code; five interleaved runs of `gc_bench` put them at 0.85-1.17×, inside each build's own
+spread.
+
+Lane A now runs at 524,288 B and expects one trap, `proxy-proto-cycle` (B10).
+The corpus also passes at 409,600 B; at 327,680 B, 17 more cases trap.
+Bisected on WT at 4 KiB resolution, the cases that need the most stack are the parser's nests
+(D3) and the native-to-native recursions:
+
+| Case | WT bytes |
+|---|---|
+| `parse-functions-512` | 405,504 |
+| `join-64`, `join-self`, `toString-63`, `string-self` | 372,736 |
+| `lastindex-valueof-63` | 364,544 |
+| `take-126`, `iter-map-126` | 356,352 |
+| `parse-binding-510` | 348,160 |
+| `array-from-63` | 339,968 |
+| `proxy-trap-119` | 294,912 |
+| `getter-119` | 286,720 |
+
+Lane B is unchanged at 425 KiB on Node and 836 KiB on workerd: each expects only
+`proxy-proto-cycle`, except workerd under default Liftoff tiering, which passes it.
+After A2, Node's painted shadow-stack peak is 428,776 B (from 561,976 B).
+So on the lane corpus Target 1 holds at Wasmtime's 512 KiB, on the Node stand-in for the
+Chromium Worker and on workerd with either tier pinned, except for the Proxy prototype cycle.
+The trapped-Proxy ceilings of §1.3 are not in the lane corpus and were not re-measured; they
+stay expected traps until B10.
 
 ### Phase 3: margin toward Target 2 (release-neutral)
 
