@@ -363,6 +363,9 @@ export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
         const rightArray = /** @type {Uint8Array} */ (right).slice(0);
         return compareBytes(leftArray, rightArray);
       }
+      case 'sturdyRef': {
+        throw Fail`A ${q(leftStyle)} cannot be rank-ordered`;
+      }
       case 'tagged': {
         // Lexicographic by `[Symbol.toStringTag]` then `.payload`.
         const labelComp = comparator(getTag(left), getTag(right));
