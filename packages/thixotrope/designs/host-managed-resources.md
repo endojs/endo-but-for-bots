@@ -388,33 +388,48 @@ would run the hub's transport over a hub session.
 
 ### 8.3 What the kit needs first
 
-1. A restart monitor.
-   Today an adapter that dies between daemon starts is rebuilt by the next
-   operation that needs it.
-   For HTTP that already means a closed port until something calls the manager;
-   for alarms it would silence every reminder, and for the control socket it
-   would lock the operator out, since no operation could reach the manager.
-   The launcher already observes exit (`onExit` in `adapters.js`); it should
-   report it to the keeper, which rebuilds with backoff.
-   This is a kit change that HTTP benefits from as well, and it gates the rest.
+1. Rebuild on exit, between starts.
+   Today a manager with anything desired rebuilds its adapter at daemon
+   start, through the start notice, and otherwise only when the next
+   operation that needs the adapter finds the keeper's probe failing.
+   The launcher observes the process exit (`onExit` in `adapters.js`) but
+   tells the manager nothing, so between starts a dead adapter stays dead
+   until something calls the manager.
+   For HTTP that is a closed port; for alarms it would silence every
+   reminder; for the control socket it would lock the operator out, since
+   no operation could reach the manager.
+   The rule the start notice already applies, rebuild while anything is
+   desired, should hold continuously: the incarnation handed to the keeper
+   carries a `closed` promise (a host answer, which also breaks at a host
+   restart), and the keeper rebuilds on it, with backoff, while the desired
+   set is non-empty.
+   No per-resource flag is needed under that rule, since an empty desired
+   set has nothing to restore; an `eager` option on `makeManager` would be
+   the alternative if a resource ever wants a process kept alive with
+   nothing registered.
+   This is a kit change that HTTP benefits from as well, and it gates the
+   rest.
 2. Built-in resources the host installs.
    On first start the host installs `resources/alarms` and `resources/control`
    under reserved names in the registry of section 1, and grants each
    workspace the alarm facet (section 2).
    A missing or broken control resource is reinstalled at start, since it is
    the operator's only way in.
-3. Adapter methods beyond the protocol, for `now()` (8.1).
-4. A code-upgrade path.
-   A native resource's identity pins the directory's digest, so a package
-   upgrade that changes `durable.js` cannot start under the old manager, and
-   the deadlines in that manager's heap would be stranded.
-   HTTP tolerates a reinstall; alarms do not.
-   Either the identity pins only `durable.js` and `ephemeral.js` may change
-   under a stable protocol, with `durable.js` kept minimal, or the lifecycle
-   gains `export()` and `import()` of desired registrations across a
-   reinstall, a small generic migration.
-   This is the general problem of upgrading a durable vat's code, met here
-   first.
+3. A way for the manager to call the adapter beyond the protocol.
+   The adapter module has all of Node, so reading the time is no problem
+   there.
+   What is missing is the method: `makeAdapter` builds the adapter's facet
+   with exactly `bind`, `unbind`, `restore` and `keys`, and the manager
+   kit holds that facet through the keeper without exposing it to
+   `durable.js`.
+   So `now()` needs `makeAdapter` to accept extra methods for the facet
+   (`methods: { now }`) and the manager to expose a call on the current
+   incarnation (`manager.call('now')`, which provides through the keeper as
+   `register` does).
+4. Code upgrade of a native resource is out of scope here.
+   The identity pins the directory's digest, so a package upgrade that
+   changes `durable.js` cannot start under the old manager; what becomes of
+   that manager's registrations is not addressed by this note.
 
 ### 8.4 The host afterwards
 
