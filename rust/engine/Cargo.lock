@@ -287,6 +287,7 @@ dependencies = [
  "ironhorse-compile",
  "ironhorse-meter",
  "ironhorse-regexp",
+ "ironhorse-runtime",
  "ironhorse-text",
  "libm",
 ]
