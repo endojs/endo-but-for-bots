@@ -2010,7 +2010,7 @@ The scratch data file names still say E1-E4: `d1a-compiler-outline-only.patch` i
   and assignment chains in 120 KB, which is their parse (D3), and 512 nested functions in
   332 KB (from 513 KB, within 3 KB of their parse).
   The tagged eval nest (`u3-eval-nest-tagged-2038`) fell from 904 KB N to 551 KB with D2 and to
-  279,255 B with A2; it needs 188,416 B on WT.
+  278,743 B with A2; it needs 188,416 B on WT.
   As predicted, the remaining compile peak is the parser's own nest: `parse-functions-512`
   needs 405,504 B on WT, the largest of any case that lane A passes.
   A test compiles 16 chains of every left-folded kind at or near the tree-depth limit on a
@@ -2410,7 +2410,10 @@ measured after A2.
 landed").
 A2 took A2b's shape directly: with the 52 most frequent arms inline, per-opcode handlers stay
 within 0.98-1.12× of the base on interleaved runs, where A2a's group split cost 2-16%.
-Its gate, run as Phase 1's was, against D2c (5ab463e5) remeasured on the same host:
+Its gate, run as Phase 1's was, against D2c remeasured on the same host, before the series was
+rebased onto `origin/llm` (D2c 5ab463e5 and A2 6f2e1aeb then, 8b666027 and 5355d7b8 as landed; in
+the native stack-lanes probe the rebase leaves the dispatch loop and every outlined arm the same
+instructions):
 
 | Workload | `run.py --check-baseline` | Four interleaved runs |
 |---|---|---|

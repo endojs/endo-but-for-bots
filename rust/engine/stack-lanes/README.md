@@ -126,5 +126,5 @@ tier mix exceeds the larger pure tier by up to 17.5% (`take` and `iter-map`;
 modelled, so lane B's headroom is 17.6% and its stacks 425 and 836 KiB.
 The third is from lane C: for the left-folded chain kinds (`&&`, `||`, `??`,
 comparison, computed member, `else if`) the deepest recursion at the ceiling
-is the post-parse `duplicate_proto_setter_line` walk, one frame per level,
-not the parser.
+was the post-parse `duplicate_proto_setter_line` walk, one frame per level,
+not the parser; since D1b that walk is a worklist.
