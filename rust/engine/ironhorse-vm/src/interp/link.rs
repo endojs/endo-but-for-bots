@@ -781,11 +781,20 @@ impl Interp {
         }
         // Native numeric data properties (`Math.PI` &co.): bound as own
         // properties of their owner under the program-local id, unmetered.
+        // Each is a constant: `Math`'s and `Number`'s value properties and
+        // every `BYTES_PER_ELEMENT` are { writable: false, enumerable:
+        // false, configurable: false } (ECMA-262 21.1.2, 21.3.1, 23.2.6,
+        // 23.2.7), as XS builds them.
         let vdata = self.proto_value_data.clone();
         for (owner, pname, value) in &vdata {
             if let Some(&pid) = self.symbol_ids.get(*pname) {
                 if keep(pid) && (full || self.find_property(*owner, pid).is_none()) {
-                    self.set_own_unmetered(*owner, pid, *value);
+                    self.set_own_unmetered_with_flag(
+                        *owner,
+                        pid,
+                        *value,
+                        XS_DONT_DELETE_FLAG | XS_DONT_SET_FLAG | XS_DONT_ENUM_FLAG,
+                    );
                 }
             }
         }

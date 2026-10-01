@@ -587,6 +587,10 @@ fn an_intrinsic_prototype_lists_its_index_keys_first() {
         "Symbol.prototype, Object(Symbol())",
         "Date.prototype, new Date(0)",
         "Promise.prototype, Promise.resolve()",
+        // Their numeric constants are non-enumerable, as XS makes them.
+        "Math, Object.create(Math)",
+        "Number, Object.create(Number)",
+        "Uint8Array.prototype, new Uint8Array(0)",
     ] {
         assert_result(
             &format!("{probe} probe({target})"),

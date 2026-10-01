@@ -480,3 +480,62 @@ fn species_readers_beyond_array() {
         ),
     ]);
 }
+
+#[test]
+fn the_numeric_constants_are_fixed() {
+    // `Math`'s and `Number`'s value properties and every `BYTES_PER_ELEMENT`
+    // are { writable: false, enumerable: false, configurable: false }. They
+    // were installed writable, enumerable and configurable.
+    let attributes = "function a(o, k) { var d = Object.getOwnPropertyDescriptor(o, k); \
+                      return (d.writable ? 'W' : '-') + (d.enumerable ? 'E' : '-') \
+                      + (d.configurable ? 'C' : '-'); }";
+    check(&[
+        (
+            "math",
+            &format!(
+                "{attributes} ['E', 'LN10', 'LN2', 'LOG10E', 'LOG2E', 'PI', 'SQRT1_2', \
+                      'SQRT2'].map(function (k) {{ return a(Math, k); }}).join()"
+            ),
+            "---,---,---,---,---,---,---,---",
+        ),
+        (
+            "number",
+            &format!(
+                "{attributes} ['EPSILON', 'MAX_SAFE_INTEGER', 'MAX_VALUE', \
+                      'MIN_SAFE_INTEGER', 'MIN_VALUE', 'NaN', 'NEGATIVE_INFINITY', \
+                      'POSITIVE_INFINITY'].map(function (k) {{ return a(Number, k); }}).join()"
+            ),
+            "---,---,---,---,---,---,---,---",
+        ),
+        (
+            "bytes_per_element",
+            &format!(
+                "{attributes} [Int8Array, Uint8Array, Uint8ClampedArray, Int16Array, \
+                      Uint16Array, Int32Array, Uint32Array, Float32Array, Float64Array, \
+                      BigInt64Array, BigUint64Array].map(function (C) {{ \
+                      return a(C, 'BYTES_PER_ELEMENT') + a(C.prototype, 'BYTES_PER_ELEMENT'); \
+                      }}).join()"
+            ),
+            "------,------,------,------,------,------,------,------,------,------,------",
+        ),
+        ("assignment", "Math.PI = 3; Math.PI", "3.141592653589793"),
+        (
+            "strict_assignment",
+            "'use strict'; try { Number.MAX_SAFE_INTEGER = 1; 'wrote' } \
+             catch (e) { e.constructor.name }",
+            "TypeError",
+        ),
+        ("delete", "delete Math.E; typeof Math.E", "number"),
+        (
+            "enumeration",
+            "var r = []; for (var k in Math) r.push(k); \
+             [r.length, Object.keys(Math).length, JSON.stringify(Math)].join()",
+            "0,0,{}",
+        ),
+        (
+            "typed_array_keys",
+            "Object.keys(Uint8Array.prototype).join('+') + '|' + Object.keys(Uint8Array).join('+')",
+            "|",
+        ),
+    ]);
+}
