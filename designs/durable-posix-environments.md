@@ -27,13 +27,28 @@ No new native recovery mechanism or deployment is included in these slices.
 The next implementation adds a Floot development preset, Fae inference through
 the existing Codex subscription pool, and durable Fae context compaction.
 These are authorized work, not implemented or deployed capabilities.
+The first new slice implements the shared capability-backed Responses adapter
+in `packages/lal/providers/subscription-responses.js`.
+It uses the existing Subscription model-id contract, opens one listener-free
+endpoint per request, retains late-acquisition cleanup, and preserves complete
+provider output including opaque reasoning on the common assistant message.
+Focused tests cover a real broker Subscription, text/tool continuation, failure
+and refusal handling, SSE framing, cancellation, and retried cleanup.
+The adapter's 25 tests and the nearest OpenRouter/configuration suites pass
+72 tests together. Lal ESLint and Lal/hosted-agent type checks pass;
+root documentation builds with 0 errors and 180 warnings.
+Fae/Floot provisioning, context-window metadata integration, compaction, permanent
+environment GC, the development preset, live acceptance, and deployment remain pending.
+The Codex catalog currently omits context-window metadata; the adapter reports
+unknown (`0`) unless a caller supplies provider-observed catalog metadata.
+This slice does not claim provider-sized compaction or live pool acceptance.
 Focused factory, native-factory, ownership, lifecycle, and runtime suites pass
 78 tests in each of the four SES configurations; package types and ESLint pass
 with warnings, and root documentation builds with 0 errors and 180 warnings.
 The full sandbox suite is not green: two unchanged direct Podman-driver
 environment-extensibility assertions fail in the unsafe configuration.
 No live Podman acceptance is claimed on this macOS development host.
-The adapter adds eight passing tests in each SES configuration.
+The sandbox-to-Shell adapter adds eight passing tests in each SES configuration.
 The Shell suite passes 17 tests and package types/ESLint (3 warnings, 0 errors);
 the daemon's host-Shell composition suite passes 7 tests, including real child
 termination, and sandbox types/ESLint pass (29 warnings, 0 errors).
