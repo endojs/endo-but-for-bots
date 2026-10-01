@@ -1442,35 +1442,14 @@ impl Interp {
         self.proto_methods.push((func_proto, "apply", fp_apply));
         let fp_bind = self.alloc_method(NativeMethod::FunctionBind);
         self.proto_methods.push((func_proto, "bind", fp_bind));
-        // Every Error prototype (base + each subtype) gets `toString`.
-        let error_protos: Vec<crate::value::SlotIndex> = {
-            let mut v = vec![error_proto];
-            for (_, native) in Native::intrinsics() {
-                if matches!(
-                    native,
-                    Native::EvalError
-                        | Native::RangeError
-                        | Native::ReferenceError
-                        | Native::SyntaxError
-                        | Native::TypeError
-                        | Native::URIError
-                        | Native::AggregateError
-                ) {
-                    if let Some(&c) = self.intrinsics.get(native.display_name()) {
-                        if let Some(p) = self.prototype_of(c) {
-                            v.push(p);
-                        }
-                    }
-                }
-            }
-            v
-        };
-        for p in error_protos {
-            let mf = self.alloc_method(NativeMethod::ErrorToString);
-            self.proto_methods.push((p, "toString", mf));
-        }
-        // The inherited Error prototype `name` (per type) and `message` (""
-        // on `%Error.prototype%`, inherited by subtypes). Placing `name` on
+        // `toString` lives on `%Error.prototype%` alone; each NativeError
+        // prototype inherits it (ES2024 20.5.6.3 lists only `constructor`,
+        // `message` and `name` there, as XS's `fxBuildError` installs).
+        let error_to_string = self.alloc_method(NativeMethod::ErrorToString);
+        self.proto_methods
+            .push((error_proto, "toString", error_to_string));
+        // Each Error prototype's own `name` (per type) and `message` (""),
+        // `%Error.prototype%`'s here and every NativeError's below. Placing `name` on
         // the prototype — not the instance — is what makes `err.name` resolve
         // up the chain while `err.hasOwnProperty('name')` is `false`, as XS.
         self.proto_data
@@ -1493,11 +1472,13 @@ impl Interp {
                     | Native::TypeError
                     | Native::URIError
                     | Native::AggregateError
+                    | Native::SuppressedError
             ) {
                 if let Some(&c) = self.intrinsics.get(native.display_name()) {
                     if let Some(p) = self.prototype_of(c) {
                         self.proto_data
                             .push((p, "name", native.display_name().to_string()));
+                        self.proto_data.push((p, "message", String::new()));
                     }
                 }
             }
