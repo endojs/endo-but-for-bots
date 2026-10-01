@@ -177,7 +177,7 @@ This increment is honest about what it does **not** yet do:
   CLI bump.
 - **The credential path under `--bare`** (the DD5 residual), answered by a
   live turn on Claude Code 2.1.280: a subscription OAuth access token
-  (`sk-ant-oat…`) is **not** accepted through an `apiKeyHelper` (`claude`
+  (`sk-ant-oat...`) is **not** accepted through an `apiKeyHelper` (`claude`
   presents it as an API key and gets `401`). The spawn files therefore present
   such a token as `ANTHROPIC_AUTH_TOKEN` in the `--settings` file's `env` key,
   never in the spawn environment. `claude` still holds it in memory, the same

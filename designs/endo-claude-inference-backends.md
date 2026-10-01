@@ -566,7 +566,7 @@ for designs that span several owners:
 
    - Anthropic's gateway documentation says that "while a gateway credential
      variable or `apiKeyHelper` is active, a developer's claude.ai subscription
-     isn't used … and the subscription's usage limits don't apply", with the
+     isn't used ... and the subscription's usage limits don't apply", with the
      traffic "billed per token to whoever owns the credential the gateway
      forwards" ([Other LLM gateways](https://code.claude.com/docs/en/llm-gateway)).
      The same section scopes the trigger to the credential variable and
@@ -575,7 +575,7 @@ for designs that span several owners:
      gateway credential, doesn't replace the subscription." The connection
      guide names `ANTHROPIC_AUTH_TOKEN` as a gateway credential variable and
      says "a gateway credential variable takes precedence over a saved
-     claude.ai login … With `ANTHROPIC_AUTH_TOKEN`, the variable takes
+     claude.ai login ... With `ANTHROPIC_AUTH_TOKEN`, the variable takes
      precedence immediately"
      ([Connect to a gateway](https://code.claude.com/docs/en/llm-gateway-connect#conflicts-with-an-existing-login)).
      So the caveat turns on the credential variable being set, and the base
