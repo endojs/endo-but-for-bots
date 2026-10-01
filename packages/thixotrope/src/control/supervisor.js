@@ -617,7 +617,9 @@ export const serveThixotrope = async (
        * Install a native resource from its directory: both entry modules
        * are bundled now, the durable one for the manager vat and the
        * ephemeral one into the store under its digest, for every process
-       * the manager launches.
+       * the manager launches. The installation's identity is the pair of
+       * bundle digests, so the directory is not consulted again and may be
+       * edited or removed afterwards; its new version is a new installation.
        * @param {string} name
        * @param {string} directory
        */
@@ -627,29 +629,17 @@ export const serveThixotrope = async (
           if (typeof directory !== 'string')
             throw Error('Expected a native resource directory');
           const description = await describeNativeResource(
-            { files, paths, hashes },
+            { files, paths },
             paths.resolve(directory),
           );
-          const { bundle, digest: bundleDigest } =
+          const { bundle, digest: durableBundleDigest } =
             await platform.bundler.bundle(description.durablePath);
           const ephemeralBundleDigest = store.putBundle(
-            await platform.bundler.bundleNative(
-              paths.fileURLToPath(description.moduleUrl),
-            ),
+            await platform.bundler.bundleNative(description.ephemeralPath),
           );
-          const checked = await describeNativeResource(
-            { files, paths, hashes },
-            description.directory,
-          );
-          if (checked.digest !== description.digest)
-            throw Error('Native resource changed during installation');
           const digest = hashes.sha256Hex(
             new TextEncoder().encode(
-              JSON.stringify([
-                description.directory,
-                description.digest,
-                bundleDigest,
-              ]),
+              JSON.stringify([durableBundleDigest, ephemeralBundleDigest]),
             ),
           );
           await installNative(daemon, workspace, {

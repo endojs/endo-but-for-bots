@@ -2,7 +2,14 @@
 import harden from '@endo/harden';
 import { makePromiseKit } from '@endo/promise-kit';
 import test from '@endo/ses-ava/test.js';
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { setTimeout } from 'node:timers/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -253,24 +260,29 @@ test.serial(
 );
 
 test.serial(
-  'native resource descriptions refuse links and node_modules',
+  'native resource descriptions locate the entries and consult nothing else',
   async t => {
     const path = await mkdtemp('/tmp/thix-native-resource-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
     const source = 'export const make = () => ({});';
     await writeFile(join(path, 'durable.js'), source);
-    await writeFile(join(path, 'ephemeral.js'), source);
-    const { digest } = await describeNativeResource(powers, path);
-    t.regex(digest, /^[0-9a-f]{64}$/);
-    await symlink(join(path, 'durable.js'), join(path, 'alias.js'));
+    // An entry must be the file that is there, not a link to one.
+    await symlink(join(path, 'durable.js'), join(path, 'ephemeral.js'));
     await t.throwsAsync(() => describeNativeResource(powers, path), {
-      message: /files or directories/,
+      message: /ephemeral\.js.*must be a file/,
     });
-    await rm(join(path, 'alias.js'));
-    t.is((await describeNativeResource(powers, path)).digest, digest);
+    await rm(join(path, 'ephemeral.js'));
+    await writeFile(join(path, 'ephemeral.js'), source);
+    // Links elsewhere and vendored packages are the bundler's concern, not
+    // the description's: the identity is the pair of bundles, and nothing
+    // about the directory beyond its entries is pinned.
+    await symlink(join(path, 'durable.js'), join(path, 'alias.js'));
     await mkdir(join(path, 'node_modules'));
-    await t.throwsAsync(() => describeNativeResource(powers, path), {
-      message: /node_modules/,
+    const root = await realpath(path);
+    t.deepEqual(await describeNativeResource(powers, path), {
+      directory: root,
+      durablePath: join(root, 'durable.js'),
+      ephemeralPath: join(root, 'ephemeral.js'),
     });
   },
 );
