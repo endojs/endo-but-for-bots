@@ -43,10 +43,11 @@ fn unwrapped_raises(code: &[Token<'_>]) -> Vec<usize> {
             if (token.text == "raise_js" || token.text.starts_with("catchable_"))
                 && code.get(at + 1).is_some_and(|t| t.text == "(")
             {
-                // `dispatch_halt!(receiver.raise(...), ...)`: whitespace and
-                // comments are absent, but identifier boundaries remain intact.
+                // `dispatch_halt!(receiver.raise(...), ...)`, or its `Flow`
+                // twin in an outlined arm: whitespace and comments are
+                // absent, but identifier boundaries remain intact.
                 let wrapped = at >= 5
-                    && code[at - 5].text == "dispatch_halt"
+                    && matches!(code[at - 5].text, "dispatch_halt" | "dispatch_halt_flow")
                     && code[at - 4].text == "!"
                     && code[at - 3].text == "("
                     && code[at - 1].text == ".";
@@ -78,6 +79,66 @@ fn raw_returns(code: &[Token<'_>]) -> Vec<usize> {
         .collect()
 }
 
+/// An outlined arm's returns: each continues at an explicit program counter
+/// or leaves with an explicitly constructed private Step, as the loop's exits
+/// do.
+fn raw_flow_returns(code: &[Token<'_>]) -> Vec<usize> {
+    token_positions(code, "return")
+        .into_iter()
+        .filter(|at| {
+            ![
+                "Flow::Next(",
+                "Flow::Exit(Step::Returned",
+                "Flow::Exit(Step::Host(",
+                "Flow::Exit(Step::Yielded(",
+                "Flow::Exit(Step::Awaited(",
+                "Flow::Exit(Step::AsyncYielded(",
+            ]
+            .iter()
+            .any(|variant| token_positions(&code[at + 1..], variant).first() == Some(&0))
+        })
+        .collect()
+}
+
+/// An outlined arm's exits, returned or in tail position: each leaves with
+/// an explicitly constructed private Step.
+fn raw_flow_exits(code: &[Token<'_>]) -> Vec<usize> {
+    token_positions(code, "Flow::Exit(")
+        .into_iter()
+        .filter(|at| {
+            ![
+                "Flow::Exit(Step::Returned",
+                "Flow::Exit(Step::Host(",
+                "Flow::Exit(Step::Yielded(",
+                "Flow::Exit(Step::Awaited(",
+                "Flow::Exit(Step::AsyncYielded(",
+            ]
+            .iter()
+            .any(|variant| token_positions(&code[*at..], variant).first() == Some(&0))
+        })
+        .collect()
+}
+
+/// The arms outlined from the dispatch loop: every `fn exec_*`.
+fn outlined_arms<'t>(code: &'t [Token<'t>]) -> Vec<(&'t str, &'t [Token<'t>])> {
+    token_positions(code, "fn")
+        .into_iter()
+        .map(|at| code[at + 1].text)
+        .filter(|name| name.starts_with("exec_"))
+        .map(|name| (name, &code[token_body(code, &format!("fn {name}("))]))
+        .collect()
+}
+
+/// The loop and its outlined arms, which together are the dispatch: every
+/// raise, exit and native-result propagation in either is locked below.
+fn dispatch_tokens<'t>(code: &'t [Token<'t>]) -> Vec<Token<'t>> {
+    let mut all = code[token_body(code, "fn dispatch_at_inner(")].to_vec();
+    for (_, body) in outlined_arms(code) {
+        all.extend_from_slice(body);
+    }
+    all
+}
+
 fn unguarded_unwinds(code: &[Token<'_>]) -> Vec<usize> {
     let guard = "if self.call_stack.len() < return_depth {";
     let guard_len = tokens(guard).len();
@@ -87,6 +148,16 @@ fn unguarded_unwinds(code: &[Token<'_>]) -> Vec<usize> {
             at < guard_len || token_positions(&code[at - guard_len..at], guard).is_empty()
         })
         .collect()
+}
+
+/// [`macro_ownership_and_metering`] for the outlined arms' `Flow` macro: the
+/// same depth and ownership test before an unwind leaves, and the same meter
+/// check at a catch landing before the loop continues there.
+fn flow_ownership_and_metering(code: &[Token<'_>]) -> bool {
+    [
+        "Step::Unwound(target) if $machine.call_stack.len() < $return_depth || !$machine.resume_target_belongs_to(target, $code) => { return Flow::Exit(Step::Unwound(target)); }",
+        "Step::Unwound(target) => { $machine.assert_resume_target(target, $code); if $machine.check_meter() == MeterCheck::Abort { return Flow::Exit(Step::Host(Halt::MeterAbort)); } return Flow::Next(target.pc); }",
+    ].iter().all(|pattern| token_positions(code, pattern).len() == 1)
 }
 
 fn macro_ownership_and_metering(code: &[Token<'_>]) -> bool {
@@ -111,7 +182,7 @@ fn raise_js_yields_a_private_step() {
 fn every_raise_in_the_dispatch_loop_goes_through_dispatch_halt() {
     let source = code_only(SRC);
     let code = tokens(&source);
-    let body = &code[token_body(&code, "fn dispatch_at_inner(")];
+    let body = dispatch_tokens(&code);
     assert!(
         body.iter()
             .filter(|t| t.text.starts_with("catchable_") || t.text == "raise_js")
@@ -119,30 +190,89 @@ fn every_raise_in_the_dispatch_loop_goes_through_dispatch_halt() {
             > 20
     );
     assert!(
-        unwrapped_raises(body).is_empty(),
+        unwrapped_raises(&body).is_empty(),
         "a raise bypasses the dispatch macro"
     );
+    // The loop's own exits use the loop macros, an outlined arm's their
+    // `Flow` twins: either one in the wrong place would not compile into the
+    // right control transfer, and this keeps the two rosters apart.
+    let loop_body = &code[token_body(&code, "fn dispatch_at_inner(")];
+    assert!(token_positions(loop_body, "dispatch_halt_flow").is_empty());
+    assert!(token_positions(loop_body, "dispatch_result_flow").is_empty());
+    for (name, arm) in outlined_arms(&code) {
+        assert!(
+            token_positions(arm, "dispatch_halt!").is_empty()
+                && token_positions(arm, "dispatch_result!").is_empty(),
+            "{name} must use the Flow macros"
+        );
+    }
+}
+
+/// Every outlined arm is entered exactly once, by the loop, through
+/// `dispatch_flow!`, and by nothing else; and every function that returns a
+/// [`Flow`] is an outlined arm, so a handler cannot leave the scans below by
+/// its name.
+#[test]
+fn every_outlined_arm_is_entered_once_from_the_loop() {
+    let source = code_only(SRC);
+    let code = tokens(&source);
+    let loop_body = &code[token_body(&code, "fn dispatch_at_inner(")];
+    let arms = outlined_arms(&code);
+    assert!(arms.len() > 50);
+    assert_eq!(token_positions(&code, "-> Flow").len(), arms.len());
+    assert_eq!(token_positions(&code, "dispatch_flow!(").len(), arms.len());
+    assert_eq!(
+        token_positions(loop_body, "dispatch_flow!(").len(),
+        arms.len()
+    );
+    for (name, _) in &arms {
+        let call = format!("self.{name}(");
+        assert_eq!(
+            token_positions(&code, &call).len(),
+            1,
+            "{name} must have one call site"
+        );
+        assert_eq!(
+            token_positions(loop_body, &format!("dispatch_flow!({call}")).len(),
+            1,
+            "{name} must be entered through dispatch_flow! in the loop"
+        );
+    }
 }
 
 #[test]
 fn no_native_result_is_propagated_out_of_the_loop_by_hand() {
     let source = code_only(SRC);
     let code = tokens(&source);
+    let line = |body: &[Token<'_>], at: &usize| source[..body[*at].start].matches('\n').count() + 1;
     let body = &code[token_body(&code, "fn dispatch_at_inner(")];
     let bad = raw_returns(body);
     assert!(
         bad.is_empty(),
         "unclassified raw returns at lines {:?}",
-        bad.iter()
-            .map(|at| source[..body[*at].start].matches('\n').count() + 1)
-            .collect::<Vec<_>>()
+        bad.iter().map(|at| line(body, at)).collect::<Vec<_>>()
     );
-    assert!(token_positions(body, "Err(Step::Unwound(").is_empty());
+    for (name, arm) in outlined_arms(&code) {
+        let bad = raw_flow_returns(arm);
+        assert!(
+            bad.is_empty(),
+            "{name}: unclassified raw returns at lines {:?}",
+            bad.iter().map(|at| line(arm, at)).collect::<Vec<_>>()
+        );
+        let bad = raw_flow_exits(arm);
+        assert!(
+            bad.is_empty(),
+            "{name}: unclassified exits at lines {:?}",
+            bad.iter().map(|at| line(arm, at)).collect::<Vec<_>>()
+        );
+    }
+    let all = dispatch_tokens(&code);
+    assert!(token_positions(&all, "Err(Step::Unwound(").is_empty());
     // This tail loop returns Step: `break halt` is just as dangerous as
     // `return halt`, but bypasses a return-only source check. No dispatch
     // opcode needs a Rust break, so reject every spelling (including labels).
     assert!(
-        token_positions(body, "break").is_empty(),
+        token_positions(&all, "break").is_empty(),
         "dispatch must not exit via break"
     );
 }
@@ -151,9 +281,9 @@ fn no_native_result_is_propagated_out_of_the_loop_by_hand() {
 fn an_unwind_leaves_dispatch_only_after_the_depth_test() {
     let source = code_only(SRC);
     let code = tokens(&source);
-    let body = &code[token_body(&code, "fn dispatch_at_inner(")];
-    assert!(token_positions(body, "Step::Unwound(").is_empty());
-    assert!(unguarded_unwinds(body).is_empty());
+    let body = dispatch_tokens(&code);
+    assert!(token_positions(&body, "Step::Unwound(").is_empty());
+    assert!(unguarded_unwinds(&body).is_empty());
     let halt_macro = &code[token_body(&code, "macro_rules! dispatch_halt")];
     assert!(macro_ownership_and_metering(halt_macro));
     let result_macro = &code[token_body(&code, "macro_rules! dispatch_result")];
@@ -161,6 +291,27 @@ fn an_unwind_leaves_dispatch_only_after_the_depth_test() {
         token_positions(
             result_macro,
             "Err(halt) => dispatch_halt!(halt, $program_counter, $machine, $return_depth, $code)"
+        )
+        .len(),
+        1
+    );
+    let halt_flow = &code[token_body(&code, "macro_rules! dispatch_halt_flow")];
+    assert!(flow_ownership_and_metering(halt_flow));
+    let result_flow = &code[token_body(&code, "macro_rules! dispatch_result_flow")];
+    assert_eq!(
+        token_positions(
+            result_flow,
+            "Err(halt) => dispatch_halt_flow!(halt, $machine, $return_depth, $code)"
+        )
+        .len(),
+        1
+    );
+    // The loop acts on an outlined arm's Flow in exactly one way.
+    let flow = &code[token_body(&code, "macro_rules! dispatch_flow")];
+    assert_eq!(
+        token_positions(
+            flow,
+            "match $flow { Flow::Next(next) => $program_counter = next, Flow::Exit(step) => return step, }"
         )
         .len(),
         1
@@ -198,8 +349,9 @@ fn control_scan_rejects_renamed_and_obscured_raw_returns() {
         let source = code_only(source);
         assert_eq!(unwrapped_raises(&tokens(&source)).len(), 1, "{source}");
     }
+    // A live propagation site in an outlined arm, mutated into a `break`.
     let mutated = SRC.replacen(
-        "Err(halt) => dispatch_halt!(halt, pc, self, return_depth, code),",
+        "Err(halt) => dispatch_halt_flow!(halt, self, return_depth, code),",
         "Err(halt) => break halt,",
         1,
     );
@@ -209,8 +361,7 @@ fn control_scan_rejects_renamed_and_obscured_raw_returns() {
     );
     let mutated = code_only(&mutated);
     let code = tokens(&mutated);
-    let body = &code[token_body(&code, "fn dispatch_at_inner(")];
-    assert_eq!(token_positions(body, "break").len(), 1);
+    assert_eq!(token_positions(&dispatch_tokens(&code), "break").len(), 1);
     let source = code_only(
         "dispatch_halt /* comment */ ! (self . catchable_type_error(), pc, self, return_depth)",
     );
@@ -219,10 +370,10 @@ fn control_scan_rejects_renamed_and_obscured_raw_returns() {
 
 #[test]
 fn control_scan_rejects_missing_depth_and_meter_guards() {
-    let source = code_only(SRC);
-    let code = tokens(&source);
+    let source_text = code_only(SRC);
+    let code = tokens(&source_text);
     let body = &code[token_body(&code, "macro_rules! dispatch_halt")];
-    let macro_source = &source[body[0].start..body.last().unwrap().start + 1];
+    let macro_source = &source_text[body[0].start..body.last().unwrap().start + 1];
     for (before, after) in [
         ("if $machine.call_stack.len() < $return_depth", ""),
         ("$machine.check_meter()", "MeterCheck::Continue"),
@@ -235,6 +386,35 @@ fn control_scan_rejects_missing_depth_and_meter_guards() {
     }
     let source = code_only("if unrelated { return Step /* comment */ :: Unwound(target); }");
     assert_eq!(unguarded_unwinds(&tokens(&source)).len(), 1);
+    let body = &code[token_body(&code, "macro_rules! dispatch_halt_flow")];
+    let macro_source = &source_text[body[0].start..body.last().unwrap().start + 1];
+    for (before, after) in [
+        ("if $machine.call_stack.len() < $return_depth", ""),
+        ("$machine.check_meter()", "MeterCheck::Continue"),
+        ("$machine.assert_resume_target(target, $code);", ""),
+        ("|| !$machine.resume_target_belongs_to(target, $code)", ""),
+    ] {
+        assert!(macro_source.contains(before));
+        let mutated = macro_source.replace(before, after);
+        assert!(!flow_ownership_and_metering(&tokens(&mutated)), "{before}");
+    }
+    for source in [
+        "return Flow::Exit(transfer);",
+        "return Flow::Exit(Step::Unwound(target));",
+        "return transfer;",
+    ] {
+        let source = code_only(source);
+        assert_eq!(raw_flow_returns(&tokens(&source)).len(), 1, "{source}");
+    }
+    for source in [
+        "Err(transfer) => Flow::Exit(transfer),",
+        "{ self.pop(); Flow::Exit(Step::Unwound(target)) }",
+        "return Flow::Exit( /* comment */ transfer);",
+    ] {
+        let source = code_only(source);
+        assert_eq!(raw_flow_exits(&tokens(&source)).len(), 1, "{source}");
+    }
+    assert!(raw_flow_exits(&tokens("Flow::Exit(Step::Returned)")).is_empty());
 }
 
 const HANDLERS: &[&str] = &[
@@ -262,7 +442,14 @@ fn handler_call_is_wrapped(code: &[Token<'_>], name: &str) -> bool {
     let sites = token_positions(code, &format!("self.{name}("));
     sites.len() == 1
         && sites.iter().all(|&at| {
-            if at < 3 || token_positions(&code[at - 3..at], "dispatch_result!(") != vec![0] {
+            if at < 3
+                || !matches!(
+                    code[at - 3].text,
+                    "dispatch_result" | "dispatch_result_flow"
+                )
+                || code[at - 2].text != "!"
+                || code[at - 1].text != "("
+            {
                 return false;
             }
             let mut depth = 0;
@@ -272,12 +459,14 @@ fn handler_call_is_wrapped(code: &[Token<'_>], name: &str) -> bool {
                     ")" => {
                         depth -= 1;
                         if depth == 0 {
-                            return token_positions(
-                                &code[end + 1..],
-                                ", pc, self, return_depth, code)",
-                            )
-                            .first()
-                                == Some(&0);
+                            // The loop's macro takes the program counter it
+                            // lands a catch at; the `Flow` twin returns it.
+                            let tail = if code[at - 3].text == "dispatch_result" {
+                                ", pc, self, return_depth, code)"
+                            } else {
+                                ", self, return_depth, code)"
+                            };
+                            return token_positions(&code[end + 1..], tail).first() == Some(&0);
                         }
                     }
                     _ => {}
@@ -312,7 +501,7 @@ fn handler_consumes_transfer(source: &str) -> bool {
 fn extracted_handlers_leave_all_transfers_to_dispatch() {
     let source = code_only(SRC);
     let code = tokens(&source);
-    let body = &code[token_body(&code, "fn dispatch_at_inner(")];
+    let body = &dispatch_tokens(&code);
     for source in HANDLERS {
         assert!(!handler_consumes_transfer(source));
         let names = handler_names(source);
@@ -336,6 +525,10 @@ fn handler_lock_rejects_discarded_errors_and_consumed_unwinds() {
         "dispatch_result!(self.dispatch_get_property(code, id), other_pc, self, return_depth, code);",
         "dispatch_result!(self.dispatch_get_property(code, id), pc, other_machine, return_depth, code);",
         "dispatch_result!(self.dispatch_get_property(code, id), pc, self, return_depth, other_code);",
+        "dispatch_result_flow!(self.dispatch_get_property(code, id), self, 0, code);",
+        "dispatch_result_flow!(self.dispatch_get_property(code, id), other_machine, return_depth, code);",
+        "dispatch_result_flow!(self.dispatch_get_property(code, id), self, return_depth, other_code);",
+        "dispatch_result_flow!(self.dispatch_get_property(code, id), pc, self, return_depth, code);",
     ] {
         assert!(!handler_call_is_wrapped(
             &tokens(source),
@@ -345,6 +538,12 @@ fn handler_lock_rejects_discarded_errors_and_consumed_unwinds() {
     assert!(handler_call_is_wrapped(
         &tokens(
             "dispatch_result!(self.dispatch_get_property(code, id), pc, self, return_depth, code);"
+        ),
+        "dispatch_get_property"
+    ));
+    assert!(handler_call_is_wrapped(
+        &tokens(
+            "dispatch_result_flow!(self.dispatch_get_property(code, id), self, return_depth, code);"
         ),
         "dispatch_get_property"
     ));

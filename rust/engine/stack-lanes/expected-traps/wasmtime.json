@@ -3,29 +3,6 @@
     "max_wasm_stack": 1048576
   },
   "expected_traps": [
-    "async-10k",
-    "async-126",
-    "async-127",
-    "bound-127",
-    "bound-128",
-    "function-call-63",
-    "function-call-64",
-    "getter-119",
-    "getter-120",
-    "has-instance-126",
-    "has-instance-127",
-    "iterator-126",
-    "iterator-127",
-    "iterator-spread-126",
-    "iterator-spread-127",
-    "proxy-proto-cycle",
-    "proxy-trap-119",
-    "proxy-trap-120",
-    "setter-119",
-    "setter-120",
-    "to-primitive-126",
-    "to-primitive-127",
-    "valueOf-126",
-    "valueOf-127"
+    "proxy-proto-cycle"
   ]
 }
