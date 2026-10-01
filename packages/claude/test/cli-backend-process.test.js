@@ -59,9 +59,12 @@ test('a real process sees only the constructed environment and its prompt', asyn
   const report = JSON.parse(result.text);
   t.is(report.prompt, 'write then read');
   t.is(report.home, join(report.cwd, 'config'));
-  // Node's spawn itself adds NODE_V8_COVERAGE under a coverage run.
+  // Variables the runtime adds after the backend builds the environment:
+  // Node's spawn adds NODE_V8_COVERAGE under a coverage run, and macOS adds
+  // __CF_USER_TEXT_ENCODING to every process.
+  const injectedKeys = ['NODE_V8_COVERAGE', '__CF_USER_TEXT_ENCODING'];
   const environmentKeys = report.environmentKeys.filter(
-    key => key !== 'NODE_V8_COVERAGE',
+    key => !injectedKeys.includes(key),
   );
   t.deepEqual(environmentKeys, [
     'ANTHROPIC_AUTH_TOKEN',
