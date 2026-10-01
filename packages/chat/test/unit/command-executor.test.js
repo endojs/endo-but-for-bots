@@ -281,7 +281,7 @@ test('execute resolve command', async t => {
   t.deepEqual(ctx.calls[0].args, [10n, ['answer']]);
 });
 
-test('execute resolve command keeps a slash in the pet name as one segment', async t => {
+test('execute resolve command splits a typed slash into a pet-name path', async t => {
   const ctx = createMockContext();
   const executor = createCommandExecutor({
     powers: ctx.powers,
@@ -296,7 +296,7 @@ test('execute resolve command keeps a slash in the pet name as one segment', asy
   });
 
   t.true(result.success);
-  t.deepEqual(ctx.calls[0].args, [10n, ['feature/foo']]);
+  t.deepEqual(ctx.calls[0].args, [10n, ['feature', 'foo']]);
 });
 
 test('execute reject command', async t => {
@@ -346,7 +346,7 @@ test('execute js command', async t => {
   ]);
 });
 
-test('execute js command keeps a slash in each pet name as one segment', async t => {
+test('execute js command splits a typed slash in each name into a pet-name path', async t => {
   const ctx = createMockContext();
   const executor = createCommandExecutor({
     powers: ctx.powers,
@@ -367,8 +367,8 @@ test('execute js command keeps a slash in each pet name as one segment', async t
     ['@main'],
     '1 + 1',
     ['x'],
-    [['feature/foo']],
-    ['feature/bar'],
+    [['feature', 'foo']],
+    ['feature', 'bar'],
   ]);
 });
 

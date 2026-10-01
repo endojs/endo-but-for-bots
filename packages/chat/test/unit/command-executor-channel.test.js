@@ -358,7 +358,7 @@ test('adopt in channel mode fails when formula ID is missing', async t => {
   t.true(result.error?.message.includes('No formula ID'));
 });
 
-test('adopt in channel mode keeps a slash in the pet name as one segment', async t => {
+test('adopt in channel mode splits a typed slash into a pet-name path', async t => {
   const ctx = createMockContext();
   const { channelRef } = createMockChannelRef([
     { number: 2n, names: ['doc'], ids: ['formula:doc1'] },
@@ -380,7 +380,7 @@ test('adopt in channel mode keeps a slash in the pet name as one segment', async
 
   t.true(result.success);
   const writeCall = ctx.calls.find(c => c.method === 'storeLocator');
-  t.deepEqual(writeCall?.args, [['my/docs/file'], 'formula:doc1']);
+  t.deepEqual(writeCall?.args, [['my', 'docs', 'file'], 'formula:doc1']);
 });
 
 test('adopt with getChannelRef returning null falls back to inbox mode', async t => {

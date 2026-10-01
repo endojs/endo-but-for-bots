@@ -106,7 +106,7 @@ export const createCommandExecutor = ({
         case 'adopt': {
           const { messageNumber, edgeName, petName } = params;
           const targetNameStr = petName ? String(petName) : String(edgeName);
-          const targetNamePath = [targetNameStr];
+          const targetNamePath = targetNameStr.split('/');
 
           // In channel mode, adopt from channel message by formula ID
           const channelRef = getChannelRef ? getChannelRef() : null;
@@ -160,7 +160,7 @@ export const createCommandExecutor = ({
           const { messageNumber, petName } = params;
           await E(powers).resolve(
             BigInt(/** @type {number} */ (messageNumber)),
-            [String(petName)],
+            String(petName).split('/'),
           );
           return {
             success: true,
@@ -283,13 +283,13 @@ export const createCommandExecutor = ({
           for (const pair of /** @type {Array<{codeName: string, petName: string}>} */ (
             bindingPairs
           )) {
-            bindings[pair.codeName] = [pair.petName];
+            bindings[pair.codeName] = String(pair.petName).split('/');
           }
           await E(powers).endow(
             BigInt(/** @type {number} */ (messageNumber)),
             bindings,
-            [String(workerName)],
-            resultName ? [String(resultName)] : undefined,
+            String(workerName).split('/'),
+            resultName ? String(resultName).split('/') : undefined,
           );
           return {
             success: true,
@@ -310,17 +310,19 @@ export const createCommandExecutor = ({
             /** @type {Array<{codeName: string, petName: string}>} */ (
               endowments
             ).map(e => e.codeName);
-          // Wrap each pet name as a one-segment path for the evaluate API
+          // Split each typed name into a pet-name path for the evaluate API
           const petNamePaths =
             /** @type {Array<{codeName: string, petName: string}>} */ (
               endowments
-            ).map(e => [e.petName]);
-          const resultPath = resultName ? [String(resultName)] : undefined;
+            ).map(e => String(e.petName).split('/'));
+          const resultPath = resultName
+            ? String(resultName).split('/')
+            : undefined;
 
           let result;
           try {
             result = await E(powers).evaluate(
-              [String(workerName)],
+              String(workerName).split('/'),
               String(source),
               codeNames,
               petNamePaths,
@@ -617,7 +619,9 @@ export const createCommandExecutor = ({
 
           // Inbox mode: use host invite
           console.log(`[Chat] Creating invitation for "${guestName}"...`);
-          const invitation = await E(powers).invite([String(guestName)]);
+          const invitation = await E(powers).invite(
+            String(guestName).split('/'),
+          );
 
           if (delivery === 'inventory') {
             console.log(
@@ -871,8 +875,8 @@ export const createCommandExecutor = ({
         case 'mkhost':
         case 'host': {
           const { handleName, agentName } = params;
-          await E(powers).provideHost([String(handleName)], {
-            agentName: [String(agentName)],
+          await E(powers).provideHost(String(handleName).split('/'), {
+            agentName: String(agentName).split('/'),
           });
           return { success: true, message: `Host "${agentName}" created` };
         }
@@ -880,8 +884,8 @@ export const createCommandExecutor = ({
         case 'mkguest':
         case 'guest': {
           const { handleName, agentName } = params;
-          await E(powers).provideGuest([String(handleName)], {
-            agentName: [String(agentName)],
+          await E(powers).provideGuest(String(handleName).split('/'), {
+            agentName: String(agentName).split('/'),
           });
           return { success: true, message: `Guest "${agentName}" created` };
         }
