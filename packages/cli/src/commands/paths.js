@@ -1,6 +1,6 @@
 import os from 'os';
 import { E } from '@endo/eventual-send';
-import { withEndoAgent } from '../context.js';
+import { assertAgentHoldsLocators, withEndoAgent } from '../context.js';
 import { parsePetNamePath } from '../pet-name.js';
 import { renderPath, renderBanner } from '../render-retention-path.js';
 
@@ -20,6 +20,7 @@ export const paths = async ({ name, agentNames, locator, json }) =>
       resolvedLocator = name;
     } else {
       const namePath = parsePetNamePath(name);
+      await assertAgentHoldsLocators(agent, '`endo paths` by pet name');
       resolvedLocator = await E(agent).locate(...namePath);
       if (resolvedLocator === undefined) {
         console.error(`${name}: not found`);

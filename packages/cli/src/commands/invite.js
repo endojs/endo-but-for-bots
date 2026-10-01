@@ -1,6 +1,6 @@
 import os from 'os';
 import { E } from '@endo/eventual-send';
-import { withEndoAgent } from '../context.js';
+import { assertAgentHoldsLocators, withEndoAgent } from '../context.js';
 import { parsePetNamePath } from '../pet-name.js';
 
 export const invite = async ({ correspondentName, agentNames }) =>
@@ -8,6 +8,7 @@ export const invite = async ({ correspondentName, agentNames }) =>
     // A slash-delimited correspondent name nests the invitation (and the
     // accepted correspondent) inside a directory; the parent must already
     // exist.
+    await assertAgentHoldsLocators(agent, '`endo invite`');
     const invitation = await E(agent).invite(
       parsePetNamePath(correspondentName),
     );

@@ -1,6 +1,6 @@
 import os from 'os';
 import { E } from '@endo/eventual-send';
-import { withEndoAgent } from '../context.js';
+import { assertAgentHoldsLocators, withEndoAgent } from '../context.js';
 import { parsePetNamePath } from '../pet-name.js';
 
 const fromAsync = async iterable => {
@@ -18,6 +18,7 @@ export const accept = async ({ correspondentName, agentNames }) => {
   return withEndoAgent(agentNames, { os, process }, async ({ agent }) => {
     // A slash-delimited name nests the accepted connection inside a
     // directory; the parent directory must already exist.
+    await assertAgentHoldsLocators(agent, '`endo accept`');
     await E(agent).accept(
       invitationLocator.trim(),
       parsePetNamePath(correspondentName),
