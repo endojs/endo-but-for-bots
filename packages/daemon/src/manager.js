@@ -70,6 +70,7 @@ import {
   parseContentLocator,
 } from './locator.js';
 import { makeContextMaker } from './context.js';
+import { makeEnvironment } from './environment.js';
 import { makeImportedReferenceRegistrar } from './imported-reference.js';
 import {
   assertValidId,
@@ -890,6 +891,14 @@ const makeDaemonCore = async (
         return [['mount', formula.mountId]];
       case 'shell':
         return [['mount', formula.mountId]];
+      case 'environment':
+        return [
+          ['runner', formula.runner],
+          ['workspace', formula.workspace],
+          ['state', formula.state],
+        ];
+      case 'environment-facet':
+        return [['environment', formula.environment]];
       case 'http-client':
         // The HTTP client is rooted in a host-owned `fetch` seam, not a mount
         // or any other daemon-minted capability, so it has no formula deps.
@@ -3578,6 +3587,38 @@ const makeDaemonCore = async (
       );
       return git;
     },
+    environment: async (formula, context, id) => {
+      for (const dependency of [
+        formula.runner,
+        formula.workspace,
+        formula.state,
+      ])
+        context.thisDiesIfThatDies(dependency);
+      const directory = await provide(formula.state);
+      context.assertActive();
+      const kit = await makeEnvironment({
+        id,
+        recipe: formula.recipe,
+        directory,
+        resolve: async role => {
+          context.assertActive();
+          const value = await provide(formula[role]);
+          context.assertActive();
+          return value;
+        },
+      });
+      context.assertActive();
+      context.onCancel(kit.shutdown);
+      return harden({ shell: kit.shell, admin: kit.admin });
+    },
+    'environment-facet': async (formula, context) => {
+      context.thisDiesIfThatDies(formula.environment);
+      const kit = /** @type {import('./types.js').EnvironmentKit} */ (
+        await provide(formula.environment)
+      );
+      context.assertActive();
+      return kit[formula.facet];
+    },
     shell: async ({ mountId, policy }, context) => {
       context.thisDiesIfThatDies(mountId);
       const mount = await provide(mountId);
@@ -5089,6 +5130,82 @@ const makeDaemonCore = async (
       })
     );
   };
+
+  /** @type {DaemonCore['formulateEnvironment']} */
+  const formulateEnvironment = (runner, workspace, recipe, deferredTasks) =>
+    withFormulaGraphLock(async () => {
+      const state = await formulateDirectory();
+      const pins = [state.id];
+      try {
+        const environmentNumber = /** @type {FormulaNumber} */ (
+          await randomHex256()
+        );
+        const shellNumber = /** @type {FormulaNumber} */ (await randomHex256());
+        const adminNumber = /** @type {FormulaNumber} */ (await randomHex256());
+        const environmentId = formatId({
+          number: environmentNumber,
+          node: localNodeNumber,
+        });
+        const shellId = formatId({
+          number: shellNumber,
+          node: localNodeNumber,
+        });
+        const adminId = formatId({
+          number: adminNumber,
+          node: localNodeNumber,
+        });
+        for (const pin of [
+          environmentId,
+          shellId,
+          adminId,
+          runner,
+          workspace,
+        ]) {
+          pinTransient(pin);
+          pins.push(pin);
+        }
+        await formulateLazy(
+          environmentNumber,
+          harden({
+            type: 'environment',
+            runner,
+            workspace,
+            state: state.id,
+            recipe,
+          }),
+        );
+        await formulateLazy(
+          shellNumber,
+          harden({
+            type: 'environment-facet',
+            environment: environmentId,
+            facet: 'shell',
+          }),
+        );
+        await formulateLazy(
+          adminNumber,
+          harden({
+            type: 'environment-facet',
+            environment: environmentId,
+            facet: 'admin',
+          }),
+        );
+        await deferredTasks.execute({ environmentId, shellId, adminId });
+        const shell = /** @type {import('./types.js').EndoShell} */ (
+          await provide(shellId)
+        );
+        const admin = /** @type {import('./types.js').EnvironmentAdmin} */ (
+          await provide(adminId)
+        );
+        return {
+          id: environmentId,
+          value: harden({ shell, admin }),
+          context: provideController(environmentId).context,
+        };
+      } finally {
+        await Promise.all(pins.map(unpinTransient));
+      }
+    });
 
   /** @type {DaemonCore['formulateHttpClient']} */
   const formulateHttpClient = async (policy, deferredTasks) => {
@@ -7645,6 +7762,7 @@ const makeDaemonCore = async (
     formulateSubMount,
     formulateGit,
     formulateShell,
+    formulateEnvironment,
     formulateHttpClient,
     getHttpClientControlForClient,
     formulateGitCredential,

@@ -409,6 +409,43 @@ export type ShellDeferredTaskParams = {
   shellId: FormulaIdentifier;
 };
 
+export type EnvironmentRecipe = {
+  policy: Pick<ShellPolicy, 'allowedCommands' | 'timeoutMs' | 'maxOutputBytes'>;
+  networkPolicy: 'off' | 'public-internet';
+};
+
+export interface EnvironmentAdmin {
+  inspect(): Promise<{
+    phase: 'idle' | 'active' | 'disposed';
+    networkPolicy: 'off' | 'public-internet';
+    interrupted: boolean;
+    active: boolean;
+  }>;
+  stop(): Promise<void>;
+  setNetworkPolicy(policy: 'off' | 'public-internet'): Promise<void>;
+  dispose(): Promise<void>;
+  help(): string;
+}
+
+export type EnvironmentKit = { shell: EndoShell; admin: EnvironmentAdmin };
+export type EnvironmentFormula = {
+  type: 'environment';
+  runner: FormulaIdentifier;
+  workspace: FormulaIdentifier;
+  state: FormulaIdentifier;
+  recipe: EnvironmentRecipe;
+};
+export type EnvironmentFacetFormula = {
+  type: 'environment-facet';
+  environment: FormulaIdentifier;
+  facet: 'shell' | 'admin';
+};
+export type EnvironmentDeferredTaskParams = {
+  environmentId: FormulaIdentifier;
+  shellId: FormulaIdentifier;
+  adminId: FormulaIdentifier;
+};
+
 /**
  * The confinement mode a formula-owned HTTP policy can honor across a daemon
  * restart on its own. `tofu-prompt` / `tofu-attenuator` are excluded because
@@ -677,6 +714,8 @@ export type Formula =
   | ScratchMountFormula
   | GitFormula
   | ShellFormula
+  | EnvironmentFormula
+  | EnvironmentFacetFormula
   | HttpClientFormula
   | GitCredentialFormula
   | GitRemoteFormula
@@ -1787,6 +1826,18 @@ export interface EndoHost extends EndoAgent {
     policy: ShellPolicy,
   ): Promise<EndoShell>;
   /**
+   * Capture exact local or remote runner/workspace dependencies. Passive
+   * restoration never starts native work. Retain the admin root until explicit
+   * disposal succeeds; dropping roots does not implement environment GC.
+   */
+  provideEnvironment(
+    runner: object,
+    workspace: EndoMount,
+    adminName: NameOrPath,
+    shellName: NameOrPath,
+    recipe: EnvironmentRecipe,
+  ): Promise<EnvironmentKit>;
+  /**
    * Mint a confined outbound-HTTP `HttpClient`, persist its formula, and bind
    * the use-facing client to `petName`. Unlike `provideShell` / `provideGit`
    * it takes no mount cap — the Network tier is rooted in a host-owned `fetch`
@@ -2676,6 +2727,8 @@ type FormulateNumberedHostParams = {
 };
 
 export type FormulaValueTypes = {
+  environment: EnvironmentKit;
+  'environment-facet': EndoShell | EnvironmentAdmin;
   directory: EndoDirectory;
   mount: EndoMount;
   network: EndoNetwork;
@@ -2902,6 +2955,12 @@ export interface DaemonCore {
     policy: ShellPolicy,
     deferredTasks: DeferredTasks<ShellDeferredTaskParams>,
   ) => FormulateResult<EndoShell>;
+  formulateEnvironment: (
+    runner: FormulaIdentifier,
+    workspace: FormulaIdentifier,
+    recipe: EnvironmentRecipe,
+    deferredTasks: DeferredTasks<EnvironmentDeferredTaskParams>,
+  ) => FormulateResult<EnvironmentKit>;
 
   formulateHttpClient: (
     policy: HttpClientPolicy,

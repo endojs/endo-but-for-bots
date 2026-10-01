@@ -125,6 +125,21 @@ native admission.
 The worker/runtime suites pass 31 tests, including source/bundle inference
 regressions and network-only lifecycle tests; types and ESLint pass.
 Live egress and durable environment composition remain pending.
+The daemon now mints an `environment` recipe and separate Shell/admin facet
+formulas. Graph edges retain exact runner and workspace identities; only the
+private formula-backed state directory is read during lookup or restoration.
+Command admission publishes active intent before resolving the runner. A cold
+active intent fences execution for operator cleanup; it does not replay commands
+or manufacture cleanup proof from a fresh runner.
+The runner's `provideEnvironment` contract is inert: acquisition belongs only to
+the returned controller's `open`. Stop reaches retained controllers outside the
+command queue and observes early cleanup rejection immediately; retry retains
+the original owner. Policy replacement and disposal fence new commands.
+Explicit disposal deletes owned development storage only after stop, never the
+workspace. Automatic GC remains deferred.
+Nine owner tests and one real daemon cold-restoration test pass. The latter
+proves passive inspection and exact dependency capture after petname rebinding.
+Native development storage, preset integration and live acceptance remain pending.
 No admitted inbox command or inference is replayed to discover its result.
 The delegation registry's closed-ask and unsolicited-sender routing remains
 process-local; published claimed-reply receipts prevent their replay, but an

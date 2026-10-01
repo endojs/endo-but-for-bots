@@ -7,6 +7,8 @@ const formulaTypes = new Set([
   'channel',
   'directory',
   'endo',
+  'environment',
+  'environment-facet',
   'eval',
   'git',
   'git-credential',

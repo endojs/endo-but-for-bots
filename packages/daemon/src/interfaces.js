@@ -13,6 +13,7 @@ import {
   rangeReadMethodGuards,
   getInfoMethodGuard,
 } from '@endo/platform/fs/lite';
+import { EnvironmentRecipeShape } from './environment.js';
 import {
   NamePathShape,
   NameOrPathShape,
@@ -446,6 +447,13 @@ export const HostInterface = M.interface('EndoHost', {
     NameOrPathShape,
     M.recordOf(M.string(), M.any()),
   ).returns(M.remotable('Shell')),
+  provideEnvironment: M.callWhen(
+    M.remotable(),
+    M.remotable(),
+    NameOrPathShape,
+    NameOrPathShape,
+    EnvironmentRecipeShape,
+  ).returns(harden({ shell: M.remotable(), admin: M.remotable() })),
   // Mint a confined outbound-HTTP client from a host-owned `fetch` seam. No
   // mount arg: the Network tier is rooted in the fetch seam, not a mount.
   provideHttpClient: M.callWhen(
@@ -681,7 +689,7 @@ export const ChannelInvitationInterface = M.interface('EndoChannelInvitation', {
   help: M.call().optional(M.string()).returns(M.string()),
   join: M.call(M.string()).returns(M.promise()),
 });
-harden(ChannelInvitationInterface);
+
 
 export const AttenuatorInterface = M.interface('EndoChannelAttenuator', {
   setInvitationValidity: M.call(M.boolean()).returns(M.promise()),
@@ -689,7 +697,7 @@ export const AttenuatorInterface = M.interface('EndoChannelAttenuator', {
   getHeatConfig: M.call().returns(M.promise()),
   temporaryBan: M.call(M.number()).returns(M.promise()),
 });
-harden(AttenuatorInterface);
+
 
 export const InvitationInterface = M.interface('EndoInvitation', {
   accept: M.call(IdShape).optional(M.string()).returns(M.promise()),
