@@ -527,8 +527,10 @@ The source review does not establish that either branch is dead.
   Implementation subsequently starts with removal of misleading sandbox dynamic
   mount/scratch/open/fork/reset methods and tracker-only mount handles, outside
   this audit's four-package source metric.
-  Static mounts and owned process cleanup remain; Shell/environment integration
-  is pending, and process-loss recovery remains separate research.
+  Static mounts and owned process cleanup remain.
+  The portable Shell adapter is subsequently tested, including CapTP byte streams
+  and failure/cancellation paths; durable environments and live acceptance remain
+  pending, and process-loss recovery remains separate research.
   The deletion is not deployed; the recorded hosted acceptance baseline is unchanged.
 
 Audit status: measured and caller-reviewed; implementation progress is above.

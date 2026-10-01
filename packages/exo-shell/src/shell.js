@@ -23,14 +23,15 @@ const DEFAULT_KILL_GRACE_MS = 2000;
  * Drain an async-iterable byte stream into a UTF-8 string, bounded to
  * `maxBytes`.  Once the cap is reached the remaining chunks are still read to
  * EOF (so the child never blocks on a full pipe) but discarded, and the result
- * is flagged `truncated`.  A stream that throws mid-read — the usual shape when
- * the process is killed — resolves with whatever was accumulated.
+ * is flagged `truncated`. Stream failure initiates termination and is reported
+ * by exec, never converted into a successful partial result.
  *
  * @param {AsyncIterable<Uint8Array> | null | undefined} stream
  * @param {number} maxBytes
+ * @param {(error: unknown) => void} onFailure
  * @returns {Promise<{ text: string, truncated: boolean }>}
  */
-const drainBounded = async (stream, maxBytes) => {
+const drainBounded = async (stream, maxBytes, onFailure) => {
   if (stream === null || stream === undefined) {
     return { text: '', truncated: false };
   }
@@ -61,8 +62,8 @@ const drainBounded = async (stream, maxBytes) => {
         truncated = true;
       }
     }
-  } catch {
-    // The process was likely killed mid-stream; return the partial capture.
+  } catch (error) {
+    onFailure(error);
   }
   const buf = new Uint8Array(total);
   let offset = 0;
@@ -126,7 +127,11 @@ export const makeShell = ({
       X`makeShell: policy.allowedCommands must be a non-empty array of command-name strings`,
     );
   }
-  if (!Number.isInteger(policyTimeoutMs) || policyTimeoutMs <= 0) {
+  if (
+    !Number.isInteger(policyTimeoutMs) ||
+    policyTimeoutMs <= 0 ||
+    policyTimeoutMs > 0x7fff_ffff
+  ) {
     throw makeError(X`makeShell: policy.timeoutMs must be a positive integer`);
   }
   if (!Number.isInteger(maxOutputBytes) || maxOutputBytes <= 0) {
@@ -134,7 +139,11 @@ export const makeShell = ({
       X`makeShell: policy.maxOutputBytes must be a positive integer`,
     );
   }
-  if (!Number.isInteger(killGraceMs) || killGraceMs <= 0) {
+  if (
+    !Number.isInteger(killGraceMs) ||
+    killGraceMs <= 0 ||
+    killGraceMs > 0x7fff_ffff
+  ) {
     throw makeError(X`makeShell: killGraceMs must be a positive integer`);
   }
 
@@ -170,73 +179,121 @@ export const makeShell = ({
       }
       // A per-call timeout may only narrow the policy value, never widen it.
       const requested = options.timeoutMs;
+      if (
+        requested !== undefined &&
+        (!Number.isInteger(requested) ||
+          requested <= 0 ||
+          requested > 0x7fff_ffff)
+      ) {
+        throw makeError(
+          X`Shell.exec: timeoutMs must be a positive timer-range integer`,
+        );
+      }
       const effectiveTimeoutMs =
-        requested !== undefined && requested > 0
+        requested !== undefined
           ? Math.min(policyTimeoutMs, requested)
           : policyTimeoutMs;
 
       // Argv only — the program name is argv[0], never a shell string, and
       // `shell: false` forbids the spawner from wrapping it in `/bin/sh -c`.
       const argv = harden([command, ...args]);
-      const proc = await spawner(argv, {
-        cwd,
-        env: childEnv,
-        shell: false,
-      });
-
-      let timedOut = false;
+      // Start the budget before admission. A late process stays observed and
+      // receives any queued termination even after the caller has timed out.
+      const procPromise = Promise.resolve().then(() =>
+        spawner(argv, {
+          cwd,
+          env: childEnv,
+          shell: false,
+          timeoutMs: effectiveTimeoutMs,
+        }),
+      );
+      /** @type {Error | undefined} */
+      let failure;
       /** @type {ReturnType<typeof setTimeout> | undefined} */
       let killTimer;
-      // On expiry, ask the child to terminate with `SIGTERM`; a child can trap
-      // or ignore it (and a forked descendant can hold the stdio pipes open),
-      // which would leave `proc.wait()` and the output drains pending forever —
-      // the timeout would not be a bound at all.  So after a grace window we
-      // escalate to the uncatchable `SIGKILL`.  The daemon spawner kills the
-      // whole process group, so a stubborn child and its descendants are reaped,
-      // their pipes reach EOF, and `exec` settles: the timeout is enforceable,
-      // not merely advisory.
-      const timer = setTimeout(() => {
-        timedOut = true;
-        void proc.kill('SIGTERM');
+      /** @type {ReturnType<typeof setTimeout> | undefined} */
+      let abandonTimer;
+      /** @type {(reason: unknown) => void} */
+      let abandon = () => {};
+      /** @type {Promise<never>} */
+      const abandoned = new Promise((_, reject) => {
+        abandon = reject;
+      });
+      void abandoned.catch(() => {});
+      /** @type {Promise<void>[]} */
+      const signals = [];
+      /** @param {string} signal */
+      const terminate = signal => {
+        signals.push(
+          procPromise.then(
+            proc =>
+              Promise.resolve()
+                .then(() => proc.kill(signal))
+                .catch(error => {
+                  failure = makeError(
+                    X`Shell cleanup failed: ${q(error)}`,
+                    undefined,
+                    { cause: failure },
+                  );
+                }),
+            () => {},
+          ),
+        );
+      };
+      /** @param {unknown} error */
+      const stop = error => {
+        if (killTimer !== undefined) return;
+        failure = error instanceof Error ? error : makeError(X`${q(error)}`);
+        terminate('SIGTERM');
         killTimer = setTimeout(() => {
-          void proc.kill('SIGKILL');
+          terminate('SIGKILL');
+          abandonTimer = setTimeout(() => {
+            abandon(
+              failure ?? makeError(X`Shell process failed without an error`),
+            );
+          }, killGraceMs);
         }, killGraceMs);
+      };
+      const timer = setTimeout(() => {
+        stop(
+          makeError(X`Shell command timed out after ${effectiveTimeoutMs}ms`),
+        );
       }, effectiveTimeoutMs);
-
-      /** @type {{ text: string, truncated: boolean }} */
-      let outRes;
-      /** @type {{ text: string, truncated: boolean }} */
-      let errRes;
-      /** @type {{ code: number | null, signal: string | null }} */
-      let status;
       try {
-        [outRes, errRes, status] = await Promise.all([
-          drainBounded(proc.stdout, maxOutputBytes),
-          drainBounded(proc.stderr, maxOutputBytes),
-          proc.wait(),
+        const proc = await Promise.race([procPromise, abandoned]);
+        const [outRes, errRes, status] = await Promise.race([
+          Promise.all([
+            drainBounded(proc.stdout, maxOutputBytes, stop),
+            drainBounded(proc.stderr, maxOutputBytes, stop),
+            proc.wait().catch(error => {
+              stop(error);
+              return undefined;
+            }),
+          ]),
+          abandoned,
         ]);
+        if (killTimer !== undefined) {
+          // A rejected wait does not prove exit, even if both readers closed.
+          if (status === undefined) terminate('SIGKILL');
+          await Promise.race([Promise.all(signals), abandoned]);
+          throw failure ?? makeError(X`Shell process failed without an error`);
+        }
+        if (status === undefined)
+          throw makeError(X`Shell process outcome is unknown`);
+        return harden({
+          stdout: outRes.text,
+          stderr: errRes.text,
+          exitCode: status.code,
+          signal: status.signal,
+          truncated: outRes.truncated || errRes.truncated,
+        });
       } finally {
         clearTimeout(timer);
         if (killTimer !== undefined) {
           clearTimeout(killTimer);
         }
+        if (abandonTimer !== undefined) clearTimeout(abandonTimer);
       }
-
-      const { code } = status;
-      let { signal } = status;
-      // A timeout kill may race the natural exit; surface the kill signal when
-      // the runtime reported neither a code nor a signal.
-      if (timedOut && code === null && signal === null) {
-        signal = 'SIGTERM';
-      }
-
-      return harden({
-        stdout: outRes.text,
-        stderr: errRes.text,
-        exitCode: code,
-        signal,
-        truncated: outRes.truncated || errRes.truncated,
-      });
     },
   });
 

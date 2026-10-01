@@ -28,7 +28,12 @@ export type ShellResult = {
  */
 export type Spawner = (
   argv: string[],
-  opts?: { cwd?: string; env?: Record<string, string>; shell?: boolean },
+  opts?: {
+    cwd?: string;
+    env?: Record<string, string>;
+    shell?: boolean;
+    timeoutMs?: number;
+  },
 ) => Promise<{
   pid: number;
   stdout?: AsyncIterable<Uint8Array> | null;

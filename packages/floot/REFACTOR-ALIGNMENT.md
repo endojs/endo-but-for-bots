@@ -118,7 +118,8 @@ The subsequent environment investigation is recorded in
 [durable POSIX environments](../../designs/durable-posix-environments.md).
 Implementation has started with deletion of the sandbox's misleading dynamic
 mount/scratch/open/fork/reset methods; static mounts and owned process cleanup remain.
-Shell/process alignment and durable environment capabilities for Fae and Floot
+The portable Shell adapter is now tested, including CapTP byte streams and
+failure/cancellation paths; durable environments and live Fae/Floot acceptance
 remain pending, without a second delegation platform or selected crash-recovery design.
 This sandbox-package deletion does not change the four-package source metric above.
 

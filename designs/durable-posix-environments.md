@@ -14,15 +14,27 @@ Implementation is authorized; the first slice removes the misleading dynamic
 slice contracts, together with the tracker-only `SandboxMount` capability.
 Static mount declarations, process supervision, admission fencing, and owned disposal remain.
 Interface enumeration tests pin the smaller surface without old-name aliases.
-The portable spawner/Shell adapter, durable environment provisioning, independent
-egress composition, and Fae/Floot acceptance remain to be implemented.
-No new native recovery mechanism or deployment is included in this slice.
+The second slice adds `makeSandboxSpawner(slice)` over eventual-send process and
+byte-stream capabilities, using the existing Shell rather than another executor.
+Shell now preserves read/wait/stdin failures and rejects timeout, including delayed
+admission; a late process remains observed for queued termination.
+Stalled stdin closure cannot hide an admitted process from cancellation.
+Tests cover structured argv, separate streams, nonzero exit, a CapTP membrane,
+read/stdin failures, delayed admission, and termination refusal.
+Durable environment provisioning, independent egress composition, and live
+Fae/Floot/two-daemon acceptance remain to be implemented.
+No new native recovery mechanism or deployment is included in these slices.
 Focused factory, native-factory, ownership, lifecycle, and runtime suites pass
 78 tests in each of the four SES configurations; package types and ESLint pass
 with warnings, and root documentation builds with 0 errors and 180 warnings.
 The full sandbox suite is not green: two unchanged direct Podman-driver
 environment-extensibility assertions fail in the unsafe configuration.
 No live Podman acceptance is claimed on this macOS development host.
+The adapter adds eight passing tests in each SES configuration.
+The Shell suite passes 17 tests and package types/ESLint (3 warnings, 0 errors);
+the daemon's host-Shell composition suite passes 7 tests, including real child
+termination, and sandbox types/ESLint pass (29 warnings, 0 errors).
+The root documentation build still reports 0 errors and 180 warnings.
 
 ## Problem and scope
 
@@ -106,8 +118,9 @@ An adapter must bridge this actual difference rather than require one implementa
 local JavaScript objects to cross CapTP.
 
 There are also semantic differences.
-`exo-shell` truncates output capture, drains the rest, and catches stream read failures
-without exposing a separate read-error result.
+At the baseline, `exo-shell` truncated output capture, drained the rest, and caught
+stream read failures without exposing a separate read-error result.
+The adapter implementation now preserves these failures as rejected execution.
 The sandbox's [`eager reader`](../packages/sandbox/src/eager-reader.js) can terminate an
 operation at its capture bound and propagate read failures.
 Termination and descendant cleanup differ between the host spawner and Podman as well.
@@ -160,7 +173,21 @@ over an eventual-send process capability.
 Keep structured argv execution distinct from explicitly granting a shell interpreter.
 Do not add backend-specific flags to the agent tool schema.
 
-Before implementation, settle and test these parts of the common contract:
+The first adapter settles these parts of the buffered contract:
+
+- Execution uses structured argv, an environment-relative working directory, and
+  explicit environment variables; no shell interpolation or ambient environment is implied.
+- EOF is sent to stdin, without withholding process controls until remote acknowledgement.
+- Ordinary nonzero exit is a result; spawn, read, stdin-close, wait, transport, and
+  timeout failures reject rather than reporting partial output as successful execution.
+- The per-stream Shell bound truncates capture and drains the rest.
+  The factory's separate native safety ceiling can terminate execution and reject it.
+- The deadline starts before admission and can only narrow the policy deadline.
+  TERM, KILL, and a bounded wait reach late-admitted handles; a bounded rejection
+  does not assert native cleanup or permit unproven resource reuse.
+- No remote PID is disclosed or used for cancellation.
+
+The remaining integration must establish these parts before claiming acceptance:
 
 - Command resolution, working-directory interpretation, environment inheritance, and stdin closure.
 - Exit status versus spawn, stream, transport, cancellation, and timeout failures.
