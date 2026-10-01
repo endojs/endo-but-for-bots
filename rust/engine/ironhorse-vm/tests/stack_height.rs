@@ -22,8 +22,13 @@
 //! ```
 //!
 //! The cases are the shared corpus in `stack-lanes/cases.rs`, which every
-//! Phase 0 lane measures.
+//! Phase 0 lane measures. A case that needs eval compiles it through the
+//! production bridge, `ironhorse_runtime::IronhorseSourceCompiler`, as the
+//! stack-lanes probe and the daemon do, so `eval-deep` and the other eval
+//! cases compile on top of the VM's depth exactly as they do there (report
+//! §2.4).
 
+use ironhorse_runtime::IronhorseSourceCompiler;
 use ironhorse_vm::{Interp, RunOutcome, NATIVE_STACK_BYTES};
 
 #[path = "../../stack-lanes/cases.rs"]
@@ -52,55 +57,6 @@ fn outcome_label(out: &RunOutcome) -> String {
         .next()
         .unwrap_or("halt")
         .to_string()
-}
-
-/// The crate's own source compiler as the eval bridge, as
-/// `native_recursion_budget.rs` installs it, so `eval-deep` compiles on top of
-/// the VM's depth (report §2.4).
-struct IronhorseCompiler;
-impl ironhorse_vm::SourceCompiler for IronhorseCompiler {
-    fn compile_source(
-        &self,
-        source: &str,
-        strict: bool,
-        raw_budget: u64,
-        charge: &mut dyn FnMut(u64) -> bool,
-    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        match ironhorse_compile::compile_atoms_budgeted_firewalled(
-            source,
-            ironhorse_compile::Goal::Eval,
-            strict,
-            raw_budget,
-            charge,
-        ) {
-            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
-                bytecode: compiled.bytecode,
-                symbols: compiled.symbols,
-                parse_meter_raw: compiled.parse_meter_raw,
-                parse_computrons: compiled.parse_computrons,
-            }),
-            Err(ironhorse_compile::CompileError::MeterAbort) => {
-                Err(ironhorse_vm::SourceCompileError::MeterAbort)
-            }
-            Err(ironhorse_compile::CompileError::Invariant(detail)) => {
-                Err(ironhorse_vm::SourceCompileError::Invariant(detail))
-            }
-            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
-                    ..
-                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
-                    ..
-                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
-                ironhorse_compile::ParseErrorKind::Unsupported => Err(
-                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
-                ),
-                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
-            },
-        }
-    }
 }
 
 struct Measured {
@@ -139,7 +95,7 @@ fn measure(case: Case) -> Measured {
         let mut machine = Interp::new();
         machine.link_intrinsics(&names);
         if case.eval_compiler {
-            machine.set_source_compiler(std::rc::Rc::new(IronhorseCompiler));
+            machine.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
         }
         let (out, run_bytes) = stage(|| machine.run(&bytecode).host_coerced());
         Measured {

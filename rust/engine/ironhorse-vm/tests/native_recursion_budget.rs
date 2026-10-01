@@ -29,6 +29,7 @@
 //! and the throw-site render, a diagnostic, falls back to a stub rather than
 //! halt a crank a native driver may still catch.
 
+use ironhorse_runtime::IronhorseSourceCompiler;
 use ironhorse_vm::{Halt, Interp, RunOutcome, NATIVE_DEPTH_LIMIT, NATIVE_STACK_BYTES};
 
 /// The stack-lane corpus (`stack-lanes/cases.rs`): the heavy re-entry
@@ -581,56 +582,8 @@ fn an_ordinary_prototype_chain_is_walked_in_place() {
     }
 }
 
-/// The crate's own source compiler installed as the eval bridge, so the
+/// [`on_contract_stack`] with the production eval bridge installed, so the
 /// compiler-side budgets are observed through the guest-visible surface.
-struct IronhorseCompiler;
-impl ironhorse_vm::SourceCompiler for IronhorseCompiler {
-    fn compile_source(
-        &self,
-        source: &str,
-        strict: bool,
-        raw_budget: u64,
-        charge: &mut dyn FnMut(u64) -> bool,
-    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
-        match ironhorse_compile::compile_atoms_budgeted_firewalled(
-            source,
-            ironhorse_compile::Goal::Eval,
-            strict,
-            raw_budget,
-            charge,
-        ) {
-            Ok(compiled) => Ok(ironhorse_vm::CompiledSource {
-                bytecode: compiled.bytecode,
-                symbols: compiled.symbols,
-                parse_meter_raw: compiled.parse_meter_raw,
-                parse_computrons: compiled.parse_computrons,
-            }),
-            Err(ironhorse_compile::CompileError::MeterAbort) => {
-                Err(ironhorse_vm::SourceCompileError::MeterAbort)
-            }
-            // A caught compiler panic is an engine fault, not a coverage
-            // gap (architecture finding F063).
-            Err(ironhorse_compile::CompileError::Invariant(detail)) => {
-                Err(ironhorse_vm::SourceCompileError::Invariant(detail))
-            }
-            Err(ironhorse_compile::CompileError::Parse(error)) => match error.kind {
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpResourceLimit,
-                    ..
-                }) => Err(ironhorse_vm::SourceCompileError::HeapExhausted),
-                ironhorse_compile::ParseErrorKind::Lex(ironhorse_compile::LexError {
-                    kind: ironhorse_compile::LexErrorKind::RegExpBudgetExceeded,
-                    ..
-                }) => Err(ironhorse_vm::SourceCompileError::MeterAbort),
-                ironhorse_compile::ParseErrorKind::Unsupported => Err(
-                    ironhorse_vm::SourceCompileError::Unsupported(error.to_string()),
-                ),
-                _ => Err(ironhorse_vm::SourceCompileError::Syntax(error.message)),
-            },
-        }
-    }
-}
-
 fn on_contract_stack_with_compiler(source: String) -> RunOutcome {
     std::thread::Builder::new()
         .stack_size(NATIVE_STACK_BYTES)
@@ -638,7 +591,7 @@ fn on_contract_stack_with_compiler(source: String) -> RunOutcome {
             let (bytecode, names) = compile(&source);
             let mut machine = Interp::new();
             machine.link_intrinsics(&names);
-            machine.set_source_compiler(std::rc::Rc::new(IronhorseCompiler));
+            machine.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
             machine.run(&bytecode)
         })
         .expect("spawn the contract-stack thread")
@@ -717,7 +670,7 @@ fn regexp_compilation_refusal_bypasses_guest_catch_in_constructor_and_eval() {
         let (bytecode, names) = compile(source);
         let mut machine = Interp::new();
         machine.link_intrinsics(&names);
-        machine.set_source_compiler(std::rc::Rc::new(IronhorseCompiler));
+        machine.set_source_compiler(std::rc::Rc::new(IronhorseSourceCompiler));
         machine.arm_meter(1, Box::new(|computrons| computrons < 10_000));
         let out = machine.run(&bytecode);
         assert!(
