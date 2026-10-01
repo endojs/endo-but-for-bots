@@ -248,6 +248,26 @@ export const mintWithPowersPath = async (
 harden(mintWithPowersPath);
 
 /**
+ * Finish guest publication in order, without replacing a retained destination.
+ * Interrupted publication leaves the remaining root names for the next run.
+ * @param {any} hostAgent
+ * @param {[string, string[]][]} moves
+ */
+const finishGuestMoves = async (hostAgent, moves) => {
+  for (const [from, to] of moves) {
+    if (
+      // eslint-disable-next-line no-await-in-loop
+      (await E(hostAgent).has(from)) &&
+      // eslint-disable-next-line no-await-in-loop
+      !(await E(hostAgent).has(...to))
+    ) {
+      // eslint-disable-next-line no-await-in-loop
+      await E(hostAgent).move([from], to);
+    }
+  }
+};
+
+/**
  * Provide the account oracle of one subscription: a retained formula with a
  * namespace of its own (`account-oracle-module.js`), fed by the broker service
  * whose transport reads the account's rate-limit headers.
@@ -329,21 +349,10 @@ export const provideAccountOracle = async (
       env: harden({ ACCOUNT_PROVIDER_ID: providerId }),
     });
   }
-  // Finish the moves, only into a destination that is still free.
-  for (const [from, to] of [
+  await finishGuestMoves(hostAgent, [
     [handleName, handlePath],
     [powersName, powersPath],
-  ]) {
-    if (
-      // eslint-disable-next-line no-await-in-loop
-      (await E(hostAgent).has(/** @type {string} */ (from))) &&
-      // eslint-disable-next-line no-await-in-loop
-      !(await E(hostAgent).has(.../** @type {string[]} */ (to)))
-    ) {
-      // eslint-disable-next-line no-await-in-loop
-      await E(hostAgent).move([from], to);
-    }
-  }
+  ]);
   // Re-point at the source minted above. The oracle resolves the name on
   // every call, so this is all a re-minted broker takes.
   const powers = await E(hostAgent).lookup(powersPath);
@@ -442,20 +451,10 @@ export const provideSubscriptionAdmin = async (
       env: harden({}),
     });
   }
-  for (const [from, to] of [
+  await finishGuestMoves(hostAgent, [
     [handleName, handlePath],
     [powersName, powersPath],
-  ]) {
-    if (
-      // eslint-disable-next-line no-await-in-loop
-      (await E(hostAgent).has(/** @type {string} */ (from))) &&
-      // eslint-disable-next-line no-await-in-loop
-      !(await E(hostAgent).has(.../** @type {string[]} */ (to)))
-    ) {
-      // eslint-disable-next-line no-await-in-loop
-      await E(hostAgent).move([from], to);
-    }
-  }
+  ]);
   // Re-point at what was minted over the broker that exists now. The intent
   // journal in this namespace is not touched.
   const powers = await E(hostAgent).lookup(powersPath);
@@ -651,20 +650,10 @@ export const provideDelegatedRunner = async (
       },
     );
   }
-  for (const [from, to] of [
+  await finishGuestMoves(hostAgent, [
     [handleName, handlePath],
     [powersName, powersPath],
-  ]) {
-    if (
-      // eslint-disable-next-line no-await-in-loop
-      (await E(hostAgent).has(/** @type {string} */ (from))) &&
-      // eslint-disable-next-line no-await-in-loop
-      !(await E(hostAgent).has(.../** @type {string[]} */ (to)))
-    ) {
-      // eslint-disable-next-line no-await-in-loop
-      await E(hostAgent).move([from], to);
-    }
-  }
+  ]);
   const powers = await E(hostAgent).lookup(powersPath);
   // The backend that exists now: an adapter mints it again on every run.
   await E(powers).storeLocator('backend', backendLocator);
@@ -839,20 +828,10 @@ export const provideSubscriptionShare = async (
       },
     );
   }
-  for (const [from, to] of [
+  await finishGuestMoves(hostAgent, [
     [handleName, handlePath],
     [powersName, powersPath],
-  ]) {
-    if (
-      // eslint-disable-next-line no-await-in-loop
-      (await E(hostAgent).has(/** @type {string} */ (from))) &&
-      // eslint-disable-next-line no-await-in-loop
-      !(await E(hostAgent).has(.../** @type {string[]} */ (to)))
-    ) {
-      // eslint-disable-next-line no-await-in-loop
-      await E(hostAgent).move([from], to);
-    }
-  }
+  ]);
   const powers = await E(hostAgent).lookup(powersPath);
   if (
     subscriptionPath === undefined &&

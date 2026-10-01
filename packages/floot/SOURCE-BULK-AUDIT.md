@@ -329,6 +329,19 @@ The source review does not establish that either branch is dead.
   All eight concrete candidates are closed; SB-09 through SB-12 local repetition
   and the separate scope decisions remain next, not implemented by this slice.
   No host configuration, image pin, stored authority or workspace changes; not deployed.
+- **SB-09 done:** four guest-publication loops now use one private
+  `finishGuestMoves` helper in `hosted-setup.js`.
+  Source-exists/destination-free checks, short-circuiting, handle-before-powers
+  ordering and rejected-move propagation are unchanged; `has` plus `move` is
+  still not an atomic publication protocol.
+  Account, reset, share and runner owners keep their separate setup and journals.
+  Twelve regressions cover the four callers' held first moves, interrupted
+  second moves with the same retained namespace, and occupied destinations with
+  stray root names preserved.
+  Focused setup/backend-setup tests pass: 47; hosted types, scoped ESLint and
+  formatting pass. Independent review checks publication semantics and reruns tests.
+  This removes 21 source lines, bringing the committed count to 42,589.
+  No durable format, formula identity or release pin changes; not deployed.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.

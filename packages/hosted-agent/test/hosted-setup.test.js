@@ -24,8 +24,10 @@ import {
   forgetBrokerSettings,
   mintWithPowersPath,
   prepareRuntimeEnv,
+  provideAccountOracle,
   providePrivateDirectory,
   provideDelegatedRunner,
+  provideSubscriptionAdmin,
   provideSubscriptionShare,
   publishAccountOracle,
   publishBrokerSubscription,
@@ -362,11 +364,14 @@ test('slice image references are checked without Podman and pinned through it', 
 /**
  * A host agent that records names as a flat map of joined paths.
  * @param {Record<string, any>} initial
+ * @param {{ beforeMove?: (from: string[], to: string[]) => void | Promise<void> }} [options]
  */
-const makeNamingHost = initial => {
+const makeNamingHost = (initial, { beforeMove = () => undefined } = {}) => {
   const names = new Map(Object.entries(initial));
   const guests = new Map();
   const made = [];
+  /** @type {[string[], string[]][]} */
+  const moves = [];
   const identities = new WeakMap();
   const joined = namePath =>
     (Array.isArray(namePath) ? namePath : [namePath]).join('/');
@@ -431,6 +436,8 @@ const makeNamingHost = initial => {
       names.set(joined(options.resultName), formula);
     },
     move: async (from, to) => {
+      moves.push([from, to]);
+      await beforeMove(from, to);
       names.set(joined(to), names.get(joined(from)));
       names.delete(joined(from));
     },
@@ -443,10 +450,160 @@ const makeNamingHost = initial => {
     names,
     guests,
     made,
+    moves,
     publication: source =>
       names.get(`floot/controller-profile/account-bindings/${source}`),
   };
 };
+
+for (const { name, stem, provide } of [
+  {
+    name: 'account oracle',
+    stem: 'account-oracle',
+    provide: host =>
+      provideAccountOracle(host, {
+        label: 'Adapter',
+        dir: 'adapter',
+        brokerPath: ['adapter', 'broker-service'],
+        providerId: 'provider',
+        specifier: 'file:///account-oracle-module.js',
+        sourceSpecifier: 'file:///account-source-module.js',
+      }),
+  },
+  {
+    name: 'reset administrator',
+    stem: 'subscription-admin',
+    provide: host =>
+      provideSubscriptionAdmin(host, {
+        label: 'Adapter',
+        dir: 'adapter',
+        brokerPath: ['adapter', 'broker-service'],
+        specifier: 'file:///subscription-admin-module.js',
+        redeemerSpecifier: 'file:///reset-redeemer-module.js',
+      }),
+  },
+  {
+    name: 'subscription share',
+    stem: 'share-alice',
+    provide: host =>
+      provideSubscriptionShare(host, {
+        label: 'Adapter',
+        dir: 'adapter',
+        shareId: 'alice',
+        limits: { budget: { tokens: 1000, periodSeconds: 60 } },
+      }),
+  },
+  {
+    name: 'delegated runner',
+    stem: 'runner-alice',
+    provide: host =>
+      provideDelegatedRunner(host, {
+        label: 'Adapter',
+        dir: 'adapter',
+        runnerId: 'alice',
+        limits: {
+          subscription: 'owned',
+          maxSessions: 2,
+          storage: 'unbounded',
+        },
+        unmetered: true,
+      }),
+  },
+]) {
+  const roots = [`adapter.${stem}-handle`, `adapter.${stem}-powers`];
+  const retained = [`adapter/${stem}-handle`, `adapter/${stem}-powers`];
+  const initial = {
+    'adapter/broker-service': 'broker',
+    'adapter/account-source': 'source',
+    'adapter/subscription': 'subscription',
+    'adapter/backend': 'backend',
+  };
+
+  test(`${name} waits for handle publication before moving its powers`, async t => {
+    t.timeout(5000);
+    let entered = () => {};
+    const held = new Promise(resolve => {
+      entered = () => resolve(undefined);
+    });
+    let release = () => {};
+    const gate = new Promise(resolve => {
+      release = () => resolve(undefined);
+    });
+    t.teardown(release);
+    const world = makeNamingHost(initial, {
+      beforeMove: async from => {
+        if (from[0] === roots[0]) {
+          entered();
+          await gate;
+        }
+      },
+    });
+    const publishing = provide(world.host);
+    publishing.catch(() => undefined);
+    await held;
+    await new Promise(resolve => setImmediate(resolve));
+    t.deepEqual(world.moves, [[[roots[0]], retained[0].split('/')]]);
+    t.true(world.names.has(roots[0]));
+    t.true(world.names.has(roots[1]));
+    t.false(world.names.has(retained[0]));
+    t.false(world.names.has(retained[1]));
+    release();
+    await publishing;
+    t.deepEqual(world.moves, [
+      [[roots[0]], retained[0].split('/')],
+      [[roots[1]], retained[1].split('/')],
+    ]);
+  });
+
+  test(`${name} resumes publication after the handle move without recreating its namespace`, async t => {
+    let interrupted = false;
+    const world = makeNamingHost(initial, {
+      beforeMove: from => {
+        if (from[0] === roots[1] && !interrupted) {
+          interrupted = true;
+          throw Error('publication interrupted');
+        }
+      },
+    });
+    await t.throwsAsync(() => provide(world.host), {
+      message: 'publication interrupted',
+    });
+    const handle = world.names.get(retained[0]);
+    const powers = world.names.get(roots[1]);
+    t.false(world.names.has(roots[0]));
+    t.true(world.names.has(retained[0]));
+    t.true(world.names.has(roots[1]));
+    t.false(world.names.has(retained[1]));
+    await provide(world.host);
+    t.is(world.names.get(retained[0]), handle);
+    t.is(world.names.get(retained[1]), powers);
+    t.is(world.guests.size, 1);
+    t.false(world.names.has(roots[0]));
+    t.false(world.names.has(roots[1]));
+    t.deepEqual(world.moves, [
+      [[roots[0]], retained[0].split('/')],
+      [[roots[1]], retained[1].split('/')],
+      [[roots[1]], retained[1].split('/')],
+    ]);
+  });
+
+  test(`${name} does not replace occupied publication destinations or discard stray root names`, async t => {
+    const world = makeNamingHost(initial);
+    await provide(world.host);
+    const handle = world.names.get(retained[0]);
+    const powers = world.names.get(retained[1]);
+    const before = world.moves.length;
+    world.names.set(roots[0], 'stray handle');
+    world.names.set(roots[1], 'stray powers');
+    await provide(world.host);
+    t.is(world.names.get(retained[0]), handle);
+    t.is(world.names.get(retained[1]), powers);
+    t.is(world.names.get(roots[0]), 'stray handle');
+    t.is(world.names.get(roots[1]), 'stray powers');
+    t.is(world.moves.length, before);
+    t.is(world.guests.size, 1);
+  });
+}
 
 test('an account oracle is made once, keeps its identity, and follows a re-minted broker', async t => {
   const world = makeNamingHost({
