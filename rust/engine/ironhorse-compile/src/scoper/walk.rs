@@ -527,7 +527,7 @@ impl Scoper<'_> {
             Token::Define => {
                 if let Some(sym) = child_sym(node, 0) {
                     let scope = self.scope.unwrap();
-                    let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), false, false);
+                    let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), None, false);
                     if let Some((rscope, rid)) = resolved {
                         self.declare_mut(rscope, rid).bound = true;
                     }

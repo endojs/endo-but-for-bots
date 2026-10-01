@@ -451,16 +451,30 @@ pub(crate) fn run_goal_metered(
     goal: Goal,
     meter: crate::meter::ParseMeter<'_>,
 ) -> Result<ScopeTree, ParseError> {
-    run_goal_with_access_log(root, goal, meter, false)
+    run_goal_with_access_log(root, goal, meter, false, false)
 }
 
 /// The private compiler consumes resolutions, not the diagnostic access log.
+#[cfg(test)]
 pub(crate) fn run_goal_for_compile(
     root: &Item,
     goal: Goal,
     meter: crate::meter::ParseMeter<'_>,
 ) -> Result<ScopeTree, ParseError> {
-    run_goal_with_access_log(root, goal, meter, true)
+    run_goal_with_access_log(root, goal, meter, true, false)
+}
+
+/// The compiler's scoping pass. `private_environment` marks a direct eval
+/// whose caller's environment can supply private names: a strict eval scope
+/// then declares an unresolved `#name` for `EVAL_PRIVATE` to bind at run
+/// time.
+pub(crate) fn run_goal_for_compile_with(
+    root: &Item,
+    goal: Goal,
+    meter: crate::meter::ParseMeter<'_>,
+    private_environment: bool,
+) -> Result<ScopeTree, ParseError> {
+    run_goal_with_access_log(root, goal, meter, true, private_environment)
 }
 
 fn run_goal_with_access_log(
@@ -468,6 +482,7 @@ fn run_goal_with_access_log(
     goal: Goal,
     meter: crate::meter::ParseMeter<'_>,
     omit_access_log: bool,
+    private_environment: bool,
 ) -> Result<ScopeTree, ParseError> {
     let root_node = match root {
         Item::Node(n) => n.as_ref(),
@@ -477,6 +492,7 @@ fn run_goal_with_access_log(
         meter,
         goal,
         omit_access_log,
+        private_environment,
         ..Scoper::default()
     };
     // fxParserHoist
@@ -532,6 +548,9 @@ struct Scoper<'a> {
     depth: u32,
     /// The [`Goal`] this run is scoping for (see `run_goal`).
     goal: Goal,
+    /// Whether a strict eval scope may leave a private name for its caller's
+    /// environment to supply (a direct eval; see [`run_goal_for_compile_with`]).
+    private_environment: bool,
     scopes: Vec<Scope>,
     // Most block scopes have no declarations. Keep only a pointer-sized
     // vacancy for them; allocate the lookup tables on the first declaration.
@@ -800,7 +819,7 @@ impl Scoper<'_> {
     fn field_init_alias(&mut self, fi: usize, class_scope: usize, class_id: u32) -> Option<u32> {
         let d = self.declare_ref(class_scope, class_id);
         let symbol = d.symbol.clone()?;
-        self.scope_lookup(fi, &symbol, false, false)
+        self.scope_lookup(fi, &symbol, None, false)
             .map(|(_, id)| id)
     }
 
@@ -1019,6 +1038,8 @@ impl Scoper<'_> {
     /// `si`, creating function-scope closure aliases as XS does. Returns
     /// the resolved `(scope, declare id)` or `None` for a global / `with`
     /// / eval-shadowed access. `closure_flag` marks captures.
+    /// `private_member` is the access's line when it names a private member
+    /// (`#x`), which a direct eval may leave to its caller's environment.
     ///
     /// XS recurses once per scope; this climbs in a loop, keeping the
     /// function scopes it leaves (from each of which the lookup continues as
@@ -1028,7 +1049,7 @@ impl Scoper<'_> {
         &mut self,
         si: usize,
         symbol: &Sym,
-        is_private_member: bool,
+        private_member: Option<u32>,
         closure_flag: bool,
     ) -> Option<(usize, u32)> {
         let mut si = si;
@@ -1054,19 +1075,25 @@ impl Scoper<'_> {
                     // XS's `fxScopeLookup` synthesizes a `Private` brand
                     // declare here for a strict eval scope
                     // (`XS_TOKEN_PRIVATE_MEMBER`), deferring the "undefined
-                    // private property" check to run time. The static
-                    // oracle-shim compile drives the whole assembled program
-                    // as one eval goal, so this Eval scope is the top-level
-                    // program with no enclosing class — an unresolved `#name`
-                    // at this point is the `AllPrivateNamesValid` early error
-                    // and can never resolve at run time. Leaving
-                    // `found = None` lets `bind_private_member` report
-                    // "invalid private identifier" (a parse-phase rejection),
-                    // matching XS's own SyntaxError verdict for these sources.
-                    // A future direct-eval implementation must resolve a
-                    // private name against the *real* enclosing private
-                    // environment, never a synthesized top-level brand.
-                    let _ = is_private_member;
+                    // private property" check to run time. Only a direct eval
+                    // does so here: its caller's environment holds the
+                    // class's private names, which `EVAL_PRIVATE` binds
+                    // before the body runs. The static compile drives a whole
+                    // program as one eval goal, where an unresolved `#name`
+                    // is the `AllPrivateNamesValid` early error; leaving
+                    // `found = None` lets `bind_private_member` report it,
+                    // matching XS's SyntaxError for these sources.
+                    if let Some(line) = private_member.filter(|_| {
+                        found.is_none()
+                            && self.private_environment
+                            && self.scope_node_flags(si) & SCOPE_STRICT != 0
+                    }) {
+                        let mut private =
+                            self.new_declare(si, Token::Private, Some(symbol.clone()), line);
+                        private.flags |= dflags::CLOSURE;
+                        found = Some(self.scope_add_declare(si, private));
+                        self.scopes[si].closure_count += 1;
+                    }
                     break found.map(|id| (si, id));
                 }
                 Token::Function => {
@@ -2051,7 +2078,7 @@ impl Scoper<'_> {
     fn bind_access(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
-            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), false, false);
+            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), None, false);
             self.record_access(&sym, node.line, resolved);
             self.resolutions.insert(node_id(node), resolved);
         }
@@ -2062,10 +2089,10 @@ impl Scoper<'_> {
     /// `obj.#m()`) and the `#x in obj` brand check (`PrivateIdentifier`)
     /// share this bind. The node's own `symbol` (child 0, the `#name`)
     /// resolves through the class-scope closures hoisting installed
-    /// (`symbolAccess`). An unresolved `#name` is an early error, including
-    /// at the root strict-eval scope: this entry has no enclosing private
-    /// environment from which a missing brand could be supplied. The walk
-    /// binds the reference (child 1) after this lookup, matching
+    /// (`symbolAccess`). An unresolved `#name` is an early error, unless a
+    /// strict direct eval's scope declares it for its caller's environment
+    /// to supply (see [`Scoper::scope_lookup`]). The walk binds the
+    /// reference (child 1) after this lookup, matching
     /// `fxPrivateMemberNodeDistribute`.
     #[inline(never)]
     fn bind_private_member(&mut self, node: &Node) -> Result<(), ParseError> {
@@ -2078,7 +2105,8 @@ impl Scoper<'_> {
         }
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
-            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), true, false);
+            let resolved =
+                self.scope_lookup(scope, &Sym::Named(sym.clone()), Some(node.line), false);
             if resolved.is_none() {
                 return Err(err(node.line, "invalid private identifier"));
             }
@@ -2093,7 +2121,7 @@ impl Scoper<'_> {
     fn bind_declare_node(&mut self, node: &Node) -> Result<(), ParseError> {
         if let Some(sym) = child_sym(node, 0) {
             let scope = self.scope.unwrap();
-            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), false, false);
+            let resolved = self.scope_lookup(scope, &Sym::Named(sym.clone()), None, false);
             // `self->declaration = declaration` — record that this declaration
             // binds (drives `fxScopeCodeStoreAll` eligibility).
             if let Some((rscope, rid)) = resolved {
@@ -2223,7 +2251,7 @@ impl Scoper<'_> {
             if let Some(&(rscope, rid)) = self.class_instance_init.get(&cnode) {
                 if let Some(sym) = self.declare_ref(rscope, rid).symbol.clone() {
                     let scope = self.scope.unwrap();
-                    if let Some(resolved) = self.scope_lookup(scope, &sym, false, false) {
+                    if let Some(resolved) = self.scope_lookup(scope, &sym, None, false) {
                         self.super_instance_init.insert(node_id(node), resolved);
                     }
                 }
@@ -2258,7 +2286,7 @@ impl Scoper<'_> {
         };
         for (name, as_name, line) in specs {
             let sym = Sym::Named(name.clone());
-            let resolved = self.scope_lookup(scope, &sym, false, false);
+            let resolved = self.scope_lookup(scope, &sym, None, false);
             match resolved {
                 Some((si, id)) => {
                     let export_name = as_name.or_else(|| Some(name.clone()));

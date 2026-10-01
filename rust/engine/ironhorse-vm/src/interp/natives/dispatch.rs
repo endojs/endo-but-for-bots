@@ -1351,7 +1351,11 @@ impl Interp {
                     // compiler). `self.strict` is the calling script or
                     // function frame's strictness at this direct-eval site.
                     let strict = self.eval_direct && self.strict;
-                    self.eval_source(&text, strict)?
+                    // XS's `XS_FIELD_FLAG`: the calling frame is a class
+                    // field initializer, which opens with
+                    // `BEGIN_STRICT_FIELD`.
+                    let field = self.eval_direct && self.running_field_initializer();
+                    self.eval_source_in(&text, strict, field)?
                 } else {
                     source
                 }

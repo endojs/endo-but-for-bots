@@ -980,8 +980,9 @@ impl<'a, 'm> Coder<'a, 'm> {
     /// (a hoisted function declaration's binding) allocates its slot here
     /// like any non-`var` declare — a `NEW_LOCAL`/`NEW_CLOSURE` with no
     /// value init (`fxScopeCodeDefineNodes` assigns the function value
-    /// later). Class brands are `Const` declarations too; the scoper never
-    /// produces a `Private` declaration for the source compilation entry.
+    /// later). Class brands are `Const` declarations too. A `Private`
+    /// declaration appears only in a direct eval's scope, a closure the
+    /// eval prologue binds to its caller's brand (`EVAL_PRIVATE`).
     fn assert_declared_kind(&self, token: Token) {
         assert!(
             matches!(
@@ -993,6 +994,7 @@ impl<'a, 'm> Coder<'a, 'm> {
                     | Token::Arg
                     | Token::Define
                     | Token::NoToken
+                    | Token::Private
             ),
             "declaration kind {:?} reached (function/class slice)",
             token
@@ -1184,24 +1186,53 @@ fn compile_goal_metered(
 }
 
 fn compile_parser(
-    mut parser: crate::parser::Parser<'_>,
+    parser: crate::parser::Parser<'_>,
     goal: Goal,
     strict: bool,
+    meter: crate::meter::ParseMeter<'_>,
+) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
+    let context = EvalContext {
+        strict,
+        ..EvalContext::default()
+    };
+    compile_parser_with(parser, goal, &context, meter)
+}
+
+/// [`compile_parser`] in an [`EvalContext`]: a field initializer's eval
+/// rejects `arguments`, and the scoper may resolve private names at run time.
+fn compile_parser_with(
+    mut parser: crate::parser::Parser<'_>,
+    goal: Goal,
+    context: &EvalContext,
     meter: crate::meter::ParseMeter<'_>,
 ) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
     let module = goal == Goal::Module;
     let mut root = if module {
         parser.parse_module()?
     } else {
-        parser.parse_program(strict)?
+        parser.parse_program(context.strict)?
     };
+    // ContainsArguments of a field initializer reaches into a direct eval
+    // there (PerformEval's `inClassFieldInitializer`), as XS's `mxFieldFlag`.
+    if context.field && parser.uses_arguments() {
+        return Err(crate::parser::ParseError {
+            line: 1,
+            kind: crate::parser::ParseErrorKind::Syntax,
+            message: "invalid arguments".into(),
+        });
+    }
     // Script and Eval share the XS eval frame shape; the goal controls hoists.
     if !module {
         if let Item::Node(n) = &mut root {
             n.flags |= crate::ast::flags::EVAL;
         }
     }
-    let tree = crate::scoper::run_goal_for_compile(&root, goal, meter.clone())?;
+    let tree = crate::scoper::run_goal_for_compile_with(
+        &root,
+        goal,
+        meter.clone(),
+        context.private_environment,
+    )?;
     let mut coder = Coder::new(&tree, meter);
     coder.intern_tree(&root);
     // `Coder::report_kind` unwinds with `Poisoned` rather than returning, so
@@ -1390,6 +1421,78 @@ pub fn compile_atoms_units_budgeted_with_limit(
         parse_meter_raw: meter.raw(),
         parse_computrons: meter.computrons(),
     })
+}
+
+/// What a direct `eval` inherits from the code that calls it (XS's
+/// `fxRunEval` flags): its strictness; whether `new.target` is allowed (the
+/// caller is a constructor-capable function); whether `super` property
+/// access is (the caller has a home object); whether it runs in a class field
+/// initializer, where `arguments` is a SyntaxError; and whether the caller's
+/// environment can supply a class's private names. With that last flag a
+/// strict eval resolves an unresolved `#name` at run time (`EVAL_PRIVATE`),
+/// as XS does, instead of rejecting it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EvalContext {
+    pub strict: bool,
+    pub new_target: bool,
+    pub super_property: bool,
+    pub field: bool,
+    pub private_environment: bool,
+}
+
+/// [`compile_atoms_units_budgeted_firewalled`] for a direct eval, compiled
+/// in its caller's [`EvalContext`].
+pub fn compile_atoms_units_eval_firewalled(
+    source: &[u16],
+    context: &EvalContext,
+    raw_budget: u64,
+    charge: &mut dyn FnMut(u64) -> bool,
+) -> Result<CompiledAtoms, CompileError> {
+    let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let meter = crate::ParseMeter::with_charge_callback(raw_budget, charge);
+        let result = compile_atoms_units_eval_with_meter(source, context, meter.clone());
+        if meter.exhausted() {
+            return Err(CompileError::MeterAbort);
+        }
+        let (bytecode, symbols) = result.map_err(CompileError::Parse)?;
+        Ok(CompiledAtoms {
+            bytecode,
+            symbols,
+            parse_meter_raw: meter.raw(),
+            parse_computrons: meter.computrons(),
+        })
+    }));
+    match caught {
+        Ok(result) => result,
+        Err(payload) => Err(CompileError::Invariant(panic_text(payload.as_ref()))),
+    }
+}
+
+/// Compile a direct eval's source in its caller's [`EvalContext`]: the
+/// [`Goal::Eval`] program, with the parser seeded with the context's
+/// `super`, `new.target` and field flags.
+pub fn compile_atoms_units_eval_with_meter(
+    source: &[u16],
+    context: &EvalContext,
+    meter: crate::ParseMeter<'_>,
+) -> Result<(Vec<u8>, Vec<u8>), crate::parser::ParseError> {
+    let result = crate::meter::catch_refusal(|| {
+        let mut parser =
+            crate::parser::Parser::with_units(source, context.strict, false, meter.clone())?;
+        let mut flags = 0;
+        if context.new_target {
+            flags |= crate::ast::flags::TARGET;
+        }
+        if context.super_property {
+            flags |= crate::ast::flags::SUPER;
+        }
+        parser.add_flags(flags);
+        compile_parser_with(parser, Goal::Eval, context, meter.clone())
+    });
+    if meter.exhausted() {
+        return Err(crate::meter::limit_error());
+    }
+    result.map_err(|()| crate::meter::limit_error())?
 }
 
 /// UTF-16 source counterpart of `compile_atoms_goal_with_meter`.
@@ -1645,8 +1748,17 @@ impl Coder<'_, '_> {
             if scope_count != 0 {
                 self.add_index(0, XS_CODE_RESERVE_1, scope_count);
                 self.scope_coding_block(scope);
-                for (_, token, _, _) in &declares {
-                    assert_ne!(*token, Token::Private, "eval private closure (class slice)");
+                // A private name a direct eval borrows from its caller's
+                // class: look it up in the environment and bind it, so the
+                // body's private accesses use the class's own brand.
+                for (id, token, sym, _) in &declares {
+                    if *token == Token::Private {
+                        let index = self.declare_index(scope, *id);
+                        let name = Self::sym_name(sym).expect("a private name");
+                        self.add_symbol(1, XS_CODE_EVAL_PRIVATE, name);
+                        self.add_index(0, XS_CODE_CONST_CLOSURE_1, index);
+                        self.add_byte(-1, XS_CODE_POP);
+                    }
                 }
             }
         } else {
