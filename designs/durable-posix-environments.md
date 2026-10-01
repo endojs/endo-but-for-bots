@@ -5,11 +5,14 @@
 | **Created** | 2026-10-01 |
 | **Updated** | 2026-10-02 |
 | **Author** | kumavis (prompted) |
-| **Status** | In Progress |
+| **Status** | Initial implementation complete; Tokyo acceptance passed |
 
 ## Implementation status
 
-2026-10-02 current slice: the Floot development preset publishes only the common
+2026-10-02: initial implementation is complete and live on Tokyo generation 194,
+app `854a4c5aae573b669692fd132bcd30cbb0cc3926`, host
+`1f2a4bdc027089096a6cea27d549903e527c2b6b`.
+The Floot development preset publishes only the common
 Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
 tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
 hosted CLI sessions already own their execution environment. The preset has its
@@ -20,10 +23,37 @@ HOME/workspace storage, and keeps the private admin for manual disposal. Missing
 private administration fails closed, including on revival of an existing Shell.
 Focused publication, cancellation and factory tests pass; the full Floot/UI
 regression suite passed 872 tests before the final revival regression addition.
-Operator provisioning is deployed on Tokyo generation 191, with a private
-development runner and the credential-free listener. Real two-daemon Shell
-execution and explicit-stop/cold-restoration tests pass locally. Live
-Rust/compaction acceptance remains pending: the first Luna request failed before
+Operator provisioning uses a private development runner and a credential-free
+network listener, separate from inference and subscription ownership.
+Real two-daemon Shell capability routing and explicit-stop/cold-restoration tests
+pass locally. The two-daemon test uses a fixture runner; it does not establish
+live remote Podman or VM execution.
+
+| Live acceptance gate | Result |
+|---|---|
+| Fae through Codex subscription pool | `gpt-5.6-luna` installed Rust in native HOME, built `/workspace/rust-pilot`, passed its unit test and accurately reported exit 7 |
+| Fae through OpenRouter | Only `openrouter/free`; uid/gid 1000, HOME `/home/node`, native commands and workspace read/write passed |
+| Durable compaction | Three checkpoints at the forced-compaction gate; six total by final inspection; original history and opaque provider context retained |
+| Policy replacement | Off prevented DNS/public access; public-only returned HTTP 200; installed Cargo survived both changes |
+| Cancellation | Admin stop interrupted an admitted sleep in 3.295 s; Floot cancel in 1.359 s, with a durable cancelled record and idle, non-interrupted environment |
+| Planned restart/recall | Explicit stop acknowledged before daemon restart; Cargo tests passed without reinstalling, `RUST_RESTART_OK` recalled, free-route file retained |
+| Delete/dispose | Both test sessions deleted, private admins disposed, dedicated test factory/profile retired; no development containers, sockets or 9P mounts remain |
+
+Focused Responses/Floot tests pass 42; runner/network/Shell tests pass 43 with
+loopback permissions (the restricted run could not start listener pipes).
+Workspace/storage/setup tests pass 21; journal/projection tests pass 27;
+Fae provider-owner tests pass 9. Lal/hosted-agent types and changed JavaScript
+ESLint pass. These are separate focused runs, not a claim that the whole repo
+is green. Every implementation/ops commit received adversarial review.
+Private operation receipts and transcript evidence remain at
+`/var/lib/endo/development-acceptance-20261002/`; the helper is connect-only,
+never a persistent daemon formula. Secrets, renewal owners, host and existing
+user workspaces were preserved. Deployment watchers are active after NixOS
+activation; no watcher policy change was made.
+
+### Defects found and fixed during acceptance
+
+The first Luna request failed before
 tool admission because ChatGPT completed output items in stream events but sent
 an empty terminal output list. The Responses adapter now retains the complete
 indexed item snapshots, preserves opaque context and rejects unfinished observed
@@ -44,13 +74,18 @@ native scope before removing its joined listener; early listener cancellation
 remains available before a scope exists. Native errors are made passable before
 crossing controller boundaries. The failed test's original owner acknowledged
 cleanup on explicit retry; its uncertain command receipt is retained, not replayed.
-Cancellation, restart/recall and disposal acceptance remain pending.
+Generation 194 passed the remaining cancellation, restart/recall and disposal
+gates after scope-first ordering was applied to runner-wide shutdown as well.
 Actual daemon testing also found that daemon exit does not run manager-owned
 environment cancellation hooks. Planned restart must explicitly acknowledge
 `admin.stop()` before stopping the daemon; exit alone leaves the active-intent
 fence. This is not cleanup proof and is not automatically adopted on restoration.
 Revising the daemon-wide shutdown boundary is follow-up lifecycle research
 (#1323), not an additional native recovery mechanism in this implementation.
+Automatic environment GC remains a design gap: cleanup is explicit on the
+private admin facet, not a finalizer or cancellation side effect.
+
+### Earlier slice history (superseded by the current status above)
 
 Implementation is authorized; the first slice removes the misleading dynamic
 `mount`, `scratch`, `open`, `fork`, and unused `reset` methods from public and native
