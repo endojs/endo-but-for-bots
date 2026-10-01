@@ -131,10 +131,75 @@ fn private_names_resolve_through_the_caller() {
             r#"class C { #x = 1; m() { try { return (0, eval)('this.#x'); } catch (e) { return e.constructor.name; } } } new C().m()"#,
             r#"SyntaxError"#,
         ),
+        (
+            "optional_call_is_indirect",
+            r#"class C { #x = 7; m() { try { return eval?.('this.#x'); } catch (e) { return e.constructor.name; } } } new C().m()"#,
+            r#"SyntaxError"#,
+        ),
+        // A spread argument list still makes a direct eval, as XS and the
+        // specification have it; V8 makes it indirect and throws a SyntaxError.
+        (
+            "spread_argument",
+            r#"class C { #x = 7; m() { return eval(...['this.#x']); } } try { new C().m() } catch (e) { e.constructor.name }"#,
+            r#"7"#,
+        ),
+        // XS, and so Ironhorse, compiles a parenthesized `(eval)(...)` as an
+        // indirect eval. The specification calls it direct, and V8 answers 7.
+        (
+            "parenthesized_callee",
+            r#"class C { #x = 7; m() { return (eval)('this.#x'); } } try { new C().m() } catch (e) { e.constructor.name }"#,
+            r#"SyntaxError"#,
+        ),
+        (
+            "async_method",
+            r#"class C { #x = 7; async m() { r = eval('this.#x'); } } var r; new C().m(); r"#,
+            r#"7"#,
+        ),
+        (
+            "async_arrow",
+            r#"class C { #x = 7; m() { var r; (async () => { r = eval('this.#x'); })(); return r; } } new C().m()"#,
+            r#"7"#,
+        ),
+        (
+            "setter",
+            r#"class C { #v = 0; set #s(v) { this.#v = v; } m() { eval('this.#s = 9'); return this.#v; } } new C().m()"#,
+            r#"9"#,
+        ),
+        (
+            "static_method",
+            r#"class C { static #sm() { return 'sm'; } static m() { return eval('C.#sm()'); } } C.m()"#,
+            r#"sm"#,
+        ),
+        (
+            "from_a_static_method",
+            r#"class C { #x = 7; static #y = 8; get #g() { return this.#x + 1; } static m(o) { return eval('[o.#x, C.#y, o.#g].join()'); } } C.m(new C())"#,
+            r#"7,8,8"#,
+        ),
+        (
+            "arrow_declared_in_eval",
+            r#"class C { #x = 1; m() { return eval('var f = () => this.#x; f()'); } } new C().m()"#,
+            r#"1"#,
+        ),
+        (
+            "class_with_fields_in_eval",
+            r#"class C { #x = 1; m() { return eval('class D { y = 2; #z = 3; g() { return this.#z; } } [new D().y, new D().g()].join()'); } } new C().m()"#,
+            r#"2,3"#,
+        ),
+        (
+            "class_in_eval_reads_the_outer_name",
+            r#"class C { #x = 1; m() { return eval('class D { y = this.#x; } ; new D().y'); } } try { new C().m() } catch (e) { e.constructor.name }"#,
+            r#"TypeError"#,
+        ),
         // The specification, as V8; XS rejects `#x in o` inside an eval ("invalid character").
         (
             "brand_check",
             r#"class C { #x = 1; m(o) { return eval('#x in o'); } } [new C().m(new C()), new C().m({})].join()"#,
+            r#"true,false"#,
+        ),
+        // The specification, as V8; XS rejects `#x in o` inside an eval ("invalid character").
+        (
+            "brand_check_from_a_static_method",
+            r#"class C { #x = 1; static check(o) { return eval('#x in o'); } } [C.check(new C()), C.check({})].join()"#,
             r#"true,false"#,
         ),
         // The specification, as V8; XS throws a ReferenceError ("get C: not initialized yet").
@@ -142,6 +207,12 @@ fn private_names_resolve_through_the_caller() {
             "static_block",
             r#"class C { static #s = 4; static { this.v = eval('C.#s'); } } C.v"#,
             r#"4"#,
+        ),
+        // The specification, as V8; XS throws a ReferenceError ("get C: not initialized yet").
+        (
+            "static_field",
+            r#"class C { static #p = 3; static f = eval('C.#p'); } C.f"#,
+            r#"3"#,
         ),
     ]);
 }
@@ -173,6 +244,36 @@ fn super_resolves_through_the_callers_home() {
             "arrow_in_eval",
             r#"var o = { m() { return eval('() => super.toString === Object.prototype.toString')(); } }; o.m()"#,
             r#"true"#,
+        ),
+        (
+            "eval_in_arrow_in_eval",
+            r#"class B { m() { return 'B'; } } class D extends B { m() { return eval('() => eval("super.m()")')(); } } new D().m()"#,
+            r#"B"#,
+        ),
+        (
+            "static_field",
+            r#"class B { static s = 'S'; } class D extends B { static f = eval('super.s'); } D.f"#,
+            r#"S"#,
+        ),
+        (
+            "generator",
+            r#"class B { m() { return 'B'; } } class D extends B { *g() { yield eval('super.m()'); } } new D().g().next().value"#,
+            r#"B"#,
+        ),
+        (
+            "async_method",
+            r#"class B { m() { return 'B'; } } class D extends B { async m() { r = eval('super.m()'); } } var r; new D().m(); r"#,
+            r#"B"#,
+        ),
+        (
+            "object_literal_getter",
+            r#"var o = { __proto__: { p: 'P' }, get x() { return eval('super.p'); } }; o.x"#,
+            r#"P"#,
+        ),
+        (
+            "object_literal_setter",
+            r#"var o = { __proto__: { p: 'P' }, set x(v) { this.r = eval('super.p') + v; } }; o.x = 1; o.r"#,
+            r#"P1"#,
         ),
         (
             "plain_function",
@@ -225,6 +326,26 @@ fn new_target_and_field_initializers() {
             r#"SyntaxError"#,
         ),
         (
+            "class_constructor",
+            r#"class C { constructor() { this.t = eval('new.target') === C; } } new C().t"#,
+            r#"true"#,
+        ),
+        (
+            "inherited_constructor",
+            r#"class B { constructor() { this.t = eval('new.target'); } } class D extends B {} new D().t === D"#,
+            r#"true"#,
+        ),
+        (
+            "function_declared_in_eval",
+            r#"function F() { this.v = eval('function g() { return new.target; } String(g())'); } new F().v"#,
+            r#"undefined"#,
+        ),
+        (
+            "function_declared_in_a_method_eval",
+            r#"class C { m() { return eval('function g() { return new.target; } String(g())'); } } new C().m()"#,
+            r#"undefined"#,
+        ),
+        (
             "field",
             r#"class C { x = eval('new.target'); } String(new C().x)"#,
             r#"undefined"#,
@@ -238,6 +359,16 @@ fn new_target_and_field_initializers() {
             "field_this",
             r#"class C { x = eval('typeof this'); } new C().x"#,
             r#"object"#,
+        ),
+        (
+            "field_arrow",
+            r#"class C { x = eval('(() => typeof new.target)()'); } new C().x"#,
+            r#"undefined"#,
+        ),
+        (
+            "computed_field_key",
+            r#"class C { [eval('"k"')] = 1; } Object.keys(new C()).join()"#,
+            r#"k"#,
         ),
     ]);
 }

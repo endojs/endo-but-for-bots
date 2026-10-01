@@ -80,6 +80,11 @@ fn a_parenthesized_chain_callee() {
             r#"var o = { x: { y() { return this.z; }, z: 5 } }; [o?.x.y(), (o?.x.y)(), o.x?.y?.()].join()"#,
             r#"5,5,5"#,
         ),
+        (
+            "constructed",
+            r#"var a = null; var r; try { new (a?.b)(); r = 'no'; } catch (e) { r = e.constructor.name; } r"#,
+            r#"TypeError"#,
+        ),
     ]);
 }
 
@@ -140,6 +145,243 @@ fn a_call_inside_the_chain() {
             "returns_nullish",
             r#"var a = { b() { return null; } }; String(a?.b()?.())"#,
             r#"undefined"#,
+        ),
+        (
+            "default_parameter",
+            r#"var a = null; function f(x = a?.b()?.()) { return String(x); } f()"#,
+            r#"undefined"#,
+        ),
+        (
+            "arrow_body",
+            r#"var a = null; var g = () => a?.b()?.(); String(g())"#,
+            r#"undefined"#,
+        ),
+        (
+            "async_body",
+            r#"var a = null; async function f() { r = String(a?.b()?.()); } var r; f(); r"#,
+            r#"undefined"#,
+        ),
+        (
+            "switch_discriminant",
+            r#"var a = null; switch (a?.b()?.()) { case undefined: 'u'; break; default: 'd'; }"#,
+            r#"u"#,
+        ),
+        (
+            "private_method",
+            r#"class C { #x() { return 1; } static t(o) { return String(o?.#x()); } } [C.t(null), C.t(new C())].join()"#,
+            r#"undefined,1"#,
+        ),
+        (
+            "super_base",
+            r#"class B { m() { return null; } } class D extends B { t() { return String(super.m()?.()) + String(super.z?.()); } } new D().t()"#,
+            r#"undefinedundefined"#,
+        ),
+        (
+            "computed_link",
+            r#"var a = null; String(a?.[(() => 'k')()]?.())"#,
+            r#"undefined"#,
+        ),
+        (
+            "template_link",
+            r#"var o = {k: null}; String(o?.[`k`]?.b?.()?.c)"#,
+            r#"undefined"#,
+        ),
+        (
+            "calls_after_a_link",
+            r#"var a = {b: null}; String(a.b?.c(1)?.d(2)?.e)"#,
+            r#"undefined"#,
+        ),
+        (
+            "plain_calls_before_a_link",
+            r#"var o = {m() { return {n() { return null; }}; }}; String(o.m().n()?.()?.x)"#,
+            r#"undefined"#,
+        ),
+        (
+            "optional_eval",
+            r#"var a = null; String(eval?.('a?.b()?.()'))"#,
+            r#"undefined"#,
+        ),
+    ]);
+}
+
+#[test]
+fn a_call_inside_the_chain_under_an_enclosing_expression() {
+    // Each chain below short-circuits past a call of its own while an
+    // enclosing expression holds values on the stack, so a landing a slot off
+    // corrupts the enclosing expression. Every case follows the
+    // specification, as V8. XS throws a TypeError (`call: not a function`,
+    // `cannot coerce to object` or `cannot coerce undefined to object`) on
+    // all but `two_substitutions` and `compound_assignment`, where it answers
+    // with the wrong value, and `array_spread`, which crashes it.
+    check(&[
+        (
+            "template_substitution",
+            r#"var a = null; String(`${a?.b()?.()}`)"#,
+            r#"undefined"#,
+        ),
+        // XS answers `undefinedundefined`.
+        (
+            "two_substitutions",
+            r#"var a = null; `${a?.b()?.()}-${a?.c()?.()}`"#,
+            r#"undefined-undefined"#,
+        ),
+        (
+            "tagged_substitution",
+            r#"var a = null; var t = (s) => s[0]; String(t`${a?.b()?.()}`)"#,
+            r#""#,
+        ),
+        (
+            "computed_key",
+            r#"var a = null; String({[a?.b()?.()]: 1}[undefined])"#,
+            r#"1"#,
+        ),
+        (
+            "member_key",
+            r#"var a = null; var o = {undefined: 'u'}; o[a?.b()?.()]"#,
+            r#"u"#,
+        ),
+        (
+            "object_literal_value",
+            r#"var a = null; JSON.stringify({v: a?.b()?.(), w: 2})"#,
+            r#"{"w":2}"#,
+        ),
+        (
+            "array_literal",
+            r#"var a = null; var r = []; for (var x of [a?.b()?.(), a?.c?.()]) r.push(String(x)); r.join()"#,
+            r#"undefined,undefined"#,
+        ),
+        (
+            "spread_argument",
+            r#"var a = null; function f(...x) { return x.length + ':' + x.join(); } f(1, ...(a?.b()?.() ?? [2]), 3)"#,
+            r#"3:1,2,3"#,
+        ),
+        (
+            "call_arguments",
+            r#"var a = null; var r = []; r.push(a?.b()?.(), a?.c()?.(), 3); r.length + ':' + r[2]"#,
+            r#"3:3"#,
+        ),
+        (
+            "nested_call_argument",
+            r#"var a = null, f = function (x) { return String(x); }; f(a?.b()?.(a?.c()?.()))"#,
+            r#"undefined"#,
+        ),
+        (
+            "method_argument",
+            r#"var a = null; var o = {m(x) { return String(x) + this.k; }, k: '!'}; o.m(a?.b()?.())"#,
+            r#"undefined!"#,
+        ),
+        (
+            "constructor_argument",
+            r#"var a = null; function F(x, y) { this.v = String(x) + y; } new F(a?.b()?.(), 2).v"#,
+            r#"undefined2"#,
+        ),
+        (
+            "logical_operands",
+            r#"var a = null; String(1 && a?.b()?.()) + String(0 || a?.b()?.())"#,
+            r#"undefinedundefined"#,
+        ),
+        (
+            "conditional_branch",
+            r#"var a = null; var c = 1; String(c ? a?.b()?.() : 0)"#,
+            r#"undefined"#,
+        ),
+        (
+            "comma",
+            r#"var a = null; var r = (0, a?.b()?.()); String(r)"#,
+            r#"undefined"#,
+        ),
+        (
+            "unary_operators",
+            r#"var a = null; [!a?.b()?.(), typeof -a?.b()?.(), void a?.b()?.()].map(String).join()"#,
+            r#"true,number,undefined"#,
+        ),
+        (
+            "comparisons",
+            r#"var a = null; [a?.b()?.() === undefined, a?.b()?.() == null].join()"#,
+            r#"true,true"#,
+        ),
+        (
+            "delete_and_typeof",
+            r#"var a = null; String(delete a?.b()?.c) + String(typeof a?.b()?.())"#,
+            r#"trueundefined"#,
+        ),
+        // XS answers `x`.
+        (
+            "compound_assignment",
+            r#"var a = null; var s = 'x'; s += a?.b()?.(); s"#,
+            r#"xundefined"#,
+        ),
+        (
+            "logical_assignment",
+            r#"var a = null; var o = {}; o.p ??= a?.b()?.(); String(o.p)"#,
+            r#"undefined"#,
+        ),
+        (
+            "destructuring_default",
+            r#"var a = null; var [x = a?.b()?.()] = []; String(x)"#,
+            r#"undefined"#,
+        ),
+        (
+            "declarations",
+            r#"var a = null; var r = a?.b()?.(), s = a?.c()?.(); [r, s].map(String).join()"#,
+            r#"undefined,undefined"#,
+        ),
+        (
+            "yield_base",
+            r#"var a = null; function* g() { yield (yield 1)?.b()?.(); } var it = g(); it.next(); String(it.next(null).value)"#,
+            r#"undefined"#,
+        ),
+        (
+            "private_base",
+            r#"class C { #x = null; m() { return String(this.#x?.b()?.()); } } new C().m()"#,
+            r#"undefined"#,
+        ),
+        (
+            "with_body",
+            r#"var x = null; var r; with ({}) { r = String(x?.y()?.()); } r"#,
+            r#"undefined"#,
+        ),
+        (
+            "class_field",
+            r#"var a = null; class K { f = a?.b()?.(); } String(new K().f)"#,
+            r#"undefined"#,
+        ),
+        (
+            "links_after_the_call",
+            r#"var a = null; String(a?.b()?.()?.[0]?.c())"#,
+            r#"undefined"#,
+        ),
+        (
+            "nullish_coalescing",
+            r#"var a = null, b = null; String(a?.b(b?.c()?.()) ?? b?.d()?.())"#,
+            r#"undefined"#,
+        ),
+        (
+            "call_result_called_twice",
+            r#"var f = function () { return null; }; String(f()?.()?.())"#,
+            r#"undefined"#,
+        ),
+        (
+            "try_finally_in_a_loop",
+            r#"var r = []; var a = null; for (var i = 0; i < 2; i++) { try { r.push(String(a?.b()?.())); } finally { r.push('f'); } } r.join()"#,
+            r#"undefined,f,undefined,f"#,
+        ),
+        (
+            "break_in_a_loop",
+            r#"var a = null; var r = []; for (var i = 0; i < 2; i++) { r.push(String(a?.b()?.())); if (i) break; } r.join()"#,
+            r#"undefined,undefined"#,
+        ),
+        (
+            "labeled_block",
+            r#"var a = null; label: { var r = String(a?.b()?.()); break label; } r"#,
+            r#"undefined"#,
+        ),
+        // XS crashes on this chain, so it runs on Ironhorse alone and never
+        // through the XS oracle.
+        (
+            "array_spread",
+            r#"var a = null; String([a?.b()?.(), ...[a?.c()?.()]].length)"#,
+            r#"2"#,
         ),
     ]);
 }
