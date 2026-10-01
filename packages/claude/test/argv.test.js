@@ -21,7 +21,7 @@ const spec = () => ({
   maxTurns: 16,
 });
 
-test('buildArgv emits all five required flags, empty-value flags, and never --resume', t => {
+test('buildArgv emits all six required flags, empty-value flags, and never --resume', t => {
   const argv = buildArgv(spec());
   assertConfinedArgv(argv); // does not throw
   for (const flag of REQUIRED_FLAGS) t.true(argv.includes(flag), flag);
@@ -97,19 +97,26 @@ test('a missing, altered, or repeated pinned-value flag is refused', t => {
   }
 });
 
+test('an argv without --settings is refused', t => {
+  // `enabledPlugins` (disabling the builtin plugins) rides only on --settings.
+  const argv = conformingArgv();
+  argv.splice(argv.indexOf('--settings'), 2);
+  t.throws(() => assertConfinedArgv(argv), { message: /--settings/ });
+});
+
 test('a trailing --tools Bash cannot re-open the built-in set', t => {
   const argv = [...conformingArgv(), '--tools', 'Bash'];
   t.throws(() => assertConfinedArgv(argv), { message: /more than once/ });
 });
 
-// --- property: five-flag spawn-refusal predicate -------------------------
+// --- property: six-flag spawn-refusal predicate -------------------------
 
 const conformingArgv = () => [...buildArgv(spec())];
 
-test('property: dropping any of the five required flags refuses', t => {
+test('property: dropping any of the six required flags refuses', t => {
   fc.assert(
     fc.property(
-      fc.subarray([...REQUIRED_FLAGS], { minLength: 0, maxLength: 4 }),
+      fc.subarray([...REQUIRED_FLAGS], { minLength: 0, maxLength: REQUIRED_FLAGS.length - 1 }),
       fc.array(fc.string(), { maxLength: 3 }),
       (present, noise) => {
         // A strict subset of the required flags plus arbitrary noise -> refuse.

@@ -8,7 +8,7 @@
 //
 //   - the pinned CLI version whose flag semantics were last measured live
 //     (2.1.280; the design's original measurement was 2.1.232);
-//   - the five presence-required flags the harness refuses to spawn without;
+//   - the six presence-required flags the harness refuses to spawn without;
 //   - the value assertion that `--tools` and `--setting-sources` each carry
 //     exactly the empty string (presence-only is the `"alg":"none"` shape),
 //     and that `--permission-mode` / `--permission-prompts` carry `dontAsk` /
@@ -28,17 +28,19 @@ import { KNOWN_BUILTIN_TOOLS } from './tool-permissions.js';
 export const PINNED_CLI_VERSION = '2.1.280';
 
 /**
- * The five flags whose PRESENCE the harness asserts before every spawn
+ * The six flags whose PRESENCE the harness asserts before every spawn
  * (§ Design Decision 1). Three close the discovery surfaces (`--bare` closes
  * CLAUDE.md/hooks/keychain; `--strict-mcp-config` closes MCP auto-discovery;
  * `--setting-sources` closes the discovered settings layers); `--tools` empties
  * the built-in set; `--disable-slash-commands` closes the `/skill-name` surface
- * `--bare` leaves resolving and `--tools ""` does not reach.
+ * `--bare` leaves resolving and `--tools ""` does not reach; `--settings` carries
+ * the `enabledPlugins` key that disables the builtin plugins `--bare` still loads.
  */
 export const REQUIRED_FLAGS = harden([
   '--bare',
   '--strict-mcp-config',
   '--setting-sources',
+  '--settings',
   '--tools',
   '--disable-slash-commands',
 ]);
@@ -160,8 +162,8 @@ export const buildArgv = spec => {
 harden(buildArgv);
 
 /**
- * The five-flag spawn-refusal predicate (§ Design Decision 1). Throws unless all
- * five required flags are present.
+ * The six-flag spawn-refusal predicate (§ Design Decision 1). Throws unless all
+ * six required flags are present.
  *
  * @param {readonly string[]} argv
  */
