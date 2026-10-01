@@ -123,3 +123,39 @@ fn the_builtin_tag_follows_the_internal_slot() {
         ),
     ]);
 }
+
+#[test]
+fn error_prototypes_match_xs() {
+    check(&[
+        (
+            "own_keys",
+            r#"[Error, TypeError, RangeError, AggregateError, SuppressedError, EvalError].map(function (C) { return C.name + '=' + Object.getOwnPropertyNames(C.prototype).sort().join('+'); }).join(' ')"#,
+            r#"Error=constructor+message+name+stack+toString TypeError=constructor+message+name RangeError=constructor+message+name AggregateError=constructor+message+name SuppressedError=constructor+message+name EvalError=constructor+message+name"#,
+        ),
+        (
+            "message_and_name",
+            r#"[TypeError, SuppressedError, URIError].map(function (C) { var d = Object.getOwnPropertyDescriptor(C.prototype, 'message'); return C.prototype.name + ':' + JSON.stringify(d.value) + d.writable + d.enumerable + d.configurable; }).join()"#,
+            r#"TypeError:""truefalsetrue,SuppressedError:""truefalsetrue,URIError:""truefalsetrue"#,
+        ),
+        (
+            "shared_to_string",
+            r#"[TypeError, RangeError, AggregateError, SuppressedError].every(function (C) { return C.prototype.toString === Error.prototype.toString; })"#,
+            r#"true"#,
+        ),
+        (
+            "suppressed_error_message_runs_to_string",
+            r#"var log = []; var e = new SuppressedError(1, 2, {toString: function () { log.push('s'); return 'm!'; }}); [String(e), e.name, log.join(), Object.getOwnPropertyNames(e).sort().join('+')].join()"#,
+            r#"SuppressedError: m!,SuppressedError,s,error+message+suppressed"#,
+        ),
+        (
+            "suppressed_error_symbol_message",
+            r#"try { new SuppressedError(1, 2, Symbol()); 'none' } catch (e) { e.constructor.name }"#,
+            r#"TypeError"#,
+        ),
+        (
+            "suppressed_error_subclass",
+            r#"class E extends SuppressedError {} var e = new E(1, 2, 'm'); [e.error, e.suppressed, e.message, e.name, e instanceof E].join()"#,
+            r#"1,2,m,SuppressedError,true"#,
+        ),
+    ]);
+}

@@ -1691,6 +1691,16 @@ impl Interp {
                 let message = (argc >= 3).then(|| arg(2));
                 let proto =
                     self.derived_construct_prototype(code, new_target, derived_native_construct)?;
+                // After the prototype read, as XS's `fx_SuppressedError` and
+                // the proposal order it; a guest `toString` runs here.
+                let message = match message {
+                    Some(message) if message.kind != Kind::Undefined => {
+                        let units = self.to_string_units(code, message)?;
+                        self.meter.tick_raw(ERROR_MESSAGE_METERING);
+                        Some(units)
+                    }
+                    _ => None,
+                };
                 let error = self.build_suppressed_error(error, suppressed, message);
                 self.adopt_prototype(error, proto)
             }
