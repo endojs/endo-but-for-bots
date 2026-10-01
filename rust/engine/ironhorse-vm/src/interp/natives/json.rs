@@ -17,27 +17,97 @@ enum JsonSource {
     Object(Vec<(ReadKey, JsonSource)>),
 }
 
+/// The key an object node is given for a worklist link while its tree is
+/// freed ([`JsonSource`]'s `Drop`); nothing reads it.
+const FREED_SOURCE_KEY: ReadKey = ReadKey::Index(0);
+
 impl JsonSource {
-    /// Move this node's children, if any, onto `into`.
-    fn detach_children(&mut self, into: &mut Vec<JsonSource>) {
+    fn child_count(&self) -> usize {
         match self {
-            JsonSource::Array(children) => into.append(children),
-            JsonSource::Object(children) => into.extend(children.drain(..).map(|(_, child)| child)),
+            JsonSource::Array(children) => children.len(),
+            JsonSource::Object(children) => children.len(),
+            JsonSource::Empty | JsonSource::Primitive { .. } => 0,
+        }
+    }
+
+    fn pop_child(&mut self) -> Option<JsonSource> {
+        match self {
+            JsonSource::Array(children) => children.pop(),
+            JsonSource::Object(children) => children.pop().map(|(_, child)| child),
+            JsonSource::Empty | JsonSource::Primitive { .. } => None,
+        }
+    }
+
+    /// Push into the slot a [`Self::pop_child`] freed, which never
+    /// reallocates.
+    fn push_child_in_place(&mut self, child: JsonSource) {
+        match self {
+            JsonSource::Array(children) => {
+                debug_assert!(children.len() < children.capacity());
+                children.push(child);
+            }
+            JsonSource::Object(children) => {
+                debug_assert!(children.len() < children.capacity());
+                children.push((FREED_SOURCE_KEY, child));
+            }
+            JsonSource::Empty | JsonSource::Primitive { .. } => {
+                debug_assert!(false, "a JSON source leaf has no child slot");
+            }
+        }
+    }
+
+    fn swap_children(&mut self, a: usize, b: usize) {
+        match self {
+            JsonSource::Array(children) => children.swap(a, b),
+            JsonSource::Object(children) => children.swap(a, b),
             JsonSource::Empty | JsonSource::Primitive { .. } => {}
         }
     }
 }
 
 impl Drop for JsonSource {
-    /// Free the tree without recursing: a node's children are detached onto a
-    /// worklist before it drops, so the derived drop glue, which would recurse
-    /// once per level of a deeply nested parse (STACK-DEPTH-REFACTOR.md B6),
-    /// only ever sees childless nodes.
+    /// Free the tree without recursing and without allocating. The derived
+    /// drop glue would recurse once per level of a deeply nested parse
+    /// (STACK-DEPTH-REFACTOR.md B6), and a heap worklist would allocate in a
+    /// destructor, where a refusal can only abort.
+    ///
+    /// The container being emptied is the worklist. A child that has
+    /// children of its own becomes the next one: its last child moves into
+    /// the slot the outer worklist's pop just freed, and the outer worklist
+    /// into the slot that move frees, swapped to index 0 so it resumes once
+    /// the inner one is exhausted. Every push lands in a slot a pop freed, so
+    /// no buffer grows, and only childless nodes ever drop.
     fn drop(&mut self) {
-        let mut pending = Vec::new();
-        self.detach_children(&mut pending);
-        while let Some(mut node) = pending.pop() {
-            node.detach_children(&mut pending);
+        if self.child_count() == 0 {
+            return;
+        }
+        let mut work = std::mem::replace(self, JsonSource::Empty);
+        // How many outer worklists are parked, each at index 0 of the next.
+        let mut links = 0usize;
+        loop {
+            if work.child_count() > usize::from(links > 0) {
+                let Some(mut node) = work.pop_child() else {
+                    break;
+                };
+                let Some(child) = node.pop_child() else {
+                    continue;
+                };
+                work.push_child_in_place(child);
+                let outer = std::mem::replace(&mut work, node);
+                work.push_child_in_place(outer);
+                let top = work.child_count() - 1;
+                work.swap_children(0, top);
+                links += 1;
+            } else if links > 0 {
+                // Only the link is left: resume the outer worklist.
+                let Some(outer) = work.pop_child() else {
+                    break;
+                };
+                work = outer;
+                links -= 1;
+            } else {
+                break;
+            }
         }
     }
 }
@@ -1931,5 +2001,103 @@ impl Interp {
             }
         }
         Slot::of(Kind::Reference, Payload::Reference(context))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn leaf() -> JsonSource {
+        JsonSource::Primitive {
+            original: Slot::undefined(),
+            start: 0,
+            end: 0,
+        }
+    }
+
+    /// Drop `tree` on a thread whose stack would not hold a recursion over
+    /// it, failing rather than hanging if the teardown does not finish. Debug
+    /// builds assert in `push_child_in_place` that every push lands in a slot
+    /// a pop freed, so no buffer grows while the tree is freed.
+    fn drop_on_small_stack(tree: JsonSource) {
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                drop(tree);
+                let _ = done.send(());
+            })
+            .expect("spawn");
+        finished
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the tree drops without recursing, in bounded time");
+    }
+
+    #[test]
+    fn a_deep_chain_drops_without_recursing() {
+        let mut array_chain = leaf();
+        let mut mixed_chain = leaf();
+        for level in 0..200_000u32 {
+            array_chain = JsonSource::Array(vec![array_chain]);
+            mixed_chain = if level % 2 == 0 {
+                JsonSource::Object(vec![(ReadKey::Index(level), mixed_chain)])
+            } else {
+                JsonSource::Array(vec![mixed_chain])
+            };
+        }
+        drop_on_small_stack(array_chain);
+        drop_on_small_stack(mixed_chain);
+    }
+
+    #[test]
+    fn wide_and_branching_trees_drop_without_growing_a_buffer() {
+        // Wide: one container of many leaves and empty containers, some
+        // with spare capacity.
+        let wide = JsonSource::Array(
+            (0..10_000)
+                .map(|i| match i % 3 {
+                    0 => leaf(),
+                    1 => JsonSource::Array(Vec::new()),
+                    _ => {
+                        let mut children = vec![(ReadKey::Id(1), leaf())];
+                        children.clear();
+                        JsonSource::Object(children)
+                    }
+                })
+                .collect(),
+        );
+        drop_on_small_stack(wide);
+        // A comb: every level holds leaves on both sides of the next level,
+        // so each worklist is resumed with children still pending.
+        let mut comb = leaf();
+        for level in 0..50_000u32 {
+            comb = if level % 2 == 0 {
+                JsonSource::Array(vec![leaf(), comb, leaf(), JsonSource::Empty])
+            } else {
+                JsonSource::Object(vec![
+                    (ReadKey::Id(1), leaf()),
+                    (ReadKey::Index(level), comb),
+                    (ReadKey::Id(2), JsonSource::Array(vec![leaf(), leaf()])),
+                ])
+            };
+        }
+        drop_on_small_stack(comb);
+        // Full branching: every container holds three subtrees.
+        fn full(depth: u32) -> JsonSource {
+            if depth == 0 {
+                return leaf();
+            }
+            if depth % 2 == 0 {
+                JsonSource::Array(vec![full(depth - 1), full(depth - 1), full(depth - 1)])
+            } else {
+                JsonSource::Object(vec![
+                    (ReadKey::Id(1), full(depth - 1)),
+                    (ReadKey::Id(2), full(depth - 1)),
+                    (ReadKey::Id(3), full(depth - 1)),
+                ])
+            }
+        }
+        drop_on_small_stack(full(9));
     }
 }

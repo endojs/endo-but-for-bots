@@ -522,23 +522,147 @@ fn dump_string(units: &[u16]) -> String {
     out
 }
 
-/// Tear a tree down with a heap worklist instead of the recursive drop glue,
-/// which took one host frame chain per tree level: a refused 5,000-term
-/// `1+1+…` overflowed a 512 KiB wasm stack freeing its partial tree
-/// (STACK-DEPTH-REFACTOR.md D1c). Children are moved out before a node
-/// drops, so the glue only ever sees childless nodes.
+/// Tear a tree down without the recursive drop glue, which took one host
+/// frame chain per tree level: a refused 5,000-term `1+1+…` overflowed a
+/// 512 KiB wasm stack freeing its partial tree (STACK-DEPTH-REFACTOR.md
+/// D1c). Nor does it allocate: a heap worklist would grow in a destructor,
+/// where a refusal can only abort.
+///
+/// The child list being emptied is the worklist. A child that has children
+/// of its own (a node's, or a node list's) becomes the next one: its last
+/// child moves into the slot the outer worklist's pop just freed, and the
+/// outer worklist, as an [`Item::List`], into the slot that move frees,
+/// swapped to index 0 so it resumes once the inner one is exhausted. Every
+/// push lands in a slot a pop freed, so no buffer grows, and only childless
+/// nodes ever drop.
 impl Drop for Node {
     fn drop(&mut self) {
         if self.children.is_empty() {
             return;
         }
-        let mut stack = std::mem::take(&mut self.children);
-        while let Some(item) = stack.pop() {
-            match item {
-                Item::Node(mut n) => stack.append(&mut n.children),
-                Item::List(mut v) => stack.append(&mut v),
-                Item::Symbol(_) | Item::Null => {}
+        let mut work = std::mem::take(&mut self.children);
+        // How many outer worklists are parked, each at index 0 of the next.
+        let mut links = 0usize;
+        loop {
+            if work.len() > usize::from(links > 0) {
+                let mut children = match work.pop() {
+                    Some(Item::Node(mut node)) => std::mem::take(&mut node.children),
+                    Some(Item::List(list)) => list,
+                    Some(Item::Symbol(_) | Item::Null) => continue,
+                    None => break,
+                };
+                let Some(child) = children.pop() else {
+                    continue;
+                };
+                push_in_place(&mut work, child);
+                let outer = std::mem::replace(&mut work, children);
+                push_in_place(&mut work, Item::List(outer));
+                let top = work.len() - 1;
+                work.swap(0, top);
+                links += 1;
+            } else if links > 0 {
+                // Only the link is left: resume the outer worklist.
+                match work.pop() {
+                    Some(Item::List(outer)) => work = outer,
+                    other => {
+                        debug_assert!(false, "a parked worklist is a node list: {other:?}");
+                        break;
+                    }
+                }
+                links -= 1;
+            } else {
+                break;
             }
         }
+    }
+}
+
+/// Push into the slot a pop freed, which never reallocates.
+fn push_in_place(list: &mut Vec<Item>, item: Item) {
+    debug_assert!(list.len() < list.capacity());
+    list.push(item);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn node(children: Vec<Item>) -> Item {
+        Item::Node(Box::new(Node::new(Token::Add, 1, 0, children, Value::None)))
+    }
+
+    /// Drop `tree` on a thread whose stack would not hold a recursion over
+    /// it, failing rather than hanging if the teardown does not finish. Debug
+    /// builds assert in `push_in_place` that every push lands in a slot a pop
+    /// freed, so no buffer grows while the tree is freed.
+    fn drop_on_small_stack(tree: Item) {
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                drop(tree);
+                let _ = done.send(());
+            })
+            .expect("spawn");
+        finished
+            .recv_timeout(std::time::Duration::from_secs(60))
+            .expect("the tree drops without recursing, in bounded time");
+    }
+
+    #[test]
+    fn a_deep_chain_drops_without_recursing() {
+        // `Node::new` measures depth from its children in constant time, so
+        // the chains are built far past `TREE_DEPTH_LIMIT`, as a refused
+        // flat chain's partial tree can be.
+        let mut node_chain = Item::Null;
+        let mut mixed_chain = Item::Null;
+        for level in 0..200_000u32 {
+            node_chain = node(vec![node_chain]);
+            mixed_chain = if level % 2 == 0 {
+                node(vec![mixed_chain, Item::Null])
+            } else {
+                Item::List(vec![mixed_chain])
+            };
+        }
+        drop_on_small_stack(node_chain);
+        drop_on_small_stack(Item::List(vec![mixed_chain]));
+    }
+
+    #[test]
+    fn wide_and_branching_trees_drop_without_growing_a_buffer() {
+        let wide = node(
+            (0..10_000)
+                .map(|i| match i % 4 {
+                    0 => Item::Null,
+                    1 => Item::Symbol(vec![u16::from(b'a')]),
+                    2 => Item::List(Vec::with_capacity(8)),
+                    _ => node(Vec::new()),
+                })
+                .collect(),
+        );
+        drop_on_small_stack(wide);
+        // A comb: every level holds siblings on both sides of the next
+        // level, so each worklist is resumed with children still pending.
+        let mut comb = Item::Null;
+        for level in 0..50_000u32 {
+            comb = if level % 2 == 0 {
+                node(vec![Item::Null, comb, node(vec![Item::Null])])
+            } else {
+                Item::List(vec![Item::Symbol(Vec::new()), comb, Item::List(vec![])])
+            };
+        }
+        drop_on_small_stack(node(vec![comb]));
+        fn full(depth: u32) -> Item {
+            if depth == 0 {
+                return Item::Null;
+            }
+            let children = vec![full(depth - 1), full(depth - 1), full(depth - 1)];
+            if depth % 2 == 0 {
+                node(children)
+            } else {
+                Item::List(children)
+            }
+        }
+        drop_on_small_stack(node(vec![full(9)]));
     }
 }
