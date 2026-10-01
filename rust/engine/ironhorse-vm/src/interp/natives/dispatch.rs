@@ -2355,6 +2355,7 @@ impl Interp {
             | NativeMethod::PromiseSpeciesGetter
             | NativeMethod::RegExpSpeciesGetter
             | NativeMethod::ArrayBufferSpeciesGetter
+            | NativeMethod::SpeciesGetter
             | NativeMethod::PromiseAll
             | NativeMethod::PromiseAllSettled
             | NativeMethod::PromiseRace
@@ -5716,7 +5717,8 @@ impl Interp {
             NativeMethod::PromiseFinally => self.promise_finally_dispatch(code, this, arg0)?,
             NativeMethod::PromiseSpeciesGetter
             | NativeMethod::RegExpSpeciesGetter
-            | NativeMethod::ArrayBufferSpeciesGetter => this,
+            | NativeMethod::ArrayBufferSpeciesGetter
+            | NativeMethod::SpeciesGetter => this,
             // `Promise.all`/`allSettled`/`race`/`any` (`fx_Promise_all` …): build
             // the derived promise, resolve each (dense-Array) element to a
             // promise, and register a native COMBINE reaction on it; the shared

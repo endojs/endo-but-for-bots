@@ -1583,6 +1583,7 @@ impl Interp {
         self.create_intl();
         self.create_temporal();
         self.create_hardened_globals();
+        self.create_species_accessors();
         // The test262 `$262` host object is NOT part of the boot: a hardened
         // realm's global surface must be auditable, and a host object
         // carrying an ArrayBuffer-detach primitive is exactly what lockdown
@@ -2050,6 +2051,34 @@ impl Interp {
         ] {
             let f = self.alloc_named_method(NativeMethod::TemporalNow(op), name, 0);
             self.proto_methods.push((now, name, f));
+        }
+    }
+
+    /// `get [Symbol.species]` on `Array`, `Map`, `Set`, `SharedArrayBuffer`
+    /// and `%TypedArray%` (ES2024 23.1.2.5, 24.1.2.3, 24.2.2.2, 25.2.4.3,
+    /// 23.2.2.4): a configurable accessor with no setter, a distinct getter
+    /// per constructor. The full link installs them under the well-known key.
+    fn create_species_accessors(&mut self) {
+        let typed_array = self.functions.iter().find_map(|(&function, info)| {
+            (info.native == Some(Native::TypedArrayBase)).then_some(function)
+        });
+        let constructors = ["Array", "Map", "Set", "SharedArrayBuffer"]
+            .map(|name| (self.intrinsics.get(name).copied(), name))
+            .into_iter()
+            .chain([(typed_array, "TypedArray")]);
+        for (constructor, guard) in constructors {
+            let Some(constructor) = constructor else {
+                continue;
+            };
+            let getter =
+                self.alloc_named_method(NativeMethod::SpeciesGetter, "get [Symbol.species]", 0);
+            self.proto_accessors.push((
+                constructor,
+                ProtoAccessorKey::WellKnownSymbol("species"),
+                getter,
+                None,
+                guard,
+            ));
         }
     }
 

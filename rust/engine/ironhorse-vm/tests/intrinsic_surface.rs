@@ -216,3 +216,49 @@ fn arguments_has_callee() {
         ),
     ]);
 }
+
+#[test]
+fn species_accessors() {
+    check(&[
+        (
+            "descriptors",
+            r#"[Array, Map, Set, SharedArrayBuffer, Object.getPrototypeOf(Uint8Array), Promise, RegExp, ArrayBuffer].map(function (C) { var d = Object.getOwnPropertyDescriptor(C, Symbol.species); return typeof d.get + d.set + d.enumerable + d.configurable + d.get.name + (d.get.call(7) === 7) + (C[Symbol.species] === C); }).join(' ')"#,
+            r#"functionundefinedfalsetrueget [Symbol.species]truetrue functionundefinedfalsetrueget [Symbol.species]truetrue functionundefinedfalsetrueget [Symbol.species]truetrue functionundefinedfalsetrueget [Symbol.species]truetrue functionundefinedfalsetrueget [Symbol.species]truetrue functionundefinedfalsetrueget [Symbol.species]truetrue functionundefinedfalsetrueget [Symbol.species]truetrue functionundefinedfalsetrueget [Symbol.species]truetrue"#,
+        ),
+        (
+            "distinct_getters",
+            r#"var g = function (C) { return Object.getOwnPropertyDescriptor(C, Symbol.species).get; }; [g(Map) === g(Set), g(Array) === g(Map), g(Object.getPrototypeOf(Uint8Array)) === g(Array)].join()"#,
+            r#"false,false,false"#,
+        ),
+        (
+            "array_subclass",
+            r#"class A extends Array {} var a = new A(1, 2, 3); [a.map(function (x) { return x; }) instanceof A, a.filter(Boolean) instanceof A, a.slice() instanceof A, a.concat([]) instanceof A, a.splice(0, 1) instanceof A, a.flat() instanceof A, A[Symbol.species] === A].join()"#,
+            r#"true,true,true,true,true,true,true"#,
+        ),
+        (
+            "typed_array_subclass",
+            r#"class U extends Uint8Array {} var u = new U(4); [u.slice() instanceof U, u.subarray(1) instanceof U, u.map(function (x) { return x; }) instanceof U, u.filter(Boolean) instanceof U].join()"#,
+            r#"true,true,true,true"#,
+        ),
+        (
+            "custom_species",
+            r#"var b = [1, 2]; b.constructor = {}; b.constructor[Symbol.species] = function (n) { this.n = n; }; JSON.stringify(b.map(function (x) { return x; }))"#,
+            r#"{"0":1,"1":2,"n":2}"#,
+        ),
+        (
+            "undefined_constructor",
+            r#"var a = [1]; a.constructor = undefined; Array.isArray(a.map(function (x) { return x; }))"#,
+            r#"true"#,
+        ),
+        (
+            "redefined_species",
+            r#"Object.defineProperty(Array, Symbol.species, {get: function () { return function (n) { return {species: n}; }; }, configurable: true}); JSON.stringify([1, 2].map(function (x) { return x; }))"#,
+            r#"{"0":1,"1":2,"species":2}"#,
+        ),
+        (
+            "species_null",
+            r#"class A extends Array { static get [Symbol.species]() { return null; } } var r = new A(1, 2).map(function (x) { return x; }); [Array.isArray(r), r instanceof A].join()"#,
+            r#"true,false"#,
+        ),
+    ]);
+}
