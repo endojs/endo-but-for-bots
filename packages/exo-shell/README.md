@@ -35,6 +35,22 @@ per-stream output cap with a `truncated` flag, and a timeout that a per-call
 value may only *narrow*. `inspect()` reveals the policy bounds but never the host
 working directory, env passlist, or search path.
 
+Ordinary nonzero exits return `exitCode`; spawn, stream, stdin-close, transport,
+and timeout failures reject `exec` instead of returning a successful partial result.
+The deadline includes process admission, not only execution after spawn.
+Termination starts with `SIGTERM`, escalates to `SIGKILL`, and bounds the caller's
+wait for an unresponsive engine.
+A bounded rejection is not proof of native cleanup: the engine must retain
+ownership of late admission and failed termination.
+
+`@endo/sandbox/spawner.js` supplies `makeSandboxSpawner(slice)` for an already-granted
+local or remote sandbox slice.
+It closes stdin, adapts separate Endo byte readers, and forwards termination through
+eventual sends; native process ownership remains with the sandbox factory.
+Shell's output bound truncates capture while continuing to drain.
+A separate native safety ceiling may terminate the operation and reject `exec`.
+This adapter does not by itself provision a durable environment or restore live processes.
+
 ## The honest boundary
 
 Under the host spawner, a `Shell` bounds *which* commands start and *with what*

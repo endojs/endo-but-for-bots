@@ -26,6 +26,7 @@
     "./resource-registry.js": "./src/resource-registry.js",
     "./generated-file-storage.js": "./src/generated-file-storage.js",
     "./factory.js": "./src/factory.js",
+    "./spawner.js": "./src/spawner.js",
     "./runtime.js": "./src/runtime.js",
     "./runtime-config.js": "./src/runtime-config.js",
     "./podman-host-environment.js": "./src/podman-host-environment.js",
@@ -59,6 +60,8 @@
     "@endo/promise-kit": "workspace:^"
   },
   "devDependencies": {
+    "@endo/captp": "workspace:^",
+    "@endo/exo-shell": "workspace:^",
     "@endo/init": "workspace:^",
     "@endo/lockdown": "workspace:^",
     "@endo/ses-ava": "workspace:^",

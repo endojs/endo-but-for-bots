@@ -146,16 +146,16 @@ test('stdout beyond maxOutputBytes is truncated and flagged', async t => {
   t.true(result.truncated);
 });
 
-test('a hanging process is killed at the timeout and reports the signal', async t => {
+test('a hanging process is killed and reports timeout as failure', async t => {
   const { spawner } = makeFakeSpawner(() => ({ hang: true }));
   const shell = makeShell({
     cwd: '/repo',
     policy: harden({ ...basePolicy, timeoutMs: 50 }),
     spawner,
   });
-  const result = await shell.exec('node', ['-e', 'while(true){}']);
-  t.is(result.exitCode, null);
-  t.is(result.signal, 'SIGTERM');
+  await t.throwsAsync(shell.exec('node', ['-e', 'while(true){}']), {
+    message: /timed out/,
+  });
 });
 
 test('a child that traps SIGTERM is escalated to SIGKILL, so exec cannot hang', async t => {
@@ -173,9 +173,9 @@ test('a child that traps SIGTERM is escalated to SIGKILL, so exec cannot hang', 
     spawner,
     killGraceMs: 20,
   });
-  const result = await shell.exec('node', ['-e', 'while(true){}']);
-  t.is(result.exitCode, null);
-  t.is(result.signal, 'SIGKILL', 'the child was reaped by the escalated kill');
+  await t.throwsAsync(shell.exec('node', ['-e', 'while(true){}']), {
+    message: /timed out/,
+  });
   t.deepEqual(
     killLog,
     ['SIGTERM', 'SIGKILL'],
@@ -211,9 +211,10 @@ test('a per-call timeout may only narrow the policy, never widen it', async t =>
   });
   // A widening request (10_000) is ignored — the policy's 40ms still fires.
   const start = Date.now();
-  const result = await shell.exec('node', ['-e', '1'], { timeoutMs: 10_000 });
+  await t.throwsAsync(shell.exec('node', ['-e', '1'], { timeoutMs: 10_000 }), {
+    message: /timed out/,
+  });
   const elapsedMs = Date.now() - start;
-  t.is(result.signal, 'SIGTERM');
   t.true(elapsedMs < 5000, 'the widening per-call timeout did not take effect');
 });
 
@@ -271,6 +272,143 @@ test('a read-only mount is refused: a shell that cannot mutate is not a shell', 
       makeShell({ cwd: '/repo', policy: basePolicy, spawner, readOnly: true }),
     { message: /read-only mount/ },
   );
+});
+
+test('reader failure terminates the child and preserves the original error', async t => {
+  t.timeout(2000);
+  const failure = Error('output transport broke');
+  let resolveExit = _status => {};
+  const exit = new Promise(resolve => {
+    resolveExit = resolve;
+  });
+  const signals = [];
+  const shell = makeShell({
+    cwd: '/repo',
+    policy: basePolicy,
+    spawner: async () => ({
+      pid: 1,
+      stdout: {
+        async *[Symbol.asyncIterator]() {
+          yield bytes('partial');
+          throw failure;
+        },
+      },
+      stderr: null,
+      wait: () =>
+        /** @type {Promise<{ code: number | null, signal: string | null }>} */ (
+          exit
+        ),
+      kill: async signal => {
+        signals.push(signal);
+        resolveExit({ code: null, signal });
+      },
+    }),
+  });
+  const reported = await t.throwsAsync(shell.exec('echo', []), {
+    message: /output transport broke/,
+  });
+  t.is(reported, failure);
+  t.deepEqual(signals, ['SIGTERM']);
+});
+
+test('rejected wait triggers hard termination without becoming a successful result', async t => {
+  const failure = Error('completion transport broke');
+  const signals = [];
+  const shell = makeShell({
+    cwd: '/repo',
+    policy: basePolicy,
+    spawner: async () => ({
+      pid: 1,
+      stdout: null,
+      stderr: null,
+      wait: async () => {
+        throw failure;
+      },
+      kill: async signal => {
+        signals.push(signal);
+      },
+    }),
+  });
+  const reported = await t.throwsAsync(shell.exec('echo', []), {
+    message: /completion transport broke/,
+  });
+  t.is(reported, failure);
+  t.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('refused termination has a bounded error result rather than an unhandled rejection', async t => {
+  t.timeout(2000);
+  const signals = [];
+  const shell = makeShell({
+    cwd: '/repo',
+    policy: { ...basePolicy, timeoutMs: 10 },
+    killGraceMs: 10,
+    spawner: async () => ({
+      pid: 1,
+      stdout: null,
+      stderr: null,
+      wait: () => new Promise(() => {}),
+      kill: async signal => {
+        signals.push(signal);
+        throw Error('signal refused');
+      },
+    }),
+  });
+  const reported = await t.throwsAsync(shell.exec('echo', []), {
+    message: /cleanup failed.*signal refused/,
+  });
+  t.regex(
+    /** @type {Error} */ (reported?.cause)?.message,
+    /cleanup failed|timed out/,
+  );
+  t.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('timeout during admission still terminates a process that arrives after caller failure', async t => {
+  t.timeout(2000);
+  let release = _process => {};
+  const admission = new Promise(resolve => {
+    release = resolve;
+  });
+  let killed = () => {};
+  const killedLate = new Promise(resolve => {
+    killed = () => resolve(undefined);
+  });
+  const signals = [];
+  const process = {
+    pid: 1,
+    stdout: null,
+    stderr: null,
+    wait: async () => ({ code: 0, signal: null }),
+    kill: async signal => {
+      signals.push(signal);
+      if (signal === 'SIGKILL') killed();
+    },
+  };
+  t.teardown(() => release(process));
+  const shell = makeShell({
+    cwd: '/repo',
+    policy: { ...basePolicy, timeoutMs: 10 },
+    killGraceMs: 10,
+    spawner: () =>
+      /** @type {ReturnType<import('../src/types.js').Spawner>} */ (admission),
+  });
+  await t.throwsAsync(shell.exec('echo', []), { message: /timed out/ });
+  release(process);
+  await killedLate;
+  t.deepEqual(signals, ['SIGTERM', 'SIGKILL']);
+});
+
+test('invalid per-call timer values refuse before spawner admission', async t => {
+  const { spawner, calls } = makeFakeSpawner(() => ({}));
+  const shell = makeShell({ cwd: '/repo', policy: basePolicy, spawner });
+  for (const timeoutMs of [0, -1, 0.5, NaN, Infinity, 0x8000_0000]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(shell.exec('echo', [], { timeoutMs }), {
+      message: /timer-range integer/,
+    });
+  }
+  t.is(calls.length, 0);
 });
 
 // --- integration: real host spawner proves env sanitization end-to-end ------

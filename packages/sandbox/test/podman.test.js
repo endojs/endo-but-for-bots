@@ -923,7 +923,7 @@ test.serial(
   },
 );
 
-test.serial('fork() throws notImplemented before Phase 3', async t => {
+test.serial('Podman slice has no unimplemented management methods', async t => {
   if (!podmanAvailability.available || !podmanAvailability.imagePresent) {
     t.pass(
       `podman or alpine image not available: ${podmanAvailability.reason ?? 'image absent'}`,
@@ -947,9 +947,14 @@ test.serial('fork() throws notImplemented before Phase 3', async t => {
     await E(handle).dispose();
     cleanupTmpdirs(tmpdirs);
   });
-  await t.throwsAsync(() => E(handle).fork(), {
-    message: /Phase 3/,
-  });
+  // eslint-disable-next-line no-underscore-dangle
+  const methods = await E(/** @type {any} */ (handle)).__getMethodNames__();
+  t.deepEqual(methods.filter(method => !method.startsWith('__')).sort(), [
+    'dispose',
+    'help',
+    'policy',
+    'spawn',
+  ]);
 });
 
 test.serial(

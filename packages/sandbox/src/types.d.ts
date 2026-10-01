@@ -619,10 +619,9 @@ export type SandboxFactory = FarRef<{
 }>;
 
 /**
- * A live sandbox slice. Pinned by the formula that minted it; when the
- * handle is dropped, every `ProcessHandle` it spawned is killed and every
- * `MountHandle` it minted is unmounted before the driver tears down the
- * underlying namespace / container.
+ * A live sandbox slice with static mounts declared at construction.
+ * Disposal fences admission and terminates owned processes before the
+ * driver tears down the underlying namespace / container.
  */
 export type SandboxHandle = FarRef<{
   help(methodName?: string): string;
@@ -641,23 +640,6 @@ export type SandboxHandle = FarRef<{
    * mistake for one saying something is.
    */
   policy(): Promise<SlicePolicyAttestation>;
-  mount(
-    cap: MountCap,
-    innerPath: string,
-    mode?: MountMode,
-  ): Promise<MountHandle>;
-  /** Mint an ephemeral, slice-lifetime scratch mount at `innerPath`. */
-  scratch(innerPath: string): Promise<MountHandle>;
-  /** Open a single file inside the slice as a `ReadableFile`-shaped cap. */
-  open(innerPath: string): Promise<ERef<unknown>>;
-  /**
-   * Mint a nested sub-slice. Phase 0–2 stubs return a structured
-   * `notImplemented` error; Phase 3 lands the real implementation behind
-   * a kernel-feature probe.
-   */
-  fork(opts?: SandboxMakeOpts): Promise<SandboxHandle>;
-  /** Tear down processes and ephemeral scratch, keeping mounts. */
-  reset(): Promise<void>;
   /** Full teardown — all processes killed, all mounts released. */
   dispose(): Promise<void>;
 }>;
@@ -696,22 +678,6 @@ export type ProcessHandle = FarRef<{
    * observe liveness rather than a `kill(0)` probe.
    */
   kill(signal?: TerminationSignal): Promise<void>;
-}>;
-
-/**
- * A mount bound into a slice. Holds the original `Mount` capability so
- * the inner path can be related back to the cap it came from.
- */
-export type MountHandle = FarRef<{
-  help(methodName?: string): string;
-  /** Path inside the slice where the mount appears. */
-  innerPath(): string;
-  /** Back-reference to the original `Mount` capability. */
-  cap(): MountCap;
-  /** Effective mount mode (`ro` or `rw`). */
-  mode(): MountMode;
-  /** Detach the mount from the slice. */
-  unmount(): Promise<void>;
 }>;
 
 // ---------------------------------------------------------------------------

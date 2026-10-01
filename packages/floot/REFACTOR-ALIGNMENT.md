@@ -109,9 +109,19 @@ These source-only changes are not deployed; generation 190 and its pins remain
 the live acceptance baseline.
 The smaller-combined-implementation target is still unproven.
 The requested scope items 3–5 are done.
-Next are the sharing/delegation and pool-weight scope decisions before the
-cross-adapter SB-13 through SB-15 extractions.
+The operator has decided to keep sharing/delegation, including budgets, nested
+shares, delegated session allowances, and expiry/revocation policies.
+The inert pool-weight contract remains a decision before the cross-adapter
+SB-13 through SB-15 extractions.
 The recommended sequence remains deletion before abstraction.
+The subsequent environment investigation is recorded in
+[durable POSIX environments](../../designs/durable-posix-environments.md).
+Implementation has started with deletion of the sandbox's misleading dynamic
+mount/scratch/open/fork/reset methods; static mounts and owned process cleanup remain.
+The portable Shell adapter is now tested, including CapTP byte streams and
+failure/cancellation paths; durable environments and live Fae/Floot acceptance
+remain pending, without a second delegation platform or selected crash-recovery design.
+This sandbox-package deletion does not change the four-package source metric above.
 
 Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
 and the rebuilt byte-only provider listener `cc639390…` on all three brokers.
