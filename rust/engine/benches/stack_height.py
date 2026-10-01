@@ -82,15 +82,17 @@ def validate_provenance(reference, candidate):
             )
 
 
-def uncommitted_changes(baseline):
-    """Tracked engine paths whose working copy differs from HEAD, the baseline
-    file itself excepted (re-writing it is not a change to what it measures)."""
+def uncommitted_changes(baseline, root=ROOT):
+    """Tracked paths under the engine `root` whose working copy differs from
+    HEAD, the baseline file itself excepted (re-writing it is not a change to
+    what it measures)."""
+    root = Path(root).resolve()
     command = ["git", "status", "--porcelain=v1", "--untracked-files=no", "--", "."]
     try:
-        command.append(f":(exclude){Path(baseline).resolve().relative_to(ROOT)}")
+        command.append(f":(exclude){Path(baseline).resolve().relative_to(root)}")
     except ValueError:
         pass  # a baseline outside the engine is not under the pathspec
-    output = subprocess.check_output(command, cwd=ROOT, text=True)
+    output = subprocess.check_output(command, cwd=root, text=True)
     return [line[3:] for line in output.splitlines() if line.strip()]
 
 
