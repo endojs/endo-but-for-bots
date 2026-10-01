@@ -635,6 +635,171 @@ What has to be settled:
   Some stores should survive the handle (a named store a user expects to find again): collection
   must be opt-in per registration, never the default for every native resource.
 
+## 10. After the state review: what needs a decision
+
+A review of the whole package at commit `10345e4d` judged the four refactor goals: the ontology
+and the reuse of components are mostly met, the simplicity of implementations and the absence of
+duplicated code are not.
+The structural changes of sections 1 to 8 landed; the code they landed on was not cut to fit them.
+Most of its findings are mechanical: cutting the supervisor, the daemon and the hub along seams
+they already have, renaming what the vocabulary already decided, deleting dead and speculative
+paths, one test fixture, and one-line substitutions of helpers that exist.
+Those go in without a design.
+The items below change a contract, a protocol, persisted state or what an operator sees, so each
+records its options and a recommendation.
+
+### 10.1 The control connection over the peer transport
+
+Today `control.sock` is served by the control resource's adapter (8.2), or by the host when the
+resource cannot be provided, and every connection is a bespoke OCapN session with its own
+four-byte framing and its own client (`src/control/local-control.js`), beside the Unix netlayer's
+framing and the transient hub client.
+Section 6 lists the framing as written twice; the listener is written twice as well.
+
+Options:
+
+- (a) Keep the resource; share one framing module and one listener module between the netlayer,
+  the resource's adapter and the host's fallback.
+  Removes the copies, keeps three implementations of "a session over a Unix socket".
+- (b) Serve `control.sock` with the Unix netlayer the host already runs for `peers.sock`, with a
+  policy of its own: every connection is a transient hub session (`transient:` prefix, swept at
+  start, no resumption token), and the administration is a publication whose swissnum is in
+  `control.secret` (mode 0600) in the state directory, read by `thix`.
+  The authority is the same as today, the state directory's ownership and permissions.
+  The control resource, the host's fallback listener and `local-control.js` go; the CLI, the
+  attach and the views are one transient hub client dialling one location.
+  `evaluate` can then return references, which section 3 left for a pass of its own.
+  This reverses 8.2: the listener is the peer transport, which the host provides in any case, so
+  the resource no longer buys the one listener implementation it was for.
+
+Recommendation: (b).
+It is the larger change and the larger reduction, and it leaves the host providing exactly what
+8.4 names: vats, processes, publication and the peer transport.
+A start that cannot serve the hub cannot serve anything, so the fallback has nothing left to fall
+back from.
+
+### 10.2 Resource commands off the administration
+
+Nine administration methods forward to the address book, two of them by evaluating guest source
+strings because the book's `send` and `take` take capabilities rather than inventory keys; a tenth
+asks the clock for its count.
+With 10.1 (b) the connection carries references, so the administration can hand the CLI the book
+and the clock and keep no method for either.
+
+Proposal: the address book gains `send(name, text, key)` and `take(id, key)` and is made at
+workspace bootstrap beside the inventory; the administration exposes `lookup(name)` for an
+inventory value; `thix` speaks to the book and the clock through it.
+The mail view subscribes to the inbox and the outbox through the one view lifetime, generalised to
+`watch(name, listener)`, in place of polling.
+Workspace version bump.
+
+Recommendation: yes, with 10.1.
+
+### 10.3 One-sided registration sameness
+
+The kit protocol has the author state the sameness of a registration on both sides, so `same` and
+`replaces` are written once per half in every resource, and the adapter re-sends `bind` on every
+`status()` because only the adapter can tell whether a spec changed.
+
+Options:
+
+- (a) Keep it; the duplication is by design and documented.
+- (b) The manager sends `bind(key, spec, epoch)`, bumping the epoch when its `replaces` accepts a
+  differing spec; the adapter kit rebinds when the epoch differs and otherwise answers from what
+  it holds.
+  `same` and `replaces` leave `makeAdapter` and every `ephemeral.js`; the manager's `same`
+  becomes optional, refusing a differing spec by default (the clock never registers twice under a
+  key, so its `same` is unreachable today).
+
+Recommendation: (b).
+Workspace version bump, since both kits are frozen into heaps and bundles.
+
+### 10.4 Status owned by the kit
+
+Each resource shapes its status record by hand and invents a word for bound (`listening`,
+`armed`, `listening`), and the clock and the control resource each probe `status()` right after
+`register` to throw on an inactive binding the kit had already reconciled.
+
+Proposal: the kit emits `{ key, status: 'bound' | 'inactive' | 'closed', error? }`; the author's
+`describe` becomes `decorate(record, spec)` and adds fields (the HTTP `url`, the clock's `at`)
+without renaming; `register` answers `{ handle, status }`.
+`thix alarms` and the README change their words.
+
+Recommendation: yes; a small visible change for three copies and two round trips fewer.
+
+### 10.5 An occupied name at placement
+
+The registry keeps an installed value whose name was taken meanwhile as `unplaced`, and places it
+when the same identity is installed again, with a `placing` guard and a `complete` flag that
+always equals `status === 'ready'`.
+This handles one race, a user taking the name between the registry's check and its put.
+
+Options: (a) keep it; (b) the installation fails with the error "name taken", keeping its vat and
+its identity until removed, like any failed installation, so the user frees the name and installs
+again; (c) reserve the name in the inventory when the request is made.
+
+Recommendation: (b); it is what the README already says of a failed installation.
+
+### 10.6 The bundle sweep and the provisional index row
+
+The host records a provisional index row before handing a request to the registry, makes a vat
+round trip to decide whether a stale row may be overwritten, and forgets the row on refusal, all
+so that a start between the registry journaling the request and writing its row does not sweep
+the request's bundles.
+
+Proposal: the daemon sweeps bundles only after the registry has answered `list()`, keeping every
+bundle a listed installation names, and never while the registry vat is quarantined, since
+nothing can be installed then.
+The provisional row, the lookup and the forget go; the index is written by the registry alone.
+A bundle put by a request the registry never heard of is freed at the next start's sweep.
+
+Recommendation: yes.
+
+### 10.7 Per-connection peer sessions
+
+A peer connection that is not durable gets a `conn:` session key, which the comments call
+ephemeral, and which no start sweeps; `transient:` keys are swept.
+A crash leaves `conn:` rows in the hub's tables for good.
+
+Recommendation: one prefix, `transient:`, one sweep; 10.1 (b) makes the control connections
+transient the same way.
+
+### 10.8 The durable factory's inputs and the kit's protocol
+
+`make(powers)` receives `adapters` and `makeKeeper` raw, for a manager that would hold an
+incarnation itself; none does, and the installer binds both into `makeManager`.
+`keys()` is a protocol verb no manager sends; the keeper's `status()` and the `restore` return
+value have no caller outside tests.
+
+Recommendation: `make` receives `makeManager` and what the installation was granted or provided;
+`keys()`, `status()` and the `restore` result go.
+A documented contract change, so it is listed here.
+
+### 10.9 The guest prelude
+
+The observable map re-implements `@endo/pubsub`'s latest topic because the topic is not in the
+prelude; the 128-bit hex pattern and the two name validators are written in shipped-by-source
+modules and in the host.
+Four prelude globals (`defineExoClass`, `defineExoClassKit`, `matches`, `mustMatch`) have no guest
+user today.
+
+Recommendation: add `makeLatestTopic`, `HEX128_PATTERN`, `assertWorkspaceName` and
+`assertInstallationName` to the prelude, and collapse the map onto the topic; keep the four
+unused globals, since the prelude is the guest's standard library and the design lists them on
+purpose.
+Workspace version bump, and the worker bundles' digest changes.
+
+### 10.10 Smaller decisions, taken
+
+- The file port gains `readTextIfPresent` and `listDirectoryIfPresent`, so no module outside
+  `src/platform/node` branches on a Node error code.
+- Convergence with `@endo/platform`'s ports stays not done; it is a change to another package.
+- The test doubles in `src/` (`store-memory.js`, `peer-replay-engine.js`, the demo vats) move to
+  `src/testing/`.
+- The demo script stays, on the shared runtime locator; the XS tests get a lane like the Ironhorse
+  one instead of skipping when the binary is absent.
+- The two worker-peer bundling scripts become one module; the dead exclusion list goes with them.
+
 ## Order of the larger changes
 
 1. Section 1, since sections 2 and 3 are simpler once installations are the host's.
@@ -643,3 +808,4 @@ What has to be settled:
    rewording in section 3.
 4. Section 5 as they come up.
 5. Section 8, after its kit prerequisites (8.3), with 7.2 alongside section 1.
+6. The mechanical findings of the state review, then the decisions of section 10 as taken.
