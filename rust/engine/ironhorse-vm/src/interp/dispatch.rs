@@ -2585,6 +2585,20 @@ impl Interp {
                         code
                     );
                 }
+                if !self.bound_construct_enters_bytecode(bf) {
+                    let result = dispatch_result_flow!(
+                        self.construct_bound_native(code, bf, base, argc),
+                        self,
+                        return_depth,
+                        code
+                    );
+                    self.push(result);
+                    if self.check_meter() == MeterCheck::Abort {
+                        return Flow::Exit(Step::Host(Halt::MeterAbort));
+                    }
+                    pc = ret_pc;
+                    return Flow::Next(pc);
+                }
                 match self.enter_construct_bound(bf, base, argc, ret_pc) {
                     Ok(body_start) => {
                         if self.check_meter() == MeterCheck::Abort {

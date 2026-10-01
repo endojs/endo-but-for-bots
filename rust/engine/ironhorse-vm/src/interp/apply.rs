@@ -391,6 +391,46 @@ impl Interp {
         }
     }
 
+    /// Whether `new bf(...)` ends at a bytecode constructor, which
+    /// [`Self::enter_construct_bound`] enters in place. A native target
+    /// constructs through [`Self::construct_value`] instead (as a Proxy
+    /// target would, once `bind` accepts one).
+    pub(super) fn bound_construct_enters_bytecode(&self, bf: crate::value::SlotIndex) -> bool {
+        let mut current = bf;
+        while let Some(data) = self.bound_functions.get(&current) {
+            current = data.target;
+        }
+        self.functions
+            .get(&current)
+            .is_some_and(|fi| fi.native.is_none() && fi.method.is_none())
+    }
+
+    /// `new boundF(...)` for a bound function whose ultimate target is not
+    /// bytecode (see [`Self::bound_construct_enters_bytecode`]): take the
+    /// frame at `base` apart and run BoundFunction [[Construct]] through the
+    /// general construct, `new.target` the bound function unless a `super()`
+    /// named its own. (A Proxy target would take this path too, but `bind`
+    /// on a Proxy still halts.) Out of line, so the dispatch loop's `RUN` arm,
+    /// which every native re-entry holds, does not carry its locals.
+    #[inline(never)]
+    pub(super) fn construct_bound_native(
+        &mut self,
+        code: &[u8],
+        bf: crate::value::SlotIndex,
+        base: usize,
+        argc: usize,
+    ) -> Result<Slot, Step> {
+        let args = self.stack[base + 4..base + 4 + argc].to_vec();
+        let new_target = self.pending_new_target.take().unwrap_or(bf);
+        self.stack.truncate(base);
+        self.construct_value(
+            code,
+            Slot::of(Kind::Reference, Payload::Reference(bf)),
+            &args,
+            Slot::of(Kind::Reference, Payload::Reference(new_target)),
+        )
+    }
+
     /// A bound function's **construct** (`new boundF(...)`, ECMA-262 10.4.1.2
     /// `[[Construct]]`): construct the ultimate target with the bound leading
     /// arguments prepended to the call arguments, and the fresh instance's
@@ -405,8 +445,9 @@ impl Interp {
     /// outermost bound is the bound itself, and step 5 (`SameValue(F, newTarget)
     /// → target`) applies at every level, so the effective `new.target` is the
     /// ultimate target — its `.prototype` becomes the instance's prototype
-    /// (via [`Self::run_constructor`] reading `target_func`). A native or
-    /// non-constructor ultimate target is not yet modeled and self-names.
+    /// (via [`Self::run_constructor`] reading `target_func`). The caller
+    /// sends any other target through [`Self::construct_value`]
+    /// ([`Self::bound_construct_enters_bytecode`]).
     pub(super) fn enter_construct_bound(
         &mut self,
         bf: crate::value::SlotIndex,

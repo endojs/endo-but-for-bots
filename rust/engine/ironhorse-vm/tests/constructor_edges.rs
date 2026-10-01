@@ -133,3 +133,49 @@ fn engine_halts_became_catchable_errors() {
         ),
     ]);
 }
+
+#[test]
+fn a_bound_native_constructs() {
+    check(&[
+        (
+            "map",
+            r#"var B = Map.bind(null); var m = new B([[1, 2]]); [m.get(1), m instanceof Map, Object.getPrototypeOf(m) === Map.prototype].join()"#,
+            r#"2,true,true"#,
+        ),
+        (
+            "array_and_date",
+            r#"var A = Array.bind(null, 1, 2); var D = Date.bind(null, 0); [JSON.stringify(new A(3)), new D().getTime()].join()"#,
+            r#"[1,2,3],0"#,
+        ),
+        (
+            "error_promise_object",
+            r#"var E = Error.bind(null, 'm'); var P = Promise.bind(null, function (r) { r(1); }); var O = Object.bind(null); [new E().message, new P() instanceof Promise, typeof new O()].join()"#,
+            r#"m,true,object"#,
+        ),
+        (
+            "not_constructors",
+            r#"var r = []; [Symbol.bind(null), Math.max.bind(null), (() => 1).bind(null)].forEach(function (B) { try { new B(); } catch (e) { r.push(e.constructor.name + ':' + e.message); } }); r.join()"#,
+            r#"TypeError:new: Symbol,TypeError:new: not a constructor,TypeError:new: not a constructor"#,
+        ),
+        (
+            "reflect_construct_new_target",
+            r#"var B = Array.bind(null, 1); class X {} var a = Reflect.construct(B, [2], X); [Object.getPrototypeOf(a) === X.prototype, a.length, Array.isArray(a)].join()"#,
+            r#"true,2,true"#,
+        ),
+        (
+            "bound_bound",
+            r#"var B = Map.bind(null).bind(null); new B() instanceof Map"#,
+            r#"true"#,
+        ),
+        (
+            "typed_and_regexp",
+            r#"var U = Uint8Array.bind(null, 3); var R = RegExp.bind(null, 'a'); [new U().length, String(new R('g'))].join()"#,
+            r#"3,/a/g"#,
+        ),
+        (
+            "bad_length",
+            r#"var B = Array.bind(null); try { new B(-1); } catch (e) { e.constructor.name + ':' + e.message }"#,
+            r#"RangeError:invalid length"#,
+        ),
+    ]);
+}
