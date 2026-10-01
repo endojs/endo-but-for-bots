@@ -764,7 +764,10 @@ fn parser_and_collection_paths_keep_incremental_admission() {
         ("arraylike_to_vec", "reserve_work_scratch"),
         ("iterable_to_list_inner", "push_prepaid_scratch"),
         ("json_parse_array_element", "admit_scratch::<Slot>"),
-        ("json_parse_object_member", "admit_scratch::<(ReadKey, Slot)>"),
+        (
+            "json_parse_object_member",
+            "admit_scratch::<(ReadKey, Slot)>",
+        ),
         ("json_parse_string_units", "push_prepaid_scratch"),
         ("mop_own_keys_inner", "push_prepaid_scratch"),
     ] {
