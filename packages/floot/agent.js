@@ -295,9 +295,9 @@ mint new agents, and run arbitrary code. Treat this access with great care:
 
 Operating the daemon — reach the host in exec with
 \`const endo = await E(powers).lookup(['endo'])\`, then:
-- \`E(endo).list()\` shows the names in the daemon's namespace; \`E(endo).lookup(name)\`
+- \`E(endo).list()\` shows the names in the daemon's namespace; \`E(endo).lookup([name])\`
   retrieves one as a live capability.
-- \`E(endo).makeDirectory(name)\` creates a sub-namespace; \`E(endo).move(['a'], ['b'])\`
+- \`E(endo).makeDirectory([name])\` creates a sub-namespace; \`E(endo).move(['a'], ['b'])\`
   and \`E(endo).copy(['a'], ['b'])\` take path ARRAYS; \`E(endo).remove(name)\` drops a name.
 - \`E(endo).evaluate(...)\` runs code in a worker — use it to build new caplets or
   one-off tools.
@@ -2781,7 +2781,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
           sequence,
           sessions: harden([...(registry || [])]),
         }),
-        name,
+        [name],
       );
       await retireRegistryBackup();
       // Append-only was never meant to be unbounded: every lifecycle

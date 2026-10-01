@@ -18,8 +18,14 @@ import { Far } from '@endo/far';
 
 import { make } from '../agent.js';
 
-// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
-const petKey = path => [path].flat(2).join('/');
+// Daemon pet-name paths arrive as arrays. Refuse anything else, as the
+// daemon's namePathFrom does, and key the fake stores by joined path.
+const petKey = path => {
+  if (!Array.isArray(path) || !path.every(part => typeof part === 'string')) {
+    throw TypeError(`not a pet-name path: ${JSON.stringify(path)}`);
+  }
+  return path.join('/');
+};
 
 /**
  * A world with one floot session on a fake hosted backend. The backend

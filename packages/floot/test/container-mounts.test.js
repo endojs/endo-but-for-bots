@@ -11,8 +11,14 @@ import {
   normalizeInnerPath,
 } from '../src/container-mounts.js';
 
-// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
-const petKey = path => [path].flat(2).join('/');
+// Daemon pet-name paths arrive as arrays. Refuse anything else, as the
+// daemon's namePathFrom does, and key the fake stores by joined path.
+const petKey = path => {
+  if (!Array.isArray(path) || !path.every(part => typeof part === 'string')) {
+    throw TypeError(`not a pet-name path: ${JSON.stringify(path)}`);
+  }
+  return path.join('/');
+};
 
 /**
  * Build a persisted record with the key the registrar will derive. A record
@@ -102,7 +108,7 @@ const makeHarness = () => {
     },
     /**
      * @param {unknown} value
-     * @param {string | string[]} path
+     * @param {string[]} path
      */
     async storeValue(value, path) {
       const name = petKey(path);

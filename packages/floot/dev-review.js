@@ -301,7 +301,7 @@ export const provisionDevReview = async ({
   );
   await E(initiator).storeValue(
     await E(host).lookup([connectionName]),
-    'dev-review',
+    ['dev-review'],
   );
   return result;
 };

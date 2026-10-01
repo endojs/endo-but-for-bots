@@ -18,7 +18,12 @@ import { makeReplyChannel } from '../src/stream.js';
 import { makeFlootToolRegistry } from '../src/tool-registry.js';
 
 // Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
-const petKey = path => [path].flat(2).join('/');
+const petKey = path => {
+  if (!Array.isArray(path) || !path.every(part => typeof part === 'string')) {
+    throw TypeError(`not a pet-name path: ${JSON.stringify(path)}`);
+  }
+  return path.join('/');
+};
 
 const makeFakePowers = () => {
   const store = new Map();

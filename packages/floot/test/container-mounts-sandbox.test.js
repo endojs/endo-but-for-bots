@@ -22,8 +22,14 @@ import { make as makeClaudeClientCaplet } from '@endo/claude-sandbox/src/claude-
 
 import { makeContainerMountRegistrar } from '../src/container-mounts.js';
 
-// Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
-const petKey = path => [path].flat(2).join('/');
+// Daemon pet-name paths arrive as arrays. Refuse anything else, as the
+// daemon's namePathFrom does, and key the fake stores by joined path.
+const petKey = path => {
+  if (!Array.isArray(path) || !path.every(part => typeof part === 'string')) {
+    throw TypeError(`not a pet-name path: ${JSON.stringify(path)}`);
+  }
+  return path.join('/');
+};
 
 const CLIENT_ENV = harden({
   SESSION_ID: 'sess-mnt',

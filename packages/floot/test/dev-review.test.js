@@ -20,7 +20,12 @@ import { make as makeConnection } from '../review-connection.js';
 import { makeWorkflowTools } from '../src/workflow-tools.js';
 
 // Daemon pet-name paths arrive as arrays; key the fake stores by joined path.
-const petKey = path => [path].flat(2).join('/');
+const petKey = path => {
+  if (!Array.isArray(path) || !path.every(part => typeof part === 'string')) {
+    throw TypeError(`not a pet-name path: ${JSON.stringify(path)}`);
+  }
+  return path.join('/');
+};
 
 const BASE = 'a'.repeat(40);
 const FIRST = 'b'.repeat(40);

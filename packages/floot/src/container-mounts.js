@@ -304,7 +304,7 @@ export const makeContainerMountRegistrar = ({
       recordsSequence += 1n;
       await E(powers).storeValue(
         harden({ version: 1, sequence, records: snapshot }),
-        journalName(sequence),
+        [journalName(sequence)],
       );
       // Trim only after the new snapshot is durable, so the journal is never
       // momentarily empty, and keep a few behind it so a snapshot that turns
