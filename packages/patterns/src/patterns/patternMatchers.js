@@ -704,8 +704,15 @@ const makePatternKit = () => {
   // /////////////////////// getRankCover //////////////////////////////////////
 
   /** @type {(passStyle: PassStyle, encodePassable: KeyToDBKey) => RankCover} */
-  const getPassStyleCover = (passStyle, encodePassable) =>
-    provideStaticRanks(encodePassable)[passStyle].cover;
+  const getPassStyleCover = (passStyle, encodePassable) => {
+    const staticRanks = provideStaticRanks(encodePassable);
+    const rank =
+      staticRanks[/** @type {keyof typeof staticRanks} */ (passStyle)];
+    if (rank === undefined) {
+      throw Fail`A ${q(passStyle)} cannot be rank-ordered`;
+    }
+    return rank.cover;
+  };
 
   /** @type {GetRankCover} */
   const getRankCover = (patt, encodePassable) => {
