@@ -37,14 +37,14 @@ built-ins/Proxy/construct/return-not-object-throws-undefined-realm.js sloppy ski
 built-ins/Proxy/construct/return-not-object-throws-undefined-realm.js strict skip:shared-positive-test-failure
 built-ins/Proxy/construct/return-not-object-throws-undefined.js sloppy pass
 built-ins/Proxy/construct/return-not-object-throws-undefined.js strict pass
-built-ins/Proxy/construct/trap-is-missing-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
-built-ins/Proxy/construct/trap-is-missing-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/construct/trap-is-missing-target-is-proxy.js sloppy pass
+built-ins/Proxy/construct/trap-is-missing-target-is-proxy.js strict pass
 built-ins/Proxy/construct/trap-is-not-callable-realm.js sloppy skip:shared-positive-test-failure
 built-ins/Proxy/construct/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
 built-ins/Proxy/construct/trap-is-not-callable.js sloppy pass
 built-ins/Proxy/construct/trap-is-not-callable.js strict pass
-built-ins/Proxy/construct/trap-is-null-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
-built-ins/Proxy/construct/trap-is-null-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/construct/trap-is-null-target-is-proxy.js sloppy pass
+built-ins/Proxy/construct/trap-is-null-target-is-proxy.js strict pass
 built-ins/Proxy/construct/trap-is-null.js sloppy pass
 built-ins/Proxy/construct/trap-is-null.js strict pass
 built-ins/Proxy/construct/trap-is-undefined-no-property.js sloppy pass
@@ -53,7 +53,7 @@ built-ins/Proxy/construct/trap-is-undefined-proto-from-cross-realm-newtarget.js 
 built-ins/Proxy/construct/trap-is-undefined-proto-from-cross-realm-newtarget.js strict skip:shared-positive-test-failure
 built-ins/Proxy/construct/trap-is-undefined-proto-from-newtarget-realm.js sloppy skip:shared-positive-test-failure
 built-ins/Proxy/construct/trap-is-undefined-proto-from-newtarget-realm.js strict skip:shared-positive-test-failure
-built-ins/Proxy/construct/trap-is-undefined-target-is-proxy.js sloppy skip:unsupported-opcode:proxy:construct-nonuser-target
-built-ins/Proxy/construct/trap-is-undefined-target-is-proxy.js strict skip:unsupported-opcode:proxy:construct-nonuser-target
+built-ins/Proxy/construct/trap-is-undefined-target-is-proxy.js sloppy pass
+built-ins/Proxy/construct/trap-is-undefined-target-is-proxy.js strict pass
 built-ins/Proxy/construct/trap-is-undefined.js sloppy pass
 built-ins/Proxy/construct/trap-is-undefined.js strict pass

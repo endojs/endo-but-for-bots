@@ -17,14 +17,14 @@ built-ins/parseInt/S15.1.2.2_A1_T7.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A1_T7.js strict pass
 built-ins/parseInt/S15.1.2.2_A2_T1.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A2_T1.js strict pass
-built-ins/parseInt/S15.1.2.2_A2_T10.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number1») to be true"
-built-ins/parseInt/S15.1.2.2_A2_T10.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number1») to be true"
+built-ins/parseInt/S15.1.2.2_A2_T10.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: parseInt(uspU[index] + \"1\") must return the same value returned by parseInt(\"1\") Expected SameValue(«NaN», «1») to be true"
+built-ins/parseInt/S15.1.2.2_A2_T10.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: parseInt(uspU[index] + \"1\") must return the same value returned by parseInt(\"1\") Expected SameValue(«NaN», «1») to be true"
 built-ins/parseInt/S15.1.2.2_A2_T10_U180E.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A2_T10_U180E.js strict pass
 built-ins/parseInt/S15.1.2.2_A2_T2.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A2_T2.js strict pass
-built-ins/parseInt/S15.1.2.2_A2_T3.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number1») to be true"
-built-ins/parseInt/S15.1.2.2_A2_T3.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number1») to be true"
+built-ins/parseInt/S15.1.2.2_A2_T3.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: parseInt(\"\\u00A01\") must return the same value returned by parseInt(\"1\") Expected SameValue(«NaN», «1») to be true"
+built-ins/parseInt/S15.1.2.2_A2_T3.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: parseInt(\"\\u00A01\") must return the same value returned by parseInt(\"1\") Expected SameValue(«NaN», «1») to be true"
 built-ins/parseInt/S15.1.2.2_A2_T4.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A2_T4.js strict pass
 built-ins/parseInt/S15.1.2.2_A2_T5.js sloppy pass
@@ -33,10 +33,10 @@ built-ins/parseInt/S15.1.2.2_A2_T6.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A2_T6.js strict pass
 built-ins/parseInt/S15.1.2.2_A2_T7.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A2_T7.js strict pass
-built-ins/parseInt/S15.1.2.2_A2_T8.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number1») to be true"
-built-ins/parseInt/S15.1.2.2_A2_T8.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number1») to be true"
-built-ins/parseInt/S15.1.2.2_A2_T9.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number1») to be true"
-built-ins/parseInt/S15.1.2.2_A2_T9.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: numberNaN», «number1») to be true"
+built-ins/parseInt/S15.1.2.2_A2_T8.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: parseInt(\"\\u20281\") must return the same value returned by parseInt(\"1\") Expected SameValue(«NaN», «1») to be true"
+built-ins/parseInt/S15.1.2.2_A2_T8.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: parseInt(\"\\u20281\") must return the same value returned by parseInt(\"1\") Expected SameValue(«NaN», «1») to be true"
+built-ins/parseInt/S15.1.2.2_A2_T9.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: parseInt(\"\\u20291\") must return the same value returned by parseInt(\"1\") Expected SameValue(«NaN», «1») to be true"
+built-ins/parseInt/S15.1.2.2_A2_T9.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: parseInt(\"\\u20291\") must return the same value returned by parseInt(\"1\") Expected SameValue(«NaN», «1») to be true"
 built-ins/parseInt/S15.1.2.2_A3.1_T1.js sloppy pass
 built-ins/parseInt/S15.1.2.2_A3.1_T1.js strict pass
 built-ins/parseInt/S15.1.2.2_A3.1_T2.js sloppy pass

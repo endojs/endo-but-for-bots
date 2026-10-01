@@ -19,8 +19,8 @@ built-ins/TypedArray/prototype/reverse/preserves-non-numeric-properties.js slopp
 built-ins/TypedArray/prototype/reverse/preserves-non-numeric-properties.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/reverse/prop-desc.js sloppy pass
 built-ins/TypedArray/prototype/reverse/prop-desc.js strict pass
-built-ins/TypedArray/prototype/reverse/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/reverse/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/reverse/resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/reverse/resizable-buffer.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/reverse/return-abrupt-from-this-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/reverse/return-abrupt-from-this-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/reverse/returns-original-object.js sloppy pass

@@ -77,8 +77,8 @@ built-ins/Temporal/PlainDateTime/prototype/since/exact-multiple-of-larger-unit.j
 built-ins/Temporal/PlainDateTime/prototype/since/exact-multiple-of-larger-unit.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDateTime/prototype/since/float64-representable-integer.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDateTime/prototype/since/float64-representable-integer.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/PlainDateTime/prototype/since/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainDateTime/prototype/since/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainDateTime/prototype/since/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainDateTime/prototype/since/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainDateTime/prototype/since/largestunit-invalid-string.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDateTime/prototype/since/largestunit-invalid-string.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainDateTime/prototype/since/largestunit-plurals-accepted.js sloppy skip:oracle-host-missing-temporal

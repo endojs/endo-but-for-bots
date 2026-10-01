@@ -71,8 +71,8 @@ built-ins/Temporal/Instant/prototype/round/smallestunit-plurals-accepted.js slop
 built-ins/Temporal/Instant/prototype/round/smallestunit-plurals-accepted.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/round/smallestunit-string-shorthand.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/round/smallestunit-string-shorthand.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Instant/prototype/round/smallestunit-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/prototype/round/smallestunit-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Instant/prototype/round/smallestunit-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/prototype/round/smallestunit-wrong-type.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/round/string-shorthand-no-object-prototype-pollution.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/round/string-shorthand-no-object-prototype-pollution.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/round/subclassing-ignored.js sloppy skip:oracle-host-missing-global:Temporal

@@ -7,8 +7,8 @@ built-ins/Array/prototype/some/15.4.4.17-1-11.js sloppy pass
 built-ins/Array/prototype/some/15.4.4.17-1-11.js strict pass
 built-ins/Array/prototype/some/15.4.4.17-1-12.js sloppy pass
 built-ins/Array/prototype/some/15.4.4.17-1-12.js strict pass
-built-ins/Array/prototype/some/15.4.4.17-1-13.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Array.prototype.some.call(JSON, callbackfn) !== true"
-built-ins/Array/prototype/some/15.4.4.17-1-13.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Array.prototype.some.call(JSON, callbackfn) !== true"
+built-ins/Array/prototype/some/15.4.4.17-1-13.js sloppy pass
+built-ins/Array/prototype/some/15.4.4.17-1-13.js strict pass
 built-ins/Array/prototype/some/15.4.4.17-1-14.js sloppy pass
 built-ins/Array/prototype/some/15.4.4.17-1-14.js strict pass
 built-ins/Array/prototype/some/15.4.4.17-1-15.js sloppy pass

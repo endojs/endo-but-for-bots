@@ -57,8 +57,8 @@ built-ins/Temporal/Duration/prototype/round/largestunit-smallestunit-mismatch.js
 built-ins/Temporal/Duration/prototype/round/largestunit-smallestunit-mismatch.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/largestunit-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/largestunit-undefined.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/prototype/round/largestunit-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/prototype/round/largestunit-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/round/largestunit-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/round/largestunit-wrong-type.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/length.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Duration/prototype/round/length.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Duration/prototype/round/name.js sloppy skip:oracle-host-missing-global:Temporal
@@ -101,8 +101,8 @@ built-ins/Temporal/Duration/prototype/round/relativeto-duration-out-of-range-add
 built-ins/Temporal/Duration/prototype/round/relativeto-duration-out-of-range-added-to-relative-date.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/relativeto-ignores-incorrect-properties.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/relativeto-ignores-incorrect-properties.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/prototype/round/relativeto-infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/Duration/prototype/round/relativeto-infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Duration/prototype/round/relativeto-infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/round/relativeto-infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/relativeto-largestunit-smallestunit-combinations.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Duration/prototype/round/relativeto-largestunit-smallestunit-combinations.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Duration/prototype/round/relativeto-leap-second.js sloppy skip:oracle-host-missing-temporal

@@ -11,8 +11,8 @@ built-ins/Proxy/set/boolean-trap-result-is-false-undefined-return-false.js slopp
 built-ins/Proxy/set/boolean-trap-result-is-false-undefined-return-false.js strict pass
 built-ins/Proxy/set/call-parameters-prototype-dunder-proto.js sloppy pass
 built-ins/Proxy/set/call-parameters-prototype-dunder-proto.js strict pass
-built-ins/Proxy/set/call-parameters-prototype-index.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«undefinedundefined», «[object Object]») to be true"
-built-ins/Proxy/set/call-parameters-prototype-index.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«undefinedundefined», «[object Object]») to be true"
+built-ins/Proxy/set/call-parameters-prototype-index.js sloppy pass
+built-ins/Proxy/set/call-parameters-prototype-index.js strict pass
 built-ins/Proxy/set/call-parameters-prototype.js sloppy pass
 built-ins/Proxy/set/call-parameters-prototype.js strict pass
 built-ins/Proxy/set/call-parameters.js sloppy pass
@@ -34,11 +34,11 @@ built-ins/Proxy/set/target-property-is-accessor-not-configurable-set-is-undefine
 built-ins/Proxy/set/target-property-is-not-configurable-not-writable-not-equal-to-v.js sloppy pass
 built-ins/Proxy/set/target-property-is-not-configurable-not-writable-not-equal-to-v.js strict pass
 built-ins/Proxy/set/trap-is-missing-receiver-multiple-calls-index.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Actual [0] and expected [0, 0, 0] should have the same contents. getOwnPropertyDescriptor: key present on [[ProxyTarget]]"
-built-ins/Proxy/set/trap-is-missing-receiver-multiple-calls-index.js strict fail:"ironhorse threw where the oracle completed: TypeError"
+built-ins/Proxy/set/trap-is-missing-receiver-multiple-calls-index.js strict fail:"ironhorse threw where the oracle completed: TypeError: set: proxy trap returned false"
 built-ins/Proxy/set/trap-is-missing-receiver-multiple-calls.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Actual [foo] and expected [foo, foo, foo] should have the same contents. getOwnPropertyDescriptor: key present on [[ProxyTarget]]"
-built-ins/Proxy/set/trap-is-missing-receiver-multiple-calls.js strict fail:"ironhorse threw where the oracle completed: TypeError"
-built-ins/Proxy/set/trap-is-missing-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
-built-ins/Proxy/set/trap-is-missing-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+built-ins/Proxy/set/trap-is-missing-receiver-multiple-calls.js strict fail:"ironhorse threw where the oracle completed: TypeError: set: proxy trap returned false"
+built-ins/Proxy/set/trap-is-missing-target-is-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected true but got false"
+built-ins/Proxy/set/trap-is-missing-target-is-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected true but got false"
 built-ins/Proxy/set/trap-is-not-callable-realm.js sloppy skip:shared-positive-test-failure
 built-ins/Proxy/set/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
 built-ins/Proxy/set/trap-is-not-callable.js sloppy pass

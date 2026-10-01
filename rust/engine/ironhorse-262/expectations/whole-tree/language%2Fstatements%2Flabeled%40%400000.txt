@@ -29,7 +29,7 @@ language/statements/labeled/tco.js sloppy skip:feature:tail-call-optimization
 language/statements/labeled/value-await-module-escaped.js sloppy pass
 language/statements/labeled/value-await-module.js sloppy pass
 language/statements/labeled/value-await-non-module-escaped.js sloppy pass
-language/statements/labeled/value-await-non-module-escaped.js strict pass
+language/statements/labeled/value-await-non-module-escaped.js strict fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: escaped keyword\" ironhorse=\"SyntaxError\""
 language/statements/labeled/value-await-non-module.js sloppy pass
 language/statements/labeled/value-await-non-module.js strict pass
 language/statements/labeled/value-yield-non-strict-escaped.js sloppy pass

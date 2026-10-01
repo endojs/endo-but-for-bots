@@ -31,16 +31,16 @@ built-ins/Temporal/PlainYearMonth/prototype/subtract/builtin.js sloppy skip:orac
 built-ins/Temporal/PlainYearMonth/prototype/subtract/builtin.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/end-of-month-out-of-range.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/end-of-month-out-of-range.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/PlainYearMonth/prototype/subtract/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainYearMonth/prototype/subtract/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainYearMonth/prototype/subtract/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/subtract/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/length.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/length.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/limits.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/limits.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/name.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/name.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/PlainYearMonth/prototype/subtract/negative-infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainYearMonth/prototype/subtract/negative-infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainYearMonth/prototype/subtract/negative-infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/subtract/negative-infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/non-integer-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/non-integer-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/prototype/subtract/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"

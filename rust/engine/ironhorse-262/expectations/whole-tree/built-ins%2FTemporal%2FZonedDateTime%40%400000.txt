@@ -17,8 +17,8 @@ built-ins/Temporal/ZonedDateTime/construction-and-properties.js sloppy skip:orac
 built-ins/Temporal/ZonedDateTime/construction-and-properties.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
 built-ins/Temporal/ZonedDateTime/constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
-built-ins/Temporal/ZonedDateTime/get-prototype-from-constructor-throws.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all\""
-built-ins/Temporal/ZonedDateTime/get-prototype-from-constructor-throws.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected a Test262Error but got a ReferenceError\" ironhorse=\"Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all\""
+built-ins/Temporal/ZonedDateTime/get-prototype-from-constructor-throws.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a Test262Error but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/get-prototype-from-constructor-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a Test262Error but got a ReferenceError"
 built-ins/Temporal/ZonedDateTime/length.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/length.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/limits.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: epochNs = 8640000000000000000001, timeZone = UTC Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: epochNs = 340282366920938463463374607431768211456, timeZone = UTC Expected a RangeError but got a TypeError\""
@@ -29,8 +29,8 @@ built-ins/Temporal/ZonedDateTime/name.js sloppy skip:oracle-host-missing-tempora
 built-ins/Temporal/ZonedDateTime/name.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prop-desc.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/prop-desc.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/ZonedDateTime/subclass.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/subclass.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/ZonedDateTime/subclass.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/ZonedDateTime/subclass.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/timezone-case-insensitive.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/timezone-case-insensitive.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/ZonedDateTime/timezone-iso-string.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: An ISO string is not a valid calendar ID for constructor parameter Expected a RangeError but got a ReferenceError"

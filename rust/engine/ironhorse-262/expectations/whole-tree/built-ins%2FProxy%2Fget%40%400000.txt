@@ -27,8 +27,8 @@ built-ins/Proxy/get/trap-is-not-callable-realm.js sloppy skip:shared-positive-te
 built-ins/Proxy/get/trap-is-not-callable-realm.js strict skip:shared-positive-test-failure
 built-ins/Proxy/get/trap-is-not-callable.js sloppy pass
 built-ins/Proxy/get/trap-is-not-callable.js strict pass
-built-ins/Proxy/get/trap-is-null-target-is-proxy.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-built-ins/Proxy/get/trap-is-null-target-is-proxy.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
+built-ins/Proxy/get/trap-is-null-target-is-proxy.js sloppy pass
+built-ins/Proxy/get/trap-is-null-target-is-proxy.js strict pass
 built-ins/Proxy/get/trap-is-undefined-no-property.js sloppy pass
 built-ins/Proxy/get/trap-is-undefined-no-property.js strict pass
 built-ins/Proxy/get/trap-is-undefined-receiver.js sloppy pass

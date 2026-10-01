@@ -7,8 +7,8 @@ language/statements/class/private-static-getter-non-static-setter-early-error.js
 language/statements/class/private-static-getter-non-static-setter-early-error.js strict pass
 language/statements/class/private-static-setter-non-static-getter-early-error.js sloppy pass
 language/statements/class/private-static-setter-non-static-getter-early-error.js strict pass
-language/statements/class/restricted-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/restricted-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/restricted-properties.js sloppy pass
+language/statements/class/restricted-properties.js strict pass
 language/statements/class/scope-gen-meth-paramsbody-var-close.js sloppy pass
 language/statements/class/scope-gen-meth-paramsbody-var-close.js strict pass
 language/statements/class/scope-gen-meth-paramsbody-var-open.js sloppy pass

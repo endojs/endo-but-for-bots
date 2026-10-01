@@ -105,8 +105,8 @@ language/statements/class/elements/prod-private-setter-before-super-return-in-co
 language/statements/class/elements/prod-private-setter-before-super-return-in-constructor.js strict pass
 language/statements/class/elements/prod-private-setter-before-super-return-in-field-initializer.js sloppy pass
 language/statements/class/elements/prod-private-setter-before-super-return-in-field-initializer.js strict pass
-language/statements/class/elements/public-class-field-initialization-is-visible-to-proxy.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
-language/statements/class/elements/public-class-field-initialization-is-visible-to-proxy.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+language/statements/class/elements/public-class-field-initialization-is-visible-to-proxy.js sloppy pass
+language/statements/class/elements/public-class-field-initialization-is-visible-to-proxy.js strict pass
 language/statements/class/elements/public-class-field-initialization-on-super-class-with-setter.js sloppy pass
 language/statements/class/elements/public-class-field-initialization-on-super-class-with-setter.js strict pass
 language/statements/class/elements/redeclaration-symbol.js sloppy pass

@@ -19,8 +19,8 @@ annexB/built-ins/unescape/name.js sloppy skip:ironhorse-missing-global:unescape
 annexB/built-ins/unescape/name.js strict skip:ironhorse-missing-global:unescape
 annexB/built-ins/unescape/not-a-constructor.js sloppy skip:ironhorse-missing-global:unescape
 annexB/built-ins/unescape/not-a-constructor.js strict skip:ironhorse-missing-global:unescape
-annexB/built-ins/unescape/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
-annexB/built-ins/unescape/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+annexB/built-ins/unescape/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"undefined\"», «\"function\"») to be true"
+annexB/built-ins/unescape/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"undefined\"», «\"function\"») to be true"
 annexB/built-ins/unescape/to-primitive-err.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
 annexB/built-ins/unescape/to-primitive-err.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError but got a ReferenceError"
 annexB/built-ins/unescape/to-primitive-observe.js sloppy skip:ironhorse-missing-global:unescape

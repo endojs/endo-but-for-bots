@@ -1,6 +1,6 @@
 # engine=ironhorse features=default corpus=built-ins/FinalizationRegistry tip=be13516fb6441b950ba8a3df97eb34062c186972
-built-ins/FinalizationRegistry/constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
-built-ins/FinalizationRegistry/constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/FinalizationRegistry/constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof FinalizationRegistry is function Expected SameValue(«\"undefined\"», «\"function\"») to be true"
+built-ins/FinalizationRegistry/constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof FinalizationRegistry is function Expected SameValue(«\"undefined\"», «\"function\"») to be true"
 built-ins/FinalizationRegistry/instance-extensible.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
 built-ins/FinalizationRegistry/instance-extensible.js strict skip:ironhorse-missing-global:FinalizationRegistry
 built-ins/FinalizationRegistry/is-a-constructor.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
@@ -25,9 +25,9 @@ built-ins/FinalizationRegistry/prototype-from-newtarget.js sloppy skip:ironhorse
 built-ins/FinalizationRegistry/prototype-from-newtarget.js strict skip:ironhorse-missing-global:FinalizationRegistry
 built-ins/FinalizationRegistry/returns-new-object-from-constructor.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
 built-ins/FinalizationRegistry/returns-new-object-from-constructor.js strict skip:ironhorse-missing-global:FinalizationRegistry
-built-ins/FinalizationRegistry/target-not-callable-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
-built-ins/FinalizationRegistry/target-not-callable-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
-built-ins/FinalizationRegistry/undefined-newtarget-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
-built-ins/FinalizationRegistry/undefined-newtarget-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/FinalizationRegistry/target-not-callable-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof FinalizationRegistry is function Expected SameValue(«\"undefined\"», «\"function\"») to be true"
+built-ins/FinalizationRegistry/target-not-callable-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof FinalizationRegistry is function Expected SameValue(«\"undefined\"», «\"function\"») to be true"
+built-ins/FinalizationRegistry/undefined-newtarget-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof FinalizationRegistry is function Expected SameValue(«\"undefined\"», «\"function\"») to be true"
+built-ins/FinalizationRegistry/undefined-newtarget-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof FinalizationRegistry is function Expected SameValue(«\"undefined\"», «\"function\"») to be true"
 built-ins/FinalizationRegistry/unnaffected-by-poisoned-cleanupCallback.js sloppy skip:ironhorse-missing-global:FinalizationRegistry
 built-ins/FinalizationRegistry/unnaffected-by-poisoned-cleanupCallback.js strict skip:ironhorse-missing-global:FinalizationRegistry

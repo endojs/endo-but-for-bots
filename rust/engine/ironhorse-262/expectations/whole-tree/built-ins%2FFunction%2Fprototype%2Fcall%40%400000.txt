@@ -20,10 +20,10 @@ built-ins/Function/prototype/call/S15.3.4.4_A1_T1.js sloppy pass
 built-ins/Function/prototype/call/S15.3.4.4_A1_T1.js strict pass
 built-ins/Function/prototype/call/S15.3.4.4_A1_T2.js sloppy pass
 built-ins/Function/prototype/call/S15.3.4.4_A1_T2.js strict pass
-built-ins/Function/prototype/call/S15.3.4.4_A2_T1.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
-built-ins/Function/prototype/call/S15.3.4.4_A2_T1.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
-built-ins/Function/prototype/call/S15.3.4.4_A2_T2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
-built-ins/Function/prototype/call/S15.3.4.4_A2_T2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+built-ins/Function/prototype/call/S15.3.4.4_A2_T1.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of Function.prototype.call.length is expected to be 1 Expected SameValue(«0», «1») to be true"
+built-ins/Function/prototype/call/S15.3.4.4_A2_T1.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of Function.prototype.call.length is expected to be 1 Expected SameValue(«0», «1») to be true"
+built-ins/Function/prototype/call/S15.3.4.4_A2_T2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of f.call.length is expected to be 1 Expected SameValue(«0», «1») to be true"
+built-ins/Function/prototype/call/S15.3.4.4_A2_T2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of f.call.length is expected to be 1 Expected SameValue(«0», «1») to be true"
 built-ins/Function/prototype/call/S15.3.4.4_A3_T1.js sloppy pass
 built-ins/Function/prototype/call/S15.3.4.4_A3_T1.js strict pass
 built-ins/Function/prototype/call/S15.3.4.4_A3_T10.js sloppy pass

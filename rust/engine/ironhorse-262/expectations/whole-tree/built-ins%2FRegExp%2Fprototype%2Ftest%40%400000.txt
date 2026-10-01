@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=built-ins/RegExp/prototype/test tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/RegExp/prototype/test/S15.10.6.3_A10.js sloppy pass
 built-ins/RegExp/prototype/test/S15.10.6.3_A10.js strict pass
-built-ins/RegExp/prototype/test/S15.10.6.3_A11.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
-built-ins/RegExp/prototype/test/S15.10.6.3_A11.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+built-ins/RegExp/prototype/test/S15.10.6.3_A11.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of RegExp.prototype.test.length is expected to be 1 Expected SameValue(«0», «1») to be true"
+built-ins/RegExp/prototype/test/S15.10.6.3_A11.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: The value of RegExp.prototype.test.length is expected to be 1 Expected SameValue(«0», «1») to be true"
 built-ins/RegExp/prototype/test/S15.10.6.3_A1_T1.js sloppy pass
 built-ins/RegExp/prototype/test/S15.10.6.3_A1_T1.js strict pass
 built-ins/RegExp/prototype/test/S15.10.6.3_A1_T10.js sloppy pass

@@ -1,10 +1,10 @@
 # engine=ironhorse features=default corpus=language/statements/class/elements tip=be13516fb6441b950ba8a3df97eb34062c186972
 language/statements/class/elements/private-derived-cls-indirect-eval-err-contains-supercall.js sloppy pass
 language/statements/class/elements/private-derived-cls-indirect-eval-err-contains-supercall.js strict pass
-language/statements/class/elements/private-direct-eval-err-contains-arguments.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a ReferenceError"
-language/statements/class/elements/private-direct-eval-err-contains-arguments.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a SyntaxError but got a ReferenceError"
-language/statements/class/elements/private-direct-eval-err-contains-newtarget.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid new.target"
-language/statements/class/elements/private-direct-eval-err-contains-newtarget.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid new.target"
+language/statements/class/elements/private-direct-eval-err-contains-arguments.js sloppy pass
+language/statements/class/elements/private-direct-eval-err-contains-arguments.js strict pass
+language/statements/class/elements/private-direct-eval-err-contains-newtarget.js sloppy pass
+language/statements/class/elements/private-direct-eval-err-contains-newtarget.js strict pass
 language/statements/class/elements/private-field-access-on-inner-arrow-function.js sloppy pass
 language/statements/class/elements/private-field-access-on-inner-arrow-function.js strict pass
 language/statements/class/elements/private-field-access-on-inner-function.js sloppy pass
@@ -25,14 +25,14 @@ language/statements/class/elements/private-field-is-visible-in-computed-properti
 language/statements/class/elements/private-field-is-visible-in-computed-properties.js strict pass
 language/statements/class/elements/private-field-on-nested-class.js sloppy pass
 language/statements/class/elements/private-field-on-nested-class.js strict pass
-language/statements/class/elements/private-field-visible-to-direct-eval-on-initializer.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-field-visible-to-direct-eval-on-initializer.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-field-visible-to-direct-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-field-visible-to-direct-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
+language/statements/class/elements/private-field-visible-to-direct-eval-on-initializer.js sloppy pass
+language/statements/class/elements/private-field-visible-to-direct-eval-on-initializer.js strict pass
+language/statements/class/elements/private-field-visible-to-direct-eval.js sloppy pass
+language/statements/class/elements/private-field-visible-to-direct-eval.js strict pass
 language/statements/class/elements/private-field-with-initialized-id-is-visible-in-computed-properties.js sloppy pass
 language/statements/class/elements/private-field-with-initialized-id-is-visible-in-computed-properties.js strict pass
-language/statements/class/elements/private-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
-language/statements/class/elements/private-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/statements/class/elements/private-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/statements/class/elements/private-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
 language/statements/class/elements/private-getter-access-on-inner-arrow-function.js sloppy pass
 language/statements/class/elements/private-getter-access-on-inner-arrow-function.js strict pass
 language/statements/class/elements/private-getter-access-on-inner-function.js sloppy pass
@@ -57,10 +57,10 @@ language/statements/class/elements/private-getter-shadowed-by-method-on-nested-c
 language/statements/class/elements/private-getter-shadowed-by-method-on-nested-class.js strict pass
 language/statements/class/elements/private-getter-shadowed-by-setter-on-nested-class.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: [[Get]] operation of an accessor without getter Expected a TypeError to be thrown but no exception was thrown at all"
 language/statements/class/elements/private-getter-shadowed-by-setter-on-nested-class.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: [[Get]] operation of an accessor without getter Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/elements/private-getter-visible-to-direct-eval-on-initializer.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-getter-visible-to-direct-eval-on-initializer.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-getter-visible-to-direct-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-getter-visible-to-direct-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
+language/statements/class/elements/private-getter-visible-to-direct-eval-on-initializer.js sloppy pass
+language/statements/class/elements/private-getter-visible-to-direct-eval-on-initializer.js strict pass
+language/statements/class/elements/private-getter-visible-to-direct-eval.js sloppy pass
+language/statements/class/elements/private-getter-visible-to-direct-eval.js strict pass
 language/statements/class/elements/private-indirect-eval-contains-arguments.js sloppy pass
 language/statements/class/elements/private-indirect-eval-err-contains-newtarget.js sloppy pass
 language/statements/class/elements/private-indirect-eval-err-contains-newtarget.js strict pass
@@ -114,10 +114,10 @@ language/statements/class/elements/private-method-shadowed-by-setter-on-nested-c
 language/statements/class/elements/private-method-shadowed-by-setter-on-nested-class.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: [[Get]] operation of an accessor without getter Expected a TypeError to be thrown but no exception was thrown at all"
 language/statements/class/elements/private-method-shadowed-on-nested-class.js sloppy pass
 language/statements/class/elements/private-method-shadowed-on-nested-class.js strict pass
-language/statements/class/elements/private-method-visible-to-direct-eval-on-initializer.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-method-visible-to-direct-eval-on-initializer.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-method-visible-to-direct-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-method-visible-to-direct-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
+language/statements/class/elements/private-method-visible-to-direct-eval-on-initializer.js sloppy pass
+language/statements/class/elements/private-method-visible-to-direct-eval-on-initializer.js strict pass
+language/statements/class/elements/private-method-visible-to-direct-eval.js sloppy pass
+language/statements/class/elements/private-method-visible-to-direct-eval.js strict pass
 language/statements/class/elements/private-setter-access-on-inner-arrow-function.js sloppy pass
 language/statements/class/elements/private-setter-access-on-inner-arrow-function.js strict pass
 language/statements/class/elements/private-setter-access-on-inner-function.js sloppy pass
@@ -142,14 +142,14 @@ language/statements/class/elements/private-setter-shadowed-by-method-on-nested-c
 language/statements/class/elements/private-setter-shadowed-by-method-on-nested-class.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: invalid [[Set]] operation in a private method Expected a TypeError to be thrown but no exception was thrown at all"
 language/statements/class/elements/private-setter-shadowed-by-setter-on-nested-class.js sloppy pass
 language/statements/class/elements/private-setter-shadowed-by-setter-on-nested-class.js strict pass
-language/statements/class/elements/private-setter-visible-to-direct-eval-on-initializer.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-setter-visible-to-direct-eval-on-initializer.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-setter-visible-to-direct-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-setter-visible-to-direct-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-static-async-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
-language/statements/class/elements/private-static-async-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
-language/statements/class/elements/private-static-async-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
-language/statements/class/elements/private-static-async-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/statements/class/elements/private-setter-visible-to-direct-eval-on-initializer.js sloppy pass
+language/statements/class/elements/private-setter-visible-to-direct-eval-on-initializer.js strict pass
+language/statements/class/elements/private-setter-visible-to-direct-eval.js sloppy pass
+language/statements/class/elements/private-setter-visible-to-direct-eval.js strict pass
+language/statements/class/elements/private-static-async-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/statements/class/elements/private-static-async-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/statements/class/elements/private-static-async-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/statements/class/elements/private-static-async-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
 language/statements/class/elements/private-static-field-shadowed-by-field-on-nested-class.js sloppy pass
 language/statements/class/elements/private-static-field-shadowed-by-field-on-nested-class.js strict pass
 language/statements/class/elements/private-static-field-shadowed-by-getter-on-nested-class.js sloppy pass
@@ -160,18 +160,18 @@ language/statements/class/elements/private-static-field-shadowed-by-setter-on-ne
 language/statements/class/elements/private-static-field-shadowed-by-setter-on-nested-class.js strict pass
 language/statements/class/elements/private-static-field-usage-inside-nested-class.js sloppy pass
 language/statements/class/elements/private-static-field-usage-inside-nested-class.js strict pass
-language/statements/class/elements/private-static-field-visible-to-direct-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-static-field-visible-to-direct-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-static-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
-language/statements/class/elements/private-static-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/statements/class/elements/private-static-field-visible-to-direct-eval.js sloppy pass
+language/statements/class/elements/private-static-field-visible-to-direct-eval.js strict pass
+language/statements/class/elements/private-static-generator-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/statements/class/elements/private-static-generator-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
 language/statements/class/elements/private-static-getter-abrupt-completition.js sloppy pass
 language/statements/class/elements/private-static-getter-abrupt-completition.js strict pass
-language/statements/class/elements/private-static-getter-visible-to-direct-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-static-getter-visible-to-direct-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
+language/statements/class/elements/private-static-getter-visible-to-direct-eval.js sloppy pass
+language/statements/class/elements/private-static-getter-visible-to-direct-eval.js strict pass
 language/statements/class/elements/private-static-method-length.js sloppy pass
 language/statements/class/elements/private-static-method-length.js strict pass
-language/statements/class/elements/private-static-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
-language/statements/class/elements/private-static-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"\"», «string\"#method\"») to be true"
+language/statements/class/elements/private-static-method-name.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
+language/statements/class/elements/private-static-method-name.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"\"», «\"#method\"») to be true"
 language/statements/class/elements/private-static-method-not-writable.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
 language/statements/class/elements/private-static-method-not-writable.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
 language/statements/class/elements/private-static-method-shadowed-by-field-on-nested-class.js sloppy pass
@@ -184,12 +184,12 @@ language/statements/class/elements/private-static-method-shadowed-by-setter-on-n
 language/statements/class/elements/private-static-method-shadowed-by-setter-on-nested-class.js strict pass
 language/statements/class/elements/private-static-method-usage-inside-nested-class.js sloppy pass
 language/statements/class/elements/private-static-method-usage-inside-nested-class.js strict pass
-language/statements/class/elements/private-static-method-visible-to-direct-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-static-method-visible-to-direct-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
+language/statements/class/elements/private-static-method-visible-to-direct-eval.js sloppy pass
+language/statements/class/elements/private-static-method-visible-to-direct-eval.js strict pass
 language/statements/class/elements/private-static-setter-abrupt-completition.js sloppy pass
 language/statements/class/elements/private-static-setter-abrupt-completition.js strict pass
-language/statements/class/elements/private-static-setter-visible-to-direct-eval.js sloppy fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
-language/statements/class/elements/private-static-setter-visible-to-direct-eval.js strict fail:"ironhorse threw where the oracle completed: SyntaxError: invalid private identifier"
+language/statements/class/elements/private-static-setter-visible-to-direct-eval.js sloppy pass
+language/statements/class/elements/private-static-setter-visible-to-direct-eval.js strict pass
 language/statements/class/elements/private-ternary-init-err-contains-arguments.js sloppy pass
 language/statements/class/elements/private-ternary-init-err-contains-arguments.js strict pass
 language/statements/class/elements/private-ternary-init-err-contains-super.js sloppy pass

@@ -35,8 +35,8 @@ built-ins/Temporal/ZonedDateTime/from/argument-propertybag-required-prop-undefin
 built-ins/Temporal/ZonedDateTime/from/argument-propertybag-required-prop-undefined-throws.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Expected a TypeError but got a ReferenceError"
 built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-object.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-object.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-datetime.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
-built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-datetime.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-datetime.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal: invalid or unsupported time zone\""
+built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-datetime.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a time zone Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal: invalid or unsupported time zone\""
 built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-leap-second.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-leap-second.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/from/argument-propertybag-timezone-string-multiple-offsets.js sloppy skip:oracle-host-missing-global:Temporal
@@ -115,8 +115,8 @@ built-ins/Temporal/ZonedDateTime/from/disambiguation-invalid-string.js sloppy sk
 built-ins/Temporal/ZonedDateTime/from/disambiguation-invalid-string.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/from/disambiguation-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/from/disambiguation-wrong-type.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/from/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/ZonedDateTime/from/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/ZonedDateTime/from/infinity-throws-rangeerror.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: year property cannot be Infinity (overflow constrain Expected a RangeError but got a ReferenceError"
+built-ins/Temporal/ZonedDateTime/from/infinity-throws-rangeerror.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: year property cannot be Infinity (overflow constrain Expected a RangeError but got a ReferenceError"
 built-ins/Temporal/ZonedDateTime/from/leap-second.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/from/leap-second.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/from/length.js sloppy skip:oracle-host-missing-temporal
@@ -179,5 +179,5 @@ built-ins/Temporal/ZonedDateTime/from/year-zero.js sloppy fail:"abort-value-diff
 built-ins/Temporal/ZonedDateTime/from/year-zero.js strict fail:"abort-value-differs: oracle=\"Test262Error: reject minus zero as extended year Expected a RangeError but got a ReferenceError\" ironhorse=\"Test262Error: reject minus zero as extended year Expected a RangeError to be thrown but no exception was thrown at all\""
 built-ins/Temporal/ZonedDateTime/from/zoneddatetime-string-multiple-offsets.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/ZonedDateTime/from/zoneddatetime-string-multiple-offsets.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/ZonedDateTime/from/zoneddatetime-string.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a ZonedDateTime Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
-built-ins/Temporal/ZonedDateTime/from/zoneddatetime-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a ZonedDateTime Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError\""
+built-ins/Temporal/ZonedDateTime/from/zoneddatetime-string.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a ZonedDateTime Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal.ZonedDateTime: invalid zoned date/time string\""
+built-ins/Temporal/ZonedDateTime/from/zoneddatetime-string.js strict fail:"abort-value-differs: oracle=\"Test262Error: bare date-time string is not a ZonedDateTime Expected a RangeError but got a ReferenceError\" ironhorse=\"RangeError: Temporal.ZonedDateTime: invalid zoned date/time string\""

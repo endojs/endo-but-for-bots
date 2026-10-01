@@ -29,16 +29,16 @@ built-ins/Temporal/Instant/prototype/subtract/builtin.js sloppy skip:oracle-host
 built-ins/Temporal/Instant/prototype/subtract/builtin.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/subtract/disallowed-duration-units.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/subtract/disallowed-duration-units.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Instant/prototype/subtract/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/Instant/prototype/subtract/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Instant/prototype/subtract/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/prototype/subtract/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/subtract/length.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Instant/prototype/subtract/length.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Instant/prototype/subtract/minimum-maximum-instant.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Instant/prototype/subtract/minimum-maximum-instant.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Instant/prototype/subtract/name.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Instant/prototype/subtract/name.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Instant/prototype/subtract/negative-infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/Instant/prototype/subtract/negative-infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Instant/prototype/subtract/negative-infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Instant/prototype/subtract/negative-infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/subtract/non-integer-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/subtract/non-integer-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Instant/prototype/subtract/not-a-constructor.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"

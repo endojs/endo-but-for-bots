@@ -30,10 +30,10 @@ language/statements/variable/S12.2_A1.js strict pass
 language/statements/variable/S12.2_A10.js sloppy pass
 language/statements/variable/S12.2_A10.js strict pass
 language/statements/variable/S12.2_A11.js sloppy pass
-language/statements/variable/S12.2_A11.js strict skip:oracle-xs-script-decl-eval-framing
+language/statements/variable/S12.2_A11.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: #2: __declared__var === \"baloon\". Actual:  __declared__var ===undefined"
 language/statements/variable/S12.2_A12.js sloppy pass
 language/statements/variable/S12.2_A12.js strict pass
-language/statements/variable/S12.2_A2.js sloppy skip:oracle-xs-script-decl-eval-framing
+language/statements/variable/S12.2_A2.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: #1: delete(__variable)===false"
 language/statements/variable/S12.2_A3.js sloppy pass
 language/statements/variable/S12.2_A3.js strict pass
 language/statements/variable/S12.2_A4.js sloppy pass
@@ -62,7 +62,7 @@ language/statements/variable/S12.2_A8_T7.js strict pass
 language/statements/variable/S12.2_A8_T8.js sloppy pass
 language/statements/variable/S12.2_A8_T8.js strict pass
 language/statements/variable/S12.2_A9.js sloppy pass
-language/statements/variable/S12.2_A9.js strict skip:oracle-xs-script-decl-eval-framing
+language/statements/variable/S12.2_A9.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: #1: When using property attributes, {DontEnum} not used"
 language/statements/variable/S14_A1.js sloppy pass
 language/statements/variable/S14_A1.js strict pass
 language/statements/variable/arguments-fn-non-strict.js sloppy pass

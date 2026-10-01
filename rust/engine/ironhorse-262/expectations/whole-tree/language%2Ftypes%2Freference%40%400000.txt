@@ -17,7 +17,7 @@ language/types/reference/8.7.2-8-s.js sloppy pass
 language/types/reference/8.7.2-8-s.js strict pass
 language/types/reference/S8.7.1_A1.js sloppy pass
 language/types/reference/S8.7.1_A1.js strict pass
-language/types/reference/S8.7.1_A2.js sloppy skip:oracle-xs-script-decl-eval-framing
+language/types/reference/S8.7.1_A2.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: #1: y = 1; (delete y) === false. Actual: true"
 language/types/reference/S8.7.2_A1_T1.js sloppy pass
 language/types/reference/S8.7.2_A1_T1.js strict pass
 language/types/reference/S8.7.2_A1_T2.js sloppy pass
@@ -34,7 +34,7 @@ language/types/reference/S8.7_A3.js sloppy pass
 language/types/reference/S8.7_A3.js strict pass
 language/types/reference/S8.7_A4.js sloppy pass
 language/types/reference/S8.7_A4.js strict pass
-language/types/reference/S8.7_A5_T1.js sloppy skip:oracle-xs-script-decl-eval-framing
+language/types/reference/S8.7_A5_T1.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: #3: obj = new Object(); var __ref = obj; delete __ref === false. Actual: true"
 language/types/reference/S8.7_A5_T2.js sloppy pass
 language/types/reference/S8.7_A6.js sloppy pass
 language/types/reference/S8.7_A6.js strict pass
@@ -46,5 +46,5 @@ language/types/reference/get-value-prop-base-primitive.js sloppy pass
 language/types/reference/get-value-prop-base-primitive.js strict pass
 language/types/reference/put-value-prop-base-primitive-realm.js sloppy skip:shared-positive-test-failure
 language/types/reference/put-value-prop-base-primitive-realm.js strict skip:shared-positive-test-failure
-language/types/reference/put-value-prop-base-primitive.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
-language/types/reference/put-value-prop-base-primitive.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+language/types/reference/put-value-prop-base-primitive.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number Expected SameValue(«0», «1») to be true"
+language/types/reference/put-value-prop-base-primitive.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number Expected SameValue(«0», «1») to be true"

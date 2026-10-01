@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=intl402/Collator tip=be13516fb6441b950ba8a3df97eb34062c186972
 intl402/Collator/builtin.js sloppy skip:oracle-host-missing-intl
 intl402/Collator/builtin.js strict skip:oracle-host-missing-intl
-intl402/Collator/constructor-options-throwing-getters.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Exception from usage getter should be propagated Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: Exception from usage getter should be propagated Expected a CustomError to be thrown but no exception was thrown at all\""
-intl402/Collator/constructor-options-throwing-getters.js strict fail:"abort-value-differs: oracle=\"Test262Error: Exception from usage getter should be propagated Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: Exception from usage getter should be propagated Expected a CustomError to be thrown but no exception was thrown at all\""
+intl402/Collator/constructor-options-throwing-getters.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Exception from usage getter should be propagated Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError to be thrown but no exception was thrown at all\""
+intl402/Collator/constructor-options-throwing-getters.js strict fail:"abort-value-differs: oracle=\"Test262Error: Exception from usage getter should be propagated Expected a CustomError but got a ReferenceError\" ironhorse=\"Test262Error: Exception from localeMatcher getter should be propagated Expected a CustomError to be thrown but no exception was thrown at all\""
 intl402/Collator/default-options-object-prototype.js sloppy skip:oracle-host-missing-intl
 intl402/Collator/default-options-object-prototype.js strict skip:oracle-host-missing-intl
 intl402/Collator/ignore-invalid-unicode-ext-values.js sloppy skip:oracle-host-missing-global:Intl

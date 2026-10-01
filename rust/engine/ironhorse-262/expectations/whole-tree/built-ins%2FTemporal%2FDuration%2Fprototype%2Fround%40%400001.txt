@@ -13,8 +13,8 @@ built-ins/Temporal/Duration/prototype/round/roundingmode-trunc.js sloppy skip:or
 built-ins/Temporal/Duration/prototype/round/roundingmode-trunc.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Duration/prototype/round/roundingmode-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/roundingmode-undefined.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/prototype/round/roundingmode-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/prototype/round/roundingmode-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/round/roundingmode-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/round/roundingmode-wrong-type.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/roundto-invalid-string.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/roundto-invalid-string.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/singular-units.js sloppy skip:oracle-host-missing-temporal
@@ -29,8 +29,8 @@ built-ins/Temporal/Duration/prototype/round/smallestunit-string-shorthand-string
 built-ins/Temporal/Duration/prototype/round/smallestunit-string-shorthand-string.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/smallestunit-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/smallestunit-undefined.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/prototype/round/smallestunit-wrong-type.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/prototype/round/smallestunit-wrong-type.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/prototype/round/smallestunit-wrong-type.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/prototype/round/smallestunit-wrong-type.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/smallestunit.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/smallestunit.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/prototype/round/string-shorthand-no-object-prototype-pollution.js sloppy skip:oracle-host-missing-temporal

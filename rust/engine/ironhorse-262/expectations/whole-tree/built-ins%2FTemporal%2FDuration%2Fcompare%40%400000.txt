@@ -39,8 +39,8 @@ built-ins/Temporal/Duration/compare/not-a-constructor.js sloppy fail:"over-accep
 built-ins/Temporal/Duration/compare/not-a-constructor.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: Calling as constructor Expected a TypeError but got a ReferenceError"
 built-ins/Temporal/Duration/compare/options-object.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/compare/options-object.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/compare/options-read-before-algorithmic-validation.js sloppy skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/Duration/compare/options-read-before-algorithmic-validation.js strict skip:oracle-host-missing-global:Temporal
+built-ins/Temporal/Duration/compare/options-read-before-algorithmic-validation.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/options-read-before-algorithmic-validation.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/compare/options-undefined.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/compare/options-undefined.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/compare/options-wrong-type.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: Test262Error: TypeError on wrong options type object Expected a TypeError but got a ReferenceError"
@@ -61,8 +61,8 @@ built-ins/Temporal/Duration/compare/relativeto-no-fractional-minutes-hours.js sl
 built-ins/Temporal/Duration/compare/relativeto-no-fractional-minutes-hours.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Duration/compare/relativeto-plaindate-add24hourdaystonormalizedtimeduration-out-of-range.js sloppy skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/compare/relativeto-plaindate-add24hourdaystonormalizedtimeduration-out-of-range.js strict skip:oracle-host-missing-temporal
-built-ins/Temporal/Duration/compare/relativeto-propertybag-infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/Duration/compare/relativeto-propertybag-infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/Duration/compare/relativeto-propertybag-infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/Duration/compare/relativeto-propertybag-infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/Duration/compare/relativeto-propertybag-invalid-offset-string.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Duration/compare/relativeto-propertybag-invalid-offset-string.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/Duration/compare/relativeto-propertybag-invalid.js sloppy skip:oracle-host-missing-temporal

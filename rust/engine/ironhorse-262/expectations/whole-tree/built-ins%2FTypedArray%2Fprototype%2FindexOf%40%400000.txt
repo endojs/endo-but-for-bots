@@ -1,10 +1,10 @@
 # engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/indexOf tip=be13516fb6441b950ba8a3df97eb34062c186972
-built-ins/TypedArray/prototype/indexOf/coerced-searchelement-fromindex-grow.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/indexOf/coerced-searchelement-fromindex-grow.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/indexOf/coerced-searchelement-fromindex-shrink.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/indexOf/coerced-searchelement-fromindex-shrink.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/indexOf/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number-1») to be true (Testing with Float64Array and makePassthrough.)"
-built-ins/TypedArray/prototype/indexOf/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number-1») to be true (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/indexOf/coerced-searchelement-fromindex-grow.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/indexOf/coerced-searchelement-fromindex-grow.js strict skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/indexOf/coerced-searchelement-fromindex-shrink.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/indexOf/coerced-searchelement-fromindex-shrink.js strict skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/indexOf/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«0», «-1») to be true (Testing with Float64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/indexOf/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«0», «-1») to be true (Testing with Float64Array and makePassthrough.)"
 built-ins/TypedArray/prototype/indexOf/detached-buffer-during-fromIndex-returns-minus-one-for-zero.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/indexOf/detached-buffer-during-fromIndex-returns-minus-one-for-zero.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/indexOf/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
@@ -33,10 +33,10 @@ built-ins/TypedArray/prototype/indexOf/not-a-constructor.js sloppy pass
 built-ins/TypedArray/prototype/indexOf/not-a-constructor.js strict pass
 built-ins/TypedArray/prototype/indexOf/prop-desc.js sloppy pass
 built-ins/TypedArray/prototype/indexOf/prop-desc.js strict pass
-built-ins/TypedArray/prototype/indexOf/resizable-buffer-special-float-values.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/indexOf/resizable-buffer-special-float-values.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/indexOf/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/indexOf/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/indexOf/resizable-buffer-special-float-values.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/indexOf/resizable-buffer-special-float-values.js strict skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/indexOf/resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/indexOf/resizable-buffer.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/indexOf/return-abrupt-from-this-out-of-bounds.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/indexOf/return-abrupt-from-this-out-of-bounds.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/indexOf/return-abrupt-tointeger-fromindex-symbol.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable

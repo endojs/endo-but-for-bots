@@ -83,8 +83,8 @@ built-ins/Object/seal/object-seal-the-extension-of-o-is-prevented-already.js slo
 built-ins/Object/seal/object-seal-the-extension-of-o-is-prevented-already.js strict pass
 built-ins/Object/seal/proxy-no-ownkeys-returned-keys-order.js sloppy pass
 built-ins/Object/seal/proxy-no-ownkeys-returned-keys-order.js strict pass
-built-ins/Object/seal/proxy-with-defineProperty-handler.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «undefinedundefined») to be true"
-built-ins/Object/seal/proxy-with-defineProperty-handler.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse», «undefinedundefined») to be true"
+built-ins/Object/seal/proxy-with-defineProperty-handler.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: writable Expected SameValue(«false», «undefined») to be true"
+built-ins/Object/seal/proxy-with-defineProperty-handler.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: writable Expected SameValue(«false», «undefined») to be true"
 built-ins/Object/seal/seal-aggregateerror.js sloppy pass
 built-ins/Object/seal/seal-aggregateerror.js strict pass
 built-ins/Object/seal/seal-arraybuffer.js sloppy pass

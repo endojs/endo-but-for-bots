@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=built-ins/Object/defineProperties tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/Object/defineProperties/15.2.3.7-0-1.js sloppy pass
 built-ins/Object/defineProperties/15.2.3.7-0-1.js strict pass
-built-ins/Object/defineProperties/15.2.3.7-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number2») to be true"
-built-ins/Object/defineProperties/15.2.3.7-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number2») to be true"
+built-ins/Object/defineProperties/15.2.3.7-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.defineProperties.length Expected SameValue(«0», «2») to be true"
+built-ins/Object/defineProperties/15.2.3.7-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.defineProperties.length Expected SameValue(«0», «2») to be true"
 built-ins/Object/defineProperties/15.2.3.7-1-1.js sloppy pass
 built-ins/Object/defineProperties/15.2.3.7-1-1.js strict pass
 built-ins/Object/defineProperties/15.2.3.7-1-2.js sloppy pass
@@ -17,8 +17,8 @@ built-ins/Object/defineProperties/15.2.3.7-2-1.js sloppy pass
 built-ins/Object/defineProperties/15.2.3.7-2-1.js strict pass
 built-ins/Object/defineProperties/15.2.3.7-2-10.js sloppy pass
 built-ins/Object/defineProperties/15.2.3.7-2-10.js strict pass
-built-ins/Object/defineProperties/15.2.3.7-2-11.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: descriptor: not an object"
-built-ins/Object/defineProperties/15.2.3.7-2-11.js strict fail:"ironhorse threw where the oracle completed: TypeError: descriptor: not an object"
+built-ins/Object/defineProperties/15.2.3.7-2-11.js sloppy pass
+built-ins/Object/defineProperties/15.2.3.7-2-11.js strict pass
 built-ins/Object/defineProperties/15.2.3.7-2-12.js sloppy pass
 built-ins/Object/defineProperties/15.2.3.7-2-12.js strict pass
 built-ins/Object/defineProperties/15.2.3.7-2-13.js sloppy pass
@@ -69,8 +69,8 @@ built-ins/Object/defineProperties/15.2.3.7-5-a-10.js sloppy pass
 built-ins/Object/defineProperties/15.2.3.7-5-a-10.js strict pass
 built-ins/Object/defineProperties/15.2.3.7-5-a-11.js sloppy pass
 built-ins/Object/defineProperties/15.2.3.7-5-a-11.js strict pass
-built-ins/Object/defineProperties/15.2.3.7-5-a-12.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: descriptor: not an object"
-built-ins/Object/defineProperties/15.2.3.7-5-a-12.js strict fail:"ironhorse threw where the oracle completed: TypeError: descriptor: not an object"
+built-ins/Object/defineProperties/15.2.3.7-5-a-12.js sloppy pass
+built-ins/Object/defineProperties/15.2.3.7-5-a-12.js strict pass
 built-ins/Object/defineProperties/15.2.3.7-5-a-13.js sloppy pass
 built-ins/Object/defineProperties/15.2.3.7-5-a-13.js strict pass
 built-ins/Object/defineProperties/15.2.3.7-5-a-14.js sloppy pass

@@ -3,8 +3,8 @@ built-ins/Array/prototype/map/15.4.4.19-8-4.js sloppy pass
 built-ins/Array/prototype/map/15.4.4.19-8-4.js strict pass
 built-ins/Array/prototype/map/15.4.4.19-8-5.js sloppy pass
 built-ins/Array/prototype/map/15.4.4.19-8-5.js strict pass
-built-ins/Array/prototype/map/15.4.4.19-8-6.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «number1») to be true"
-built-ins/Array/prototype/map/15.4.4.19-8-6.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: undefinedundefined», «number1») to be true"
+built-ins/Array/prototype/map/15.4.4.19-8-6.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: resArr[4] Expected SameValue(«undefined», «1») to be true"
+built-ins/Array/prototype/map/15.4.4.19-8-6.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: resArr[4] Expected SameValue(«undefined», «1») to be true"
 built-ins/Array/prototype/map/15.4.4.19-8-7.js sloppy pass
 built-ins/Array/prototype/map/15.4.4.19-8-7.js strict pass
 built-ins/Array/prototype/map/15.4.4.19-8-8.js sloppy pass

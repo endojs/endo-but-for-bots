@@ -5,8 +5,8 @@ language/statements/class/definition/basics.js sloppy pass
 language/statements/class/definition/basics.js strict pass
 language/statements/class/definition/class-method-returns-promise.js sloppy pass
 language/statements/class/definition/class-method-returns-promise.js strict pass
-language/statements/class/definition/constructable-but-no-prototype.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/definition/constructable-but-no-prototype.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/constructable-but-no-prototype.js sloppy pass
+language/statements/class/definition/constructable-but-no-prototype.js strict pass
 language/statements/class/definition/constructor-property.js sloppy pass
 language/statements/class/definition/constructor-property.js strict pass
 language/statements/class/definition/constructor-strict-by-default.js sloppy pass
@@ -57,8 +57,8 @@ language/statements/class/definition/getters-restricted-ids.js sloppy pass
 language/statements/class/definition/getters-restricted-ids.js strict pass
 language/statements/class/definition/implicit-constructor.js sloppy pass
 language/statements/class/definition/implicit-constructor.js strict pass
-language/statements/class/definition/invalid-extends.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/definition/invalid-extends.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/invalid-extends.js sloppy pass
+language/statements/class/definition/invalid-extends.js strict pass
 language/statements/class/definition/methods-async-super-call-body.js sloppy pass
 language/statements/class/definition/methods-async-super-call-body.js strict pass
 language/statements/class/definition/methods-async-super-call-param.js sloppy pass
@@ -99,18 +99,18 @@ language/statements/class/definition/methods-gen-yield-weak-binding.js sloppy pa
 language/statements/class/definition/methods-gen-yield-weak-binding.js strict pass
 language/statements/class/definition/methods-named-eval-arguments.js sloppy pass
 language/statements/class/definition/methods-named-eval-arguments.js strict pass
-language/statements/class/definition/methods-restricted-properties.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/definition/methods-restricted-properties.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/methods-restricted-properties.js sloppy pass
+language/statements/class/definition/methods-restricted-properties.js strict pass
 language/statements/class/definition/methods.js sloppy pass
 language/statements/class/definition/methods.js strict pass
 language/statements/class/definition/numeric-property-names.js sloppy pass
 language/statements/class/definition/numeric-property-names.js strict pass
-language/statements/class/definition/prototype-getter.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
-language/statements/class/definition/prototype-getter.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+language/statements/class/definition/prototype-getter.js sloppy pass
+language/statements/class/definition/prototype-getter.js strict pass
 language/statements/class/definition/prototype-property.js sloppy pass
 language/statements/class/definition/prototype-property.js strict pass
-language/statements/class/definition/prototype-setter.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-language/statements/class/definition/prototype-setter.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+language/statements/class/definition/prototype-setter.js sloppy pass
+language/statements/class/definition/prototype-setter.js strict pass
 language/statements/class/definition/prototype-wiring.js sloppy pass
 language/statements/class/definition/prototype-wiring.js strict pass
 language/statements/class/definition/setters-non-configurable-err.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"

@@ -122,7 +122,7 @@ built-ins/Promise/prototype/then/resolve-settled-rejected-self.js strict pass
 built-ins/Promise/prototype/then/resolve-settled-rejected-thenable.js sloppy pass
 built-ins/Promise/prototype/then/resolve-settled-rejected-thenable.js strict pass
 built-ins/Promise/prototype/then/rxn-handler-fulfilled-invoke-nonstrict.js sloppy pass
-built-ins/Promise/prototype/then/rxn-handler-fulfilled-invoke-strict.js strict skip:async:unhandled-rejection
+built-ins/Promise/prototype/then/rxn-handler-fulfilled-invoke-strict.js strict pass
 built-ins/Promise/prototype/then/rxn-handler-fulfilled-next-abrupt.js sloppy skip:async:unhandled-rejection
 built-ins/Promise/prototype/then/rxn-handler-fulfilled-next-abrupt.js strict skip:async:unhandled-rejection
 built-ins/Promise/prototype/then/rxn-handler-fulfilled-next.js sloppy pass
@@ -134,7 +134,7 @@ built-ins/Promise/prototype/then/rxn-handler-fulfilled-return-normal.js strict p
 built-ins/Promise/prototype/then/rxn-handler-identity.js sloppy pass
 built-ins/Promise/prototype/then/rxn-handler-identity.js strict pass
 built-ins/Promise/prototype/then/rxn-handler-rejected-invoke-nonstrict.js sloppy pass
-built-ins/Promise/prototype/then/rxn-handler-rejected-invoke-strict.js strict skip:async:unhandled-rejection
+built-ins/Promise/prototype/then/rxn-handler-rejected-invoke-strict.js strict pass
 built-ins/Promise/prototype/then/rxn-handler-rejected-next-abrupt.js sloppy skip:async:unhandled-rejection
 built-ins/Promise/prototype/then/rxn-handler-rejected-next-abrupt.js strict skip:async:unhandled-rejection
 built-ins/Promise/prototype/then/rxn-handler-rejected-next.js sloppy pass

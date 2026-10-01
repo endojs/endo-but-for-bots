@@ -3,8 +3,8 @@ built-ins/Iterator/prototype/filter/argument-effect-order.js sloppy pass
 built-ins/Iterator/prototype/filter/argument-effect-order.js strict pass
 built-ins/Iterator/prototype/filter/argument-validation-failure-closes-underlying.js sloppy pass
 built-ins/Iterator/prototype/filter/argument-validation-failure-closes-underlying.js strict pass
-built-ins/Iterator/prototype/filter/callable.js sloppy skip:non-primitive-completion
-built-ins/Iterator/prototype/filter/callable.js strict skip:non-primitive-completion
+built-ins/Iterator/prototype/filter/callable.js sloppy pass
+built-ins/Iterator/prototype/filter/callable.js strict pass
 built-ins/Iterator/prototype/filter/exhaustion-does-not-call-return.js sloppy pass
 built-ins/Iterator/prototype/filter/exhaustion-does-not-call-return.js strict pass
 built-ins/Iterator/prototype/filter/get-next-method-only-once.js sloppy pass

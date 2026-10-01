@@ -37,4 +37,4 @@ language/types/number/S8.5_A7.js sloppy pass
 language/types/number/S8.5_A7.js strict pass
 language/types/number/S8.5_A8.js sloppy pass
 language/types/number/S8.5_A8.js strict pass
-language/types/number/S8.5_A9.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: #1: Globally defined variable NaN has not been altered by program execution"
+language/types/number/S8.5_A9.js sloppy pass

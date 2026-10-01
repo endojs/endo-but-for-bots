@@ -3,9 +3,9 @@ annexB/language/function-code/block-decl-func-block-scoping.js sloppy skip:share
 annexB/language/function-code/block-decl-func-existing-block-fn-no-init.js sloppy skip:shared-positive-test-failure
 annexB/language/function-code/block-decl-func-existing-block-fn-update.js sloppy skip:shared-positive-test-failure
 annexB/language/function-code/block-decl-func-existing-fn-no-init.js sloppy pass
-annexB/language/function-code/block-decl-func-existing-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"outer declaration\\\"», «\\\"inner declaration\\\"») to be true\" ironhorse=\"Test262Error: string\\\"outer declaration\\\"», «string\\\"inner declaration\\\"») to be true\""
+annexB/language/function-code/block-decl-func-existing-fn-update.js sloppy skip:shared-test262-failure
 annexB/language/function-code/block-decl-func-existing-var-no-init.js sloppy pass
-annexB/language/function-code/block-decl-func-existing-var-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/function-code/block-decl-func-existing-var-update.js sloppy skip:shared-test262-failure
 annexB/language/function-code/block-decl-func-init.js sloppy skip:shared-positive-test-failure
 annexB/language/function-code/block-decl-func-no-skip-try.js sloppy skip:shared-positive-test-failure
 annexB/language/function-code/block-decl-func-skip-arguments.js sloppy pass
@@ -20,7 +20,7 @@ annexB/language/function-code/block-decl-func-skip-early-err.js sloppy pass
 annexB/language/function-code/block-decl-func-skip-param.js sloppy pass
 annexB/language/function-code/block-decl-func-update.js sloppy skip:shared-positive-test-failure
 annexB/language/function-code/block-decl-nested-blocks-with-fun-decl.js sloppy skip:shared-positive-test-failure
-annexB/language/function-code/block-decl-nostrict.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefined») to be true\" ironhorse=\"Test262Error: Expected SameValue(«ReferenceError: get f: undefined variable», «undefinedundefined») to be true\""
+annexB/language/function-code/block-decl-nostrict.js sloppy skip:shared-test262-failure
 annexB/language/function-code/function-redeclaration-block.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable a\" ironhorse=\"SyntaxError\""
 annexB/language/function-code/function-redeclaration-switch.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: duplicate variable a\" ironhorse=\"SyntaxError\""
 annexB/language/function-code/if-decl-else-decl-a-func-block-scoping.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""

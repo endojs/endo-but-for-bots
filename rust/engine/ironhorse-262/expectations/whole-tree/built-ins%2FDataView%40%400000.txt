@@ -17,8 +17,8 @@ built-ins/DataView/byteoffset-is-negative-throws.js sloppy pass
 built-ins/DataView/byteoffset-is-negative-throws.js strict pass
 built-ins/DataView/constructor.js sloppy pass
 built-ins/DataView/constructor.js strict pass
-built-ins/DataView/custom-proto-access-detaches-buffer.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
-built-ins/DataView/custom-proto-access-detaches-buffer.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a TypeError to be thrown but no exception was thrown at all"
+built-ins/DataView/custom-proto-access-detaches-buffer.js sloppy pass
+built-ins/DataView/custom-proto-access-detaches-buffer.js strict pass
 built-ins/DataView/custom-proto-access-resizes-buffer-invalid-by-length.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/DataView/custom-proto-access-resizes-buffer-invalid-by-length.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/DataView/custom-proto-access-resizes-buffer-invalid-by-offset.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
@@ -27,18 +27,18 @@ built-ins/DataView/custom-proto-access-resizes-buffer-valid-by-length.js sloppy 
 built-ins/DataView/custom-proto-access-resizes-buffer-valid-by-length.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/DataView/custom-proto-access-resizes-buffer-valid-by-offset.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/DataView/custom-proto-access-resizes-buffer-valid-by-offset.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/DataView/custom-proto-access-throws-sab.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
-built-ins/DataView/custom-proto-access-throws-sab.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
-built-ins/DataView/custom-proto-access-throws.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
-built-ins/DataView/custom-proto-access-throws.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected a Test262Error to be thrown but no exception was thrown at all"
+built-ins/DataView/custom-proto-access-throws-sab.js sloppy pass
+built-ins/DataView/custom-proto-access-throws-sab.js strict pass
+built-ins/DataView/custom-proto-access-throws.js sloppy pass
+built-ins/DataView/custom-proto-access-throws.js strict pass
 built-ins/DataView/custom-proto-if-not-object-fallbacks-to-default-prototype-sab.js sloppy pass
 built-ins/DataView/custom-proto-if-not-object-fallbacks-to-default-prototype-sab.js strict pass
 built-ins/DataView/custom-proto-if-not-object-fallbacks-to-default-prototype.js sloppy pass
 built-ins/DataView/custom-proto-if-not-object-fallbacks-to-default-prototype.js strict pass
-built-ins/DataView/custom-proto-if-object-is-used-sab.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"DataView\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true"
-built-ins/DataView/custom-proto-if-object-is-used-sab.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"DataView\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true"
-built-ins/DataView/custom-proto-if-object-is-used.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"DataView\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true"
-built-ins/DataView/custom-proto-if-object-is-used.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«function [\"DataView\"] (){[native code]}», «function [\"Object\"] (){[native code]}») to be true"
+built-ins/DataView/custom-proto-if-object-is-used-sab.js sloppy pass
+built-ins/DataView/custom-proto-if-object-is-used-sab.js strict pass
+built-ins/DataView/custom-proto-if-object-is-used.js sloppy pass
+built-ins/DataView/custom-proto-if-object-is-used.js strict pass
 built-ins/DataView/dataview.js sloppy pass
 built-ins/DataView/dataview.js strict pass
 built-ins/DataView/defined-bytelength-and-byteoffset-sab.js sloppy pass

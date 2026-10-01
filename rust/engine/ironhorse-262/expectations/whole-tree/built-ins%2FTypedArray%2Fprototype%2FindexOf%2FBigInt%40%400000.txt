@@ -1,6 +1,6 @@
 # engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/indexOf/BigInt tip=be13516fb6441b950ba8a3df97eb34062c186972
-built-ins/TypedArray/prototype/indexOf/BigInt/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number-1») to be true (Testing with BigInt64Array and makePassthrough.)"
-built-ins/TypedArray/prototype/indexOf/BigInt/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number-1») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/indexOf/BigInt/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«0», «-1») to be true (Testing with BigInt64Array and makePassthrough.)"
+built-ins/TypedArray/prototype/indexOf/BigInt/detached-buffer-during-fromIndex-returns-minus-one-for-undefined.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«0», «-1») to be true (Testing with BigInt64Array and makePassthrough.)"
 built-ins/TypedArray/prototype/indexOf/BigInt/detached-buffer-during-fromIndex-returns-minus-one-for-zero.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/indexOf/BigInt/detached-buffer-during-fromIndex-returns-minus-one-for-zero.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/indexOf/BigInt/detached-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable

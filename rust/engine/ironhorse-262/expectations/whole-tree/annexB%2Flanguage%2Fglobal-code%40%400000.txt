@@ -1,13 +1,13 @@
 # engine=ironhorse features=default corpus=annexB/language/global-code tip=be13516fb6441b950ba8a3df97eb34062c186972
 annexB/language/global-code/block-decl-global-block-scoping.js sloppy skip:shared-positive-test-failure
 annexB/language/global-code/block-decl-global-existing-block-fn-no-init.js sloppy skip:shared-positive-test-failure
-annexB/language/global-code/block-decl-global-existing-block-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/global-code/block-decl-global-existing-block-fn-update.js sloppy skip:shared-test262-failure
 annexB/language/global-code/block-decl-global-existing-fn-no-init.js sloppy pass
-annexB/language/global-code/block-decl-global-existing-fn-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"outer declaration\\\"», «\\\"inner declaration\\\"») to be true\" ironhorse=\"Test262Error: string\\\"outer declaration\\\"», «string\\\"inner declaration\\\"») to be true\""
+annexB/language/global-code/block-decl-global-existing-fn-update.js sloppy skip:shared-test262-failure
 annexB/language/global-code/block-decl-global-existing-global-init.js sloppy skip:shared-positive-test-failure
 annexB/language/global-code/block-decl-global-existing-non-enumerable-global-init.js sloppy skip:shared-positive-test-failure
 annexB/language/global-code/block-decl-global-existing-var-no-init.js sloppy pass
-annexB/language/global-code/block-decl-global-existing-var-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/global-code/block-decl-global-existing-var-update.js sloppy skip:shared-test262-failure
 annexB/language/global-code/block-decl-global-init.js sloppy skip:shared-positive-test-failure
 annexB/language/global-code/block-decl-global-no-skip-try.js sloppy skip:shared-positive-test-failure
 annexB/language/global-code/block-decl-global-skip-early-err-block.js sloppy pass
@@ -17,7 +17,7 @@ annexB/language/global-code/block-decl-global-skip-early-err-for.js sloppy pass
 annexB/language/global-code/block-decl-global-skip-early-err-switch.js sloppy pass
 annexB/language/global-code/block-decl-global-skip-early-err-try.js sloppy pass
 annexB/language/global-code/block-decl-global-skip-early-err.js sloppy pass
-annexB/language/global-code/block-decl-global-update.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+annexB/language/global-code/block-decl-global-update.js sloppy skip:shared-test262-failure
 annexB/language/global-code/if-decl-else-decl-a-global-block-scoping.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
 annexB/language/global-code/if-decl-else-decl-a-global-existing-block-fn-no-init.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""
 annexB/language/global-code/if-decl-else-decl-a-global-existing-block-fn-update.js sloppy fail:"error-message-differs:SyntaxError: oracle=\"SyntaxError: no block (strict code)\" ironhorse=\"SyntaxError\""

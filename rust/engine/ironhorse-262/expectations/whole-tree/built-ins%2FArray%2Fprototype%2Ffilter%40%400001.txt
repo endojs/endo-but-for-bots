@@ -25,8 +25,8 @@ built-ins/Array/prototype/filter/15.4.4.20-9-4.js sloppy pass
 built-ins/Array/prototype/filter/15.4.4.20-9-4.js strict pass
 built-ins/Array/prototype/filter/15.4.4.20-9-5.js sloppy pass
 built-ins/Array/prototype/filter/15.4.4.20-9-5.js strict pass
-built-ins/Array/prototype/filter/15.4.4.20-9-6.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number4») to be true"
-built-ins/Array/prototype/filter/15.4.4.20-9-6.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number3», «number4») to be true"
+built-ins/Array/prototype/filter/15.4.4.20-9-6.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: resArr.length Expected SameValue(«3», «4») to be true"
+built-ins/Array/prototype/filter/15.4.4.20-9-6.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: resArr.length Expected SameValue(«3», «4») to be true"
 built-ins/Array/prototype/filter/15.4.4.20-9-7.js sloppy pass
 built-ins/Array/prototype/filter/15.4.4.20-9-7.js strict pass
 built-ins/Array/prototype/filter/15.4.4.20-9-8.js sloppy pass

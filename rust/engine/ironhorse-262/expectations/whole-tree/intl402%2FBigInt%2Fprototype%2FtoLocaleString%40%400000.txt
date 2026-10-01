@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=intl402/BigInt/prototype/toLocaleString tip=be13516fb6441b950ba8a3df97eb34062c186972
 intl402/BigInt/prototype/toLocaleString/builtin.js sloppy pass
 intl402/BigInt/prototype/toLocaleString/builtin.js strict pass
-intl402/BigInt/prototype/toLocaleString/de-DE.js sloppy fail:"abort-type divergence: oracle threw \"RangeError: invalid radix\" ironhorse threw \"Test262Error: string\\\"8.878.000.000%\\\"», «string\\\"8.878.000.000\\u{a0}%\\\"») to be true\""
-intl402/BigInt/prototype/toLocaleString/de-DE.js strict fail:"abort-type divergence: oracle threw \"RangeError: invalid radix\" ironhorse threw \"Test262Error: string\\\"8.878.000.000%\\\"», «string\\\"8.878.000.000\\u{a0}%\\\"») to be true\""
+intl402/BigInt/prototype/toLocaleString/de-DE.js sloppy fail:"abort-type divergence: oracle threw \"RangeError: invalid radix\" ironhorse threw \"Test262Error: Expected SameValue(«\\\"8.878.000.000%\\\"», «\\\"8.878.000.000\\u{a0}%\\\"») to be true\""
+intl402/BigInt/prototype/toLocaleString/de-DE.js strict fail:"abort-type divergence: oracle threw \"RangeError: invalid radix\" ironhorse threw \"Test262Error: Expected SameValue(«\\\"8.878.000.000%\\\"», «\\\"8.878.000.000\\u{a0}%\\\"») to be true\""
 intl402/BigInt/prototype/toLocaleString/default-options-object-prototype.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: RangeError: invalid radix"
 intl402/BigInt/prototype/toLocaleString/default-options-object-prototype.js strict fail:"over-acceptance: ironhorse completed a source the oracle rejected: RangeError: invalid radix"
 intl402/BigInt/prototype/toLocaleString/en-US.js sloppy fail:"over-acceptance: ironhorse completed a source the oracle rejected: RangeError: invalid radix"

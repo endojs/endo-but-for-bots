@@ -17,5 +17,5 @@ built-ins/Math/sumPrecise/sum.js sloppy fail:"ironhorse threw where the oracle c
 built-ins/Math/sumPrecise/sum.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
 built-ins/Math/sumPrecise/takes-iterable.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
 built-ins/Math/sumPrecise/takes-iterable.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function"
-built-ins/Math/sumPrecise/throws-on-non-number.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
-built-ins/Math/sumPrecise/throws-on-non-number.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number1») to be true"
+built-ins/Math/sumPrecise/throws-on-non-number.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«0», «1») to be true"
+built-ins/Math/sumPrecise/throws-on-non-number.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«0», «1») to be true"

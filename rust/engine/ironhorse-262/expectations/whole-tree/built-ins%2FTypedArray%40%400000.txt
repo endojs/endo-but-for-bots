@@ -7,10 +7,10 @@ built-ins/TypedArray/name.js sloppy pass
 built-ins/TypedArray/name.js strict pass
 built-ins/TypedArray/out-of-bounds-behaves-like-detached.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/out-of-bounds-behaves-like-detached.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/out-of-bounds-get-and-set.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/out-of-bounds-get-and-set.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/out-of-bounds-has.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/out-of-bounds-has.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/out-of-bounds-get-and-set.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/out-of-bounds-get-and-set.js strict skip:shared-positive-test-failure
+built-ins/TypedArray/out-of-bounds-has.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/out-of-bounds-has.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype.js sloppy pass
 built-ins/TypedArray/prototype.js strict pass
 built-ins/TypedArray/resizable-buffer-length-tracking-1.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable

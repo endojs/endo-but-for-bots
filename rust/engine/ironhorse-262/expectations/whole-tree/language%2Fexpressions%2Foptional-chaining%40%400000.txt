@@ -39,10 +39,10 @@ language/expressions/optional-chaining/member-expression-async-literal.js sloppy
 language/expressions/optional-chaining/member-expression-async-literal.js strict pass
 language/expressions/optional-chaining/member-expression-async-this.js sloppy pass
 language/expressions/optional-chaining/member-expression-async-this.js strict pass
-language/expressions/optional-chaining/member-expression.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"a\"», «string\"\"») to be true"
-language/expressions/optional-chaining/member-expression.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"a\"», «string\"\"») to be true"
-language/expressions/optional-chaining/new-target-optional-call.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
-language/expressions/optional-chaining/new-target-optional-call.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: booleanfalse"
+language/expressions/optional-chaining/member-expression.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"a\"», «\"\"») to be true"
+language/expressions/optional-chaining/member-expression.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"a\"», «\"\"») to be true"
+language/expressions/optional-chaining/new-target-optional-call.js sloppy pass
+language/expressions/optional-chaining/new-target-optional-call.js strict pass
 language/expressions/optional-chaining/optional-call-preserves-this.js sloppy pass
 language/expressions/optional-chaining/optional-call-preserves-this.js strict pass
 language/expressions/optional-chaining/optional-chain-async-optional-chain-square-brackets.js sloppy pass

@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=built-ins/Object/create tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/Object/create/15.2.3.5-0-1.js sloppy pass
 built-ins/Object/create/15.2.3.5-0-1.js strict pass
-built-ins/Object/create/15.2.3.5-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number2») to be true"
-built-ins/Object/create/15.2.3.5-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number2») to be true"
+built-ins/Object/create/15.2.3.5-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.create.length Expected SameValue(«0», «2») to be true"
+built-ins/Object/create/15.2.3.5-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.create.length Expected SameValue(«0», «2») to be true"
 built-ins/Object/create/15.2.3.5-1-1.js sloppy pass
 built-ins/Object/create/15.2.3.5-1-1.js strict pass
 built-ins/Object/create/15.2.3.5-1-2.js sloppy skip:shared-positive-test-failure
@@ -21,8 +21,8 @@ built-ins/Object/create/15.2.3.5-3-1.js sloppy pass
 built-ins/Object/create/15.2.3.5-3-1.js strict pass
 built-ins/Object/create/15.2.3.5-4-1.js sloppy pass
 built-ins/Object/create/15.2.3.5-4-1.js strict pass
-built-ins/Object/create/15.2.3.5-4-10.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: descriptor: not an object"
-built-ins/Object/create/15.2.3.5-4-10.js strict fail:"ironhorse threw where the oracle completed: TypeError: descriptor: not an object"
+built-ins/Object/create/15.2.3.5-4-10.js sloppy pass
+built-ins/Object/create/15.2.3.5-4-10.js strict pass
 built-ins/Object/create/15.2.3.5-4-100.js sloppy pass
 built-ins/Object/create/15.2.3.5-4-100.js strict pass
 built-ins/Object/create/15.2.3.5-4-101.js sloppy pass

@@ -19,7 +19,7 @@ built-ins/TypedArray/prototype/toSorted/name.js sloppy fail:"ironhorse threw whe
 built-ins/TypedArray/prototype/toSorted/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
 built-ins/TypedArray/prototype/toSorted/not-a-constructor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
 built-ins/TypedArray/prototype/toSorted/not-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
-built-ins/TypedArray/prototype/toSorted/property-descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
-built-ins/TypedArray/prototype/toSorted/property-descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/toSorted/property-descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof Expected SameValue(«\"undefined\"», «\"function\"») to be true"
+built-ins/TypedArray/prototype/toSorted/property-descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof Expected SameValue(«\"undefined\"», «\"function\"») to be true"
 built-ins/TypedArray/prototype/toSorted/this-value-invalid.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/toSorted/this-value-invalid.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable

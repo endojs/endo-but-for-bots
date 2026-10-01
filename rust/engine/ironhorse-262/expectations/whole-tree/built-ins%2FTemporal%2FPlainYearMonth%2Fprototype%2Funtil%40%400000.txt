@@ -63,8 +63,8 @@ built-ins/Temporal/PlainYearMonth/prototype/until/calendar-temporal-object.js sl
 built-ins/Temporal/PlainYearMonth/prototype/until/calendar-temporal-object.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/prototype/until/exact-multiple-of-larger-unit.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainYearMonth/prototype/until/exact-multiple-of-larger-unit.js strict skip:oracle-host-missing-global:Temporal
-built-ins/Temporal/PlainYearMonth/prototype/until/infinity-throws-rangeerror.js sloppy skip:parse-or-decode
-built-ins/Temporal/PlainYearMonth/prototype/until/infinity-throws-rangeerror.js strict skip:parse-or-decode
+built-ins/Temporal/PlainYearMonth/prototype/until/infinity-throws-rangeerror.js sloppy skip:oracle-host-missing-temporal
+built-ins/Temporal/PlainYearMonth/prototype/until/infinity-throws-rangeerror.js strict skip:oracle-host-missing-temporal
 built-ins/Temporal/PlainYearMonth/prototype/until/largestunit-auto.js sloppy skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainYearMonth/prototype/until/largestunit-auto.js strict skip:oracle-host-missing-global:Temporal
 built-ins/Temporal/PlainYearMonth/prototype/until/largestunit-disallowed-units.js sloppy skip:oracle-host-missing-global:Temporal

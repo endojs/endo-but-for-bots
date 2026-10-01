@@ -33,8 +33,8 @@ built-ins/TypedArray/prototype/with/not-a-constructor.js sloppy fail:"ironhorse 
 built-ins/TypedArray/prototype/with/not-a-constructor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: isConstructor invoked with a non-function value"
 built-ins/TypedArray/prototype/with/order-of-evaluation.js sloppy fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
 built-ins/TypedArray/prototype/with/order-of-evaluation.js strict fail:"ironhorse threw where the oracle completed: TypeError: call: not a function (Testing with Float64Array and makePassthrough.)"
-built-ins/TypedArray/prototype/with/property-descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
-built-ins/TypedArray/prototype/with/property-descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/TypedArray/prototype/with/property-descriptor.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof Expected SameValue(«\"undefined\"», «\"function\"») to be true"
+built-ins/TypedArray/prototype/with/property-descriptor.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: typeof Expected SameValue(«\"undefined\"», «\"function\"») to be true"
 built-ins/TypedArray/prototype/with/this-value-invalid.js sloppy pass
 built-ins/TypedArray/prototype/with/this-value-invalid.js strict pass
 built-ins/TypedArray/prototype/with/valid-typedarray-index-checked-after-coercions.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable

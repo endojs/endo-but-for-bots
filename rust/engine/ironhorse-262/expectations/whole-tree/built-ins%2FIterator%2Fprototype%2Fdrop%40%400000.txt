@@ -3,8 +3,8 @@ built-ins/Iterator/prototype/drop/argument-effect-order.js sloppy skip:shared-te
 built-ins/Iterator/prototype/drop/argument-effect-order.js strict skip:shared-test262-failure
 built-ins/Iterator/prototype/drop/argument-validation-failure-closes-underlying.js sloppy skip:shared-test262-failure
 built-ins/Iterator/prototype/drop/argument-validation-failure-closes-underlying.js strict skip:shared-test262-failure
-built-ins/Iterator/prototype/drop/callable.js sloppy skip:non-primitive-completion
-built-ins/Iterator/prototype/drop/callable.js strict skip:non-primitive-completion
+built-ins/Iterator/prototype/drop/callable.js sloppy pass
+built-ins/Iterator/prototype/drop/callable.js strict pass
 built-ins/Iterator/prototype/drop/exhaustion-does-not-call-return.js sloppy pass
 built-ins/Iterator/prototype/drop/exhaustion-does-not-call-return.js strict pass
 built-ins/Iterator/prototype/drop/get-next-method-only-once.js sloppy pass

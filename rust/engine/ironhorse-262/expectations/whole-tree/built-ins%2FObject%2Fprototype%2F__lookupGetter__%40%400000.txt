@@ -29,5 +29,5 @@ built-ins/Object/prototype/__lookupGetter__/name.js sloppy fail:"ironhorse threw
 built-ins/Object/prototype/__lookupGetter__/name.js strict fail:"ironhorse threw where the oracle completed: TypeError: invalid object"
 built-ins/Object/prototype/__lookupGetter__/prop-desc.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: __lookupGetter__ should be an own property"
 built-ins/Object/prototype/__lookupGetter__/prop-desc.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: __lookupGetter__ should be an own property"
-built-ins/Object/prototype/__lookupGetter__/this-non-obj.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
-built-ins/Object/prototype/__lookupGetter__/this-non-obj.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: string\"undefined\"», «string\"function\"») to be true"
+built-ins/Object/prototype/__lookupGetter__/this-non-obj.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"undefined\"», «\"function\"») to be true"
+built-ins/Object/prototype/__lookupGetter__/this-non-obj.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Expected SameValue(«\"undefined\"», «\"function\"») to be true"

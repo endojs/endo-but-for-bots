@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=built-ins/Object/defineProperty tip=be13516fb6441b950ba8a3df97eb34062c186972
 built-ins/Object/defineProperty/15.2.3.6-0-1.js sloppy pass
 built-ins/Object/defineProperty/15.2.3.6-0-1.js strict pass
-built-ins/Object/defineProperty/15.2.3.6-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number3») to be true"
-built-ins/Object/defineProperty/15.2.3.6-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: number0», «number3») to be true"
+built-ins/Object/defineProperty/15.2.3.6-0-2.js sloppy fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.defineProperty.length Expected SameValue(«0», «3») to be true"
+built-ins/Object/defineProperty/15.2.3.6-0-2.js strict fail:"ironhorse failed a harness assertion the oracle passed: Test262Error: Object.defineProperty.length Expected SameValue(«0», «3») to be true"
 built-ins/Object/defineProperty/15.2.3.6-1-1.js sloppy pass
 built-ins/Object/defineProperty/15.2.3.6-1-1.js strict pass
 built-ins/Object/defineProperty/15.2.3.6-1-2.js sloppy pass

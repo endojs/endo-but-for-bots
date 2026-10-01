@@ -3,15 +3,18 @@ built-ins/TypedArray/prototype/copyWithin/bit-precision.js sloppy skip:unsupport
 built-ins/TypedArray/prototype/copyWithin/bit-precision.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/copyWithin/byteoffset.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/copyWithin/byteoffset.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/copyWithin/coerced-target-start-end-shrink.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/copyWithin/coerced-target-start-end-shrink.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/copyWithin/coerced-target-start-grow.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/copyWithin/coerced-target-start-grow.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/copyWithin/coerced-values-end-detached-prototype.js sloppy fail:"ironhorse-hang: no verdict within 60s (non-terminating dispatch)"
-built-ins/TypedArray/prototype/copyWithin/coerced-values-end-detached.js sloppy fail:"ironhorse-hang: no verdict within 60s (non-terminating dispatch)"
+built-ins/TypedArray/prototype/copyWithin/coerced-target-start-end-shrink.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/copyWithin/coerced-target-start-end-shrink.js strict skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/copyWithin/coerced-target-start-grow.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/copyWithin/coerced-target-start-grow.js strict skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/copyWithin/coerced-values-end-detached-prototype.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/copyWithin/coerced-values-end-detached-prototype.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/copyWithin/coerced-values-end-detached.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/copyWithin/coerced-values-end-detached.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/copyWithin/coerced-values-end.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/copyWithin/coerced-values-end.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/copyWithin/coerced-values-start-detached.js sloppy fail:"ironhorse-hang: no verdict within 60s (non-terminating dispatch)"
+built-ins/TypedArray/prototype/copyWithin/coerced-values-start-detached.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/copyWithin/coerced-values-start-detached.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/copyWithin/coerced-values-start.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/copyWithin/coerced-values-start.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/copyWithin/coerced-values-target.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
@@ -54,8 +57,8 @@ built-ins/TypedArray/prototype/copyWithin/not-a-constructor.js sloppy pass
 built-ins/TypedArray/prototype/copyWithin/not-a-constructor.js strict pass
 built-ins/TypedArray/prototype/copyWithin/prop-desc.js sloppy pass
 built-ins/TypedArray/prototype/copyWithin/prop-desc.js strict pass
-built-ins/TypedArray/prototype/copyWithin/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/copyWithin/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/copyWithin/resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/copyWithin/resizable-buffer.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/copyWithin/return-abrupt-from-end-is-symbol.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/copyWithin/return-abrupt-from-end-is-symbol.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/copyWithin/return-abrupt-from-end.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable

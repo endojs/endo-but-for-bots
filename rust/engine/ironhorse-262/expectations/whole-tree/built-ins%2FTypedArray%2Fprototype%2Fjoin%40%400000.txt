@@ -1,8 +1,8 @@
 # engine=ironhorse features=default corpus=built-ins/TypedArray/prototype/join tip=be13516fb6441b950ba8a3df97eb34062c186972
-built-ins/TypedArray/prototype/join/coerced-separator-grow.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/join/coerced-separator-grow.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/join/coerced-separator-shrink.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/join/coerced-separator-shrink.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/join/coerced-separator-grow.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/join/coerced-separator-grow.js strict skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/join/coerced-separator-shrink.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/join/coerced-separator-shrink.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/join/custom-separator-result-from-tostring-on-each-simple-value.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/join/custom-separator-result-from-tostring-on-each-simple-value.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/join/custom-separator-result-from-tostring-on-each-value.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
@@ -27,8 +27,8 @@ built-ins/TypedArray/prototype/join/not-a-constructor.js sloppy pass
 built-ins/TypedArray/prototype/join/not-a-constructor.js strict pass
 built-ins/TypedArray/prototype/join/prop-desc.js sloppy pass
 built-ins/TypedArray/prototype/join/prop-desc.js strict pass
-built-ins/TypedArray/prototype/join/resizable-buffer.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
-built-ins/TypedArray/prototype/join/resizable-buffer.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
+built-ins/TypedArray/prototype/join/resizable-buffer.js sloppy skip:shared-positive-test-failure
+built-ins/TypedArray/prototype/join/resizable-buffer.js strict skip:shared-positive-test-failure
 built-ins/TypedArray/prototype/join/result-from-tostring-on-each-simple-value.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/join/result-from-tostring-on-each-simple-value.js strict skip:unsupported-opcode:native-call:ArrayBuffer:resizable
 built-ins/TypedArray/prototype/join/result-from-tostring-on-each-value.js sloppy skip:unsupported-opcode:native-call:ArrayBuffer:resizable

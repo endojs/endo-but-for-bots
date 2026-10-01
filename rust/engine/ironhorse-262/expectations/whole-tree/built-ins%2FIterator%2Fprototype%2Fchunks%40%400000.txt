@@ -3,8 +3,8 @@ built-ins/Iterator/prototype/chunks/argument-effect-order.js sloppy skip:shared-
 built-ins/Iterator/prototype/chunks/argument-effect-order.js strict skip:shared-test262-failure
 built-ins/Iterator/prototype/chunks/argument-validation-failure-close-throws.js sloppy skip:shared-test262-failure
 built-ins/Iterator/prototype/chunks/argument-validation-failure-close-throws.js strict skip:shared-test262-failure
-built-ins/Iterator/prototype/chunks/argument-validation-failure-closes-underlying.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: iterator closed when chunkSize is undefined Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
-built-ins/Iterator/prototype/chunks/argument-validation-failure-closes-underlying.js strict fail:"abort-value-differs: oracle=\"Test262Error: iterator closed when chunkSize is undefined Expected SameValue(«false», «true») to be true\" ironhorse=\"Test262Error: booleanfalse», «booleantrue») to be true\""
+built-ins/Iterator/prototype/chunks/argument-validation-failure-closes-underlying.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/chunks/argument-validation-failure-closes-underlying.js strict skip:shared-test262-failure
 built-ins/Iterator/prototype/chunks/callable.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/prototype/chunks/callable.js strict skip:shared-positive-test-failure
 built-ins/Iterator/prototype/chunks/chunkSize-no-coercion.js sloppy pass
@@ -29,8 +29,8 @@ built-ins/Iterator/prototype/chunks/get-next-method-throws.js sloppy skip:shared
 built-ins/Iterator/prototype/chunks/get-next-method-throws.js strict skip:shared-test262-failure
 built-ins/Iterator/prototype/chunks/get-return-method-throws.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/prototype/chunks/get-return-method-throws.js strict skip:shared-positive-test-failure
-built-ins/Iterator/prototype/chunks/is-function.js sloppy fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
-built-ins/Iterator/prototype/chunks/is-function.js strict fail:"abort-value-differs: oracle=\"Test262Error: Expected SameValue(«\\\"undefined\\\"», «\\\"function\\\"») to be true\" ironhorse=\"Test262Error: string\\\"undefined\\\"», «string\\\"function\\\"») to be true\""
+built-ins/Iterator/prototype/chunks/is-function.js sloppy skip:shared-test262-failure
+built-ins/Iterator/prototype/chunks/is-function.js strict skip:shared-test262-failure
 built-ins/Iterator/prototype/chunks/iterator-already-exhausted.js sloppy skip:shared-positive-test-failure
 built-ins/Iterator/prototype/chunks/iterator-already-exhausted.js strict skip:shared-positive-test-failure
 built-ins/Iterator/prototype/chunks/iterator-return-method-throws.js sloppy skip:shared-positive-test-failure
