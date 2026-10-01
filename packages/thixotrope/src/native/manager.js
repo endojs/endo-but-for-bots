@@ -46,6 +46,14 @@ export const makeNativeManager = (
         'Native durable module must return its facet and lifecycle synchronously',
       );
     }
+    if (
+      typeof kit.lifecycle.started !== 'function' ||
+      typeof kit.lifecycle.exited !== 'function'
+    ) {
+      throw Error(
+        'Native durable module lifecycle must have started() and exited()',
+      );
+    }
     return harden({
       kit: harden({ facet: kit.facet, lifecycle: kit.lifecycle }),
     });

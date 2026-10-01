@@ -20,7 +20,7 @@ const bundle = `(() => {
     let starts = 0;
     return harden({
       facet: Far('Registration', { loads: () => loads, factories: () => factories, starts: () => starts }),
-      lifecycle: Far('Lifecycle', { started: () => { starts += 1; } }),
+      lifecycle: Far('Lifecycle', { started: () => { starts += 1; }, exited: () => {} }),
       // Implementation helpers need not be passable across vats.
       helper: () => undefined,
     });

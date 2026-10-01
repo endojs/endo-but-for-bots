@@ -252,10 +252,13 @@ Its `make({ adapters, makeKeeper, makeManager })` returns `{ facet, lifecycle }`
 registration and how to describe its status.
 The ephemeral module runs in a separate Node process with native platform APIs; its `make()`
 builds the adapter with `makeAdapter` from `@endo/thixotrope/native-adapter.js`, supplying the
-identity rules and the two verbs that acquire and release the resource.
+identity rules, the two verbs that acquire and release the resource, and optionally `resolve`,
+what a registration became once bound (a delay becoming a deadline, say), which the manager adopts.
 The two halves speak one protocol, so `resources/http` is HTTP and little else on each side.
 The workspace retains installation bookkeeping and the public facet.
-Each manager receives its own daemon startup notification, independently of workspace execution.
+Each manager receives its own daemon startup notification, independently of workspace execution,
+and an exit notice when its adapter process ends on its own, after a backoff that grows with
+consecutive quick exits; it rebuilds the adapter on either while anything is registered.
 The primary daemon only loads directory metadata and bundles the durable module, launches and
 connects the native process, and manages its lifetime.
 It contains no HTTP listener implementation or HTTP-specific installation commands.

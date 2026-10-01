@@ -162,7 +162,7 @@ test.serial(
       join(directory, 'durable.js'),
       `export const make = () => harden({
         facet: Far('Registration', { ok: () => true }),
-        lifecycle: Far('Lifecycle', { started: () => {} }),
+        lifecycle: Far('Lifecycle', { started: () => {}, exited: () => {} }),
       });`,
     );
     await t.throwsAsync(() => client.call('installNative', 'web', directory), {

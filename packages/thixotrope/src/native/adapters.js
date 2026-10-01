@@ -8,6 +8,19 @@ import { randomHex128 } from '../random-id.js';
 
 /** @import { NativeWorkerPowers } from '../platform/native-workers.js' */
 /** @import { RandomPowers } from '../platform/random.js' */
+/** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
+
+/**
+ * An incarnation that lived shorter than this before exiting on its own is
+ * a quick exit; consecutive quick exits back off the exit notice, doubling
+ * from one second up to the ceiling, so a process that dies at once is not
+ * rebuilt in a tight loop. The first exit after a long life is reported at
+ * once.
+ */
+export const QUICK_EXIT_MS = 10_000;
+harden(QUICK_EXIT_MS);
+export const MAX_EXIT_NOTICE_DELAY_MS = 30_000;
+harden(MAX_EXIT_NOTICE_DELAY_MS);
 
 /**
  * Each native incarnation is an ephemeral session: no heap or input replay.
@@ -17,12 +30,18 @@ import { randomHex128 } from '../random-id.js';
  * be closed with the manager: retiring a vat retires the host resources it
  * owns, and a native process is one.
  *
- * @param {{nativeWorkers?: NativeWorkerPowers, random: RandomPowers}} powers
- * @param {{hub: any, importBootstrap: (id: string) => any}} options
+ * An incarnation that exits on its own, rather than through `retire`, its
+ * owner's retirement or shutdown, is reported to its owner through
+ * `onAdapterExit` after the backoff above, so the manager can rebuild it
+ * while it still desires anything, without waiting for the next operation
+ * that needs an adapter or for the next daemon start.
+ *
+ * @param {{nativeWorkers?: NativeWorkerPowers, random: RandomPowers, timers: TimerPowers}} powers
+ * @param {{hub: any, importBootstrap: (id: string) => any, onAdapterExit?: (workerId: string) => void}} options
  */
 export const makeNativeAdapters = (
-  { nativeWorkers, random },
-  { hub, importBootstrap },
+  { nativeWorkers, random, timers },
+  { hub, importBootstrap, onAdapterExit = () => {} },
 ) => {
   const opening = makeInFlight();
   const cleanupFailure = makeFirstFailure();
@@ -39,7 +58,46 @@ export const makeNativeAdapters = (
   // reused, so the set only tells a late launcher that its owner is gone.
   /** @type {Set<string>} */
   const retiredOwners = new Set();
+  // Owner → consecutive quick exits, and the exit notices not yet delivered.
+  /** @type {Map<string, number>} */
+  const quickExits = new Map();
+  /** @type {Map<string, Set<TimerHandle>>} */
+  const notices = new Map();
   let stopped = false;
+  /**
+   * Report an incarnation's own exit to its owner, after a delay that grows
+   * with consecutive quick exits.
+   * @param {string} owner
+   * @param {number} livedMs
+   */
+  const scheduleExitNotice = (owner, livedMs) => {
+    const quick =
+      livedMs < QUICK_EXIT_MS ? (quickExits.get(owner) ?? 0) + 1 : 0;
+    quickExits.set(owner, quick);
+    const delay =
+      quick === 0
+        ? 0
+        : Math.min(MAX_EXIT_NOTICE_DELAY_MS, 1000 * 2 ** (quick - 1));
+    const pending = setOf(notices, owner);
+    /** @type {TimerHandle} */
+    const timer = timers.setTimer(() => {
+      pending.delete(timer);
+      if (stopped || retiredOwners.has(owner)) return;
+      try {
+        onAdapterExit(owner);
+      } catch (error) {
+        // A timer callback has no caller to throw to.
+        cleanupFailure.record(error);
+      }
+    }, delay);
+    pending.add(timer);
+    timers.unrefTimer?.(timer);
+  };
+  /** @param {string} owner */
+  const cancelExitNotices = owner => {
+    for (const timer of notices.get(owner) ?? []) timers.clearTimer(timer);
+    notices.delete(owner);
+  };
   /**
    * @template T
    * @param {Map<string, Set<T>>} index
@@ -97,7 +155,13 @@ export const makeNativeAdapters = (
                 }
               },
             });
-            const close = async () => {
+            // Ending the process: `close` is an end someone asked for (the
+            // manager's retirement, its owner's, or shutdown) and is not
+            // reported; `end` alone, as on a hub abort, is one the owner
+            // must hear about like any other exit it did not ask for.
+            let closing = false;
+            let ready = false;
+            const end = async () => {
               try {
                 await child.terminate();
               } finally {
@@ -106,12 +170,31 @@ export const makeNativeAdapters = (
                 if (owner !== undefined) owned.get(owner)?.delete(close);
               }
             };
+            const close = () => {
+              closing = true;
+              return end();
+            };
             closers.add(close);
             if (owner !== undefined && !retiredOwners.has(owner))
               setOf(owned, owner).add(close);
+            const launchedAt = timers.monotonicNow();
             void child.closed.then(() => {
               closers.delete(close);
               if (owner !== undefined) owned.get(owner)?.delete(close);
+              if (owner === undefined) return;
+              const livedMs = timers.monotonicNow() - launchedAt;
+              // A long life ends the run of quick exits however it ends.
+              if (livedMs >= QUICK_EXIT_MS) quickExits.delete(owner);
+              // An exit nobody asked for is the owner's to hear about, once
+              // the incarnation was the owner's to use: one that dies before
+              // its root is fetched is reported by `create()` rejecting.
+              if (ready && !closing && !stopped && !retiredOwners.has(owner)) {
+                try {
+                  scheduleExitNotice(owner, livedMs);
+                } catch (error) {
+                  cleanupFailure.record(error);
+                }
+              }
             });
             try {
               if (
@@ -124,13 +207,14 @@ export const makeNativeAdapters = (
                 durable: false,
                 send: child.send,
                 onAbort: () => {
-                  void close().catch(error => cleanupFailure.record(error));
+                  void end().catch(error => cleanupFailure.record(error));
                 },
               });
               for (const bytes of pending.splice(0)) sink.deliver(bytes);
               const root = await E(importBootstrap(id)).fetch(
                 encodeSwissnum('root'),
               );
+              ready = true;
               return Far('NativeAdapterIncarnation', {
                 getRoot: () => root,
                 retire: close,
@@ -163,6 +247,8 @@ export const makeNativeAdapters = (
      */
     retireWorker: async workerId => {
       retiredOwners.add(workerId);
+      cancelExitNotices(workerId);
+      quickExits.delete(workerId);
       // A launch in flight sees the retirement once its process is up and
       // closes it; wait for that so nothing of the vat's outlives this call.
       await Promise.all(launching.get(workerId) ?? []);
@@ -177,8 +263,17 @@ export const makeNativeAdapters = (
       }
       failure.assertNone();
     },
+    /**
+     * Stop reporting exits, ahead of shutdown: a notice delivered while the
+     * daemon is parking its vats would wake one it just put to sleep.
+     */
+    quiesce: () => {
+      stopped = true;
+      for (const owner of [...notices.keys()]) cancelExitNotices(owner);
+    },
     shutdown: async () => {
       stopped = true;
+      for (const owner of [...notices.keys()]) cancelExitNotices(owner);
       const results = await Promise.allSettled([
         ...[...closers].map(close => close()),
         opening.drain(),

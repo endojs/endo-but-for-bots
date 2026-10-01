@@ -19,10 +19,12 @@ The durable factory is synchronous and receives `{adapters, makeKeeper, makeMana
 guest prelude in scope as globals.
 It returns `{facet, lifecycle}`, both remotables; `src/native/contract.js` states the contract as
 types.
-Installation publishes the lifecycle facet privately for the manager's own start notice and places
+Installation publishes the lifecycle facet privately for the manager's own notices and places
 only the facet in the requested inventory slot, where applications receive it through ordinary
 grants.
-Each manager has its own start notice, so recovery does not depend on workspace execution.
+Each manager has its own start notice, so recovery does not depend on workspace execution, and
+hears of its adapter's own exit through the same facet, after a host-side backoff, so a listener
+comes back between starts without waiting for the next operation that needs it.
 
 The daemon supplies generic process launch, reference routing, retirement and shutdown.
 A native process is a transient hub session with a fresh identity, not a replaying worker: process

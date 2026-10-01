@@ -12,7 +12,7 @@ export const make = () => {
       setMarker: value => { globals.marker = value; },
       getMarker: () => globals.marker,
     }),
-    lifecycle: Far('Lifecycle', {started: () => { starts += 1; }}),
+    lifecycle: Far('Lifecycle', {started: () => { starts += 1; }, exited: () => {}}),
   });
 };
 harden(make);
