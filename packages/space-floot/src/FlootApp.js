@@ -202,7 +202,17 @@ const PresetModal = ({
     }
   }, [selection, model, effortListed]);
   const [internet, setInternet] = useState(true);
-  const networkPolicies = selectedModel?.supportedNetworkPolicies || [];
+  const visiblePresets = presets.filter(
+    p => !p.backendIds || p.backendIds.includes(backend),
+  );
+  const modelNetworkPolicies = selectedModel?.supportedNetworkPolicies || [];
+  const networkPolicies = modelNetworkPolicies.length
+    ? modelNetworkPolicies
+    : [
+        ...new Set(
+          visiblePresets.flatMap(p => p.supportedNetworkPolicies || []),
+        ),
+      ];
   const supportsInternet = networkPolicies.includes('public-internet');
   const note =
     discoveryNote(backendCatalog) ||
@@ -390,7 +400,9 @@ const PresetModal = ({
           'small',
           null,
           supportsInternet
-            ? 'Allows public HTTP/HTTPS uploads and downloads. Private networks remain blocked.'
+            ? modelNetworkPolicies.length
+              ? 'Allows public HTTP/HTTPS uploads and downloads. Private networks remain blocked.'
+              : 'Applies to development environments only. Allows public HTTP/HTTPS; private networks remain blocked.'
             : 'This backend does not offer configurable public-internet access.',
         ),
       ),
@@ -434,8 +446,8 @@ const PresetModal = ({
       h(
         'div',
         { class: 'floot-preset-list' },
-        (presets.length
-          ? presets
+        (visiblePresets.length
+          ? visiblePresets
           : [{ id: '', title: 'Start session', description: '' }]
         ).map(p =>
           h(
@@ -453,7 +465,8 @@ const PresetModal = ({
                   chosenSubscription === 'auto'
                     ? undefined
                     : chosenSubscription,
-                  networkPolicies.length
+                  modelNetworkPolicies.length ||
+                    p.supportedNetworkPolicies?.length
                     ? supportsInternet && internet
                       ? 'public-internet'
                       : 'off'

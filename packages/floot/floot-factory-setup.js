@@ -418,6 +418,17 @@ export const main = async agent => {
   // after.
   await provisionMachineAdmin(agent, { dir, factoryHost });
 
+  // POSIX execution is separate from inference. Copy the configured durable
+  // runner identity, never its paths or administration into a model's guest.
+  if (await E(agent).has('environments', 'runner')) {
+    await E(factoryHost).storeLocator(
+      'environment-runner',
+      await E(agent).locate('environments', 'runner'),
+    );
+  } else if (await E(factoryHost).has('environment-runner')) {
+    await E(factoryHost).remove('environment-runner');
+  }
+
   // 5. Launch the factory caplet straight into floot/controller. On a re-run,
   // replace the caplet — the one formula whose module path is tied to a
   // release checkout — and keep everything it was bound to.

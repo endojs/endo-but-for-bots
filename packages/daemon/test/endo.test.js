@@ -545,6 +545,97 @@ test('lifecycle', async t => {
   t.pass();
 });
 
+testNeedsNodeWorker(
+  'durable environment restores passively and retains exact runner/workspace identities',
+  async t => {
+    t.timeout(60_000);
+    const { cancelled, config } = await prepareConfig(t, {
+      configName: 'posix',
+    });
+    const runnerSpecifier = new URL('./_environment-runner.js', import.meta.url)
+      .href;
+    const workspaceSpecifier = new URL(
+      './_native-session-dependency.js',
+      import.meta.url,
+    ).href;
+    const recipe = harden({
+      policy: {
+        allowedCommands: ['sh'],
+        timeoutMs: 1000,
+        maxOutputBytes: 4096,
+      },
+      networkPolicy: 'off',
+    });
+    {
+      const { host } = await makeHost(config, cancelled);
+      await E(host).makeDirectory('audit');
+      const runner = await E(host).makeUnconfined(
+        'runner-worker',
+        runnerSpecifier,
+        { powersName: 'audit', resultName: 'runner' },
+      );
+      const workspace = await E(host).makeUnconfined(
+        'workspace-worker',
+        workspaceSpecifier,
+        {
+          powersName: 'audit',
+          resultName: 'workspace',
+          env: { LABEL: 'original' },
+        },
+      );
+      const kit = await E(host).provideEnvironment(
+        runner,
+        workspace,
+        'environment-admin',
+        'shell',
+        recipe,
+      );
+      await E(host).remove('runner');
+      await E(host).remove('workspace');
+      t.deepEqual(await E(kit.shell).inspect(), recipe.policy);
+      t.is((await E(kit.admin).inspect()).phase, 'idle');
+    }
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      const audit = await E(host).lookup('audit');
+      const shell = await E(host).lookup('shell');
+      const admin = await E(host).lookup('environment-admin');
+      t.deepEqual(await E(shell).inspect(), recipe.policy);
+      t.is((await E(admin).inspect()).phase, 'idle');
+      t.is(await E(audit).readText('runner-revivals'), '1');
+      t.is(await E(audit).readText('revivals-original'), '1');
+      // Rebinding the old name cannot redirect the recipe's dependency.
+      await E(host).makeUnconfined('replacement-worker', workspaceSpecifier, {
+        powersName: 'audit',
+        resultName: 'workspace',
+        env: { LABEL: 'replacement' },
+      });
+      t.is((await E(shell).exec('sh', harden([]))).stdout, 'original');
+      t.is(await E(audit).readText('runner-revivals'), '2');
+      t.is(await E(audit).readText('revivals-original'), '2');
+      await E(admin).stop();
+    }
+    // Planned restart explicitly stops native ownership first. Daemon process
+    // exit alone is not that acknowledgement (cold active intents fence).
+    await restart(config);
+    {
+      const { host } = await makeHost(config, cancelled);
+      const audit = await E(host).lookup('audit');
+      const admin = await E(host).lookup('environment-admin');
+      t.is((await E(admin).inspect()).phase, 'idle');
+      t.is(await E(audit).readText('runner-revivals'), '2');
+      const shell = await E(host).lookup('shell');
+      t.is((await E(shell).exec('sh', harden([]))).stdout, 'original');
+      t.is(await E(audit).readText('runner-revivals'), '3');
+      await E(admin).stop();
+      await E(admin).dispose();
+      t.is((await E(admin).inspect()).phase, 'disposed');
+      t.is(await E(audit).readText('revivals-replacement'), '1');
+    }
+  },
+);
+
 test('failure to start', async t => {
   await null;
   const cleanup = async () => {
@@ -5393,6 +5484,53 @@ testNeedsNodeWorker.serial(
       'probe-result',
     );
     t.is(identity, 'remote-project');
+  },
+);
+
+testNeedsNodeWorker.serial(
+  'portable environment Shell crosses two daemon peers without private admin',
+  async t => {
+    t.timeout(60_000);
+    const remote = await prepareHostWithTestNetwork(t, 'er');
+    const local = await prepareHostWithTestNetwork(t, 'el');
+    await E(local).addPeerInfo(await E(remote).getPeerInfo());
+    await E(remote).makeDirectory('audit');
+    const runner = await E(remote).makeUnconfined(
+      'runner-worker',
+      new URL('./_environment-runner.js', import.meta.url).href,
+      { powersName: 'audit', resultName: 'runner' },
+    );
+    const workspace = await E(remote).makeUnconfined(
+      'workspace-worker',
+      new URL('./_native-session-dependency.js', import.meta.url).href,
+      {
+        powersName: 'audit',
+        resultName: 'workspace',
+        env: { LABEL: 'remote-workspace' },
+      },
+    );
+    const policy = harden({
+      allowedCommands: ['sh'],
+      timeoutMs: 1000,
+      maxOutputBytes: 4096,
+    });
+    const kit = await E(remote).provideEnvironment(
+      runner,
+      workspace,
+      'environment-admin',
+      'shell',
+      harden({ policy, networkPolicy: 'off' }),
+    );
+    await E(local).storeLocator(['shell'], await E(remote).locate('shell'));
+    const shell = await E(local).lookup('shell');
+    t.deepEqual(await E(shell).inspect(), policy);
+    t.is((await E(shell).exec('sh', harden([]))).stdout, 'remote-workspace');
+    t.false(await E(local).has('environment-admin'));
+    await E(kit.admin).stop();
+    await E(kit.admin).dispose();
+    await t.throwsAsync(E(shell).exec('sh', harden([])), {
+      message: /disposed/,
+    });
   },
 );
 

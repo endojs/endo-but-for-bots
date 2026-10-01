@@ -3,7 +3,7 @@ import '@endo/init';
 
 import { Fail } from '@endo/errors';
 import { makeExo } from '@endo/exo';
-import { M } from '@endo/patterns';
+import { M, mustMatch } from '@endo/patterns';
 
 import { makeProviderHttpListener } from './provider-http.js';
 import { makeProviderPipe } from './provider-pipe.js';
@@ -69,17 +69,26 @@ export const startProviderListenerWorker = async ({
   const pipe = makeProviderPipe({ input, output, bootstrap });
   ready = (async () => {
     const configuration = await pipe.getBootstrap();
+    const networkOnly =
+      Object.keys(configuration).length === 1 &&
+      Object.hasOwn(configuration, 'network');
     const allowed = [
       'endpoint',
       'limits',
       ...(Object.hasOwn(configuration, 'network') ? ['network'] : []),
     ];
-    (Object.keys(configuration).length === allowed.length &&
-      allowed.every(key => Object.hasOwn(configuration, key))) ||
+    networkOnly ||
+      (Object.keys(configuration).length === allowed.length &&
+        allowed.every(key => Object.hasOwn(configuration, key))) ||
       Fail`Invalid provider worker bootstrap`;
     if (configuration.network !== undefined) {
+      mustMatch(configuration.network, harden({ endpoint: M.remotable() }));
       makeNetworkListeners || Fail`Provider worker does not support networking`;
       networkConfiguration = configuration.network;
+    }
+    if (networkOnly) {
+      networkConfiguration || Fail`Network worker requires egress authority`;
+      return harden({ protocol: 'ManagedNetworkV1' });
     }
     listener = await makeProviderHttpListener({
       endpoint: configuration.endpoint,

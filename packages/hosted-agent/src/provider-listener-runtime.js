@@ -2,6 +2,7 @@
 
 import { E } from '@endo/eventual-send';
 import { Fail, makeError, X } from '@endo/errors';
+import { M, mustMatch } from '@endo/patterns';
 import { makePodmanHostEnvironment } from '@endo/sandbox/podman-host-environment.js';
 import {
   readNetworkNamespace,
@@ -320,9 +321,30 @@ export const makePodmanProviderListenerRuntimeKit = ({
    * runtime's existing admission queue, listener capacity and cleanup sets.
    * stop() targets only this acquisition, including failed startup; it fences
    * immediately and never equates rejection with native release.
-   * @param {{endpoint:any,limits:any,network?:{endpoint:any}}} configuration
+   * @param {{endpoint:any,limits:any,network?:{endpoint:any}} | {network:{endpoint:any}}} configuration
    */
-  const startKit = ({ endpoint, limits, network = undefined }) => {
+  const startKit = configuration => {
+    const networkOnly =
+      Object.keys(configuration).length === 1 &&
+      Object.hasOwn(configuration, 'network');
+    const allowed = [
+      'endpoint',
+      'limits',
+      ...(Object.hasOwn(configuration, 'network') ? ['network'] : []),
+    ];
+    networkOnly ||
+      (Object.keys(configuration).length === allowed.length &&
+        allowed.every(key => Object.hasOwn(configuration, key))) ||
+      Fail`Invalid listener configuration`;
+    const { network } = configuration;
+    if (Object.hasOwn(configuration, 'network'))
+      mustMatch(harden(network), harden({ endpoint: M.remotable() }));
+    !networkOnly ||
+      network?.endpoint ||
+      Fail`Network worker requires egress authority`;
+    const { endpoint, limits } = /** @type {{endpoint:any,limits:any}} */ (
+      configuration
+    );
     const name = `endo-provider-${randomUUID()}`;
     let child;
     let pipe;
@@ -463,11 +485,15 @@ export const makePodmanProviderListenerRuntimeKit = ({
       pipe = makeProviderPipe({
         input: subprocess.stdout,
         output: subprocess.stdin,
-        bootstrap: harden({
-          endpoint,
-          limits,
-          ...(network ? { network } : {}),
-        }),
+        bootstrap: harden(
+          networkOnly
+            ? { network }
+            : {
+                endpoint,
+                limits,
+                ...(network ? { network } : {}),
+              },
+        ),
       });
       void pipe.closed.then(() => {
         channelClosed = true;
@@ -475,8 +501,12 @@ export const makePodmanProviderListenerRuntimeKit = ({
       });
       control = await deadline(pipe.getBootstrap(), 10_000);
       const ready = await deadline(E(control).ready(), 10_000);
-      (ready.protocol === 'ProviderListenerV1' &&
-        /^http:\/\/127\.0\.0\.1:\d+$/.test(ready.endpoint)) ||
+      (networkOnly
+        ? ready.protocol === 'ManagedNetworkV1' &&
+          Object.keys(ready).length === 1
+        : ready.protocol === 'ProviderListenerV1' &&
+          Object.keys(ready).length === 2 &&
+          /^http:\/\/127\.0\.0\.1:\d+$/.test(ready.endpoint)) ||
         Fail`Provider listener handshake failed`;
       const observe = async () => {
         live || Fail`Provider listener inactive`;
@@ -529,7 +559,7 @@ export const makePodmanProviderListenerRuntimeKit = ({
           Fail`Provider listener changed during observation`;
         namespaceId = observedNetwork.namespaceId;
         return harden({
-          endpoint: ready.endpoint,
+          ...(networkOnly ? {} : { endpoint: ready.endpoint }),
           containerName: name,
           networkNamespaceId: namespaceId,
           listenerImageDigest: imageDigest,

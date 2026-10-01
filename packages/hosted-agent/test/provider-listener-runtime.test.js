@@ -137,6 +137,55 @@ const fixture = async (t, publicNetwork = false) => {
 };
 
 test.serial(
+  'network-only worker carries egress but no inference listener or authority',
+  async t => {
+    t.timeout(5000);
+    const f = await fixture(t, true);
+    const kit = makePodmanProviderListenerRuntimeKit(f.options);
+    t.teardown(kit.close);
+    const runtime = await kit.open();
+    const worker = await runtime.startKit({
+      network: { endpoint: Far('public egress only', {}) },
+    }).value;
+    const evidence = await worker.observe();
+    t.false(Object.hasOwn(evidence, 'endpoint'));
+    t.is(evidence.network.policy, 'public-internet');
+    t.is(evidence.network.dnsHost, '127.0.0.53');
+    t.true(f.launches[0].includes('--network=none'));
+    t.true(f.launches[0].includes('--cap-drop=ALL'));
+    await worker.stop();
+    await t.throwsAsync(worker.observe(), { message: /inactive/ });
+    t.is(f.removals.length, 1);
+  },
+);
+
+test.serial(
+  'ambiguous or empty network-only bootstraps fail before resource admission',
+  async t => {
+    const f = await fixture(t, true);
+    const kit = makePodmanProviderListenerRuntimeKit(f.options);
+    t.teardown(kit.close);
+    const runtime = await kit.open();
+    for (const configuration of [
+      { network: undefined },
+      { network: {} },
+      {
+        network: {
+          endpoint: Far('egress', {}),
+          unexpectedCapability: Far('secret', {}),
+        },
+      },
+      { network: { endpoint: Far('egress', {}) }, limits },
+    ]) {
+      t.throws(() => runtime.startKit(configuration), {
+        message: /configuration|egress authority|Must|properties/,
+      });
+    }
+    t.is(f.launches.length, 0);
+  },
+);
+
+test.serial(
   'default Podman commands retain one sanitized operator environment through listener cleanup',
   async t => {
     t.timeout(5000);

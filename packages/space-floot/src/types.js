@@ -57,7 +57,7 @@ export {};
  */
 
 /**
- * @typedef {{ id: string, title: string, description?: string }} FlootPreset
+ * @typedef {{ id: string, title: string, description?: string, backendIds?: string[], supportedNetworkPolicies?: string[] }} FlootPreset
  */
 
 /**

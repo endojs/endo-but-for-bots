@@ -49,8 +49,9 @@ const hasUncertainStartup = error =>
  * @param {any} t
  * @param {import('../src/generated-file-storage-types.js').GeneratedFileStorage} [storage]
  * @param {SeccompFilePowers} [fs]
+ * @param {{uid: number, gid: number}} [runAs]
  */
-const fixture = (t, storage, fs) => {
+const fixture = (t, storage, fs, runAs) => {
   const active = new Set();
   const attached = new Map();
   const calls = [];
@@ -179,6 +180,7 @@ const fixture = (t, storage, fs) => {
     ownerId: 'cleanup-test',
     generatedFileStorage: storage,
     fs,
+    runAs,
   });
   /** @type {any} */
   let slice = {
@@ -307,6 +309,28 @@ test('successful removal and attach exit retain ownership until native stdio clo
   await proc.wait();
   t.is(f.slice.live.size, 0);
   t.is(f.calls.filter(args => args[0] === 'rm').length, 1);
+});
+
+test('native operator identity uses keep-id without chowning writable binds', async t => {
+  t.timeout(3000);
+  const f = fixture(t, undefined, undefined, { uid: 1000, gid: 1000 });
+  await f.driver.spawn(f.slice, ['/bin/true'], {});
+  const create = f.calls.find(args => args[0] === 'create');
+  t.is(create[create.indexOf('--user') + 1], '1000:1000');
+  t.is(create[create.indexOf('--userns') + 1], 'keep-id:uid=1000,gid=1000');
+  t.false(create.some(arg => arg.includes(':U')));
+  f.finish([...f.active][0]);
+});
+
+test('native execution identity rejects root, fractions and extra policy fields', t => {
+  for (const runAs of [
+    { uid: 0, gid: 1000 },
+    { uid: 1000, gid: -1 },
+    { uid: 1.5, gid: 1 },
+    { uid: 1, gid: 1, extra: true },
+  ]) {
+    t.throws(() => makePodmanDriver({ runAs }), { message: /identity/ });
+  }
 });
 
 test('failed natural removal retains ownership and disposal retries without rewriting process history', async t => {

@@ -14,6 +14,7 @@ const world = (
     catalogState = 'current',
     endpointGate = undefined,
     forceCompaction = false,
+    development = false,
   } = {},
 ) => {
   t.timeout(10_000);
@@ -97,6 +98,9 @@ const world = (
     ['codex-inference', subscription],
     ['codex-backend', backend],
   ]);
+  const guests = new Map();
+  let environments = 0;
+  if (development) store.set('environment-runner', Far('Runner'));
   const host = Far('FlootHost', {
     has: name => store.has(name),
     lookup: name => store.get(name),
@@ -107,11 +111,43 @@ const world = (
     remove: name => {
       store.delete(name);
     },
-    copy: () => undefined,
+    copy: ([from], [guestName, name]) => {
+      if (guests.has(guestName))
+        guests.get(guestName).set(name, store.get(from));
+    },
+    provideEnvironment: (_runner, _mount, adminName, shellName) => {
+      environments += 1;
+      store.set(
+        adminName,
+        Far('EnvironmentAdmin', { stop: () => {}, setNetworkPolicy: () => {} }),
+      );
+      store.set(
+        shellName,
+        Far('Shell', {
+          exec: () =>
+            harden({
+              stdout: 'ok',
+              stderr: '',
+              exitCode: 0,
+              signal: null,
+              truncated: false,
+            }),
+          inspect: () =>
+            harden({
+              allowedCommands: ['sh'],
+              timeoutMs: 1000,
+              maxOutputBytes: 4096,
+            }),
+        }),
+      );
+    },
     provideGuest: (_name, { agentName }) => {
       guestCreates += 1;
       if (store.has(agentName)) return;
       const values = new Map([['user', harden({})]]);
+      guests.set(agentName, values);
+      if (development)
+        values.set('workspace', Far('Git', { worktree: () => Far('Mount') }));
       store.set(
         agentName,
         Far('SessionGuest', {
@@ -160,8 +196,36 @@ const world = (
     endpoints,
     cliCreates: () => cliCreates,
     guestCreates: () => guestCreates,
+    environments: () => environments,
   };
 };
+
+test('development factory revival refuses a public Shell with missing private admin', async t => {
+  const subject = world(t, { development: true });
+  const session = await E(subject.factory).createSession({
+    presetId: 'development',
+    backendId: 'fae-codex',
+    modelId: 'luna',
+    networkPolicy: 'off',
+  });
+  const { id } = await E(session).getInfo();
+  await E(await E(session).startTurn('seed')).whenFinished();
+  t.is(subject.environments(), 1);
+  const restoredFactory = await subject.restart();
+  subject.store.delete(`floot-environment-admin-${id}`);
+  // Incarnations are lazy after restart; the retained public Shell must not
+  // bypass private cleanup-authority validation before new inference.
+  const restored = await E(restoredFactory).getSession(id);
+  const refused = await E(restored).startTurn('retry');
+  await E(refused).whenFinished();
+  t.regex((await E(refused).getStatus()).error, /private admin is missing/);
+  t.is(subject.requests.length, 1);
+  t.is(subject.environments(), 1);
+  await t.throwsAsync(E(restoredFactory).deleteSession(id), {
+    message: /private admin is missing/,
+  });
+  await subject.close();
+});
 
 test('Floot Fae Codex pins inference, preserves opaque journal context, and never creates a CLI', async t => {
   const subject = world(t);

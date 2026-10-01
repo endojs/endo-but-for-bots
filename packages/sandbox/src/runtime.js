@@ -69,7 +69,7 @@ const NativeServiceInterface = harden(
  * The generic factory separately supports other backends. This hosted runtime
  * requires a driver with explicit host-only lifetime cleanup authority.
  *
- * @param {{ directory: string, ownerId: string, maxBytes: bigint, maxEntries: bigint, env?: Record<string, string> }} config
+ * @param {{ directory: string, ownerId: string, maxBytes: bigint, maxEntries: bigint, env?: Record<string, string>, runAs?: { uid: number, gid: number } }} config
  * `volumeQuota` is the trusted host kernel-quota observer the Podman driver
  * requires before it admits a durable volume mount. It is configuration-derived
  * host authority, never model-facing, and an adapter that needs one (Codex's
@@ -81,7 +81,7 @@ const NativeServiceInterface = harden(
  * @param {{ scratchProvider: SandboxPowers | null, fs?: typeof import('node:fs/promises'), makeDriver?: (storage: GeneratedFileStorage) => SandboxDriver & { close(): Promise<void> }, volumeQuota?: ERef<VolumeQuotaObserver> }} powers
  */
 export const makeSandboxRuntime = (
-  { directory, ownerId, maxBytes, maxEntries, env = {} },
+  { directory, ownerId, maxBytes, maxEntries, env = {}, runAs },
   { scratchProvider, fs: fsPower, makeDriver, volumeQuota },
 ) => {
   let closing = false;
@@ -129,6 +129,7 @@ export const makeSandboxRuntime = (
             env,
             ownerId,
             generatedFileStorage: storage,
+            ...(runAs === undefined ? {} : { runAs }),
             ...(volumeQuota === undefined ? {} : { volumeQuota }),
           });
       assertOpen();

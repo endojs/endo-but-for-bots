@@ -21,6 +21,7 @@
   "main": "./src/index.js",
   "types": "./types-index.types.d.ts",
   "exports": {
+    "./environment-interfaces.js": "./src/environment-interfaces.js",
     ".": {
       "types": "./types-index.types.d.ts",
       "default": "./src/index.js"

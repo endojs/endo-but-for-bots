@@ -9,6 +9,25 @@
 
 ## Implementation status
 
+2026-10-02 current slice: the Floot development preset publishes only the common
+Shell as `shell` in inventory and exposes structured `runCommand`/`inspectShell`
+tools, distinct from JavaScript `exec`. Only Fae inference backends select it;
+hosted CLI sessions already own their execution environment. The preset has its
+own recorded network policy and private retained admin. Cancellation aborts
+inference and waits for native stop; failed cleanup journals uncertainty and
+quarantines the incarnation. Deletion aborts before stopping, preserves native
+HOME/workspace storage, and keeps the private admin for manual disposal. Missing
+private administration fails closed, including on revival of an existing Shell.
+Focused publication, cancellation and factory tests pass; the full Floot/UI
+regression suite passed 872 tests before the final revival regression addition.
+Operator provisioning, live Rust/compaction and remote acceptance remain pending.
+Actual daemon testing also found that daemon exit does not run manager-owned
+environment cancellation hooks. Planned restart must explicitly acknowledge
+`admin.stop()` before stopping the daemon; exit alone leaves the active-intent
+fence. This is not cleanup proof and is not automatically adopted on restoration.
+Revising the daemon-wide shutdown boundary is follow-up lifecycle research
+(#1323), not an additional native recovery mechanism in this implementation.
+
 Implementation is authorized; the first slice removes the misleading dynamic
 `mount`, `scratch`, `open`, `fork`, and unused `reset` methods from public and native
 slice contracts, together with the tracker-only `SandboxMount` capability.
@@ -115,6 +134,45 @@ Focused tests cover forced compaction/continuation and factory reconstruction,
 unknown capacity, malformed summaries, recent opaque context, cancelled/stale
 publication and ambiguous checkpoint writes.
 Live pool/compaction acceptance is not yet claimed.
+The shared credential-free listener worker now accepts a closed network-only
+bootstrap with only a public-egress endpoint, and publishes `ManagedNetworkV1`
+readiness without creating or reporting an inference HTTP endpoint.
+It reuses the same rootless isolated runtime, network observations, DNS/proxy
+listeners and retained cleanup; no fake provider grant or new sidecar framework.
+Nested extra capabilities and missing egress authority are rejected before
+native admission.
+The worker/runtime suites pass 31 tests, including source/bundle inference
+regressions and network-only lifecycle tests; types and ESLint pass.
+Live egress and durable environment composition remain pending.
+The daemon now mints an `environment` recipe and separate Shell/admin facet
+formulas. Graph edges retain exact runner and workspace identities; only the
+private formula-backed state directory is read during lookup or restoration.
+Command admission publishes active intent before resolving the runner. A cold
+active intent fences execution for operator cleanup; it does not replay commands
+or manufacture cleanup proof from a fresh runner.
+The runner's `provideEnvironment` contract is inert: acquisition belongs only to
+the returned controller's `open`. Stop reaches retained controllers outside the
+command queue and observes early cleanup rejection immediately; retry retains
+the original owner. Policy replacement and disposal fence new commands.
+Explicit disposal deletes owned development storage only after stop, never the
+workspace. Automatic GC remains deferred.
+Nine owner tests and one real daemon cold-restoration test pass. The latter
+proves passive inspection and exact dependency capture after petname rebinding.
+The Podman runner now composes the same native scopes, Shell spawner, inode-owned
+allocation store and managed network-only listener. The portable recipe and
+private runner/controller guards live with Shell, not in a backend-specific
+session contract. Provisioning returns an inert controller. Acquiring a scope,
+projecting the exact workspace Mount over 9P and opening public egress belong to
+explicit open. Stop reaches pending acquisitions outside their queue and waits
+for original native cleanup before unmounting.
+Only the native `home` child is bound writable at `/home/node`; Cargo/Rustup and
+build output use it. The workspace is a separate projection. The Podman operator
+maps uid/gid 1000 with `keep-id`, preserving host ownership without chowning
+shared storage; the attested hosted-policy path is unchanged. No scratch mount,
+inference grant, Secret, host path or Podman controller reaches Shell.
+The runner's five tests and nearest daemon/native lifecycle suites pass 79 tests.
+Types and ESLint pass. Live Podman identity/network and installation persistence
+are still unverified; preset integration and Tokyo acceptance remain pending.
 No admitted inbox command or inference is replayed to discover its result.
 The delegation registry's closed-ask and unsolicited-sender routing remains
 process-local; published claimed-reply receipts prevent their replay, but an

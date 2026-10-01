@@ -17,6 +17,7 @@
   "type": "module",
   "main": "src/hosted-backend.js",
   "exports": {
+    "./environment-runner.js": "./src/environment-runner.js",
     ".": "./src/hosted-backend.js",
     "./account.js": "./src/account.js",
     "./account-bindings.js": "./src/account-bindings.js",
@@ -99,6 +100,7 @@
     "@endo/errors": "workspace:^",
     "@endo/eventual-send": "workspace:^",
     "@endo/exo": "workspace:^",
+    "@endo/exo-shell": "workspace:^",
     "@endo/exo-stream": "workspace:^",
     "@endo/far": "workspace:^",
     "@endo/init": "workspace:^",

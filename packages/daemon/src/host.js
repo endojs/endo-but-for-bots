@@ -23,6 +23,7 @@ import {
 } from '@endo/exo-git';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
+import { assertEnvironmentRecipe } from '@endo/exo-shell/environment-interfaces.js';
 import { cancelPendingIterator } from './cancelable-iterator.js';
 import {
   assertPetName,
@@ -314,6 +315,7 @@ harden(normalizeHttpClientPolicy);
  * @param {DaemonCore['formulateSubMount']} args.formulateSubMount
  * @param {DaemonCore['formulateGit']} args.formulateGit
  * @param {DaemonCore['formulateShell']} args.formulateShell
+ * @param {DaemonCore['formulateEnvironment']} args.formulateEnvironment
  * @param {DaemonCore['formulateHttpClient']} args.formulateHttpClient
  * @param {(client: unknown) => unknown} args.getHttpClientControlForClient
  *   Host-private resolver from a daemon-minted `HttpClient` cap to its
@@ -369,6 +371,7 @@ export const makeHostMaker = ({
   formulateSubMount,
   formulateGit,
   formulateShell,
+  formulateEnvironment,
   formulateHttpClient,
   getHttpClientControlForClient,
   formulateGitCredential,
@@ -1413,6 +1416,50 @@ export const makeHostMaker = ({
       );
 
       const { value } = await formulateShell(mountId, normalizedPolicy, tasks);
+      return value;
+    };
+
+    /** @type {EndoHost['provideEnvironment']} */
+    const provideEnvironment = async (
+      runner,
+      workspace,
+      adminName,
+      shellName,
+      recipe,
+    ) => {
+      assertEnvironmentRecipe(recipe);
+      const adminPath = petNamePathFrom(adminName).namePath;
+      const shellPath = petNamePathFrom(shellName).namePath;
+      if (
+        JSON.stringify(adminPath) === JSON.stringify(shellPath) ||
+        (await E(directory).has(...adminPath)) ||
+        (await E(directory).has(...shellPath))
+      ) {
+        throw makeError(X`Environment names are already bound or identical`);
+      }
+      const runnerId = getIdForRef(runner);
+      const workspaceId = getIdForRef(workspace);
+      if (runnerId === undefined || workspaceId === undefined)
+        throw makeError(
+          X`Environment dependencies require retained daemon identities`,
+        );
+      const backing = getMountBacking(workspace);
+      if (backing?.readOnly)
+        throw makeError(X`Environment requires a writable workspace`);
+      const tasks =
+        /** @type {DeferredTasks<import('./types.js').EnvironmentDeferredTaskParams>} */ (
+          makeDeferredTasks()
+        );
+      tasks.push(async ids => {
+        await E(directory).storeIdentifier(adminPath, ids.adminId);
+        await E(directory).storeIdentifier(shellPath, ids.shellId);
+      });
+      const { value } = await formulateEnvironment(
+        runnerId,
+        workspaceId,
+        recipe,
+        tasks,
+      );
       return value;
     };
 
@@ -3128,6 +3175,7 @@ export const makeHostMaker = ({
       provideSubMount,
       provideGit,
       provideShell,
+      provideEnvironment,
       provideHttpClient,
       getHttpClientControl,
       provideGitRemote,
