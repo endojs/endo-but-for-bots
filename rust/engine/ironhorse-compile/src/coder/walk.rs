@@ -113,10 +113,13 @@ enum Resume<'n> {
         end_target: usize,
         tail: bool,
     },
-    /// `fxChainNodeCode`: place the short-circuit target, restore the outer.
-    Chain { target: usize, saved: Option<usize> },
-    /// `fxOptionNodeCode`: branch to the chain's target.
-    Option,
+    /// `fxChainNodeCode`: place the short-circuit target, restore the outer
+    /// chain.
+    Chain(SavedChain),
+    /// `fxOptionNodeCode`: branch to the chain's target, or to a landing
+    /// that balances the stack first. The level is the link's, one above
+    /// where its base started.
+    Option(i32),
     /// `fxMemberNodeCode`, after the object.
     Member(&'n Node),
     /// `fxPrivateMemberNodeCode`, after the reference.
@@ -174,8 +177,8 @@ enum Resume<'n> {
         flag: i32,
         second: bool,
     },
-    /// `fxChainNodeCodeThis`: place the target, restore the outer one.
-    ChainThis { target: usize, saved: Option<usize> },
+    /// `fxChainNodeCodeThis`: place the target, restore the outer chain.
+    ChainThis(SavedChain),
     /// `fxOptionNodeCodeThis`: drop the receiver of a nullish base.
     OptionThis {
         swap_target: usize,
@@ -390,19 +393,17 @@ impl Coder<'_, '_> {
                 )
             }
             Chain => {
-                // The saved outer chain target is restored: chains can nest
-                // through call arguments.
-                let saved = self.chain_target;
-                let target = self.create_target();
-                self.chain_target = Some(target);
-                (
-                    Resume::Chain { target, saved },
-                    Step::Code(&node.children[0]),
-                )
+                // The saved outer chain is restored: chains can nest through
+                // call arguments.
+                let saved = self.enter_chain(self.stack_level + 1);
+                (Resume::Chain(saved), Step::Code(&node.children[0]))
             }
             Option => {
                 self.tail = tail;
-                (Resume::Option, Step::Code(&node.children[0]))
+                (
+                    Resume::Option(self.stack_level + 1),
+                    Step::Code(&node.children[0]),
+                )
             }
             Member => (Resume::Member(node), Step::Code(&node.children[0])),
             PrivateMember => (Resume::PrivateMember(node), Step::Code(&node.children[1])),
@@ -531,15 +532,17 @@ impl Coder<'_, '_> {
             // base is nullish, not fall through to the plain-value fallback
             // (which would drop the receiver dance).
             Token::Chain => {
-                let saved = self.chain_target;
-                let target = self.create_target();
-                self.chain_target = Some(target);
-                stack.push(Resume::ChainThis { target, saved });
+                let saved = self.enter_chain(self.stack_level + 2);
+                stack.push(Resume::ChainThis(saved));
                 Step::This(&node.children[0], flag)
             }
+            // While the callee is coded, this call's swap path is the
+            // landing pad of a short-circuit inside it that leaves the same
+            // receiver/value pair (see `code_option_this_branch`).
             Token::Option => {
                 let swap_target = self.create_target();
                 let skip_target = self.create_target();
+                self.chain_pads.push((swap_target, self.stack_level + 2));
                 stack.push(Resume::OptionThis {
                     swap_target,
                     skip_target,
@@ -774,14 +777,12 @@ impl Coder<'_, '_> {
                 stack.push(Resume::End(end_target));
                 Step::Code(&node.children[2])
             }
-            Resume::Chain { target, saved } => {
-                self.place_target(0, target);
-                self.chain_target = saved;
+            Resume::Chain(saved) => {
+                self.leave_chain(saved);
                 Step::Up
             }
-            Resume::Option => {
-                let target = self.chain_target.expect("optional `?.` outside a chain");
-                self.add_branch(0, XS_CODE_BRANCH_CHAIN_1, target);
+            Resume::Option(level) => {
+                self.code_option_branch(level);
                 Step::Up
             }
             Resume::Member(node) => {
@@ -961,11 +962,10 @@ impl Coder<'_, '_> {
                 *result = flag;
                 Step::Up
             }
-            Resume::ChainThis { target, saved } => {
+            Resume::ChainThis(saved) => {
                 // The receiver-setup result of the chain's own reference
                 // stays the walk's result.
-                self.place_target(0, target);
-                self.chain_target = saved;
+                self.leave_chain(saved);
                 Step::Up
             }
             Resume::OptionThis {
@@ -976,17 +976,135 @@ impl Coder<'_, '_> {
                 // nullish base must drop the receiver (`SWAP`/`POP`) before
                 // short-circuiting the whole chain to `undefined`; a present
                 // base skips that dance and continues the call.
-                let chain_target = self.chain_target.expect("optional `?.` outside a chain");
-                self.add_branch(0, XS_CODE_BRANCH_CHAIN_1, swap_target);
-                self.add_branch(1, XS_CODE_BRANCH_1, skip_target);
-                self.place_target(0, swap_target);
-                self.add_byte(0, XS_CODE_SWAP);
-                self.add_byte(-1, XS_CODE_POP);
-                self.add_branch(0, XS_CODE_BRANCH_1, chain_target);
-                self.place_target(0, skip_target);
+                let (_, pair_level) = self.chain_pads.pop().expect("this call's pad");
+                self.code_option_this_branch(swap_target, skip_target, pair_level);
                 Step::Up
             }
         }
+    }
+}
+
+/// An outer chain, saved while a nested one is coded: its target, its
+/// landing level and the floor of its pads.
+type SavedChain = (Option<usize>, i32, usize);
+
+/// The optional-chain landings. XS sends every `?.` short-circuit of a chain
+/// to one target, whatever the stack holds at the branch; these keep each
+/// landing balanced. Every level is taken where its node starts, never from
+/// `stack_level` after a base: that is XS's linear count, which runs high
+/// after a template's `TO_STRING`, a spread, `??=` and other constructs
+/// whose stack effect XS overcounts for its frame size.
+impl Coder<'_, '_> {
+    /// Install a chain whose short-circuits land at `level`, with no pads of
+    /// an outer chain: a parenthesized chain ends where its parentheses do.
+    /// The outer chain's pads stay on the stack, below the new floor.
+    fn enter_chain(&mut self, level: i32) -> SavedChain {
+        let target = self.create_target();
+        (
+            self.chain_target.replace(target),
+            std::mem::replace(&mut self.chain_level, level),
+            std::mem::replace(&mut self.chain_pads_floor, self.chain_pads.len()),
+        )
+    }
+
+    /// Place the chain's target and restore the outer chain. Every pad the
+    /// chain pushed was popped by the optional call that pushed it.
+    fn leave_chain(&mut self, saved: SavedChain) {
+        let target = self.chain_target.expect("inside a chain");
+        self.place_target(0, target);
+        debug_assert_eq!(self.chain_pads.len(), self.chain_pads_floor);
+        (self.chain_target, self.chain_level, self.chain_pads_floor) = saved;
+    }
+
+    /// Where a short-circuit taken with the stack at `level` lands without
+    /// adjustment: the chain's target, or the pad of an enclosing optional
+    /// call that expects that level.
+    fn chain_landing(&self, level: i32) -> Option<usize> {
+        if level == self.chain_level {
+            return self.chain_target;
+        }
+        self.chain_pads[self.chain_pads_floor..]
+            .iter()
+            .rev()
+            .find(|&&(_, pad_level)| pad_level == level)
+            .map(|&(pad, _)| pad)
+    }
+
+    /// From a short-circuit at `level`, with the nullish value (now
+    /// `undefined`) on top, reach the chain's level and branch to its
+    /// target: drop what lies beneath the value, or push `undefined` for a
+    /// receiver/value pair. Returns the linear stack delta the ops add.
+    fn code_chain_adjust(&mut self, level: i32) -> i32 {
+        let mut delta = 0;
+        let mut level = level;
+        while level > self.chain_level {
+            self.add_byte(0, XS_CODE_SWAP);
+            self.add_byte(-1, XS_CODE_POP);
+            delta -= 1;
+            level -= 1;
+        }
+        while level < self.chain_level {
+            self.add_byte(1, XS_CODE_UNDEFINED);
+            delta += 1;
+            level += 1;
+        }
+        let target = self.chain_target.expect("inside a chain");
+        self.add_branch(0, XS_CODE_BRANCH_1, target);
+        delta
+    }
+
+    /// `fxOptionNodeCode`'s short-circuit, for a link at `level`: branch
+    /// (`BRANCH_CHAIN`, taken exactly when the base is `null`/`undefined`,
+    /// leaving `undefined` as the result) to the landing for that level.
+    ///
+    /// A link whose level matches no landing (`(a?.b)()`, where the call
+    /// expects a receiver/value pair) branches to its own pad that balances
+    /// the stack first. XS branches straight to the chain's target there and
+    /// leaves the call a slot short. Out of line, so the landing's locals do
+    /// not widen the walk's frame.
+    #[inline(never)]
+    fn code_option_branch(&mut self, level: i32) {
+        if let Some(target) = self.chain_landing(level) {
+            self.add_branch(0, XS_CODE_BRANCH_CHAIN_1, target);
+            return;
+        }
+        let pad = self.create_target();
+        let skip = self.create_target();
+        self.add_branch(0, XS_CODE_BRANCH_CHAIN_1, pad);
+        self.add_branch(0, XS_CODE_BRANCH_1, skip);
+        self.place_target(0, pad);
+        let delta = self.code_chain_adjust(level);
+        self.place_target(-delta, skip);
+    }
+
+    /// `fxOptionNodeCodeThis`'s short-circuit. The callee's receiver/value
+    /// pair is on the stack, at `pair_level`, taken where the callee
+    /// started. A nullish base drops the receiver (`SWAP`/`POP`) before
+    /// short-circuiting; a present base skips that and continues the call.
+    ///
+    /// While the callee was coded, the swap path was the landing pad of a
+    /// short-circuit inside it that leaves the same pair: the base of
+    /// `a?.b()?.()`'s `a?.b()`, under the receiver this call pushed. From
+    /// the swap path, a level that still matches no landing (`f?.()?.()`,
+    /// one receiver per call) is balanced before the branch, off the path
+    /// a present base takes.
+    #[inline(never)]
+    fn code_option_this_branch(&mut self, swap_target: usize, skip_target: usize, pair_level: i32) {
+        self.add_branch(0, XS_CODE_BRANCH_CHAIN_1, swap_target);
+        self.add_branch(1, XS_CODE_BRANCH_1, skip_target);
+        self.place_target(0, swap_target);
+        self.add_byte(0, XS_CODE_SWAP);
+        self.add_byte(-1, XS_CODE_POP);
+        // The `POP` dropped the receiver, so the value sits at
+        // `pair_level - 1`.
+        let delta = match self.chain_landing(pair_level - 1) {
+            Some(target) => {
+                self.add_branch(0, XS_CODE_BRANCH_1, target);
+                0
+            }
+            None => self.code_chain_adjust(pair_level - 1),
+        };
+        self.place_target(-delta, skip_target);
     }
 }
 
