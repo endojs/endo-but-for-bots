@@ -84,6 +84,9 @@ export type PassByRef =
  *     remote interaction.
  *   * As a special case to support system observability, error objects are
  *     Passable (PassStyle 'error').
+ *   * SturdyRefs (PassStyle 'sturdyRef') are Passable by identity, like
+ *     PassableCaps, but are not PassableCaps: marshal has no slot
+ *     representation for them yet.
  *
  * A Passable is essentially a pass-by-copy superstructure with a
  * pass-by-reference
@@ -93,7 +96,7 @@ export type PassByRef =
 export type Passable<
   PC extends PassableCap = PassableCap,
   E extends Error = Error,
-> = void | Atom | Container<PC, E> | PC | E;
+> = void | Atom | Container<PC, E> | PC | E | SturdyRefObject;
 
 export type Container<PC extends PassableCap, E extends Error> =
   | CopyArrayInterface<PC, E>
@@ -194,7 +197,8 @@ export type RemotableMethodName = PropertyKey;
  * constructed with.
  *
  * This is the same shape as the `SturdyRef` type of `@endo/sturdyref`, which
- * pass-style cannot import without a dependency cycle. Keep the two in step.
+ * pass-style cannot import without a dependency cycle. `types.test-d.ts`
+ * checks that the two stay in step.
  */
 export interface SturdyRefObject {
   readonly [Symbol.toStringTag]: 'SturdyRef';
