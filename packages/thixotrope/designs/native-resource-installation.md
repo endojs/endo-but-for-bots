@@ -7,18 +7,19 @@ This note records the installation contract behind it: what identifies an instal
 host drives it to completion or removal across interruption, and what the Ironhorse engine
 required of the source transfer.
 
-An operator installs a trusted directory into the selected daemon's workspace inventory with
+An operator installs a trusted directory into the selected workspace's inventory with
 `thix install-native STATE NAME DIRECTORY`.
 Each installation bundles its durable module and evaluates it once in a dedicated manager vat;
-the workspace retains the installation record and the public inventory reference.
+the registry vat retains the installation record, the host its index entry, and the workspace the
+public inventory reference.
 The ephemeral module is bundled at installation as well, in the compartment mapper's CommonJS
 form, and stored in the state directory under its digest; a separate Node process loads the
 stored bundle, owns its native APIs and exposes only its root over the existing OCapN pipe
 protocol.
 The primary daemon never imports or executes it.
 
-The durable factory is synchronous and receives `{adapters, makeKeeper, makeManager}`, with the
-guest prelude in scope as globals.
+The durable factory is synchronous and receives `{adapters, makeKeeper, makeManager}` together with
+whatever the installation was granted or provided, with the guest prelude in scope as globals.
 It returns `{facet, lifecycle}`, both remotables; `src/native/contract.js` states the contract as
 types.
 Installation publishes the lifecycle facet privately for the manager's own notices and places
@@ -32,14 +33,17 @@ The daemon supplies generic process launch, reference routing, retirement and sh
 A native process is a transient hub session with a fresh identity, not a replaying worker: process
 exit permanently breaks that incarnation's references, its inputs are never replayed, and pipe
 loss terminates the process so its OS resources are released.
-The manager creates a successor on its next adapter-using operation or at daemon startup, and
-reconstructs only declared state; it does not restart an adapter autonomously after exit.
+The manager creates a successor on its next adapter-using operation, at daemon startup, or when the
+host reports the adapter's own exit, and reconstructs only declared state; nothing pending is
+replayed into it.
 
 ## Installation identity and compatibility
 
-A state directory selects the daemon's existing single workspace.
-An installation's identity is its inventory name together with a digest over the pair of bundle
-digests, the durable module's and the ephemeral module's.
+A state directory serves many workspaces, and an installation belongs to the one that asked for it:
+the registry keys it by workspace and name, so one directory installed from two workspaces is two
+installations, each with a manager vat of its own.
+An installation's identity is its workspace and inventory name together with a digest over the pair
+of bundle digests, the durable module's and the ephemeral module's.
 Each bundle freezes what its module imports, so a dependency's change is a change of the bundle;
 the directory's path is not part of the identity, and the same modules at another path are the
 same installation.
@@ -104,7 +108,7 @@ removed, and none is made, until the state directory is replaced.
 
 Removal is the registry's to drive, in the opposite order.
 The manager vat is retired first, which closes the native processes it launched (each launcher is
-described by the manager that owns it), withdraws its start notice and drops the host rows keyed
+bound to the manager that owns it), withdraws its start notice and drops the host rows keyed
 by it; only then does the registry forget the name, taking the facet out of the inventory if the
 inventory still holds it, and the host its index entry.
 A removal interrupted between the steps resumes where it stopped; the reverse order could leave a

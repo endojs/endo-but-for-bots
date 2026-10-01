@@ -19,10 +19,25 @@ import { serveThixotrope } from '../src/control/supervisor.js';
 import { connectLocalControl } from '../src/control/local-control.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { describeNativeResource } from '../src/native/describe-resource.js';
+import { makeLogPowers } from '../src/platform/logging.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
 import { makeFsStore } from '../src/store/store-fs.js';
 
 const powers = makeNodePowers();
+/** The supervisor's diagnostics, for what a start says of its socket. */
+/** @type {string[]} */
+const diagnostics = [];
+const logged = harden({
+  ...powers,
+  logging: makeLogPowers({
+    log: (...args) => powers.logging.log(...args),
+    info: () => {},
+    error: (...args) => {
+      diagnostics.push(args.map(String).join(' '));
+      powers.logging.error(...args);
+    },
+  }),
+});
 
 /** @import { ExecutionContext } from 'ava' */
 
@@ -33,7 +48,7 @@ const powers = makeNodePowers();
  * @param {string} path
  */
 const serve = async (t, path) => {
-  const supervisor = await serveThixotrope(powers, path, {
+  const supervisor = await serveThixotrope(logged, path, {
     engine: harden({
       ...makePeerJournalReplayEngine(powers),
       acquireStore: async () => async () => {},
@@ -544,7 +559,14 @@ test.serial(
       ...workerStore.getMeta(),
       failure: 'halted for the test',
     });
+    const said = diagnostics.length;
     host = await serve(t, path);
+    t.true(
+      diagnostics
+        .slice(said)
+        .some(line => line.includes('control socket served by the host')),
+      'the control socket cannot be provided, so the host listens and says so',
+    );
     const listed = await host.client.call('installations');
     t.deepEqual(
       listed.map((/** @type {{name: string}} */ entry) => entry.name).sort(),

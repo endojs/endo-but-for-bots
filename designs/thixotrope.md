@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-07-16 |
-| **Updated** | 2026-09-30 |
+| **Updated** | 2026-10-01 |
 | **Author** | Aaron Davis (prompted) |
 | **Status** | In Progress |
 
@@ -79,13 +79,15 @@ One word for one thing, throughout the code, the README and this document:
 | vat | One guest heap behind one OCapN endpoint, run by a worker. A **durable** vat has a heap image and journal and survives sleep and restart; an **ephemeral** vat or worker has no recovery baseline and is discarded at startup. |
 | session | A logical protocol relationship in the hub, with reference tables, answer routes and lifecycle; never a socket. A **durable session** belongs to a worker, a remote peer or the host endpoint itself and outlives sockets, processes and the daemon. A **transient session** (`transient:` key prefix) belongs to a transient client or a native adapter process and is discarded at startup. |
 | transient client | A disposable host-side OCapN client with a transient session, for embedders; `daemon.openTransientClient()`. |
-| resource | A host capability with a durable description, reconstructed through a registered factory at the host endpoint and retired when its meaning ends (`makeResource`, `retireResource`): introductions, worker facades, adapter launchers. |
+| resource | A host capability bound to a worker, a key, both or neither, reconstructed through a registered factory at the host endpoint and retired when its meaning ends or with the worker it is bound to (`makeResource`, `retireResource`): introductions, worker facades, adapter launchers. |
 | native resource | A directory with `durable.js` and `ephemeral.js`, installed by name; its **manager** runs the durable module in a dedicated vat and its **adapter** runs the ephemeral module in a Node process. |
 | manager | The durable half of a native resource: keeps desired registrations in its heap, holds one adapter incarnation through a **keeper**, and is notified at every start. |
 | adapter | The ephemeral half of a native resource: one incarnation per Node process, restored from the manager's desired state; the only sense of the word in this package's code and documents. Platform ports have implementations, not adapters. |
 | registration | One desired entry a manager keeps under a key, and the **handle** a caller holds for it, with `status()` and `close()`. The public object a native resource installs into the inventory is its **facet**. |
 | subscription | A listener on an observable map. A **durable** subscription is a guest's and survives restart; an **ephemeral** subscription is a view's, bridged by the running supervisor, and is discarded at restart. |
-| installation | One name in the registry: an application or a native resource, with its code digest, grant mapping, allocation key, vat and outcome. |
+| workspace | One user's vat in a state directory, allocated under a key derived from its name, with an inventory and an address book of its own and a mailbox provided to it in a vat of its own; `serve` makes `default`, and a control connection speaks for one at a time. The hub, the registry, the clock and the control socket are the daemon's, shared by every workspace. |
+| registry | The daemon's vat of installations, allocated under a fixed key and published under a name only the host knows, with the host's index, `installations.json`, beside it. |
+| installation | One name in the registry, in a workspace or the daemon's: an application or a native resource, with its code digest, grant mapping, allocation key, vat and outcome. |
 | grant | A user handing an inventory value to an installation under a power name. Host-provided services are **provided**, not granted. |
 | publication | A swissnum-to-capability mapping in the hub, fetched through the bootstrap; also a retention root. |
 | introduction | The exchange of contact inboxes that an **invitation** grants once; `invite`, `accept`, `revokeInvitation`. Dialling a peer is **connecting**, never introduction. |
@@ -231,12 +233,13 @@ establish hardware power-loss behavior.
 
 ## Host resources and persistence boundaries
 
-Host capabilities have durable descriptions and are reconstructed through registered factories.
+Host capabilities are bound to a worker, a key, both or neither, and are reconstructed through
+registered factories at the export slots their bindings were recorded against.
 A resource whose meaning has ended is retired: the host forgets its instance and nulls its recorded
 exports, so a restart seats tombstones for it rather than re-running the factory, and the guest's
 release of an export drops that export's record.
-Retiring a worker also releases the host state keyed by it, such as the adapter processes it
-launched.
+Retiring a worker retires every resource bound to it and releases the host state keyed by it, such
+as the adapter processes it launched.
 Host-origin nondeterministic results enter guest state as journaled protocol replies.
 The host endpoint treats unrecoverable pending host-operation answers as at-most-once obligations:
 restart rejects them rather than blindly repeating an external effect.
@@ -276,7 +279,8 @@ served is reachable, and withdrawing the registration releases it: a closed hand
 names the handler it was made with.
 
 `durable.js` exports a synchronous `make(powers)` that receives `{ adapters, makeKeeper,
-makeManager }`, with the guest prelude in scope, and returns `{ facet, lifecycle }`.
+makeManager }` together with whatever the installation was granted or provided, such as the control
+socket's `admin`, with the guest prelude in scope, and returns `{ facet, lifecycle }`.
 `makeManager({ label, same, replaces, describe })` writes the manager's bookkeeping once: it keeps
 the desired registrations, holds one adapter incarnation through a keeper, reconciles each
 registration against it, hands out per-registration handles whose `status()` and `close()` act only
@@ -318,7 +322,7 @@ Removing an installation retires the manager vat first, which closes the process
 withdraws its start notice, and only then forgets the name.
 
 HTTP is the first native resource a user installs, `resources/http`; the clock, `resources/clock`,
-is the first the supervisor installs itself, at every start.
+is the first the supervisor provides itself, at every start.
 Its facet registers a handler on a port with an optional origin policy and returns the handle;
 registration succeeds even when binding fails, and `status()` retries the binding and reports an
 inactive listener with its error, so a caller can always withdraw desired state.
@@ -332,8 +336,9 @@ invocation may complete after the HTTP client is gone.
 
 ### The clock
 
-The supervisor provides a clock as a native resource installed at every start, under `clock` in
-the inventory, so it has its own budget and failure lifetime and retiring it drops its alarms.
+The supervisor provides a clock as a native resource, one for the daemon, found again at every start
+and installed when missing, and hands its facet to every workspace under `clock`, so it has its own
+budget and failure lifetime and removing it drops every workspace's alarms.
 It exposes `at(deadline)`, `after(delay)` and `arm({ at } | { after })`, the last with a per-alarm
 cancellation capability, and no `now()`: a program that only needs a delay never learns the time.
 The deadlines live in the clock's manager vat, durable for free; the timers live in its adapter
@@ -360,8 +365,8 @@ administration over a private Unix socket; a connection speaks for one workspace
 The socket is served by a native resource the supervisor provides, whose adapter process listens
 and starts each client's session from a facet of the administration, which stays host code.
 Each workspace is a vat allocated under a key derived from its name, published as a retention root,
-with an inventory, a mailbox and an address book of its own; the hub, the registry and the clock are
-the daemon's.
+with an inventory and an address book of its own and a mailbox provided to it in a vat of its own;
+the hub, the registry, the clock and the control socket are the daemon's.
 Terminal attachment does not own the workspace lifetime.
 Disconnecting a terminal leaves guest state available for later attachment.
 The socket carries local administrative authority and is protected by the state directory's ownership
@@ -371,7 +376,8 @@ Workspace metadata carries a version the supervisor bumps whenever a guest closu
 shape; the current version includes dedicated native managers, the mail address book with its
 introductions resource, manager-owned adapter launchers, the one installation registry, the clock
 and mailbox provided through it, the clock as a native resource, the registry in a vat of the
-daemon's own with the host's index beside it, and the table of workspaces.
+daemon's own with the host's index beside it, the table of workspaces, and host resources bound to
+a worker and a key.
 Earlier workspaces require explicit migration or fresh state; startup rejects them before restoring
 workers, because their heap-persisted registry and clock closures cannot be replaced by loading
 new source.
@@ -521,7 +527,9 @@ Retirement cannot undo external effects already performed.
 The main integration examples each use two guest vats connected through comms: a caller invokes a
 counter in another vat, and a promise listener survives restart before receiving settlement.
 Tests also exercise process-crash boundaries, reference retention, quarantine, runtime ownership,
-workspace restart, installation, and ephemeral UI cleanup.
+workspace restart, many workspaces in one state directory, installation and its resumption, the
+host's own control listener when the registry vat is quarantined, the retirement of resources with
+their worker, and ephemeral UI cleanup.
 Process-crash tests do not establish hardware power-loss safety or exactly-once effects in an
 arbitrary external service.
 
