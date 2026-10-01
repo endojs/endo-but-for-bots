@@ -43,8 +43,10 @@ const mountsOf = argv => {
 
 test('the slice mounts only the system, the granted paths, and fresh tmpfs', t => {
   const argv = assembleBwrapArgv(baseOptions);
-  t.deepEqual(argv.slice(0, 6), [
+  t.deepEqual(argv.slice(0, 8), [
     '--unshare-all',
+    '--unshare-user',
+    '--disable-userns',
     '--share-net',
     '--die-with-parent',
     '--new-session',
@@ -170,4 +172,23 @@ test('makeBwrapSpawn runs the command under bwrap with the same options', t => {
   t.throws(() => slicedSpawn('/opt/claude/claude', [], {}), {
     message: /explicit cwd/,
   });
+});
+
+test('resolveSystemMounts surfaces a failure other than a missing path', async t => {
+  const fileSystem = /** @type {any} */ ({
+    lstat: async () => {
+      throw Object.assign(Error('EACCES'), { code: 'EACCES' });
+    },
+    readlink: async () => '',
+    realpath: async () => {
+      throw Object.assign(Error('ENOENT'), { code: 'ENOENT' });
+    },
+  });
+  await t.throwsAsync(() => resolveSystemMounts({ fileSystem }), {
+    message: 'EACCES',
+  });
+});
+
+test('the assembled argv is hardened', t => {
+  t.true(Object.isFrozen(assembleBwrapArgv(baseOptions)));
 });

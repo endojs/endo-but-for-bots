@@ -58,6 +58,16 @@ export const SYSTEM_ETC_ENTRIES = harden([
 export const DEFAULT_SCRATCH_HOME = '/home/endo-claude';
 
 /**
+ * Treat a missing path as absent; any other failure is not an absence.
+ *
+ * @param {any} error
+ */
+const absentIfMissing = error => {
+  if (error?.code === 'ENOENT') return undefined;
+  throw error;
+};
+
+/**
  * Resolve the system mounts present on this host. A top-level symlink such as
  * merged-usr `/bin -> usr/bin` is recreated as a symlink rather than bound.
  *
@@ -68,7 +78,7 @@ export const DEFAULT_SCRATCH_HOME = '/home/endo-claude';
 export const resolveSystemMounts = async ({ fileSystem = fs } = {}) => {
   const directoryMounts = await Promise.all(
     SYSTEM_DIRECTORIES.map(async directory => {
-      const stats = await fileSystem.lstat(directory).catch(() => undefined);
+      const stats = await fileSystem.lstat(directory).catch(absentIfMissing);
       if (stats === undefined) return [];
       /** @type {SliceMount} */
       const mount = stats.isSymbolicLink()
@@ -83,7 +93,7 @@ export const resolveSystemMounts = async ({ fileSystem = fs } = {}) => {
   );
   const etcMounts = await Promise.all(
     SYSTEM_ETC_ENTRIES.map(async entry => {
-      const real = await fileSystem.realpath(entry).catch(() => undefined);
+      const real = await fileSystem.realpath(entry).catch(absentIfMissing);
       /** @type {SliceMount[]} */
       const mounts =
         real === undefined
@@ -142,8 +152,12 @@ export const assembleBwrapArgv = ({
     assertAbsolute(value, label);
   }
   /** @type {string[]} */
+  // `--disable-userns` stops the confined tree from creating a nested user
+  // namespace to regain capabilities; it needs an explicit `--unshare-user`.
   const argv = [
     '--unshare-all',
+    '--unshare-user',
+    '--disable-userns',
     '--share-net',
     '--die-with-parent',
     '--new-session',
@@ -171,7 +185,7 @@ export const assembleBwrapArgv = ({
     command,
     ...commandArguments,
   );
-  return argv;
+  return harden(argv);
 };
 harden(assembleBwrapArgv);
 
