@@ -194,14 +194,8 @@ export type RemotableMethodName = PropertyKey;
 
 /**
  * A SturdyRef is passable, analogous to a presence: it has object identity and
- * no data. `passStyleOf` returns `'sturdyRef'` for a value that is frozen, has
- * no own properties, inherits directly from `SturdyRef.prototype`, and that
- * the global `SturdyRef.isSturdyRef` brand check accepts (see
- * `@endo/sturdyref`). What it refers to is known only to the handler it was
- * constructed with.
- *
- * This is the same shape as the `SturdyRef` type of `@endo/sturdyref`, which
- * pass-style cannot import without a dependency cycle. `types.test-d.ts`
+ * no data. This mirrors the `SturdyRef` type of `@endo/sturdyref`, which
+ * pass-style cannot import without a dependency cycle; `types.test-d.ts`
  * checks that the two stay in step.
  */
 export interface SturdyRefObject {
