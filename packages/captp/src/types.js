@@ -3,6 +3,20 @@ export {};
 /** @typedef {string} CapTPSlot */
 
 /**
+ * The coordinates a SturdyRef can be reconstructed from.
+ *
+ * `hints` is optional when passed to `makeSturdyRefFromData`, which defaults
+ * it to `{}`, so the data `getSturdyRefData` returns always has `hints`.
+ *
+ * @typedef {object} SturdyRefData
+ * @property {string} peerId the peer that holds the referent
+ * @property {string} objectId the peer's name for the referent, such as a
+ * swiss number
+ * @property {string} [network] the network the peer is reachable on
+ * @property {Record<string, string>} [hints] how to connect to the peer
+ */
+
+/**
  * @typedef {object} TrapImpl
  * @property {(target: any, args: Array<any>) => any} applyFunction function
  * application

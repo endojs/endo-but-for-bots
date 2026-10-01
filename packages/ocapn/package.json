@@ -78,6 +78,7 @@
     "c8": "catalog:dev",
     "cbor": "^10.0.12",
     "eslint": "catalog:dev",
+    "fast-check": "^4.10.2",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },

@@ -1,6 +1,7 @@
 /** @import {RemoteKit, Settler} from '@endo/eventual-send' */
 /** @import {CapData} from '@endo/marshal' */
-/** @import {CapTPSlot, TrapHost, TrapGuest, TrapImpl} from './types.js' */
+/** @import {SturdyRef} from '@endo/pass-style' */
+/** @import {CapTPSlot, SturdyRefData, TrapHost, TrapGuest, TrapImpl} from './types.js' */
 
 // Your app may need to `import '@endo/eventual-send/shim.js'` to get HandledPromise
 
@@ -226,6 +227,18 @@ export const makeDefaultCapTPImportExportTables = ({
  * @property {TrapHost} [trapHost] if specified, enable this CapTP (host) to serve
  * objects marked with makeTrapHandler to synchronous clients (guests)
  * @property {boolean} [gcImports] if true, aggressively garbage collect imports
+ * @property {string} [peerId] our name for the peer. If specified,
+ * `makeSturdyRefFromData` refuses data that names a different peer. This
+ * catches bookkeeping mistakes; it is not a security boundary, since
+ * `objectId` is the only access check. Without it, the secret goes to
+ * whichever peer this connection reaches.
+ * @property {(objectId: string) => unknown} [locateSturdyRef] if specified,
+ * serve the peer's SturdyRefs-from-data: when the peer enlivens a SturdyRef
+ * it constructed with `objectId`, answer with this hook's result (or a
+ * promise for it). Return `undefined` when `objectId` names nothing; the
+ * enliven then rejects without revealing `objectId`. Without the hook, every
+ * such enliven rejects. `objectId` is the only access check on this path, so
+ * it must be an unguessable bearer secret, like a swiss number.
  * @property {(MakeCapTPImportExportTablesOptions) => CapTPImportExportTables} [makeCapTPImportExportTables] provide external import/export tables
  * @property {(err: Error, errorId?: string) => void} [marshalSaveError]
  * forwarded to the underlying `makeMarshal` call. Invoked after the
@@ -238,6 +251,32 @@ export const makeDefaultCapTPImportExportTables = ({
  * privileged downstream layer to associate the decoded error with the
  * sender's locally captured context.
  */
+
+/**
+ * The entries of `record` if it is an object whose own properties are all
+ * enumerable string-keyed strings, or `undefined` otherwise. The entries are
+ * read once, so a getter or proxy cannot answer validation and copying
+ * differently.
+ *
+ * @param {unknown} record
+ * @returns {[string, string][] | undefined}
+ */
+const stringRecordEntries = record => {
+  if (typeof record !== 'object' || record === null) {
+    return undefined;
+  }
+  const entries = Object.entries(record);
+  if (
+    Reflect.ownKeys(record).length !== entries.length ||
+    !entries.every(([_key, value]) => typeof value === 'string')
+  ) {
+    return undefined;
+  }
+  return entries;
+};
+
+/** @type {readonly PropertyKey[]} */
+const sturdyRefDataKeys = harden(['peerId', 'objectId', 'network', 'hints']);
 
 /** @type {CapTPRejectionContext} */
 const PROMISE_REJECTION = harden({
@@ -294,6 +333,8 @@ export const makeCapTP = (
     makeCapTPImportExportTables = makeDefaultCapTPImportExportTables,
     marshalSaveError,
     marshalLoadError,
+    peerId,
+    locateSturdyRef,
   } = opts;
 
   // It's a hazard to have trapGuest and trapHost both enabled, as we may
@@ -480,7 +521,9 @@ export const makeCapTP = (
   // Used to construct slot names for questions.
   // In this version of CapTP we use strings for export/import slot names.
   // prefixed with 'p' if promises, 'q' for questions, 'o' for objects,
-  // and 't' for traps.;
+  // and 't' for traps.
+  // 'l-0' is a fixed singleton, not a `+`/`-` pair: it names the peer's
+  // SturdyRef locator (see `makeSturdyRefFromData`).
   let lastQuestionID = 0;
   let lastTrapID = 0;
   let lastSturdyRefID = 0;
@@ -815,7 +858,25 @@ export const makeCapTP = (
 
       const [prop, args] = decodeMethod(obj.method);
       let val;
-      if (answers.has(target)) {
+      if (target === 'l-0') {
+        // The peer is enlivening a SturdyRef it constructed from data. The
+        // target is our SturdyRef locator. Checked before `answers` so a
+        // peer-chosen question id cannot shadow it. The peer picks the
+        // method and arguments, so the locator answers only
+        // `locate(objectId)` with one string, and refuses anything else,
+        // including methods it inherits and property gets.
+        val =
+          prop === 'locate' &&
+          args &&
+          args.length === 1 &&
+          typeof args[0] === 'string'
+            ? sturdyRefLocator
+            : Promise.reject(
+                makeError(
+                  X`SturdyRef locator answers only locate(objectId), not ${q(prop)}`,
+                ),
+              );
+      } else if (answers.has(target)) {
         val = answers.get(target);
       } else if (typeof target === 'string' && target[0] === 's') {
         // The peer is enlivening a SturdyRef we exported. The target is
@@ -1114,6 +1175,108 @@ export const makeCapTP = (
     return far;
   };
 
+  // The locator we serve for the peer's SturdyRefs-from-data (see
+  // `makeSturdyRefFromData`). It answers only `locate`, and only through the
+  // `locateSturdyRef` hook the creator of this CapTP chose to supply.
+  const sturdyRefLocator = Far('SturdyRefLocator', {
+    /** @param {string} objectId */
+    locate: async objectId => {
+      // Intentionally do NOT include `objectId` in errors: it is the secret.
+      typeof objectId === 'string' ||
+        Fail`SturdyRef object id must be a string`;
+      if (locateSturdyRef === undefined) {
+        throw Fail`CapTP ${ourId} does not locate SturdyRefs from data`;
+      }
+      const located = await locateSturdyRef(objectId);
+      located !== undefined ||
+        Fail`CapTP ${ourId} has no SturdyRef for the requested object id`;
+      return located;
+    },
+  });
+
+  /**
+   * The data of each SturdyRef this connection constructed from data, so a
+   * persistence layer can record a ref and later reconstruct it.
+   *
+   * @type {WeakMap<object, SturdyRefData>}
+   */
+  const sturdyRefData = new WeakMap();
+
+  /**
+   * Construct a SturdyRef from its recorded coordinates. Enlivening it asks
+   * the peer's `locateSturdyRef` hook for `objectId` over this connection, so
+   * it fails once the connection is gone. `network` and `hints` are
+   * recorded for the layer that routes connections; a single CapTP
+   * connection does not interpret them.
+   *
+   * This is a closely-held capability of whoever made this CapTP: it is not
+   * reachable from the peer, from a SturdyRef, or from the realm.
+   *
+   * @param {SturdyRefData} data
+   * @returns {SturdyRef}
+   */
+  const makeSturdyRefFromData = data => {
+    (typeof data === 'object' && data !== null) ||
+      Fail`SturdyRef data must be an object`;
+    // Compare every own key, so a symbol-keyed or non-enumerable property
+    // cannot slip past the check.
+    const extra = Reflect.ownKeys(data).filter(
+      key => !sturdyRefDataKeys.includes(key),
+    );
+    extra.length === 0 || Fail`Unexpected SturdyRef data properties ${extra}`;
+    const {
+      peerId: dataPeerId,
+      objectId,
+      network = undefined,
+      hints = {},
+    } = data;
+    typeof dataPeerId === 'string' ||
+      Fail`SturdyRef peerId must be a string, not ${dataPeerId}`;
+    // Intentionally do NOT include `objectId` in errors: it is the secret.
+    typeof objectId === 'string' || Fail`SturdyRef objectId must be a string`;
+    network === undefined ||
+      typeof network === 'string' ||
+      Fail`SturdyRef network must be a string, not ${network}`;
+    const hintEntries =
+      stringRecordEntries(hints) ??
+      Fail`SturdyRef hints must be a record of strings, not ${hints}`;
+    peerId === undefined ||
+      dataPeerId === peerId ||
+      Fail`SturdyRef data names peer ${dataPeerId}, but CapTP ${ourId} connects to ${peerId}`;
+    /** @type {SturdyRefData} */
+    const recorded = harden({
+      peerId: dataPeerId,
+      objectId,
+      ...(network === undefined ? {} : { network }),
+      hints: Object.fromEntries(hintEntries),
+    });
+    const sturdyRef = /** @type {SturdyRef} */ (
+      makeSturdyRef(
+        harden({
+          enliven: () => {
+            const { promise: locator } =
+              /** @type {RemoteKit<{ locate: (objectId: string) => Promise<unknown> }>} */ (
+                makeRemoteKit('l-0')
+              );
+            return E(locator).locate(objectId);
+          },
+        }),
+      )
+    );
+    sturdyRefData.set(sturdyRef, recorded);
+    return sturdyRef;
+  };
+
+  /**
+   * The recorded data of a SturdyRef this connection constructed from data,
+   * or `undefined` for any other value.
+   *
+   * @param {unknown} sturdyRef
+   * @returns {SturdyRefData | undefined}
+   */
+  const getSturdyRefData = sturdyRef =>
+    sturdyRefData.get(/** @type {object} */ (sturdyRef));
+
   // Put together our return value.
   const rets = {
     abort,
@@ -1127,6 +1290,8 @@ export const makeCapTP = (
     makeTrapHandler,
     Trap: /** @type {import('./ts-types.js').Trap | undefined} */ (undefined),
     makeRemoteKit,
+    makeSturdyRefFromData,
+    getSturdyRefData,
   };
 
   if (trapGuest) {

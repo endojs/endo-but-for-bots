@@ -2,6 +2,8 @@ import '@endo/sturdyref/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
+import { isDeepStrictEqual } from 'node:util';
+import fc from 'fast-check';
 import { Far, Remotable } from '@endo/marshal';
 import { isPromise } from '@endo/promise-kit';
 import { passStyleOf } from '@endo/pass-style';
@@ -212,4 +214,327 @@ test('a CapTP SturdyRef enliven facet refuses other methods and arguments', asyn
     const reply = await call(questionID, [...method]);
     t.not(reply.exception, undefined, `${method[0]} is refused`);
   }
+});
+
+/**
+ * Connect two CapTP instances directly, with options for each side.
+ *
+ * @param {object} leftOptions
+ * @param {object} rightOptions
+ */
+const makeOptionsPair = (leftOptions, rightOptions) => {
+  /** @type {any} */
+  let right;
+  const left = makeCapTP(
+    'left',
+    obj => right.dispatch(obj),
+    undefined,
+    leftOptions,
+  );
+  right = makeCapTP(
+    'right',
+    obj => left.dispatch(obj),
+    undefined,
+    rightOptions,
+  );
+  return { left, right };
+};
+
+test('a SturdyRef constructed from data enlivens through the peer locator', async t => {
+  const target = Far('target', { hello: () => 'hi' });
+  const located = [];
+  const { left } = makeOptionsPair(
+    { peerId: 'right' },
+    {
+      locateSturdyRef: objectId => {
+        located.push(objectId);
+        return objectId === 'swiss-1' ? target : undefined;
+      },
+    },
+  );
+  const data = {
+    peerId: 'right',
+    objectId: 'swiss-1',
+    network: 'tcp-testing-only',
+    hints: { host: '127.0.0.1', port: '1234' },
+  };
+  const ref = left.makeSturdyRefFromData(data);
+  t.is(passStyleOf(ref), 'sturdyRef');
+  t.deepEqual(Reflect.ownKeys(ref), []);
+  t.deepEqual(left.getSturdyRefData(ref), data);
+  t.true(Object.isFrozen(left.getSturdyRefData(ref)));
+  t.is(left.getSturdyRefData(harden({})), undefined);
+
+  const live = await SturdyRef.enliven(ref);
+  t.is(await E(live).hello(), 'hi');
+  t.deepEqual(located, ['swiss-1']);
+
+  // The recorded data reconstructs an equivalent, distinct ref.
+  const again = left.makeSturdyRefFromData(data);
+  t.not(again, ref);
+  t.is(await E(await SturdyRef.enliven(again)).hello(), 'hi');
+});
+
+test('constructing a SturdyRef from data validates the data', t => {
+  const { left } = makeOptionsPair({ peerId: 'right' }, {});
+  t.throws(
+    () => left.makeSturdyRefFromData({ peerId: 'other', objectId: 'x' }),
+    {
+      message: /names peer "other"/,
+    },
+  );
+  t.throws(
+    () => left.makeSturdyRefFromData(/** @type {any} */ ({ peerId: 'right' })),
+    {
+      message: /objectId must be a string/,
+    },
+  );
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 'right', objectId: 'x', extra: 1 }),
+      ),
+    { message: /Unexpected SturdyRef data properties/ },
+  );
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'right',
+          objectId: 'x',
+          hints: { port: 1 },
+        }),
+      ),
+    { message: /hints must be a record of strings/ },
+  );
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'right',
+          objectId: 'x',
+          hints: { host: 'h', [Symbol('smuggled')]: {} },
+        }),
+      ),
+    { message: /hints must be a record of strings/ },
+  );
+  let reads = 0;
+  const fickle = {
+    get port() {
+      reads += 1;
+      return reads === 1 ? '1234' : {};
+    },
+  };
+  const ref = left.makeSturdyRefFromData({
+    peerId: 'right',
+    objectId: 'x',
+    hints: /** @type {any} */ (fickle),
+  });
+  t.is(reads, 1);
+  t.deepEqual(left.getSturdyRefData(ref)?.hints, { port: '1234' });
+});
+
+test('constructing a SturdyRef from data rejects non-objects and symbol keys', t => {
+  const { left } = makeOptionsPair({}, {});
+  t.throws(() => left.makeSturdyRefFromData(/** @type {any} */ (null)), {
+    message: /data must be an object/,
+  });
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'right',
+          objectId: 'x',
+          [Symbol('smuggled')]: true,
+        }),
+      ),
+    { message: /Unexpected SturdyRef data properties/ },
+  );
+});
+
+test('no SturdyRef data validation error reveals the objectId', t => {
+  const { left } = makeOptionsPair({ peerId: 'right' }, {});
+  // The prefix keeps a short generated id from matching ordinary message text.
+  const objectIds = fc.string({ minLength: 1 }).map(id => `swiss:${id}`);
+  /** @type {Record<string, unknown>[]} */
+  const invalid = [
+    { peerId: 'other' },
+    { peerId: 1 },
+    { peerId: 'right', extra: true },
+    { peerId: 'right', network: 1 },
+    { peerId: 'right', hints: null },
+    { peerId: 'right', hints: { port: 1 } },
+  ];
+  fc.assert(
+    fc.property(objectIds, fc.constantFrom(...invalid), (objectId, base) => {
+      let message = '';
+      try {
+        left.makeSturdyRefFromData(/** @type {any} */ ({ ...base, objectId }));
+      } catch (error) {
+        message = /** @type {Error} */ (error).message;
+      }
+      return message !== '' && !message.includes(objectId);
+    }),
+  );
+  t.pass();
+});
+
+test('a SturdyRef from data rejects when the peer locates nothing', async t => {
+  const { left } = makeOptionsPair({}, { locateSturdyRef: () => undefined });
+  const ref = left.makeSturdyRefFromData({
+    peerId: 'right',
+    objectId: 'secret-swiss',
+  });
+  const error = await t.throwsAsync(() => SturdyRef.enliven(ref), {
+    message: /has no SturdyRef for the requested object id/,
+  });
+  t.notRegex(error?.message ?? '', /secret-swiss/);
+});
+
+test('a peer-chosen question id cannot shadow the SturdyRef locator', async t => {
+  const target = Far('target', { hello: () => 'hi' });
+  const decoy = Far('decoy', { hello: () => 'decoy' });
+  /** @type {any} */
+  let right;
+  const left = makeCapTP('left', obj => right.dispatch(obj), undefined, {});
+  right = makeCapTP('right', obj => left.dispatch(obj), decoy, {
+    locateSturdyRef: objectId => (objectId === 'x' ? target : undefined),
+  });
+  // Ask a question whose id is the reserved locator slot, so its answer
+  // would shadow the locator if `answers` were consulted first.
+  right.dispatch({
+    type: 'CTP_CALL',
+    epoch: 0,
+    questionID: 'l-0',
+    target: 'o+0',
+    method: right.serialize(harden(['hello', []])),
+  });
+  const ref = left.makeSturdyRefFromData({ peerId: 'right', objectId: 'x' });
+  const live = await SturdyRef.enliven(ref);
+  t.is(await E(live).hello(), 'hi');
+});
+
+test('a SturdyRef from data rejects without a peer locator or connection', async t => {
+  const { left } = makeOptionsPair({}, {});
+  const ref = left.makeSturdyRefFromData({ peerId: 'right', objectId: 'x' });
+  await t.throwsAsync(() => SturdyRef.enliven(ref), {
+    message: /does not locate SturdyRefs from data/,
+  });
+
+  const { left: left2 } = makeOptionsPair(
+    {},
+    { locateSturdyRef: () => Far('t', {}) },
+  );
+  const ref2 = left2.makeSturdyRefFromData({ peerId: 'right', objectId: 'x' });
+  left2.abort(Error('gone'));
+  await t.throwsAsync(() => SturdyRef.enliven(ref2), { message: /gone/ });
+});
+
+test('constructing a SturdyRef from data checks each coordinate type', t => {
+  const { left } = makeOptionsPair({}, {});
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 1, objectId: 'x' }),
+      ),
+    { message: /peerId must be a string/ },
+  );
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 'right', objectId: 'x', network: 1 }),
+      ),
+    { message: /network must be a string/ },
+  );
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({ peerId: 'right', objectId: 'x', hints: null }),
+      ),
+    { message: /hints must be a record of strings/ },
+  );
+  // Without our own `peerId`, any peer name is accepted, and omitted
+  // coordinates are recorded as their defaults.
+  const ref = left.makeSturdyRefFromData({ peerId: 'anyone', objectId: 'x' });
+  t.deepEqual(left.getSturdyRefData(ref), {
+    peerId: 'anyone',
+    objectId: 'x',
+    hints: {},
+  });
+});
+
+test('the SturdyRef locator refuses a non-string object id', async t => {
+  const { left } = makeOptionsPair({}, { locateSturdyRef: () => Far('t', {}) });
+  const { promise } = left.makeRemoteKit('l-0');
+  const locator = /** @type {any} */ (promise);
+  await t.throwsAsync(() => E(locator).locate(1), {
+    message: /answers only locate\(objectId\)/,
+  });
+});
+
+test('the SturdyRef locator refuses other methods, arguments, and gets', async t => {
+  const target = Far('target', { hello: () => 'hi' });
+  const { left } = makeOptionsPair(
+    {},
+    { locateSturdyRef: objectId => (objectId === 'x' ? target : undefined) },
+  );
+  const { promise } = left.makeRemoteKit('l-0');
+  const locator = /** @type {any} */ (promise);
+  const located = await E(locator).locate('x');
+  t.is(await E(located).hello(), 'hi');
+
+  const refusal = { message: /answers only locate\(objectId\)/ };
+  await t.throwsAsync(() => E(locator).locate('x', 'extra'), refusal);
+  await t.throwsAsync(() => E(locator).locate(), refusal);
+  await t.throwsAsync(() => E(locator).toString(), refusal);
+  // eslint-disable-next-line no-prototype-builtins
+  await t.throwsAsync(() => E(locator).hasOwnProperty('locate'), refusal);
+  await t.throwsAsync(() => E.get(locator).locate, refusal);
+});
+
+test('constructing a SturdyRef from data refuses non-enumerable properties', t => {
+  const { left } = makeOptionsPair({}, {});
+  const data = { peerId: 'right', objectId: 'x' };
+  Object.defineProperty(data, 'smuggled', { value: true, enumerable: false });
+  t.throws(() => left.makeSturdyRefFromData(data), {
+    message: /Unexpected SturdyRef data properties/,
+  });
+  /** @type {Record<string, string>} */
+  const hints = {};
+  Object.defineProperty(hints, 'port', { value: '1', enumerable: false });
+  t.throws(
+    () => left.makeSturdyRefFromData({ peerId: 'right', objectId: 'x', hints }),
+    { message: /hints must be a record of strings/ },
+  );
+});
+
+test('a CapTP returns the data it constructed a SturdyRef from', t => {
+  const { left } = makeOptionsPair({}, {});
+  const sturdyRefDataArbitrary = fc
+    .tuple(
+      fc.string(),
+      fc.string(),
+      fc.option(fc.string(), { nil: undefined }),
+      fc.option(fc.array(fc.tuple(fc.string(), fc.string())), {
+        nil: undefined,
+      }),
+    )
+    .map(([peerId, objectId, network, hintEntries]) => ({
+      peerId,
+      objectId,
+      ...(network === undefined ? {} : { network }),
+      ...(hintEntries === undefined
+        ? {}
+        : { hints: Object.fromEntries(hintEntries) }),
+    }));
+  fc.assert(
+    fc.property(sturdyRefDataArbitrary, data =>
+      isDeepStrictEqual(
+        left.getSturdyRefData(left.makeSturdyRefFromData(data)),
+        // The recorded data always has hints.
+        { hints: {}, ...data },
+      ),
+    ),
+  );
+  t.pass();
 });
