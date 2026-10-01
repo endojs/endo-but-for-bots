@@ -29,6 +29,13 @@ an empty terminal output list. The Responses adapter now retains the complete
 indexed item snapshots, preserves opaque context and rejects unfinished observed
 items, duplicate native identities, missing or conflicting completions; it does
 not reconstruct arguments from deltas.
+The next live request reached `runCommand` and reported the provisioning error
+accurately: Unix sockets cannot fit beneath full native allocation identities.
+The runner now allocates a short private incarnation socket directory beneath
+the operator runtime root, and removes it non-recursively only after unmount
+acknowledgement. Failed removal retains its original owner for explicit retry.
+Recorded `ENDO_NINEP_*` settings now reach the existing mounter validator and
+helper program fields. Neither change moves or deletes durable HOME/workspace.
 Actual daemon testing also found that daemon exit does not run manager-owned
 environment cancellation hooks. Planned restart must explicitly acknowledge
 `admin.stop()` before stopping the daemon; exit alone leaves the active-intent

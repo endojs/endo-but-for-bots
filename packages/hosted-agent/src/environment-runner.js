@@ -1,6 +1,6 @@
 // @ts-check
 import { createHash } from 'node:crypto';
-import { lstat, mkdir } from 'node:fs/promises';
+import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
@@ -16,9 +16,11 @@ import { makeSandboxRuntime } from '@endo/sandbox/runtime.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
 import { makeOwnedNativeService } from '@endo/sandbox/owned-native-service.js';
 import { makeResourceRegistry } from '@endo/sandbox/resource-registry.js';
+import { assertPrivateDirectory } from '@endo/sandbox/private-directory.js';
 import { makeSandboxSpawner } from '@endo/sandbox/spawner.js';
 import { makeStateStorageOperations } from './session-state-storage.js';
 import { makeDefaultMounter } from './workspace-projection.js';
+import { readMounterEnv } from './session-plan.js';
 import { makePodmanProviderListenerRuntimeKit } from './provider-listener-runtime.js';
 import { makePublicEgress } from './public-egress.js';
 import {
@@ -36,7 +38,7 @@ const storageId = id => {
 /** A host-private child directory, never a guest-selected path or symlink. */
 /** @param {string} directory */
 const privateDirectory = async directory => {
-  await mkdir(directory, { mode: 0o700 });
+  await fs.mkdir(directory, { mode: 0o700 });
 };
 /** @param {string} directory */
 const retainedHome = async directory => {
@@ -45,7 +47,7 @@ const retainedHome = async directory => {
   } catch (error) {
     if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EEXIST')
       throw error;
-    const stat = await lstat(directory);
+    const stat = await fs.lstat(directory);
     (stat.isDirectory() && !stat.isSymbolicLink()) ||
       Fail`Invalid environment home`;
   }
@@ -118,6 +120,7 @@ export const makeEnvironmentRunnerKit = (
           let scope;
           let slice;
           let mounter;
+          let sockets;
           let worker;
           let egress;
           let forget = () => {};
@@ -159,6 +162,12 @@ export const makeEnvironmentRunnerKit = (
               // Native scope/listener acknowledgements precede unmount. Failure
               // keeps all original handles and the registry entry for retry.
               await mounter?.close();
+              if (sockets) {
+                // Non-recursive removal only after bridge/unmount ACK. Keep
+                // the original directory on failure; never sweep runtime roots.
+                await fs.rmdir(sockets);
+                sockets = undefined;
+              }
               forget();
             })().catch(error => {
               stopping = undefined;
@@ -186,14 +195,32 @@ export const makeEnvironmentRunnerKit = (
                   const state = await storage.prepareSessionDirectory(key);
                   assertOpen();
                   const home = path.join(state.directory, 'home');
-                  const sockets = path.join(state.directory, 'sockets');
                   await retainedHome(home);
-                  await retainedHome(sockets);
+                  // Socket lifetime is an incarnation, not durable HOME. The
+                  // allocation's full identity is too long for Unix sockets.
+                  const socketParent = await assertPrivateDirectory(
+                    env.XDG_RUNTIME_DIR,
+                    fs,
+                  );
+                  sockets = await fs.mkdtemp(
+                    path.join(socketParent, 'env-9p-'),
+                  );
                   assertOpen();
                   const workspace = await E(dependencies).get('workspace');
                   assertOpen();
                   mounter = makeMounter({
                     ...env,
+                    ...readMounterEnv(
+                      Object.fromEntries(
+                        [
+                          'NINEP_SUDO',
+                          'NINEP_MOUNT_PROGRAM',
+                          'NINEP_UMOUNT_PROGRAM',
+                        ]
+                          .filter(name => env[`ENDO_${name}`] !== undefined)
+                          .map(name => [name, env[`ENDO_${name}`]]),
+                      ),
+                    ),
                     XDG_RUNTIME_DIR: sockets,
                     NINEP_SOCKET_DIR: sockets,
                   });
@@ -338,7 +365,8 @@ const readConfig = env => {
   ['0', '1'].includes(publicInternet) ||
     Fail`Invalid environment network ceiling`;
   const runtime = readRuntimeConfig(env);
-  runtime.ownerId.length <= 56 || Fail`Environment owner is too long for its network scope`;
+  runtime.ownerId.length <= 56 ||
+    Fail`Environment owner is too long for its network scope`;
   return harden({
     ...runtime,
     imageRef: required('ENDO_ENVIRONMENT_IMAGE_REF'),
