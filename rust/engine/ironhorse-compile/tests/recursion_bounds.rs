@@ -462,17 +462,30 @@ fn chains_near_the_tree_depth_limit_compile_on_a_small_stack() {
     // with explicit stacks (STACK-DEPTH-REFACTOR.md D2), so no pass recurses
     // over its links: each of these compiles at or near the tree-depth limit
     // (a class body or a mixed chain spends some of its levels elsewhere) on a
-    // thread far smaller than one host frame per link would need.
+    // thread far smaller than one host frame per link would need. A chain
+    // that is one of the sweep's shapes takes its depth from the sweep's pin.
     let chains: [(&str, String); 16] = [
         ("binary", wrapped("1+", "1", "", 2045)),
         ("member", format!("a{}", ".b".repeat(2045))),
         ("computed", format!("a{}", "[0]".repeat(2045))),
         ("call", format!("f{}", "()".repeat(2044))),
-        ("method call", format!("a{}", ".b()".repeat(1022))),
+        (
+            "method call",
+            format!("a{}", ".b()".repeat(sweep_pin("call-then-member"))),
+        ),
         ("optional", format!("a{}", "?.b".repeat(1022))),
-        ("optional call", format!("a{}", "?.()".repeat(1022))),
+        (
+            "optional call",
+            format!("a{}", "?.()".repeat(sweep_pin("optional-call"))),
+        ),
         ("tagged template", format!("f{}", "``".repeat(2043))),
-        ("tagged substitution", format!("f{}", "`${1}`".repeat(2043))),
+        (
+            "tagged substitution",
+            format!(
+                "f{}",
+                "`${1}`".repeat(sweep_pin("tagged-with-substitution"))
+            ),
+        ),
         ("and", format!("a{}", " && a".repeat(2045))),
         ("or", format!("a{}", " || a".repeat(2045))),
         ("nullish", format!("a{}", " ?? a".repeat(2045))),

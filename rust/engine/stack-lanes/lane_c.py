@@ -422,13 +422,14 @@ def chains(wasm, names, problems, stack_kb=CHAIN_STACK_KB):
     chain and for the walkers the native's own recursion, the chains whose
     budget sets the ceiling. For the chain kinds it is whichever compiler
     pass recurses deepest over the tree, which is not always the counted
-    one: the folding productions are parsed by a loop, and the post-parse
-    `duplicate_proto_setter_line` walk recurses once per level of the
-    left-nested tree they build. A level is a list of wasm function indices,
-    exact where names are not (a generic's instantiations share a name). A
-    family whose trace does not repeat, or that fits the stack, reports
-    None; a host that cannot run one, or a run that times out, is a problem,
-    recorded and skipped."""
+    one: the folding productions are parsed by a loop, so a pass over the
+    left-nested tree they build can recurse deeper than the parse (before
+    D1b, the post-parse `duplicate_proto_setter_line` walk recursed once per
+    level of it). A level is a list of wasm function indices, exact where
+    names are not (a generic's instantiations share a name). A family whose
+    trace does not repeat, or that fits the stack, reports None; a host that
+    cannot run one, or a run that times out, is a problem, recorded and
+    skipped."""
     result = {}
     for kind in CHAIN_KINDS:
         result[kind] = {}
