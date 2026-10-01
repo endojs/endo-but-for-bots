@@ -235,7 +235,7 @@ pub(super) use ironhorse_meter::FUNCTION_LOCAL_METERING;
 
 /// The Function.prototype call/apply trampoline work specific to a callable
 /// Proxy receiver. The Proxy's own target/trap-sensitive `[[Call]]` costs are
-/// charged centrally by [`Interp::proxy_call`], so direct, bound, and abstract
+/// charged centrally by [`Interp::proxy_call_step`], so direct, bound, and abstract
 /// calls all see them and these helpers add only the syntactic trampoline.
 pub(super) use ironhorse_meter::CALLABLE_PROXY_DOT_TRAMPOLINE_METERING;
 

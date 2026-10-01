@@ -790,11 +790,15 @@ fn parser_and_collection_paths_keep_incremental_admission() {
 fn every_call_path_copies_a_frames_arguments_fallibly() {
     // The bound call, the Proxy call and construct, the bound native
     // construct and the host call each copy the frame's arguments before
-    // re-dispatching. Each goes through one fallible copy.
+    // re-dispatching. Each goes through one fallible copy, and the argument
+    // list a Proxy call's `apply` trap receives is reserved fallibly too.
     assert!(method("frame_arguments").contains("reserved_vec("));
+    assert!(method("proxy_run_step").contains("reserved_vec("));
+    assert!(!method("proxy_run_step").contains(".to_vec()"));
     for name in [
         "exec_run",
         "bound_call",
+        "proxy_run_call",
         "construct_bound_native",
         "call_host",
     ] {

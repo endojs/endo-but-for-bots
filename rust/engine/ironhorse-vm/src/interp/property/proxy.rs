@@ -1151,47 +1151,6 @@ impl Interp {
         Ok(trap_keys)
     }
 
-    /// `[[Call]]` (ECMA-262 10.5.12). A light frame of the native-recursion
-    /// budget, like the `mop_*` entries. The dispatch path's first Proxy layer
-    /// comes here; `invoke_value` takes every further layer as a turn of its
-    /// loop, charging each the same unit.
-    pub(in crate::interp) fn proxy_call(
-        &mut self,
-        code: &[u8],
-        proxy: crate::value::SlotIndex,
-        this: Slot,
-        args: &[Slot],
-    ) -> Result<Slot, Step> {
-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-            vm.proxy_call_inner(code, proxy, this, args)
-        })
-    }
-
-    pub(in crate::interp) fn proxy_call_inner(
-        &mut self,
-        code: &[u8],
-        proxy: crate::value::SlotIndex,
-        this: Slot,
-        args: &[Slot],
-    ) -> Result<Slot, Step> {
-        // The same layer as `proxy_call_step`, written out so the dispatch
-        // path's frame does not carry a `ProxyCall` between the step and the
-        // call; `invoke_value` takes any further Proxy layer as a turn.
-        let (target, handler) = self.proxy_target_handler(proxy, "apply")?;
-        let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
-        let trap = match self.proxy_trap(code, handler, "apply")? {
-            Some(t) => t,
-            None => {
-                self.charge_and_check(self.proxy_call_forward_metering(target))?;
-                return self.invoke_value(code, target_slot, this, args);
-            }
-        };
-        self.meter.tick_raw(PROXY_CALL_TRAP_METERING);
-        let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
-        let arg_array = self.array_from_slots(args);
-        self.invoke_value(code, trap, handler_slot, &[target_slot, this, arg_array])
-    }
-
     /// What forwarding `[[Call]]` to `target` costs, by the kind of callable
     /// it is.
     fn proxy_call_forward_metering(&self, target: crate::value::SlotIndex) -> u64 {
@@ -1249,7 +1208,7 @@ impl Interp {
     }
 
     /// `[[Construct]]` (ECMA-262 10.5.13). A light frame of the
-    /// native-recursion budget, like [`Self::proxy_call`].
+    /// native-recursion budget, like `[[Call]]` ([`Self::proxy_run_call`]).
     ///
     /// A Proxy has [[Construct]] only when its target does (ProxyCreate step
     /// 7), so `new` on one whose target is not a constructor throws before

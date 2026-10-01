@@ -716,7 +716,8 @@ enum ProxyStep<T> {
 /// What one Proxy layer of `[[Call]]` does: forward the call to its target
 /// with the same receiver and arguments, or call the `apply` trap with the
 /// handler as receiver and `(target, thisArgument, argumentsList)`. Either is
-/// a tail call, which `invoke_value` takes as its next turn.
+/// a tail call, which `invoke_value` takes as its next turn and `RUN` makes
+/// itself ([`Interp::proxy_run_call`]).
 enum ProxyCall {
     Forward(crate::value::SlotIndex),
     Trap {
@@ -1921,7 +1922,9 @@ struct CallerState {
     /// Native-recursion budget units this frame holds for the activation it
     /// replaces (STACK-DEPTH-REFACTOR.md §4.5): a call the dispatch loop runs
     /// in place, which the recursive shape ran in a nested `dispatch_at`,
-    /// charges that loop's [`HEAVY_FRAME_COST`] here. `Interp::leave_call`
+    /// charges that loop's [`HEAVY_FRAME_COST`] here, with any units its
+    /// caller charged around the call (a Proxy layer's light unit; see
+    /// `Interp::enter_in_place`). `Interp::leave_call`
     /// releases them when the frame is popped, and the dispatch loop that owns
     /// the frame releases them when it exits with the frame still on the call
     /// stack, so the depth is released where the nested loop released it.

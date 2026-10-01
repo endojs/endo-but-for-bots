@@ -3863,14 +3863,41 @@ fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
     );
 }
 
-/// The bound-call nest the in-place tests run: each level calls the next
-/// through `f.bind(…)()`, which `RUN` enters in the caller's dispatch loop
-/// (STACK-DEPTH-REFACTOR.md C1), and the innermost calls `bottom`.
-const IN_PLACE_NEST: &str =
-    "function f(n, bottom) { return n > 0 ? f.bind(null, n - 1, bottom)() : bottom(); }";
+/// The nests the in-place tests run, each level calling the next through a
+/// call `RUN` enters in the caller's dispatch loop (STACK-DEPTH-REFACTOR.md
+/// C1), and the innermost calling `bottom`: through a bound function, a
+/// Proxy that forwards to `f`, and a Proxy whose `apply` trap calls `f`.
+/// Each defines `wrap`, which gives a function the same kind of call, and
+/// comes with its ceiling and the depth the refusal one level past it
+/// reports.
+const IN_PLACE_NESTS: [(&str, &str, usize, usize); 3] = [
+    (
+        "bound",
+        "function f(n, bottom) { return n > 0 ? f.bind(null, n - 1, bottom)() : bottom(); } \
+         function wrap(w) { return w.bind(null); }",
+        127,
+        2049,
+    ),
+    (
+        "forward",
+        "function f(n, bottom) { return n > 0 ? fp(n - 1, bottom) : bottom(); } \
+         var fp = new Proxy(f, {}); \
+         function wrap(w) { return new Proxy(w, {}); }",
+        119,
+        2056,
+    ),
+    (
+        "trap",
+        "function f(n, bottom) { return n > 0 ? ft(n - 1, bottom) : bottom(); } \
+         var ft = new Proxy(function () {}, { apply: function (t, s, a) { return f(a[0], a[1]); } }); \
+         function wrap(w) { return new Proxy(function () {}, { apply: function () { return w(); } }); }",
+        119,
+        2056,
+    ),
+];
 
-fn in_place_machine(program: &str) -> (Interp, Vec<u8>) {
-    let source = format!("{IN_PLACE_NEST} {program}");
+fn in_place_machine(nest: &str, program: &str) -> (Interp, Vec<u8>) {
+    let source = format!("{nest} {program}");
     let (code, symbols) = ironhorse_compile::compile_atoms(&source).unwrap();
     let mut m = Interp::new();
     m.link_intrinsics(&crate::parse_symbols(&symbols));
@@ -3878,18 +3905,22 @@ fn in_place_machine(program: &str) -> (Interp, Vec<u8>) {
 }
 
 /// No charge outlives the crank: the depth is zero, the frames the halted
-/// activation retains hold none, and the next crank's bound nest completes at
-/// its ceiling and is refused one level past it, as with nested loops.
-fn assert_no_charge_survives(m: &mut Interp, kind: &str) {
-    assert_eq!(m.native_depth, 0, "{kind}: native depth after the crank");
+/// activation retains hold none, and the next crank's nest completes at its
+/// ceiling and is refused one level past it, as with nested loops.
+fn assert_no_charge_survives(m: &mut Interp, nest: &(&str, &str, usize, usize), kind: &str) {
+    let &(name, nest, ceiling, refused_at) = nest;
+    assert_eq!(
+        m.native_depth, 0,
+        "{name} {kind}: native depth after the crank"
+    );
     assert!(
         m.call_stack.iter().all(|frame| frame.held == 0),
-        "{kind}: a retained frame still holds units"
+        "{name} {kind}: a retained frame still holds units"
     );
     m.reattach_meter_host(Box::new(|_| true));
-    for (depth, completes) in [(127, true), (128, false)] {
+    for (depth, completes) in [(ceiling, true), (ceiling + 1, false)] {
         let (next, names) = ironhorse_compile::compile_atoms(&format!(
-            "{IN_PLACE_NEST} f({depth}, function () {{ return 'bottom'; }})"
+            "{nest} f({depth}, function () {{ return 'bottom'; }})"
         ))
         .unwrap();
         let next = m
@@ -3897,22 +3928,22 @@ fn assert_no_charge_survives(m: &mut Interp, kind: &str) {
             .unwrap();
         let out = m.run(&next);
         if completes {
-            assert!(out.completed, "{kind}: f({depth}): {:?}", out.halt);
-            assert_eq!(out.result, "bottom", "{kind}: f({depth})");
+            assert!(out.completed, "{name} {kind}: f({depth}): {:?}", out.halt);
+            assert_eq!(out.result, "bottom", "{name} {kind}: f({depth})");
         } else {
             assert!(
                 matches!(
                     out.halt,
-                    Halt::ReentryLimit {
-                        depth: 2049,
-                        limit: 2048
-                    }
+                    Halt::ReentryLimit { depth, limit: 2048 } if depth == refused_at
                 ),
-                "{kind}: f({depth}): {:?}",
+                "{name} {kind}: f({depth}): {:?}",
                 out.halt
             );
         }
-        assert_eq!(m.native_depth, 0, "{kind}: native depth after f({depth})");
+        assert_eq!(
+            m.native_depth, 0,
+            "{name} {kind}: native depth after f({depth})"
+        );
     }
 }
 
@@ -3928,81 +3959,155 @@ fn in_place_frames_release_their_charge_after_every_halt() {
         ("ReentryLimit", "f(200, function () { return 0; })"),
         ("Throw", "f(60, function () { throw new Error('bottom'); })"),
     ];
-    for (kind, program) in cases {
-        let (mut m, code) = in_place_machine(program);
-        if kind == "MeterAbort" {
-            let mut checks = 0;
-            m.arm_meter(
-                1,
-                Box::new(move |_| {
-                    checks += 1;
-                    checks < 400
-                }),
+    for nest in &IN_PLACE_NESTS {
+        for (kind, program) in cases {
+            let (mut m, code) = in_place_machine(nest.1, program);
+            if kind == "MeterAbort" {
+                let mut checks = 0;
+                m.arm_meter(
+                    1,
+                    Box::new(move |_| {
+                        checks += 1;
+                        checks < 400
+                    }),
+                );
+            }
+            let out = if kind == "StepLimit" {
+                m.run_bounded(&code, 200_000)
+            } else {
+                m.run(&code)
+            };
+            assert!(
+                format!("{:?}", out.halt).starts_with(kind),
+                "{} {kind}: {:?}",
+                nest.0,
+                out.halt
             );
+            assert!(
+                m.call_stack.len() > 50,
+                "{} {kind}: the halt must come from inside the in-place frames",
+                nest.0
+            );
+            assert_no_charge_survives(&mut m, nest, kind);
         }
-        let out = if kind == "StepLimit" {
-            m.run_bounded(&code, 200_000)
-        } else {
-            m.run(&code)
-        };
-        assert!(
-            format!("{:?}", out.halt).starts_with(kind),
-            "{kind}: {:?}",
-            out.halt
-        );
-        assert!(
-            m.call_stack.len() > 50,
-            "{kind}: the halt must come from inside the in-place frames"
-        );
-        assert_no_charge_survives(&mut m, kind);
     }
 }
 
 #[test]
 fn in_place_frames_release_their_charge_after_a_panic_or_heap_exhaustion() {
-    // A panic unwinds every native activation without the loops' releases:
-    // the generic handler zeroes the depth and the frames' units.
-    let (mut m, code) = in_place_machine("f(60, function () { while (true) {} })");
-    PANIC_AT_STEP.with(|step| step.set(Some(200_000)));
-    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.run(&code)));
-    PANIC_AT_STEP.with(|step| step.set(None));
-    assert!(panicked.is_err(), "the dispatch loop must panic");
-    assert!(
-        m.call_stack.len() > 50,
-        "the panic must come from inside the in-place frames"
-    );
-    assert_no_charge_survives(&mut m, "panic");
+    for nest in &IN_PLACE_NESTS {
+        // A panic unwinds every native activation without the loops'
+        // releases: the generic handler zeroes the depth and the frames'
+        // units.
+        let (mut m, code) = in_place_machine(nest.1, "f(60, function () { while (true) {} })");
+        PANIC_AT_STEP.with(|step| step.set(Some(200_000)));
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.run(&code)));
+        PANIC_AT_STEP.with(|step| step.set(None));
+        assert!(
+            panicked.is_err(),
+            "{}: the dispatch loop must panic",
+            nest.0
+        );
+        assert!(
+            m.call_stack.len() > 50,
+            "{}: the panic must come from inside the in-place frames",
+            nest.0
+        );
+        assert_no_charge_survives(&mut m, nest, "panic");
 
-    // So does heap exhaustion, which unwinds as a panic payload.
-    let (mut m, code) = in_place_machine("f(60, function () { var a = []; for (;;) a.push({}); })");
-    m.set_slot_ceiling(m.slots.capacity() + 2_000);
-    let out = m.run(&code);
-    m.set_slot_ceiling(u32::MAX);
-    assert!(matches!(out.halt, Halt::HeapExhausted), "{:?}", out.halt);
-    assert_no_charge_survives(&mut m, "HeapExhausted");
+        // So does heap exhaustion, which unwinds as a panic payload.
+        let (mut m, code) = in_place_machine(
+            nest.1,
+            "f(60, function () { var a = []; for (;;) a.push({}); })",
+        );
+        m.set_slot_ceiling(m.slots.capacity() + 2_000);
+        let out = m.run(&code);
+        m.set_slot_ceiling(u32::MAX);
+        assert!(
+            matches!(out.halt, Halt::HeapExhausted),
+            "{}: {:?}",
+            nest.0,
+            out.halt
+        );
+        assert_no_charge_survives(&mut m, nest, "HeapExhausted");
+    }
+}
+
+#[test]
+fn a_proxy_call_that_is_not_entered_in_place_releases_its_unit() {
+    // `RUN` charges a Proxy layer's unit before it looks up the trap. A
+    // revoked Proxy, a throwing `apply` getter and a trap that is not
+    // callable throw before any frame holds it; a native target or trap, a
+    // further Proxy and a bound trap go back to `RUN` to be called through
+    // `invoke_value`. Each gives the unit back, or 200 rounds leave the next
+    // nest no budget.
+    let (name, nest, ceiling, _) = IN_PLACE_NESTS[2];
+    for (setup, call) in [
+        (
+            "var r = Proxy.revocable(function () {}, {}); r.revoke(); var p = r.proxy;",
+            "p()",
+        ),
+        (
+            "var p = new Proxy(function () {}, { get apply() { throw 1; } });",
+            "p()",
+        ),
+        ("var p = new Proxy(function () {}, { apply: 1 });", "p()"),
+        ("var p = new Proxy(JSON.parse, {});", "p('{')"),
+        ("var p = new Proxy(JSON.parse, {});", "p('1')"),
+        (
+            "var p = new Proxy(function (f) { return f(); }, { apply: Reflect.apply });",
+            "p(function () { throw 2; })",
+        ),
+        (
+            "var p = new Proxy(new Proxy(function () {}, {}), {});",
+            "p()",
+        ),
+        (
+            "var p = new Proxy(function () {}, { apply: function () { throw 3; }.bind(null) });",
+            "p()",
+        ),
+    ] {
+        let (mut m, code) = in_place_machine(
+            nest,
+            &format!(
+                "{setup} for (var i = 0; i < 200; i++) {{ try {{ {call}; }} catch (e) {{}} }} \
+                 f({ceiling}, function () {{ return 'bottom'; }})"
+            ),
+        );
+        let out = m.run(&code);
+        assert!(out.completed, "{name} {setup}: {:?}", out.halt);
+        assert_eq!(out.result, "bottom", "{name} {setup}");
+        assert_eq!(m.native_depth, 0, "{name} {setup}");
+        assert_eq!(m.held_total, 0, "{name} {setup}");
+    }
 }
 
 #[test]
 fn a_walk_that_throws_past_in_place_frames_restores_only_its_own_charge() {
-    // Each throw from inside an explicit-stack walk, caught below the bound
-    // frame that called it, pops that frame inside the walk; the walk's
-    // restore must not charge its units again, or 200 rounds leave the next
-    // nest no budget (the C1 pre-commit review's regression).
-    for walk in [
-        "JSON.parse('{')",
-        "JSON.stringify({ toJSON: function () { throw 1; } })",
-        "JSON.parse('{\"a\":[1]}', function (k, w) { if (k === 'a') throw 2; return w; })",
-        "[[1]].flatMap(function () { throw 3; })",
-    ] {
-        let (mut m, code) = in_place_machine(&format!(
-            "function w() {{ return {walk}; }} var wb = w.bind(null); \
-             for (var i = 0; i < 200; i++) {{ try {{ wb(); }} catch (e) {{}} }} \
-             f(126, function () {{ return 'bottom'; }})"
-        ));
-        let out = m.run(&code);
-        assert!(out.completed, "{walk}: {:?}", out.halt);
-        assert_eq!(out.result, "bottom", "{walk}");
-        assert_eq!(m.native_depth, 0, "{walk}");
-        assert_eq!(m.held_total, 0, "{walk}");
+    // Each throw from inside an explicit-stack walk, caught below the
+    // in-place frame that called it, pops that frame inside the walk; the
+    // walk's restore must not charge its units again, or 200 rounds leave the
+    // next nest no budget (the C1 pre-commit review's regression).
+    for (name, nest, ceiling, _) in IN_PLACE_NESTS {
+        for walk in [
+            "JSON.parse('{')",
+            "JSON.stringify({ toJSON: function () { throw 1; } })",
+            "JSON.parse('{\"a\":[1]}', function (k, w) { if (k === 'a') throw 2; return w; })",
+            "[[1]].flatMap(function () { throw 3; })",
+        ] {
+            let (mut m, code) = in_place_machine(
+                nest,
+                &format!(
+                    "function w() {{ return {walk}; }} var wb = wrap(w); \
+                     for (var i = 0; i < 200; i++) {{ try {{ wb(); }} catch (e) {{}} }} \
+                     f({ceiling}, function () {{ return 'bottom'; }})"
+                ),
+            );
+            let out = m.run(&code);
+            assert!(out.completed, "{name} {walk}: {:?}", out.halt);
+            assert_eq!(out.result, "bottom", "{name} {walk}");
+            assert_eq!(m.native_depth, 0, "{name} {walk}");
+            assert_eq!(m.held_total, 0, "{name} {walk}");
+        }
     }
 }

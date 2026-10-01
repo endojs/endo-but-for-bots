@@ -73,7 +73,7 @@ try { [1].forEach(function () { tb(50); }); } catch (e) { log.push('forEach:' + 
 function deep(n) { return n > 0 ? deep.bind(null, n - 1)() : n; }
 log.push(deep(120));
 Promise.resolve().then(function () { log.push(deep(120)); });
-log.join()
+log
 // ---
 // A value-stack overflow under bound levels halts where it did.
 function deep() { return deep(); }

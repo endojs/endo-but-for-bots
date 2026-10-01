@@ -19,15 +19,15 @@
 //! through `dispatch_halt_flow!`/`dispatch_result_flow!`, the loop macros'
 //! twins with the same ownership and metering checks.
 //! `tests/dispatch_loop_control_transfer.rs` locks this boundary and its roster.
-use super::invoke::BoundCall;
+use super::invoke::RunCall;
 use super::{
     branch_target, cannot_coerce_to_object, canonicalize_nan, cesu8_to_units, count_new_locals,
     to_int32, to_number, unary_minus, units_to_be16, ArithOp, AsyncGeneratorState, BitOp,
     CatchJump, GeneratorState, Halt, Interp, Kind, MeterCheck, Native, NativeMethod, Opcode,
     Payload, RelOp, ResumeStatus, Slot, Step, Suspension, BIGINT_LITERAL_METERING,
     BIGINT_NEG_FRAME_METERING, BOUNDED_RUN_SLOT_CEILING, FUNCTION_LOCAL_METERING, HEAVY_FRAME_COST,
-    USING_DECL_METERING, USING_RESOURCE_METERING, WITH_ENV_SETUP_METERING, XS_DONT_DELETE_FLAG,
-    XS_DONT_ENUM_FLAG, XS_DONT_SET_FLAG,
+    LIGHT_FRAME_COST, USING_DECL_METERING, USING_RESOURCE_METERING, WITH_ENV_SETUP_METERING,
+    XS_DONT_DELETE_FLAG, XS_DONT_ENUM_FLAG, XS_DONT_SET_FLAG,
 };
 use crate::DecodeError;
 
@@ -2710,8 +2710,8 @@ impl Interp {
                 return_depth,
                 code
             ) {
-                BoundCall::Entered(body_start) => return Flow::Next(body_start),
-                BoundCall::Call(target, receiver, args) => {
+                RunCall::Entered(body_start) => return Flow::Next(body_start),
+                RunCall::Call(target, receiver, args) => {
                     let result = dispatch_result_flow!(
                         self.invoke_value(code, target, receiver, &args),
                         self,
@@ -2726,40 +2726,50 @@ impl Interp {
             }
             pc = ret_pc;
         } else if let Some((px, base)) = func_ref.filter(|(f, _)| self.proxies.contains_key(f)) {
-            // `p(...)` / `new p(...)`: collect the frame's args and
-            // receiver, clear the frame, and run the proxy's
+            // `p(...)` / `new p(...)`: run the proxy's
             // `[[Call]]`/`[[Construct]]` (its `apply`/`construct`
-            // trap, or the target).
-            let args =
-                dispatch_result_flow!(self.frame_arguments(base, argc), self, return_depth, code);
-            let this = self
-                .stack
-                .get(base)
-                .copied()
-                .unwrap_or_else(Slot::undefined);
-            let nt = self.proxy_construct_new_target(base, px);
-            self.stack.truncate(base);
-            let result = if has_target {
+            // trap, or the target) on the frame's args and receiver.
+            if has_target {
+                let args = dispatch_result_flow!(
+                    self.frame_arguments(base, argc),
+                    self,
+                    return_depth,
+                    code
+                );
+                let nt = self.proxy_construct_new_target(base, px);
+                self.stack.truncate(base);
                 // A Proxy takes its `new.target` as an argument, never from
                 // the latch, which nothing on this path would consume: left
                 // set, it leaked into the next construct, so a later plain
                 // `new Map()` built a subclass instance.
                 self.pending_new_target = None;
-                dispatch_result_flow!(
+                let result = dispatch_result_flow!(
                     self.proxy_construct(code, px, &args, nt),
                     self,
                     return_depth,
                     code
-                )
+                );
+                self.push(result);
             } else {
-                dispatch_result_flow!(
-                    self.proxy_call(code, px, this, &args),
+                // A trap or target that is a user function over this
+                // loop's buffer runs in this loop (STACK-DEPTH-REFACTOR.md
+                // C1); any other is called here, inside the layer's light
+                // unit.
+                match dispatch_result_flow!(
+                    self.proxy_run_call(code, px, base, argc, ret_pc),
                     self,
                     return_depth,
                     code
-                )
-            };
-            self.push(result);
+                ) {
+                    RunCall::Entered(body_start) => return Flow::Next(body_start),
+                    RunCall::Call(callee, receiver, args) => {
+                        let result = self.invoke_value(code, callee, receiver, &args);
+                        self.leave_native_frame(LIGHT_FRAME_COST);
+                        let result = dispatch_result_flow!(result, self, return_depth, code);
+                        self.push(result);
+                    }
+                }
+            }
             if self.check_meter() == MeterCheck::Abort {
                 return Flow::Exit(Step::Host(Halt::MeterAbort));
             }
