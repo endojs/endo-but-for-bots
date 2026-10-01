@@ -982,7 +982,7 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
 
     await E(host).storeValue(10, 'ten');
     const tenId = await E(host).identify('ten');
-    await E(agent).storeIdentifier(['@pins', 'ten'], tenId);
+    await E(host).storeIdentifier([`${kind}-agent`, '@pins', 'ten'], tenId);
 
     t.is(await E(pins).identify('ten'), tenId);
     t.deepEqual(await E(agent).list('@pins'), ['ten']);
@@ -1017,6 +1017,7 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
     const { host } = await prepareHost(t);
     await E(host).storeValue(10, 'ten');
     const agent = await provideAgent(host, kind, {
+      agentName: `${kind}-agent`,
       introducedNames: {
         ten: 'dix',
         '@pins': 'retained',
@@ -1025,9 +1026,12 @@ for (const { kind, provideAgent, pinsProperty } of agentKinds) {
     });
 
     t.is(await E(agent).lookup('dix'), 10);
-    t.is(await E(agent).identify('retained'), await E(host).identify('@pins'));
     t.is(
-      await E(agent).identify('connections'),
+      await E(host).identify(`${kind}-agent`, 'retained'),
+      await E(host).identify('@pins'),
+    );
+    t.is(
+      await E(host).identify(`${kind}-agent`, 'connections'),
       await E(host).identify('@nets'),
     );
   });
@@ -1950,12 +1954,14 @@ test('rehydrated requests can be resolved after restart', async t => {
   await E(host).storeValue(10, 'ten');
 
   const guest = E(host).provideGuest('guest');
-  const guestMessages = iterateReader(E(guest).followMessages());
+  const hostMessages = iterateReader(E(host).followMessages());
 
   E.sendOnly(guest).request('@host', 'need a number');
 
-  const { value: guestMessage } = await guestMessages.next();
-  const { promiseId: promiseLocatorP } = E.get(guestMessage);
+  // The guest's own view of the request withholds its promise locator, so
+  // read it from the host's inbox.
+  const { value: hostMessage } = await hostMessages.next();
+  const { promiseId: promiseLocatorP } = E.get(hostMessage);
   const promiseLocator = await promiseLocatorP;
   await E(host).storeLocator(['pending'], promiseLocator);
 

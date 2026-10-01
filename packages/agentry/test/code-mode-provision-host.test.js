@@ -25,11 +25,7 @@ const makeHost = () => {
   const idValues = new Map();
   const identifyCalls = [];
   const guestBindings = new Map();
-  const guest = {
-    storeIdentifier: async (name, id) => {
-      guestBindings.set(name, id);
-    },
-  };
+  const guest = {};
 
   const makeDirectory = async path => {
     const names = Array.isArray(path) ? path : [path];
@@ -83,6 +79,17 @@ const makeHost = () => {
       },
       storeIdentifier: async (namePath, id) => {
         identifiers.set(pathKey(namePath), id);
+      },
+      copy: async (fromPath, toPath) => {
+        const id = identifiers.get(pathKey(fromPath));
+        if (id === undefined) {
+          throw Error(`missing name ${pathKey(fromPath)}`);
+        }
+        if (identifiers.get(pathKey(toPath.slice(0, -1))) === 'guest-agent') {
+          guestBindings.set(toPath[toPath.length - 1], id);
+        } else {
+          identifiers.set(pathKey(toPath), id);
+        }
       },
       storeValue: async (value, namePath) => {
         values.set(pathKey(namePath), value);
@@ -141,10 +148,7 @@ test('named grants pin the first host capability and bind only the guest alias',
     'calendar-original',
   );
   t.is(fixture.guestBindings.get('calendar'), 'calendar-original');
-  t.deepEqual(fixture.identifyCalls, [
-    ['tools', 'calendar'],
-    controllerPowerPath,
-  ]);
+  t.deepEqual(fixture.identifyCalls, [['tools', 'calendar']]);
 
   fixture.identifiers.set('tools/calendar', 'calendar-rebound');
   fixture.idValues.set('calendar-rebound', { version: 'rebound' });
@@ -153,7 +157,7 @@ test('named grants pin the first host capability and bind only the guest alias',
   t.is(fixture.guestBindings.get('calendar'), 'calendar-original');
   t.deepEqual(
     fixture.identifyCalls,
-    [['tools', 'calendar'], controllerPowerPath, controllerPowerPath],
+    [['tools', 'calendar']],
     'reconstruction does not resolve the rebound source path',
   );
 });
