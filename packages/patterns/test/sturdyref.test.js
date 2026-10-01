@@ -44,6 +44,17 @@ test('a SturdyRef is not a pattern', t => {
   });
 });
 
+test('a SturdyRef cannot bound a range pattern', t => {
+  // Range matchers look up a rank cover, which a SturdyRef does not have.
+  // They must reject it as a non-key when the pattern is made.
+  const ref = makeRef();
+  const message = /"sturdyRef" cannot be a key/;
+  t.throws(() => M.lte(ref), { message });
+  t.throws(() => M.gte(ref), { message });
+  t.throws(() => M.lt(ref), { message });
+  t.throws(() => M.gt(ref), { message });
+});
+
 test('a SturdyRef as a specimen fails to match rather than throwing', t => {
   const ref = makeRef();
   t.true(matches(ref, M.any()));
