@@ -19,7 +19,7 @@ without `node_modules` in situ, and with or without a pre-generated
 
 `evaluate` and `define` are on the guest and are now projected. The makers are
 not, because the guest has none. Only `EndoHost` has makers, and they cover part
-of the source-by-layout matrix. Tracking issue:
+of the source-by-layout matrix (the table in the next section). Tracking issue:
 [endojs/endo-but-for-bots#1339](https://github.com/endojs/endo-but-for-bots/issues/1339).
 
 ## What exists today
@@ -53,8 +53,8 @@ those.
 
 [snapshot-mapper](snapshot-mapper.md) rejects a `node_modules` segment where
 the daemon itself lays out packages fetched from a registry. This design covers
-trees the daemon did not lay out: npm, pnpm, Yarn, or a person did, and the
-design reads that layout as it is.
+trees laid out by npm, pnpm, Yarn, or a person, and reads each layout as it
+is.
 
 ## Design
 
@@ -153,22 +153,31 @@ A new `makeTreeReadPowers(tree, { root })` in `@endo/platform/fs` turns a
   synthetic root. A snapshot tree stores files and directories but no links,
   so each package has one path and `canonical` is the identity.
 
-A tree read from a mount must use a **hoisted** `node_modules` layout (for
-pnpm, `node-linker=hoisted`). The reason is links that resolve outside the
-mount root. pnpm's default isolated layout keeps its virtual store under
-`node_modules/.pnpm` and links each `node_modules/<pkg>` to a path inside it;
-those links stay in the root, and the mount follows them. But workspace
-packages (`workspace:` and `link:` dependencies) link to sibling directories
-of the package, and pnpm's global virtual store links to a directory outside
-the project. The mount refuses any path whose physical form is outside its
-root, so `mapNodeModules` would see those packages as missing. A hoisted
-layout places each package as a real directory under the root, which the
-mount reads without following any link out. Detection reports a link that
-resolves outside the root as an unsupported layout rather than a missing
-dependency. A later filesystem mount attenuation that keeps the full
-POSIX namespace but shows only chosen roots, with a controller facet that adds
-and removes roots, would let a symlinked store run confined; it is out of scope
-here.
+A tree read from a mount must keep every package directory physically under
+the mount root. The reason is links that resolve outside it: the mount refuses
+any path whose physical form is outside its root, so `mapNodeModules` would see
+such a package as missing. Two pnpm mechanisms produce those links, and they
+need separate remedies.
+
+- **Store-resolved dependencies.** pnpm's default isolated layout keeps its
+  virtual store under `node_modules/.pnpm` and links each `node_modules/<pkg>`
+  to a path inside it; those links stay in the root, and the mount follows
+  them. pnpm's global virtual store instead links to a directory outside the
+  project. `node-linker=hoisted` places each store-resolved package as a real
+  directory under the root, which avoids both.
+- **Workspace dependencies** (`workspace:` and `link:`). pnpm links these to
+  the sibling package's directory under every `node-linker` setting, including
+  `hoisted`; only injected dependencies (`inject-workspace-packages=true`, or
+  `dependenciesMeta.<pkg>.injected`) copy them into `node_modules`. A workspace
+  link stays in the root when the mount's root is the workspace root, and
+  escapes it when the mount's root is one member package. The caller either
+  mounts the workspace root or injects workspace dependencies.
+
+Detection reports a link that resolves outside the root as an unsupported
+layout rather than a missing dependency. A later filesystem mount attenuation
+that keeps the full POSIX namespace but shows only chosen roots, with a
+controller facet that adds and removes roots, would let a store or workspace
+outside the root run confined; it is out of scope here.
 
 `@endo/exo-npm`'s `makeMountReadPowers` serves the registry peer-directory
 layout and stays separate; both may later share the segment validator.
@@ -185,19 +194,24 @@ The maker takes an optional `layout`:
 | `'package'` | `package.json` only | `makeFromPackage`, when built |
 
 When `layout` is omitted the daemon detects it and records the detected value
-in the formula's provenance. A tree that matches no layout (no
-`compartment-map.json` and no `package.json` at the root) is rejected with an
-error naming the layouts it looked for, and nothing is formulated; an
-unsupported layout, such as a link out of the root, is rejected the same way
-with a message naming the cause. A pre-generated map whose locations fall
-outside the synthetic root is rejected; the daemon does not relocate it.
+in the formula's provenance. Because the tree is live, the daemon detects again
+at each incarnation, before it captures; a tree whose layout has changed runs
+under the new layout. A caller who passes `layout` fixes it, and an incarnation
+whose tree no longer matches that layout fails the capture. A tree that matches
+no layout (no `compartment-map.json` and no `package.json` at the root) is
+rejected with an error naming the layouts it looked for, and nothing is
+formulated; an unsupported layout, such as a link out of the root, is rejected
+the same way with a message naming the cause. A pre-generated map whose
+locations fall outside the synthetic root is rejected; the daemon does not
+relocate it.
 
 The `node-modules-scan` entry is the root package's own `"."` export, resolved
 by `mapNodeModules` exactly as compartment-mapper resolves any package's
 exports: `exports["."]` may be a string or a conditions object, and the
-conditions are compartment-mapper's defaults (`import`, `default`). A package with no `exports` falls back to
-`main`. An explicit `entry` option names a module path within the root
-package instead and bypasses `exports`.
+conditions are the ones `mapNodeModules` always adds (`import`, `default`, and
+`endo`). A package with no `exports` falls back to `main`. An explicit `entry`
+option names a module path within the root package instead and bypasses
+`exports`.
 
 ### Makers
 
@@ -211,7 +225,10 @@ the made value and, with `resultName`, stores it.
 | `makeFromBundle(workerPetName, bundleName, options?)` | new | new | blob or value holding an `endoZipBase64` bundle, precompiled |
 
 The parameter keeps the existing `workerPetName` spelling of `EndoHost`
-(`packages/daemon/src/types.d.ts`).
+(`packages/daemon/src/types.d.ts`). The guest and MCP `makeArchive` likewise
+keep the host's name rather than a `makeFromArchive` spelling, so one
+operation has one name on every facet; its doc comment and tool description
+say that it runs an archive rather than producing one.
 
 `makeFromBundle` does not bring back the `make-bundle` formula. It decodes the
 bundle, stores the precompiled bytes, and formulates `make-archive` with the
@@ -253,7 +270,7 @@ Capture errors surface as an `isError` result, and a rejected option
 |---|---|---|---|---|---|
 | MCP adapter → guest | adapter validates JSON arguments | catalog declaration | none | guest | pet-name paths, strings |
 | Guest → daemon formulation | `prepareMakeCaplet` | guest name hub bounds worker and powers | pet store entry for `resultName` | daemon | formula identifiers |
-| Daemon capture → compartment-mapper | `makeTreeReadPowers`, `captureFromMap` | layout detection, root confinement, hoisted layout | CAS blob for an archive or bundle; the formula's tree reference for a tree | daemon | archive bytes |
+| Daemon capture → compartment-mapper | `makeTreeReadPowers`, `captureFromMap` | layout detection, root confinement, in-root package directories | CAS blob for an archive or bundle; the formula's tree reference for a tree | daemon | archive bytes |
 | Daemon → worker | `make-archive` worker method | worker kind | none in the worker | daemon (reincarnation) | archive blob, powers, context |
 
 - **Persistent state**: the daemon owns it (the CAS blob and the formula).
@@ -270,14 +287,17 @@ Capture errors surface as an `isError` result, and a rejected option
 2. Daemon capture for `node-modules-with-map` and `node-modules-scan`; `EndoHost.makeFromTree`
    gains `layout` and `entry`.
 3. `EndoHost.makeFromBundle`, and `makeArchive`'s refusal of precompiled archives.
-4. Guest makers.
-5. MCP tools in `@endo/agent-mcp-stdio`.
+4. `EndoGuest.makeArchive`, `makeFromTree`, and `makeFromBundle`, bounded by
+   the guest's name hub and options shape.
+5. MCP tools for the three guest makers in `@endo/agent-mcp-stdio`, with
+   `resultName` required.
 
 ## Test plan
 
 - A `node_modules` tree laid out by npm, one by pnpm with
-  `node-linker=hoisted`, and one by Yarn run to the same result on a Node
-  worker and an XS worker.
+  `node-linker=hoisted`, and one by Yarn with `nodeLinker: node-modules` run
+  to the same result on a Node worker and an XS worker. A Yarn Plug'n'Play
+  tree (no `node_modules`) is rejected with the no-layout error.
 - A package reached through two `node_modules` paths in a mount (an in-root
   link) loads as one compartment.
 - A root `package.json` whose `exports["."]` is a conditions object resolves
@@ -289,7 +309,8 @@ Capture errors surface as an `isError` result, and a rejected option
 - Changing a mutable mount after `makeFromTree` changes the reincarnated
   application; a snapshot tree reincarnates the same application.
 - A pnpm workspace link that resolves outside the mount root is reported as an
-  unsupported layout.
+  unsupported layout under both the isolated and the hoisted linker; the same
+  workspace mounted at its root, or with injected workspace dependencies, runs.
 - `makeArchive` refuses an archive whose compartment map names a precompiled
   parser; `makeFromBundle` runs a precompiled bundle on a Node worker.
 - The MCP tools refuse a call without `resultName`.
@@ -313,11 +334,13 @@ Capture errors surface as an `isError` result, and a rejected option
    [daemon-make-archive](daemon-make-archive.md) still holds.
 3. Considered and rejected: relocating a pre-generated map whose locations are
    outside the root. Reason: silent relocation hides which files ran.
-4. A tree read from a mount requires a hoisted `node_modules` layout. pnpm's
-   workspace links and global virtual store resolve outside the mount root,
-   which the mount refuses; the in-root `.pnpm` virtual store alone would not.
-   Packages reached through in-root links still load once, because
-   `canonical` collapses them. A filesystem
+4. A tree read from a mount must keep every package directory under the mount
+   root, which the mount enforces. pnpm's global virtual store resolves
+   outside the root, so store-resolved dependencies need
+   `node-linker=hoisted`; the in-root `.pnpm` virtual store is acceptable on
+   its own. Workspace links stay symlinks under every linker, so a workspace
+   is mounted at its root or uses injected dependencies. Packages reached
+   through in-root links still load once, because `canonical` collapses them. A filesystem
    mount attenuation that shows chosen roots of the full POSIX namespace, with
    a controller facet to add and remove roots, is tracked as a separate design.
 5. Archives carry original sources and a compartment map, never precompiled
