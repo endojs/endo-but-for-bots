@@ -3,7 +3,7 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "commit": "5638208ce9a850d76e785bc28f32072125f1ede0"
+    "commit": "706f5cd1be5b032c0c133b6cd322a4af818e1133"
   },
   "slack": 0.02,
   "cases": {
@@ -48,7 +48,7 @@
       "outcome": "compiled"
     },
     "proxy-set-10k.run": {
-      "bytes": 10167,
+      "bytes": 10119,
       "outcome": "ReentryLimit"
     },
     "proxy-has-10k.compile": {
@@ -80,7 +80,7 @@
       "outcome": "compiled"
     },
     "proxy-getownproperty-10k.run": {
-      "bytes": 10439,
+      "bytes": 10487,
       "outcome": "ReentryLimit"
     },
     "proxy-define-10k.compile": {
@@ -88,7 +88,7 @@
       "outcome": "compiled"
     },
     "proxy-define-10k.run": {
-      "bytes": 10375,
+      "bytes": 10407,
       "outcome": "ReentryLimit"
     },
     "proxy-getprototypeof-10k.compile": {
@@ -104,7 +104,7 @@
       "outcome": "compiled"
     },
     "proxy-setprototypeof-10k.run": {
-      "bytes": 12679,
+      "bytes": 12711,
       "outcome": "ReentryLimit"
     },
     "proxy-isextensible-10k.compile": {
@@ -224,7 +224,7 @@
       "outcome": "compiled"
     },
     "json-stringify-10k.run": {
-      "bytes": 12743,
+      "bytes": 12711,
       "outcome": "ReentryLimit"
     },
     "json-stringify-256.compile": {
@@ -232,7 +232,7 @@
       "outcome": "compiled"
     },
     "json-stringify-256.run": {
-      "bytes": 12703,
+      "bytes": 12671,
       "outcome": "completed"
     },
     "flat-self.compile": {
@@ -240,7 +240,7 @@
       "outcome": "compiled"
     },
     "flat-self.run": {
-      "bytes": 13119,
+      "bytes": 13103,
       "outcome": "ReentryLimit"
     },
     "flat-256.compile": {
@@ -248,7 +248,7 @@
       "outcome": "compiled"
     },
     "flat-256.run": {
-      "bytes": 11767,
+      "bytes": 11655,
       "outcome": "completed"
     },
     "foreach-63.compile": {
@@ -304,7 +304,7 @@
       "outcome": "compiled"
     },
     "regexp-deep.run": {
-      "bytes": 233967,
+      "bytes": 234055,
       "outcome": "completed"
     },
     "proto-chain-ordinary-20k.compile": {
@@ -344,7 +344,7 @@
       "outcome": "compiled"
     },
     "eval-deep.run": {
-      "bytes": 235695,
+      "bytes": 235183,
       "outcome": "completed"
     },
     "forEach-63.compile": {
@@ -808,7 +808,7 @@
       "outcome": "compiled"
     },
     "eval-direct-43.run": {
-      "bytes": 560167,
+      "bytes": 559655,
       "outcome": "ReentryLimit"
     },
     "eval-indirect-42.compile": {
@@ -824,7 +824,7 @@
       "outcome": "compiled"
     },
     "eval-indirect-43.run": {
-      "bytes": 559991,
+      "bytes": 559479,
       "outcome": "ReentryLimit"
     },
     "compartment-42.compile": {
@@ -840,7 +840,7 @@
       "outcome": "compiled"
     },
     "compartment-43.run": {
-      "bytes": 628103,
+      "bytes": 627591,
       "outcome": "ReentryLimit"
     },
     "proxy-trap-119.compile": {
@@ -856,7 +856,7 @@
       "outcome": "compiled"
     },
     "proxy-trap-120.run": {
-      "bytes": 716639,
+      "bytes": 716671,
       "outcome": "ReentryLimit"
     },
     "replace-re-fn-42.compile": {
@@ -880,7 +880,7 @@
       "outcome": "compiled"
     },
     "user-exec-42.run": {
-      "bytes": 525463,
+      "bytes": 525455,
       "outcome": "completed"
     },
     "user-exec-43.compile": {
@@ -984,7 +984,7 @@
       "outcome": "compiled"
     },
     "jrevive-arr-2001.run": {
-      "bytes": 13823,
+      "bytes": 13831,
       "outcome": "ReentryLimit"
     },
     "jrevive-obj-1999.compile": {
@@ -1008,7 +1008,7 @@
       "outcome": "compiled"
     },
     "jstr-arr-2014.run": {
-      "bytes": 12743,
+      "bytes": 12711,
       "outcome": "completed"
     },
     "jstr-arr-2015.compile": {
@@ -1016,7 +1016,7 @@
       "outcome": "compiled"
     },
     "jstr-arr-2015.run": {
-      "bytes": 12703,
+      "bytes": 12671,
       "outcome": "ReentryLimit"
     },
     "jstr-obj-2014.compile": {
@@ -1024,7 +1024,7 @@
       "outcome": "compiled"
     },
     "jstr-obj-2014.run": {
-      "bytes": 13911,
+      "bytes": 13823,
       "outcome": "completed"
     },
     "jstr-obj-2015.compile": {
@@ -1032,7 +1032,7 @@
       "outcome": "compiled"
     },
     "jstr-obj-2015.run": {
-      "bytes": 13855,
+      "bytes": 13823,
       "outcome": "ReentryLimit"
     },
     "jstr-replacer-1999.compile": {
@@ -1040,7 +1040,7 @@
       "outcome": "compiled"
     },
     "jstr-replacer-1999.run": {
-      "bytes": 18575,
+      "bytes": 18543,
       "outcome": "completed"
     },
     "jstr-replacer-2000.compile": {
@@ -1048,7 +1048,7 @@
       "outcome": "compiled"
     },
     "jstr-replacer-2000.run": {
-      "bytes": 18575,
+      "bytes": 18543,
       "outcome": "ReentryLimit"
     },
     "flat-fast-2015.compile": {
@@ -1056,7 +1056,7 @@
       "outcome": "compiled"
     },
     "flat-fast-2015.run": {
-      "bytes": 13151,
+      "bytes": 13103,
       "outcome": "completed"
     },
     "flat-fast-2016.compile": {
@@ -1064,7 +1064,7 @@
       "outcome": "compiled"
     },
     "flat-fast-2016.run": {
-      "bytes": 13151,
+      "bytes": 13103,
       "outcome": "ReentryLimit"
     },
     "flat-generic-2015.compile": {
@@ -1072,7 +1072,7 @@
       "outcome": "compiled"
     },
     "flat-generic-2015.run": {
-      "bytes": 13151,
+      "bytes": 13071,
       "outcome": "completed"
     },
     "flat-generic-2016.compile": {
@@ -1080,7 +1080,7 @@
       "outcome": "compiled"
     },
     "flat-generic-2016.run": {
-      "bytes": 13151,
+      "bytes": 13103,
       "outcome": "ReentryLimit"
     },
     "render-arr-2047.compile": {
@@ -1184,7 +1184,7 @@
       "outcome": "compiled"
     },
     "parse-binding-511.compile": {
-      "bytes": 127575,
+      "bytes": 127391,
       "outcome": "refused"
     },
     "parse-cond-chain-1011.compile": {
@@ -1328,7 +1328,7 @@
       "outcome": "compiled"
     },
     "mixed-value-stack-30.run": {
-      "bytes": 252623,
+      "bytes": 252559,
       "outcome": "StackOverflow"
     },
     "mixed-value-stack-60.compile": {
@@ -1352,7 +1352,7 @@
       "outcome": "compiled"
     },
     "u2-tojson-flat-1022.run": {
-      "bytes": 22023,
+      "bytes": 21991,
       "outcome": "completed"
     },
     "u2-tojson-regexp-512.compile": {
@@ -1360,7 +1360,7 @@
       "outcome": "compiled"
     },
     "u2-tojson-regexp-512.run": {
-      "bytes": 243743,
+      "bytes": 243711,
       "outcome": "completed"
     },
     "u3-eval-nest-tagged-2038.compile": {
@@ -1368,7 +1368,7 @@
       "outcome": "compiled"
     },
     "u3-eval-nest-tagged-2038.run": {
-      "bytes": 1326047,
+      "bytes": 1325535,
       "outcome": "completed"
     },
     "u3-eval-nest-callchain-2044.compile": {
@@ -1376,7 +1376,7 @@
       "outcome": "compiled"
     },
     "u3-eval-nest-callchain-2044.run": {
-      "bytes": 550855,
+      "bytes": 550343,
       "outcome": "completed"
     },
     "u4-function-callchain-in-tojson-1900.compile": {
@@ -1384,7 +1384,7 @@
       "outcome": "compiled"
     },
     "u4-function-callchain-in-tojson-1900.run": {
-      "bytes": 484175,
+      "bytes": 483807,
       "outcome": "completed"
     },
     "regexp-backtrack.compile": {
