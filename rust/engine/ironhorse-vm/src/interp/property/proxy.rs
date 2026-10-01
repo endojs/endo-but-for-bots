@@ -1250,6 +1250,11 @@ impl Interp {
 
     /// `[[Construct]]` (ECMA-262 10.5.13). A light frame of the
     /// native-recursion budget, like [`Self::proxy_call`].
+    ///
+    /// A Proxy has [[Construct]] only when its target does (ProxyCreate step
+    /// 7), so `new` on one whose target is not a constructor throws before
+    /// any trap runs, with XS's message (XS sets `XS_CAN_CONSTRUCT_FLAG` from
+    /// the target when it creates the Proxy).
     pub(in crate::interp) fn proxy_construct(
         &mut self,
         code: &[u8],
@@ -1257,9 +1262,32 @@ impl Interp {
         args: &[Slot],
         new_target: Slot,
     ) -> Result<Slot, Step> {
+        if self.proxy_construct_refused(proxy) {
+            return Err(self.catchable_type_error_msg("new: proxy is not a constructor".into()));
+        }
         self.with_native_frame(LIGHT_FRAME_COST, |vm| {
             vm.proxy_construct_inner(code, proxy, args, new_target)
         })
+    }
+
+    /// Whether `new` on `proxy` throws before any trap: its innermost target
+    /// is not a constructor. A revoked layer has lost its target, so it is
+    /// not refused here and its construct step throws the revocation error.
+    /// (XS keeps the capability through revocation: there, `new` on a revoked
+    /// Proxy over an arrow still says "new: proxy is not a constructor".)
+    #[inline(never)]
+    pub(in crate::interp) fn proxy_construct_refused(
+        &self,
+        proxy: crate::value::SlotIndex,
+    ) -> bool {
+        let mut current = proxy;
+        while let Some(data) = self.proxies.get(&current) {
+            if data.revoked {
+                return false;
+            }
+            current = data.target;
+        }
+        !self.slot_is_constructor(current)
     }
 
     pub(in crate::interp) fn proxy_construct_inner(

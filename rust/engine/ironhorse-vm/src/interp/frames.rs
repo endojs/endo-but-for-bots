@@ -306,6 +306,14 @@ impl Interp {
                 return Err(self.catchable_type_error_msg(message.into()));
             }
         };
+        // A construct of a function without [[Construct]] (an arrow, a method
+        // or accessor, a generator, an async function) throws before its body
+        // is entered, as XS's `RUN` does for a target frame whose function
+        // `mxIsConstructor` refuses. `Reflect.construct`, `extends`, bound
+        // functions and Proxies check the same way before they get here.
+        if has_target && !self.slot_is_constructor(func) {
+            return Err(self.catchable_type_error_msg("new: not a constructor".into()));
+        }
         // The single choke point every user-function dispatch funnels through.
         // A `None` body means the callee has no runnable bytecode — a bound
         // function (or any bodyless instance) that reached here past a missed
