@@ -35,6 +35,11 @@ libm = { version = "=0.2.16", default-features = false, features = ["force-soft-
 # XS nor c/moddable nor libclang; it does not depend on this crate, so
 # the edge is not a cycle.
 ironhorse-compile = { path = "../ironhorse-compile" }
+# The production eval bridge (`IronhorseSourceCompiler`), so the tests that
+# drive eval through the guest surface measure the path the daemon and the
+# stack-lanes probe run. A development edge back to this crate: integration
+# tests link the one `ironhorse_vm` that `ironhorse-runtime` links.
+ironhorse-runtime = { path = "../ironhorse-runtime" }
 
 [features]
 # Off by default; only the isolated test-ironhorse-calibration CI job and local

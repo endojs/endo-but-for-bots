@@ -48,6 +48,7 @@ flowchart TD
     ironhorse_vm -.->|"dev"| ironhorse_compile
     ironhorse_vm -->|"normal"| ironhorse_meter
     ironhorse_vm -->|"normal"| ironhorse_regexp
+    ironhorse_vm -.->|"dev"| ironhorse_runtime
     ironhorse_vm -->|"normal"| ironhorse_text
     xs_oracle -.->|"dev"| ironhorse_vm
 ```
