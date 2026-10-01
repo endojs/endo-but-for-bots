@@ -1705,7 +1705,7 @@ export interface EndoAgent
 export interface EndoGuest extends EndoAgent {
   /** Evaluate code directly in a worker, constrained by reachable capabilities. */
   evaluate(
-    workerPetName: string[] | undefined,
+    workerNamePath: string[] | undefined,
     source: string,
     codeNames: Array<string>,
     petNamePaths: string[][],
@@ -1731,18 +1731,18 @@ export interface EndoGuest extends EndoAgent {
    * Mint a single-use invitation whose locator's `from` names this guest's
    * handle, so an acceptor binds this guest (not the top host) under its chosen
    * pet name. Acceptance stores the acceptor's handle in this guest's pet store
-   * under `correspondentName`. Network mediation runs through an internal
+   * under `correspondentNamePath`. Network mediation runs through an internal
    * daemon broker; this call confers no `getPeerInfo`/`addPeerInfo`, host facet,
    * peer enumeration, or outbound-dialing surface. Shares `EndoHost.invite`'s
    * implementation.
    */
-  invite(correspondentName: string[]): Promise<Invitation>;
+  invite(correspondentNamePath: string[]): Promise<Invitation>;
   /**
    * Redeem an invitation locator into THIS guest, binding the relationship to
    * the calling guest — no replacement guest is minted on the acceptor side.
    * The guest accepts *as itself*: its `@self` handle is the identity presented
    * to the inviter, and the inviter's handle is bound reciprocally under
-   * `correspondentName` (a pet name this guest chooses; the inviter chooses its
+   * `correspondentNamePath` (a pet name this guest chooses; the inviter chooses its
    * own independently, so the two may differ). A path nests the binding under a
    * directory that must already exist. Shares `EndoHost.accept`'s
    * implementation; confers no `getPeerInfo`/`addPeerInfo`, host facet, peer
@@ -1751,7 +1751,10 @@ export interface EndoGuest extends EndoAgent {
    * redirecting an existing route), with the agent-key write deferred until the
    * invitation is proven.
    */
-  accept(invitationLocator: string, correspondentName: string[]): Promise<void>;
+  accept(
+    invitationLocator: string,
+    correspondentNamePath: string[],
+  ): Promise<void>;
 }
 
 export type SecretState = 'active' | 'revoked';
@@ -2046,24 +2049,24 @@ export interface EndoHost extends EndoAgent {
   makeDirectory(petNamePath: string[]): Promise<EndoDirectory>;
   provideWorker(petNamePath: string[]): Promise<EndoWorker>;
   evaluate(
-    workerPetName: string[] | undefined,
+    workerNamePath: string[] | undefined,
     source: string,
     codeNames: Array<string>,
     petNamePaths: string[][],
-    resultName?: string[],
+    resultNamePath?: string[],
   ): Promise<unknown>;
   makeUnconfined(
-    workerName: string[] | undefined,
+    workerNamePath: string[] | undefined,
     specifier: string,
     options?: MakeCapletOptions,
   ): Promise<unknown>;
   makeArchive(
-    workerPetName: string[] | undefined,
-    archiveName: string[],
+    workerNamePath: string[] | undefined,
+    archiveNamePath: string[],
     options?: MakeCapletOptions,
   ): Promise<unknown>;
   makeFromTree(
-    workerPetName: string[] | undefined,
+    workerNamePath: string[] | undefined,
     treeName: string[],
     options?: MakeCapletOptions,
   ): Promise<unknown>;
@@ -2081,7 +2084,7 @@ export interface EndoHost extends EndoAgent {
    * Supports native Node modules (unlike {@link makeFromTree}).
    */
   makeUnconfinedFromTree(
-    workerPetName: string[] | undefined,
+    workerNamePath: string[] | undefined,
     treeName: string[],
     options?: MakeCapletOptions & { entry?: string },
   ): Promise<unknown>;
@@ -2103,13 +2106,16 @@ export interface EndoHost extends EndoAgent {
   locateWithHints(...petNamePath: string[]): Promise<string | undefined>;
   /** Adopt a value from a locator that includes connection hints. */
   adoptFromLocator(locator: string, petNamePath: string[]): Promise<void>;
-  invite(correspondentName: string[]): Promise<Invitation>;
-  accept(invitationLocator: string, correspondentName: string[]): Promise<void>;
+  invite(correspondentNamePath: string[]): Promise<Invitation>;
+  accept(
+    invitationLocator: string,
+    correspondentNamePath: string[],
+  ): Promise<void>;
   endow(
     messageNumber: bigint,
     bindings: Record<string, string[]>,
-    workerName?: string[],
-    resultName?: string[],
+    workerNamePath?: string[],
+    resultNamePath?: string[],
   ): Promise<void>;
   submit(messageNumber: bigint, values: Record<string, unknown>): Promise<void>;
   sendValue: Mail['sendValue'];

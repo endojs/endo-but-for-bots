@@ -99,6 +99,11 @@ export const ReadableNameHubInterface = M.interface('ReadableNameHub', {
 // where the hub returns `M.remotable()` — the exo awaits before wrapping the
 // reader).
 export const nameHubMethodGuards = harden({
+  // `lookup` / `maybeLookup` keep the platform's string-or-array
+  // `NameOrPathShape` here: those guards are shared with trees outside the
+  // daemon, so narrowing them is a separate breaking change. The daemon's
+  // implementations still refuse a bare string through `namePathFrom`, with
+  // the same retry hint as the `NamePathArgumentShape` methods below.
   ...readableNameHubMethodGuards,
   identify: M.call().rest(NamePathShape).returns(M.promise()),
   locate: M.call().rest(NamePathShape).returns(M.promise()),

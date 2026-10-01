@@ -204,7 +204,7 @@ Decline a request message.
 - reject(0, "Not available") declines with a reason
 The requester receives an error.
 
-## adopt(messageNumber, edgeName, petName) -> Promise<void>
+## adopt(messageNumber, edgeName, petNamePath) -> Promise<void>
 
 Adopt a value from an incoming package message, giving it a pet name.
 - adopt(0, "gift", ["my-new-thing"]) takes "gift" from message 0, names it "my-new-thing"
@@ -219,19 +219,19 @@ Use after you've processed a message.
 
 Remove all messages from the inbox.
 
-## request(recipientName, description, responseName?) -> Promise<any>
+## request(recipientNamePath, description, responseNamePath?) -> Promise<any>
 
 Send a request to another agent asking for a capability.
 - request(["@host"], "a counter") asks @host for "a counter"
 - request(["@host"], "a counter", ["my-counter"]) also stores the response as "my-counter"
 The recipient sees your request and can resolve or reject it.
 
-## send(recipientName, strings, edgeNames, petNames) -> Promise<void>
+## send(recipientNamePath, strings, edgeNames, petNamePaths) -> Promise<void>
 
 Send a package message with values to another agent.
 - strings: Text fragments that form the message
 - edgeNames: Labels for the values being sent
-- petNames: Names of values to include
+- petNamePaths: Pet-name paths of the values to include
 
 Example: send(["@host"], ["Here is ", " for you"], ["gift"], [["my-counter"]])
   Sends: "Here is @gift for you" where @gift refers to "my-counter"
@@ -296,22 +296,22 @@ and trigger evaluation. This separates code proposal from capability binding.
 
 Example: define("E(counter).incr()", { counter: { label: "A counter capability" } })
 
-## form(recipientName, description, fields) -> Promise<void>
+## form(recipientNamePath, description, fields) -> Promise<void>
 
 Send a structured form to another agent.
 The form appears in the recipient's inbox. They can submit values using submit().
 
-- recipientName: Pet-name path of the recipient (e.g., ["@host"])
+- recipientNamePath: Pet-name path of the recipient (e.g., ["@host"])
 - description: Human-readable description of the form
 - fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]
 
 Example: form(["@host"], "Configure settings", [{ name: "name", label: "Your name" }])
 
-## storeBlob(readerRef, petName?) -> Promise<EndoReadable>
+## storeBlob(readerRef, petNamePath?) -> Promise<EndoReadable>
 
 Store binary data as a blob with a pet name.
 - readerRef: An async iterator yielding base64-encoded strings
-- petName: Name to store the blob under
+- petNamePath: Pet-name path to store the blob under
 Returns a readable blob reference.
 
 ## storeValue(value, petNamePath) -> Promise<void>
@@ -362,19 +362,19 @@ For a multi-segment path, writes through the mount.
 Example: writeText(["my-blob"], "hello")
 Example: writeText(["my-mount", "output.txt"], "hello")
 
-## invite(correspondentName) -> Promise<Invitation>
+## invite(correspondentNamePath) -> Promise<Invitation>
 
 Mint a single-use invitation whose locator names this guest's own handle, so an
 acceptor becomes a peer of this guest (not of the top host). Bind the acceptor
-under correspondentName once they accept. Hand the returned invitation's
+under correspondentNamePath once they accept. Hand the returned invitation's
 locate() string to the invitee out of band.
 Example: invite(["new-neighbor"])
 
-## accept(invitationLocator, correspondentName) -> Promise<void>
+## accept(invitationLocator, correspondentNamePath) -> Promise<void>
 
 Redeem an invitation locator into this guest, binding the relationship to the
 calling guest — no replacement guest is minted. This guest accepts as itself;
-the inviter's handle is bound under correspondentName, a pet name this guest
+the inviter's handle is bound under correspondentNamePath, a pet name this guest
 chooses (the inviter chooses its own independently, so they may differ).
 Example: accept(invitationLocator, ["my-neighbor"])
 
@@ -404,11 +404,11 @@ Get documentation for this interface or a specific method.
 - help() returns an overview of the host capabilities
 - help("evaluate") returns documentation for code evaluation
 
-## storeBlob(readerRef, petName) -> Promise<EndoReadable>
+## storeBlob(readerRef, petNamePath) -> Promise<EndoReadable>
 
 Store binary data as a blob with a pet name.
 - readerRef: An async iterator yielding base64-encoded strings
-- petName: Name to store the blob under
+- petNamePath: Pet-name path to store the blob under
 Returns a readable blob reference.
 
 ## storeValue(value, petNamePath) -> Promise<void>
@@ -417,14 +417,14 @@ Store a passable value (number, string, array, record, etc.) with a name.
 - storeValue(42, ["answer"]) stores the number 42
 - storeValue({x: 1, y: 2}, ["point"]) stores a record
 
-## provideGuest(petName?, options?) -> Promise<EndoGuest>
+## provideGuest(petNamePath?, options?) -> Promise<EndoGuest>
 
 Create or retrieve a confined guest agent.
 - provideGuest() creates an anonymous guest
 - provideGuest(["my-guest"]) creates/retrieves a named guest
 Options: { agentName, introducedNames, pins, networks }
 
-## provideHost(petName?, options?) -> Promise<EndoHost>
+## provideHost(petNamePath?, options?) -> Promise<EndoHost>
 
 Create or retrieve another host agent.
 - provideHost() creates an anonymous host
@@ -436,22 +436,22 @@ Options: { agentName, introducedNames, pins, networks }
 Create or retrieve a worker for running code.
 Workers are isolated JavaScript environments.
 
-## evaluate(workerName, source, codeNames, petNames, resultName?) -> Promise<any>
+## evaluate(workerNamePath, source, codeNames, petNamePaths, resultNamePath?) -> Promise<any>
 
 Evaluate JavaScript code in a worker with named endowments.
-- workerName: Worker to use (undefined for new worker)
+- workerNamePath: Pet-name path of the worker to use (undefined for new worker)
 - source: JavaScript code string
 - codeNames: Names visible in the code
-- petNames: Pet names providing values for those names
-- resultName: Optional name to store the result
+- petNamePaths: Pet-name paths providing values for those names
+- resultNamePath: Optional pet-name path to store the result
 
 Example: evaluate(undefined, "x + y", ["x", "y"], [["a"], ["b"]], ["result"])
-  Runs "x + y" where x=lookup(["a"]), y=lookup(["b"]), stores result as "result"
+  Runs "x + y" where x=lookup(["a"]), y=lookup(["b"]), stores result as ["result"]
 
-## makeUnconfined(workerName, specifier, options?) -> Promise<any>
+## makeUnconfined(workerNamePath, specifier, options?) -> Promise<any>
 
 Load and instantiate an unconfined module (has access to Node.js APIs).
-- workerName: Pet-name path of the worker to use (undefined for new worker)
+- workerNamePath: Pet-name path of the worker to use (undefined for new worker)
 - specifier: Module path or URL
 - options: Optional object with:
   - powersName: Pet-name path of the powers to grant (default: ['@none'])
@@ -460,13 +460,13 @@ Load and instantiate an unconfined module (has access to Node.js APIs).
 
 The module's make(powers, context, { env }) function is called.
 
-## makeArchive(workerName, archiveName, options?) -> Promise<any>
+## makeArchive(workerNamePath, archiveNamePath, options?) -> Promise<any>
 
 Instantiate a module from a source-only ZIP archive (a
 `compartment-map.json` plus modules in their original mjs/cjs
 sources, with no precompiled module formats).
-- workerName: Pet-name path of the worker to use (undefined for new worker)
-- archiveName: Pet-name path of the readable blob holding the archive
+- workerNamePath: Pet-name path of the worker to use (undefined for new worker)
+- archiveNamePath: Pet-name path of the readable blob holding the archive
 - options: Optional object with:
   - powersName: Pet-name path of the powers to grant (default: ['@none'])
   - resultName: Pet-name path to store the result, e.g. ["my-counter"]
@@ -513,38 +513,38 @@ Parses the locator to extract peer info, establishes a connection if needed,
 and writes the formula ID into the local pet store.
 Example: adoptFromLocator("endo://node.../formula@hint?type=channel", ["remote-channel"])
 
-## invite(correspondentName) -> Promise<Invitation>
+## invite(correspondentNamePath) -> Promise<Invitation>
 
-Mint a single-use invitation and bind the correspondent under correspondentName
+Mint a single-use invitation and bind the correspondent under correspondentNamePath
 once they accept. Hand the returned invitation's locate() string to the invitee
 out of band.
 
-## accept(invitationLocator, correspondentName) -> Promise<void>
+## accept(invitationLocator, correspondentNamePath) -> Promise<void>
 
 Redeem an invitation locator, binding the inviter's handle reciprocally under
-correspondentName — no synthetic local guest is minted.
+correspondentNamePath — no synthetic local guest is minted.
 
-## endow(messageNumber, bindings, workerName?, resultName?) -> Promise<void>
+## endow(messageNumber, bindings, workerNamePath?, resultNamePath?) -> Promise<void>
 
 Bind capabilities to a guest's code definition and evaluate it.
 This is the host-side counterpart to the guest's define() method.
 
 - messageNumber: The definition message number
-- bindings: Record mapping slot names to pet names, e.g. { counter: "my-counter" }
-- workerName: Optional worker to use for evaluation
-- resultName: Optional pet name to store the result
+- bindings: Record mapping slot names to pet-name paths, e.g. { counter: ["my-counter"] }
+- workerNamePath: Optional pet-name path of the worker to use for evaluation
+- resultNamePath: Optional pet-name path to store the result
 
 The host decides which capabilities to provide for each slot.
 The code proposed by the guest runs with these host-chosen bindings.
 
-Example: endow(0, { counter: "my-counter" })
+Example: endow(0, { counter: ["my-counter"] })
 
-## form(recipientName, description, fields) -> Promise<void>
+## form(recipientNamePath, description, fields) -> Promise<void>
 
 Send a structured form to another agent.
 The form appears in the recipient's inbox. They can submit values using submit().
 
-- recipientName: Pet-name path of the recipient, e.g. ["alice"]
+- recipientNamePath: Pet-name path of the recipient, e.g. ["alice"]
 - description: Human-readable description of what the form is for
 - fields: Array of field definitions, e.g. [{ name: "email", label: "Your email" }]
 
