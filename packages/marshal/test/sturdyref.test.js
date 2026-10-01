@@ -11,6 +11,7 @@ import {
   sortByRank,
 } from '../src/rankOrder.js';
 import { makeEncodePassable } from '../src/encodePassable.js';
+import { makeMarshal } from '../src/marshal.js';
 
 /** @type {any} */
 const { SturdyRef } = globalThis;
@@ -28,9 +29,7 @@ test('a SturdyRef cannot be rank-ordered', t => {
   t.throws(() => compareRank(5, ref), { message });
   t.throws(() => sortByRank(harden([1, ref]), compareRank), { message });
   t.throws(() => getPassStyleCover('sturdyRef'), { message });
-  t.throws(() => compareRank(ref, makeRef()), {
-    message: /Unrecognized passStyle: "sturdyRef"/,
-  });
+  t.throws(() => compareRank(ref, makeRef()), { message });
 });
 
 test('a SturdyRef cannot be encoded', t => {
@@ -38,4 +37,22 @@ test('a SturdyRef cannot be encoded', t => {
   t.throws(() => encodePassable(makeRef()), {
     message: /"sturdyRef"/,
   });
+});
+
+test('a SturdyRef cannot be marshalled', t => {
+  const message = /a "sturdyRef" cannot be marshalled/;
+  for (const serializeBodyFormat of /** @type {const} */ ([
+    'capdata',
+    'smallcaps',
+  ])) {
+    const { toCapData } = makeMarshal(undefined, undefined, {
+      serializeBodyFormat,
+    });
+    t.throws(() => toCapData(makeRef()), { message }, serializeBodyFormat);
+    t.throws(
+      () => toCapData(harden({ nested: [makeRef()] })),
+      { message },
+      serializeBodyFormat,
+    );
+  }
 });
