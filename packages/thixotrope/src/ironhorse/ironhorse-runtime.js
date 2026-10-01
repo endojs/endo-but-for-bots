@@ -6,6 +6,7 @@
 import { q } from '@endo/errors';
 import harden from '@endo/harden';
 
+import { assertRecordVersion } from '../store/versioned-record.js';
 import { heapCeilingNames, makeIronhorseLimits } from './ironhorse-limits.js';
 
 /**
@@ -24,7 +25,7 @@ export const hashFile = async (hashes, path) => hashes.sha256File(path);
 harden(hashFile);
 
 const incompatible =
-  'Incompatible Ironhorse runtime: worker, bootstrap, or manifest format differs from runtime.json; use the original runtime or migrate to a fresh state directory';
+  'Incompatible Ironhorse runtime: worker or bootstrap differs from runtime.json; use the original runtime or migrate to a fresh state directory';
 
 /**
  * Refuse a persisted manifest this runtime cannot honor, comparing parsed
@@ -49,12 +50,7 @@ const checkSavedManifest = (saved, identity, executionLimits) => {
     limits: previous,
     ...unknownFields
   } = saved;
-  if (typeof format === 'number' && format > identity.format) {
-    throw Error(
-      `Ironhorse runtime.json is from a newer version: manifest format ${format} exceeds supported format ${identity.format}; use that runtime or migrate to a fresh state directory`,
-    );
-  }
-  if (format !== identity.format) throw Error(incompatible);
+  assertRecordVersion('Ironhorse runtime manifest', format, identity.format);
   const [unknownField] = Object.keys(unknownFields);
   if (unknownField !== undefined) {
     throw Error(

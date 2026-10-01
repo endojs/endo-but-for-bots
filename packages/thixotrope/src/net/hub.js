@@ -1,7 +1,7 @@
 // @ts-check
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
-import { encodeHex } from '@endo/hex';
+import { decodeHex, encodeHex } from '@endo/hex';
 import {
   DescHandoffGiveSigEnvelopeCodec,
   getSelectorName,
@@ -14,6 +14,9 @@ import {
 } from '@endo/ocapn';
 import { makeOcapnOperationsCodecs } from '@endo/ocapn/operations';
 import { locationToLocationId } from '@endo/ocapn/client/util';
+
+import { describeError } from '../describe-error.js';
+import { assertRecordVersion } from '../store/versioned-record.js';
 
 /**
  * Thixotrope's comms hub: an OCapN forwarding node that is NOT a
@@ -98,22 +101,11 @@ import { locationToLocationId } from '@endo/ocapn/client/util';
 
 const BOOTSTRAP_POSITION = '0';
 const STATE_VERSION = 2;
+const QUEUED_FRAME_PATTERN = /^(?:[0-9a-f]{2})*$/;
 
-/**
- * Hex-encode a byteArray `Uint8Array`, a whole-buffer-spanning view (issue
- * #573) or the emulated frozen wrapper the `@endo/immutable-arraybuffer`
- * shim yields (as `makeSessionId`/`frozenBytes` do); `encodeHex` copies the
- * wrapper itself.
- */
-const hexFromBytes = encodeHex;
-
-/** @param {string} hex */
-const bytesFromHex = hex => {
-  const out = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < out.length; i += 1) {
-    out[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  }
-  return out;
+/** @param {string} message */
+const raise = message => {
+  throw Error(message);
 };
 
 /**
@@ -124,8 +116,8 @@ const bytesFromHex = hex => {
  */
 const swissnumHex = swissnum =>
   typeof swissnum === 'string'
-    ? hexFromBytes(new TextEncoder().encode(swissnum))
-    : hexFromBytes(swissnum);
+    ? encodeHex(new TextEncoder().encode(swissnum))
+    : encodeHex(swissnum);
 
 const makeMemoryHubStore = () => {
   /** @type {any} */
@@ -446,11 +438,7 @@ export const makeOcapnHub = ({
     if (state === undefined) {
       return;
     }
-    if (state.version !== STATE_VERSION) {
-      throw Error(
-        `ocapn hub: unsupported persisted state version ${state.version}`,
-      );
-    }
+    assertRecordVersion('hub state', state.version, STATE_VERSION);
     for (const [refId, row] of Object.entries(state.refs ?? {})) {
       const r = /** @type {any} */ (row);
       refs.set(refId, {
@@ -482,6 +470,11 @@ export const makeOcapnHub = ({
       session.retired = sd.retired ?? false;
       session.durable = Boolean(sd.durable);
       session.queue = [...(sd.queue ?? [])];
+      // The hub wrote every queued frame as hex; one that is not is a
+      // damaged state file, refused here rather than at the next send.
+      session.queue.every(
+        hex => typeof hex === 'string' && QUEUED_FRAME_PATTERN.test(hex),
+      ) || raise(`ocapn hub: malformed queued frame for session ${sessionKey}`);
       session.queueSequences = sd.queueSequences
         ? [...sd.queueSequences]
         : session.queue.map((_, index) => String(BigInt(index) + 1n));
@@ -829,7 +822,7 @@ export const makeOcapnHub = ({
         DescHandoffGiveSigEnvelopeCodec.write(signedGive, writer);
         const pending = {
           position: String(position),
-          giveHex: hexFromBytes(writer.getBytes()),
+          giveHex: encodeHex(writer.getBytes()),
           gifterSession: sessionKey,
         };
         outSession.pendingWithdraws.push(pending);
@@ -958,7 +951,7 @@ export const makeOcapnHub = ({
   const dispatchBytes = (sessionKey, bytes) => {
     const session = provideSessionState(sessionKey);
     if (session.attached || session.durable) {
-      session.queue.push(hexFromBytes(bytes));
+      session.queue.push(encodeHex(bytes));
       session.queueSequences.push('');
       dirty = true;
       persist();
@@ -994,7 +987,7 @@ export const makeOcapnHub = ({
           persist();
         }
         const accepted = session.send(
-          bytesFromHex(session.queue[0]),
+          decodeHex(session.queue[0]),
           session.queueSequences[0],
         );
         // Durable adapters return true only once they own the bytes. A
@@ -1125,20 +1118,20 @@ export const makeOcapnHub = ({
             throw Error('ocapn hub: the exporter session has no self identity');
           }
           const signedGive = DescHandoffGiveSigEnvelopeCodec.read(
-            codec.makeReader(bytesFromHex(pending.giveHex)),
+            codec.makeReader(decodeHex(pending.giveHex)),
           );
           const gifterKeyPair = cryptography.makeOcapnKeyPairFromPrivateKey(
-            bytesFromHex(gifter.identity.selfPrivateKey),
+            decodeHex(gifter.identity.selfPrivateKey),
           );
           const selfAtExporter = cryptography.makeOcapnKeyPairFromPrivateKey(
-            bytesFromHex(session.identity.selfPrivateKey),
+            decodeHex(session.identity.selfPrivateKey),
           );
           const handoffCount = session.nextHandoffCount;
           session.nextHandoffCount += 1n;
           const handoffReceive = makeHandoffReceiveDescriptor(
             signedGive,
             handoffCount,
-            /** @type {any} */ (bytesFromHex(session.identity.sessionId)),
+            /** @type {any} */ (decodeHex(session.identity.sessionId)),
             selfAtExporter.publicKey.id,
           );
           const signature = cryptography.signHandoffReceive(
@@ -1290,18 +1283,18 @@ export const makeOcapnHub = ({
 
     // Our peer must be the authorized receiver, on this same session.
     const peerPublicKey = cryptography.makeOcapnPublicKey(
-      bytesFromHex(identity.peerPublicKeyQ),
+      decodeHex(identity.peerPublicKeyQ),
     );
-    if (hexFromBytes(receivingSide) !== hexFromBytes(peerPublicKey.id)) {
+    if (encodeHex(receivingSide) !== encodeHex(peerPublicKey.id)) {
       throw Error('ocapn hub: withdraw-gift: receiver key mismatch');
     }
-    if (hexFromBytes(receivingSession) !== identity.sessionId) {
+    if (encodeHex(receivingSession) !== identity.sessionId) {
       throw Error('ocapn hub: withdraw-gift: session id mismatch');
     }
 
     // The give must be signed by the gifter's key in ITS session with
     // the hub.
-    const gifterSessionIdHex = hexFromBytes(gifterSessionId);
+    const gifterSessionIdHex = encodeHex(gifterSessionId);
     /** @type {SessionState | undefined} */
     let gifterSession;
     for (const candidate of sessions.values()) {
@@ -1314,7 +1307,7 @@ export const makeOcapnHub = ({
       throw Error('ocapn hub: withdraw-gift: unknown gifter session');
     }
     const gifterPublicKey = cryptography.makeOcapnPublicKey(
-      bytesFromHex(gifterSession.identity.peerPublicKeyQ),
+      decodeHex(gifterSession.identity.peerPublicKeyQ),
     );
     cryptography.assertHandoffGiveSignatureValid(
       handoffGive,
@@ -1337,7 +1330,7 @@ export const makeOcapnHub = ({
     }
     session.usedGiftHandoffs.push(countKey);
     dirty = true;
-    return { giftKey: `${gifterSessionIdHex}:${hexFromBytes(giftId)}` };
+    return { giftKey: `${gifterSessionIdHex}:${encodeHex(giftId)}` };
   };
 
   /**
@@ -1365,7 +1358,7 @@ export const makeOcapnHub = ({
           reason:
             value === undefined
               ? 'ocapn hub: the answer is broken'
-              : String(/** @type {Error} */ (value).message ?? value),
+              : describeError(value),
         };
       }
       if (answerPosition !== false && answerPosition !== undefined) {
@@ -1381,7 +1374,7 @@ export const makeOcapnHub = ({
     const methodName = getSelectorName(args[0]);
     switch (methodName) {
       case 'fetch': {
-        const swissnum = hexFromBytes(args[1]);
+        const swissnum = encodeHex(args[1]);
         const refId = publications.get(swissnum);
         const row = refId === undefined ? undefined : refs.get(refId);
         if (row === undefined || row.dead) {
@@ -1418,7 +1411,7 @@ export const makeOcapnHub = ({
           ]);
           return;
         }
-        const giftKey = `${identity.sessionId}:${hexFromBytes(args[1])}`;
+        const giftKey = `${identity.sessionId}:${encodeHex(args[1])}`;
         if (giftWaiters.has(giftKey) || hasGiftRoute(giftKey)) {
           settleGiftWaiters(giftKey, refId);
           respond(['fulfill']);
@@ -1906,9 +1899,7 @@ export const makeOcapnHub = ({
     logError(`aborting remote session ${sessionKey} on bad frame:`, error);
     try {
       const { writeOcapnMessage } = provideCodecKit(sessionKey);
-      const reason = String(
-        /** @type {Error} */ (error)?.message ?? error,
-      ).slice(0, 200);
+      const reason = describeError(error);
       const bytes = writeOcapnMessage({ type: 'op:abort', reason });
       if (session.attached) {
         session.send(bytes);
@@ -2055,11 +2046,11 @@ export const makeOcapnHub = ({
       session.onAbort = onAbort;
       if (identity !== undefined) {
         session.identity = {
-          sessionId: hexFromBytes(identity.sessionId),
-          peerPublicKeyQ: hexFromBytes(identity.peerPublicKeyQ),
+          sessionId: encodeHex(identity.sessionId),
+          peerPublicKeyQ: encodeHex(identity.peerPublicKeyQ),
           ...(identity.selfPrivateKeyBytes === undefined
             ? {}
-            : { selfPrivateKey: hexFromBytes(identity.selfPrivateKeyBytes) }),
+            : { selfPrivateKey: encodeHex(identity.selfPrivateKeyBytes) }),
         };
       }
       dirty = true;

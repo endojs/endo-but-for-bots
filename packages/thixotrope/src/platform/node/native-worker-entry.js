@@ -6,6 +6,7 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 import { createRequire } from 'node:module';
 import process from 'node:process';
 
+import { isRemotable } from '../../is-remotable.js';
 import { makePipeNetwork } from '../../net/pipe-network.js';
 import { silentLogger } from '../logging.js';
 import { makeNodePowers } from './powers.js';
@@ -38,7 +39,7 @@ try {
   if (typeof namespace.make !== 'function')
     throw Error('Native ephemeral module must export make(powers)');
   const root = await namespace.make(harden({}));
-  if (root?.[Symbol.for('passStyle')] !== 'remotable')
+  if (!isRemotable(root))
     throw Error('Native ephemeral module must return a remotable root');
   const client = await makeOcapn({
     randomBytes: random.randomBytes,

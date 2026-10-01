@@ -3,14 +3,15 @@ import { Fail, X, makeError, q } from '@endo/errors';
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
 
+import { HEX128_PATTERN } from '../random-id.js';
+
 const invitationVersion = 1;
 const maxInvitationLength = 4096;
 const maxNameLength = 128;
-const secretPattern = /^[0-9a-f]{32}$/;
 
 /** @param {unknown} secret */
 const assertSecret = secret => {
-  if (typeof secret !== 'string' || !secretPattern.test(secret))
+  if (typeof secret !== 'string' || !HEX128_PATTERN.test(secret))
     throw Fail`Invalid invitation secret`;
   return secret;
 };
@@ -74,7 +75,7 @@ export const makeMailIntroductions = ({
     if (
       invitation?.version !== invitationVersion ||
       typeof secret !== 'string' ||
-      !secretPattern.test(secret) ||
+      !HEX128_PATTERN.test(secret) ||
       typeof name !== 'string' ||
       !name.length ||
       name.length > maxNameLength

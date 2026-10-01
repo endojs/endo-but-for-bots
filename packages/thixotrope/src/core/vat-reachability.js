@@ -1,7 +1,7 @@
 // @ts-check
 import harden from '@endo/harden';
+import { encodeHex } from '@endo/hex';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToHex } from '@noble/hashes/utils.js';
 
 /**
  * Explain the same conservative session graph used for vat collection.
@@ -174,7 +174,7 @@ export const inspectVatReachability = ({
   const displaySession = session =>
     ids.has(session) || session === 'endpoint'
       ? session
-      : `session:${bytesToHex(sha256(new TextEncoder().encode(session)))}`;
+      : `session:${encodeHex(sha256(new TextEncoder().encode(session)))}`;
   return harden({
     workers: ordered.map(node => ({
       ...node,
