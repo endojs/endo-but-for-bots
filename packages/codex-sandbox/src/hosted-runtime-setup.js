@@ -12,7 +12,6 @@ import {
   assertRuntimePlacement as assertHostedRuntimePlacement,
   prepareRuntimeEnv as prepareHostedRuntimeEnv,
   readProvisionedEnvironment as readHostedProvisionedEnvironment,
-  readSliceImageReference as readHostedSliceImageReference,
   resolveFuturePath as resolveHostedFuturePath,
   resolvePinnedImageRef as resolveHostedPinnedImageRef,
 } from '@endo/hosted-agent/hosted-setup.js';
@@ -122,11 +121,6 @@ harden(assertRuntimePlacement);
 export const prepareRuntimeEnv = (env, ownerId, roots) =>
   prepareHostedRuntimeEnv(env, ownerId, roots, LABEL);
 harden(prepareRuntimeEnv);
-
-/** @param {string} rootfs */
-export const readSliceImageReference = rootfs =>
-  readHostedSliceImageReference(rootfs, LABEL);
-harden(readSliceImageReference);
 
 /**
  * @param {string} rootfs

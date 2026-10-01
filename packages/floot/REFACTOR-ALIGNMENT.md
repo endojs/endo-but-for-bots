@@ -61,8 +61,12 @@ The requested [source-bulk audit](SOURCE-BULK-AUDIT.md) measures 42,786 lines
 across the four backend/shared packages: 56.5% in hosted-agent.
 It identifies small unused surfaces, legacy compatibility, local repetition and
 larger scope decisions, distinguishing them from justified parallel mechanisms.
-All SB candidates remain pending; the smaller-combined-implementation target
-is still unproven. The recommended next sequence remains deletion before abstraction.
+The operator confirms Tokyo is the only consumer, so unused exported surfaces
+need no external-compatibility bridge. SB-01/SB-07 remove seven unused setup
+wrappers and the OpenCode version export, reducing this metric by 51 lines to
+42,735. The audit records incremental candidate progress and validation.
+The smaller-combined-implementation target is still unproven.
+The recommended next sequence remains deletion before abstraction.
 
 Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
 and the rebuilt byte-only provider listener `cc639390…` on all three brokers.

@@ -24,7 +24,6 @@ import {
 
 export const OPENROUTER_ORIGIN = 'https://openrouter.ai';
 export const OPENROUTER_INFERENCE_PATH = '/api/v1/chat/completions';
-export const OPENCODE_BROKER_VERSION = 'OpencodeProviderBrokerV1';
 
 // The shared budgets and owner pattern, re-exported for this package's users.
 export {

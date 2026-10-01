@@ -5,9 +5,6 @@ import {
   assertRuntimePlacement as assertHostedRuntimePlacement,
   prepareRuntimeEnv as prepareHostedRuntimeEnv,
   readProvisionedEnvironment as readHostedProvisionedEnvironment,
-  readSliceImageReference as readHostedSliceImageReference,
-  resolveFuturePath as resolveHostedFuturePath,
-  resolvePinnedImageRef as resolveHostedPinnedImageRef,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
 import { homedir } from 'node:os';
@@ -123,14 +120,6 @@ export const getHostedStorageRoots = env => {
 harden(getHostedStorageRoots);
 
 /**
- * The shared setup helpers bound to this package's label; see
- * `@endo/hosted-agent/hosted-setup.js` for each contract.
- * @param {string} name
- */
-export const resolveFuturePath = name => resolveHostedFuturePath(name, LABEL);
-harden(resolveFuturePath);
-
-/**
  * @param {string} directory
  * @param {ReturnType<typeof getHostedStorageRoots>} roots
  */
@@ -146,16 +135,3 @@ harden(assertRuntimePlacement);
 export const prepareRuntimeEnv = (env, ownerId, roots) =>
   prepareHostedRuntimeEnv(env, ownerId, roots, LABEL);
 harden(prepareRuntimeEnv);
-
-/** @param {string} rootfs */
-export const readSliceImageReference = rootfs =>
-  readHostedSliceImageReference(rootfs, LABEL);
-harden(readSliceImageReference);
-
-/**
- * @param {string} rootfs
- * @param {Parameters<typeof resolveHostedPinnedImageRef>[1]} [exec]
- */
-export const resolvePinnedImageRef = (rootfs, exec = undefined) =>
-  resolveHostedPinnedImageRef(rootfs, exec, LABEL);
-harden(resolvePinnedImageRef);

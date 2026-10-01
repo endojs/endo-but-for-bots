@@ -131,8 +131,12 @@ or delete a trust boundary.
 
 Caller searches covered the committed application repository and host operator
 scripts, including dynamic imports; tests are distinguished from runtime callers.
-Public/exported surfaces still require an explicit contract decision even where
-no in-repository production caller exists.
+The operator clarified on October 1 that this code has no out-of-repository
+users: Tokyo is its only consumer.
+Unused exports can therefore be removed outright; remaining test/operator
+callers must still be migrated while preserving their cleanup and state contracts.
+The candidate table records the initial findings; progress below supersedes its
+prospective wording as each deletion lands.
 
 | ID | Candidate | Evidence and smallest next change |
 |---|---|---|
@@ -146,8 +150,8 @@ no in-repository production caller exists.
 | SB-08 | Codex's alternate persistence callback | `codex-client.js`'s `saveThreadId` fallback has test callers; the controller and README use `saveThreadState`. It is a public low-level option, not automatically dead. Prefer one complete persistence contract after deciding/removing the alternate API; retain operational checkpoint durability. |
 
 SB-01 through SB-05 are the strongest small deletion slices.
-Caller coverage cannot prove absence of out-of-repository users, but compatibility
-with deprecated development infrastructure is explicitly not a requirement here.
+Compatibility with external users or deprecated development infrastructure is
+not a requirement here.
 None of these candidates warrants a new framework or a broader lifecycle rewrite.
 
 ## Repetition to reduce after the deletions
@@ -244,7 +248,25 @@ The source review does not establish that either branch is dead.
 6. Remeasure this same committed four-package scope after each slice and update
    candidate status here; document source moved outside the scope separately.
 
-Audit status: measured and caller-reviewed; all SB candidates are pending.
+### Implementation progress, 2026-10-01
+
+- **SB-01 and SB-07 done:** removed all seven unused adapter setup wrappers,
+  their exclusive tests and the unused OpenCode broker version export.
+  Codex's two live resolver helpers, current-pin checks and host storage-pin
+  readers remain. This removes 51 source lines in the four-package metric
+  (Claude 20, Codex 6, OpenCode 25), plus 102 exclusive test lines.
+  The committed source count after this slice is 42,735 versus 42,786 above.
+  Full suites pass: Claude 539, Codex 431, OpenCode 298.
+  Independent review reruns 60 focused setup/runtime/broker tests; all pass.
+  Package ESLint and Claude/Codex runtime type checks pass; root docs reports zero errors.
+  Full package type checks encounter existing stale declaration/fixture typing,
+  tracked separately rather than reported as a clean gate.
+  No image helper, durable owner, format or release pin changes; not deployed.
+- **SB-02 through SB-06 and SB-08 pending:** the operator authorizes removing
+  the alternate public/operator APIs after in-repository caller migration.
+  No compatibility shim or replacement framework is required.
+
+Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.
 Process-loss/quiescence research remains outside this implementation sequence in
 [draft tracking PR #1323](https://github.com/endojs/endo-but-for-bots/pull/1323).

@@ -16,9 +16,6 @@ import {
   assertRuntimePlacement as assertHostedRuntimePlacement,
   prepareRuntimeEnv as prepareHostedRuntimeEnv,
   readProvisionedEnvironment as readHostedProvisionedEnvironment,
-  readSliceImageReference as readHostedSliceImageReference,
-  resolveFuturePath as resolveHostedFuturePath,
-  resolvePinnedImageRef as resolveHostedPinnedImageRef,
 } from '@endo/hosted-agent/hosted-setup.js';
 import { readRuntimeConfig } from '@endo/sandbox/runtime-config.js';
 import { homedir } from 'node:os';
@@ -168,10 +165,6 @@ export const getHostedStorageRoots = env => {
 };
 harden(getHostedStorageRoots);
 
-/** @param {string} name */
-export const resolveFuturePath = name => resolveHostedFuturePath(name, LABEL);
-harden(resolveFuturePath);
-
 /**
  * @param {string} directory
  * @param {Record<string, string>} roots
@@ -179,19 +172,6 @@ harden(resolveFuturePath);
 export const assertRuntimePlacement = (directory, roots) =>
   assertHostedRuntimePlacement(directory, roots, LABEL);
 harden(assertRuntimePlacement);
-
-/** @param {string} rootfs */
-export const readSliceImageReference = rootfs =>
-  readHostedSliceImageReference(rootfs, LABEL);
-harden(readSliceImageReference);
-
-/**
- * @param {string} rootfs
- * @param {Parameters<typeof resolveHostedPinnedImageRef>[1]} [exec]
- */
-export const resolvePinnedImageRef = (rootfs, exec = undefined) =>
-  resolveHostedPinnedImageRef(rootfs, exec, LABEL);
-harden(resolvePinnedImageRef);
 
 /**
  * The native runtime's persisted construction policy. The runtime owns the
