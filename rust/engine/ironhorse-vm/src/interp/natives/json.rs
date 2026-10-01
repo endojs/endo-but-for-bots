@@ -1807,6 +1807,11 @@ impl Interp {
         source: Option<&'s JsonSource>,
     ) -> Result<ReviveFrame<'s>, Step> {
         let holder_slot = Slot::of(Kind::Reference, Payload::Reference(holder));
+        // The parent snapshotted its keys before any reviver ran, and a reviver
+        // can since have NAMED this index (an accessor promotes it to a named
+        // slot). A stale `Index` reads the store the property has left, so the
+        // visit would see `undefined` and then delete the live property.
+        let name = self.refresh_read_key(name);
         let value = self.mop_get_read(code, holder, name, holder_slot)?;
         let walk = match value.value {
             Payload::Reference(object) if value.kind == Kind::Reference => {
@@ -1826,12 +1831,14 @@ impl Interp {
                     // here while the parse that produced it took under a
                     // second. Key order here is `[[OwnPropertyKeys]]` order
                     // and the sources are in parse order, so this cannot be
-                    // done positionally.
+                    // done positionally. Keyed in the stable form: a reviver
+                    // can name a later sibling index mid-walk, and a map keyed
+                    // by the form it had on entry would no longer find it.
                     let sources = match source {
                         Some(JsonSource::Object(children)) => Some(
                             children
                                 .iter()
-                                .map(|(k, child)| (self.refresh_read_key(*k), child))
+                                .map(|(k, child)| (self.stable_read_key(*k), child))
                                 .collect(),
                         ),
                         _ => None,
@@ -1904,7 +1911,7 @@ impl Interp {
                 *next += 1;
                 let child = sources
                     .as_ref()
-                    .and_then(|m| m.get(&self.refresh_read_key(*key)).copied());
+                    .and_then(|m| m.get(&self.stable_read_key(*key)).copied());
                 Ok(Some((*object, *key, child)))
             }
         }

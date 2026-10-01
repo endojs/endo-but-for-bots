@@ -549,6 +549,18 @@ impl Interp {
         }
     }
 
+    /// A [`ReadKey`] in a form guest code cannot change: an index stays an
+    /// `Index` whether or not the table has since named it, and every other
+    /// key is its id. [`Self::refresh_read_key`] answers the opposite question
+    /// (which form READS the property now), so a key that must still match
+    /// after guest code runs is compared in this form and refreshed to read.
+    pub(in crate::interp) fn stable_read_key(&self, key: ReadKey) -> ReadKey {
+        match key {
+            ReadKey::Id(id) => self.key_id_index(id).map_or(key, ReadKey::Index),
+            key => key,
+        }
+    }
+
     /// Whether a [`ReadKey`] names a canonical integer index — answerable
     /// without a name when it is an `Index`, and by the name's own spelling
     /// when the table already holds one.
