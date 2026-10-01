@@ -36,7 +36,7 @@ import { syrupCodec } from '@endo/ocapn/syrup';
 import { makePromiseKit } from '@endo/promise-kit';
 
 import { makeInFlight } from '../in-flight.js';
-import { settleWithin, withExpiry } from '../platform/timers.js';
+import { settleWithin } from '../platform/timers.js';
 import { describeNativeResource } from '../native/describe-resource.js';
 import { randomHex128 } from '../random-id.js';
 import { makeSerialQueue } from '../serial-queue.js';
@@ -49,11 +49,12 @@ import { makeWorkspaceAccess } from './workspace-access.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
 import { makeFileSyncStringAtom } from '../store/file-sync-string-atom.js';
 import { make as makeClock } from '../../resources/clock/durable.js';
+import { make as makeControl } from '../../resources/control/durable.js';
 import { makeDurableNetLayer } from '../net/durable-netlayer.js';
 import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
 import { readIronhorseLimits } from '../ironhorse/ironhorse-limits.js';
-import { makeLocalControl } from './local-control.js';
 import { makeInventoryViewLifetime } from './inventory-view-lifetime.js';
+import { makeLocalControl } from './local-control.js';
 import { makeObservableMap } from '../observable-map.js';
 import { makeMailbox } from '../mail/mailbox.js';
 import { makeMailContact } from '../mail/mail-contact.js';
@@ -66,7 +67,6 @@ import {
 } from '../net/unix-netlayer.js';
 
 /** @import { WorkerEngine } from '../core/worker-engine.js' */
-/** @import { SocketConnection, SocketListener } from '../platform/sockets.js' */
 
 // The shape of what the supervisor keeps in the workspace vat's heap. Guest
 // closures the supervisor ships (the inventory, the registries, the clock,
@@ -208,25 +208,26 @@ export const serveThixotrope = async (
       });
     },
   });
-  /** @type {Set<SocketConnection>} */
-  const controlConnections = new Set();
-  /**
-   * Drop a control connection at once: a throw on the writer takes pending
-   * reads and writes down with it, and `closed` resolves for the cleanup
-   * registered on it.
-   * @param {SocketConnection} connection
-   */
-  const drop = connection => {
-    void connection.writer
-      .throw(Error('Supervisor closed the connection'))
-      .catch(() => {});
-  };
   const pendingDisconnects = makeInFlight();
-  /** @type {Map<SocketConnection, () => Promise<void>>} */
+  // The views each live control connection holds, by its facet, for the
+  // stop to end together.
+  /** @type {Map<object, () => Promise<void>>} */
   const disconnectViews = new Map();
-  /** @type {SocketListener | undefined} */
-  let controlListener;
-  let listening = false;
+  // The control socket's facet, once provided: the native resource whose
+  // adapter listens for local administration sessions; or, when it could
+  // not be provided, the host's own listener in its place.
+  /** @type {any} */
+  let controlFacet;
+  /** @type {{ close: () => Promise<void> } | undefined} */
+  let fallbackListener;
+  // The per-connection administration facet the control adapter asks for at
+  // each connection; made once the administration below exists, which a
+  // connection accepted before then waits for.
+  /** @type {(() => object) | undefined} */
+  let makeConnectionFacet;
+  /** @type {PromiseKit<void>} */
+  const readyKit = makePromiseKit();
+  void readyKit.promise.catch(() => {});
   let requested = false;
   // Settles when this supervisor has been asked to stop, by `stop`, a signal,
   // or a fatal condition; `serveThixotrope` hands the promise to its caller.
@@ -246,22 +247,32 @@ export const serveThixotrope = async (
     peerNetlayer?.shutdown();
     await peerNetlayer?.closed;
   };
-  const closeSocket = () => {
-    for (const connection of controlConnections) drop(connection);
-  };
   const closeControl = async () => {
-    if (!listening || !controlListener) return;
-    listening = false;
-    const { closed } = controlListener;
-    controlListener.close();
     const viewCleanup = Promise.allSettled(
       [...disconnectViews.values()].map(disconnect => disconnect()),
     );
-    // Flush the stop acknowledgement, then bound the wait for clients to close.
-    for (const connection of controlConnections) {
-      void connection.writer.return(undefined).catch(() => {});
+    // The adapter stops accepting and ends its connections, after the stop
+    // acknowledgement it has already forwarded; bounded, since a stuck
+    // adapter must not hold the stop, and the daemon's shutdown ends the
+    // process in any case.
+    if (controlFacet !== undefined) {
+      const closing = controlFacet;
+      controlFacet = undefined;
+      await settleWithin(
+        timers,
+        1000,
+        E(closing)
+          .close()
+          .catch((/** @type {Error} */ error) => {
+            log.error('control socket not closed:', error);
+          }),
+      );
     }
-    await withExpiry(timers, 1000, closeSocket, () => closed);
+    if (fallbackListener !== undefined) {
+      const closing = fallbackListener;
+      fallbackListener = undefined;
+      await settleWithin(timers, 1000, closing.close());
+    }
     // A failed guest may never settle subscription setup or cancellation.
     // Continue to daemon shutdown after a grace period; startup discards any
     // ephemeral registrations that survive in the guest's persistent image.
@@ -270,6 +281,8 @@ export const serveThixotrope = async (
       1000,
       Promise.all([viewCleanup, pendingDisconnects.drain()]),
     );
+    // Still holding the lease: a successor's socket is never removed by this
+    // process after ownership passes.
     await files.remove(socketPath, { force: true });
   };
 
@@ -347,6 +360,20 @@ export const serveThixotrope = async (
               allocating,
             }),
           'installation-index': () => index.resource(),
+          // The operator's administration, host code, from which the
+          // control socket's adapter starts each client's session: one
+          // facet per connection, ended with it.
+          'control-admin': () =>
+            Far('ThixotropeControlAdmin', {
+              help: () =>
+                'connect() makes the administration facet one client connection speaks to; close() on that facet ends what it holds.',
+              connect: async () => {
+                await readyKit.promise;
+                if (requested || makeConnectionFacet === undefined)
+                  throw Error('Supervisor is not accepting connections');
+                return makeConnectionFacet();
+              },
+            }),
           // Makers run while the endpoint restores, before `daemon` is
           // assigned and before the netlayer exists, so every use of the
           // daemon is deferred to the call.
@@ -524,12 +551,19 @@ export const serveThixotrope = async (
      *   installation belongs to; absent for a daemon-wide one
      * @param {Iterable<Workspace>} [among] the workspaces a stale
      *   daemon-wide value is taken back from; those served, by default
+     * @param {object} [options]
+     * @param {Record<string, unknown>} [options.powers] host powers the
+     *   installation is provided, beside its grants
+     * @param {boolean} [options.replaceUnhealthy] an installation that
+     *   failed, or whose vat is quarantined, is removed and provided afresh,
+     *   for one that keeps nothing worth repairing
      */
     const provide = async (
       name,
       stage,
       into = undefined,
       among = workspaces.values(),
+      { powers = undefined, replaceUnhealthy = false } = {},
     ) => {
       const where = into === undefined ? '' : ` to ${into.workspace}`;
       if (!registryHealthy()) {
@@ -539,7 +573,21 @@ export const serveThixotrope = async (
         return undefined;
       }
       try {
-        const held = await E(registry).lookup(name, into?.workspace);
+        let held = await E(registry).lookup(name, into?.workspace);
+        if (
+          held !== undefined &&
+          replaceUnhealthy &&
+          (held.status === 'failed' ||
+            (held.workerId !== undefined &&
+              daemon
+                .inspectWorkers()
+                .find(worker => worker.workerId === held.workerId)?.failure))
+        ) {
+          // Nothing of it is worth repairing: the name is freed and the
+          // installation made again.
+          await E(registry).remove(name, into?.workspace);
+          held = undefined;
+        }
         if (held?.status === 'ready') {
           if (
             held.workerId !== undefined &&
@@ -572,6 +620,7 @@ export const serveThixotrope = async (
             digest: `builtin:${name}`,
             allocationKey: randomId(),
             grants: [],
+            ...(powers === undefined ? {} : { powers }),
             ...(await stage()),
           }),
         );
@@ -598,6 +647,24 @@ export const serveThixotrope = async (
       return /** @type {const} */ ({
         kind: 'native',
         durableDigest: store.putBundle(`({ make: ${makeClock.toString()} })`),
+        ephemeralDigest: store.putBundle(
+          await platform.bundler.bundleNative(
+            paths.join(directory, 'ephemeral.js'),
+          ),
+        ),
+      });
+    };
+    // The control socket is a native resource shipped with the package,
+    // provided daemon-wide with the host's administration as its power: its
+    // adapter listens on `control.sock` and starts each client's session
+    // from a facet of the administration, so the operator's authority stays
+    // host code and works while vats are broken. It keeps nothing worth
+    // repairing, so one that failed is made again.
+    const controlStage = async () => {
+      const directory = paths.resolve(packagePath, 'resources', 'control');
+      return /** @type {const} */ ({
+        kind: 'native',
+        durableDigest: store.putBundle(`({ make: ${makeControl.toString()} })`),
         ephemeralDigest: store.putBundle(
           await platform.bundler.bundleNative(
             paths.join(directory, 'ephemeral.js'),
@@ -964,8 +1031,6 @@ export const serveThixotrope = async (
       }
       return opening;
     };
-    // Only the lock owner may reclaim the socket left by a dead supervisor.
-    await files.remove(socketPath, { force: true });
     /** @param {Workspace} workspace */
     const assertWorkspace = workspace => {
       if (requested) throw Error('Supervisor is stopping');
@@ -1001,7 +1066,7 @@ export const serveThixotrope = async (
       harden({ name: workspace.name, workerId: workspace.workerId });
     const daemonMethods = {
       help: () =>
-        'Local supervisor. Daemon-wide: status(), stop(), installations(), reachability(), collect(), workspaces(), createWorkspace(name), selectWorkspace(name). In the selected workspace, `default` unless selected: evaluate(source), install(name, bundle, grants), installNative(name, directory), remove(name), alarmStatus(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id), watchInventory(listener).',
+        'Local supervisor. Daemon-wide: status(), stop(), installations(), reachability(), collect(), workspaces(), createWorkspace(name), selectWorkspace(name), close(). In the selected workspace, `default` unless selected: evaluate(source), install(name, bundle, grants), installNative(name, directory), remove(name), alarmStatus(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id), watchInventory(listener).',
       stop: () => {
         timers.setTimer(requestStop, 0);
         return 'Stopping supervisor';
@@ -1158,6 +1223,12 @@ export const serveThixotrope = async (
         const workspace = current();
         if (registryHealthy()) {
           if (await E(registry).remove(name, workspace.name)) return true;
+          // The socket this very request came through: removing it would
+          // end administration for the lifetime, the stop included.
+          if (name === 'control')
+            throw Error(
+              'The control socket cannot be removed; it is provided afresh at every start',
+            );
           const held = await E(registry).lookup(name);
           if (held !== undefined) {
             const removed = await E(registry).remove(name);
@@ -1176,6 +1247,10 @@ export const serveThixotrope = async (
         for (const scope of [workspace.name, undefined]) {
           const entry = index.get(scope, name);
           if (entry !== undefined) {
+            if (scope === undefined && name === 'control')
+              throw Error(
+                'The control socket cannot be removed; it is provided afresh at every start',
+              );
             const { workerId } = entry;
             if (
               workerId !== undefined &&
@@ -1252,38 +1327,54 @@ export const serveThixotrope = async (
       /** @param {string} id */
       discardMessage: id => E(current().getMailbox()).discard(id),
     });
-    controlListener = await sockets.listenPath({
-      path: socketPath,
-      mode: 0o600,
-      onConnection: connection => {
-        if (requested) {
-          drop(connection);
-          return;
+    /**
+     * The administration one client connection speaks to: the daemon's
+     * methods and the selected workspace's, `default` until it selects
+     * another, with inventory views per workspace that end with the
+     * connection, which the control adapter closes when the client goes.
+     * An adapter that dies closes none of its facets; their views, whose
+     * listeners the hub has broken by then, stay listed until the stop ends
+     * them, since no cheaper signal names which facets were that adapter's.
+     */
+    makeConnectionFacet = () => {
+      let selected = /** @type {Workspace} */ (
+        workspaces.get(DEFAULT_WORKSPACE)
+      );
+      /** @type {Map<string, ReturnType<typeof makeInventoryViewLifetime>>} */
+      const views = new Map();
+      const viewOf = (/** @type {Workspace} */ workspace) => {
+        let view = views.get(workspace.name);
+        if (view === undefined) {
+          view = makeInventoryViewLifetime(timers, workspace.inventory);
+          views.set(workspace.name, view);
         }
-        controlConnections.add(connection);
-        // Each connection speaks for one workspace at a time, `default`
-        // until it selects another; its inventory views are per workspace
-        // and end with the connection.
-        let selected = /** @type {Workspace} */ (
-          workspaces.get(DEFAULT_WORKSPACE)
-        );
-        /** @type {Map<string, ReturnType<typeof makeInventoryViewLifetime>>} */
-        const views = new Map();
-        const viewOf = (/** @type {Workspace} */ workspace) => {
-          let view = views.get(workspace.name);
-          if (view === undefined) {
-            view = makeInventoryViewLifetime(timers, workspace.inventory);
-            views.set(workspace.name, view);
-          }
-          return view;
-        };
-        const disconnect = async () => {
-          disconnectViews.delete(connection);
-          await Promise.all([...views.values()].map(view => view.disconnect()));
-        };
-        disconnectViews.set(connection, disconnect);
-        void connection.closed.then(() => {
-          controlConnections.delete(connection);
+        return view;
+      };
+      /** @type {object} */
+      let facet;
+      const disconnect = async () => {
+        disconnectViews.delete(facet);
+        await Promise.all([...views.values()].map(view => view.disconnect()));
+      };
+      facet = Far('ThixotropeLocalAdmin', {
+        ...daemonMethods,
+        ...makeWorkspaceMethods(() => selected),
+        /** @param {string} name */
+        selectWorkspace: name => {
+          assertWorkspaceName(name);
+          const workspace = workspaces.get(name);
+          if (workspace === undefined)
+            throw Error(`Unknown workspace: ${name}`);
+          selected = workspace;
+          return describeWorkspace(workspace);
+        },
+        /** @param {any} listener */
+        watchInventory: listener => {
+          if (requested) throw Error('Connection is closing');
+          assertWorkspace(selected);
+          return viewOf(selected).watch(listener);
+        },
+        close: () => {
           const cleanup = disconnect().catch(error => {
             // A quarantined vat cannot run cancellation; its ephemeral
             // listeners will be discarded if it is ever recovered in a new
@@ -1291,38 +1382,109 @@ export const serveThixotrope = async (
             if (!requested) log.error('inventory disconnect:', error.message);
           });
           pendingDisconnects.track(cleanup);
-        });
-        const admin = Far('ThixotropeLocalAdmin', {
-          ...daemonMethods,
-          ...makeWorkspaceMethods(() => selected),
-          /** @param {string} name */
-          selectWorkspace: name => {
-            assertWorkspaceName(name);
-            const workspace = workspaces.get(name);
-            if (workspace === undefined)
-              throw Error(`Unknown workspace: ${name}`);
-            selected = workspace;
-            return describeWorkspace(workspace);
+          return cleanup;
+        },
+      });
+      disconnectViews.set(facet, disconnect);
+      return facet;
+    };
+    /**
+     * The control socket as host code, for a start that cannot have the
+     * native resource serve it: the registry vat quarantined, say. The
+     * repair path must not route through the thing being repaired, so the
+     * host listens itself, the same framing and facets, and says so.
+     * @param {string} reason
+     */
+    const serveFallback = async reason => {
+      // The resource's adapter may be serving the path already, rebuilt at
+      // this start from a registration its manager vat kept: its
+      // connections reach the same administration, so the host stands
+      // down rather than take a live listener's socket.
+      /** @type {Set<import('../platform/sockets.js').SocketConnection>} */
+      const connections = new Set();
+      const listen = () =>
+        sockets.listenPath({
+          path: socketPath,
+          mode: 0o600,
+          onConnection: connection => {
+            if (requested || makeConnectionFacet === undefined) {
+              void connection.writer
+                .throw(Error('Supervisor closed the connection'))
+                .catch(() => {});
+              return;
+            }
+            connections.add(connection);
+            void connection.closed.then(() => connections.delete(connection));
+            const facet = /** @type {any} */ (makeConnectionFacet());
+            void makeLocalControl(
+              { sockets, random },
+              connection,
+              'worker',
+              facet,
+            )
+              .then(session => session.closed)
+              .catch(error => {
+                void connection.writer.throw(error).catch(() => {});
+              })
+              .finally(() => facet.close());
           },
-          /** @param {any} listener */
-          watchInventory: listener => {
-            if (requested) throw Error('Connection is closing');
-            assertWorkspace(selected);
-            return viewOf(selected).watch(listener);
+          onError: error => {
+            log.error('control listener failed:', error);
           },
         });
-        void makeLocalControl(
-          { sockets, random },
-          connection,
-          'worker',
-          admin,
-        ).catch(() => drop(connection));
-      },
-      onError: error => {
-        log.error('control listener failed:', error);
-      },
+      /** @type {Awaited<ReturnType<typeof listen>>} */
+      let listener;
+      try {
+        listener = await listen();
+      } catch (error) {
+        if (/** @type {NodeJS.ErrnoException} */ (error).code !== 'EADDRINUSE')
+          throw error;
+        if (await sockets.probePath(socketPath)) {
+          log.error(`control socket served by its adapter: ${reason}`);
+          return;
+        }
+        // Only the lock owner may reclaim the socket left by a dead
+        // supervisor.
+        await files.remove(socketPath, { force: true });
+        listener = await listen();
+      }
+      log.error(`control socket served by the host: ${reason}`);
+      fallbackListener = harden({
+        close: async () => {
+          listener.close();
+          for (const connection of connections)
+            void connection.writer.return(undefined).catch(() => {});
+          await listener.closed;
+        },
+      });
+    };
+    // Served last, once everything a connection can reach exists.
+    controlFacet = await provide('control', controlStage, undefined, opened, {
+      powers: harden({ admin: daemon.makeResource('control-admin') }),
+      replaceUnhealthy: true,
     });
-    listening = true;
+    if (controlFacet === undefined) {
+      await serveFallback('the control socket could not be provided');
+    } else {
+      try {
+        await E(controlFacet).serve(socketPath);
+      } catch (error) {
+        log.error('control socket not served:', error);
+        // Nothing of it stays desired: a registration left behind would
+        // have the adapter take the path from the host at its next rebuild.
+        const closing = controlFacet;
+        controlFacet = undefined;
+        await settleWithin(
+          timers,
+          1000,
+          E(closing)
+            .close()
+            .catch(() => {}),
+        );
+        await serveFallback('its adapter could not listen');
+      }
+    }
+    readyKit.resolve();
     let closing;
     const close = () => {
       closing ??= (async () => {
@@ -1338,7 +1500,6 @@ export const serveThixotrope = async (
             await closePeers();
             await daemon.shutdown();
           } finally {
-            closeSocket();
             requestStop();
           }
         }
@@ -1347,10 +1508,10 @@ export const serveThixotrope = async (
     };
     return harden({ socketPath, stopped, close });
   } catch (error) {
+    readyKit.reject(error);
     try {
       await closeControl();
     } finally {
-      closeSocket();
       await closePeers();
       await daemon?.crash();
     }

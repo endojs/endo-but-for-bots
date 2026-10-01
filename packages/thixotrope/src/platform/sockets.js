@@ -42,6 +42,10 @@
  * @typedef {object} SocketPowers
  * @property {(path: string) => SocketConnection} connectPath dial `path`; a
  *   failure to connect surfaces through the connection's streams
+ * @property {(path: string) => Promise<boolean>} probePath whether a
+ *   listener answers at `path`: a socket file nobody serves, or none, is
+ *   false, so a caller can tell a live listener from a stale file before
+ *   taking the path
  * @property {(options: { path: string, mode?: number, onConnection: (connection: SocketConnection) => void, onError: (error: unknown) => void }) => Promise<SocketListener>} listenPath
  *   bind `path`; when `mode` is given the implementation applies those
  *   permission bits to the bound endpoint before resolving. A failure to

@@ -98,7 +98,15 @@ yarn workspace @endo/thixotrope thix stop ./private-state
 ```
 
 `serve` runs in the foreground and creates a private state directory (mode 0700).
-It accepts local OCapN admin sessions on `control.sock` (mode 0600).
+It accepts local OCapN admin sessions on `control.sock` (mode 0600), served by the control
+socket, a native resource the supervisor provides daemon-wide: its adapter process listens on the
+socket and starts each client's session from a facet of the operator's administration, which stays
+host code, so repair works while vats are broken, and a listener that dies is rebuilt.
+`thix installations` lists it as `control`; it keeps nothing worth repairing, so one that failed is
+provided afresh at the next start, and a start that cannot provide it at all, the registry vat
+being quarantined, say, has the host listen on the socket itself and says so in its log, unless
+the resource's adapter, rebuilt from the registration its vat kept, is serving the socket already.
+It cannot be removed through itself: `thix remove control` is refused.
 Only the supervisor opens the persistence store.
 The socket grants full local administration; anyone running as the same OS user
 can administer every workspace.

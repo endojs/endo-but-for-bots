@@ -249,7 +249,7 @@ test.serial(
         .sort(),
       ['carol', 'default'],
     );
-    t.is((await fresh.call('status')).workers.length, 6);
+    t.is((await fresh.call('status')).workers.length, 7);
     const table = JSON.parse(
       await readFile(join(path, 'workspace.json'), 'utf8'),
     );

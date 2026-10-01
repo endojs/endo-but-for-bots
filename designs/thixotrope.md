@@ -356,6 +356,8 @@ Cancellation is supported; recurring scheduling remains application work.
 
 The local supervisor owns a table of persistent workspaces, `default` among them, and exposes
 administration over a private Unix socket; a connection speaks for one workspace at a time.
+The socket is served by a native resource the supervisor provides, whose adapter process listens
+and starts each client's session from a facet of the administration, which stays host code.
 Each workspace is a vat allocated under a key derived from its name, published as a retention root,
 with an inventory, a mailbox and an address book of its own; the hub, the registry and the clock are
 the daemon's.
