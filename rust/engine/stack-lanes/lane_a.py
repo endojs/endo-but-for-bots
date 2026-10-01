@@ -8,8 +8,8 @@ byte-identical; a Wasmtime trap is allowed only for a case on the expected-trap
 list, and that list may only shrink: a listed case that no longer traps fails
 the check until it is removed (`--update-expected` removes it).
 
-The stack started at 2,097,152 B and is lowered toward 524,288 B as phases land:
-Phase 1 of the report took it to 1,048,576 B.
+The stack started at 2,097,152 B and is lowered as phases land: Phase 1 of the
+report took it to 1,048,576 B and Phase 2 to 524,288 B.
 """
 import argparse
 import json
@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build_probe  # noqa: E402
 import common  # noqa: E402
 
-DEFAULT_STACK = 1024 * 1024
+DEFAULT_STACK = 512 * 1024
 EXPECTED = common.LANES / "expected-traps/wasmtime.json"
 
 
