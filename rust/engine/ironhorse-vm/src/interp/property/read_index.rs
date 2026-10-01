@@ -282,19 +282,32 @@ impl Interp {
         if let Some(&ta) = self.typed_arrays.get(&inst) {
             return Ok(self.ta_index_own_descriptor(ta, f64::from(index)));
         }
+        if let Some(descriptor) = self.exotic_index_descriptor(inst, index) {
+            return Ok(Some(descriptor));
+        }
+        Ok(self.index_prop_descriptor(inst, index))
+    }
+
+    /// An array element's or a String wrapper's own descriptor at `index`,
+    /// read without a name for the index (a program's `o[0]` interns none).
+    pub(in crate::interp) fn exotic_index_descriptor(
+        &mut self,
+        inst: crate::value::SlotIndex,
+        index: u32,
+    ) -> Option<OrdinaryDescriptor> {
         if let Some(item) = self
             .arrays
             .get(&inst)
             .and_then(|a| a.items().get(&index).copied())
         {
             let value = self.array_item_value(inst, item);
-            return Ok(Some(OrdinaryDescriptor {
+            return Some(OrdinaryDescriptor {
                 value: Some(value),
                 writable: Some(item.flag & XS_DONT_SET_FLAG == 0),
                 enumerable: Some(item.flag & XS_DONT_ENUM_FLAG == 0),
                 configurable: Some(item.flag & XS_DONT_DELETE_FLAG == 0),
                 ..OrdinaryDescriptor::default()
-            }));
+            });
         }
         if let Some(Slot {
             kind: Kind::String,
@@ -304,16 +317,16 @@ impl Interp {
         {
             let value = self.string_index_get(off, index);
             if value.kind != Kind::Undefined {
-                return Ok(Some(OrdinaryDescriptor {
+                return Some(OrdinaryDescriptor {
                     value: Some(value),
                     writable: Some(false),
                     enumerable: Some(true),
                     configurable: Some(false),
                     ..OrdinaryDescriptor::default()
-                }));
+                });
             }
         }
-        Ok(self.index_prop_descriptor(inst, index))
+        None
     }
 
     /// `[[Delete]]` of an index key the name table has no id for —

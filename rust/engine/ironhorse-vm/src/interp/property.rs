@@ -524,31 +524,13 @@ impl Interp {
                             return Err(self.failed_set_error(inst, key_id, "set"));
                         }
                     }
-                } else if !define
-                    && (self.arrays[&inst]
-                        .items()
-                        .get(&index)
-                        .is_some_and(|item| item.flag & XS_DONT_SET_FLAG != 0)
-                        || index >= self.arrays[&inst].length && !self.array_length_writable(inst)
-                        || !self.instance_extensible(inst)
-                            && !self.arrays[&inst].items().contains_key(&index))
-                {
-                    if self.strict {
-                        let reason = if self.arrays[&inst]
-                            .items()
-                            .get(&index)
-                            .is_some_and(|item| item.flag & XS_DONT_SET_FLAG != 0)
-                        {
-                            "not writable"
-                        } else {
-                            "not extensible"
-                        };
-                        return Err(self.catchable_type_error_msg(format!("set ?: {reason}")));
-                    }
-                } else {
+                    Ok(())
+                } else if define {
                     self.array_item_set(inst, index, value, define);
+                    Ok(())
+                } else {
+                    self.array_index_set(code, inst, index, key_id, value, obj)
                 }
-                Ok(())
             } else {
                 // An ordinary object keeps its index properties BY INDEX, the
                 // way XS's `fxOrdinarySetProperty` grows an internal
@@ -568,10 +550,12 @@ impl Interp {
                             self.meter.tick_builtin();
                             return Ok(());
                         }
-                    } else if self
-                        .ordinary_index_set(code, inst, index, value, obj)?
-                        .is_some()
+                    } else if let Some(accepted) =
+                        self.ordinary_index_set(code, inst, index, value, obj)?
                     {
+                        if !accepted && self.strict {
+                            return Err(self.failed_index_set_error(inst, index, "set"));
+                        }
                         return Ok(());
                     }
                     // Fall through: the narrow shapes the index store cannot
@@ -591,7 +575,10 @@ impl Interp {
                     self.ordinary_define_own_property(inst, id, descriptor);
                     self.meter.tick_builtin();
                 } else {
-                    let _ = self.ordinary_set(code, inst, id, value, obj)?;
+                    let accepted = self.ordinary_set(code, inst, id, value, obj)?;
+                    if !accepted && self.strict {
+                        return Err(self.failed_index_set_error(inst, index, "set"));
+                    }
                 }
                 Ok(())
             }
@@ -640,6 +627,78 @@ impl Interp {
             }
             Ok(())
         }
+    }
+
+    /// `OrdinarySet` of an index on an Array receiver that stores it as an
+    /// item (ECMA-262 10.1.9.2): an own item is written in place unless it is
+    /// read-only; an index the array lacks is decided up the chain first —
+    /// an inherited setter runs, an inherited non-writable value or a
+    /// Proxy's refusal rejects — and only a write left to the receiver meets
+    /// its own `[[DefineOwnProperty]]`, which a non-extensible array or a
+    /// fixed `length` the index would grow refuses.
+    fn array_index_set(
+        &mut self,
+        code: &[u8],
+        inst: crate::value::SlotIndex,
+        index: u32,
+        name: Option<u16>,
+        value: Slot,
+        receiver: Slot,
+    ) -> Result<(), Step> {
+        let reject = |vm: &mut Self, reason: &str| -> Result<(), Step> {
+            if vm.strict {
+                return Err(vm.catchable_type_error_msg(format!("set ?: {reason}")));
+            }
+            Ok(())
+        };
+        if let Some(item) = self.arrays[&inst].items().get(&index) {
+            if item.flag & XS_DONT_SET_FLAG != 0 {
+                return reject(self, "not writable");
+            }
+            self.array_item_set(inst, index, value, false);
+            return Ok(());
+        }
+        let start = self.instance_prototype(inst);
+        if !start.is_null() {
+            match self.index_set_walk(code, start, index, name, value, receiver)? {
+                IndexSetWalk::Create => {}
+                IndexSetWalk::Done(true) => return Ok(()),
+                IndexSetWalk::Done(false) => {
+                    if self.strict {
+                        return Err(self.failed_index_set_error(inst, index, "set"));
+                    }
+                    return Ok(());
+                }
+                // Only a TypedArray receiver defers, and this one is an Array.
+                IndexSetWalk::Defer => {
+                    return Err(Step::Host(Halt::EngineInvariant("array_index_set:defer")))
+                }
+            }
+        }
+        // The walk may have run guest code (a Proxy handler's `set` getter):
+        // decide on the array as it is now. An index it now holds in a named
+        // slot decides alone, without a second copy in the items.
+        if let Some(id) = self
+            .index_read_key_id(index)
+            .filter(|&id| self.find_property(inst, id).is_some())
+        {
+            if !self.set_named_index_on_receiver(code, inst, id, value)? && self.strict {
+                return Err(self.failed_set_error(inst, id, "set"));
+            }
+            return Ok(());
+        }
+        let a = &self.arrays[&inst];
+        if a.items().contains_key(&index) {
+            if a.items()[&index].flag & XS_DONT_SET_FLAG != 0 {
+                return reject(self, "not writable");
+            }
+        } else if !self.instance_extensible(inst)
+            || index >= a.length && !self.array_length_writable(inst)
+        {
+            return reject(self, "not extensible");
+        }
+        self.array_item_set(inst, index, value, false);
+        Ok(())
     }
 
     // ---- the `mop_*` dispatchers: an object's internal method, proxy-aware ---
@@ -1467,11 +1526,16 @@ impl Interp {
             let descriptor = self
                 .index_prop_descriptor(current, index)
                 .or_else(|| self.named_index_descriptor(current, index))
+                .or_else(|| self.exotic_index_descriptor(current, index))
                 .or_else(|| self.exotic_index_own_descriptor(current, index));
             if let Some(descriptor) = descriptor {
                 if descriptor.is_accessor() {
                     reason = "no setter";
-                } else if descriptor.writable == Some(false) {
+                } else if descriptor.writable == Some(false)
+                    // XS reports a String wrapper's own character as
+                    // "not extensible".
+                    && !(current == inst && self.wrapper_data.contains_key(&current))
+                {
                     reason = "not writable";
                 }
                 break;

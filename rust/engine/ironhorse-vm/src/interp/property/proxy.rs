@@ -884,13 +884,23 @@ impl Interp {
         let (target, handler) = self.proxy_target_handler(proxy, "set")?;
         match self.proxy_trap(code, handler, "set")? {
             Some(trap) => self
-                .proxy_set_trapped(code, target, handler, trap, id, value, receiver)
+                .proxy_set_trapped(
+                    code,
+                    target,
+                    handler,
+                    trap,
+                    ReadKey::Id(id),
+                    value,
+                    receiver,
+                )
                 .map(ProxyStep::Done),
             None => Ok(ProxyStep::Forward(target)),
         }
     }
 
-    /// The trap call and invariant checks of [`Self::proxy_set`].
+    /// The trap call and invariant checks of [`Self::proxy_set`], for either
+    /// spelling of the key: an index the table has never named reaches the
+    /// trap as the string `fxKeyAt` would spell, without minting a name.
     #[allow(clippy::too_many_arguments)]
     #[inline(never)]
     pub(in crate::interp) fn proxy_set_trapped(
@@ -899,23 +909,24 @@ impl Interp {
         target: crate::value::SlotIndex,
         handler: crate::value::SlotIndex,
         trap: Slot,
-        id: u16,
+        key: ReadKey,
         value: Slot,
         receiver: Slot,
     ) -> Result<bool, Step> {
         let handler_slot = Slot::of(Kind::Reference, Payload::Reference(handler));
         let target_slot = Slot::of(Kind::Reference, Payload::Reference(target));
-        let key = self.property_key_slot(id)?;
+        let key_slot = self.read_key_slot(key)?;
         let result = self.invoke_value(
             code,
             trap,
             handler_slot,
-            &[target_slot, key, value, receiver],
+            &[target_slot, key_slot, value, receiver],
         )?;
         if !self.truthy(&result) {
             return Ok(false);
         }
-        if let Some(d) = self.mop_get_own_property(code, target, id)? {
+        let key = self.refresh_read_key(key);
+        if let Some(d) = self.mop_get_own_property_read(code, target, key)? {
             if d.configurable == Some(false) {
                 if d.is_data()
                     && d.writable == Some(false)
