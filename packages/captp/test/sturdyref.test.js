@@ -468,8 +468,26 @@ test('the SturdyRef locator refuses a non-string object id', async t => {
   const { promise } = left.makeRemoteKit('l-0');
   const locator = /** @type {any} */ (promise);
   await t.throwsAsync(() => E(locator).locate(1), {
-    message: /object id must be a string/,
+    message: /answers only locate\(objectId\)/,
   });
+});
+
+test('the SturdyRef locator refuses other methods, arguments, and gets', async t => {
+  const target = Far('target', { hello: () => 'hi' });
+  const { left } = makeOptionsPair(
+    {},
+    { locateSturdyRef: objectId => (objectId === 'x' ? target : undefined) },
+  );
+  const { promise } = left.makeRemoteKit('l-0');
+  const locator = /** @type {any} */ (promise);
+  t.is(await E(await E(locator).locate('x')).hello(), 'hi');
+
+  const refusal = { message: /answers only locate\(objectId\)/ };
+  await t.throwsAsync(() => E(locator).locate('x', 'extra'), refusal);
+  await t.throwsAsync(() => E(locator).locate(), refusal);
+  await t.throwsAsync(() => E(locator).toString(), refusal);
+  await t.throwsAsync(() => E(locator).hasOwnProperty('locate'), refusal);
+  await t.throwsAsync(() => E.get(locator).locate, refusal);
 });
 
 test('constructing a SturdyRef from data refuses non-enumerable properties', t => {

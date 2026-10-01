@@ -860,10 +860,22 @@ export const makeCapTP = (
       let val;
       if (target === 'l-0') {
         // The peer is enlivening a SturdyRef it constructed from data. The
-        // target is our SturdyRef locator, which answers only `locate`.
-        // Checked before `answers` so a peer-chosen question id cannot
-        // shadow it.
-        val = sturdyRefLocator;
+        // target is our SturdyRef locator. Checked before `answers` so a
+        // peer-chosen question id cannot shadow it. The peer picks the
+        // method and arguments, so the locator answers only
+        // `locate(objectId)` with one string, and refuses anything else,
+        // including methods it inherits and property gets.
+        val =
+          prop === 'locate' &&
+          args &&
+          args.length === 1 &&
+          typeof args[0] === 'string'
+            ? sturdyRefLocator
+            : Promise.reject(
+                makeError(
+                  X`SturdyRef locator answers only locate(objectId), not ${q(prop)}`,
+                ),
+              );
       } else if (answers.has(target)) {
         val = answers.get(target);
       } else if (typeof target === 'string' && target[0] === 's') {
@@ -1166,7 +1178,7 @@ export const makeCapTP = (
   // The locator we serve for the peer's SturdyRefs-from-data (see
   // `makeSturdyRefFromData`). It answers only `locate`, and only through the
   // `locateSturdyRef` hook the creator of this CapTP chose to supply.
-  const sturdyRefLocator = harden({
+  const sturdyRefLocator = Far('SturdyRefLocator', {
     /** @param {string} objectId */
     locate: async objectId => {
       // Intentionally do NOT include `objectId` in errors: it is the secret.
