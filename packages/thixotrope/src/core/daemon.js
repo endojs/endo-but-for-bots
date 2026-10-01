@@ -1113,7 +1113,7 @@ const buildDaemon = async (
       },
     });
   const nativeAdapters = makeNativeAdapters(
-    { nativeWorkers, random },
+    { nativeWorkers, random, timers },
     {
       hub,
       importBootstrap: id =>
@@ -1124,6 +1124,25 @@ const buildDaemon = async (
             position: 0n,
           }),
         }),
+      // The owner hears of its adapter's own exit through the same held
+      // object its start notice reaches, so a manager with anything desired
+      // rebuilds between daemon starts as it does at one.
+      onAdapterExit: workerId => {
+        const report = (/** @type {unknown} */ error) =>
+          logging
+            .sub('thixotrope', 'daemon')
+            .error(`exit notice for ${q(workerId)} failed:`, error);
+        try {
+          if (stopping || !workers.has(workerId)) return;
+          const { startNotify } = store.provideWorkerStore(workerId).getMeta();
+          if (startNotify === undefined) return;
+          lookup(startNotify)
+            .then(target => E(target).exited())
+            .catch(report);
+        } catch (error) {
+          report(error);
+        }
+      },
     },
   );
   Object.assign(resourceMakers, resources, {
@@ -1451,6 +1470,9 @@ const buildDaemon = async (
       return harden(swept.sort());
     },
     shutdown: async () => {
+      // Exit notices stop first: one delivered while vats are being parked
+      // would wake a vat just put to sleep.
+      nativeAdapters.quiesce();
       try {
         for (const [workerId, entry] of workers) {
           // An ephemeral worker's heap is discarded at the next startup, so

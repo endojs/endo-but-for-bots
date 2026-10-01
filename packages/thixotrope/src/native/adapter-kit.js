@@ -17,7 +17,10 @@ import { makeSerialQueue } from '../serial-queue.js';
  * The adapter and its manager, built with `makeManager`, speak one protocol:
  * `bind(key, spec)`, `unbind(key)`, `restore([[key, spec], ...])` and
  * `keys()`, where `spec` is whatever passable record the manager registers
- * under a key.
+ * under a key. A bind answers what the registration became when binding
+ * settled something the spec left open (a delay becomes a deadline, a port
+ * of zero becomes the port the listener got), or `undefined` when it is as
+ * sent; the manager keeps the resolved form, so a restore sends it.
  *
  * @template Spec
  * @template Binding
@@ -37,6 +40,19 @@ import { makeSerialQueue } from '../serial-queue.js';
  *   acquire the resource for a registration
  * @param {(binding: Binding, key: unknown) => Promise<unknown> | unknown} options.unbind
  *   release it
+ * @param {(binding: Binding, spec: Spec) => Spec} [options.resolve]
+ *   what the registration became once bound, when binding settles something
+ *   the spec left open; the resolved spec is what the adapter keeps, reports
+ *   and compares a repeated bind against. By default a registration is as
+ *   sent, and binds answer `undefined`. Three obligations come with it: the
+ *   manager adopts the resolved spec and sends it back on every restore, so
+ *   `resolve` must leave an already-resolved spec as it is; `same` is then
+ *   asked about a resolved `existing` and a possibly unresolved `wanted`,
+ *   and must accept one that leaves open what the other settled; and the
+ *   resolved spec lives on in the manager's durable heap, so it must be
+ *   data and the manager's own remotables, never something of this
+ *   process, which no later incarnation could use. A `resolve` that throws
+ *   releases the binding and fails the bind.
  */
 export const makeAdapter = ({
   label,
@@ -44,22 +60,30 @@ export const makeAdapter = ({
   replaces = () => false,
   bind,
   unbind,
+  resolve,
 }) => {
   if (typeof label !== 'string') throw Error('makeAdapter needs a label');
   if (typeof same !== 'function') throw Error('makeAdapter needs same()');
   if (typeof bind !== 'function' || typeof unbind !== 'function')
     throw Error('makeAdapter needs bind() and unbind()');
+  if (resolve !== undefined && typeof resolve !== 'function')
+    throw Error('makeAdapter resolve must be a function');
   /** @type {Map<unknown, {spec: Spec, binding: Binding}>} */
   const bound = new Map();
   const enqueue = makeSerialQueue();
   /**
+   * Bind a registration, or find it already bound. Answers the resolved
+   * spec when the adapter resolves registrations, so the manager adopts the
+   * standing form even for a bind it repeats; `undefined` otherwise.
    * @param {unknown} key
    * @param {Spec} spec
+   * @returns {Promise<Spec | undefined>}
    */
   const bindOne = async (key, spec) => {
     const standing = bound.get(key);
     if (standing !== undefined) {
-      if (same(standing.spec, spec)) return key;
+      if (same(standing.spec, spec))
+        return resolve === undefined ? undefined : standing.spec;
       if (!replaces(standing.spec, spec))
         throw Error(`${label} is already registered`);
       // The binding closes over its registration, so it is replaced rather
@@ -70,8 +94,26 @@ export const makeAdapter = ({
       bound.delete(key);
     }
     const binding = await bind(key, spec);
-    bound.set(key, { spec, binding });
-    return key;
+    if (resolve === undefined) {
+      bound.set(key, { spec, binding });
+      return undefined;
+    }
+    /** @type {Spec} */
+    let resolved;
+    try {
+      resolved = harden(resolve(binding, spec));
+    } catch (error) {
+      // The resource was acquired; a registration that cannot say what it
+      // became is released rather than kept where nothing can name it.
+      try {
+        await unbind(binding, key);
+      } catch (_release) {
+        // The failure to report is the bind's own.
+      }
+      throw error;
+    }
+    bound.set(key, { spec: resolved, binding });
+    return resolved;
   };
   return Far('Adapter', {
     /**
@@ -90,17 +132,21 @@ export const makeAdapter = ({
       }),
     /**
      * Bind a set of registrations, one at a time; a failure is reported for
-     * its key and the rest are still attempted.
+     * its key and the rest are still attempted. A registration that resolved
+     * is reported with its resolved spec.
      * @param {Array<[unknown, Spec]>} entries
      */
     restore: entries =>
       enqueue(async () => {
-        /** @type {Array<{ key: unknown, error?: string }>} */
+        /** @type {Array<{ key: unknown, spec?: Spec, error?: string }>} */
         const results = [];
         for (const [key, spec] of entries) {
           // eslint-disable-next-line no-await-in-loop
           const result = await bindOne(key, spec).then(
-            () => harden({ key }),
+            resolved =>
+              harden(
+                resolved === undefined ? { key } : { key, spec: resolved },
+              ),
             error =>
               harden({
                 key,

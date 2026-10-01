@@ -4,6 +4,7 @@ import harden from '@endo/harden';
 import test from '@endo/ses-ava/test.js';
 
 import { makeAdapterKeeper } from '../src/adapter-keeper.js';
+import { makeAdapter } from '../src/native/adapter-kit.js';
 import { makeManager } from '../src/native/manager-kit.js';
 
 /**
@@ -19,6 +20,15 @@ const fixture = () => {
   let failBind = false;
   let failUnbind = false;
   let incarnations = 0;
+  /**
+   * A registration for `r` resolves: the resource settles its slot number
+   * at bind time, as a delay becomes a deadline.
+   * @param {any} spec
+   */
+  const resolveSpec = spec =>
+    spec.who === 'r' && spec.slot === undefined
+      ? harden({ ...spec, slot: incarnations * 100 + spec.n })
+      : undefined;
   const adapter = Far('Adapter', {
     /**
      * @param {unknown} key
@@ -26,8 +36,10 @@ const fixture = () => {
      */
     bind: (key, spec) => {
       if (failBind) throw Error('resource unavailable');
-      bound.set(key, spec);
+      const resolved = resolveSpec(spec);
+      bound.set(key, resolved ?? spec);
       log.push(`bind ${key}`);
+      return resolved;
     },
     /** @param {unknown} key */
     unbind: key => {
@@ -47,8 +59,15 @@ const fixture = () => {
             harden({ key, error: 'resource unavailable' }),
           ),
         );
-      for (const [key, spec] of entries) bound.set(key, spec);
-      return harden(entries.map(([key]) => harden({ key })));
+      return harden(
+        entries.map(([key, spec]) => {
+          const resolved = resolveSpec(spec);
+          bound.set(key, resolved ?? spec);
+          return harden(
+            resolved === undefined ? { key } : { key, spec: resolved },
+          );
+        }),
+      );
     },
     keys: () => harden([...bound.keys()]),
   });
@@ -78,6 +97,7 @@ const fixture = () => {
        * @param {{who: string}} b
        */
       replaces: (a, b) => a.who === b.who,
+      /** @type {(key: unknown, spec: any, state: string, error?: string) => unknown} */
       describe: (key, spec, state, error) =>
         harden({ key, spec, state, ...(error === undefined ? {} : { error }) }),
     },
@@ -223,4 +243,113 @@ test('startup rebuilds the adapter only when something is desired', async t => {
   await E(manager.lifecycle).started();
   t.is(incarnations(), 1);
   t.deepEqual(log.at(-1), 'unbind one');
+});
+
+test('a resolved spec is adopted as the desired one, described, and restored', async t => {
+  const { manager, bound, log, failNextUnbind } = fixture();
+  const handle = await manager.register('one', harden({ who: 'r', n: 1 }));
+  t.deepEqual(
+    await E(handle).status(),
+    { key: 'one', spec: { who: 'r', n: 1, slot: 101 }, state: 'bound' },
+    'status describes what the registration became',
+  );
+  t.deepEqual(bound.get('one'), { who: 'r', n: 1, slot: 101 });
+  // Retire the incarnation through an uncertain unbind of another key; the
+  // survivor is restored in its resolved form, not the one first registered.
+  const other = await manager.register('two', harden({ who: 'b', n: 1 }));
+  failNextUnbind();
+  t.true(await E(other).close());
+  t.like(await E(handle).status(), { state: 'bound', spec: { slot: 101 } });
+  t.deepEqual(
+    bound.get('one'),
+    { who: 'r', n: 1, slot: 101 },
+    'the second incarnation received the resolved spec, so it did not resolve again',
+  );
+  t.true(log.includes('restore one'));
+});
+
+test('an exit notice rebuilds the adapter only when something is desired', async t => {
+  const { manager, incarnations, bound } = fixture();
+  await E(manager.lifecycle).exited();
+  t.is(incarnations(), 0, 'nothing desired, nothing rebuilt');
+  const handle = await manager.register('one', harden({ who: 'a', n: 1 }));
+  t.is(incarnations(), 1);
+  await E(manager.lifecycle).exited();
+  t.is(incarnations(), 1, 'a live incarnation answers the probe and is kept');
+  t.true(bound.has('one'));
+  await E(handle).close();
+  await E(manager.lifecycle).exited();
+  t.is(incarnations(), 1);
+});
+
+test('over a resolving adapter, a first registration is bound once and adopted; a later one adopts from its bind', async t => {
+  /** @type {string[]} */
+  const log = [];
+  let next = 0;
+  /**
+   * @param {{who: string, slot?: number}} a
+   * @param {{who: string, slot?: number}} b
+   */
+  const same = (a, b) =>
+    a.who === b.who && (b.slot === undefined || a.slot === b.slot);
+  const adapter = makeAdapter({
+    label: 'Slot',
+    same,
+    /**
+     * @param {unknown} key
+     * @param {{who: string, slot?: number}} spec
+     */
+    bind: async (key, spec) => {
+      next += 1;
+      log.push(`bind ${key} ${spec.slot ?? 'unresolved'}`);
+      return next;
+    },
+    /**
+     * @param {number} slot
+     * @param {{who: string, slot?: number}} spec
+     * @returns {{who: string, slot?: number}}
+     */
+    resolve: (slot, spec) =>
+      spec.slot === undefined ? { ...spec, slot } : spec,
+    unbind: async () => {
+      log.push('unbind');
+    },
+  });
+  const adapters = Far('Launcher', {
+    create: () =>
+      Far('Incarnation', { getRoot: () => adapter, retire: () => {} }),
+  });
+  const manager = makeManager(
+    { adapters, makeKeeper: makeAdapterKeeper },
+    {
+      label: 'Slot',
+      same,
+      /** @type {(key: unknown, spec: any, state: string, error?: string) => unknown} */
+      describe: (key, spec, state, error) =>
+        harden({ key, spec, state, ...(error === undefined ? {} : { error }) }),
+    },
+  );
+  // No incarnation yet: providing one restores this registration, which
+  // resolves; the bind that follows must send the adopted form, or the
+  // adapter would see a different registration under the same key.
+  const first = await manager.register('one', harden({ who: 'a' }));
+  t.deepEqual(await E(first).status(), {
+    key: 'one',
+    spec: { who: 'a', slot: 1 },
+    state: 'bound',
+  });
+  t.deepEqual(log, ['bind one unresolved'], 'bound once');
+  // A live incarnation: adoption comes from the bind's own answer.
+  const second = await manager.register('two', harden({ who: 'b' }));
+  t.deepEqual(await E(second).status(), {
+    key: 'two',
+    spec: { who: 'b', slot: 2 },
+    state: 'bound',
+  });
+  t.is(
+    await manager.register('one', harden({ who: 'a' })),
+    first,
+    'the consumer may register the unresolved form again',
+  );
+  t.deepEqual(log, ['bind one unresolved', 'bind two unresolved']);
 });

@@ -11,14 +11,18 @@ import { makeSerialQueue } from '../serial-queue.js';
  * adapter, hand out a per-registration handle that reports status and closes
  * only its own generation, withdraw a registration durably before telling
  * the adapter, retire an incarnation whose unbinding is uncertain, and rebuild
- * the adapter at startup when there is anything to restore. This factory
+ * the adapter at startup and after its own exit when there is anything to
+ * restore. This factory
  * writes all of that once. A resource author supplies the identity of a
  * registration and how to describe its state; the adapter side, built with
  * `makeAdapter`, supplies the verbs.
  *
  * The manager and the adapter speak one protocol: `bind(key, spec)`,
  * `unbind(key)`, `restore([[key, spec], ...])` and `keys()`, where `spec` is
- * whatever passable record the author registers under a key.
+ * whatever passable record the author registers under a key. A bind or a
+ * restore may answer a resolved spec, what the registration became once
+ * bound; the manager adopts it as the desired spec, so `same`, `describe`
+ * and the next restore all see the resolved form.
  *
  * Shipped by source: this factory is evaluated in the manager vat, so it
  * may import only what the guest prelude provides, under those names.
@@ -32,7 +36,10 @@ import { makeSerialQueue } from '../serial-queue.js';
  *   whether a registration already in place is the one wanted, so that
  *   registering it again changes nothing. A spec is usually a record built
  *   for each registration, so identity would refuse the same registration
- *   made twice; the author says what sameness is.
+ *   made twice; the author says what sameness is. Once a registration has
+ *   resolved, `existing` is the resolved form while a consumer may well
+ *   register the unresolved one again, so `same` must accept a wanted spec
+ *   that leaves open what the existing one settled.
  * @param {(existing: Spec, wanted: Spec) => boolean} [options.replaces]
  *   whether a differing registration may take the place of the existing one
  *   under the same key, in which case the adapter is told to rebind; never by
@@ -58,6 +65,17 @@ export const makeManager = (
    */
   const desired = new Map();
   const enqueue = makeSerialQueue();
+  /**
+   * Adopt what the adapter says a registration became, if it is still the
+   * desired registration under its key.
+   * @param {unknown} key
+   * @param {{spec: Spec | undefined}} entry
+   * @param {Spec | undefined} resolved
+   */
+  const adopt = (key, entry, resolved) => {
+    if (resolved === undefined || desired.get(key) !== entry) return;
+    entry.spec = harden(resolved);
+  };
   const keeper = makeKeeper({
     create: async () => {
       const incarnation = await E(adapters).create();
@@ -67,11 +85,30 @@ export const makeManager = (
       });
     },
     /** @param {any} adapter */
-    restore: adapter =>
-      E(adapter).restore(
-        harden([...desired].map(([key, { spec }]) => harden([key, spec]))),
-      ),
+    restore: async adapter => {
+      const entries = [...desired];
+      /** @type {Array<{ key: unknown, spec?: Spec, error?: string }>} */
+      const results = await E(adapter).restore(
+        harden(entries.map(([key, { spec }]) => harden([key, spec]))),
+      );
+      // An adapter that reports nothing resolved nothing; one that answers
+      // out of shape is the author's problem to see in status, not a reason
+      // for the manager to lose its restore.
+      if (!Array.isArray(results)) return results;
+      for (const result of results) {
+        const entry =
+          typeof result === 'object' && result !== null
+            ? desired.get(result.key)
+            : undefined;
+        if (entry !== undefined) adopt(result.key, entry, result.spec);
+      }
+      return results;
+    },
   });
+  const rebuildIfDesired = () =>
+    enqueue(async () => {
+      if (desired.size > 0) await keeper.provide();
+    });
   /** @param {unknown} reason */
   const describeError = reason =>
     String(/** @type {Error} */ (reason)?.message ?? reason).slice(0, 512);
@@ -83,13 +120,26 @@ export const makeManager = (
    *   is present
    */
   const reconcile = async (key, entry) => {
-    const spec = /** @type {Spec} */ (entry.spec);
     try {
       const adapter = await keeper.provide();
-      await E(adapter).bind(key, spec);
-      return harden(describe(key, spec, 'bound'));
+      // Providing may have built an incarnation and restored this very
+      // registration, adopting what it resolved to; bind the desired spec
+      // as it is now, not as it was when the operation began.
+      adopt(
+        key,
+        entry,
+        await E(adapter).bind(key, /** @type {Spec} */ (entry.spec)),
+      );
+      return harden(describe(key, /** @type {Spec} */ (entry.spec), 'bound'));
     } catch (error) {
-      return harden(describe(key, spec, 'inactive', describeError(error)));
+      return harden(
+        describe(
+          key,
+          /** @type {Spec} */ (entry.spec),
+          'inactive',
+          describeError(error),
+        ),
+      );
     }
   };
   return harden({
@@ -164,15 +214,15 @@ export const makeManager = (
     /** The keys currently desired, for a public facet that lists them. */
     keys: () => harden([...desired.keys()]),
     /**
-     * The facet the host notifies at every daemon start: rebuild the adapter
-     * if anything is desired, so restored registrations are in place before
-     * the start is reported.
+     * The facet the host notifies at every daemon start, and whenever an
+     * adapter of this manager exits on its own: rebuild the adapter if
+     * anything is desired, so restored registrations are in place before the
+     * start is reported, and come back between starts without waiting for
+     * the next operation that needs them.
      */
     lifecycle: Far('ManagerLifecycle', {
-      started: () =>
-        enqueue(async () => {
-          if (desired.size > 0) await keeper.provide();
-        }),
+      started: () => rebuildIfDesired(),
+      exited: () => rebuildIfDesired(),
     }),
   });
 };

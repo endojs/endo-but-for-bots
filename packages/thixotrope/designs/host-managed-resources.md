@@ -397,27 +397,24 @@ would run the hub's transport over a hub session.
 
 ### 8.3 What the kit needs first
 
-1. Rebuild on exit, between starts.
-   Today a manager with anything desired rebuilds its adapter at daemon
-   start, through the start notice, and otherwise only when the next
-   operation that needs the adapter finds the keeper's probe failing.
-   The launcher observes the process exit (`onExit` in `adapters.js`) but
-   tells the manager nothing, so between starts a dead adapter stays dead
-   until something calls the manager.
-   For HTTP that is a closed port; for alarms it would silence every
-   reminder; for the control socket it would lock the operator out, since
-   no operation could reach the manager.
-   The rule the start notice already applies, rebuild while anything is
-   desired, should hold continuously: the incarnation handed to the keeper
-   carries a `closed` promise (a host answer, which also breaks at a host
-   restart), and the keeper rebuilds on it, with backoff, while the desired
-   set is non-empty.
-   No per-resource flag is needed under that rule, since an empty desired
-   set has nothing to restore; an `eager` option on `makeManager` would be
-   the alternative if a resource ever wants a process kept alive with
-   nothing registered.
-   This is a kit change that HTTP benefits from as well, and it gates the
-   rest.
+1. Rebuild on exit, between starts. (Done.)
+   A manager with anything desired rebuilt its adapter at daemon start,
+   through the start notice, and otherwise only when the next operation that
+   needed the adapter found the keeper's probe failing.
+   The launcher observed the process exit but told the manager nothing, so
+   between starts a dead adapter stayed dead until something called the
+   manager: a closed port for HTTP, every reminder silenced for alarms, the
+   operator locked out for the control socket.
+   Now the launcher reports an incarnation's own exit (not one it was told
+   to end, nor its owner's retirement, nor shutdown) to the owner through
+   the same held object the start notice reaches, as `exited()` on the
+   lifecycle facet, and the manager kit rebuilds on it while anything is
+   desired, exactly as it does on `started()`.
+   The backoff lives in the host, which owns the timers a vat lacks: the
+   first exit after a life of ten seconds or more is reported at once, and
+   consecutive quicker exits double the delay from one second up to thirty.
+   No per-resource flag is needed, since an empty desired set has nothing to
+   restore.
 2. Built-in resources the host installs.
    On first start the host installs `resources/alarms` and `resources/control`
    under reserved names in the registry of section 1, and grants each
@@ -453,16 +450,18 @@ would run the hub's transport over a hub session.
    application; what becomes of the old manager's registrations across that
    is out of scope here.
 
-4. Let `bind` return a resolved spec.
-   Today the kit records the spec the manager sent, and `restore` sends it
-   back unchanged.
+4. Let a registration resolve at bind time. (Done.)
+   The kit recorded the spec the manager sent, and `restore` sent it back
+   unchanged.
    Some registrations are resolved at bind time: a relative delay becomes an
    absolute deadline, and a port of zero becomes the port the listener got.
-   The adapter kit should take the value `bind` returns as the registration's
-   resolved spec, report it to the manager with the bind's answer, and have
-   the manager kit store it as the desired spec, so that `same`, `describe`
-   and `restore` all see the resolved form.
-   A `bind` that returns nothing keeps the spec it was sent, as today.
+   `makeAdapter` now takes an optional `resolve(binding, spec)`; a bind
+   answers the resolved spec, or `undefined` when a registration is as sent,
+   and `restore` reports each resolved registration with its resolved spec.
+   The manager kit adopts a resolved spec as the desired one, if the entry
+   is still the desired registration under its key, so `same`, `describe`
+   and the next restore all see the resolved form.
+   HTTP has no `resolve` and is unchanged.
 
 ### 8.4 The host afterwards
 

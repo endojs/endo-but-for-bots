@@ -279,25 +279,33 @@ makeManager }`, with the guest prelude in scope, and returns `{ facet, lifecycle
 the desired registrations, holds one adapter incarnation through a keeper, reconciles each
 registration against it, hands out per-registration handles whose `status()` and `close()` act only
 on their own generation, withdraws desired state durably before telling the adapter, retires an
-incarnation whose unbinding is uncertain, and rebuilds the adapter at startup when anything is
-desired.
+incarnation whose unbinding is uncertain, and rebuilds the adapter at startup and after its own
+exit when anything is desired.
 `ephemeral.js` exports `make()` returning the adapter, built with `makeAdapter({ label, same,
-replaces, bind, unbind })` from `@endo/thixotrope/native-adapter.js`, which serializes operations,
-keeps the bindings, replaces or refuses a differing registration as the author decides, and restores
-a set of registrations one at a time, reporting each failure without giving up on the rest.
+replaces, bind, unbind, resolve })` from `@endo/thixotrope/native-adapter.js`, which serializes
+operations, keeps the bindings, replaces or refuses a differing registration as the author decides,
+and restores a set of registrations one at a time, reporting each failure without giving up on the
+rest.
 The two speak one protocol: `bind(key, spec)`, `unbind(key)`, `restore([[key, spec], …])` and
 `keys()`, where `spec` is whatever passable record the author registers under a key.
+A registration may resolve at bind time, when binding settles something the spec left open (a
+relative delay becomes an absolute deadline; a port of zero becomes the port the listener got):
+the optional `resolve(binding, spec)` says what it became, a bind answers that resolved spec
+(`undefined` when the registration is as sent), a restore reports it, and the manager adopts it as
+the desired spec, so `same`, `describe` and the next restore all see the resolved form.
 Sameness of a registration is the author's to state on both sides, since a record crosses the wire
 as a fresh copy each time; an adapter forgets a binding only once its release succeeds, so a failed
 release is retried by a later unbind and reaches the manager's retirement path.
 `src/native/contract.js` states the contract as types.
 
 Only the facet enters the named inventory slot; applications receive it through grants.
-The lifecycle facet is published privately for the manager's own start notice, which the daemon
-delivers at every start after every vat is seated, to every manager in parallel and within one
-bound.
-A manager with anything desired rebuilds its adapter then; between starts, adapter death is
-repaired by the next operation that needs an adapter, and there is no autonomous restart monitor.
+The lifecycle facet is published privately for the manager's own notices: `started()`, which the
+daemon delivers at every start after every vat is seated, to every manager in parallel and within
+one bound, and `exited()`, which the daemon delivers on the launcher's report when an adapter
+process ends on its own rather than through retirement or shutdown.
+A manager with anything desired rebuilds its adapter on either; the backoff is the host's, since
+it owns the timers a vat lacks: the first exit after a life of ten seconds or more is reported at
+once, and consecutive quicker exits double the delay from one second up to thirty.
 Each adapter incarnation has one transient session, shared by its requests; retiring the process
 retires that session and breaks its references.
 Directory contents and the durable bundle are pinned by digest; source changes require a new

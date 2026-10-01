@@ -9,7 +9,9 @@
  * globals, typed as `GuestGlobals` from `@endo/thixotrope/guest.js`. Its
  * `make` is synchronous and receives the powers below; it returns a public
  * facet, the only thing installed into the inventory, and a lifecycle facet
- * the daemon calls `started()` on at every start.
+ * the daemon calls `started()` on at every start and `exited()` on when an
+ * adapter process of this installation exits on its own, after a backoff
+ * that grows with consecutive quick exits.
  *
  * `ephemeral.js` runs in a fresh Node process each time the manager needs an
  * adapter, with ordinary module resolution and no replay; its `make` receives
@@ -28,8 +30,9 @@
  * @typedef {object} NativeDurableKit
  * @property {any} facet the public facet, installed into the inventory
  *   under the installation's name
- * @property {{ started: () => unknown }} lifecycle notified at every daemon
- *   start, after every vat is seated
+ * @property {{ started: () => unknown, exited: () => unknown }} lifecycle
+ *   notified at every daemon start, after every vat is seated, and at an
+ *   adapter's own exit; a module built on `makeManager` gets both from it
  *
  * @typedef {object} NativeDurableModule
  * @property {(powers: NativeDurablePowers) => NativeDurableKit} make
@@ -42,13 +45,21 @@
 /**
  * The protocol between a manager and its adapter. A registration is a
  * passable `spec` desired under a `key`; the adapter binds it, unbinds it,
- * restores a set of them one at a time, and lists what it holds.
+ * restores a set of them one at a time, and lists what it holds. A bind
+ * answers the resolved spec when binding settled something the spec left
+ * open, or `undefined` when the registration is as sent; a restore reports
+ * each resolved registration with its resolved spec. The manager adopts a
+ * resolved spec as the desired one, so a later restore sends that form;
+ * resolving an already-resolved spec must leave it as it is, `same` on both
+ * sides must accept an unresolved spec against the resolved one it became,
+ * and a resolved spec is data and the manager's own remotables only, since
+ * it outlives the process that resolved it.
  *
  * @template Spec
  * @typedef {object} AdapterProtocol
- * @property {(key: unknown, spec: Spec) => Promise<unknown>} bind
+ * @property {(key: unknown, spec: Spec) => Promise<Spec | undefined>} bind
  * @property {(key: unknown) => Promise<boolean>} unbind
- * @property {(entries: Array<[unknown, Spec]>) => Promise<Array<{ key: unknown, error?: string }>>} restore
+ * @property {(entries: Array<[unknown, Spec]>) => Promise<Array<{ key: unknown, spec?: Spec, error?: string }>>} restore
  * @property {() => Promise<Array<unknown>>} keys
  */
 
@@ -67,7 +78,7 @@
  * @typedef {object} Manager
  * @property {(key: unknown, spec: Spec) => Promise<RegistrationHandle>} register
  * @property {() => Array<unknown>} keys
- * @property {{ started: () => Promise<void> }} lifecycle
+ * @property {{ started: () => Promise<void>, exited: () => Promise<void> }} lifecycle
  */
 
 /**
