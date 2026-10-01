@@ -15,6 +15,10 @@ import {
 
 /** @import { LalToolDef } from './index.js' */
 
+// A mount or readable tree takes a slash-delimited file path string; a
+// daemon directory refuses a string and takes an array of path components.
+const FileNameShape = M.or(M.string(), NamePathShape);
+
 /** @type {LalToolDef[]} */
 export const fsToolDefs = harden([
   {
@@ -28,20 +32,22 @@ export const fsToolDefs = harden([
     name: 'readText',
     summary:
       'Read text content from a capability (ReadableTree, WritableTree, etc.). ' +
-      'Arguments: petNamePath, fileName (string).',
+      'Arguments: petNamePath, fileName (a path string for a mount or tree, ' +
+      'or a string[] path for a daemon directory).',
     params: M.splitRecord({
       petNamePath: NamePathArgumentShape,
-      fileName: M.string(),
+      fileName: FileNameShape,
     }),
   },
   {
     name: 'writeText',
     summary:
       'Write text content to a capability (WritableTree, etc.). ' +
-      'Arguments: petNamePath, fileName (string), content (string).',
+      'Arguments: petNamePath, fileName (a path string for a mount or tree, ' +
+      'or a string[] path for a daemon directory), content (string).',
     params: M.splitRecord({
       petNamePath: NamePathArgumentShape,
-      fileName: M.string(),
+      fileName: FileNameShape,
       content: M.string(),
     }),
   },
@@ -53,11 +59,12 @@ export const fsToolDefs = harden([
       'uniquely-matching `oldText` with `newText`; pass several edits to apply ' +
       'them in one call (they must not overlap). Line endings and a leading BOM ' +
       'are preserved, and a unified diff of the change is returned. ' +
-      'Arguments: petNamePath, fileName (string), edits (array of ' +
+      'Arguments: petNamePath, fileName (a path string for a mount or tree, ' +
+      'or a string[] path for a daemon directory), edits (array of ' +
       '{ oldText, newText }).',
     params: M.splitRecord({
       petNamePath: NamePathArgumentShape,
-      fileName: M.string(),
+      fileName: FileNameShape,
       edits: M.arrayOf(
         M.splitRecord({
           oldText: M.string(),

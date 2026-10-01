@@ -57,6 +57,9 @@
   content to a capability (WritableTree, etc.)
 - `editText(petNamePath, fileName, edits)` — Apply unique-match text
   replacements and return a unified diff
+- For these three tools, `fileName` is a path string such as
+  `"src/a.js"` for a mounted tree, and an array of path components such
+  as `["a.txt"]` for a directory made with `makeDirectory`
 - `glob(petNamePath, pattern, followSymlinks?)` — Find paths recursively
   within a search-capable filesystem capability (`*` is segment-local and `**`
   crosses segments; `?` is literal). `**` reports a directory symlink but does
@@ -79,14 +82,14 @@ IMPORTANT: Always prefer direct tool calls over `evaluate()` or
 `define()`. Many tasks can be accomplished without code execution:
 
 - Use `list()` to enumerate names in your directory or any capability
-- Use `list("capName")` to list contents of a ReadableTree or
+- Use `list(["capName"])` to list contents of a ReadableTree or
   WritableTree capability
-- Use `readText("capName", "file.txt")` to read text from a
+- Use `readText(["capName"], "file.txt")` to read text from a
   capability
-- Use `writeText("capName", "file.txt", content)` to write text
+- Use `writeText(["capName"], "file.txt", content)` to write text
   to a capability
-- Use `glob("capName", "src/**/*.js")` and
-  `grep("capName", "TODO", "src/**/*.js")` to search a mounted workspace
+- Use `glob(["capName"], "src/**/*.js")` and
+  `grep(["capName"], "TODO", "src/**/*.js")` to search a mounted workspace
 - Use `lookup()` to inspect values
 - Use `has()` to check existence
 - Use `inspect()` to discover a capability's methods and

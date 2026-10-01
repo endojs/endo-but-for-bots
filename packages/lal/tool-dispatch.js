@@ -434,7 +434,9 @@ export const makeExecuteTool = powers => {
           content: updated,
           diff,
           applied,
-        } = applyEdits(original, edits, { fileName });
+        } = applyEdits(original, edits, {
+          fileName: Array.isArray(fileName) ? fileName.join('/') : fileName,
+        });
         await E(capability).writeText(fileName, updated);
         return harden({ applied, diff });
       }

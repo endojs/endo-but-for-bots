@@ -37,7 +37,7 @@ export type ToolCallArgs = {
   source?: string;
   codeNames?: string[];
   resultNamePath?: NamePath | string;
-  fileName?: string;
+  fileName?: string | NamePath;
   content?: string;
   // Arguments to the `glob`/`grep` search tools: a glob or regexp `pattern`,
   // an optional `glob` filter restricting `grep` to matching paths, an
