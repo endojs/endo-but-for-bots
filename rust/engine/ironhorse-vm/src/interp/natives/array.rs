@@ -3179,26 +3179,22 @@ impl Interp {
         mapper: Option<(Slot, Slot)>,
         source_receiver: Slot,
     ) -> Result<u64, Step> {
-        let base = self.native_depth;
-        let result = self.array_generic_flatten_nested(
-            code,
-            target,
-            FlatSource {
-                source,
-                source_len,
-                source_index: 0,
-                linear_steps: 0,
-                depth,
-                receiver: source_receiver,
-            },
-            target_index,
-            mapper,
-        );
-        // An error leaves the units of every open source charged; the
-        // recursion released them on its way out.
-        debug_assert!(result.is_err() || self.native_depth == base);
-        self.native_depth = base;
-        result
+        self.with_native_depth_restored(|vm| {
+            vm.array_generic_flatten_nested(
+                code,
+                target,
+                FlatSource {
+                    source,
+                    source_len,
+                    source_index: 0,
+                    linear_steps: 0,
+                    depth,
+                    receiver: source_receiver,
+                },
+                target_index,
+                mapper,
+            )
+        })
     }
 
     fn array_generic_flatten_nested(

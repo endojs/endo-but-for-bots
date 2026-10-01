@@ -89,6 +89,28 @@ impl Interp {
         result
     }
 
+    /// Run an explicit-stack walk that stands in for a recursion
+    /// (STACK-DEPTH-REFACTOR.md B3-B6): `f` charges a unit for each level it
+    /// opens and releases it when the level closes, so it returns with
+    /// `native_depth` where it found it, but an error leaves the units of
+    /// every level still open charged. The recursion released them on its way
+    /// out; this restores the depth on every return path so none leaks across
+    /// a crank.
+    #[inline(always)]
+    pub(super) fn with_native_depth_restored<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, Step>,
+    ) -> Result<T, Step> {
+        let base = self.native_depth;
+        let result = f(self);
+        debug_assert!(
+            result.is_err() || self.native_depth == base,
+            "an explicit-stack walk returned with its levels still charged"
+        );
+        self.native_depth = base;
+        result
+    }
+
     /// Hold the native-recursion units of a forwarding walk
     /// (STACK-DEPTH-REFACTOR.md B1): `f` adds each unit it charges to the
     /// count it is handed, through [`Self::forwarding_hop`], and every one is
