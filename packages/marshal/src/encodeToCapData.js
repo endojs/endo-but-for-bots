@@ -25,9 +25,13 @@ import { X, Fail, q } from '@endo/errors';
 /**
  * Like `passStyleOf(val) === 'sturdyRef'`, but returns false rather than
  * throwing for a value that is not passable, since capdata tolerates
- * whatever `convertSlotToVal` returns for a 'slot'.
+ * whatever `convertSlotToVal` returns for a 'slot'. Built directly on
+ * `passStyleOf` (an existing `@endo/marshal` dependency) rather than
+ * `@endo/sturdyref`'s own `isSturdyRef`, since `@endo/marshal` deliberately
+ * keeps `@endo/sturdyref` as a devDependency only, used from test files.
  *
  * @param {unknown} val
+ * @returns {val is SturdyRef}
  */
 const isSturdyRef = val => {
   try {
