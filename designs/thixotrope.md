@@ -85,7 +85,7 @@ One word for one thing, throughout the code, the README and this document:
 | adapter | The ephemeral half of a native resource: one incarnation per Node process, restored from the manager's desired state; the only sense of the word in this package's code and documents. Platform ports have implementations, not adapters. |
 | registration | One desired entry a manager keeps under a key, and the **handle** a caller holds for it, with `status()` and `close()`. The public object a native resource installs into the inventory is its **facet**. |
 | subscription | A listener on an observable map. A **durable** subscription is a guest's and survives restart; an **ephemeral** subscription is a view's, bridged by the running supervisor, and is discarded at restart. |
-| installation | One name in the workspace registry: an application or a native resource, with its code digest, grant mapping, allocation key, vat and outcome. |
+| installation | One name in the registry: an application or a native resource, with its code digest, grant mapping, allocation key, vat and outcome. |
 | grant | A user handing an inventory value to an installation under a power name. Host-provided services are **provided**, not granted. |
 | publication | A swissnum-to-capability mapping in the hub, fetched through the bootstrap; also a retention root. |
 | introduction | The exchange of contact inboxes that an **invitation** grants once; `invite`, `accept`, `revokeInvitation`. Dialling a peer is **connecting**, never introduction. |
@@ -253,7 +253,7 @@ heap reclamation has already happened.
 ### Native resources
 
 A native resource is a directory with `durable.js` and `ephemeral.js`, installed by name into the
-workspace registry the way an application is: `thix install-native STATE NAME DIRECTORY`.
+registry the way an application is: `thix install-native STATE NAME DIRECTORY`.
 The two modules are the two halves of one thing.
 The **manager**, the durable module's kit, runs in a dedicated vat whose heap persists.
 The **adapter**, the ephemeral module's root, runs in a Node process that owns the operating-system
@@ -363,7 +363,8 @@ and permissions.
 Workspace metadata carries a version the supervisor bumps whenever a guest closure it ships changes
 shape; the current version includes dedicated native managers, the mail address book with its
 introductions resource, manager-owned adapter launchers, the one installation registry, the clock
-and mailbox provided through it, and the clock as a native resource.
+and mailbox provided through it, the clock as a native resource, and the registry in a vat of the
+daemon's own with the host's index beside it.
 Earlier workspaces require explicit migration or fresh state; startup rejects them before restoring
 workers, because their heap-persisted registry and clock closures cannot be replaced by loading
 new source.
@@ -375,21 +376,27 @@ separate garbage-collection regime.
 
 An application module exports `make(powers)`.
 The CLI bundles its static module graph and grants only explicitly selected inventory capabilities.
-One persistent workspace registry records every installation, application or native resource: its
-name, code digest, grant mapping, the vat the host allocated for it under an idempotent allocation
-key, and its pending, ready, or failed outcome; the installed value takes the name in the inventory.
-The host drives the phases, each durable in the workspace, so an interrupted installation resumes
-on a retry with the same identity without allocating a second vat or running a factory twice.
-The bundle is staged into the new vat in bounded messages, and the workspace obtains that vat's
-guest evaluator directly so an asynchronous factory result survives host restart as a
+One persistent registry, in a vat of the daemon's own, records every installation, application or
+native resource: its name, code digest, grant mapping, the vat the host allocated for it under an
+idempotent allocation key, and its pending, ready, or failed outcome; the installed value takes the
+name in the inventory of the workspace that asked for it.
+The registry vat drives each installation as one durable function, so an interrupted installation
+resumes by itself at the next start without allocating a second vat or running a factory twice: a
+host answer broken by the restart is made again under the same allocation key.
+The bundle goes into the host's store under its digest, the registry vat handles the digest only,
+and the host stages the bundle into the new vat in bounded messages; the registry obtains that
+vat's guest evaluator directly so an asynchronous factory result survives host restart as a
 guest-to-guest promise.
+The host keeps an index of its own beside the vat, so listing and removal work while the registry
+vat cannot answer, and the workspace does no more than resolve grants and hold the installed
+values.
 Reinstalling the same name, code, and grant mapping reuses the existing result.
 
 Installation captures code and powers; it does not reload changed source files or upgrade an existing
 application's heap.
 Grants are limited to remotable capabilities and checked before any vat exists.
-Removing an installation retires its vat first and then forgets the name, so a removal interrupted
-between the two is finished by the next removal or installation under that name.
+Removing an installation retires its vat first and then forgets the name; a removal interrupted
+between the two resumes where it stopped.
 
 ## Contacts and capability offers
 

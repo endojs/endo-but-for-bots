@@ -211,10 +211,10 @@ The inventory itself and the worker controller are not implicitly granted.
 
 The application's root takes the name in the inventory: from `attach`, call
 `E(inventory.get('counter')).incr()`.
-`thix installations`, or `installations.list()` from `attach`, reports each installation of either
-kind with its SHA-256 code digest, grants, and status.
-One workspace registry records applications and native resources alike: a name, a code digest, a
-grant mapping, the vat allocated for it, and its outcome.
+`thix installations` reports each installation of either kind with its SHA-256 code digest,
+grants, and status.
+One registry, in a vat of the daemon's own, records applications and native resources alike: a
+name, a code digest, a grant mapping, the vat allocated for it, and its outcome.
 The registry retains the factory's result, including a pending result promise, which is guest to
 guest so a factory still pending when the host restarts settles afterwards.
 Its code and captured powers survive restart without reading the original module again.
@@ -223,10 +223,13 @@ Repeating a name with the same bundle and grant mapping reuses its original resu
 changing its code or grants requires a different name or removing the installation first.
 Inventory changes after installation do not change previously captured powers.
 
-Every phase of an installation is durable, so one interrupted by a crash resumes when the same
-name and bundle are installed again, reusing the vat it allocated and never running `make` twice;
+An installation is one durable function in the registry vat, so one interrupted by a crash
+resumes by itself at the next start, reusing the vat it allocated and never running `make` twice;
 until then it stays listed as pending.
-Failed installations remain inspectable and do not automatically run `make` again.
+The host keeps an index of its own beside the vat, `installations.json`, which `installations` and
+`remove` read when the registry vat cannot answer.
+A failed installation, whether its factory or a step before it failed, stays inspectable and is
+not retried; remove it and install again.
 `thix remove ./private-state NAME` removes an installation of either kind, completed, failed, or
 pending: its vat is retired, so references already held elsewhere break, and the name is free.
 This initial version provides installation, not live code upgrades.
@@ -255,7 +258,7 @@ builds the adapter with `makeAdapter` from `@endo/thixotrope/native-adapter.js`,
 identity rules, the two verbs that acquire and release the resource, and optionally `resolve`,
 what a registration became once bound (a delay becoming a deadline, say), which the manager adopts.
 The two halves speak one protocol, so `resources/http` is HTTP and little else on each side.
-The workspace retains installation bookkeeping and the public facet.
+The registry vat retains the installation and the workspace inventory holds the public facet.
 Each manager receives its own daemon startup notification, independently of workspace execution,
 and an exit notice when its adapter process ends on its own, after a backoff that grows with
 consecutive quick exits; it rebuilds the adapter on either while anything is registered.
@@ -264,9 +267,9 @@ the native process from the stored ephemeral bundle, and manages its lifetime.
 It contains no HTTP listener implementation or HTTP-specific installation commands.
 
 Installation stores only the public facet in the requested inventory slot, through
-the same workspace registry and phases as an application.
-An interrupted installation resumes when the same directory and name are installed again.
-The retry reuses the manager vat; it does not rerun a completed durable factory attempt.
+the same registry as an application.
+An interrupted installation resumes by itself at the next start.
+The resumption reuses the manager vat; it does not rerun a completed durable factory attempt.
 The HTTP facet provides `register(port, handler, policy?)`; the returned handle provides
 `status()` and `close()`.
 An unavailable port still returns a handle; `status()` retries binding and reports an error
@@ -352,14 +355,15 @@ The process checks wall-clock time before reporting, so this is not a precise ti
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 9 is required.
+Workspace metadata version 10 is required.
 It includes dedicated native manager vats (version 4), the mail address book that introduces
 contacts through the `mail-introductions` resource with observable inbox and outbox maps
 (version 5), adapter launchers described by the manager vat that owns them, so that removing or
 collecting a manager closes its processes (version 6), one installation registry for applications
 and native resources whose values live in the inventory (version 7), the clock and mailbox provided
-as installations in vats of their own (version 8), and native adapters launched from bundles stored
-under their digest together with the clock as a native resource with no host ledger (version 9).
+as installations in vats of their own (version 8), native adapters launched from bundles stored
+under their digest together with the clock as a native resource with no host ledger (version 9),
+and the registry in a vat of the daemon's own with the host's index beside it (version 10).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 

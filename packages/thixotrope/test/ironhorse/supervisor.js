@@ -155,10 +155,10 @@ test.serial(
     const publications = JSON.parse(
       await readFile(hubPath, 'utf8'),
     ).publications;
-    // The workspace root, and the clock manager's start notice: the clock is
-    // a native resource, and a native manager's lifecycle facet is published
-    // privately for its notices.
-    t.is(Object.keys(publications).length, 2);
+    // The workspace root, the registry vat, and the clock manager's start
+    // notice: the clock is a native resource, and a native manager's
+    // lifecycle facet is published privately for its notices.
+    t.is(Object.keys(publications).length, 3);
 
     // A worker allocation exists, but its selection record did not commit.
     await rm(configPath);
@@ -166,8 +166,8 @@ test.serial(
     const recoveredSelection = await connect(t, path);
     const status = await recoveredSelection.call('status');
     t.is(status.workspace, workerId);
-    // The workspace and the provided clock and mailbox.
-    t.is(status.workers.length, 3);
+    // The workspace, the registry, and the provided clock and mailbox.
+    t.is(status.workers.length, 4);
     t.is(await recoveredSelection.call('evaluate', 'retained'), '91');
     await recoveredSelection.call('stop');
     t.is((await second.exited)[0], 0);
@@ -253,7 +253,7 @@ test.serial(
     t.is((await restored.call('status')).workspace, before.workspace);
     t.is(await restored.call('evaluate', 'E(counter).incr()'), '3n');
     const after = await restored.call('status');
-    t.is(after.workers.length, 4);
+    t.is(after.workers.length, 5);
     t.not(after.timings.delivery.count, '0');
     // Only the supervisor reads the store; client access is confined to socket.
     // eslint-disable-next-line no-bitwise
@@ -643,13 +643,13 @@ test.serial(
       ),
       "'undefined:undefined'",
     );
-    t.is((await admin.call('status')).workers.length, 4);
+    t.is((await admin.call('status')).workers.length, 5);
     await admin.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);
     t.is(
       (await admin.call('status')).workers.length,
-      4,
+      5,
       'repeat installation reuses its vat',
     );
     await t.throwsAsync(
@@ -687,7 +687,7 @@ test.serial(
     await restored.call('install', 'counter-app', bundle, [
       ['counter', 'counter'],
     ]);
-    t.is((await restored.call('status')).workers.length, 4);
+    t.is((await restored.call('status')).workers.length, 5);
     await restored.call('stop');
     t.is((await second.exited)[0], 0);
   },
@@ -731,8 +731,9 @@ test.serial(
     t.truthy(JSON.parse(listed.output).find(entry => entry.name === 'counter'));
     const graph = await transcript(t, path, '', 'reachability');
     t.is(graph.code, 0);
-    // The workspace, the counter, and the provided clock and mailbox.
-    t.is(JSON.parse(graph.output).workers.length, 4);
+    // The workspace, the counter, the registry, and the provided clock and
+    // mailbox.
+    t.is(JSON.parse(graph.output).workers.length, 5);
     const collection = await transcript(t, path, '', 'collect');
     t.is(collection.code, 0);
     t.deepEqual(JSON.parse(collection.output), []);

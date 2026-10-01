@@ -5,6 +5,7 @@ import test from '@endo/ses-ava/test.js';
 import {
   mkdir,
   mkdtemp,
+  readFile,
   realpath,
   rm,
   symlink,
@@ -214,60 +215,85 @@ test.serial(
   },
 );
 
-test.serial('shutdown waits for an accepted native installation', async t => {
-  t.timeout(30_000);
-  const path = await mkdtemp('/tmp/thix-install-close-');
-  t.teardown(() => rm(path, { recursive: true, force: true }));
-  const { promise: started, resolve: bundleStarted } = makePromiseKit();
-  const { promise: gate, resolve: releaseBundle } = makePromiseKit();
-  let released = false;
-  const supervisor = await serveThixotrope(
-    harden({
-      ...powers,
-      bundler: harden({
-        ...powers.bundler,
-        bundle: async file => {
-          bundleStarted(undefined);
-          await gate;
-          t.false(released, 'installation retains store ownership');
-          return powers.bundler.bundle(file);
-        },
+test.serial(
+  'shutdown does not wait for an installation being bundled',
+  async t => {
+    t.timeout(30_000);
+    const path = await mkdtemp('/tmp/thix-install-close-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const { promise: started, resolve: bundleStarted } = makePromiseKit();
+    const { promise: gate, resolve: releaseBundle } = makePromiseKit();
+    const supervisor = await serveThixotrope(
+      harden({
+        ...powers,
+        bundler: harden({
+          ...powers.bundler,
+          bundle: async file => {
+            bundleStarted(undefined);
+            await gate;
+            return powers.bundler.bundle(file);
+          },
+        }),
       }),
-    }),
-    path,
-    {
+      path,
+      {
+        engine: harden({
+          ...makePeerJournalReplayEngine(powers),
+          acquireStore: async () => async () => {},
+        }),
+      },
+    );
+    t.teardown(() => {
+      releaseBundle(undefined);
+      return supervisor.close();
+    });
+    const client = await connectLocalControl(
+      powers,
+      join(path, 'control.sock'),
+    );
+    t.teardown(() => client.close());
+    const installing = client.call(
+      'installNative',
+      'resource',
+      fileURLToPath(new URL('./fixtures/native-resource/', import.meta.url)),
+    );
+    const observed = installing.catch(error => {
+      t.regex(error.message, /Session disconnected/);
+    });
+    await started;
+    client.close();
+    await client.closed;
+    // Bundling is the host's and holds nothing durable: the stop proceeds, the
+    // request fails with its connection, and the next start lists nothing
+    // under the name; an installation the registry holds resumes, which the
+    // Ironhorse lane covers.
+    const closing = supervisor.close();
+    t.false(
+      await Promise.race([closing.then(() => false), setTimeout(2000, true)]),
+      'shutdown did not wait for the bundling',
+    );
+    releaseBundle(undefined);
+    await observed;
+    const again = await serveThixotrope(powers, path, {
       engine: harden({
         ...makePeerJournalReplayEngine(powers),
-        acquireStore: async () => async () => {
-          released = true;
-        },
+        acquireStore: async () => async () => {},
       }),
-    },
-  );
-  t.teardown(() => {
-    releaseBundle(undefined);
-    return supervisor.close();
-  });
-  const client = await connectLocalControl(powers, join(path, 'control.sock'));
-  t.teardown(() => client.close());
-  const installing = client.call(
-    'installNative',
-    'resource',
-    fileURLToPath(new URL('./fixtures/native-resource/', import.meta.url)),
-  );
-  const observed = installing.catch(error => {
-    t.regex(error.message, /Session disconnected/);
-  });
-  await started;
-  client.close();
-  await client.closed;
-  const closing = supervisor.close();
-  t.true(await Promise.race([closing.then(() => false), setTimeout(50, true)]));
-  releaseBundle(undefined);
-  await closing;
-  await observed;
-  t.true(released);
-});
+    });
+    t.teardown(() => again.close());
+    const reconnected = await connectLocalControl(
+      powers,
+      join(path, 'control.sock'),
+    );
+    t.teardown(() => reconnected.close());
+    t.is(
+      (await reconnected.call('installations')).find(
+        (/** @type {{name: string}} */ entry) => entry.name === 'resource',
+      ),
+      undefined,
+    );
+  },
+);
 
 test.serial(
   'native resource descriptions require both entry files',
@@ -312,7 +338,7 @@ test.serial(
   },
 );
 
-test.serial('collection waits for native installation to finish', async t => {
+test.serial('collection spares a native installation in progress', async t => {
   t.timeout(30_000);
   const path = await mkdtemp('/tmp/thix-install-collect-');
   t.teardown(() => rm(path, { recursive: true, force: true }));
@@ -354,13 +380,13 @@ test.serial('collection waits for native installation to finish', async t => {
     fileURLToPath(new URL('./fixtures/native-resource/', import.meta.url)),
   );
   await started.promise;
-  const collecting = collector.call('collect');
-  t.true(
-    await Promise.race([collecting.then(() => false), setTimeout(50, true)]),
-  );
+  // The manager vat is rooted by the registry's reference to its facade
+  // once that has arrived, and kept by the host until then: a collection
+  // made while its module is still being installed neither waits for the
+  // installation nor sweeps the vat.
+  const swept = await collector.call('collect');
   gate.resolve(undefined);
   await installing;
-  const swept = await collecting;
   const status = await collector.call('status');
   const manager = status.workers.find(
     worker => worker.debugLabel === 'native:resource',
@@ -384,40 +410,47 @@ test.serial(
     t.teardown(() => rm(path, { recursive: true, force: true }));
     let host = await serve(t, path);
     const store = makeFsStore(powers, path);
-    // The clock the supervisor provides is a native resource with a bundle
-    // of its own, named by its launcher from the first start on.
+    // What the supervisor provides: the clock's two bundles and the
+    // mailbox's one, all still in the store at the start that installed
+    // them; a bundle leaves the store only at a later start's sweep.
     const provided = store.listBundles();
-    t.is(provided.length, 1);
+    t.is(provided.length, 3);
     await host.client.call(
       'installNative',
       'one',
       fileURLToPath(new URL('./fixtures/native-resource/', import.meta.url)),
     );
-    const others = store.listBundles().filter(d => !provided.includes(d));
-    t.is(others.length, 1);
-    const [installed] = others;
-    t.regex(installed, /^[0-9a-f]{64}$/);
+    const installed = store
+      .listBundles()
+      .filter(digest => !provided.includes(digest));
+    t.is(installed.length, 2, 'the installation put both of its bundles');
+    for (const digest of installed) t.regex(digest, /^[0-9a-f]{64}$/);
     // A bundle nothing names: left by an installation interrupted before its
     // manager held the launcher, say.
     const orphan = store.putBundle(
       'module.exports = { make: () => undefined };\n',
     );
-    t.deepEqual(store.listBundles(), [...provided, installed, orphan].sort());
+    t.deepEqual(
+      store.listBundles(),
+      [...provided, ...installed, orphan].sort(),
+    );
     host.client.close();
     await host.supervisor.close();
     host = await serve(t, path);
-    t.deepEqual(
-      store.listBundles(),
-      [...provided, installed].sort(),
-      'the orphan is freed and the named bundles kept',
-    );
+    // The orphan and the bundles whose vats hold their code are freed; the
+    // two a launcher names, the clock's and the installation's ephemeral
+    // bundles, are kept.
+    const kept = store.listBundles();
+    t.is(kept.length, 2);
+    t.is(kept.filter(digest => provided.includes(digest)).length, 1);
+    t.is(kept.filter(digest => installed.includes(digest)).length, 1);
     t.true(await host.client.call('remove', 'one'));
     host.client.close();
     await host.supervisor.close();
     host = await serve(t, path);
     t.deepEqual(
       store.listBundles(),
-      provided,
+      kept.filter(digest => provided.includes(digest)),
       'a removed installation frees its bundle at the next start',
     );
   },
@@ -482,6 +515,152 @@ test.serial(
       await version(),
       '1',
       'a restarted installation has no use for the directory',
+    );
+  },
+);
+
+test.serial(
+  'a quarantined registry vat leaves the host serving from its index',
+  async t => {
+    t.timeout(60_000);
+    const path = await mkdtemp('/tmp/thix-registry-quarantine-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const directory = fileURLToPath(
+      new URL('./fixtures/native-resource/', import.meta.url),
+    );
+    let host = await serve(t, path);
+    await host.client.call('installNative', 'one', directory);
+    const { registry } = await host.client.call('status');
+    host.client.close();
+    await host.supervisor.close();
+    // The registry vat halted: its metadata records the failure, as the
+    // transport does for a delivery that ends a vat.
+    const store = makeFsStore(powers, path);
+    const workerStore = store.provideWorkerStore(registry);
+    workerStore.setMeta({
+      ...workerStore.getMeta(),
+      failure: 'halted for the test',
+    });
+    host = await serve(t, path);
+    const listed = await host.client.call('installations');
+    t.deepEqual(
+      listed.map((/** @type {{name: string}} */ entry) => entry.name).sort(),
+      ['clock', 'mailbox', 'one'],
+      'the index lists what the registry held',
+    );
+    const one = listed.find(
+      (/** @type {{name: string}} */ entry) => entry.name === 'one',
+    );
+    t.like(one, { kind: 'native', status: 'ready' });
+    t.false(
+      Object.hasOwn(one, 'allocationKey'),
+      "the index's own columns stay the host's",
+    );
+    await t.throwsAsync(
+      () =>
+        host.client.call('install', 'two', '({ make: () => undefined })', []),
+      { message: /quarantined/ },
+    );
+    await t.throwsAsync(
+      () => host.client.call('installNative', 'two', directory),
+      { message: /quarantined/ },
+    );
+    const before = (await host.client.call('status')).workers.length;
+    t.true(await host.client.call('remove', 'one'));
+    t.is(
+      (await host.client.call('status')).workers.length,
+      before - 1,
+      'the index named the vat to retire',
+    );
+    t.false(
+      (await host.client.call('installations')).some(
+        (/** @type {{name: string}} */ entry) => entry.name === 'one',
+      ),
+    );
+    t.false(await host.client.call('remove', 'one'));
+  },
+);
+
+test.serial(
+  "the host's index covers a request before the registry has it, and is cleared of one it never got",
+  async t => {
+    t.timeout(60_000);
+    const path = await mkdtemp('/tmp/thix-index-provisional-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    const indexPath = join(path, 'installations.json');
+    const entries = async () =>
+      JSON.parse(await readFile(indexPath, 'utf8')).entries;
+    let host = await serve(t, path);
+    // A request the registry refuses leaves nothing in the index.
+    await t.throwsAsync(
+      () =>
+        host.client.call('install', 'refused', '({ make: () => undefined })', [
+          ['power', 'absent'],
+        ]),
+      { message: /Unknown inventory grant/ },
+    );
+    t.false('refused' in (await entries()));
+    host.client.close();
+    await host.supervisor.close();
+    // Two requests the registry never received, the host having ended
+    // between recording them and handing them over: their bundles are kept
+    // for them at the next start, the registry does not list them, one is
+    // replaced by a new request under its name and the other removed.
+    const store = makeFsStore(powers, path);
+    const ghostBundle = store.putBundle('({ make: () => undefined })');
+    const orphanBundle = store.putBundle('({ make: () => null })');
+    const file = JSON.parse(await readFile(indexPath, 'utf8'));
+    for (const [name, bundleDigest] of [
+      ['ghost', ghostBundle],
+      ['orphan', orphanBundle],
+    ]) {
+      file.entries[name] = {
+        kind: 'application',
+        digest: bundleDigest,
+        grants: [],
+        allocationKey: name === 'ghost' ? '3'.repeat(32) : '4'.repeat(32),
+        bundleDigest,
+        status: 'pending',
+        provisional: true,
+      };
+    }
+    await writeFile(indexPath, JSON.stringify(file));
+    host = await serve(t, path);
+    t.true(store.listBundles().includes(ghostBundle));
+    t.true(store.listBundles().includes(orphanBundle));
+    const names = (await host.client.call('installations')).map(
+      (/** @type {{name: string}} */ entry) => entry.name,
+    );
+    t.false(names.includes('ghost'));
+    t.false(names.includes('orphan'));
+    t.like(
+      await host.client.call(
+        'install',
+        'ghost',
+        '({ make: () => "placed" })',
+        [],
+      ),
+      { name: 'ghost', status: 'ready' },
+    );
+    t.is((await entries()).ghost.provisional, undefined);
+    t.is((await entries()).ghost.status, 'ready');
+    t.true(await host.client.call('remove', 'orphan'));
+    t.false('orphan' in (await entries()));
+    t.false(await host.client.call('remove', 'orphan'));
+    host.client.close();
+    await host.supervisor.close();
+    host = await serve(t, path);
+    t.false(
+      store.listBundles().includes(ghostBundle),
+      'the bundle of the replaced request is freed',
+    );
+    t.false(
+      store.listBundles().includes(orphanBundle),
+      'the bundle of the removed request is freed',
+    );
+    t.is(
+      await host.client.call('evaluate', "inventory.get('ghost')"),
+      "'placed'",
     );
   },
 );

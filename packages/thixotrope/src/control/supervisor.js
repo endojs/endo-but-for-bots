@@ -25,11 +25,13 @@
  * Everything durable lives in the daemon's store or the guest heap; this
  * file holds only the process-lifetime wiring between them.
  */
+/** @import { ThixotropeDaemon } from '../core/daemon.js' */
 /** @import { PlatformPowers } from '../platform/powers.js' */
 /** @import { FilePowers } from '../platform/files.js' */
 /** @import { PromiseKit } from '@endo/promise-kit' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
+import { PENDING_ANSWER_ABORTED_MESSAGE } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makePromiseKit } from '@endo/promise-kit';
 
@@ -39,14 +41,13 @@ import { describeNativeResource } from '../native/describe-resource.js';
 import { randomHex128 } from '../random-id.js';
 import { makeSerialQueue } from '../serial-queue.js';
 
-import { evaluateSource } from './evaluate-source.js';
-import {
-  installApplication,
-  installNative,
-  removeInstallation,
-} from './install.js';
-import { makeInstallations } from './installations.js';
+import { evaluateSource } from '../core/evaluate-source.js';
+import { makeInstallationIndex } from './installation-index.js';
+import { makeInstaller } from './installer.js';
+import { makeRegistry } from './registry.js';
+import { makeWorkspaceAccess } from './workspace-access.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
+import { makeFileSyncStringAtom } from '../store/file-sync-string-atom.js';
 import { make as makeClock } from '../../resources/clock/durable.js';
 import { makeDurableNetLayer } from '../net/durable-netlayer.js';
 import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
@@ -81,18 +82,16 @@ import {
 // mailbox are installations the supervisor provides, each in its own vat;
 // 9: native adapters are launched from bundles stored under their digest,
 // which the launcher's description names in place of a directory, and the
-// clock is a native resource, with no host alarm ledger.
-const WORKSPACE_VERSION = 9;
+// clock is a native resource, with no host alarm ledger; 10: the
+// installation registry is the host's, in a registry vat of its own with an
+// index beside it, and a workspace only resolves grants and holds values.
+const WORKSPACE_VERSION = 10;
+// The daemon takes allocation keys from the host alone, so a fixed key names
+// the host's own registry vat and nothing else can carry it.
+const REGISTRY_ALLOCATION_KEY = '00000000000000000000000000000001';
 
 // sun_path on the strictest supported platform: 104 bytes including the NUL.
 const MAX_SOCKET_PATH_BYTES = 103;
-// A stuck installation cannot block `stop`: installations are resumable, so
-// shutdown waits this long for an accepted one and then proceeds. This bounds
-// the host-side phases (describing and bundling the directory, booting the
-// manager); a delivery stalled inside the workspace vat is bounded by the
-// engine's request timeout, as every other delivery is.
-const INSTALL_DRAIN_MS = 10_000;
-
 /**
  * @param {FilePowers} files
  * @param {string} path
@@ -231,6 +230,11 @@ export const serveThixotrope = async (
   const { promise: stopped } = stopKit;
   const requestStop = () => stopKit.resolve();
   let daemon;
+  /** @type {PromiseKit<ThixotropeDaemon>} */
+  const daemonKit = makePromiseKit();
+  // A daemon that fails to start rejects the kit for the host calls waiting
+  // on it; the failure itself is the caller's, so the kit's copy is handled.
+  void daemonKit.promise.catch(() => {});
   /** @type {Awaited<ReturnType<typeof makeUnixNetLayer>> | undefined} */
   let peerNetlayer;
   const closePeers = async () => {
@@ -266,6 +270,21 @@ export const serveThixotrope = async (
 
   try {
     const store = makeFsStore({ syncFiles, paths }, statePath);
+    // Collection takes its turn with a vat allocation in flight, which has
+    // no root until its facade is answered; the registry vat itself
+    // serialises installations and removals, and roots the vat of an
+    // installation it is driving.
+    const serialized = makeSerialQueue();
+    // Vats the installer has handed out that the registry vat has not yet
+    // named in a later call: nothing roots one until the registry holds its
+    // facade, so a collection is told to keep them.
+    /** @type {Set<string>} */
+    const allocating = new Set();
+    // The host's own record of installations, written by the registry vat
+    // at every step and read here when that vat cannot answer; loaded under
+    // the store lease, with the workspace metadata.
+    /** @type {ReturnType<typeof makeInstallationIndex>} */
+    let index;
     daemon = await makeThixotropeDaemon(
       { timers, random, logging },
       {
@@ -274,6 +293,18 @@ export const serveThixotrope = async (
         nativeWorkers: platform.nativeWorkers,
         codec: syrupCodec,
         idleSleepMs,
+        // A bundle an installation has put in the store but not yet staged
+        // is named by the index until it is.
+        retainBundles: () =>
+          index
+            .list()
+            .flatMap(entry =>
+              [
+                entry.bundleDigest,
+                entry.durableDigest,
+                entry.ephemeralDigest,
+              ].filter(digest => typeof digest === 'string'),
+            ),
         validateState: async () => {
           try {
             config = JSON.parse(await files.readText(configPath));
@@ -286,8 +317,31 @@ export const serveThixotrope = async (
               `Incompatible workspace metadata: this build requires version ${WORKSPACE_VERSION}; migrate or use a fresh state directory`,
             );
           }
+          const atom = makeFileSyncStringAtom(
+            syncFiles,
+            paths.join(statePath, 'installations.json'),
+          );
+          index = makeInstallationIndex(
+            harden({
+              read: atom.read,
+              // Written under the store lease only, like every store write.
+              /** @param {string} text */
+              write: text => {
+                rawEngine.assertStoreOwnership?.();
+                atom.write(text);
+              },
+            }),
+          );
         },
         resources: {
+          installer: () =>
+            makeInstaller({
+              daemon: daemonKit.promise,
+              store,
+              serialize: serialized,
+              allocating,
+            }),
+          'installation-index': () => index.resource(),
           // Makers run while the endpoint restores, before `daemon` is
           // assigned and before the netlayer exists, so every use of the
           // daemon is deferred to the call.
@@ -325,6 +379,15 @@ export const serveThixotrope = async (
           );
         },
       },
+    ).then(
+      built => {
+        daemonKit.resolve(built);
+        return built;
+      },
+      error => {
+        daemonKit.reject(error);
+        throw error;
+      },
     );
 
     if (config === undefined) {
@@ -355,6 +418,101 @@ export const serveThixotrope = async (
     )
       throw Error('Invalid workspace metadata');
     const workspace = daemon.getWorker(config.workerId);
+    // The registry vat is the host's: allocated under a fixed key, so every
+    // start finds the same vat with no record to lose, and published under
+    // a name only the host knows, as a retention root. Publishing is
+    // idempotent, so it is made at every start rather than recorded.
+    const registryWorker = await daemon.createWorker({
+      debugLabel: 'registry',
+      allocationKey: REGISTRY_ALLOCATION_KEY,
+    });
+    const registryPublication = `registry-${registryWorker.workerId}`;
+    const registryHealthy = () =>
+      !daemon
+        .inspectWorkers()
+        .find(worker => worker.workerId === registryWorker.workerId)?.failure;
+    // A quarantined registry vat is left as it is: the host serves without
+    // it, listing and removing installations from its index, and says so.
+    /** @type {any} */
+    let registry;
+    if (registryHealthy()) {
+      // The registry's source is more than one message should carry on
+      // Ironhorse: a vat that already holds the registry is asked first, so
+      // a start costs one message, and the transfer goes in bounded chunks.
+      registry = await registryWorker.evaluate('globalThis.registry');
+      if (registry === undefined) {
+        registry = await evaluateSource(
+          registryWorker,
+          `(({ installer, index, restartMessage }) =>
+            (globalThis.registry ??= (${makeRegistry.toString()})({ installer, index, restartMessage })))`,
+          {
+            installer: daemon.makeResource('installer'),
+            index: daemon.makeResource('installation-index'),
+            restartMessage: PENDING_ANSWER_ABORTED_MESSAGE,
+          },
+        );
+      }
+      daemon.publish(registry, registryPublication);
+    } else {
+      log.error(
+        'The registry vat is quarantined: installations are listed and removed from the host index, and none can be made; this version offers no command to repair it',
+      );
+    }
+    const assertRegistry = () => {
+      if (!registryHealthy())
+        throw Error(
+          'The registry vat is quarantined; installations can be listed and removed, not made',
+        );
+    };
+    /**
+     * Hand an installation request to the registry vat. The host's index
+     * names the request's bundles first: the registry journals the request
+     * before the host hears of it, so a host that ended between the two
+     * would otherwise sweep the bundles at its next start, from under the
+     * driver resuming the request. The registry's own record replaces this
+     * one at its first step; one for a request the registry refused is
+     * forgotten here.
+     * @param {any} request
+     */
+    const requestInstall = async request => {
+      if (requested) throw Error('Supervisor is stopping');
+      const { name } = request;
+      const held = index.get(name);
+      // A record of the host's own is replaced by the registry's at its
+      // first step; one still the host's names a request the registry never
+      // received, the host having ended in between, and is replaced too.
+      const provisional =
+        held === undefined ||
+        (held.provisional === true &&
+          (await E(registry).lookup(name)) === undefined);
+      if (provisional) {
+        index.record(name, {
+          kind: request.kind,
+          digest: request.digest,
+          grants: Array.isArray(request.grants) ? request.grants : [],
+          allocationKey: request.allocationKey,
+          ...(request.bundleDigest === undefined
+            ? {}
+            : { bundleDigest: request.bundleDigest }),
+          ...(request.durableDigest === undefined
+            ? {}
+            : { durableDigest: request.durableDigest }),
+          ...(request.ephemeralDigest === undefined
+            ? {}
+            : { ephemeralDigest: request.ephemeralDigest }),
+          status: 'pending',
+          provisional: true,
+        });
+      }
+      try {
+        return await E(registry).install(request);
+      } catch (error) {
+        // Refused before the registry held it: still the host's record.
+        if (provisional && index.get(name)?.provisional === true)
+          index.forget(name);
+        throw error;
+      }
+    };
     // Metadata selects the vat before initialization. Repeating initialization
     // after a crash reuses its globals instead of replacing retained values.
     if (!config.initialized) {
@@ -369,7 +527,7 @@ export const serveThixotrope = async (
     }
     let inventory;
     /** @type {any} */
-    let installations;
+    let workspaceAccess;
     if (
       !daemon
         .inspectWorkers()
@@ -379,97 +537,65 @@ export const serveThixotrope = async (
         `(globalThis.inventory ??= (${makeObservableMap.toString()})())`,
       );
       await E(inventory).disconnectEphemeral();
-      // One delivery both creates the registry and reports what it holds
-      // of the installations provided below: every delivery into the
-      // workspace costs a crank under Ironhorse, and a start pays this one.
-      /** @type {Record<string, {workerId?: string, complete: boolean} | undefined>} */
-      let provided;
-      [installations, provided] = await workspace.evaluate(
-        `[(globalThis.installations ??= (${makeInstallations.toString()})(inventory)), { clock: installations.lookup('clock'), mailbox: installations.lookup('mailbox') }]`,
-      );
+      // The workspace's whole part in installing: resolving grants and
+      // holding installed values. The registry vat does the rest. A vat
+      // that already holds the access object is asked first, so a start
+      // costs one message rather than the source again.
+      workspaceAccess = await workspace.evaluate('globalThis.workspaceAccess');
+      if (workspaceAccess === undefined) {
+        workspaceAccess = await evaluateSource(
+          workspace,
+          `(() => (globalThis.workspaceAccess ??= (${makeWorkspaceAccess.toString()})(inventory)))`,
+          {},
+        );
+      }
       /**
        * An installation the supervisor provides rather than the user: the
-       * same path as any application, so it has a vat, a budget and a
+       * same path as any installation, so it has a vat, a budget and a
        * failure lifetime of its own, is listed with the rest, and can be
        * removed, in which case the next start provides it again. Its digest
-       * is a constant: what it ships changes only with the workspace version.
-       * A name the user has taken is theirs; the supervisor says so and goes
-       * on without. Nothing here reads the inventory global, which the user
-       * may have replaced.
+       * is a constant: what it ships changes only with the workspace
+       * version. A name the user has taken is theirs; the supervisor says so
+       * and goes on without. Nothing here reads the inventory global, which
+       * the user may have replaced.
        *
-       * The installer is used only for one that is missing, unfinished, or
-       * whose vat is gone (a removal interrupted after retiring it), which
-       * the installer forgets and replaces; a healthy one costs a start
-       * nothing beyond the registry's own report.
+       * The registry finds one it holds again, so a healthy installation
+       * costs a start one lookup; only one that is missing, or whose
+       * installation did not complete, is installed, and its code is put in
+       * the store for that.
        * @param {string} name
-       * @param {string} source an expression yielding `{ make }`
+       * @param {() => Promise<{kind: 'application', bundleDigest: string} | {kind: 'native', durableDigest: string, ephemeralDigest: string}>} stage
+       *   put the code in the store and name it
        */
-      const provide = async (name, source) => {
-        const held = provided[name];
-        if (
-          held?.complete &&
-          held.workerId !== undefined &&
-          daemon.listWorkerIds().includes(held.workerId)
-        )
+      const provide = async (name, stage) => {
+        if (!registryHealthy()) {
+          log.error(`${name} not provided: the registry vat is quarantined`);
           return;
-        try {
-          const { result } = await installApplication(daemon, workspace, {
-            name,
-            digest: `builtin:${name}`,
-            allocationKey: randomId(),
-            bundle: source,
-            grants: [],
-          });
-          await result;
-        } catch (error) {
-          log.error(`${name} not provided:`, error);
         }
-      };
-      /**
-       * A native resource the supervisor provides, from a directory the
-       * package ships, under the same rule as `provide`: a constant digest,
-       * installed only when missing, unfinished or without its vat. Its
-       * durable factory is shipped by source like every other built-in, so
-       * it must be whole (closing over nothing but the guest prelude), and
-       * a start bundles nothing.
-       * @param {string} name
-       * @param {string} directory
-       * @param {(powers: any) => unknown} make the durable module's factory
-       */
-      const provideNative = async (name, directory, make) => {
-        const held = provided[name];
-        if (
-          held?.complete &&
-          held.workerId !== undefined &&
-          daemon.listWorkerIds().includes(held.workerId)
-        )
-          return;
         try {
-          const description = await describeNativeResource(
-            { files, paths },
-            directory,
+          const held = await E(registry).lookup(name);
+          if (held?.status === 'ready') {
+            if (
+              held.workerId !== undefined &&
+              daemon.listWorkerIds().includes(held.workerId)
+            )
+              return;
+            // Ready, but its vat is gone: retired by the host while the
+            // registry could not answer. The name is freed and provided
+            // afresh.
+            await E(registry).remove(name);
+          }
+          const { result } = await requestInstall(
+            harden({
+              name,
+              digest: `builtin:${name}`,
+              allocationKey: randomId(),
+              grants: [],
+              workspace: workspaceAccess,
+              ...(await stage()),
+            }),
           );
-          // The adapter's module is bundled into the store under its digest
-          // once, here; the launcher names the digest, so the package's own
-          // directory is never pinned and may change underneath a running
-          // installation. The installed clock keeps running the bundle it
-          // was installed with, so a change to what its two halves say to
-          // each other is a WORKSPACE_VERSION bump, which makes a fresh
-          // installation of it.
-          const bundleDigest = store.putBundle(
-            await platform.bundler.bundleNative(description.ephemeralPath),
-          );
-          await installNative(daemon, workspace, {
-            name,
-            digest: `builtin:${name}`,
-            allocationKey: randomId(),
-            bundle: `({ make: ${make.toString()} })`,
-            makeAdapters: workerId =>
-              daemon.makeResource('native-adapter', {
-                bundleDigest,
-                workerId,
-              }),
-          });
+          await result;
         } catch (error) {
           log.error(`${name} not provided:`, error);
         }
@@ -477,15 +603,32 @@ export const serveThixotrope = async (
       // The clock is a native resource shipped with the package: its manager
       // vat holds every pending deadline, and its adapter process holds the
       // timers. Removing it retires both; the next start provides it again.
-      await provideNative(
-        'clock',
-        paths.resolve(packagePath, 'resources', 'clock'),
-        makeClock,
-      );
-      await provide(
-        'mailbox',
-        `({ make: () => (${makeMailbox.toString()})((${makeObservableMap.toString()})) })`,
-      );
+      // Its durable factory is shipped by source like every other built-in,
+      // so it must be whole (closing over nothing but the guest prelude); the
+      // adapter's module is bundled into the store under its digest, so the
+      // package's own directory is never pinned and may change underneath a
+      // running installation. The installed clock keeps running the bundle
+      // it was installed with, so a change to what its two halves say to
+      // each other is a WORKSPACE_VERSION bump, which makes a fresh
+      // installation of it.
+      await provide('clock', async () => {
+        const directory = paths.resolve(packagePath, 'resources', 'clock');
+        return {
+          kind: 'native',
+          durableDigest: store.putBundle(`({ make: ${makeClock.toString()} })`),
+          ephemeralDigest: store.putBundle(
+            await platform.bundler.bundleNative(
+              paths.join(directory, 'ephemeral.js'),
+            ),
+          ),
+        };
+      });
+      await provide('mailbox', async () => ({
+        kind: 'application',
+        bundleDigest: store.putBundle(
+          `({ make: () => (${makeMailbox.toString()})((${makeObservableMap.toString()})) })`,
+        ),
+      }));
     }
     // Only the lock owner may reclaim the socket left by a dead supervisor.
     await files.remove(socketPath, { force: true });
@@ -551,15 +694,28 @@ export const serveThixotrope = async (
       });
       return wrapped;
     };
-    // Installations, removals and collection take turns: an allocation has
-    // no guest root until its facade reaches the registry, and a removal
-    // must not race the installation it removes.
-    const serialized = makeSerialQueue();
     const assertWorkspace = () => {
       if (requested) throw Error('Supervisor is stopping');
-      if (installations === undefined)
+      if (workspaceAccess === undefined)
         throw Error('The workspace vat is quarantined; repair it first');
     };
+    /**
+     * The registry vat's view of what is installed, or the host index's
+     * when that vat cannot answer, in the same shape: the index also names
+     * vats, allocation keys and bundles, which stay the host's.
+     */
+    const listInstallations = async () =>
+      registryHealthy()
+        ? E(registry).list()
+        : index
+            .list()
+            .map(({ name, kind, digest, grants, status, error }) =>
+              harden({ name, kind, digest, grants, status, error }),
+            );
+    // Vats the installer has handed out and the registry has not yet named
+    // are kept from collection; one retired meanwhile is no longer a vat.
+    const kept = () =>
+      [...allocating].filter(id => daemon.listWorkerIds().includes(id));
     const adminMethods = {
       help: () =>
         'Local supervisor: evaluate(source), status(), stop(), install(name, bundle, grants), installNative(name, directory), installations(), remove(name), alarmStatus(), reachability(), collect(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id); each connection also has watchInventory(listener).',
@@ -573,6 +729,7 @@ export const serveThixotrope = async (
       status: () =>
         harden({
           workspace: config.workerId,
+          registry: registryWorker.workerId,
           ...(ironhorseLimits ? { ironhorse: ironhorseLimits } : {}),
           workers: daemon.inspectWorkers(),
           timings: Object.fromEntries(
@@ -600,31 +757,34 @@ export const serveThixotrope = async (
        * @param {Array<[string, string]>} grants
        */
       install: async (name, bundle, grants) => {
-        // The lock covers allocation and staging; the factory itself may
-        // await anything, and a removal or collection must not wait for it.
-        const { result } = await serialized(async () => {
-          assertWorkspace();
-          if (typeof bundle !== 'string') throw Error('Expected module bundle');
-          const digest = hashes.sha256Hex(new TextEncoder().encode(bundle));
-          return installApplication(daemon, workspace, {
+        assertWorkspace();
+        assertRegistry();
+        if (typeof bundle !== 'string') throw Error('Expected module bundle');
+        // The bundle goes into the store, where the registry vat has the
+        // host stage it from; the vat never holds it. The install answers
+        // once the factory has been called; the factory itself may await
+        // anything, and nothing here waits for it but this request.
+        const bundleDigest = store.putBundle(bundle);
+        const { result } = await requestInstall(
+          harden({
             name,
-            digest,
+            kind: 'application',
+            digest: bundleDigest,
             allocationKey: randomId(),
-            bundle,
             grants,
-          });
-        });
-        await result;
-        return (await E(installations).list()).find(
-          entry => entry.name === name,
+            workspace: workspaceAccess,
+            bundleDigest,
+          }),
         );
+        await result;
+        return (await E(registry).list()).find(entry => entry.name === name);
       },
       installations: () => {
-        assertWorkspace();
-        return E(installations).list();
+        if (requested) throw Error('Supervisor is stopping');
+        return listInstallations();
       },
-      reachability: () => daemon.inspectReachability(),
-      collect: () => serialized(() => daemon.collectVats()),
+      reachability: () => daemon.inspectReachability({ keep: kept() }),
+      collect: () => serialized(() => daemon.collectVats({ keep: kept() })),
       inventoryStatus: () => {
         if (inventory === undefined)
           throw Error('The workspace vat is quarantined; repair it first');
@@ -632,46 +792,54 @@ export const serveThixotrope = async (
       },
       /**
        * Install a native resource from its directory: both entry modules
-       * are bundled now, the durable one for the manager vat and the
-       * ephemeral one into the store under its digest, for every process
-       * the manager launches. The installation's identity is the pair of
-       * bundle digests, so the directory is not consulted again and may be
-       * edited or removed afterwards; its new version is a new installation.
+       * are bundled, the durable one for the manager vat and the ephemeral
+       * one for every process the manager launches, and both go into the
+       * store under their digests, where the registry vat has the host take
+       * them from. The installation's identity is the pair of digests, so
+       * the directory is not consulted again and may be edited or removed
+       * afterwards; its new version is a new installation.
        * @param {string} name
        * @param {string} directory
        */
-      installNative: (name, directory) =>
-        serialized(async () => {
-          assertWorkspace();
-          if (typeof directory !== 'string')
-            throw Error('Expected a native resource directory');
-          const description = await describeNativeResource(
-            { files, paths },
-            paths.resolve(directory),
-          );
-          const { bundle, digest: durableBundleDigest } =
-            await platform.bundler.bundle(description.durablePath);
-          const ephemeralBundleDigest = store.putBundle(
-            await platform.bundler.bundleNative(description.ephemeralPath),
-          );
-          const digest = hashes.sha256Hex(
-            new TextEncoder().encode(
-              JSON.stringify([durableBundleDigest, ephemeralBundleDigest]),
-            ),
-          );
-          await installNative(daemon, workspace, {
+      installNative: async (name, directory) => {
+        assertWorkspace();
+        assertRegistry();
+        if (typeof directory !== 'string')
+          throw Error('Expected a native resource directory');
+        const description = await describeNativeResource(
+          { files, paths },
+          paths.resolve(directory),
+        );
+        const { bundle } = await platform.bundler.bundle(
+          description.durablePath,
+        );
+        const ephemeralBundle = await platform.bundler.bundleNative(
+          description.ephemeralPath,
+        );
+        // Bundling is the host's and may outlast a stop: nothing goes into
+        // the store once the supervisor is stopping.
+        if (requested) throw Error('Supervisor is stopping');
+        const durableDigest = store.putBundle(bundle);
+        const ephemeralDigest = store.putBundle(ephemeralBundle);
+        const digest = hashes.sha256Hex(
+          new TextEncoder().encode(
+            JSON.stringify([durableDigest, ephemeralDigest]),
+          ),
+        );
+        const { result } = await requestInstall(
+          harden({
             name,
+            kind: 'native',
             digest,
             allocationKey: randomId(),
-            bundle,
-            makeAdapters: workerId =>
-              daemon.makeResource('native-adapter', {
-                bundleDigest: ephemeralBundleDigest,
-                workerId,
-              }),
-          });
-          return harden({ name, directory: description.directory, digest });
-        }),
+            workspace: workspaceAccess,
+            durableDigest,
+            ephemeralDigest,
+          }),
+        );
+        await result;
+        return harden({ name, directory: description.directory, digest });
+      },
       /**
        * Remove an installation of either kind by name: its vat is retired,
        * the processes it launched are closed, and the name is free again,
@@ -679,13 +847,25 @@ export const serveThixotrope = async (
        * Capabilities already handed out from it break.
        * @param {string} name
        */
-      remove: name =>
-        serialized(async () => {
-          assertWorkspace();
-          if (typeof name !== 'string' || !name.length)
-            throw Error('Expected an inventory name');
-          return removeInstallation(daemon, workspace, name);
-        }),
+      remove: async name => {
+        if (requested) throw Error('Supervisor is stopping');
+        if (typeof name !== 'string' || !name.length)
+          throw Error('Expected an inventory name');
+        if (registryHealthy() && (await E(registry).remove(name))) return true;
+        // The registry vat does not hold the name, or cannot answer. The
+        // host index may still: for a request that never reached the
+        // registry, the host having ended between recording it and handing
+        // it over, or for a vat the registry cannot retire. It is retired
+        // and forgotten here; the inventory entry, if any, is the
+        // workspace's to clear.
+        const entry = index.get(name);
+        if (entry === undefined) return false;
+        const { workerId } = entry;
+        if (workerId !== undefined && daemon.listWorkerIds().includes(workerId))
+          await serialized(() => daemon.getWorker(workerId).retire());
+        index.forget(name);
+        return true;
+      },
       alarmStatus: async () => {
         assertWorkspace();
         // The clock counts its own pending alarms; the host keeps none.
@@ -775,13 +955,8 @@ export const serveThixotrope = async (
         // Remove the endpoint while still holding the lease. A successor's
         // socket must never be removed by this process after ownership passes.
         try {
-          // Draining the queue: an empty turn settles once everything
-          // before it has, and nothing new is admitted once stopping.
-          await settleWithin(
-            timers,
-            INSTALL_DRAIN_MS,
-            serialized(async () => {}),
-          );
+          // An installation in flight is the registry vat's to resume: its
+          // continuation survives the stop, so nothing here waits for it.
           await closeControl();
         } finally {
           try {

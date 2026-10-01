@@ -5,7 +5,8 @@ import { getInterfaceGuardPayload } from '@endo/patterns';
 import test from '@endo/ses-ava/test.js';
 
 import { makeAdapterKeeper } from '../src/adapter-keeper.js';
-import { makeInstallations } from '../src/control/installations.js';
+import { makeRegistry } from '../src/control/registry.js';
+import { makeWorkspaceAccess } from '../src/control/workspace-access.js';
 import { guestPrelude } from '../src/guest/prelude.js';
 import { makeMailAddressBook } from '../src/mail/mail-address-book.js';
 import { makeMailContact } from '../src/mail/mail-contact.js';
@@ -85,10 +86,27 @@ test('the observable map, mailbox, contact and address book are whole', async t 
   t.is(await first, 0n, 'the plain listener was notified');
 });
 
-test('the installation registry is whole', t => {
-  const installations = evaluateShipped(makeInstallations)(new Map());
-  assertInterface(t, installations, 'Installations');
-  t.deepEqual(installations.list(), []);
+test('the registry and the workspace access are whole', async t => {
+  const registry = evaluateShipped(makeRegistry)(
+    harden({
+      installer: Far('Installer', {}),
+      index: Far('Index', {}),
+      restartMessage: 'restart',
+    }),
+  );
+  assertInterface(t, registry, 'Registry');
+  t.deepEqual(registry.list(), []);
+  t.is(registry.lookup('absent'), undefined);
+  const inventory = new Map([['granted', Far('Granted', {})]]);
+  const access = evaluateShipped(makeWorkspaceAccess)(inventory);
+  assertInterface(t, access, 'WorkspaceAccess');
+  t.deepEqual(
+    Object.keys(await E(access).lookupGrants(harden([['power', 'granted']]))),
+    ['power'],
+  );
+  t.throws(() => access.lookupGrants(harden([['power', 'absent']])), {
+    message: /Unknown inventory grant/,
+  });
 });
 
 test('the native manager and its kit are whole', async t => {

@@ -1,19 +1,26 @@
 // @ts-check
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
+import { PENDING_ANSWER_ABORTED_MESSAGE } from '@endo/ocapn';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
+import { makePromiseKit } from '@endo/promise-kit';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import test from '@endo/ses-ava/test.js';
+import { setTimeout } from 'node:timers/promises';
+import { fileURLToPath } from 'node:url';
 
-import { installNative, removeInstallation } from '../src/control/install.js';
-import { makeInstallations } from '../src/control/installations.js';
+import { makeInstallationIndex } from '../src/control/installation-index.js';
+import { makeInstaller } from '../src/control/installer.js';
+import { makeRegistry } from '../src/control/registry.js';
+import { makeWorkspaceAccess } from '../src/control/workspace-access.js';
 import { makeThixotropeDaemon } from '../src/core/daemon.js';
 import { makePeerSnapshottingReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
+import { makeSerialQueue } from '../src/serial-queue.js';
 import { makeMemoryStore } from '../src/store/store-memory.js';
 
 const powers = makeNodePowers();
-const bundle = `(() => {
+const durableBundle = `(() => {
   globalThis.loads = (globalThis.loads ?? 0) + 1;
   return { make: () => {
     globalThis.factories = (globalThis.factories ?? 0) + 1;
@@ -26,281 +33,392 @@ const bundle = `(() => {
     });
   }};
 })()`;
-const options = harden({
-  name: 'resource',
-  digest: 'pinned-code',
-  allocationKey: '1'.repeat(32),
-  bundle,
-  makeAdapters: () => Far('UnusedAdapters', {}),
-});
+const ephemeralPath = fileURLToPath(
+  new URL('./fixtures/native-resource/ephemeral.js', import.meta.url),
+);
 
-/** @param {ReturnType<typeof makeMemoryStore>} store */
-const start = store =>
-  makeThixotropeDaemon(powers, {
+/** A string atom in memory, for the index. */
+const makeMemoryAtom = () => {
+  /** @type {string | undefined} */
+  let text;
+  return harden({
+    read: () => text,
+    /** @param {string} next */
+    write: next => {
+      text = next;
+    },
+  });
+};
+
+/**
+ * A daemon with the registry's host resources, as the supervisor wires
+ * them, whose installer can be told to end the daemon right after one of
+ * its operations has taken effect and before its answer is delivered: the
+ * host restart the registry vat's driver is written to survive.
+ *
+ * @param {ReturnType<typeof makeMemoryStore>} store
+ * @param {ReturnType<typeof makeInstallationIndex>} index
+ * @param {{ after?: 'allocate' | 'installNativeModule' | 'record', collectAfterAllocate?: boolean }} [interrupt]
+ */
+const start = async (store, index, { after, collectAfterAllocate } = {}) => {
+  /** @type {any} */
+  let daemon;
+  const daemonKit = makePromiseKit();
+  /** @type {Promise<void> | undefined} */
+  let crashed;
+  // As the supervisor wires them: allocation and collection take turns, and
+  // a vat handed out is kept until the registry names it again.
+  const serialized = makeSerialQueue();
+  /** @type {Set<string>} */
+  const allocating = new Set();
+  const kept = () =>
+    [...allocating].filter(id => daemon.listWorkerIds().includes(id));
+  /** @type {Promise<string[]> | undefined} */
+  let collected;
+  const never = new Promise(() => {});
+  /**
+   * @param {string} operation
+   * @param {() => Promise<unknown>} run
+   */
+  const interrupting = async (operation, run) => {
+    const result = await run();
+    if (operation === after) {
+      // The crash is made out of band, so the delivery in progress is one
+      // the restart breaks rather than one that ends the daemon itself.
+      crashed = setTimeout(0).then(() => daemon.crash());
+      await never;
+    }
+    return result;
+  };
+  daemon = await makeThixotropeDaemon(powers, {
     store,
     engine: makePeerSnapshottingReplayEngine(powers),
     codec: syrupCodec,
     makeNetlayer: ({ handlers, logger }) =>
       makeTcpNetLayer({ handlers, logger }),
-  });
-
-for (const phase of [
-  'allocation',
-  'attachment',
-  'initialization',
-  'notice',
-  'inventory',
-]) {
-  test.serial(`native installation resumes after ${phase} commits`, async t => {
-    t.timeout(30_000);
-    const store = makeMemoryStore();
-    const first = await start(store);
-    t.teardown(() => first.crash());
-    const workspace = await first.createWorker({ debugLabel: 'workspace' });
-    const root = await workspace.evaluate(`(() => {
-      globalThis.inventory = new Map();
-      globalThis.installations = (${makeInstallations.toString()})(inventory);
-      return Far('Workspace', {});
-    })()`);
-    first.publish(root, 'workspace');
-    const interrupted = () => {
-      throw Error('interrupted after commit');
-    };
-    const wrap = manager =>
-      harden({
-        ...manager,
-        evaluate: async (source, endowments) => {
-          const result = await manager.evaluate(source, endowments);
-          if (
-            phase === 'initialization' &&
-            source.includes('globalThis.eval(source)')
-          )
-            interrupted();
-          return result;
-        },
-        notifyOnStart: target => {
-          const result = manager.notifyOnStart(target);
-          if (phase === 'notice') interrupted();
-          return result;
-        },
-      });
-    const installingDaemon = harden({
-      ...first,
-      createWorker: async config => {
-        const manager = await first.createWorker(config);
-        if (phase === 'allocation') interrupted();
-        return wrap(manager);
-      },
-      getWorker: id => wrap(first.getWorker(id)),
-    });
-    const installingWorkspace = harden({
-      ...workspace,
-      evaluate: async (source, endowments) => {
-        const result = await workspace.evaluate(source, endowments);
-        if (
-          (phase === 'attachment' && source.includes('installations.attach')) ||
-          (phase === 'inventory' && source.includes('installations.finish'))
-        )
-          interrupted();
-        return result;
-      },
-    });
-    await t.throwsAsync(
-      () => installNative(installingDaemon, installingWorkspace, options),
-      {
-        message: 'interrupted after commit',
-      },
-    );
-    const managerId = first
-      .inspectWorkers()
-      .find(worker => worker.debugLabel === 'native:resource')?.workerId;
-    t.truthy(managerId);
-    if (managerId === undefined) throw Error('Manager was not allocated');
-    await first.crash();
-
-    const second = await start(store);
-    t.teardown(() => second.shutdown());
-    const restored = second.getWorker(workspace.workerId);
-    await installNative(second, restored, {
-      ...options,
-      allocationKey: '2'.repeat(32),
-    });
-    const managers = second
-      .inspectWorkers()
-      .filter(worker => worker.debugLabel === 'native:resource');
-    t.is(managers.length, 1);
-    t.is(managers[0].workerId, managerId);
-    const registration = await restored.evaluate("inventory.get('resource')");
-    t.is(await E(registration).loads(), 1);
-    t.is(await E(registration).factories(), 1);
-    const manager = second.getWorker(managers[0].workerId);
-    await manager.sleep();
-    await restored.sleep();
-    t.false((await second.collectVats()).includes(managers[0].workerId));
-    // Its own lifecycle publication keeps the manager recoverable even when
-    // the workspace is no longer present to dispatch anything.
-    await restored.retire();
-    await second.crash();
-    const third = await start(store);
-    t.teardown(() => third.shutdown());
-    t.true(
-      await third
-        .getWorker(managers[0].workerId)
-        .evaluate(
-          'E(nativeManager.kit.facet).starts().then(count => count >= 1)',
+    retainBundles: () =>
+      index
+        .list()
+        .flatMap(entry =>
+          [entry.durableDigest, entry.ephemeralDigest].filter(
+            digest => typeof digest === 'string',
+          ),
         ),
-    );
+    resources: {
+      installer: () => {
+        const installer = makeInstaller({
+          daemon: daemonKit.promise,
+          store,
+          serialize: serialized,
+          allocating,
+        });
+        return Far('InterruptibleInstaller', {
+          /**
+           * @param {string} label
+           * @param {string} allocationKey
+           */
+          allocate: (label, allocationKey) => {
+            // Called directly, so its serialised turn is queued now, and a
+            // collection queued right behind it runs once the vat exists
+            // and before its facade has reached the registry vat: where the
+            // supervisor's `collect` can land.
+            const allocated = installer.allocate(label, allocationKey);
+            if (collectAfterAllocate)
+              collected = serialized(() =>
+                daemon.collectVats({ keep: kept() }),
+              );
+            return interrupting('allocate', () => allocated);
+          },
+          /**
+           * @param {string} workerId
+           * @param {string} bundleDigest
+           */
+          stage: (workerId, bundleDigest) =>
+            E(installer).stage(workerId, bundleDigest),
+          /**
+           * @param {string} workerId
+           * @param {string} durableDigest
+           * @param {string} ephemeralDigest
+           */
+          installNativeModule: (workerId, durableDigest, ephemeralDigest) =>
+            interrupting('installNativeModule', () =>
+              E(installer).installNativeModule(
+                workerId,
+                durableDigest,
+                ephemeralDigest,
+              ),
+            ),
+          /** @param {string} workerId */
+          retire: workerId => E(installer).retire(workerId),
+        });
+      },
+      'installation-index': () => {
+        const facet = index.resource();
+        return Far('InterruptibleIndex', {
+          /**
+           * @param {string} name
+           * @param {any} entry
+           */
+          record: (name, entry) =>
+            interrupting('record', async () => E(facet).record(name, entry)),
+          /** @param {string} name */
+          forget: name => E(facet).forget(name),
+        });
+      },
+    },
   });
+  daemonKit.resolve(daemon);
+  return harden({
+    daemon,
+    crashed: () => crashed,
+    collected: () => collected,
+  });
+};
+
+/**
+ * The registry vat, the workspace vat and the bundles, made once in a fresh
+ * store; found again after a restart through the publications.
+ * @param {any} daemon
+ * @param {ReturnType<typeof makeMemoryStore>} store
+ */
+const bootstrap = async (daemon, store) => {
+  const workspace = await daemon.createWorker({ debugLabel: 'workspace' });
+  const access = await workspace.evaluate(`(() => {
+    globalThis.inventory = new Map();
+    return (globalThis.workspaceAccess = (${makeWorkspaceAccess.toString()})(inventory));
+  })()`);
+  daemon.publish(access, 'workspace');
+  const registryVat = await daemon.createWorker({ debugLabel: 'registry' });
+  const registry = await registryVat.evaluate(
+    `(globalThis.registry ??= (${makeRegistry.toString()})({ installer, index, restartMessage }))`,
+    {
+      installer: daemon.makeResource('installer'),
+      index: daemon.makeResource('installation-index'),
+      restartMessage: PENDING_ANSWER_ABORTED_MESSAGE,
+    },
+  );
+  daemon.publish(registry, 'registry');
+  const durableDigest = store.putBundle(durableBundle);
+  const ephemeralDigest = store.putBundle(
+    await powers.bundler.bundleNative(ephemeralPath),
+  );
+  return harden({
+    workspace,
+    registry,
+    access,
+    durableDigest,
+    ephemeralDigest,
+  });
+};
+
+/**
+ * @param {any} registry
+ * @param {string} name
+ * @param {string} status
+ */
+const waitForStatus = async (registry, name, status) => {
+  let found;
+  for (let attempt = 0; attempt < 400; attempt += 1) {
+    // eslint-disable-next-line no-await-in-loop
+    found = await E(registry).lookup(name);
+    if (found?.status === status) return found;
+    // eslint-disable-next-line no-await-in-loop
+    await setTimeout(25);
+  }
+  const listed = (await E(registry).list()).find(entry => entry.name === name);
+  throw Error(
+    `${name} never became ${status}: ${found?.status} ${listed?.error ?? ''}`,
+  );
+};
+
+for (const after of /** @type {const} */ ([
+  'allocate',
+  'installNativeModule',
+  'record',
+])) {
+  test.serial(
+    `a native installation resumes by itself after a host restart during ${after}`,
+    async t => {
+      t.timeout(60_000);
+      const store = makeMemoryStore();
+      const index = makeInstallationIndex(makeMemoryAtom());
+      const first = await start(store, index, { after });
+      t.teardown(() => first.daemon.crash().catch(() => {}));
+      const { workspace, registry, access, durableDigest, ephemeralDigest } =
+        await bootstrap(first.daemon, store);
+      const request = harden({
+        name: 'resource',
+        kind: 'native',
+        digest: 'pinned-code',
+        allocationKey: '1'.repeat(32),
+        workspace: access,
+        durableDigest,
+        ephemeralDigest,
+      });
+      // The host ends before this answer: the call is never answered by
+      // this daemon, and its rejection, if any, is the session's to make.
+      const installing = E(registry).install(request);
+      void installing.catch(() => {});
+      for (let i = 0; i < 400 && first.crashed() === undefined; i += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        await setTimeout(25);
+      }
+      t.truthy(first.crashed(), 'the installer interrupted the daemon');
+      await first.crashed();
+
+      // The registry vat's driver resumes on its own: no retry from anyone.
+      const second = await start(store, index);
+      t.teardown(() => second.daemon.shutdown().catch(() => {}));
+      const restoredRegistry = await second.daemon.lookup('registry');
+      t.like(await waitForStatus(restoredRegistry, 'resource', 'ready'), {
+        kind: 'native',
+        complete: true,
+      });
+      const managers = second.daemon
+        .inspectWorkers()
+        .filter(
+          (/** @type {{debugLabel?: string}} */ worker) =>
+            worker.debugLabel === 'native:resource',
+        );
+      t.is(managers.length, 1, 'one manager vat, found again under its key');
+      const restoredWorkspace = second.daemon.getWorker(workspace.workerId);
+      const registration = await restoredWorkspace.evaluate(
+        "inventory.get('resource')",
+      );
+      t.is(await E(registration).loads(), 1);
+      t.is(await E(registration).factories(), 1);
+      t.like(index.get('resource'), {
+        status: 'ready',
+        workerId: managers[0].workerId,
+      });
+      const manager = second.daemon.getWorker(managers[0].workerId);
+      await manager.sleep();
+      await restoredWorkspace.sleep();
+      t.false(
+        (await second.daemon.collectVats()).includes(managers[0].workerId),
+        'the installed vat is retained through the workspace',
+      );
+      // Its own lifecycle publication keeps the manager recoverable even when
+      // the workspace is no longer present to dispatch anything.
+      await restoredWorkspace.retire();
+      await second.daemon.crash();
+      const third = await start(store, index);
+      t.teardown(() => third.daemon.shutdown());
+      t.true(
+        await third.daemon
+          .getWorker(managers[0].workerId)
+          .evaluate(
+            'E(nativeManager.kit.facet).starts().then(count => count >= 1)',
+          ),
+      );
+    },
+  );
 }
 
 test.serial(
   'failed native factory stays in its manager and does not rerun',
   async t => {
     t.timeout(30_000);
-    const daemon = await start(makeMemoryStore());
+    const store = makeMemoryStore();
+    const index = makeInstallationIndex(makeMemoryAtom());
+    const { daemon } = await start(store, index);
     t.teardown(() => daemon.shutdown());
-    const workspace = await daemon.createWorker({ debugLabel: 'workspace' });
-    await workspace.evaluate(`(globalThis.inventory = new Map(),
-    globalThis.installations = (${makeInstallations.toString()})(inventory), true)`);
-    const broken = {
-      ...options,
-      bundle: `({make: () => {
-    globalThis.attempts = (globalThis.attempts ?? 0) + 1;
-    throw Error('factory failed');
-  }})`,
-    };
-    await t.throwsAsync(() => installNative(daemon, workspace, broken), {
-      message: /factory failed/,
+    const { workspace, registry, access, ephemeralDigest } = await bootstrap(
+      daemon,
+      store,
+    );
+    const brokenDigest = store.putBundle(`({make: () => {
+      globalThis.attempts = (globalThis.attempts ?? 0) + 1;
+      throw Error('factory failed');
+    }})`);
+    const request = harden({
+      name: 'resource',
+      kind: 'native',
+      digest: 'broken-code',
+      allocationKey: '2'.repeat(32),
+      workspace: access,
+      durableDigest: brokenDigest,
+      ephemeralDigest,
     });
-    await t.throwsAsync(() => installNative(daemon, workspace, broken), {
-      message: /factory failed/,
-    });
-    t.is(await workspace.evaluate('6 * 7'), 42);
+    const { result } = await E(registry).install(request);
+    await t.throwsAsync(() => result, { message: /factory failed/ });
+    const again = await E(registry).install(request);
+    await t.throwsAsync(() => again.result, { message: /factory failed/ });
     t.is(await workspace.evaluate('typeof attempts'), 'undefined');
     const managers = daemon
       .inspectWorkers()
-      .filter(worker => worker.debugLabel === 'native:resource');
+      .filter(
+        (/** @type {{debugLabel?: string}} */ worker) =>
+          worker.debugLabel === 'native:resource',
+      );
     t.is(managers.length, 1);
     t.is(await daemon.getWorker(managers[0].workerId).evaluate('attempts'), 1);
+    t.is(index.get('resource')?.status, 'failed');
+    t.regex(index.get('resource')?.error ?? '', /factory failed/);
 
     // The name is not lost to the failure: removal retires the manager and a
     // corrected package installs under the same name.
-    t.true(await removeInstallation(daemon, workspace, 'resource'));
+    t.true(await E(registry).remove('resource'));
     t.false(daemon.listWorkerIds().includes(managers[0].workerId));
-    t.is(
-      await workspace.evaluate('installations.lookup(name)', {
-        name: 'resource',
+    t.is(await E(registry).lookup('resource'), undefined);
+    t.is(index.get('resource'), undefined);
+    t.false(await E(registry).remove('resource'));
+    const corrected = await E(registry).install(
+      harden({
+        ...request,
+        digest: 'corrected-code',
+        allocationKey: '3'.repeat(32),
+        durableDigest: store.putBundle(durableBundle),
+        ephemeralDigest: store.putBundle(
+          await powers.bundler.bundleNative(ephemeralPath),
+        ),
       }),
-      undefined,
     );
-    t.false(await removeInstallation(daemon, workspace, 'resource'));
-    await installNative(daemon, workspace, {
-      ...options,
-      digest: 'corrected-code',
-    });
+    const facet = await corrected.result;
+    t.is(await E(facet).factories(), 1);
     t.is(
-      await workspace.evaluate("E(inventory.get('resource')).factories()"),
-      1,
+      await workspace.evaluate("inventory.get('resource') !== undefined"),
+      true,
     );
-    const replacements = daemon
-      .inspectWorkers()
-      .filter(worker => worker.debugLabel === 'native:resource');
-    t.is(replacements.length, 1);
-    t.not(replacements[0].workerId, managers[0].workerId);
   },
 );
 
 test.serial(
-  'a removal interrupted after retiring the manager is finished by the next install',
+  'a collection queued behind an allocation keeps the vat for the registry',
   async t => {
-    t.timeout(30_000);
-    const daemon = await start(makeMemoryStore());
-    t.teardown(() => daemon.shutdown());
-    const workspace = await daemon.createWorker({ debugLabel: 'workspace' });
-    await workspace.evaluate(`(globalThis.inventory = new Map(),
-    globalThis.installations = (${makeInstallations.toString()})(inventory), true)`);
-    await installNative(daemon, workspace, options);
-    const { workerId } = await workspace.evaluate(
-      'installations.lookup(name)',
-      { name: 'resource' },
+    t.timeout(60_000);
+    const store = makeMemoryStore();
+    const index = makeInstallationIndex(makeMemoryAtom());
+    const started = await start(store, index, { collectAfterAllocate: true });
+    t.teardown(() => started.daemon.shutdown().catch(() => {}));
+    const { registry, access, durableDigest, ephemeralDigest } =
+      await bootstrap(started.daemon, store);
+    const { result } = await E(registry).install(
+      harden({
+        name: 'resource',
+        kind: 'native',
+        digest: 'pinned-code',
+        allocationKey: '2'.repeat(32),
+        workspace: access,
+        durableDigest,
+        ephemeralDigest,
+      }),
     );
-    // The removal's first step, with nothing after it.
-    await daemon.getWorker(workerId).retire();
-    t.true(await workspace.evaluate("inventory.has('resource')"));
-    // A corrected package is the usual reason to remove; it must not be
-    // refused as a different installation of the stale entry.
-    await installNative(daemon, workspace, {
-      ...options,
-      digest: 'corrected-code',
-    });
-    const managers = daemon
+    await result;
+    // The facade was still on its way to the registry vat when the collection
+    // ran: nothing but the host's keep rooted the new vat then.
+    t.deepEqual(await started.collected(), []);
+    const managers = started.daemon
       .inspectWorkers()
-      .filter(worker => worker.debugLabel === 'native:resource');
+      .filter(
+        (/** @type {{debugLabel?: string}} */ worker) =>
+          worker.debugLabel === 'native:resource',
+      );
     t.is(managers.length, 1);
-    t.not(managers[0].workerId, workerId);
-    t.is(await workspace.evaluate("E(inventory.get('resource')).starts()"), 0);
-    t.deepEqual(
-      await workspace.evaluate('installations.lookup(name)', {
-        name: 'resource',
-      }),
-      { kind: 'native', workerId: managers[0].workerId, complete: true },
-    );
-    // The same interruption, retried by a removal rather than an install.
-    await daemon.getWorker(managers[0].workerId).retire();
-    t.true(await removeInstallation(daemon, workspace, 'resource'));
-    t.false(await workspace.evaluate("inventory.has('resource')"));
-    t.is(
-      await workspace.evaluate('installations.lookup(name)', {
-        name: 'resource',
-      }),
-      undefined,
-    );
-  },
-);
-
-test.serial(
-  'allocation retries validate options and do not alias diagnostic labels',
-  async t => {
-    const daemon = await start(makeMemoryStore());
-    t.teardown(() => daemon.shutdown());
-    const first = await daemon.createWorker({
-      debugLabel: 'same label',
-      allocationKey: 'a'.repeat(32),
+    t.like(await E(registry).lookup('resource'), {
+      status: 'ready',
+      complete: true,
+      workerId: managers[0].workerId,
     });
-    const second = await daemon.createWorker({
-      debugLabel: 'same label',
-      allocationKey: 'b'.repeat(32),
-    });
-    t.not(first.workerId, second.workerId);
-    t.is(
-      (
-        await daemon.createWorker({
-          debugLabel: 'same label',
-          allocationKey: 'a'.repeat(32),
-        })
-      ).workerId,
-      first.workerId,
-    );
-    await t.throwsAsync(
-      () =>
-        daemon.createWorker({
-          debugLabel: 'changed label',
-          allocationKey: 'a'.repeat(32),
-        }),
-      {
-        message: /allocation options changed/,
-      },
-    );
-    await t.throwsAsync(
-      () =>
-        daemon.createWorker({
-          debugLabel: 'same label',
-          ephemeral: true,
-          allocationKey: 'a'.repeat(32),
-        }),
-      {
-        message: /allocation options changed/,
-      },
-    );
   },
 );
