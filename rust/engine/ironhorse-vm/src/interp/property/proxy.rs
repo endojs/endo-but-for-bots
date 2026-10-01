@@ -585,18 +585,23 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         id: u16,
     ) -> Result<bool, Step> {
-        // The recursion's re-entry for a target, `mop_has`, first walks the
+        // The forwarding loop of `forwarding_loop`, written out because the
+        // recursion's re-entry for a target, `mop_has`, first walks the
         // target's ordinary levels: a Proxy past them is the next layer.
-        self.forwarding_levels_loop(
-            proxy,
-            |vm, proxy| vm.proxy_has_step(code, proxy, id),
-            |vm, target| {
-                Ok(match vm.mop_has_ordinary_levels(code, target, id)? {
-                    HasLevels::Answered(found, _) => ProxyStep::Done(found),
-                    HasLevels::Proxy(next, _) => ProxyStep::Forward(next),
-                })
-            },
-        )
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            loop {
+                let target = match vm.proxy_has_step(code, proxy, id)? {
+                    ProxyStep::Done(found) => return Ok(found),
+                    ProxyStep::Forward(target) => target,
+                };
+                vm.forwarding_hop(held)?;
+                match vm.mop_has_ordinary_levels(code, target, id)? {
+                    HasLevels::Answered(found, _) => return Ok(found),
+                    HasLevels::Proxy(next, _) => proxy = next,
+                }
+            }
+        })
     }
 
     /// One layer of the forwarding loop of [`Self::proxy_has`].

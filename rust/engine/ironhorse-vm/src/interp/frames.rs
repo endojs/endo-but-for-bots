@@ -152,67 +152,19 @@ impl Interp {
     pub(super) fn forwarding_loop<T>(
         &mut self,
         proxy: crate::value::SlotIndex,
-        step: impl FnMut(&mut Self, crate::value::SlotIndex) -> Result<ProxyStep<T>, Step>,
-        mut forwarded: impl FnMut(&mut Self, crate::value::SlotIndex) -> Result<T, Step>,
-    ) -> Result<T, Step> {
-        self.forwarding_walk(proxy, step, |vm, held, target| {
-            if vm.proxies.contains_key(&target) {
-                vm.forwarding_hop(held)?;
-                return Ok(ProxyStep::Forward(target));
-            }
-            forwarded(vm, target).map(ProxyStep::Done)
-        })
-    }
-
-    /// The Proxy arm of an internal method whose re-entry for a target, the
-    /// guarded entry the recursion called, walks the target's ordinary levels
-    /// before it reaches the next Proxy (`[[HasProperty]]`; an index-keyed
-    /// `[[Get]]`, whose re-entry first runs the Array Iterator's context
-    /// check). Every forward is charged the unit that re-entry would have
-    /// been, before `levels` runs on the target, and `levels` answers or names
-    /// the Proxy past the target's ordinary levels as the next layer.
-    #[inline(always)]
-    pub(super) fn forwarding_levels_loop<T>(
-        &mut self,
-        proxy: crate::value::SlotIndex,
-        step: impl FnMut(&mut Self, crate::value::SlotIndex) -> Result<ProxyStep<T>, Step>,
-        mut levels: impl FnMut(&mut Self, crate::value::SlotIndex) -> Result<ProxyStep<T>, Step>,
-    ) -> Result<T, Step> {
-        self.forwarding_walk(proxy, step, |vm, held, target| {
-            vm.forwarding_hop(held)?;
-            levels(vm, target)
-        })
-    }
-
-    /// The loop the forwarding walks share ([`Self::forwarding_loop`],
-    /// [`Self::forwarding_levels_loop`]): `step` takes a Proxy layer, and a
-    /// forward hands its target to `forwarded`, which charges the layer
-    /// through [`Self::forwarding_hop`] on the count it is handed and either
-    /// answers or names the next Proxy. Every unit is held until the walk
-    /// returns, on every return path. The Proxy `[[Get]]` walk keeps its own
-    /// loop (`proxy_get_forwarded`), which threads the forwarded metering and
-    /// takes the first layer outside the walk to keep a single layer's frame.
-    #[inline(always)]
-    fn forwarding_walk<T>(
-        &mut self,
-        proxy: crate::value::SlotIndex,
         mut step: impl FnMut(&mut Self, crate::value::SlotIndex) -> Result<ProxyStep<T>, Step>,
-        mut forwarded: impl FnMut(
-            &mut Self,
-            &mut usize,
-            crate::value::SlotIndex,
-        ) -> Result<ProxyStep<T>, Step>,
+        forwarded: impl FnOnce(&mut Self, crate::value::SlotIndex) -> Result<T, Step>,
     ) -> Result<T, Step> {
         self.with_forwarding_walk(|vm, held| {
             let mut proxy = proxy;
             loop {
-                let target = match step(vm, proxy)? {
+                match step(vm, proxy)? {
                     ProxyStep::Done(result) => return Ok(result),
-                    ProxyStep::Forward(target) => target,
-                };
-                match forwarded(vm, held, target)? {
-                    ProxyStep::Done(result) => return Ok(result),
-                    ProxyStep::Forward(next) => proxy = next,
+                    ProxyStep::Forward(target) if vm.proxies.contains_key(&target) => {
+                        vm.forwarding_hop(held)?;
+                        proxy = target;
+                    }
+                    ProxyStep::Forward(target) => return forwarded(vm, target),
                 }
             }
         })
