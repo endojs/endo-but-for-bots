@@ -38,13 +38,13 @@ const makeConfig = name => ({
 });
 
 /**
- * @param {string} sockPath
+ * @param {string} socketPath
  * @param {Promise<never>} cancelled
  */
-const connect = async (sockPath, cancelled) => {
+const connect = async (socketPath, cancelled) => {
   const { getBootstrap, closed } = await makeEndoClient(
     'client',
-    sockPath,
+    socketPath,
     cancelled,
   );
   closed.catch(() => {});

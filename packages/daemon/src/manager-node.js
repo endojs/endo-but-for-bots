@@ -159,7 +159,7 @@ const main = async () => {
     fs,
     path,
     servePath: networkPowers.servePath,
-    sockPath,
+    daemonSocketPath: sockPath,
     cancelled,
     marshalSaveError: (err, errorId) => guestMarshalSaveError?.(err, errorId),
   });

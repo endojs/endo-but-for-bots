@@ -6,7 +6,7 @@
 // confinement properties change, shape 1; designs/endo-claude.md):
 //
 //   runConfinedTurn({ formulaId, credential, prompt, model, claudePath,
-//                     guestSockPath })
+//                     guestSocketPath })
 //
 //   harness process (this module)             confined `claude -p --bare`
 //   ─────────────────────────────             ───────────────────────────
@@ -18,7 +18,7 @@
 // The harness connects to a daemon-issued guest socket
 // (`EndoBootstrap.guestBootstrapPath`), whose CapTP bootstrap is the guest
 // facet itself, so the harness holds no host. An operator issues that socket
-// once and passes its path as `guestSockPath`; without one, the turn issues it
+// once and passes its path as `guestSocketPath`; without one, the turn issues it
 // over the root socket and closes that root session before the broker starts.
 //
 // The daemon connection, its socket path, and the formula id stay in the
@@ -54,6 +54,42 @@ import { PINNED_CLI_VERSION } from './argv.js';
 /** @import { SpawnOptions, ChildProcess } from 'node:child_process' */
 /** @import { InferResult } from './claude.types.js' */
 /** @import { DaemonConnection, GuestConnection } from '@endo/agent-mcp-stdio' */
+
+/**
+ * The default harness connection: a session on `guestSocketPath`, or, when
+ * absent, on a guest socket issued for `formulaId` over the root socket
+ * (`issue` closes that root session before it returns).
+ *
+ * @param {object} options
+ * @param {string} options.formulaId
+ * @param {string} [options.guestSocketPath]
+ * @param {typeof issueGuestBootstrapPath} [options.issue]
+ * @param {typeof connectToGuestBootstrap} [options.connectTo]
+ * @returns {() => Promise<GuestConnection>}
+ */
+export const makeGuestConnect = ({
+  formulaId,
+  guestSocketPath,
+  issue = issueGuestBootstrapPath,
+  connectTo = connectToGuestBootstrap,
+}) => {
+  return async () =>
+    connectTo({
+      socketPath:
+        guestSocketPath ??
+        (await issue({
+          formulaId,
+          env: process.env,
+          platform: process.platform,
+          info: {
+            user: os.userInfo().username,
+            home: os.homedir(),
+            temp: os.tmpdir(),
+          },
+        })),
+    });
+};
+harden(makeGuestConnect);
 
 /**
  * Read `claude --version` (for example `2.1.232 (Claude Code)`) under the
@@ -103,7 +139,7 @@ const defaultPathValue = nodePath =>
  * @param {string} options.claudePath - absolute path of the pinned `claude`.
  * @param {string[]} [options.pinnedModels] - defaults to `[model]`.
  * @param {string} [options.pinnedCliVersion]
- * @param {string} [options.guestSockPath] - a daemon-issued guest socket for
+ * @param {string} [options.guestSocketPath] - a daemon-issued guest socket for
  *   `formulaId` (`EndoBootstrap.guestBootstrapPath`). When absent, the default
  *   `connect` issues one over this process's `ENDO_SOCK` / default socket.
  * @param {() => Promise<GuestConnection | DaemonConnection>} [options.connect]
@@ -129,22 +165,8 @@ export const runConfinedTurn = async ({
   claudePath,
   pinnedModels = [model],
   pinnedCliVersion = PINNED_CLI_VERSION,
-  guestSockPath,
-  connect = async () =>
-    connectToGuestBootstrap({
-      sockPath:
-        guestSockPath ??
-        (await issueGuestBootstrapPath({
-          formulaId,
-          env: process.env,
-          platform: process.platform,
-          info: {
-            user: os.userInfo().username,
-            home: os.homedir(),
-            temp: os.tmpdir(),
-          },
-        })),
-    }),
+  guestSocketPath,
+  connect = makeGuestConnect({ formulaId, guestSocketPath }),
   version = '0.0.0',
   parentDir = os.tmpdir(),
   nodePath = process.execPath,

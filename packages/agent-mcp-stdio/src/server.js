@@ -251,9 +251,9 @@ harden(makeGuestMcpServer);
 /**
  * Open an Endo client session on a socket.
  *
- * @param {string} sockPath
+ * @param {string} socketPath
  */
-const openClient = async sockPath => {
+const openClient = async socketPath => {
   const { makeEndoClient } = await import('@endo/daemon');
   /** @type {(reason: Error) => void} */
   let cancel = () => {};
@@ -264,7 +264,7 @@ const openClient = async sockPath => {
   cancelled.catch(() => {});
   const { getBootstrap, closed } = await makeEndoClient(
     'endo-mcp-stdio',
-    sockPath,
+    socketPath,
     cancelled,
     undefined,
     { onReject: () => {} },
@@ -311,11 +311,11 @@ harden(connectToDaemon);
  * guest facet, so the session reaches that guest and carries no host.
  *
  * @param {object} options
- * @param {string} options.sockPath - the guest socket.
+ * @param {string} options.socketPath - the guest socket.
  * @returns {Promise<GuestConnection>}
  */
-export const connectToGuestBootstrap = async ({ sockPath }) => {
-  const { bootstrap, closed, close } = await openClient(sockPath);
+export const connectToGuestBootstrap = async ({ socketPath }) => {
+  const { bootstrap, closed, close } = await openClient(socketPath);
   return harden({ guest: bootstrap, closed, close });
 };
 harden(connectToGuestBootstrap);

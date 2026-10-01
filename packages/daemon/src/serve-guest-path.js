@@ -76,10 +76,10 @@ export const makeGuestPathIssuer = ({
         X`Guest socket name ${q(name)} is already issued to another guest`,
       );
     }
-    const sockPath = socketPathFor(name);
-    if (sockPath.length > MAX_SOCKET_PATH_LENGTH) {
+    const socketPath = socketPathFor(name);
+    if (socketPath.length > MAX_SOCKET_PATH_LENGTH) {
       throw makeError(
-        X`Guest socket path is too long for a Unix socket: ${q(sockPath)}`,
+        X`Guest socket path is too long for a Unix socket: ${q(socketPath)}`,
       );
     }
     numberByName.set(name, formulaNumber);
@@ -89,7 +89,7 @@ export const makeGuestPathIssuer = ({
       }
       await directoryReady;
       const { started, stopped } = servePrivatePath(
-        sockPath,
+        socketPath,
         /** @type {FarRef<unknown>} */ (guest),
         {
           servePath,
@@ -101,7 +101,7 @@ export const makeGuestPathIssuer = ({
       );
       stopped.catch(reportError);
       await started;
-      return sockPath;
+      return socketPath;
     })();
     issuedByNumber.set(formulaNumber, issued);
     // A failed issue may be retried.

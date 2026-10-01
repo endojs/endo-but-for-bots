@@ -54,7 +54,7 @@ runConfinedTurn({
     : { pinnedCliVersion: values['pinned-cli-version'] }),
   ...(values['guest-socket'] === undefined
     ? {}
-    : { guestSockPath: values['guest-socket'] }),
+    : { guestSocketPath: values['guest-socket'] }),
 }).then(
   result => {
     process.stdout.write(`${JSON.stringify(result)}\n`, () =>
