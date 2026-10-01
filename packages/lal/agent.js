@@ -217,11 +217,11 @@ export const make = (guestPowers, _context) => {
       }
     };
 
-    /** @param {any} msg */
-    const isOwnForm = msg =>
-      msg.type === 'form' &&
-      Array.isArray(msg.fromNames) &&
-      msg.fromNames.includes('@self');
+    /** @param {any} message */
+    const isOwnForm = message =>
+      message.type === 'form' &&
+      Array.isArray(message.fromNames) &&
+      message.fromNames.includes('@self');
 
     // Pre-scan existing messages to find our latest form messageId so that
     // old value messages (from prior sessions) that reply to an earlier form

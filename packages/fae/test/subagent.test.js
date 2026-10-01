@@ -537,7 +537,7 @@ test('ask rejects an out-of-range timeout and an oversized task', async t => {
   t.is(mailbox.stream.length, 0);
 });
 
-test('spawnSubagent leaves the parent’s edge to the spawner', async t => {
+test("spawnSubagent leaves the parent's edge to the spawner", async t => {
   const mailbox = makeMailbox({ names: {} });
   const { timers } = makeManualTimers();
   const delegations = makeSubagentDelegations({

@@ -571,7 +571,7 @@ test('two stops of one subagent do not cancel it twice', async t => {
   );
 });
 
-test('the spawner binds and drops the parent’s top-level edge to its subagent', async t => {
+test("the spawner binds and drops the parent's top-level edge to its subagent", async t => {
   const { hostAgent, names } = makeFakeHost();
   const spawner = makeSubagentSpawner({
     provideContext: async () =>

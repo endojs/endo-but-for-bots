@@ -68,11 +68,11 @@ export const make = (guestPowers, _context) => {
 
     // A guest sees its correspondents by its own pet names; its own outbound
     // mail names it `@self`.
-    /** @param {any} msg */
-    const isOwnForm = msg =>
-      msg.type === 'form' &&
-      Array.isArray(msg.fromNames) &&
-      msg.fromNames.includes('@self');
+    /** @param {any} message */
+    const isOwnForm = message =>
+      message.type === 'form' &&
+      Array.isArray(message.fromNames) &&
+      message.fromNames.includes('@self');
 
     /**
      * Read the value a value message carries: a guest reaches it by adopting

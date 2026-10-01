@@ -622,7 +622,7 @@ export const makeSubagentSpawner = ({
         return 'spawn(name, { systemPrompt? }) — Create a subagent named beneath this agent, bind it in the parent as subagent.<name>, and return { name }.';
       }
       if (methodName === 'stop') {
-        return 'stop(name) — Cancel a subagent, its own subagents, and every name they own, then drop the parent’s subagent.<name>.';
+        return "stop(name) — Cancel a subagent, its own subagents, and every name they own, then drop the parent's subagent.<name>.";
       }
       if (methodName === 'list') {
         return 'list() — Names of this agent’s live subagents.';
