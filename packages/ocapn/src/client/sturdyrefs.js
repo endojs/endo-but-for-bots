@@ -80,6 +80,20 @@ export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
  * @property {Record<string, string>} [hints] how to connect to the peer
  */
 
+/** @type {readonly PropertyKey[]} */
+const sturdyRefDataKeys = harden(['peerId', 'objectId', 'network', 'hints']);
+
+/**
+ * A copy of `secret` that shares no mutable state with it. Bytes are copied
+ * with the `Uint8Array` constructor, which reads the source's elements
+ * directly, so a subclass cannot substitute its own `slice`.
+ *
+ * @param {string | Uint8Array} secret
+ * @returns {string | Uint8Array}
+ */
+const copySecret = secret =>
+  typeof secret === 'string' ? secret : new Uint8Array(secret);
+
 /**
  * Convert SturdyRef data to the `(location, secret)` pair an OCapN SturdyRef
  * is made of: `peerId` becomes `location.designator`, `network` becomes
@@ -98,13 +112,17 @@ export const sturdyRefDataToDetails = data => {
   if (typeof data !== 'object' || data === null) {
     throw TypeError('ocapn: SturdyRef data must be an object');
   }
-  const { peerId, objectId, network, hints = undefined, ...rest } = data;
-  const extra = Reflect.ownKeys(rest);
+  // Compare every own key, so a symbol-keyed or non-enumerable property
+  // cannot slip past the check.
+  const extra = Reflect.ownKeys(data).filter(
+    key => !sturdyRefDataKeys.includes(key),
+  );
   if (extra.length !== 0) {
     throw TypeError(
       `ocapn: unexpected SturdyRef data properties ${extra.map(String).join(', ')}`,
     );
   }
+  const { peerId, objectId, network, hints = undefined } = data;
   if (typeof peerId !== 'string') {
     throw TypeError('ocapn: SturdyRef peerId must be a string');
   }
@@ -140,7 +158,7 @@ export const sturdyRefDataToDetails = data => {
     }),
     // Copy bytes, so a later change to the caller's buffer cannot change
     // which object the SturdyRef names.
-    secret: typeof objectId === 'string' ? objectId : objectId.slice(),
+    secret: copySecret(objectId),
   };
 };
 
@@ -148,8 +166,10 @@ export const sturdyRefDataToDetails = data => {
  * Convert the `(location, secret)` pair of an OCapN SturdyRef to its data,
  * the inverse of `sturdyRefDataToDetails`: `location.designator` becomes
  * `peerId`, `location.network ?? location.transport` becomes `network`,
- * `location.hints` (when not `false`) becomes `hints`, and the secret becomes
- * `objectId`. The result includes the secret, so it is closely held.
+ * `location.hints` (when not `false`) becomes `hints`, and a copy of the
+ * secret becomes `objectId`. The copy keeps a holder of the data from
+ * changing, through the bytes, which object the SturdyRef names. The result
+ * includes the secret, so it is closely held.
  *
  * @param {SturdyRefDetails} details
  * @returns {SturdyRefData}
@@ -157,7 +177,7 @@ export const sturdyRefDataToDetails = data => {
 export const sturdyRefDetailsToData = ({ location, secret }) =>
   harden({
     peerId: location.designator,
-    objectId: secret,
+    objectId: copySecret(secret),
     network: location.network ?? location.transport,
     ...(location.hints ? { hints: location.hints } : {}),
   });

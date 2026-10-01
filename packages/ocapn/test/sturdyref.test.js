@@ -6,6 +6,7 @@ import { Far } from '@endo/marshal';
 import harden from '@endo/harden';
 import { passStyleOf } from '@endo/pass-style';
 import { provideSturdyRef } from '@endo/sturdyref';
+import { isDeepStrictEqual } from 'node:util';
 import fc from 'fast-check';
 import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import {
@@ -20,6 +21,7 @@ import {
   makeSturdyRef,
   makeSturdyRefTracker,
   sturdyRefDataToDetails,
+  sturdyRefDetailsToData,
 } from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
 import { AllCodecs, makeCodecTestKit } from './codecs/_codecs_util.js';
@@ -523,5 +525,80 @@ test('no SturdyRef data validation error reveals the objectId', t => {
       return message !== '' && !message.includes(objectId);
     }),
   );
+  t.pass();
+});
+
+test('mutating returned SturdyRef data bytes leaves the ref unchanged', async t => {
+  const { client } = await makeTestClient({ debugLabel: 'A' });
+  const ref = client.makeSturdyRefFromData({
+    peerId: 'p',
+    objectId: Uint8Array.of(0x80, 0x81),
+    network: 'tcp',
+  });
+  const data = client.getSturdyRefData(ref);
+  const bytes = /** @type {Uint8Array} */ (data?.objectId);
+  t.not(bytes, getSturdyRefDetails(ref)?.secret);
+  bytes[0] = 0xff;
+  t.deepEqual(getSturdyRefDetails(ref)?.secret, Uint8Array.of(0x80, 0x81));
+  t.deepEqual(
+    client.getSturdyRefData(ref)?.objectId,
+    Uint8Array.of(0x80, 0x81),
+  );
+  client.shutdown();
+});
+
+test('OCapN SturdyRef data refuses non-enumerable extra properties', t => {
+  const data = { peerId: 'p', objectId: 'x', network: 'tcp' };
+  Object.defineProperty(data, 'smuggled', { value: true, enumerable: false });
+  t.throws(() => sturdyRefDataToDetails(data), {
+    message: /unexpected SturdyRef data properties smuggled/,
+  });
+});
+
+/**
+ * Arbitrary OCapN SturdyRef data, with string or byte object ids and with or
+ * without hints.
+ */
+const sturdyRefDataArbitrary = fc
+  .tuple(
+    fc.string(),
+    fc.oneof(fc.string(), fc.uint8Array()),
+    fc.string(),
+    fc.option(fc.array(fc.tuple(fc.string(), fc.string())), {
+      nil: undefined,
+    }),
+  )
+  .map(([peerId, objectId, network, hintEntries]) => ({
+    peerId,
+    objectId,
+    network,
+    ...(hintEntries === undefined
+      ? {}
+      : { hints: Object.fromEntries(hintEntries) }),
+  }));
+
+test('SturdyRef data round-trips through details', t => {
+  fc.assert(
+    fc.property(sturdyRefDataArbitrary, data =>
+      isDeepStrictEqual(
+        sturdyRefDetailsToData(sturdyRefDataToDetails(data)),
+        data,
+      ),
+    ),
+  );
+  t.pass();
+});
+
+test('a client returns the data it constructed a SturdyRef from', async t => {
+  const { client } = await makeTestClient({ debugLabel: 'A' });
+  fc.assert(
+    fc.property(sturdyRefDataArbitrary, data =>
+      isDeepStrictEqual(
+        client.getSturdyRefData(client.makeSturdyRefFromData(data)),
+        data,
+      ),
+    ),
+  );
+  client.shutdown();
   t.pass();
 });
