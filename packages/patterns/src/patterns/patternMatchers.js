@@ -439,7 +439,8 @@ const makePatternKit = () => {
         );
       }
       case 'error':
-      case 'promise': {
+      case 'promise':
+      case 'sturdyRef': {
         return reject && reject`A ${q(kind)} cannot be a pattern`;
       }
       default: {
@@ -501,6 +502,9 @@ const makePatternKit = () => {
       }
       case 'error': {
         return reject && reject`errors cannot be patterns: ${patt}`;
+      }
+      case 'sturdyRef': {
+        return reject && reject`sturdyRefs cannot be patterns: ${patt}`;
       }
       case 'undefined':
       case 'null':
@@ -700,8 +704,15 @@ const makePatternKit = () => {
   // /////////////////////// getRankCover //////////////////////////////////////
 
   /** @type {(passStyle: PassStyle, encodePassable: KeyToDBKey) => RankCover} */
-  const getPassStyleCover = (passStyle, encodePassable) =>
-    provideStaticRanks(encodePassable)[passStyle].cover;
+  const getPassStyleCover = (passStyle, encodePassable) => {
+    const staticRanks = provideStaticRanks(encodePassable);
+    const rank =
+      staticRanks[/** @type {keyof typeof staticRanks} */ (passStyle)];
+    if (rank === undefined) {
+      throw Fail`A ${q(passStyle)} cannot be rank-ordered`;
+    }
+    return rank.cover;
+  };
 
   /** @type {GetRankCover} */
   const getRankCover = (patt, encodePassable) => {
@@ -2295,12 +2306,10 @@ const makePatternKit = () => {
   });
 };
 
-// Only include those whose meaning is independent of an imputed sort order
-// of remotables, or of encoding of passable as sortable strings. Thus,
-// getRankCover is omitted. To get one, you'd need to instantiate
-// `makePatternKit()` yourself. Since there are currently no external
-// uses of `getRankCover`, for clarity during development, `makePatternKit`
-// is not currently exported.
+// `getRankCover` is exported too. It takes the `encodePassable` that imputes
+// a sort order as an argument and rejects any pattern whose pass style has no
+// rank, such as a SturdyRef, with an error naming that pass style.
+// `makePatternKit` is not exported.
 export const {
   confirmMatches,
   confirmLabeledMatches,

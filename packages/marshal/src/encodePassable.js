@@ -913,7 +913,7 @@ harden(isEncodedRemotable);
 // /////////////////////////////////////////////////////////////////////////////
 
 /**
- * @type {Record<PassStyle, string>}
+ * @type {Record<Exclude<PassStyle, 'sturdyRef'>, string>}
  * The single prefix characters to be used for each PassStyle category.
  * `bigint` is a two-character string because each of those characters
  * individually is a valid bigint prefix (`n` for "negative" and `p` for
@@ -928,6 +928,10 @@ harden(isEncodedRemotable);
  * reserved from the same set of strings. Note that the prefix is > any
  * prefix used by any cover so that ordinal mapping keys are always outside
  * the range of valid collection entry keys.
+ *
+ * `sturdyRef` has no prefix: until marshal gives SturdyRefs a
+ * representation, encoding one throws as an unexpected pass style, and
+ * rank-ordering one throws as an unordered pass style.
  */
 export const passStylePrefixes = {
   error: '!',

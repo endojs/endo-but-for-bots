@@ -39,7 +39,10 @@ held in a `WeakMap` inside the constructor and is never reachable from the
 ref. Refs have **no identification**: two refs made from the same handler are
 distinct. Any notion of "same referent" belongs to the handler.
 
-A SturdyRef is not passable at this layer: `passStyleOf` rejects it.
+`@endo/pass-style` recognizes a ref made by the constructor installed at
+`globalThis.SturdyRef` as passable, with pass style `'sturdyRef'`.
+A ref made by a ponyfill constructor that lost the first-wins race is not
+recognized.
 
 ## First-wins
 

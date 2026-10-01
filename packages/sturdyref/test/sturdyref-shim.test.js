@@ -6,7 +6,6 @@
 import '@endo/init';
 import test from 'ava';
 import harden from '@endo/harden';
-import { passStyleOf } from '@endo/pass-style';
 import {
   makeSturdyRef,
   enliven,
@@ -63,11 +62,6 @@ test('no location: opaque, no own keys, handler unreachable', t => {
   for (const key of Reflect.ownKeys(getPrototypeOf(ref))) {
     t.not(Reflect.get(getPrototypeOf(ref), key), handler);
   }
-  t.throws(
-    () => passStyleOf(ref),
-    undefined,
-    'passStyleOf rejects a SturdyRef',
-  );
 });
 
 test('no identification: the same handler mints distinct refs', async t => {

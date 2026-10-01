@@ -42,7 +42,7 @@ export type PrimitiveStyle = AtomStyle;
 export type ContainerStyle = 'copyRecord' | 'copyArray' | 'tagged';
 
 export type PassStyle =
-  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise';
+  AtomStyle | ContainerStyle | 'remotable' | 'error' | 'promise' | 'sturdyRef';
 
 export type PassStyleMarker = 'tagged' | 'remotable';
 
@@ -60,6 +60,10 @@ export type ExtractStyle<P extends PassStyled<any, any>> = P[typeof PASS_STYLE];
 
 export type PassByCopy = Atom | Error | CopyArray | CopyRecord | CopyTagged;
 
+/**
+ * Excludes `SturdyRefObject`, which is passed by identity but, like its
+ * exclusion from `PassableCap`, has no marshal slot representation yet.
+ */
 export type PassByRef =
   | RemotableObject
   | RemotableBrand<any, any>
@@ -84,6 +88,9 @@ export type PassByRef =
  *     remote interaction.
  *   * As a special case to support system observability, error objects are
  *     Passable (PassStyle 'error').
+ *   * SturdyRefs (PassStyle 'sturdyRef') are Passable by identity, like
+ *     PassableCaps, but are not PassableCaps: marshal has no slot
+ *     representation for them yet.
  *
  * A Passable is essentially a pass-by-copy superstructure with a
  * pass-by-reference
@@ -93,7 +100,7 @@ export type PassByRef =
 export type Passable<
   PC extends PassableCap = PassableCap,
   E extends Error = Error,
-> = void | Atom | Container<PC, E> | PC | E;
+> = void | Atom | Container<PC, E> | PC | E | SturdyRefObject;
 
 export type Container<PC extends PassableCap, E extends Error> =
   | CopyArrayInterface<PC, E>
@@ -123,6 +130,7 @@ export type PassStyleOf = {
   (p: Promise<any>): 'promise';
   (p: Error): 'error';
   (p: CopyTagged): 'tagged';
+  (p: SturdyRefObject): 'sturdyRef';
   (p: readonly any[]): 'copyArray';
   // A `Uint8Array` is also `Iterable<number>`; place its byteArray
   // overload before the Iterable-as-remotable fallback so the more
@@ -183,6 +191,16 @@ export type RemotableObject<I extends InterfaceSpec = string> = PassStyled<
 // to type method names of Remotables.
 // export type RemotableMethodName = string | symbol;
 export type RemotableMethodName = PropertyKey;
+
+/**
+ * A SturdyRef is passable, analogous to a presence: it has object identity and
+ * no data. This mirrors the `SturdyRef` type of `@endo/sturdyref`, which
+ * pass-style cannot import without a dependency cycle; `types.test-d.ts`
+ * checks that the two stay in step.
+ */
+export interface SturdyRefObject {
+  readonly [Symbol.toStringTag]: 'SturdyRef';
+}
 
 /**
  * The authority-bearing leaves of a Passable's pass-by-copy superstructure.

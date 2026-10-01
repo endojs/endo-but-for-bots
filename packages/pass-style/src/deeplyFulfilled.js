@@ -136,6 +136,12 @@ export const deeplyFulfilled = async val => {
       // @ts-expect-error not assignable to type 'DeeplyAwaited<T>'
       return rem;
     }
+    case 'sturdyRef': {
+      // Like a remotable, a SturdyRef is already fulfilled. It is enlivened
+      // explicitly, with `SturdyRef.enliven`, never by awaiting.
+      // @ts-expect-error not assignable to type 'DeeplyAwaited<T>'
+      return val;
+    }
     case 'error': {
       const err = /** @type {Error} */ (val);
       // @ts-expect-error not assignable to type 'DeeplyAwaited<T>'
