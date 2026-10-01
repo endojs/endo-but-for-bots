@@ -21,6 +21,12 @@ private administration fails closed, including on revival of an existing Shell.
 Focused publication, cancellation and factory tests pass; the full Floot/UI
 regression suite passed 872 tests before the final revival regression addition.
 Operator provisioning, live Rust/compaction and remote acceptance remain pending.
+Actual daemon testing also found that daemon exit does not run manager-owned
+environment cancellation hooks. Planned restart must explicitly acknowledge
+`admin.stop()` before stopping the daemon; exit alone leaves the active-intent
+fence. This is not cleanup proof and is not automatically adopted on restoration.
+Revising the daemon-wide shutdown boundary is follow-up lifecycle research
+(#1323), not an additional native recovery mechanism in this implementation.
 
 Implementation is authorized; the first slice removes the misleading dynamic
 `mount`, `scratch`, `open`, `fork`, and unused `reset` methods from public and native
