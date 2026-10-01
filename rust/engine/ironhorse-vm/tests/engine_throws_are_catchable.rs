@@ -131,6 +131,25 @@ fn object_statics_throw_catchable_type_errors_with_xs_messages() {
     );
 }
 
+/// `new Symbol()` had no construct arm, so it fell through to the native
+/// dispatcher's catch-all and halted the engine with
+/// `NotImplemented("native-call:Symbol")`. ECMA-262 makes it a TypeError, and
+/// XS throws one before it coerces the description.
+#[test]
+fn constructing_a_symbol_throws_a_catchable_type_error() {
+    assert_catches(
+        "var r=0; try { new Symbol() } \
+         catch(e){ r=(e instanceof TypeError)+':'+e.name+': '+e.message } r",
+        "true:TypeError: new: Symbol",
+    );
+    assert_catches(
+        "var coerced = false; var r=0; \
+         try { new Symbol({ toString: function () { coerced = true; return 'd'; } }) } \
+         catch(e){ r=e.name+':'+coerced } r",
+        "TypeError:false",
+    );
+}
+
 #[test]
 fn an_engine_type_error_is_an_instance_of_the_realms_type_error() {
     assert_catches(

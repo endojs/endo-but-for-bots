@@ -1576,8 +1576,8 @@ impl Interp {
             // freely. The coercion runs guest code (`toString`/`valueOf`/
             // `@@toPrimitive`) and propagates its abrupt completion, exactly
             // where XS does — before the symbol exists, so a throwing
-            // description creates nothing. `new Symbol()` throws in JS; a
-            // `has_target` call self-names below and never coerces (XS's
+            // description creates nothing. `new Symbol()` throws in JS; the
+            // `has_target` arm below throws before coercing anything (XS's
             // `mxTypeError("new Symbol")` precedes its `fxToString`).
             Native::Symbol if !has_target => {
                 let description = arg(0);
@@ -1594,6 +1594,12 @@ impl Interp {
                 let d = self.slots.alloc(desc);
                 self.meter.tick_raw(SYMBOL_CREATE_METERING);
                 Slot::of(Kind::Symbol, Payload::Reference(d))
+            }
+            // `new Symbol()` (or a subclass's `super()`) is a catchable
+            // TypeError. Without this arm the construct fell through to the
+            // catch-all and halted the engine with `NotImplemented`.
+            Native::Symbol => {
+                return Err(self.catchable_type_error_msg("new: Symbol".into()));
             }
             // The intrinsic Iterator constructor is abstract only when called
             // directly or used as its own `new.target`. A derived constructor's
