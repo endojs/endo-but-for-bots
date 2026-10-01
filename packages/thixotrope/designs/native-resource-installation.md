@@ -65,35 +65,49 @@ resolve.
 
 One durable manager vat per installation holds every registration for that resource, separating
 the manager's execution budget, heap and failure lifetime from the workspace and from other
-managers; the workspace remains the inventory and installation coordinator.
+managers; the registry vat coordinates the installation and the workspace holds the facet in its
+inventory.
 The native child process stays ephemeral and invokes application handlers directly, so ordinary
 requests never route through the workspace.
 
-The workspace registry, shared with application installation, reserves a name, kind, code digest
-and grant mapping under a random allocation key before any vat exists.
+The registry, in a vat of the daemon's own and shared with application installation, reserves a
+name, kind, code digest and grant mapping under a random allocation key before any vat exists.
 The host records that key in the new worker's initial metadata, so allocation is idempotent
 without using diagnostic labels as identity, and the registry retains the worker facade before
 resource code runs, giving vat collection an ordinary reference to respect.
-Collection waits for an active installation to finish, so it cannot remove an unbound allocation.
+An allocation takes a turn with collection, and the host keeps a vat it has handed out from
+collection until the registry's next call about it: the facade is still on its way when the turn
+ends, and until the registry holds it nothing else roots the vat.
 
-Initialization stages the durable bundle into the manager in bounded chunks and evaluates it once
-there, together with the manager kit and the keeper, retaining the kit or the failure in the
-manager's own heap so a retry never runs the factory twice.
+The host's installer, a resource granted to the registry vat alone, stages the durable bundle
+from the store into the manager in bounded chunks and evaluates it once there, together with the
+manager kit and the keeper, retaining the kit or the failure in the manager's own heap so a retry
+never runs the factory twice; the bundle stays in the store until a later start's sweep finds
+nothing naming it, the index having stopped naming it once the manager held it.
 The host then publishes the lifecycle facet and installs the manager's start notice.
-Finally the workspace puts the facet into the inventory, checking for intervening inventory
-edits: a completed retry preserves later edits, and a failed manager retains its identity and
-error until removed.
-An interrupted installation resumes on an explicit same-identity install; startup does not
-silently complete an unfinished one.
+Finally the registry puts the facet into the inventory through the workspace's access object; a
+name taken meanwhile fails that attempt but not the installation, which keeps the facet and
+places it when the same identity is installed again, and a failed manager retains its identity
+and error until removed.
+The installation is one durable function in the registry vat, so an interrupted one resumes by
+itself at the next start: a host answer broken by the restart is made again under the same
+allocation key, and every host step is idempotent.
+The host keeps an index of its own beside the vat, written by the registry at each step, which
+names the bundles not yet staged for the sweep and answers listing and removal while the registry
+vat cannot.
+The host records a request there before handing it to the registry, since the registry journals
+the request before the host hears of it, and a start in between would otherwise sweep the bundles
+from under the resuming driver.
+A quarantined registry vat leaves the host serving from the index: installations are listed and
+removed, and none is made, until the state directory is replaced.
 
-Removal is the host's to drive, in the opposite order.
+Removal is the registry's to drive, in the opposite order.
 The manager vat is retired first, which closes the native processes it launched (each launcher is
 described by the manager that owns it), withdraws its start notice and drops the host rows keyed
 by it; only then does the registry forget the name, taking the facet out of the inventory if the
-inventory still holds it.
-A removal interrupted between the two steps leaves an entry naming a retired vat, which the next
-removal or installation under that name finishes; the reverse order could leave a manager that no
-name reaches but whose start notice still roots it.
+inventory still holds it, and the host its index entry.
+A removal interrupted between the steps resumes where it stopped; the reverse order could leave a
+manager that no name reaches but whose start notice still roots it.
 A failed or interrupted installation is removed the same way, so a corrected directory installs
 under the same name rather than over an installation the registry still holds.
 
@@ -107,8 +121,8 @@ Sending the durable bundle in one evaluation request exhausted the Ironhorse dec
 ceiling while it built intermediate string prefixes.
 Installation therefore transfers source in bounded chunks and evaluates the assembled expression;
 the workspace's mail bootstrap goes the same way, on a staging slot of its own.
-The supervisor serializes installations and waits, within a bound, for accepted installations
-before shutdown.
+The registry vat serializes installations; the supervisor does not wait for one at shutdown, since
+the driver resumes it at the next start.
 The staged source is wrapped in a simple-parameter function, the shape Ironhorse's parser accepts
 around bundled strict functions.
 Configurable execution and heap defaults are in [Ironhorse limits](ironhorse-limits.md).

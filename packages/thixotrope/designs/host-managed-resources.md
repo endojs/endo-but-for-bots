@@ -14,15 +14,17 @@ retires their processes, delivers their start notices, and indexes them.
 A workspace therefore has no code of its own beyond an observable map and an address book, and
 nothing in it needs a version bump when the host's bookkeeping changes shape.
 
-Today the code is close to this for native resources at runtime and far from it for bookkeeping.
-The host already allocates the manager vat, owns the adapter launcher (a host resource described by
-the manager's worker id), delivers the start notice and drives removal.
-But the **installation registry** that indexes every installation lives in the workspace vat's
-heap, so an installation is scoped to one workspace and managed through that workspace.
+When this note was written, the code was close to this for native resources at runtime and far
+from it for bookkeeping.
+The host already allocated the manager vat, owned the adapter launcher (a host resource described
+by the manager's worker id), delivered the start notice and drove removal.
+But the **installation registry** that indexed every installation lived in the workspace vat's
+heap, so an installation was scoped to one workspace and managed through that workspace; section 1
+moved it.
 
-## 1. Move the installation registry out of the user's workspace
+## 1. Move the installation registry out of the user's workspace (Done.)
 
-What the registry in the workspace implies today:
+What the registry in the workspace implied:
 
 - An installation is scoped to one workspace.
   The same native directory installed from two workspaces is two manager vats and two adapter
@@ -50,6 +52,16 @@ the manager hands out when a resource must be partitioned between users.
 
 Cost: a workspace version bump; `install.js` addressed at the registry vat rather than the
 workspace; the supervisor's `provide` of the clock and mailbox moves with it.
+
+Done: the registry vat is the host's, allocated under a fixed key and published under a name only
+the host knows; `installations.json` is the host's index, written by the registry vat through the
+`installation-index` resource and read by the host when the vat cannot answer; a workspace exposes
+an access object that resolves grants and takes and gives back installed values; the supervisor
+provides the clock and the mailbox through the registry.
+A quarantined registry vat leaves the host serving from the index, listing and removing
+installations and making none.
+A native resource is still installed per name from one workspace; sharing one installation between
+workspaces is section 2's.
 
 ## 2. Many workspaces, one by default
 
@@ -148,12 +160,12 @@ Each entry names the copies; the fix is the one piece they should share.
 ### Written more than once inside the package
 
 - **Bounded error text.**
-  `String(reason).slice(0, 512)` appears in `mailbox.js`, `mail-contact.js`, `installations.js`,
+  `String(reason).slice(0, 512)` appears in `mailbox.js`, `mail-contact.js`, `registry.js`,
   `manager-kit.js` and `adapter-kit.js`.
   Four of the five are shipped into vats by source, so the helper belongs in the guest prelude
   beside `makeSerialQueue`.
 - **Remotable checks that must not throw.**
-  `passStyleOf` throws on a non-passable value, so `mail-address-book.js`, `installations.js` and
+  `passStyleOf` throws on a non-passable value, so `mail-address-book.js`, `workspace-access.js` and
   `native/manager.js` each wrap it in a try/catch `isRemotable`; `@endo/pass-style`'s own
   `isRemotable` throws the same way and is not a drop-in.
   One prelude helper.
@@ -273,15 +285,15 @@ Cost: every vat holding a clock wakes once per host start to re-arm, inside
 the existing start-notice bound, and the cap on pending alarms becomes a
 per-vat matter of heap, which is where a quota belongs.
 
-### 7.2 Installation: the driver moves into the registry vat
+### 7.2 Installation: the driver moves into the registry vat (Done.)
 
-Today `install.js` is a host phase runner (`prepare`, `attach`, `start`,
-`finish`, `fail`, `lookup`, `remove`) against the registry in the workspace
-vat.
-Because the host can die between phases, each phase is recorded, a retry is
-explicit, the supervisor serialises installations and drains them within a
-bound at shutdown, and a removal interrupted between retiring the vat and
-forgetting the name is repaired by a fixup before the next `prepare`.
+Before this change `install.js` was a host phase runner (`prepare`, `attach`,
+`start`, `finish`, `fail`, `lookup`, `remove`) against the registry in the
+workspace vat.
+Because the host could die between phases, each phase was recorded, a retry
+was explicit, the supervisor serialised installations and drained them within
+a bound at shutdown, and a removal interrupted between retiring the vat and
+forgetting the name was repaired by a fixup before the next `prepare`.
 
 Proposed: with the registry vat of section 1, run the driver there as one
 async function per installation.
@@ -306,6 +318,18 @@ Removed: the phase driving in `install.js`, the phase states in
 `installations.js`, the drain bound and the removal fixup.
 Kept: allocation keys and the registry record (name, kind, digest, grants,
 allocation key, outcome).
+
+Done: `makeRegistry` runs the driver in the registry vat and makes a host call
+again when a restart broke its answer; the host's `installer` resource, granted
+to the registry vat alone, allocates under the key, stages a bundle by digest
+from the store, makes a native manager and retires a vat, each idempotently.
+The index names a bundle until its vat holds the code, and the host records a
+request in the index before handing it to the registry, so a start in between
+keeps the bundles; a later start's sweep frees them.
+Collection no longer waits for an installation: an allocation takes a turn
+with collection, and the host keeps a vat it has handed out until the
+registry's next call about it, after which the registry's own reference roots
+it.
 
 ### 7.3 What stays in the host, and why
 

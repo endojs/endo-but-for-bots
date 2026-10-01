@@ -135,6 +135,9 @@ const START_NOTICE_MS = 10_000;
  * @param {number} [options.idleSleepMs] park a worker after this long
  *   with no deliveries (see the durable worker transport's idle-sleep
  *   policy); omitted means workers sleep only on request
+ * @param {() => Array<string>} [options.retainBundles] digests of stored
+ *   bundles the embedder's own records still need, which the start-up sweep
+ *   keeps beside those a native adapter launcher names
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
@@ -148,6 +151,7 @@ const buildDaemon = async (
     resources = {},
     nativeWorkers,
     idleSleepMs = undefined,
+    retainBundles = () => [],
     verbose = false,
   },
 ) => {
@@ -1271,6 +1275,10 @@ const buildDaemon = async (
       )
         namedBundles.add(found.description.bundleDigest);
     }
+    // The embedder may name bundles its own records still need: the
+    // supervisor's installation index names the bundles of installations
+    // not yet staged.
+    for (const digest of retainBundles()) namedBundles.add(digest);
     for (const digest of store.listBundles()) {
       if (!namedBundles.has(digest)) store.deleteBundle(digest);
     }
@@ -1454,12 +1462,16 @@ const buildDaemon = async (
     },
     inspectReachability,
     collectVats: async ({ keep = [] } = {}) => {
-      const candidates = inspectReachability({ keep }).collectible;
+      // A kept vat its owner retires meanwhile is no longer a vat to keep.
+      const live = () => keep.filter(workerId => workers.has(workerId));
+      const candidates = inspectReachability({ keep: live() }).collectible;
       const swept = [];
       for (const workerId of candidates) {
         // Retirement yields: a new root or message may have appeared since the
         // previous victim. Recheck instead of sweeping a stale candidate list.
-        if (inspectReachability({ keep }).collectible.includes(workerId)) {
+        if (
+          inspectReachability({ keep: live() }).collectible.includes(workerId)
+        ) {
           // eslint-disable-next-line no-await-in-loop
           await retireWorkerNow(workerId);
           swept.push(workerId);
