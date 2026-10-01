@@ -408,6 +408,21 @@ struct Target {
     original: Option<usize>,
 }
 
+/// What `fxFunctionNodeCode` keeps across coding its parameters and body:
+/// the function's scope, the target after its code, and the coder's
+/// per-function state to restore.
+struct FunctionCode {
+    scope: usize,
+    target: usize,
+    saved_env: i32,
+    saved_eval: bool,
+    saved_program: bool,
+    saved_scope_level: i32,
+    saved_break: Option<usize>,
+    saved_continue: Option<usize>,
+    saved_return: Option<usize>,
+}
+
 /// The coder — XS's `txCoder`. Holds the record list, the target arena,
 /// the running stack/scope counters, and the program/eval flags the node
 /// emitters branch on.
@@ -450,13 +465,13 @@ pub struct Coder<'a, 'm> {
     /// its binding/assignment target (XS sets `node->symbol` before the
     /// value is coded, so the name lands in the `CONSTRUCTOR_FUNCTION` /
     /// `FUNCTION` operand). Set by the naming site, consumed by
-    /// `code_function`.
+    /// the function arm (`code_function_open`).
     pending_name: Option<SymbolName>,
     /// Staged for the next function value: it is an object/class accessor
     /// (getter/setter). XS marks the function node itself `mxGetterFlag`/
     /// `mxSetterFlag`, but the Rust parser stamps those on the *property*,
     /// so the naming site relays it here to pick the `FUNCTION`
-    /// creation-op. Captured (and cleared) at the top of `code_function`.
+    /// creation-op. Captured (and cleared) by `code_function_open`.
     pending_accessor: bool,
     /// XS's `mxExpressionNoValue`, staged for the *next* dispatched node: a
     /// statement or `for` iteration discards its expression's value, so a
@@ -1437,7 +1452,7 @@ impl Coder<'_, '_> {
         // into a nested expression.
         let no_value = std::mem::take(&mut self.no_value);
         let tail = std::mem::take(&mut self.tail);
-        if !self.walk(node, tail) {
+        if !self.walk(node, no_value, tail) {
             self.code_arm(node, no_value, tail);
         }
         self.depth -= 1;
@@ -1521,34 +1536,16 @@ impl Coder<'_, '_> {
             PrivateIdentifier => self.code_private_identifier(node),
             New => self.code_new(node),
             Params => self.code_params(node, false, false),
-            AddAssign
-            | SubtractAssign
-            | MultiplyAssign
-            | DivideAssign
-            | ModuloAssign
-            | ExponentiationAssign
-            | BitAndAssign
-            | BitOrAssign
-            | BitXorAssign
-            | LeftShiftAssign
-            | SignedRightShiftAssign
-            | UnsignedRightShiftAssign
-            | AndAssign
-            | OrAssign
-            | CoalesceAssign => self.code_compound(node, no_value),
             Increment | Decrement => self.code_postfix(node, no_value),
             Delete => self.code_delete(&node.children[0]),
             Object => self.code_object(node),
             Array => self.code_array(node),
             Binding => self.code_binding(node),
             Var | Let | Const | Using => self.code_declare(node),
-            Function | Generator => self.code_function(node),
-            Define => self.code_define(node),
-            Body => self.code_body(node),
+            // The walk runs every define (`walk.rs`), coded or not.
+            Define => unreachable!("the walk runs the define arm"),
             Return => self.code_return(node),
             ParamsBinding => self.code_params_binding(node),
-            Yield => self.code_yield(node),
-            Await => self.code_await(node),
             Delegate => self.code_delegate(node),
             Class => self.code_class(node),
             Super => self.code_super(node),
@@ -2506,19 +2503,27 @@ impl Coder<'_, '_> {
     /// generator is resumed with `.next()` (the `BRANCH_STATUS` fall-through
     /// to `target`) — threads a `.return()`/`.throw()` completion out to the
     /// function's return target. The async form (`await`/`THROW_STATUS`) and
-    /// `yield*` (`Delegate`) are deferred.
+    /// `yield*` (`Delegate`) are deferred. The walk runs it (`walk.rs`): this
+    /// is the part before the operand, returning the resume target, and
+    /// [`Coder::code_yield_close`] the rest.
     #[inline(never)]
-    fn code_yield(&mut self, node: &Node) {
+    fn code_yield_open(&mut self, node: &Node) -> usize {
         let is_async = node.flags & crate::ast::flags::ASYNC != 0;
         let target = self.create_target();
-        if is_async {
-            // Async generators yield the raw value; the async runtime wraps
-            // and awaits it.
-            self.code(&node.children[0]);
-        } else {
+        // Async generators yield the raw value; the async runtime wraps and
+        // awaits it.
+        if !is_async {
             self.add_byte(1, XS_CODE_OBJECT);
             self.add_byte(1, XS_CODE_DUB);
-            self.code(&node.children[0]);
+        }
+        target
+    }
+
+    /// `fxYieldNodeCode` after its operand.
+    #[inline(never)]
+    fn code_yield_close(&mut self, node: &Node, target: usize) {
+        let is_async = node.flags & crate::ast::flags::ASYNC != 0;
+        if !is_async {
             self.add_symbol(-2, XS_CODE_NEW_PROPERTY, "value");
             self.add_integer(0, XS_CODE_INTEGER_1, 0);
             self.add_byte(1, XS_CODE_DUB);
@@ -2704,11 +2709,10 @@ impl Coder<'_, '_> {
     /// `fxAwaitNodeCode`. Child `[expression]`. Evaluate the awaited value,
     /// `AWAIT`, and (until the async job resumes — `BRANCH_STATUS`
     /// fall-through) thread the rejection/completion out to the return
-    /// target.
+    /// target. The walk runs it (`walk.rs`): it creates the resume target,
+    /// codes the operand, then this.
     #[inline(never)]
-    fn code_await(&mut self, node: &Node) {
-        let target = self.create_target();
-        self.code(&node.children[0]);
+    fn code_await_close(&mut self, node: &Node, target: usize) {
         self.add_byte(0, XS_CODE_AWAIT);
         self.add_branch(1, XS_CODE_BRANCH_STATUS_1, target);
         self.add_byte(-1, XS_CODE_SET_RESULT);
@@ -2865,7 +2869,7 @@ impl Coder<'_, '_> {
         // An anonymous function or class takes the target identifier as its
         // name: a function via its creation operand, an anonymous class via
         // its constructor's creation operand (`code_class` leaves
-        // `pending_name` for the constructor `code_function` to consume, and
+        // `pending_name` for the constructor's function arm to consume, and
         // emits no `NAME` op since the class itself is unnamed).
         // Only a simple identifier (a declaration or a bare `Access`) names
         // the value; a member / computed / pattern target leaves the value
@@ -2985,10 +2989,22 @@ impl Coder<'_, '_> {
     /// function value), store, and pop. A define is coded once (XS's
     /// `mxDefineNodeCodedFlag`): it is hoisted to the top of its scope by
     /// [`Coder::code_define_nodes`], so the in-list statement is a no-op.
+    /// The walk runs the same steps (`walk.rs`).
     #[inline(never)]
     fn code_define(&mut self, node: &Node) {
-        if !self.defined.insert(node_id(node)) {
+        if !self.code_define_open(node) {
             return;
+        }
+        self.code(&node.children[1]);
+        self.code_define_close(node);
+    }
+
+    /// [`Coder::code_define`] up to its initializer: `false` for a define
+    /// already coded, having done nothing.
+    #[inline(never)]
+    fn code_define_open(&mut self, node: &Node) -> bool {
+        if !self.defined.insert(node_id(node)) {
+            return false;
         }
         self.code_declare_reference(node);
         // Name inference for an anonymous initializer: `export default
@@ -3000,7 +3016,11 @@ impl Coder<'_, '_> {
         if Self::infers_name(&node.children[1]) {
             self.pending_name = Self::symbol_opt(&node.children[0]);
         }
-        self.code(&node.children[1]);
+        true
+    }
+
+    /// [`Coder::code_define`] after its initializer: store and pop.
+    fn code_define_close(&mut self, node: &Node) {
         self.code_declare_assign(node);
         self.add_byte(-1, XS_CODE_POP);
     }
@@ -3022,15 +3042,15 @@ impl Coder<'_, '_> {
 
     /// The ordered statement items of a body: a `Statements` node's list,
     /// or the single statement itself.
-    fn statement_items(body: &Item) -> Vec<&Item> {
+    fn statement_items(body: &Item) -> &[Item] {
         if let Item::Node(n) = body {
             if n.token == Token::Statements {
                 if let Some(Item::List(items)) = n.children.first() {
-                    return items.iter().collect();
+                    return items;
                 }
             }
         }
-        vec![body]
+        std::slice::from_ref(body)
     }
 
     /// `fxCoderCountParameters` — the leading simple/pattern parameter
@@ -3121,7 +3141,7 @@ impl Coder<'_, '_> {
         // Hold the inferred `pending_name` across the heritage evaluation
         // so a heritage `function(){}` (itself a `CONSTRUCTOR_FUNCTION`
         // that would consume the pending name) stays anonymous, then
-        // restore it for the constructor's `code_function`.
+        // restore it for the constructor's function arm.
         let inferred_name = self.pending_name.take();
 
         // A named class binds its name to a `const` closure slot visible in
@@ -3150,7 +3170,7 @@ impl Coder<'_, '_> {
         // The constructor function, then bind the prototype/constructor pair.
         // A base constructor of a field-bearing class captures the
         // `instanceInit` closure and calls it on entry; expose the target so
-        // `code_function` can find the constructor's capturing alias.
+        // the constructor's function arm can find its capturing alias.
         let saved_instance_init = self.class_instance_init;
         self.class_instance_init = instance_init;
         self.pending_name = inferred_name;
@@ -3329,7 +3349,7 @@ impl Coder<'_, '_> {
     /// `instanceInit` / `constructorInit`): a `CONSTRUCTOR_FUNCTION` whose
     /// `BEGIN_STRICT_FIELD` body runs `fxFieldNodeCode` for each field with
     /// `this` bound to the target (constructor for static, instance for
-    /// instance fields). Mirrors `code_function`'s wrapper (save/restore,
+    /// instance fields). Mirrors the function arm's wrapper (save/restore,
     /// `CODE`/`END`, environment store). Computed-key and private fields
     /// capture their class-scope closures (`atAccess` / `symbolAccess` /
     /// `valueAccess`) as use-closure aliases in this function's own frame:
@@ -3529,8 +3549,11 @@ impl Coder<'_, '_> {
         }
     }
 
+    /// `fxFunctionNodeCode` up to its parameters, which the walk codes
+    /// (`walk.rs`), then [`Coder::code_function_params_coded`], the body
+    /// and [`Coder::code_function_close`].
     #[inline(never)]
-    fn code_function(&mut self, node: &Node) {
+    fn code_function_open(&mut self, node: &Node) -> FunctionCode {
         use crate::ast::flags as f;
         let flags = node.flags;
         let scope = self.scope_of(node);
@@ -3552,19 +3575,17 @@ impl Coder<'_, '_> {
         // Control-flow and declaring function bodies now code correctly
         // (the ported branch-threading optimizer + the store-and-pop
         // fusion handle them), so no body-shape guard is needed.
-        let is_arrow = flags & f::ARROW != 0;
         let is_strict = flags & f::STRICT != 0;
         let scope_count = *self
             .tree
             .scope_counts
             .get(&scope)
             .expect("compiler invariant: missing scope count");
-        let scope_eval = self.tree.scopes[scope].flags & crate::scoper::SCOPE_EVAL != 0;
 
         // A direct `eval` inside a **parameter default** poisons the
         // parameter scope (`fxScopeCodingParams` publishes the parameters into
         // a `with` environment) but not the body scope; the enclosing `with`
-        // frames are unwound by `fxScopeCodedBody` (see [`Coder::code_body`],
+        // frames are unwound by `fxScopeCodedBody` (see [`Coder::code_body_close`],
         // keyed on the function node's eval flag).
 
         // Save the coder's per-function state.
@@ -3668,8 +3689,25 @@ impl Coder<'_, '_> {
             }
         }
         self.code_arguments_object(scope, node, is_strict);
-        self.code(&node.children[1]); // ParamsBinding
-        self.code_function_name(scope);
+        FunctionCode {
+            scope,
+            target,
+            saved_env,
+            saved_eval,
+            saved_program,
+            saved_scope_level,
+            saved_break,
+            saved_continue,
+            saved_return,
+        }
+    }
+
+    /// `fxFunctionNodeCode` between its parameters and its body.
+    #[inline(never)]
+    fn code_function_params_coded(&mut self, node: &Node, function: &FunctionCode) {
+        use crate::ast::flags as f;
+        let flags = node.flags;
+        self.code_function_name(function.scope);
 
         self.return_target = Some(self.create_target());
         // A generator body opens by suspending at its start
@@ -3683,7 +3721,26 @@ impl Coder<'_, '_> {
             };
             self.add_byte(0, op);
         }
-        self.code(&node.children[2]); // Body
+    }
+
+    /// `fxFunctionNodeCode` after its body.
+    #[inline(never)]
+    fn code_function_close(&mut self, node: &Node, function: FunctionCode) {
+        use crate::ast::flags as f;
+        let flags = node.flags;
+        let FunctionCode {
+            scope,
+            target,
+            saved_env,
+            saved_eval,
+            saved_program,
+            saved_scope_level,
+            saved_break,
+            saved_continue,
+            saved_return,
+        } = function;
+        let is_arrow = flags & f::ARROW != 0;
+        let scope_eval = self.tree.scopes[scope].flags & crate::scoper::SCOPE_EVAL != 0;
         let rt = self.return_target.expect("function return target");
         self.place_target(0, rt);
         let end = if is_arrow {
@@ -4367,9 +4424,12 @@ impl Coder<'_, '_> {
     /// (`fxScopeCodingBody`): the `var`/function declarations publish into a
     /// `null` `with`, then the lexical declarations into an `undefined` one,
     /// so an eval-created name resolves to the right frame. Child
-    /// `[statement]`.
+    /// `[statement]`. The walk runs it (`walk.rs`): this opens the body's
+    /// scope and returns it, then the walk codes the hoisted function
+    /// declarations, the statements (inside a disposal region if the scope
+    /// has disposables) and [`Coder::code_body_close`].
     #[inline(never)]
-    fn code_body(&mut self, node: &Node) {
+    fn code_body_open(&mut self, node: &Node) -> usize {
         let scope = self.scope_of(node);
         // `fxScopeCodingBody`/`fxScopeCodedBody` key on the body *node*'s
         // `mxEvalFlag`, which the parser/hoister sets only for a **direct
@@ -4386,14 +4446,14 @@ impl Coder<'_, '_> {
         } else {
             self.scope_coding_block(scope);
         }
-        self.code_define_nodes(&node.children[0]);
-        if self.tree.scopes[scope].disposable_count > 0 {
-            let context = self.scope_code_using(scope);
-            self.code(&node.children[0]);
-            self.scope_code_used(scope, context);
-        } else {
-            self.code(&node.children[0]);
-        }
+        scope
+    }
+
+    /// The close of [`Coder::code_body_open`]'s body, after its statements
+    /// and any disposal region.
+    #[inline(never)]
+    fn code_body_close(&mut self, scope: usize) {
+        let strict = self.tree.scopes[scope].flags & crate::ast::flags::STRICT != 0;
         // `fxScopeCodedBody` keys the two-`WITHOUT` teardown on the enclosing
         // FUNCTION node's eval flag, not the body's — so the `with` frames
         // `fxScopeCodingParams`' eval branch pushed unwind even though the body
@@ -5044,39 +5104,66 @@ impl Coder<'_, '_> {
     // ---- assignment: the codeReference / codeAssign families --------
 
     /// `fxCompoundExpressionNodeCode` — `+=`, `-=`, … and the short-circuit
-    /// `&&=` / `||=` / `??=`. Children `[reference, value]`.
+    /// `&&=` / `||=` / `??=`. Children `[reference, value]`. The walk runs it
+    /// (`walk.rs`): this creates a short-circuit assignment's opcode and two
+    /// targets, then the walk codes the reference in receiver-setup mode,
+    /// [`Coder::code_compound_reference_coded`], the value and
+    /// [`Coder::code_compound_close`].
     #[inline(never)]
-    fn code_compound(&mut self, node: &Node, stmt_no_value: bool) {
+    fn code_compound_open(&mut self, node: &Node) -> Option<(usize, usize)> {
+        // Keep the two targets in one value. Arithmetic assignments have no
+        // targets; a short-circuit arm cannot observe a partially
+        // initialized pair (F063).
+        Self::compound_branch(node.token).map(|_| (self.create_target(), self.create_target()))
+    }
+
+    /// The branch around a short-circuit assignment's value, or `None` for
+    /// an arithmetic one.
+    fn compound_branch(token: Token) -> Option<i32> {
         use Token::*;
-        let no_value = stmt_no_value || node.flags & crate::ast::flags::EXPRESSION_NO_VALUE != 0;
-        let token = node.token;
-        let branch = match token {
+        match token {
             AndAssign => Some(XS_CODE_BRANCH_ELSE_1),
             OrAssign => Some(XS_CODE_BRANCH_IF_1),
             CoalesceAssign => Some(XS_CODE_BRANCH_COALESCE_1),
             _ => None,
-        };
-        // Keep the opcode and its two targets in one value. Arithmetic
-        // assignments have no targets; a short-circuit arm cannot observe a
-        // partially initialized pair (F063).
-        let shortcut = branch.map(|op| (op, self.create_target(), self.create_target()));
-        let swap = self.code_this(&node.children[0], 1);
-        if let Some((branch, else_target, _)) = shortcut {
-            if token != CoalesceAssign {
+        }
+    }
+
+    /// `fxCompoundExpressionNodeCode` between its reference and its value:
+    /// a short-circuit assignment branches around the value.
+    fn code_compound_reference_coded(&mut self, node: &Node, shortcut: Option<(usize, usize)>) {
+        if let (Some(branch), Some((else_target, _))) =
+            (Self::compound_branch(node.token), shortcut)
+        {
+            if node.token != Token::CoalesceAssign {
                 self.add_byte(1, XS_CODE_DUB);
             }
             self.add_branch(-1, branch, else_target);
-            if token != CoalesceAssign {
+            if node.token != Token::CoalesceAssign {
                 self.add_byte(-1, XS_CODE_POP);
             }
-            self.code(&node.children[1]);
+        }
+    }
+
+    /// `fxCompoundExpressionNodeCode` after its value. `swap` is the
+    /// reference's residual flag, and `stmt_no_value` the staged no-value
+    /// flag.
+    #[inline(never)]
+    fn code_compound_close(
+        &mut self,
+        node: &Node,
+        stmt_no_value: bool,
+        shortcut: Option<(usize, usize)>,
+        swap: i32,
+    ) {
+        let no_value = stmt_no_value || node.flags & crate::ast::flags::EXPRESSION_NO_VALUE != 0;
+        if shortcut.is_some() {
             self.code_compound_name(node);
         } else {
-            self.code(&node.children[1]);
-            self.add_byte(-1, compound_op(token));
+            self.add_byte(-1, compound_op(node.token));
         }
         self.code_assign(&node.children[0], 0);
-        if let Some((_, else_target, end_target)) = shortcut {
+        if let Some((else_target, end_target)) = shortcut {
             self.add_branch(0, XS_CODE_BRANCH_1, end_target);
             self.place_target(0, else_target);
             let mut swap = swap;

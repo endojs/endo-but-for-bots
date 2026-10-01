@@ -1,12 +1,15 @@
-//! The coder's walk: `code`, `code_this` and the arms that form chains, as one
-//! loop over an explicit continuation stack (STACK-DEPTH-REFACTOR.md §4.6 D2).
+//! The coder's walk: `code`, `code_this` and the arms that form chains or
+//! nests, as one loop over an explicit continuation stack
+//! (STACK-DEPTH-REFACTOR.md §4.6 D2).
 //!
-//! A member, call, logical, conditional, `if`, unary or binary chain nests one
-//! tree level per link, and the parser bounds those links only by
-//! [`crate::ast::TREE_DEPTH_LIMIT`], so coding them recursively took one group
-//! of host frames per link: a 2,043-link tagged-template chain needed 788 KB of
-//! native stack to compile. Here each such arm is split at the points where it
-//! codes a child. The part before the child runs when the node is entered; the
+//! A member, call, logical, conditional, `if`, unary, binary or assignment
+//! chain nests one tree level per link, and the parser bounds those links only
+//! by [`crate::ast::TREE_DEPTH_LIMIT`], so coding them recursively took one
+//! group of host frames per link: a 2,043-link tagged-template chain needed
+//! 788 KB of native stack to compile. Functions, their bodies and hoisted
+//! declarations, blocks, statements, `yield` and `await` nest too, within the
+//! parser's budget. Here each such arm is split at the points where it codes a
+//! child. The part before the child runs when the node is entered; the
 //! rest waits on the [`Resume`] stack until the child is coded. So the arms
 //! make the same calls in the same order (every `add_*`, `create_target`,
 //! `use_temporary`, `generate_tag`, work charge and depth check), and the walk
@@ -46,11 +49,33 @@ enum Resume<'n> {
     StatementProgram,
     /// `fxStatementNodeCode` in a body: discard the value.
     StatementBody,
+    /// `fxScopeCodeDefineNodes` for a block (or a function body, when
+    /// `body`): code the next hoisted function declaration among its
+    /// statements from `i`, then open its disposal region, if any, and code
+    /// the statements.
+    Defines {
+        node: &'n Node,
+        scope: usize,
+        i: usize,
+        body: bool,
+    },
+    /// `fxDefineNodeCode`, after the initializer: store and pop.
+    Define(&'n Node),
     /// `fxBlockNodeCode`: close the disposal region, if any, and the scope.
     Block {
         scope: usize,
         using: Option<(i32, i32, usize)>,
     },
+    /// `fxBodyNodeCode`: close the disposal region, if any, and the body.
+    Body {
+        scope: usize,
+        using: Option<(i32, i32, usize)>,
+    },
+    /// `fxFunctionNodeCode`, after the parameters. Boxed, so that every
+    /// suspended arm stays small.
+    FunctionParams(&'n Node, Box<FunctionCode>),
+    /// `fxFunctionNodeCode`, after the body.
+    FunctionBody(&'n Node, Box<FunctionCode>),
     /// `fxIfNodeCode`, after the test.
     IfTest(&'n Node),
     /// `fxIfNodeCode`, after the consequent.
@@ -119,6 +144,25 @@ enum Resume<'n> {
     },
     /// `fxAssignNodeCode`, after the value.
     Assign(&'n Node),
+    /// `fxCompoundExpressionNodeCode`, after the reference: its residual
+    /// flag is the walk's result, which every receiver-setup arm sets as its
+    /// last action (where the recursion read a fresh `code_this` return).
+    CompoundReference {
+        node: &'n Node,
+        no_value: bool,
+        shortcut: Option<(usize, usize)>,
+    },
+    /// `fxCompoundExpressionNodeCode`, after the value.
+    CompoundValue {
+        node: &'n Node,
+        no_value: bool,
+        shortcut: Option<(usize, usize)>,
+        swap: i32,
+    },
+    /// `fxYieldNodeCode`, after the operand.
+    Yield(&'n Node, usize),
+    /// `fxAwaitNodeCode`, after the operand.
+    Await(&'n Node, usize),
     /// `fxMemberNodeCodeThis`, after the object.
     MemberThis(&'n Node),
     /// `fxPrivateMemberNodeCodeThis`, after the reference.
@@ -145,9 +189,9 @@ impl Coder<'_, '_> {
     /// so that the other arms, which recurse through `code`, never carry the
     /// walk's frame.
     #[inline(never)]
-    pub(super) fn walk(&mut self, node: &Node, tail: bool) -> bool {
+    pub(super) fn walk(&mut self, node: &Node, no_value: bool, tail: bool) -> bool {
         let mut stack: Vec<Resume<'_>> = Vec::new();
-        match self.enter(node, tail, &mut stack) {
+        match self.enter(node, no_value, tail, &mut stack) {
             Some(first) => {
                 self.run(first, stack);
                 true
@@ -164,7 +208,10 @@ impl Coder<'_, '_> {
     }
 
     /// Run the walk from `first` until `stack` is empty, returning the
-    /// residual flag the outermost receiver-setup arm leaves.
+    /// residual flag the outermost receiver-setup arm leaves. Inlined into
+    /// both entries, so that an arm the walk does not run, recursing through
+    /// `code`, carries one walk frame per level rather than two.
+    #[inline(always)]
     fn run<'n>(&mut self, first: Step<'n>, mut stack: Vec<Resume<'n>>) -> i32 {
         let mut result = 0;
         let mut step = first;
@@ -186,7 +233,7 @@ impl Coder<'_, '_> {
                     let tail = std::mem::take(&mut self.tail);
                     let mark = stack.len();
                     stack.push(Resume::Leave);
-                    match self.enter(node, tail, &mut stack) {
+                    match self.enter(node, no_value, tail, &mut stack) {
                         Some(next) => next,
                         None => {
                             stack.truncate(mark);
@@ -207,12 +254,14 @@ impl Coder<'_, '_> {
 
     /// Start the arm of a node just entered, if it is one the walk runs: do
     /// what the arm does before its first child, push the arm's [`Resume`],
-    /// and return the step for that child. `None` for every other arm, having
-    /// done nothing.
+    /// and return the step for that child (or [`Step::Up`] for a define
+    /// already coded, which pushes nothing). `None` for every other arm,
+    /// having done nothing.
     #[inline(never)]
     fn enter<'n>(
         &mut self,
         node: &'n Node,
+        no_value: bool,
         tail: bool,
         stack: &mut Vec<Resume<'n>>,
     ) -> Option<Step<'n>> {
@@ -235,21 +284,43 @@ impl Coder<'_, '_> {
                 }
             }
             Block => {
-                // `fxScopeCodeDefineNodes` (function/host defines) is
-                // deferred, and `fxScopeCodeUsingStatement` with no
-                // disposables is just the statement dispatch.
                 let scope = self.scope_of(node);
                 self.scope_coding_block(scope);
-                self.code_define_nodes(&node.children[0]);
-                let using = if self.tree.scopes[scope].disposable_count > 0 {
-                    Some(self.scope_code_using(scope))
-                } else {
-                    None
-                };
                 (
-                    Resume::Block { scope, using },
-                    Step::Code(&node.children[0]),
+                    Resume::Defines {
+                        node,
+                        scope,
+                        i: 0,
+                        body: false,
+                    },
+                    Step::Up,
                 )
+            }
+            Body => {
+                let scope = self.code_body_open(node);
+                (
+                    Resume::Defines {
+                        node,
+                        scope,
+                        i: 0,
+                        body: true,
+                    },
+                    Step::Up,
+                )
+            }
+            Function | Generator => {
+                let function = Box::new(self.code_function_open(node));
+                (
+                    Resume::FunctionParams(node, function),
+                    Step::Code(&node.children[1]),
+                )
+            }
+            Define => {
+                if !self.code_define_open(node) {
+                    // Coded where its scope hoisted it.
+                    return Some(Step::Up);
+                }
+                (Resume::Define(node), Step::Code(&node.children[1]))
             }
             If => (Resume::IfTest(node), Step::Code(&node.children[0])),
             Void | Not | BitNot | Minus | Plus | Typeof => {
@@ -367,6 +438,39 @@ impl Coder<'_, '_> {
                 self.set_pending_name(&node.children[0], &node.children[1]);
                 self.code_reference(&node.children[0], 1);
                 (Resume::Assign(node), Step::Code(&node.children[1]))
+            }
+            AddAssign
+            | SubtractAssign
+            | MultiplyAssign
+            | DivideAssign
+            | ModuloAssign
+            | ExponentiationAssign
+            | BitAndAssign
+            | BitOrAssign
+            | BitXorAssign
+            | LeftShiftAssign
+            | SignedRightShiftAssign
+            | UnsignedRightShiftAssign
+            | AndAssign
+            | OrAssign
+            | CoalesceAssign => {
+                let shortcut = self.code_compound_open(node);
+                (
+                    Resume::CompoundReference {
+                        node,
+                        no_value,
+                        shortcut,
+                    },
+                    Step::This(&node.children[0], 1),
+                )
+            }
+            Yield => {
+                let target = self.code_yield_open(node);
+                (Resume::Yield(node, target), Step::Code(&node.children[0]))
+            }
+            Await => {
+                let target = self.create_target();
+                (Resume::Await(node, target), Step::Code(&node.children[0]))
             }
             _ => return None,
         };
@@ -492,11 +596,66 @@ impl Coder<'_, '_> {
                 }
                 Step::Up
             }
+            Resume::Defines {
+                node,
+                scope,
+                i,
+                body,
+            } => {
+                let items = Self::statement_items(&node.children[0]);
+                for (j, item) in items.iter().enumerate().skip(i) {
+                    let Item::Node(n) = item else { continue };
+                    if n.token != Token::Define || !self.code_define_open(n) {
+                        continue;
+                    }
+                    stack.push(Resume::Defines {
+                        node,
+                        scope,
+                        i: j + 1,
+                        body,
+                    });
+                    stack.push(Resume::Define(n));
+                    return Step::Code(&n.children[1]);
+                }
+                // `fxScopeCodeUsingStatement` with no disposables is just
+                // the statement dispatch.
+                let using = if self.tree.scopes[scope].disposable_count > 0 {
+                    Some(self.scope_code_using(scope))
+                } else {
+                    None
+                };
+                stack.push(if body {
+                    Resume::Body { scope, using }
+                } else {
+                    Resume::Block { scope, using }
+                });
+                Step::Code(&node.children[0])
+            }
+            Resume::Define(node) => {
+                self.code_define_close(node);
+                Step::Up
+            }
             Resume::Block { scope, using } => {
                 if let Some(context) = using {
                     self.scope_code_used(scope, context);
                 }
                 self.scope_coded(scope);
+                Step::Up
+            }
+            Resume::Body { scope, using } => {
+                if let Some(context) = using {
+                    self.scope_code_used(scope, context);
+                }
+                self.code_body_close(scope);
+                Step::Up
+            }
+            Resume::FunctionParams(node, function) => {
+                self.code_function_params_coded(node, &function);
+                stack.push(Resume::FunctionBody(node, function));
+                Step::Code(&node.children[2])
+            }
+            Resume::FunctionBody(node, function) => {
+                self.code_function_close(node, *function);
                 Step::Up
             }
             Resume::IfTest(node) => {
@@ -698,6 +857,37 @@ impl Coder<'_, '_> {
             }
             Resume::Assign(node) => {
                 self.code_assign(&node.children[0], 1);
+                Step::Up
+            }
+            Resume::CompoundReference {
+                node,
+                no_value,
+                shortcut,
+            } => {
+                self.code_compound_reference_coded(node, shortcut);
+                stack.push(Resume::CompoundValue {
+                    node,
+                    no_value,
+                    shortcut,
+                    swap: *result,
+                });
+                Step::Code(&node.children[1])
+            }
+            Resume::CompoundValue {
+                node,
+                no_value,
+                shortcut,
+                swap,
+            } => {
+                self.code_compound_close(node, no_value, shortcut, swap);
+                Step::Up
+            }
+            Resume::Yield(node, target) => {
+                self.code_yield_close(node, target);
+                Step::Up
+            }
+            Resume::Await(node, target) => {
+                self.code_await_close(node, target);
                 Step::Up
             }
             Resume::MemberThis(node) => {
