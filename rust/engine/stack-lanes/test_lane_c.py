@@ -1,5 +1,9 @@
+import contextlib
+import io
 import unittest
+from unittest import mock
 
+import common
 import lane_c
 import wasmbin
 
@@ -260,10 +264,57 @@ class Chains(unittest.TestCase):
         self.assertEqual(lane_c.units_per_level(42), 48)
 
 
+TIMEOUT = common.Outcome(trap="timeout after 900s", timed_out=True)
+
+
+def native_mark(probe, args, **kwargs):
+    """The native probe's --stack line for a family at depth args[3]."""
+    return common.Outcome(line=f'halt=Return result="x" meter=1 stack={int(args[3]) * 100}')
+
+
+def shadow_mark(wasm, args, **kwargs):
+    """A painting Node run of a family at depth args[3] that returned."""
+    outcome = common.Outcome(line='halt=Return result="x" meter=1')
+    outcome.shadow_stack = int(args[3]) * 10
+    return outcome
+
+
 class Slopes(unittest.TestCase):
+    def slopes(self, native=native_mark, node=shadow_mark):
+        """lane_c.slopes over one heavy family at ceiling 126, its painters'
+        hosts replaced: the family's entry and the run's problems."""
+        problems = []
+        with mock.patch.object(lane_c.ceilings, "recorded", return_value=[("valueOf", 126)]), \
+                mock.patch.object(common, "run_native", side_effect=native), \
+                mock.patch.object(common, "run_node", side_effect=node), \
+                contextlib.redirect_stdout(io.StringIO()):
+            entry = lane_c.slopes("probe", "probe.wasm", problems)["valueOf"]
+        return entry, problems
+
+    def test_both_painters_give_a_slope(self):
+        entry, problems = self.slopes()
+        self.assertEqual(problems, [])
+        self.assertEqual(entry["native"]["bytes_per_level"], 100)
+        self.assertEqual(entry["shadow"]["bytes_per_level"], 10)
+
+    def test_a_shadow_painter_timeout_is_a_problem_not_a_missing_entry(self):
+        """`Outcome.trapped` excludes a timeout, which left no mark and no
+        problem: the shadow slope dropped out of the report silently."""
+        entry, problems = self.slopes(node=lambda *args, **kwargs: TIMEOUT)
+        self.assertNotIn("shadow", entry)
+        self.assertEqual(len(problems), 1)
+        self.assertRegex(problems[0], r"^slope valueOf: the shadow painter timed out at depth 63\b.*"
+                                      r"timeout after 900s$")
+
+    def test_a_native_painter_timeout_or_trap_is_a_problem_not_a_missing_entry(self):
+        for outcome, verdict in ((TIMEOUT, "timed out"), (common.Outcome(trap="signal 6"), "trapped")):
+            with self.subTest(verdict=verdict):
+                entry, problems = self.slopes(native=lambda *args, **kwargs: outcome)
+                self.assertNotIn("native", entry)
+                self.assertEqual(len(problems), 1)
+                self.assertRegex(problems[0], rf"^slope valueOf: the native painter {verdict} at depth 63: ")
+
     def test_a_shadow_painter_trap_is_a_problem_not_a_missing_entry(self):
-        import common
-        from unittest import mock
         trapped = common.Outcome(trap="TRAP: Maximum call stack size exceeded")
         with mock.patch.object(common, "run_node", return_value=trapped) as run_node:
             with self.assertRaisesRegex(common.HarnessError, "trapped at depth 7"):
@@ -273,6 +324,19 @@ class Slopes(unittest.TestCase):
         returned.shadow_stack = 4096
         with mock.patch.object(common, "run_node", return_value=returned):
             self.assertEqual(lane_c.shadow_stack("probe.wasm", "valueOf", 7), 4096)
+
+
+class ChainRuns(unittest.TestCase):
+    def test_a_chain_run_that_times_out_is_a_problem_not_a_fit(self):
+        """A timeout is not `trapped`, and read as a family that fits the
+        stack it dropped the chain without a problem."""
+        problems = []
+        with mock.patch.object(lane_c.ceilings, "recorded", return_value=[("valueOf", 126)]), \
+                mock.patch.object(common, "run_node", return_value=TIMEOUT), \
+                contextlib.redirect_stdout(io.StringIO()):
+            result = lane_c.chains("probe.wasm", {}, problems)
+        self.assertEqual(result, {kind: {"valueOf": None} for kind in lane_c.CHAIN_KINDS})
+        self.assertEqual(problems, [f"chain {kind}/valueOf: timeout after 900s" for kind in lane_c.CHAIN_KINDS])
 
 
 class TierMix(unittest.TestCase):

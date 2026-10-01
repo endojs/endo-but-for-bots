@@ -296,9 +296,24 @@ def units_per_level(ceiling):
     return round(2048 / (ceiling + 1))
 
 
+def painted(painter, outcome, n, where=""):
+    """The outcome of a painter run that returned. A trap's mark is where it
+    trapped, not what the family needs, and a run that timed out has no mark,
+    so either is a HarnessError: the collector read nothing for the family.
+    `Outcome.trapped` excludes a timeout, so the timeout is checked first."""
+    if outcome.timed_out:
+        raise common.HarnessError(f"the {painter} painter timed out at depth {n}{where}: {outcome.trap}")
+    if outcome.trapped:
+        raise common.HarnessError(f"the {painter} painter trapped at depth {n}{where}: {outcome.trap}")
+    return outcome
+
+
 def native_stack(native, family, n):
-    line = common.run_native(native, ["family", "heavy", family, str(n), "--stack"]).line or ""
-    return int(line.rsplit("stack=", 1)[1]) if "stack=" in line else None
+    outcome = painted("native", common.run_native(native, ["family", "heavy", family, str(n), "--stack"]), n)
+    line = outcome.line or ""
+    if "stack=" not in line:
+        raise common.HarnessError(f"the native painter printed no mark at depth {n}: {line!r}")
+    return int(line.rsplit("stack=", 1)[1])
 
 
 # The host stack the shadow painter runs under: room for every heavy family at
@@ -309,20 +324,19 @@ SLOPE_STACK_KB = 16 * 1024
 
 
 def shadow_stack(wasm, family, n, stack_kb=SLOPE_STACK_KB):
-    """The painted shadow mark of a run that returned. A trap's mark is where
-    it trapped, not what the family needs, so a trap is a HarnessError: the
-    collector read nothing for the family."""
+    """The painted shadow mark of a run that returned (`painted`)."""
     outcome = common.run_node(wasm, ["family", "heavy", family, str(n)], paint=True, stack_kb=stack_kb)
-    if outcome.trapped:
-        raise common.HarnessError(f"the shadow painter trapped at depth {n} under a {stack_kb} KiB "
-                                  f"host stack: {outcome.trap}")
+    painted("shadow", outcome, n, f" under a {stack_kb} KiB host stack")
+    if outcome.shadow_stack is None:
+        raise common.HarnessError(f"the shadow painter printed no mark at depth {n}")
     return outcome.shadow_stack
 
 
 def slopes(native, wasm, problems):
     """Per heavy family: bytes per level and per unit, native and shadow, from
     two depths (half the ceiling and the ceiling). A host that cannot run a
-    family is a problem, recorded and skipped, not the end of the run."""
+    family, or a painter run that gives no mark (`painted`), is a problem,
+    recorded and skipped, not the end of the run."""
     result = {}
     for family, ceiling in ceilings.recorded("heavy"):
         low, high = max(ceiling // 2, 1), ceiling
@@ -332,13 +346,11 @@ def slopes(native, wasm, problems):
         entry = {"ceiling": ceiling, "units_per_level_estimated": units, "depths": [low, high]}
         try:
             n1, n2 = native_stack(native, family, low), native_stack(native, family, high)
-            if n1 is not None and n2 is not None:
-                per_level = (n2 - n1) / (high - low)
-                entry["native"] = {"bytes_per_level": round(per_level), "bytes_per_unit": round(per_level / units)}
+            per_level = (n2 - n1) / (high - low)
+            entry["native"] = {"bytes_per_level": round(per_level), "bytes_per_unit": round(per_level / units)}
             s1, s2 = shadow_stack(wasm, family, low), shadow_stack(wasm, family, high)
-            if s1 is not None and s2 is not None:
-                per_level = (s2 - s1) / (high - low)
-                entry["shadow"] = {"bytes_per_level": round(per_level), "bytes_per_unit": round(per_level / units)}
+            per_level = (s2 - s1) / (high - low)
+            entry["shadow"] = {"bytes_per_level": round(per_level), "bytes_per_unit": round(per_level / units)}
         except common.HarnessError as error:
             problems.append(f"slope {family}: {error}")
         result[family] = entry
@@ -392,7 +404,8 @@ def chains(wasm, names, problems, stack_kb=CHAIN_STACK_KB):
     left-nested tree they build. A level is a list of wasm function indices,
     exact where names are not (a generic's instantiations share a name). A
     family whose trace does not repeat, or that fits the stack, reports
-    None; a host that cannot run one is a problem, recorded and skipped."""
+    None; a host that cannot run one, or a run that times out, is a problem,
+    recorded and skipped."""
     result = {}
     for kind in CHAIN_KINDS:
         result[kind] = {}
@@ -403,6 +416,11 @@ def chains(wasm, names, problems, stack_kb=CHAIN_STACK_KB):
                                           trap_frames=CHAIN_FRAMES)
             except common.HarnessError as error:
                 problems.append(f"chain {kind}/{family}: {error}")
+                result[kind][family] = None
+                continue
+            if outcome.timed_out:
+                # Not `trapped`, and not a run that fit the stack either.
+                problems.append(f"chain {kind}/{family}: {outcome.trap}")
                 result[kind][family] = None
                 continue
             level = one_level(outcome.trap_frames or [], name=lambda i: function_name(names, i)) \
