@@ -2425,6 +2425,7 @@ __metadata:
   resolution: "@endo/floot@workspace:packages/floot"
   dependencies:
     "@anthropic-ai/sdk": "npm:^0.124.0"
+    "@endo/agent-tools": "workspace:^"
     "@endo/captp": "workspace:^"
     "@endo/claude-sandbox": "workspace:^"
     "@endo/cli": "workspace:^"
