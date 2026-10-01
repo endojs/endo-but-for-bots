@@ -109,9 +109,16 @@ These source-only changes are not deployed; generation 190 and its pins remain
 the live acceptance baseline.
 The smaller-combined-implementation target is still unproven.
 The requested scope items 3–5 are done.
-Next are the sharing/delegation and pool-weight scope decisions before the
-cross-adapter SB-13 through SB-15 extractions.
+The operator has decided to keep sharing/delegation, including budgets, nested
+shares, delegated session allowances, and expiry/revocation policies.
+The inert pool-weight contract remains a decision before the cross-adapter
+SB-13 through SB-15 extractions.
 The recommended sequence remains deletion before abstraction.
+The subsequent environment investigation is recorded in
+[durable POSIX environments](../../designs/durable-posix-environments.md).
+It proposes portable Shell/process alignment and durable environment capabilities
+for Fae and Floot, not a second delegation platform or selected crash-recovery design.
+No runtime implementation or new acceptance result is claimed for that proposal.
 
 Generation 189 runs app `604ec1a8d`, host `4a5ac8a`, unchanged native image pins
 and the rebuilt byte-only provider listener `cc639390…` on all three brokers.

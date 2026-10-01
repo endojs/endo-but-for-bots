@@ -19,7 +19,8 @@ The ten largest files hold 30.7% of the four-package total.
 The snapshot identifies concrete unused surfaces and legacy compatibility paths,
 alongside several small repetitions worth consolidating locally.
 The immediate evidenced deletions are small, not thousands of lines.
-The optional sharing/delegation subsystem is a larger scope decision, not dead code.
+The optional sharing/delegation subsystem is not dead code; the operator has
+decided to retain its policy features, as recorded under scope item 1 below.
 No evidence justifies replacing the current ownership layers with another framework.
 The original smaller-combined-implementation target remains unproven.
 
@@ -188,9 +189,14 @@ not evidence that whole clients can be merged safely.
    invocation, but are exported and documented operator provisioning APIs.
    Tokyo's current account configuration uses its own Secrets rather than
    consuming remote shares.
-   Decide whether this extra feature belongs in the refactor; moving files alone
-   does not reduce combined complexity.
-   A scope reduction must also remove setup, exports, configuration and tests.
+   **Scope clarified:** keep budgets, nested shares, delegated session allowances,
+   and expiry/revocation policies, per the operator's subsequent direction.
+   Local and remote runners should be ordinary Endo capabilities with the same
+   interface, not a separate transport or environment platform.
+   Audit repetition inside these retained features rather than deleting them as unused.
+   Moving files alone does not reduce combined complexity.
+   The environment/Shell proposal is recorded in
+   [durable POSIX environments](../../designs/durable-posix-environments.md).
 2. **Pool weight.** `weight` is validated and returned as metadata, but current
    selection uses standing, reset, usage and ordering, not weight.
    Document the actual contract or remove the inert option; do not add weighted
@@ -257,11 +263,10 @@ The source review does not establish that either branch is dead.
 2. Decide alternate public/operator API contracts SB-06 through SB-08, then
    migrate their callers before removal.
 3. Consolidate local repetition SB-09 through SB-12 without moving authority.
-4. Decide whether optional sharing/delegation and inert weight/storage knobs
-   belong in this release.
+4. Resolve scope and inert configuration before extracting broader helpers.
    Do not bury that scope decision in an abstraction commit.
-   Sharing/delegation and pool weight remain undecided; scope item 3 removes
-   the unsupported storage-bound extension rather than implementing quotas.
+   Sharing/delegation is retained; pool weight remains undecided.
+   Scope item 3 removes the unsupported storage-bound extension rather than implementing quotas.
 5. Only then consider pure framing/common-profile extraction SB-13 through SB-15,
    with differential protocol and closed-shape tests.
 6. Remeasure this same committed four-package scope after each slice and update
@@ -423,8 +428,9 @@ The source review does not establish that either branch is dead.
   No new framework, public projection API, durable owner, host configuration,
   credential edit or release pin changes; not deployed.
   SB-01 through SB-12 are closed.
-  Next is the explicit sharing/delegation and inert-knob scope decision, followed
-  by SB-13 through SB-15 only with their required cross-adapter evidence.
+  At this checkpoint, sharing/delegation and the inert-knob scope were undecided.
+  The later clarification below retains sharing/delegation; SB-13 through SB-15
+  still require their cross-adapter evidence.
 
 - **Scope item 3 done:** removed the unsupported delegated storage-bound
   extension, not sharing/delegation itself.
@@ -474,7 +480,8 @@ The source review does not establish that either branch is dead.
   and one source file, hosted-agent 23,987; combined **42,557** across **161** files,
   down **229** from the initial snapshot.
   No host, credential, lifecycle authority or release pin changes; not deployed.
-  Scope item 5 is next; sharing/delegation and pool weight remain undecided.
+  At this checkpoint, scope item 5 was next and sharing/delegation and pool weight
+  were undecided; the subsequent scope clarification below retains sharing/delegation.
 
 - **Scope item 5 done:** corrected the Claude factory and hosted translator's
   comments, README and run help; `acknowledge()` remains an operational no-op.
@@ -509,8 +516,16 @@ The source review does not establish that either branch is dead.
   individual slice.
   No secrets, owner identities, host config, runtime pins or deployed state changed;
   not deployed.
-  The three requested scope items are closed; sharing/delegation and pool weight
-  remain separate decisions, and SB-13 through SB-15 remain unimplemented.
+  The three requested scope items are closed; pool weight remains a separate
+  decision, and SB-13 through SB-15 remain unimplemented.
+
+- **Sharing/delegation scope clarified:** retain the existing policy features;
+  remote runner compatibility should use ordinary Endo capability interfaces.
+  The new [durable POSIX environment proposal](../../designs/durable-posix-environments.md)
+  records the current Shell, spawner, slice, and ownership differences, with a
+  contract-first path for Fae and Floot to share environment authority.
+  It is proposed, not implemented; process-loss recovery remains separate research.
+  This documentation changes no source metric, runtime behavior, or deployed state.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.
