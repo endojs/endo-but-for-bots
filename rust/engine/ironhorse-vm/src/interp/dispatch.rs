@@ -2366,7 +2366,7 @@ impl Interp {
     /// The dispatch loop's `SUPER` arm.
     #[inline(never)]
     fn exec_super(&mut self, code: &[u8], mut pc: usize, return_depth: usize, size: i8) -> Flow {
-        let parent = self.instance_prototype(self.cur_func);
+        let parent = self.super_parent();
         if parent.is_null() || !self.slot_is_constructor(parent) {
             let error = self.internal_error("TypeError", "super: not a constructor".into());
             dispatch_halt_flow!(self.raise_js(error), self, return_depth, code);
@@ -3443,7 +3443,15 @@ impl Interp {
     #[inline(never)]
     fn exec_set_this(&mut self, code: &[u8], mut pc: usize, return_depth: usize, size: i8) -> Flow {
         let value = dispatch_result_flow!(self.peek_checked(), self, return_depth, code);
-        if self.this_val.kind != Kind::Uninitialized {
+        // An arrow's `this` is the one its derived constructor binds (XS's
+        // frames share one `this` cell): the arrow's capture says whether it
+        // is bound yet, whatever the arrow read when it was entered.
+        let capture = self.arrow_this_capture(self.cur_func);
+        let bound = match capture {
+            Some(capture) => self.slots.get(capture).kind != Kind::Uninitialized,
+            None => self.this_val.kind != Kind::Uninitialized,
+        };
+        if bound {
             let error = self.internal_error("ReferenceError", "this: already initialized".into());
             dispatch_halt_flow!(self.raise_js(error), self, return_depth, code);
         }
@@ -3452,6 +3460,9 @@ impl Interp {
             let slot = self.slots.get_mut(capture);
             slot.kind = self.this_val.kind;
             slot.value = self.this_val.value;
+        }
+        if let Some(capture) = capture {
+            self.publish_arrow_this(capture, value);
         }
         pc += size as usize;
         Flow::Next(pc)

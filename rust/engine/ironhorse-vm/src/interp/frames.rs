@@ -208,6 +208,61 @@ impl Interp {
         Ok(args)
     }
 
+    /// The capture of `this` an arrow function `function` reads (the
+    /// `this` slot `STORE_ARROW` appended to its environment), or `None` for
+    /// any other function.
+    pub(super) fn arrow_this_capture(
+        &self,
+        function: crate::value::SlotIndex,
+    ) -> Option<crate::value::SlotIndex> {
+        let closures = self.functions.get(&function).map(|info| info.closures)?;
+        if closures.is_null() {
+            return None;
+        }
+        // Looked up, never interned: `STORE_ARROW` interned the key when it
+        // made the capture, and a constructor without an arrow must not add
+        // a key to the machine's state.
+        let id = *self.symbol_ids.get("this")?;
+        self.find_property(closures, id)
+    }
+
+    /// Bind `this` from a `super(...)` an arrow ran: write the arrow's
+    /// capture, then, up the suspended frames, the frame that made that
+    /// capture and every other capture it made, as the constructor's own
+    /// `SET_THIS` does. That frame is the derived constructor, or an arrow
+    /// nested in it, whose own capture is published the same way. XS's
+    /// frames share one `this` cell, which gives this for free. A
+    /// constructor that has returned holds no capture and is not found.
+    #[inline(never)]
+    pub(super) fn publish_arrow_this(&mut self, capture: crate::value::SlotIndex, value: Slot) {
+        let mut capture = capture;
+        loop {
+            let slot = self.slots.get_mut(capture);
+            slot.kind = value.kind;
+            slot.value = value.value;
+            let Some(frame) = self
+                .call_stack
+                .iter_mut()
+                .rev()
+                .find(|frame| frame.this_captures.contains(&capture))
+            else {
+                return;
+            };
+            frame.this_val = value;
+            let captures = std::mem::take(&mut frame.this_captures);
+            let function = frame.cur_func;
+            for other in captures {
+                let slot = self.slots.get_mut(other);
+                slot.kind = value.kind;
+                slot.value = value.value;
+            }
+            match self.arrow_this_capture(function) {
+                Some(outer) => capture = outer,
+                None => return,
+            }
+        }
+    }
+
     /// The `new.target` a `super(...)` frame at `base` carries in its RESULT
     /// slot (see the dispatch loop's `SUPER` arm). The RESULT slot of every
     /// other frame is `undefined`, so this is `None` for them.
