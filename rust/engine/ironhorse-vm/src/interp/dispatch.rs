@@ -2643,7 +2643,7 @@ impl Interp {
                 );
             }
             dispatch_result_flow!(
-                self.call_native_method(m, base, argc, code),
+                self.call_native_method_in_place(m, base, argc, code),
                 self,
                 return_depth,
                 code
