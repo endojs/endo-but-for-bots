@@ -1,6 +1,21 @@
 //! Array construction, async drivers, iteration, and native array algorithms.
 use super::super::*;
 
+/// One source array of the generic `FlattenIntoArray` walk: where its read
+/// stands, its remaining depth, and the value it was read as (the receiver of
+/// its `flatMap` callback when it is the outermost one).
+#[derive(Clone, Copy)]
+struct FlatSource {
+    source: crate::value::SlotIndex,
+    source_len: u64,
+    source_index: u64,
+    /// `HasProperty` probes taken on this source without a present-index
+    /// shortcut, against the linear cap.
+    linear_steps: u64,
+    depth: f64,
+    receiver: Slot,
+}
+
 impl Interp {
     // ------------------------------------------------------------------
     // `Array.from` (ECMA-262 23.1.2.1). This shares the general callable,
@@ -1847,25 +1862,29 @@ impl Interp {
     /// without invoking guest code. Dense own data elements are sufficient;
     /// holes, accessors, Proxies, and arguments objects require `HasProperty`,
     /// `Get`, or the full `IsArray` operation. The budget also keeps a cyclic
-    /// graph with a very large requested depth from recursing on the Rust
-    /// stack merely to decide which execution path to use.
+    /// graph with a very large requested depth from walking without end merely
+    /// to decide which execution path to use.
+    ///
+    /// The visit is the recursion's own (STACK-DEPTH-REFACTOR.md B4): pre-order,
+    /// each array's items in key order, the budget spent at the same visits,
+    /// with one item iterator per open array on a heap stack instead of a host
+    /// frame. It charges nothing.
     pub(in crate::interp) fn array_flat_fast_safe(
         &self,
         source: crate::value::SlotIndex,
         depth: u32,
         budget: &mut u32,
     ) -> bool {
-        if *budget == 0 || self.arguments_objects.contains(&source) {
+        if !self.array_flat_fast_visit(source, budget) {
             return false;
         }
-        *budget -= 1;
-        let Some(array) = self.arrays.get(&source) else {
-            return false;
-        };
-        if array.items().len() as u32 != array.length {
-            return false;
-        }
-        for item in array.items().values() {
+        let mut open = vec![(self.arrays[&source].items().values(), depth)];
+        while let Some((items, depth)) = open.last_mut() {
+            let depth = *depth;
+            let Some(&item) = items.next() else {
+                open.pop();
+                continue;
+            };
             if item.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) != 0 {
                 return false;
             }
@@ -1878,14 +1897,27 @@ impl Interp {
             if self.proxies.contains_key(&element) {
                 return false;
             }
-            if depth > 0
-                && self.arrays.contains_key(&element)
-                && !self.array_flat_fast_safe(element, depth - 1, budget)
-            {
-                return false;
+            if depth > 0 && self.arrays.contains_key(&element) {
+                if !self.array_flat_fast_visit(element, budget) {
+                    return false;
+                }
+                open.push((self.arrays[&element].items().values(), depth - 1));
             }
         }
         true
+    }
+
+    /// One array of [`Self::array_flat_fast_safe`]'s walk: spend one visit of
+    /// the budget, and require a dense array that is not an arguments object.
+    fn array_flat_fast_visit(&self, source: crate::value::SlotIndex, budget: &mut u32) -> bool {
+        if *budget == 0 || self.arguments_objects.contains(&source) {
+            return false;
+        }
+        *budget -= 1;
+        let Some(array) = self.arrays.get(&source) else {
+            return false;
+        };
+        array.items().len() as u32 == array.length
     }
 
     /// Whether `IsConcatSpreadable(value)` is guaranteed to use its default
@@ -3126,6 +3158,15 @@ impl Interp {
     /// apply the optional top-level mapper, recursively flatten only values for
     /// which `IsArray` is true (including transparent Proxies), and create each
     /// target element with `CreateDataPropertyOrThrow`.
+    ///
+    /// One light frame of the native-recursion budget per nested array: a
+    /// self-containing array under `flat(Infinity)` halts with
+    /// `Halt::ReentryLimit` (XS recurses `fxFlattenIntoArray` on its C stack to
+    /// the same end) instead of overflowing the host stack. The nesting is an
+    /// explicit stack of open sources (STACK-DEPTH-REFACTOR.md B4), each
+    /// charged its unit where the recursive call charged it and holding it
+    /// until the source is exhausted, so the budget, the meter and every
+    /// observable read evolve as they did.
     #[allow(clippy::too_many_arguments)]
     fn array_generic_flatten_into(
         &mut self,
@@ -3138,116 +3179,141 @@ impl Interp {
         mapper: Option<(Slot, Slot)>,
         source_receiver: Slot,
     ) -> Result<u64, Step> {
-        // One light frame of the native-recursion budget per nested array:
-        // a self-containing array under `flat(Infinity)` halts with
-        // `Halt::ReentryLimit` (XS recurses `fxFlattenIntoArray` on its C
-        // stack to the same end) instead of overflowing the host stack.
-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-            vm.array_generic_flatten_into_inner(
-                code,
-                target,
+        let base = self.native_depth;
+        let result = self.array_generic_flatten_nested(
+            code,
+            target,
+            FlatSource {
                 source,
                 source_len,
-                target_index,
+                source_index: 0,
+                linear_steps: 0,
                 depth,
-                mapper,
-                source_receiver,
-            )
-        })
+                receiver: source_receiver,
+            },
+            target_index,
+            mapper,
+        );
+        // An error leaves the units of every open source charged; the
+        // recursion released them on its way out.
+        debug_assert!(result.is_err() || self.native_depth == base);
+        self.native_depth = base;
+        result
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn array_generic_flatten_into_inner(
+    fn array_generic_flatten_nested(
         &mut self,
         code: &[u8],
         target: crate::value::SlotIndex,
-        source: crate::value::SlotIndex,
-        source_len: u64,
+        top: FlatSource,
         mut target_index: u64,
-        depth: f64,
         mapper: Option<(Slot, Slot)>,
-        source_receiver: Slot,
     ) -> Result<u64, Step> {
         const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
         const GENERIC_FLAT_LINEAR_CAP: u64 = 1 << 24;
 
-        let mut source_index = 0u64;
-        let mut linear_steps = 0u64;
-        while source_index < source_len {
-            let present =
-                match self.array_generic_next_present_index(source, source_index, source_len) {
+        self.enter_native_frame(LIGHT_FRAME_COST)?;
+        // The source being read, and the sources it was reached from.
+        let mut cur = top;
+        let mut outer: Vec<FlatSource> = Vec::new();
+        loop {
+            while cur.source_index < cur.source_len {
+                let present = match self.array_generic_next_present_index(
+                    cur.source,
+                    cur.source_index,
+                    cur.source_len,
+                ) {
                     Some(Some(next)) => {
-                        source_index = next;
+                        cur.source_index = next;
                         true
                     }
                     Some(None) => break,
                     None => {
-                        if linear_steps >= GENERIC_FLAT_LINEAR_CAP {
+                        if cur.linear_steps >= GENERIC_FLAT_LINEAR_CAP {
                             return Err(Step::Host(Halt::Refused("flat:oversized-array-like")));
                         }
-                        linear_steps += 1;
-                        self.array_generic_has(code, source, source_index)?
+                        cur.linear_steps += 1;
+                        self.array_generic_has(code, cur.source, cur.source_index)?
                     }
                 };
-            if !present {
-                source_index += 1;
-                continue;
-            }
-
-            let mut element = self.array_generic_get(code, source, source_index)?;
-            if let Some((callback, this_arg)) = mapper {
-                self.meter.tick_raw(
-                    ARRAY_FLATMAP_CALLBACK_METERING - ARRAY_FLATMAP_GENERIC_ELEMENT_OVERLAP,
-                );
-                let callback_args = [
-                    element,
-                    Self::array_index_number(source_index),
-                    source_receiver,
-                ];
-                element = self.run_callback(code, callback, this_arg, &callback_args)?;
-            }
-
-            if depth > 0.0 {
-                let array_element = match element.value {
-                    Payload::Reference(element_object) if element.kind == Kind::Reference => self
-                        .array_generic_is_array(element_object)?
-                        .then_some(element_object),
-                    _ => None,
-                };
-                if let Some(element_object) = array_element {
-                    self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
-                    let element_len = self.array_generic_length(code, element_object)?;
-                    target_index = self.array_generic_flatten_into(
-                        code,
-                        target,
-                        element_object,
-                        element_len,
-                        target_index,
-                        depth - 1.0,
-                        None,
-                        element,
-                    )?;
-                    source_index += 1;
+                if !present {
+                    cur.source_index += 1;
                     continue;
                 }
-            }
 
-            if target_index >= MAX_SAFE_INTEGER {
-                // This spec guard has no matching XS diagnostic: the pinned
-                // flat helper uses txIndex without a safe-integer guard.
-                return Err(self.catchable_type_error_msg(
-                    "Array.flat: result exceeds maximum array-like length".into(),
-                ));
+                let mut element = self.array_generic_get(code, cur.source, cur.source_index)?;
+                // Only the outermost source is mapped (`flatMap`).
+                if let Some((callback, this_arg)) = mapper.filter(|_| outer.is_empty()) {
+                    self.meter.tick_raw(
+                        ARRAY_FLATMAP_CALLBACK_METERING - ARRAY_FLATMAP_GENERIC_ELEMENT_OVERLAP,
+                    );
+                    let callback_args = [
+                        element,
+                        Self::array_index_number(cur.source_index),
+                        cur.receiver,
+                    ];
+                    element = self.run_callback(code, callback, this_arg, &callback_args)?;
+                }
+
+                if cur.depth > 0.0 {
+                    let array_element = match element.value {
+                        Payload::Reference(element_object) if element.kind == Kind::Reference => {
+                            self.array_generic_is_array(element_object)?
+                                .then_some(element_object)
+                        }
+                        _ => None,
+                    };
+                    if let Some(element_object) = array_element {
+                        self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
+                        let element_len = self.array_generic_length(code, element_object)?;
+                        // The nested source's light frame, charged where the
+                        // recursive call charged it.
+                        self.enter_native_frame(LIGHT_FRAME_COST)?;
+                        // Host memory the recursion took as stack: at most one
+                        // source per unit of the budget, so this fails only if
+                        // the host allocator does.
+                        outer
+                            .try_reserve(1)
+                            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                        let nested = FlatSource {
+                            source: element_object,
+                            source_len: element_len,
+                            source_index: 0,
+                            linear_steps: 0,
+                            depth: cur.depth - 1.0,
+                            receiver: element,
+                        };
+                        outer.push(std::mem::replace(&mut cur, nested));
+                        continue;
+                    }
+                }
+
+                if target_index >= MAX_SAFE_INTEGER {
+                    // This spec guard has no matching XS diagnostic: the pinned
+                    // flat helper uses txIndex without a safe-integer guard.
+                    return Err(self.catchable_type_error_msg(
+                        "Array.flat: result exceeds maximum array-like length".into(),
+                    ));
+                }
+                self.charge_and_check(ARRAY_FLAT_PER_LEAF_METERING)?;
+                let count = usize::try_from(target_index + 1)
+                    .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                self.admit_scratch::<Slot>(count)?;
+                self.array_generic_create_data_property(code, target, target_index, element)?;
+                target_index += 1;
+                cur.source_index += 1;
             }
-            self.charge_and_check(ARRAY_FLAT_PER_LEAF_METERING)?;
-            let count =
-                usize::try_from(target_index + 1).map_err(|_| Step::Host(Halt::HeapExhausted))?;
-            self.admit_scratch::<Slot>(count)?;
-            self.array_generic_create_data_property(code, target, target_index, element)?;
-            target_index += 1;
-            source_index += 1;
+            // This source is exhausted: release its frame and resume the one
+            // it was reached from after the element that led here.
+            self.leave_native_frame(LIGHT_FRAME_COST);
+            match outer.pop() {
+                None => return Ok(target_index),
+                Some(resumed) => {
+                    cur = resumed;
+                    cur.source_index += 1;
+                }
+            }
         }
-        Ok(target_index)
     }
 
     /// `IsConcatSpreadable(O)`: primitives are never spread; an explicit
@@ -4545,6 +4611,11 @@ impl Interp {
     /// array elements while `depth > 0` and appending leaves to `out`. Meters
     /// the per-visit read, the per-array-element length read, and each
     /// appended leaf's `mxDefineIndex` chunk growth as it goes.
+    ///
+    /// The nesting is an explicit stack of open arrays, each with its length,
+    /// cursor and remaining depth (STACK-DEPTH-REFACTOR.md B4): the same
+    /// pre-order visit and the same metering sequence as the recursion, on a
+    /// flat host stack.
     pub(in crate::interp) fn flat_into(
         &mut self,
         src: crate::value::SlotIndex,
@@ -4552,7 +4623,15 @@ impl Interp {
         depth: u32,
         out: &mut Vec<Slot>,
     ) -> Result<(), Step> {
-        for index in 0..len {
+        // (array, length, next index, remaining depth)
+        let mut open: Vec<(crate::value::SlotIndex, u32, u32, u32)> = vec![(src, len, 0, depth)];
+        while let Some(top) = open.last_mut() {
+            let (src, len, index, depth) = *top;
+            if index >= len {
+                open.pop();
+                continue;
+            }
+            top.2 += 1;
             let item = match self
                 .arrays
                 .get(&src)
@@ -4570,7 +4649,7 @@ impl Interp {
                 };
                 self.meter.tick_raw(ARRAY_FLAT_PER_ARRAY_METERING);
                 let sub_len = self.arrays[&sub].length;
-                self.flat_into(sub, sub_len, depth - 1, out)?;
+                open.push((sub, sub_len, 0, depth - 1));
             } else {
                 // Append the leaf: the per-leaf cost plus the `mxDefineIndex`
                 // chunk growth to `out.len() + 1` slots.

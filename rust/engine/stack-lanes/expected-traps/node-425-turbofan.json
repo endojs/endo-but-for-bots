@@ -7,11 +7,6 @@
     ]
   },
   "expected_traps": [
-    "flat-fast-2015",
-    "flat-fast-2016",
-    "flat-generic-2015",
-    "flat-generic-2016",
-    "flat-self",
     "jrevive-arr-2000",
     "jrevive-arr-2001",
     "jrevive-obj-1999",
