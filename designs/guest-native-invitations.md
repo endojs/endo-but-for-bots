@@ -85,7 +85,7 @@ decisions recorded in the Open Questions section.
 | Topic | This design | Landed on `llm` | Resolution |
 |---|---|---|---|
 | Consume-once serialization | A synchronous pet-store compare-and-set (`storeLocatorIfMatches`) | An in-memory per-invitation `SerialJobs` queue around a check of the captured-path slot, followed by `storeLocator` | Consume-once holds within one process. Durability across a restart moves to the formula-store state machine (section 7). |
-| Outcome surface | A returned `{ status }` record | Thrown errors; `accept` resolves `undefined` | Still to do. The returned record is what lets a cross-CapTP caller tell the outcomes apart. |
+| Outcome surface | A returned `{ status }` record | Thrown errors; `accept` resolves `undefined` | Still to do, confirmed by the maintainer (Open Question 7). The returned record is what lets a cross-CapTP caller tell the outcomes apart. |
 | Acceptor ordering | Consume on the inviter, then bind locally | Speculative local bind and peer route first, then consume on the inviter, with rollback if that fails and an outcome-unknown error on a timeout | The landed order is kept. The formula-store state machine turns outcome-unknown into a resumable state (section 7). |
 | Revocation | Re-`invite` overwrite only; `remove`/`rename` reject | An explicit `Invitation.cancel()` verb | `cancel()` is kept. `remove` becomes revocation through prompt collection, and `rename` is not revocation (section 5). |
 | Host-minted pin | Kept for hosts, recorded per invitation | Removed on both facets | Removed. Per-agent pins replace it (Open Question 2). |
@@ -95,8 +95,10 @@ decisions recorded in the Open Questions section.
 - [#1277](https://github.com/endojs/endo-but-for-bots/pull/1277) (design,
   draft): retention labels and a lifecycle for a guest's hidden `hostPins`,
   including a path-derived invitation pin key.
-  That design assumes a per-invitation pin, which this design removes.
-  #1277 therefore has to be reconciled with Open Question 2 before it lands.
+  The maintainer has asked for #1277 to be retired
+  ([comment](https://github.com/endojs/endo-but-for-bots/pull/1116#issuecomment-5939221667)), so this design does not depend on it and
+  does not reconcile with it.
+  If retiring it leaves a gap, that gap will be designed again on its own terms.
 - [#399](https://github.com/endojs/endo-but-for-bots/pull/399)
   ([familiar-deep-link-invitations](familiar-deep-link-invitations.md)):
   `endo://` deep links routed to `accept`.
@@ -1034,6 +1036,8 @@ gates.
 The first six questions below were answered in kriskowal's review of this PR
 ([review 5360612317](https://github.com/endojs/endo-but-for-bots/pull/1116#pullrequestreview-5360612317)),
 checked against what has landed since.
+The seventh was answered in a later
+[comment](https://github.com/endojs/endo-but-for-bots/pull/1116#issuecomment-5939221667).
 Each entry keeps the original question and records the decision.
 
 1. **Host convergence: resolved.**
@@ -1051,8 +1055,9 @@ Each entry keeps the original question and records the decision.
    pin.
    #1310 has already removed the mint on both facets.
    No per-invitation pin should come back in any other form.
-   The `hostPins` invitation-pin lifecycle proposed in #1277 is therefore at odds
-   with this decision, and the two need to be reconciled before #1277 lands.
+   The `hostPins` invitation-pin lifecycle proposed in #1277 conflicted with this
+   decision. The maintainer has since asked for #1277 to be retired
+   ([comment](https://github.com/endojs/endo-but-for-bots/pull/1116#issuecomment-5939221667)), so no reconciliation is needed.
    The `_multiplayer-suite.js` retention assertions stay green without the pin,
    because a pending invitation is retained by its pet-store entry and a completed
    one by the reciprocal bindings.
@@ -1098,13 +1103,13 @@ Each entry keeps the original question and records the decision.
    limit growth to the scale they are ready for.
    An accepter who uses another federated instance, a Familiar, or their own pet
    daemon never uses the coupon.
-7. **Still open: the outcome surface.**
+7. **The outcome surface: resolved, return a discriminated record.**
    #1310 landed thrown errors, while section 1 asks for a returned `{ status }`
    record because a thrown tag does not survive CapTP.
-   This design keeps the returned record as remaining work, with `revoked` added
-   as a status (section 1).
-   It is listed separately in case the maintainer would rather keep the thrown
-   errors.
+   The maintainer prefers returning passable discriminated unions or labeled tags
+   ([comment](https://github.com/endojs/endo-but-for-bots/pull/1116#issuecomment-5939221667)).
+   The returned record therefore stays as remaining work, with `revoked` added as
+   a status (section 1).
 
 ## Prompt
 
