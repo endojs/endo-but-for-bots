@@ -2,18 +2,15 @@
 
 import test from '@endo/ses-ava/prepare-endo.js';
 import { Far } from '@endo/far';
-import { formatLocator } from '@endo/daemon/locator.js';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
 
 import { spawnWorkerLoop } from '../agent.js';
 
-const NODE = 'a'.repeat(64);
-const SELF = 'b'.repeat(64);
-const CHILD = 'c'.repeat(64);
-const HOST = 'd'.repeat(64);
-
-/** @param {string} number */
-const locatorFor = number => formatLocator(`${number}:${NODE}`, 'handle');
+// Opaque stand-ins for the formulas behind the guest's names. They never reach
+// the guest: its mail names correspondents only by its own pet names.
+const SELF = 'self';
+const CHILD = 'child';
+const HOST = 'host';
 
 /**
  * A guest-powers stub with a *live* mailbox: the stream stays open, and every
@@ -27,9 +24,9 @@ const locatorFor = number => formatLocator(`${number}:${NODE}`, 'handle');
 const makeLiveMailbox = ({ onEcho } = {}) => {
   /** @type {Map<string, unknown>} */
   const directory = new Map([
-    ['@self', locatorFor(SELF)],
-    ['@host', locatorFor(HOST)],
-    ['subagents/helper', locatorFor(CHILD)],
+    ['@self', SELF],
+    ['@host', HOST],
+    ['subagent.helper', CHILD],
   ]);
   /** @type {any[]} */
   const queue = [];
@@ -47,27 +44,29 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
    * The guest's own top-level pet names for a correspondent, as the daemon
    * reports them on `fromNames`/`toNames`.
    *
-   * @param {unknown} locator
+   * @param {unknown} formula
    */
-  const namesFor = locator =>
+  const namesFor = formula =>
     harden(
       [...directory]
-        .filter(([key, value]) => value === locator && !key.includes('/'))
+        .filter(([key, value]) => value === formula && !key.includes('/'))
         .map(([key]) => key),
     );
 
-  // The locators stay on the message alongside the names: the delegation
-  // registry still matches a subagent's replies by them.
-  const push = rawMessage => {
-    if (closed) return;
+  // Redacted the way the daemon redacts a guest's mail: the sender and
+  // recipient become the guest's own names for them, and the formulas behind
+  // those names never reach it.
+  const push = ({ from, to, ...rest }) => {
     const message = harden({
-      ...rawMessage,
-      fromNames: namesFor(rawMessage.from),
-      toNames: namesFor(rawMessage.to),
+      ...rest,
+      fromNames: namesFor(from),
+      toNames: namesFor(to),
     });
+    if (closed) return message;
     const waiter = waiters.shift();
     if (waiter) waiter(harden({ value: message, done: false }));
     else queue.push(message);
+    return message;
   };
   const close = () => {
     closed = true;
@@ -110,7 +109,8 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
    * Deliver an inbound message from another party.
    *
    * @param {object} options
-   * @param {string} options.from
+   * @param {string} options.from - The sender's formula, which the guest sees
+   *   only as its names for it.
    * @param {string[]} options.strings
    * @param {string} [options.replyTo]
    * @param {boolean} [options.done]
@@ -120,7 +120,7 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
     const message = harden({
       type: 'package',
       from,
-      to: locatorFor(SELF),
+      to: SELF,
       strings: harden([...strings]),
       names: harden([]),
       ids: harden([]),
@@ -130,8 +130,7 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
       ...(replyTo ? { replyTo } : {}),
     });
     nextNumber += 1n;
-    push(message);
-    return message;
+    return push(message);
   };
 
   const keyOf = nameOrPath =>
@@ -143,8 +142,8 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
     nextId += 1;
     const message = harden({
       type: 'package',
-      from: locatorFor(SELF),
-      to: directory.get(recipientKey) || recipientKey,
+      from: SELF,
+      to: directory.get(recipientKey),
       strings: harden([...strings]),
       names: harden([]),
       ids: harden([]),
@@ -154,8 +153,8 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
       ...(replyTo ? { replyTo } : {}),
     });
     nextNumber += 1n;
-    push(message);
-    if (onEcho) onEcho(message, mailbox);
+    const echoed = push(message);
+    if (onEcho) onEcho(echoed, mailbox);
   };
 
   const powers = Far('Powers', {
@@ -184,11 +183,10 @@ const makeLiveMailbox = ({ onEcho } = {}) => {
     storeValue: async (value, nameOrPath) => {
       directory.set(keyOf(nameOrPath), value);
     },
-    storeLocator: async (nameOrPath, locator) => {
-      directory.set(keyOf(nameOrPath), locator);
-    },
-    locate: async (...path) => directory.get(path.join('/')),
     send: async (recipient, strings) => {
+      if (!directory.has(keyOf(recipient))) {
+        throw Error(`Unknown name ${keyOf(recipient)}`);
+      }
       sent.push({ recipient: keyOf(recipient), strings: [...strings] });
       echoSend(keyOf(recipient), strings);
     },
@@ -247,7 +245,7 @@ const makeScriptedProvider = rounds => {
 };
 
 const stubSpawner = Far('SubagentSpawner', {
-  spawn: async name => harden({ name, locator: locatorFor(CHILD) }),
+  spawn: async name => harden({ name }),
   stop: async () => {},
   list: async () => harden(['helper']),
   help: () => 'stub',
@@ -261,9 +259,9 @@ test('a turn blocked on askSubagent still observes the reply', async t => {
     onEcho: (message, box) => {
       // The daemon echoes the delegation into the parent's own stream before
       // any reply to it. Script the subagent's answer right behind the echo.
-      if (message.to === locatorFor(CHILD)) {
+      if (message.toNames.includes('subagent.helper')) {
         box.deliver({
-          from: locatorFor(CHILD),
+          from: CHILD,
           strings: ['the answer is 42'],
           replyTo: message.messageId,
         });
@@ -310,7 +308,7 @@ test('a turn blocked on askSubagent still observes the reply', async t => {
     await loop;
   });
 
-  mailbox.deliver({ from: locatorFor(HOST), strings: ['please delegate'] });
+  mailbox.deliver({ from: HOST, strings: ['please delegate'] });
 
   // The agent replies to the host message once the ask has been answered.
   t.true(
@@ -335,9 +333,9 @@ test('a claimed subagent reply is dismissed so a restart cannot replay it', asyn
   t.timeout(20_000);
   const mailbox = makeLiveMailbox({
     onEcho: (message, box) => {
-      if (message.to === locatorFor(CHILD)) {
+      if (message.toNames.includes('subagent.helper')) {
         box.deliver({
-          from: locatorFor(CHILD),
+          from: CHILD,
           strings: ['done'],
           replyTo: message.messageId,
         });
@@ -378,7 +376,7 @@ test('a claimed subagent reply is dismissed so a restart cannot replay it', asyn
     await loop;
   });
 
-  mailbox.deliver({ from: locatorFor(HOST), strings: ['please delegate'] });
+  mailbox.deliver({ from: HOST, strings: ['please delegate'] });
 
   t.true(await until(() => mailbox.dismissed.length > 0));
   mailbox.close();
@@ -416,7 +414,7 @@ test('a backlog larger than any bound is answered, not declined', async t => {
   // later. Twenty is past the bound this loop used to carry.
   for (let index = 0; index < 20; index += 1) {
     mailbox.deliver({
-      from: locatorFor(HOST),
+      from: HOST,
       strings: [`message ${index}`],
     });
   }
@@ -484,12 +482,12 @@ test('cancellation closes delegations without waiting for the reader', async t =
   );
   t.teardown(() => mailbox.close());
 
-  mailbox.deliver({ from: locatorFor(HOST), strings: ['delegate please'] });
+  mailbox.deliver({ from: HOST, strings: ['delegate please'] });
   // Wait until the delegation is on the wire and the turn is parked on a reply
   // that will never come.
   t.true(
     await until(() =>
-      mailbox.sent.some(record => record.recipient === 'subagents/helper'),
+      mailbox.sent.some(record => record.recipient === 'subagent.helper'),
     ),
     `mailbox saw: ${JSON.stringify(
       mailbox.sent.map(record => record.recipient ?? `reply#${record.replyTo}`),
@@ -535,7 +533,7 @@ test('a real daemon context does not stop the loop before it starts', async t =>
     await loop;
   });
 
-  mailbox.deliver({ from: locatorFor(HOST), strings: ['are you there?'] });
+  mailbox.deliver({ from: HOST, strings: ['are you there?'] });
   t.true(
     await until(() =>
       mailbox.sent.some(record => record.replyTo !== undefined),
@@ -565,6 +563,6 @@ test('a context that cannot report cancellation stops the loop', async t => {
   );
   t.teardown(() => mailbox.close());
   await loop;
-  mailbox.deliver({ from: locatorFor(HOST), strings: ['are you there?'] });
+  mailbox.deliver({ from: HOST, strings: ['are you there?'] });
   t.false(await until(() => mailbox.sent.some(r => r.replyTo !== undefined)));
 });

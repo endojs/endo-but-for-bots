@@ -6,16 +6,27 @@ import { Fail, q } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
-import { parseLocator } from '@endo/daemon/locator.js';
 
 /**
  * @typedef {import('./tool-makers.js').ToolSchema} ToolSchema
  * @typedef {import('./tool-makers.js').FaeTool} FaeTool
  */
 
-/** The parent's pet-store directory holding one entry per live subagent. */
-export const SUBAGENT_DIRECTORY = 'subagents';
-harden(SUBAGENT_DIRECTORY);
+/**
+ * Prefix of the pet name under which a parent holds each live subagent's
+ * handle: subagent `x` is the parent's `subagent.x`.
+ *
+ * The binding is top-level on purpose. A guest knows its correspondents only
+ * by the names the daemon stamps on a message as `fromNames`/`toNames`, which
+ * are the guest's own *top-level* names for the sender and recipient — a
+ * subagent bound inside a directory would appear in neither, and the
+ * delegation registry could not tell its reply from anyone else's mail.
+ *
+ * A dot cannot occur in an agent name (see `agentNamePattern`), so the suffix
+ * after the prefix is exactly the subagent's name.
+ */
+export const SUBAGENT_PET_NAME_PREFIX = 'subagent.';
+harden(SUBAGENT_PET_NAME_PREFIX);
 
 /**
  * Infix that makes a subagent's names in the factory host derivable from its
@@ -147,31 +158,21 @@ export const assertSubagentName = name => {
 harden(assertSubagentName);
 
 /**
- * Compare two locators by the formula they name.
+ * The parent's pet name for its subagent `name`.
  *
- * A locator produced by `locate()` carries the transport hints resolved from
- * `@nets` at the moment of the call, while the `from`/`to` locators stamped
- * onto a mailbox message are always hint-free. String equality between the two
- * therefore fails on any daemon that has network addresses configured, even
- * though both name the same formula. Identity is the `{ number, node }` pair.
- *
- * @param {unknown} leftLocator
- * @param {unknown} rightLocator
- * @returns {boolean}
+ * @param {unknown} name
+ * @returns {string}
  */
-export const isSameFormula = (leftLocator, rightLocator) => {
-  if (typeof leftLocator !== 'string' || typeof rightLocator !== 'string') {
-    return false;
-  }
-  try {
-    const left = parseLocator(leftLocator);
-    const right = parseLocator(rightLocator);
-    return left.number === right.number && left.node === right.node;
-  } catch {
-    return false;
-  }
-};
-harden(isSameFormula);
+export const subagentPetName = name =>
+  `${SUBAGENT_PET_NAME_PREFIX}${assertSubagentName(name)}`;
+harden(subagentPetName);
+
+/**
+ * @param {unknown} names
+ * @returns {string[]}
+ */
+const nameList = names =>
+  Array.isArray(names) ? names.filter(name => typeof name === 'string') : [];
 
 /**
  * Render a package message's interleaved strings and edge names the way both
@@ -235,7 +236,8 @@ harden(SubagentSpawnerInterface);
 /**
  * @typedef {object} PendingDelegation
  * @property {string} name
- * @property {string} recipient - Locator for the subagent's handle.
+ * @property {string} petName - The parent's top-level name for the subagent,
+ *   by which the daemon names it in `fromNames` and `toNames`.
  * @property {string} text - The exact single string sent, used to distinguish
  *   this delegation from any other mail to the same subagent.
  * @property {string | undefined} outboundId - `messageId` of the delegation,
@@ -292,7 +294,7 @@ export const makeSubagentDelegations = ({
   const closedOutboundIds = new Set();
 
   /**
-   * Handles of the subagents this registry has asked, so that mail from one
+   * Pet names of the subagents this registry has asked, so that mail from one
    * of them that answers no ask can be told from mail a user sent. The same
    * exchange starts from an unsolicited message as from a stray reply, and a
    * subagent talks to its parent by answering asks.
@@ -320,10 +322,10 @@ export const makeSubagentDelegations = ({
     }
   };
 
-  /** @param {string} recipient */
-  const remember = recipient => {
-    knownSubagents.delete(recipient);
-    knownSubagents.add(recipient);
+  /** @param {string} petName */
+  const remember = petName => {
+    knownSubagents.delete(petName);
+    knownSubagents.add(petName);
     while (knownSubagents.size > MAX_KNOWN_SUBAGENTS) {
       const [oldest] = knownSubagents;
       knownSubagents.delete(oldest);
@@ -354,14 +356,18 @@ export const makeSubagentDelegations = ({
     // "Thinking..." placeholder, so wait for the settled revision — which the
     // daemon re-emits under the same number.
     if (message.done === false) return unclaimed;
-    const { from, to, replyTo, messageId, number, names } = message;
+    const { replyTo, messageId, number, names } = message;
+    // A guest's mail names its correspondents by the guest's own pet names,
+    // never by locator; `@self` is this agent.
+    const fromNames = nameList(message.fromNames);
+    const toNames = nameList(message.toNames);
 
     // The echo of our own delegation, which teaches us its messageId.
-    if (typeof messageId === 'string') {
+    if (typeof messageId === 'string' && fromNames.includes('@self')) {
       for (const delegation of pendingByName.values()) {
         if (
           delegation.outboundId === undefined &&
-          isSameFormula(to, delegation.recipient) &&
+          toNames.includes(delegation.petName) &&
           Array.isArray(message.strings) &&
           message.strings.length === 1 &&
           message.strings[0] === delegation.text
@@ -384,7 +390,7 @@ export const makeSubagentDelegations = ({
       const delegation = pendingByOutboundId.get(replyTo);
       // `replyTo` can only name a message its sender took part in, but
       // matching the sender as well keeps the guarantee local to this module.
-      if (delegation && isSameFormula(from, delegation.recipient)) {
+      if (delegation && fromNames.includes(delegation.petName)) {
         const edgeNames = /** @type {string[]} */ (
           (Array.isArray(names) ? names : []).filter(
             edgeName => typeof edgeName === 'string',
@@ -406,8 +412,8 @@ export const makeSubagentDelegations = ({
     // exchange this registry exists to prevent — the parent's reply lands in
     // the subagent's inbox, the subagent answers that, and so on, a model
     // call per hop with nothing to end it — so it is consumed instead.
-    for (const recipient of knownSubagents) {
-      if (isSameFormula(from, recipient)) {
+    for (const petName of knownSubagents) {
+      if (fromNames.includes(petName)) {
         console.error(
           `[subagent] discarding unsolicited mail from a subagent; a subagent speaks by answering asks`,
         );
@@ -447,13 +453,11 @@ export const makeSubagentDelegations = ({
     // `ask` caller still sees it, but the host does not report a bogus
     // unhandled rejection every time a shutdown races a delegation.
     answerKit.promise.catch(() => undefined);
+    const petName = subagentPetName(name);
     /** @type {PendingDelegation} */
     const delegation = {
       name,
-      // Filled in below, once `locate` has resolved. Until then the entry
-      // exists only to hold the slot; `claim` cannot match an empty recipient
-      // because `isSameFormula` rejects a non-locator.
-      recipient: '',
+      petName,
       text: task,
       outboundId: undefined,
       settle: answerKit.resolve,
@@ -466,22 +470,15 @@ export const makeSubagentDelegations = ({
     // an answer nothing would ever deliver to it.
     pendingByName.set(name, delegation);
 
-    const path = harden([SUBAGENT_DIRECTORY, name]);
-    /** @type {unknown} */
-    let recipient;
     try {
-      // `locate` takes the path as separate name arguments — unlike `lookup`
-      // and `send`, whose guards accept an array.
-      recipient = await E(powers).locate(...path);
-      typeof recipient === 'string' ||
+      (await E(powers).has(petName)) ||
         Fail`No subagent named ${q(name)} — spawn it first`;
     } catch (error) {
       forget(delegation);
       throw error;
     }
-    delegation.recipient = /** @type {string} */ (recipient);
-    remember(delegation.recipient);
-    // Re-checked after the await: closing during `locate` must not go on to
+    remember(petName);
+    // Re-checked after the await: closing during `has` must not go on to
     // send, or the subagent bills a model turn for a reply the closed registry
     // can never observe.
     if (closedReason !== undefined) {
@@ -500,7 +497,7 @@ export const makeSubagentDelegations = ({
     try {
       // The registry is armed before the send so that the echo of this very
       // message cannot be observed by the inbox loop before it can be matched.
-      await E(powers).send(path, harden([task]), harden([]), harden([]));
+      await E(powers).send(petName, harden([task]), harden([]), harden([]));
       const outcome = await Promise.race([
         answerKit.promise.then(answer => harden({ answer })),
         deadline.then(() => harden({ answer: undefined })),
@@ -557,8 +554,11 @@ harden(makeSubagentDelegations);
  * `SubagentSpawner`; an agent at the maximum delegation depth is given none,
  * which is what bounds the tree.
  *
+ * The spawner, not this agent, writes the `subagent.<name>` edge: its `spawn`
+ * binds the child's handle into the parent's pet store and its `stop` drops
+ * it, because a guest can neither receive nor store a locator.
+ *
  * @param {object} options
- * @param {any} options.powers - The parent agent's guest powers.
  * @param {any} options.spawner - A `SubagentSpawner` capability.
  * @param {ReturnType<typeof makeSubagentDelegations>} options.delegations
  * @param {boolean} [options.retainsAttachments] - Whether a claimed reply stays
@@ -570,7 +570,6 @@ harden(makeSubagentDelegations);
  * @returns {Map<string, FaeTool>}
  */
 export const makeSubagentTools = ({
-  powers,
   spawner,
   delegations,
   retainsAttachments = false,
@@ -589,7 +588,7 @@ export const makeSubagentTools = ({
             'Create a subagent: a separate agent with its own conversation, ' +
             'inbox, and pet name directory. Use it to run a self-contained ' +
             'piece of work without spending your own context on it. The ' +
-            'subagent is reachable by mail at the name you choose; put ' +
+            'subagent is reachable by mail at subagent.<name>; put ' +
             'questions to it with askSubagent and release it with stopSubagent.',
           parameters: {
             type: 'object',
@@ -598,7 +597,7 @@ export const makeSubagentTools = ({
                 type: 'string',
                 description:
                   'Lowercase name for the subagent, e.g. "researcher". ' +
-                  'Becomes its pet name under subagents/.',
+                  'Its pet name becomes subagent.<name>.',
               },
               systemPrompt: {
                 type: 'string',
@@ -614,21 +613,16 @@ export const makeSubagentTools = ({
     async execute(args) {
       const { name, systemPrompt } = /** @type {any} */ (args);
       assertSubagentName(name);
-      const { locator } = /** @type {any} */ (
-        await E(spawner).spawn(
-          name,
-          harden(systemPrompt ? { systemPrompt } : {}),
-        )
+      // The spawner binds the subagent's handle into this agent's pet store as
+      // `subagent.<name>`: a guest can neither receive nor store a locator, so
+      // the edge is written from the host side, by whoever minted the child.
+      await E(spawner).spawn(
+        name,
+        harden(systemPrompt ? { systemPrompt } : {}),
       );
-      // The parent binds the subagent under its own authority, so the spawner
-      // never needs write access to this agent's pet store.
-      if (!(await E(powers).has(SUBAGENT_DIRECTORY))) {
-        await E(powers).makeDirectory(SUBAGENT_DIRECTORY);
-      }
-      await E(powers).storeLocator([SUBAGENT_DIRECTORY, name], locator);
       return `Spawned subagent "${name}". Ask it something with askSubagent.`;
     },
-    help: () => 'Create a subagent reachable by mail under subagents/<name>.',
+    help: () => 'Create a subagent reachable by mail as subagent.<name>.',
   });
 
   const askTool = harden({
@@ -717,12 +711,9 @@ export const makeSubagentTools = ({
     async execute(args) {
       const { name } = /** @type {any} */ (args);
       assertSubagentName(name);
+      // The spawner drops this agent's `subagent.<name>` edge once the child is
+      // down, so a failed stop leaves a name that still points at something.
       await E(spawner).stop(name);
-      // Drop the parent's own edge last, so a failed stop leaves a name that
-      // still points at something rather than a dangling one.
-      if (await E(powers).has(SUBAGENT_DIRECTORY, name)) {
-        await E(powers).remove(SUBAGENT_DIRECTORY, name);
-      }
       return `Stopped subagent "${name}".`;
     },
     help: () => 'Stop a subagent and remove its name.',

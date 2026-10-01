@@ -30,9 +30,9 @@ delegation strictly before any reply to it.
 2. The inbox loop offers every message to `claim`, before its own routing.
    The echo of the parent's own send teaches `claim` that delegation's
    `messageId`.
-3. A later inbound message whose `replyTo` is that `messageId`, and whose `from`
-   is the subagent, settles the `ask` and is *not* turned into a conversation
-   turn.
+3. A later inbound message whose `replyTo` is that `messageId`, and whose
+   `fromNames` include the subagent's pet name, settles the `ask` and is *not*
+   turned into a conversation turn.
 
 Without step 3 a Floot parent would answer its subagent's reply, and the
 subagent would answer that — an unbounded exchange between two models.
@@ -54,15 +54,22 @@ Either one, left to fall through, would be answered by the parent, and the
 subagent would answer that: a subagent speaks to its parent by answering asks,
 and nothing else it sends starts a turn.
 
-### Locator identity
+### Matching by pet name
 
-`locate()` decorates a locator with the transport hints `@nets` publishes at the
-moment of the call, while the `from`/`to` locators stamped onto a message are
-always hint-free.
-String equality between the two therefore fails on any daemon with network
-addresses configured.
-`isSameFormula` compares the `{ number, node }` pair instead, and both harnesses
-now use it for their own "is this my own outbound mail?" check as well.
+A guest neither produces nor consumes locators: the messages it reads name the
+sender and recipient only by the guest's own pet names, as `fromNames` and
+`toNames`, and its own outbound mail names it `@self`.
+The registry therefore matches by name:
+the echo is a message whose `fromNames` include `@self` and whose `toNames`
+include the subagent's pet name, and a reply is one whose `fromNames` include it.
+
+The daemon computes those names with `reverseIdentify` over the guest's special
+and *top-level* names only, so a subagent bound inside a directory would appear
+in neither list.
+Each subagent is therefore held under a top-level name, `subagent.<name>`
+(`subagentPetName`).
+An agent name cannot contain a dot, so the name after the prefix is exactly the
+subagent's.
 
 ## Authority
 
@@ -71,7 +78,7 @@ now use it for their own "is this my own outbound mail?" check as well.
 ```ts
 interface SubagentSpawner {
   spawn(name: string, options?: { systemPrompt?: string }):
-    Promise<{ name: string; locator: string }>;
+    Promise<{ name: string }>;
   stop(name: string): Promise<void>;
   list(): Promise<string[]>;
   help(methodName?: string): string;
@@ -80,9 +87,14 @@ interface SubagentSpawner {
 
 It can create, enumerate, and release agents named beneath one parent, and
 nothing else.
-It deliberately does **not** write into the parent's pet store: `spawn` returns
-a locator and the parent binds it under `subagents/<name>` with its own
-authority, so a compromised parent gains no writer for its own namespace.
+A guest can neither receive nor store a locator, so the spawner — which holds
+host authority — writes the parent's one edge to each child:
+`spawn` binds the child's handle into the parent's pet store as
+`subagent.<name>`, and `stop` drops that name once the child is down.
+It writes no other name, so a compromised parent gains no writer for the rest of
+its own namespace.
+A child whose edge cannot be written is released at once rather than left
+running where nothing can address it.
 
 Withholding the spawner is what withholds the tools.
 An agent at the delegation bound is given none, so `makeSubagentTools` is never
@@ -204,7 +216,7 @@ options, so a caller cannot declare itself somebody's subagent.
 A Fae subagent is deliberately **not** pinned: subagents are working memory, and
 a daemon restart should not resurrect a tree of them behind the user's back.
 The consequence, not yet addressed, is that a revived parent still holds
-`subagents/<name>` for each of them and its spawner still lists them, while
+`subagent.<name>` for each of them and its spawner still lists them, while
 their loops are gone: an `askSubagent` to one waits out its whole timeout, and
 the dead entries count against the live-subagent bound until the parent's model
 stops them.

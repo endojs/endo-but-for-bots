@@ -280,7 +280,6 @@ export const makeFlootToolRegistry = (
     builtins.set(name, tool);
   if (spawner && delegations) {
     for (const [name, tool] of makeSubagentTools({
-      powers,
       spawner,
       delegations,
       // A Floot session dismisses every message it handles, a delegation reply

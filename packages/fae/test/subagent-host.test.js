@@ -570,3 +570,72 @@ test('two stops of one subagent do not cancel it twice', async t => {
     1,
   );
 });
+
+test('the spawner binds and drops the parent’s top-level edge to its subagent', async t => {
+  const { hostAgent, names } = makeFakeHost();
+  const spawner = makeSubagentSpawner({
+    provideContext: async () =>
+      harden({
+        hostAgent,
+        providerLocator: provisionOptions.providerLocator,
+        hostAgentLocator: provisionOptions.hostAgentLocator,
+      }),
+    parentName: 'p',
+    driverSpecifier: provisionOptions.driverSpecifier,
+    spawnerSpecifier: provisionOptions.spawnerSpecifier,
+    depth: 1,
+    maxDepth: 1,
+  });
+
+  // A guest can neither receive nor store a locator, so the spawner — which
+  // holds host authority — writes the parent's edge, and hands back none.
+  t.deepEqual(await spawner.spawn('c'), { name: 'c' });
+  // Top-level in the parent's guest, because the daemon names a guest's
+  // correspondents by its top-level names only: the parent's delegation
+  // registry matches the child's replies by `subagent.c` in `fromNames`.
+  t.is(names.get('profile-for-p/subagent.c'), names.get('p.sub.c'));
+
+  await spawner.stop('c');
+  t.false(names.has('profile-for-p/subagent.c'));
+});
+
+test('a subagent the parent cannot be given a name for is released', async t => {
+  const { hostAgent, names } = makeFakeHost();
+  const failingHost = Far('HostAgent', {
+    ...Object.fromEntries(
+      [
+        'list',
+        'has',
+        'locate',
+        'provideGuest',
+        'storeLocator',
+        'makeUnconfined',
+        'cancel',
+        'remove',
+      ].map(method => [method, (...args) => hostAgent[method](...args)]),
+    ),
+    async copy(_from, to) {
+      if (to[0] === 'profile-for-p') throw Error('parent is gone');
+    },
+  });
+  const spawner = makeSubagentSpawner({
+    provideContext: async () =>
+      harden({
+        hostAgent: failingHost,
+        providerLocator: provisionOptions.providerLocator,
+        hostAgentLocator: provisionOptions.hostAgentLocator,
+      }),
+    parentName: 'p',
+    driverSpecifier: provisionOptions.driverSpecifier,
+    spawnerSpecifier: provisionOptions.spawnerSpecifier,
+    depth: 1,
+    maxDepth: 1,
+  });
+
+  await t.throwsAsync(spawner.spawn('c'), { message: /parent is gone/ });
+  // A running child nobody can address is a model loop nobody can stop.
+  t.deepEqual(
+    [...names.keys()].filter(name => name.includes('p.sub.c')),
+    [],
+  );
+});

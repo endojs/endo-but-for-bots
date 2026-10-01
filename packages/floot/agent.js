@@ -34,8 +34,8 @@ import { runAgenticTurn } from '@endo/fae/src/turn-engine.js';
 import {
   SubagentSpawnerInterface,
   assertSubagentName,
-  isSameFormula,
   makeSubagentDelegations,
+  subagentPetName,
 } from '@endo/fae/src/subagent.js';
 import { DEFAULT_MAX_SUBAGENT_DEPTH } from '@endo/fae/src/subagent-host.js';
 import { resolveAuthToken } from '@endo/fae/src/credentials.js';
@@ -1575,7 +1575,6 @@ export const makeStreamingAgent = async (
     if (inboxStarted || stopped) return;
     inboxStarted = true;
     inboxLoop = (async () => {
-      const selfLocator = await E(powers).locate('@self');
       const messages = iterateReader(E(powers).followMessages());
       inboxIterator = messages;
       if (stopped) {
@@ -1748,7 +1747,7 @@ export const makeStreamingAgent = async (
           const { value: message, done } = next;
           if (done) break;
           const {
-            from: fromId,
+            fromNames: rawFromNames,
             number,
             type,
             strings,
@@ -1786,12 +1785,11 @@ export const makeStreamingAgent = async (
             // eslint-disable-next-line no-continue
             continue;
           }
+          // A guest's mail names its correspondents by the guest's own pet
+          // names, never by locator; `@self` is this session.
+          const fromNames = Array.isArray(rawFromNames) ? rawFromNames : [];
           // Skip our own outbound messages echoed back into the inbox.
-          // Compare formulas, not locator strings: `locate` decorates with the
-          // transport hints currently published by `@nets` while a message's
-          // `from` is always hint-free, so a daemon with network addresses
-          // would fail string equality and answer its own mail.
-          if (isSameFormula(fromId, selfLocator)) {
+          if (fromNames.includes('@self')) {
             await dismissQuietly(number);
             // eslint-disable-next-line no-continue
             continue;
@@ -1823,19 +1821,10 @@ export const makeStreamingAgent = async (
             text = `(${type || 'unknown'} message)`;
           }
 
-          // Resolve a friendly sender name for the history entry: the
-          // petname(s) this guest has for the sender, falling back to the
-          // locator. The reply is sent to the same sender by message number.
-          let fromName;
-          try {
-            const senderNames = await E(powers).reverseLocate(fromId);
-            fromName =
-              Array.isArray(senderNames) && senderNames.length
-                ? senderNames[0]
-                : fromId;
-          } catch {
-            fromName = fromId;
-          }
+          // A friendly sender name for the history entry: the first pet name
+          // this guest has for the sender. The reply is sent to the same
+          // sender by message number, so an unnamed sender needs no address.
+          const fromName = fromNames.length ? fromNames[0] : '(unnamed)';
 
           if (stopped || quarantineError) break;
           pendingMail.push({ number, text, fromName, type });
@@ -3567,9 +3556,10 @@ export const make = (hostPowers, _context, { env } = {}) => {
   /**
    * The whole of the authority a session gets over the factory: create, list,
    * and release sessions recorded as its own subagents. It cannot name, reach,
-   * or delete any other session, and it never sees a session guest — the
-   * locator it returns is the subagent's mail handle, which is exactly what
-   * the parent needs to converse with it and nothing more.
+   * or delete any other session, and it never sees a session guest — the one
+   * edge it writes, the parent's `subagent.<name>`, names the subagent's mail
+   * handle, which is exactly what the parent needs to converse with it and
+   * nothing more.
    *
    * @param {string} parentId
    * @param {number} depth - Delegation depth of the subagents it creates.
@@ -3632,8 +3622,23 @@ export const make = (hostPowers, _context, { env } = {}) => {
           subagentName: name,
           subagentDepth: depth,
         });
-        const locator = await E(getHost()).locate(`session-${childId}`);
-        return harden({ name, locator });
+        // Bound into the parent session's guest under a top-level name,
+        // because the daemon names a guest's correspondents (`fromNames` /
+        // `toNames`) by its top-level names only and the parent's delegation
+        // registry matches replies by that name. A guest can neither receive
+        // nor store a locator, so the edge is written from the host side. A
+        // child the parent cannot address is a loop nobody can reach, so a
+        // failed bind releases it.
+        try {
+          await E(getHost()).copy(
+            [`session-${childId}`],
+            [`session-agent-${parentId}`, subagentPetName(name)],
+          );
+        } catch (error) {
+          await releaseSession(childId).catch(() => undefined);
+          throw error;
+        }
+        return harden({ name });
       },
 
       /** @param {string} name */
@@ -3645,6 +3650,13 @@ export const make = (hostPowers, _context, { env } = {}) => {
         );
         if (!entry) throw Error(`No subagent named "${name}".`);
         await releaseSession(entry.id);
+        // Dropped last, so a failed stop leaves the parent a name that still
+        // points at something rather than a dangling one.
+        const parentAgentName = `session-agent-${parentId}`;
+        const petName = subagentPetName(name);
+        if (await E(getHost()).has(parentAgentName, petName)) {
+          await E(getHost()).remove(parentAgentName, petName);
+        }
       },
 
       async list() {
@@ -3658,7 +3670,7 @@ export const make = (hostPowers, _context, { env } = {}) => {
       /** @param {string} [methodName]  */
       help(methodName) {
         if (methodName === 'spawn') {
-          return 'spawn(name, { systemPrompt? }) — Create a subagent session beneath this one and return { name, locator }.';
+          return 'spawn(name, { systemPrompt? }) — Create a subagent session beneath this one, bind it in the parent as subagent.<name>, and return { name }.';
         }
         if (methodName === 'stop') {
           return 'stop(name) — Delete a subagent session and every session beneath it.';

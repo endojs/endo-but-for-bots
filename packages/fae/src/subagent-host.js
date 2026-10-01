@@ -16,6 +16,7 @@ import {
   agentNamePattern,
   assertSubagentName,
   reservedSubagentSuffixes,
+  subagentPetName,
 } from './subagent.js';
 
 /**
@@ -454,9 +455,11 @@ harden(releaseFaeAgent);
  *
  * The spawner is the *only* authority a parent gains over the agent namespace:
  * it can create, enumerate, and release agents named beneath itself, and
- * nothing else. It deliberately does not write into the parent's pet store —
- * the parent binds the returned locator under its own authority — so a
- * compromised parent gains no writer for its own namespace.
+ * nothing else. The one write it makes into the parent's pet store is the
+ * `subagent.<name>` edge to each child's handle: a guest can neither receive
+ * nor store a locator, so the edge is written from the host side, and only
+ * under the name `subagentPetName` derives — the parent gains no writer for
+ * any other name in its own namespace.
  *
  * `provideContext` is called per method rather than at construction: a spawner
  * caplet is reincarnated by the very lookup its parent's driver performs while
@@ -485,6 +488,8 @@ export const makeSubagentSpawner = ({
   maxSubagents = DEFAULT_MAX_SUBAGENTS,
   systemPrompt,
 }) => {
+  // The parent's guest, whose pet store holds its `subagent.<name>` edges.
+  const parentProfileName = profileNameFor(parentName);
   // The parse the whole scheme rests on is "every segment matches
   // `agentNamePattern`, joined by the infix". The child segment is checked in
   // `spawn`; this is the only place the parent's own name — which arrives from
@@ -545,9 +550,10 @@ export const makeSubagentSpawner = ({
         const existing = await listNames(hostAgent);
         existing.length < maxSubagents ||
           Fail`Subagent limit of ${q(maxSubagents)} reached; stop one first`;
-        const { locator } = await provisionFaeAgent({
+        const childName = subagentAgentName(parentName, name);
+        await provisionFaeAgent({
           hostAgent,
-          name: subagentAgentName(parentName, name),
+          name: childName,
           providerLocator,
           hostAgentLocator,
           driverSpecifier,
@@ -561,7 +567,29 @@ export const makeSubagentSpawner = ({
           // should not resurrect a tree of them behind the user's back.
           pin: false,
         });
-        return harden({ name, locator });
+        // Bound under a top-level name, because the daemon names a guest's
+        // correspondents (`fromNames`/`toNames`) by its top-level names only,
+        // and the parent's delegation registry matches replies by that name.
+        // A child the parent cannot address is a running loop nobody can
+        // reach, so a failed bind releases it.
+        try {
+          await E(hostAgent).copy(
+            [childName],
+            [parentProfileName, subagentPetName(name)],
+          );
+        } catch (error) {
+          try {
+            await releaseFaeAgent({ hostAgent, name: childName });
+          } catch (rollbackError) {
+            throw new AggregateError(
+              [error, rollbackError],
+              `Binding subagent "${name}" failed, and releasing it failed too`,
+              { cause: rollbackError },
+            );
+          }
+          throw error;
+        }
+        return harden({ name });
       });
     },
 
@@ -574,6 +602,12 @@ export const makeSubagentSpawner = ({
           hostAgent,
           name: subagentAgentName(parentName, name),
         });
+        // Dropped last, so a failed stop leaves the parent a name that still
+        // points at something rather than a dangling one.
+        const petName = subagentPetName(name);
+        if (await E(hostAgent).has(parentProfileName, petName)) {
+          await E(hostAgent).remove(parentProfileName, petName);
+        }
       });
     },
 
@@ -585,10 +619,10 @@ export const makeSubagentSpawner = ({
     /** @param {string} [methodName] */
     help(methodName) {
       if (methodName === 'spawn') {
-        return 'spawn(name, { systemPrompt? }) — Create a subagent named beneath this agent and return { name, locator }.';
+        return 'spawn(name, { systemPrompt? }) — Create a subagent named beneath this agent, bind it in the parent as subagent.<name>, and return { name }.';
       }
       if (methodName === 'stop') {
-        return 'stop(name) — Cancel a subagent, its own subagents, and every name they own.';
+        return 'stop(name) — Cancel a subagent, its own subagents, and every name they own, then drop the parent’s subagent.<name>.';
       }
       if (methodName === 'list') {
         return 'list() — Names of this agent’s live subagents.';

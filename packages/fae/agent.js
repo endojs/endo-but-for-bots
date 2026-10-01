@@ -329,7 +329,6 @@ export const spawnWorkerLoop = async (
   );
   if (spawner) {
     for (const [name, tool] of makeSubagentTools({
-      powers,
       spawner,
       delegations,
       // The inbox loop dismisses every claimed reply (see below), so a reply's
