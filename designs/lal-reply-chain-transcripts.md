@@ -7,6 +7,11 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | **Complete** |
 
+> Update 2026-10-01: guest messages carry `fromNames`/`toNames` (the guest's
+> own pet names for the correspondents) instead of `from`/`to`, and a guest
+> has no `locate` or `identify`. Lal recognizes its own outbound messages by
+> `fromNames` containing `@self`. See #1404.
+
 ## Motivation
 
 The Lal agent currently maintains a single, flat, ever-growing LLM transcript.
@@ -186,9 +191,9 @@ are required.
 
 ```
 on message(inboxMessage):
-  { messageId, replyTo, number, from } = inboxMessage
+  { messageId, replyTo, number, fromNames } = inboxMessage
 
-  if from === selfId:
+  if fromNames includes '@self':
     // Own outbound message — index it for future replies.
     handleOwnMessage(inboxMessage)
     return
@@ -398,7 +403,7 @@ Replace the single `transcript` array with a node-based transcript store.
 The message loop dispatches inbound messages to the correct transcript chain
 (or creates a new one) before calling `runAgenticLoop(node)`.
 
-Own-messages (`fromId === selfId`) are no longer skipped — they are used to
+Own-messages (`fromNames` includes `@self`) are no longer skipped — they are used to
 create alias entries in the transcript store.
 
 ### Modified: `runAgenticLoop(node)`
@@ -419,7 +424,7 @@ The chat UI can optionally parse and display it.
 ### Capturing Outbound messageId
 
 The agent observes its own messages via `followMessages()`. Outbound messages
-arrive with `from === selfId` and carry both `messageId` and `replyTo`. The
+arrive with `fromNames` including `@self` and carry both `messageId` and `replyTo`. The
 agent uses `replyTo` to locate the parent node and creates an alias under the
 outbound `messageId`. No daemon API changes required.
 

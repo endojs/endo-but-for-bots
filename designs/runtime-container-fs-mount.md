@@ -149,7 +149,10 @@ Deviations from the sketch:
   session-guest surface, reachable from both runtimes.
 - The `cap` (direct passable) attach variant is deferred: tools speak JSON,
   so v1 resolves by pet name only; possession is proven by resolving the
-  name through the session guest's own petstore (`identify`).
+  name through the session guest's own petstore. Update 2026-10-01: a guest
+  no longer has `identify`, so the factory host resolves the path through
+  its own pet name for the session guest
+  (`E(powers).identify(sessionName, ...path)`); see #1404.
 - Bridges are per attach record (`clientKey`, `capId`, `innerPath`), not
   per `capId`; attaching one cap at two inner paths mints two bridges.
   The per-cap reuse remains an optimization for later.

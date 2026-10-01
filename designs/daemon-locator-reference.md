@@ -179,8 +179,14 @@ formula identifier.
 When given a locator, it calls `internalizeLocator` to extract the
 identifier before delegating to `write`.
 This method is defined once in `directory.js` and carried up through
-`host.js` and `guest.js` via destructuring; it is not re-implemented at
-each layer.
+`host.js` via destructuring; it is not re-implemented at each layer.
+
+Update 2026-10-01: `guest.js` no longer carries the identifier and locator
+methods on this page (`identify`, `locate`, the reverse and enumeration
+forms, `followLocatorNameChanges`, `storeIdentifier`, `storeLocator`,
+`lookupById`, `lookupByLocator`). A guest designates by pet name only; its
+host binds capabilities into it by pet-name path, and durable
+cross-session designation goes through sturdy refs. See #1404.
 
 ### Subscription
 

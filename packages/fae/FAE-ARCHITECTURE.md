@@ -91,7 +91,7 @@ The caplet entry point follows the Endo convention. On load:
 2. Register built-in tools in a `localTools` Map
 3. Move any introduced tool capabilities from top-level into `tools/`
 4. Send "Fae agent ready." to HOST
-5. Identify SELF and start the message-following loop
+5. Start the message-following loop
 
 ```
 make()
@@ -101,7 +101,6 @@ make()
   │                                   # adoptTool, send, listMessages, dismiss
   ├─ initializeIntroducedTools()      # Move pre-installed tools → tools/
   ├─ E(powers).send('HOST', [...])    # Announce readiness
-  ├─ E(powers).identify('SELF')      # Get own formula ID
   └─ runAgent()                       # Enter message-following loop
 ```
 
@@ -112,7 +111,7 @@ while (true):
     message = await messageIterator.next()  # Block on next mail
     │
     ├─ Race against cancellation signal
-    ├─ Skip own messages (fromId === selfId)
+    ├─ Skip own messages (fromNames includes '@self')
     │
     ├─ discoverTools(powers, localTools)    # Merge local + daemon tools
     │
@@ -317,7 +316,8 @@ Messages arrive as `InboxMessage` objects with:
 
 | Field | Description |
 |-------|-------------|
-| `from` | Formula ID of the sender |
+| `fromNames` | The guest's own pet names for the sender (for example `['@host']`, or `['@self']` for its own mail) |
+| `toNames` | The guest's own pet names for the recipient |
 | `number` | Message sequence number (BigInt) |
 | `type` | `"package"` for normal messages |
 | `strings` | Text parts of the message |
@@ -441,7 +441,7 @@ A complete request lifecycle:
 1. User sends "@fae What time is it?" via Endo chat UI
 2. Endo daemon delivers mail to fae's inbox
 3. messageIterator.next() yields the message
-4. fae skips own messages (fromId !== selfId)
+4. fae skips own messages (`fromNames` includes `@self`)
 5. discoverTools() merges local tools + tools/ directory
    → finds "timestamp" tool
 6. transcript.push({ role: 'user', content: 'Message #5 from HOST: What time is it?' })

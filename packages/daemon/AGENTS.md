@@ -45,7 +45,7 @@ On restart, calling `provideGuest` with `introducedNames` on an already-existing
 ### Message types
 
 - `type: 'package'` messages work with `adopt()`.
-- `type: 'value'` messages (created by form submissions via `submit()`) have a `valueId`. Use `E(powers).lookup(msg.valueId)` to resolve the value — `adopt()` will throw `"Message must be a package"`.
+- `type: 'value'` messages (created by form submissions via `submit()`) carry the value on a `value` edge. A guest reads it with `E(powers).adopt(msg.number, 'value', scratchName)`, then `lookup(scratchName)`, then removes the scratch name. Guest messages carry no `valueId`, and a guest has no `lookupById`.
 
 ### Form flow
 
