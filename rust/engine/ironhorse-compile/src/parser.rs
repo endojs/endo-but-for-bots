@@ -30,9 +30,9 @@ use crate::meter::ParseMeter;
 use crate::token::Token;
 use crate::token_flags::has_flag;
 use crate::token_flags::{
-    ASSIGN_EXPRESSION, BEGIN_EXPRESSION, CALL_EXPRESSION, EQUAL_EXPRESSION,
-    EXPONENTIATION_EXPRESSION, IDENTIFIER_NAME, POSTFIX_EXPRESSION, PREFIX_EXPRESSION,
-    RELATIONAL_EXPRESSION, SHIFT_EXPRESSION, UNARY_EXPRESSION,
+    ADDITIVE_EXPRESSION, ASSIGN_EXPRESSION, BEGIN_EXPRESSION, CALL_EXPRESSION, EQUAL_EXPRESSION,
+    EXPONENTIATION_EXPRESSION, IDENTIFIER_NAME, MULTIPLICATIVE_EXPRESSION, POSTFIX_EXPRESSION,
+    PREFIX_EXPRESSION, RELATIONAL_EXPRESSION, SHIFT_EXPRESSION, UNARY_EXPRESSION,
 };
 use ironhorse_text::SymbolName;
 
@@ -90,7 +90,34 @@ impl From<LexError> for ParseError {
 
 type PResult<T> = Result<T, ParseError>;
 
-/// The parser's native-recursion budget, in the units `Parser::nested`
+/// Run `$body`, a production's body, as one recursion point of `$cost` budget
+/// units of `$parser` (see [`PARSER_STACK_BUDGET`]): refuse with
+/// `fxCheckParserStack`'s `"stack overflow"` when the charge would exceed the
+/// budget, else charge it and release it on every return of the body, an
+/// error's included.
+///
+/// A refusal `return`s it from the enclosing function. A macro rather than a
+/// helper taking a closure: a generic `nested(cost, closure)` left the helper
+/// or the closure a frame of its own on wasm (STACK-DEPTH-REFACTOR.md D3).
+/// Each charged production is an `#[inline(never)]` wrapper whose body, a
+/// `*_inner` function it alone calls, the optimizer inlines into it, so an
+/// optimized build spends one frame per recursion point and no caller's frame
+/// grows by the body. The refusal is built in place: an out-of-line refusal
+/// changed what the optimizer inlined into `statement`, by 16 bytes a level.
+macro_rules! charged {
+    ($parser:ident, $cost:expr, $body:expr) => {{
+        if $parser.depth + $cost > $crate::parser::PARSER_STACK_BUDGET {
+            return Err($parser.error("stack overflow"));
+        }
+        $parser.depth += $cost;
+        let result = $body;
+        $parser.depth -= $cost;
+        result
+    }};
+}
+pub(crate) use charged;
+
+/// The parser's native-recursion budget, in the units `charged!`
 /// charges.
 ///
 /// XS's recursive-descent parser guards its C stack with
@@ -110,11 +137,12 @@ type PResult<T> = Result<T, ParseError>;
 ///   operand, an array or object literal element, a call's arguments, a
 ///   template substitution, an arrow body — costs [`CASCADE_COST`] plus the
 ///   operand charges the cascade passes on the way down: the whole
-///   precedence cascade is re-entered, about 35 KiB of frames per level
+///   precedence cascade is re-entered, about 18 KiB of frames per level
 ///   unoptimized, so about 90 levels (91 nested parentheses compile, 92 do
 ///   not);
-/// - a nested statement, a `new` operand or a destructuring-pattern level
-///   costs [`STATEMENT_COST`]: 512 levels (about 10 KiB each);
+/// - a nested statement, a `new` or a destructuring-pattern level costs
+///   [`STATEMENT_COST`]: 512 levels (3-8 KiB each unoptimized; the `new`s of
+///   a chain are consumed in a loop and hold no frame of their own);
 /// - an assignment, unary, exponentiation or conditional operand — the cheap
 ///   right-recursive chains such as `a ? b : c ? d : …`, `2 ** 2 ** …` or
 ///   `!!!!x` — costs [`OPERAND_COST`]: about 1,000 levels (about 2 KiB each).
@@ -134,6 +162,45 @@ pub const STATEMENT_COST: u32 = 2;
 /// Budget units for one assignment, unary or conditional operand level (see
 /// [`PARSER_STACK_BUDGET`]).
 pub const OPERAND_COST: u32 = 1;
+
+/// The rungs of XS's binary ladder, from `fxCoalesceExpression` (rung 0) to
+/// `fxMultiplicativeExpression` (rung 10), each parsing the one above it for
+/// its operands; [`Parser::binary_expression`] climbs them.
+const RUNGS: usize = 11;
+/// `fxRelationalExpression`'s rung.
+const RELATIONAL_RUNG: usize = 7;
+
+/// Whether `token` continues rung `rung` of the binary ladder: the test of
+/// the rung's operator loop.
+fn continues_rung(token: Token, rung: usize) -> bool {
+    match rung {
+        0 => token == Token::Coalesce,
+        1 => token == Token::Or,
+        2 => token == Token::And,
+        3 => token == Token::BitOr,
+        4 => token == Token::BitXor,
+        5 => token == Token::BitAnd,
+        6 => has_flag(token, EQUAL_EXPRESSION),
+        RELATIONAL_RUNG => has_flag(token, RELATIONAL_EXPRESSION),
+        8 => has_flag(token, SHIFT_EXPRESSION),
+        9 => has_flag(token, ADDITIVE_EXPRESSION),
+        10 => has_flag(token, MULTIPLICATIVE_EXPRESSION),
+        _ => unreachable!("the binary ladder has {RUNGS} rungs"),
+    }
+}
+
+/// Where the `fxRelationalExpression` of a binary climb stands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Relational {
+    /// Entered, its first operand not yet returned: the `for`-header test
+    /// comes next.
+    Entered,
+    /// In its operator loop.
+    Looping,
+    /// Not looping: entered at `#x in`, which parses its right operand and
+    /// returns, or returned by the `for`-header test.
+    NotLooping,
+}
 
 /// Return the line of the second `__proto__:` setter in an object literal.
 /// Converted assignment/parameter covers are `ObjectBinding` nodes, so only
@@ -199,7 +266,8 @@ pub struct Parser<'a> {
     /// [`Self::property_name`] call.
     property_name_async_flag: u32,
     /// Budget units in use by the recursion points currently on the native
-    /// stack (see [`PARSER_STACK_BUDGET`] and [`Self::nested`]).
+    /// stack (see [`PARSER_STACK_BUDGET`] and `charged!`), and by the
+    /// `new`s of a chain [`Self::new_expression`] has entered.
     depth: u32,
 }
 
@@ -348,24 +416,6 @@ impl<'a> Parser<'a> {
         Ok(SymbolName::from_units(
             self.cur.string.as_deref().unwrap_or_default(),
         ))
-    }
-
-    /// Run `f` as one recursion point of `cost` budget units, refusing with
-    /// `fxCheckParserStack`'s `"stack overflow"` when the charge would exceed
-    /// [`PARSER_STACK_BUDGET`]. The charge is released on every return path,
-    /// including a `?` propagation inside `f`.
-    pub(crate) fn nested<T>(
-        &mut self,
-        cost: u32,
-        f: impl FnOnce(&mut Self) -> PResult<T>,
-    ) -> PResult<T> {
-        if self.depth + cost > PARSER_STACK_BUDGET {
-            return Err(self.error("stack overflow"));
-        }
-        self.depth += cost;
-        let result = f(self);
-        self.depth -= cost;
-        result
     }
 
     // --- token window (fxGetNextToken / fxLookAheadOnce / fxMatchToken) ---
@@ -587,9 +637,9 @@ impl<'a> Parser<'a> {
         // The tree-depth invariant: no node deeper than
         // [`crate::ast::TREE_DEPTH_LIMIT`] is ever built, so no later pass —
         // nor the tree's own drop glue — recurses past it. This is where a
-        // flat run the grammar folds into a left-nested chain (`binary_ladder`,
-        // member and call chains) grows one level per operand without any
-        // parser recursion to charge.
+        // flat run the grammar folds into a left-nested chain (the binary
+        // rungs, member and call chains) grows one level per operand without
+        // any parser recursion to charge.
         if node.depth > crate::ast::TREE_DEPTH_LIMIT {
             return Err(self.error("stack overflow"));
         }
@@ -858,8 +908,9 @@ impl<'a> Parser<'a> {
     /// `fxAssignmentExpression`. One [`OPERAND_COST`] recursion point: the
     /// right-recursive chains (`a = b = c`, `a ? b : c ? d : e`, the
     /// element/argument/substitution positions) all pass through here.
+    #[inline(never)]
     fn assignment_expression(&mut self) -> PResult<()> {
-        self.nested(OPERAND_COST, |p| p.assignment_expression_inner())
+        charged!(self, OPERAND_COST, self.assignment_expression_inner())
     }
 
     fn assignment_expression_inner(&mut self) -> PResult<()> {
@@ -882,7 +933,7 @@ impl<'a> Parser<'a> {
 
     /// `fxConditionalExpression`.
     fn conditional_expression(&mut self) -> PResult<()> {
-        self.coalesce_expression()?;
+        self.binary_expression()?;
         if self.cur.token == Token::QuestionMark {
             let line = self.cur.line;
             self.check_arrow_function(1)?;
@@ -898,163 +949,89 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    /// A left-associative binary ladder rung: parse `next`, then while
-    /// the current token has `class_flag`, consume it and another `next`
-    /// and fold a 2-child node of that token. Mirrors the shape shared by
-    /// `fxOrExpression` … `fxShiftExpression`.
-    fn binary_ladder(
-        &mut self,
-        class_flag: u32,
-        next: fn(&mut Self) -> PResult<()>,
-    ) -> PResult<()> {
-        next(self)?;
-        while has_flag(self.cur.token, class_flag) {
+    /// `fxCoalesceExpression` through `fxMultiplicativeExpression`, XS's 11
+    /// left-associative rungs, climbed in one loop (STACK-DEPTH-REFACTOR.md
+    /// D3).
+    ///
+    /// In XS each rung is a production that parses the rung above it, then
+    /// loops while the current token continues it, consuming the operator,
+    /// parsing another operand of the rung above, checking for an arrow and
+    /// folding a 2-child node. So an operand of the ladder held 11 frames.
+    /// Here `pending[r]` is the operator rung `r`'s loop holds while its right
+    /// operand is parsed, the only state a rung's frame carried, and after
+    /// each operand the loop returns through the rungs from the top down as
+    /// the frames did: each folds its pending operator, then the first rung
+    /// the current token continues consumes it and its right operand enters
+    /// the rungs above it. Every token, fold, arrow check and error comes in
+    /// the ladder's order, and none of the rungs is charged, as none was.
+    ///
+    /// `fxRelationalExpression`'s two quirks are kept. Entered at a `#x`, it
+    /// parses `#x in ShiftExpression` and returns without looping. In a `for`
+    /// header (`mxForFlag`), it returns after its first operand when an `in`
+    /// or `of` follows, though its loop consumes an `in` after a relational
+    /// operator.
+    #[inline(never)]
+    fn binary_expression(&mut self) -> PResult<()> {
+        let mut pending: [Option<(Token, u32)>; RUNGS] = [None; RUNGS];
+        // The rung whose production the next operand is parsed for: rungs
+        // `entry..` are entered, and the ones below it hold their place.
+        let mut entry = 0;
+        let mut relational = Relational::Entered;
+        loop {
+            if entry <= RELATIONAL_RUNG {
+                relational = Relational::Entered;
+                if self.cur.token == Token::PrivateIdentifier {
+                    let line = self.cur.line;
+                    let sym = self.cur.symbol.clone().unwrap_or_default();
+                    self.push_symbol(sym);
+                    self.get_next_token()?;
+                    self.match_token(Token::In)?;
+                    if self.flags & flags::FOR != 0 {
+                        return Err(self.error("invalid in"));
+                    }
+                    // The `ShiftExpression` is parsed as a right operand of
+                    // the relational rung, and folded there.
+                    pending[RELATIONAL_RUNG] = Some((Token::PrivateIdentifier, line));
+                    relational = Relational::NotLooping;
+                }
+            }
+            self.exponentiation_expression()?;
             let token = self.cur.token;
-            let line = self.cur.line;
-            self.get_next_token()?;
-            next(self)?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, token, line)?;
+            let mut rung = RUNGS;
+            entry = loop {
+                if rung == 0 {
+                    return Ok(());
+                }
+                rung -= 1;
+                if let Some((operator, line)) = pending[rung].take() {
+                    self.check_arrow_function(2)?;
+                    self.push_node_struct(2, operator, line)?;
+                }
+                if rung == RELATIONAL_RUNG {
+                    if relational == Relational::Entered {
+                        relational = Relational::Looping;
+                        if self.flags & flags::FOR != 0
+                            && (token == Token::In || self.is_keyword("of")?)
+                        {
+                            relational = Relational::NotLooping;
+                        }
+                    }
+                    if relational == Relational::NotLooping {
+                        continue;
+                    }
+                }
+                if continues_rung(token, rung) {
+                    let line = self.cur.line;
+                    if rung == RELATIONAL_RUNG {
+                        self.match_token(token)?;
+                    } else {
+                        self.get_next_token()?;
+                    }
+                    pending[rung] = Some((token, line));
+                    break rung + 1;
+                }
+            };
         }
-        Ok(())
-    }
-
-    /// `fxCoalesceExpression`.
-    fn coalesce_expression(&mut self) -> PResult<()> {
-        self.or_expression()?;
-        while self.cur.token == Token::Coalesce {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.or_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::Coalesce, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxOrExpression`.
-    fn or_expression(&mut self) -> PResult<()> {
-        self.and_expression()?;
-        while self.cur.token == Token::Or {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.and_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::Or, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxAndExpression`.
-    fn and_expression(&mut self) -> PResult<()> {
-        self.bit_or_expression()?;
-        while self.cur.token == Token::And {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.bit_or_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::And, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxBitOrExpression`.
-    fn bit_or_expression(&mut self) -> PResult<()> {
-        self.bit_xor_expression()?;
-        while self.cur.token == Token::BitOr {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.bit_xor_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::BitOr, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxBitXorExpression`.
-    fn bit_xor_expression(&mut self) -> PResult<()> {
-        self.bit_and_expression()?;
-        while self.cur.token == Token::BitXor {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.bit_and_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::BitXor, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxBitAndExpression`.
-    fn bit_and_expression(&mut self) -> PResult<()> {
-        self.equal_expression()?;
-        while self.cur.token == Token::BitAnd {
-            let line = self.cur.line;
-            self.get_next_token()?;
-            self.equal_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::BitAnd, line)?;
-        }
-        Ok(())
-    }
-
-    /// `fxEqualExpression`.
-    fn equal_expression(&mut self) -> PResult<()> {
-        self.binary_ladder(EQUAL_EXPRESSION, Self::relational_expression)
-    }
-
-    /// `fxRelationalExpression` — including the `#private in obj` form
-    /// and the `for`-header `in`/`of` short-circuit.
-    fn relational_expression(&mut self) -> PResult<()> {
-        if self.cur.token == Token::PrivateIdentifier {
-            let line = self.cur.line;
-            let sym = self.cur.symbol.clone().unwrap_or_default();
-            self.push_symbol(sym);
-            self.get_next_token()?;
-            self.match_token(Token::In)?;
-            if self.flags & flags::FOR != 0 {
-                return Err(self.error("invalid in"));
-            }
-            self.shift_expression()?;
-            self.check_arrow_function(2)?;
-            self.push_node_struct(2, Token::PrivateIdentifier, line)?;
-        } else {
-            self.shift_expression()?;
-            if self.flags & flags::FOR != 0
-                && (self.cur.token == Token::In || self.is_keyword("of")?)
-            {
-                return Ok(());
-            }
-            while has_flag(self.cur.token, RELATIONAL_EXPRESSION) {
-                let token = self.cur.token;
-                let line = self.cur.line;
-                self.match_token(token)?;
-                self.shift_expression()?;
-                self.check_arrow_function(2)?;
-                self.push_node_struct(2, token, line)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// `fxShiftExpression`.
-    fn shift_expression(&mut self) -> PResult<()> {
-        self.binary_ladder(SHIFT_EXPRESSION, Self::additive_expression)
-    }
-
-    /// `fxAdditiveExpression`.
-    fn additive_expression(&mut self) -> PResult<()> {
-        self.binary_ladder(
-            crate::token_flags::ADDITIVE_EXPRESSION,
-            Self::multiplicative_expression,
-        )
-    }
-
-    /// `fxMultiplicativeExpression`.
-    fn multiplicative_expression(&mut self) -> PResult<()> {
-        self.binary_ladder(
-            crate::token_flags::MULTIPLICATIVE_EXPRESSION,
-            Self::exponentiation_expression,
-        )
     }
 
     /// `fxExponentiationExpression` — right-associative, and a leading
@@ -1064,8 +1041,9 @@ impl<'a> Parser<'a> {
     /// `**` is right-associative, so `2 ** 2 ** …` recurses here per operand
     /// — after the charged operand production has already returned, so this
     /// production must charge for itself.
+    #[inline(never)]
     fn exponentiation_expression(&mut self) -> PResult<()> {
-        self.nested(OPERAND_COST, |p| p.exponentiation_expression_inner())
+        charged!(self, OPERAND_COST, self.exponentiation_expression_inner())
     }
 
     fn exponentiation_expression_inner(&mut self) -> PResult<()> {
@@ -1087,8 +1065,9 @@ impl<'a> Parser<'a> {
 
     /// `fxUnaryExpression` — `+ - ! ~ typeof void delete await`. One
     /// [`OPERAND_COST`] recursion point (`!!!!x` recurses here per operator).
+    #[inline(never)]
     fn unary_expression(&mut self) -> PResult<()> {
-        self.nested(OPERAND_COST, |p| p.unary_expression_inner())
+        charged!(self, OPERAND_COST, self.unary_expression_inner())
     }
 
     fn unary_expression_inner(&mut self) -> PResult<()> {
@@ -1123,8 +1102,9 @@ impl<'a> Parser<'a> {
     }
 
     /// `fxPrefixExpression` — `++ --`. One [`OPERAND_COST`] recursion point.
+    #[inline(never)]
     fn prefix_expression(&mut self) -> PResult<()> {
-        self.nested(OPERAND_COST, |p| p.prefix_expression_inner())
+        charged!(self, OPERAND_COST, self.prefix_expression_inner())
     }
 
     fn prefix_expression_inner(&mut self) -> PResult<()> {
@@ -1168,8 +1148,9 @@ impl<'a> Parser<'a> {
     /// operand, a literal element, an argument, a template substitution, an
     /// arrow body), so this is where a nesting level's full cascade of frames
     /// is charged.
+    #[inline(never)]
     fn call_expression(&mut self) -> PResult<()> {
-        self.nested(CASCADE_COST, |p| p.call_expression_inner())
+        charged!(self, CASCADE_COST, self.call_expression_inner())
     }
 
     fn call_expression_inner(&mut self) -> PResult<()> {
@@ -2056,30 +2037,73 @@ impl<'a> Parser<'a> {
     }
 
     /// `fxNewExpression` — `new X(...)`, member chains after `new`, and
-    /// `new.target`. One [`STATEMENT_COST`] recursion point: `new new new f`
-    /// recurses here per operand without passing through the cascade.
+    /// `new.target`. One [`STATEMENT_COST`] recursion point per `new`.
+    ///
+    /// In XS, `new new new f` recurses here once per `new` without passing
+    /// through the cascade: each `new`'s primary expression is the next
+    /// `new`, which returns before the enclosing one parses its member chain
+    /// and arguments. So the leading `new`s are consumed in a loop instead,
+    /// each charged into `depth` where its recursion was, and finished
+    /// innermost first, each releasing its charge where its recursion returned
+    /// (STACK-DEPTH-REFACTOR.md D3).
+    #[inline(never)]
     fn new_expression(&mut self) -> PResult<()> {
-        self.nested(STATEMENT_COST, |p| p.new_expression_inner())
+        // The recursion released every charge as it unwound, an error's
+        // included; on success the loop has released them all already.
+        let depth = self.depth;
+        let result = self.new_expression_chain();
+        self.depth = depth;
+        result
     }
 
-    #[inline(never)]
-    fn new_expression_inner(&mut self) -> PResult<()> {
-        let line = self.cur.line;
-        self.match_token(Token::New)?;
-        if self.cur.token == Token::Dot {
-            self.get_next_token()?;
-            if self.is_keyword("target")? {
-                if self.flags & flags::TARGET == 0 {
-                    return Err(self.error("invalid new.target"));
-                }
-                self.get_next_token()?;
-                self.push_node_struct(0, Token::Target, line)?;
-            } else {
-                return Err(self.error("missing target"));
+    /// The body of [`Self::new_expression`], which restores `depth` when this
+    /// returns an error with `new`s still charged.
+    fn new_expression_chain(&mut self) -> PResult<()> {
+        // The lines of the `new`s enclosing the innermost, outermost first.
+        let mut enclosing = Vec::new();
+        let innermost = loop {
+            // `charged!`'s check and charge, for a recursion point released
+            // when its `new` is finished.
+            if self.depth + STATEMENT_COST > PARSER_STACK_BUDGET {
+                return Err(self.error("stack overflow"));
             }
-            return Ok(());
+            self.depth += STATEMENT_COST;
+            let line = self.cur.line;
+            self.match_token(Token::New)?;
+            if self.cur.token == Token::Dot {
+                self.get_next_token()?;
+                if self.is_keyword("target")? {
+                    if self.flags & flags::TARGET == 0 {
+                        return Err(self.error("invalid new.target"));
+                    }
+                    self.get_next_token()?;
+                    self.push_node_struct(0, Token::Target, line)?;
+                } else {
+                    return Err(self.error("missing target"));
+                }
+                // `new.target` is complete as it stands.
+                break None;
+            }
+            if self.cur.token != Token::New {
+                self.literal_expression(true)?;
+                break Some(line);
+            }
+            enclosing.push(line);
+        };
+        if let Some(line) = innermost {
+            self.new_expression_tail(line)?;
         }
-        self.literal_expression(true)?;
+        self.depth -= STATEMENT_COST;
+        while let Some(line) = enclosing.pop() {
+            self.new_expression_tail(line)?;
+            self.depth -= STATEMENT_COST;
+        }
+        Ok(())
+    }
+
+    /// The rest of a `new` once its primary expression is on the stack: the
+    /// member chain, the arguments and the `New` node.
+    fn new_expression_tail(&mut self, line: u32) -> PResult<()> {
         self.check_arrow_function(1)?;
         loop {
             let member_line = self.cur.line;
