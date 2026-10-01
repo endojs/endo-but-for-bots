@@ -18,6 +18,42 @@ enum JsonSource {
     Object(Vec<(ReadKey, JsonSource)>),
 }
 
+/// One container `JSON.parse` has opened and not yet closed: the explicit
+/// stack that stands in for `fxParseJSONArray`/`fxParseJSONObject`'s
+/// recursion. Each open container holds the light unit of the
+/// native-recursion budget its value charged on entry, so the budget evolves
+/// as the recursion's did.
+enum JsonParseFrame {
+    Array {
+        inst: crate::value::SlotIndex,
+        length: u32,
+        sources: Vec<JsonSource>,
+    },
+    Object {
+        inst: crate::value::SlotIndex,
+        member_count: usize,
+        /// Key → its position in `sources`, so a repeated key replaces in O(1).
+        source_positions: std::collections::HashMap<ReadKey, usize>,
+        sources: Vec<(ReadKey, JsonSource)>,
+        /// The key of the member whose value is being parsed.
+        key: ReadKey,
+    },
+}
+
+/// What opening a container yields: an empty one is a finished value, any
+/// other is a frame whose first element or member value comes next.
+enum JsonParseOpened {
+    Value((Slot, JsonSource)),
+    Frame(JsonParseFrame),
+}
+
+/// What delivering a value to the innermost open container yields: another
+/// element or member value to parse, or the container closed by its bracket.
+enum JsonParseDelivered {
+    Next,
+    Closed,
+}
+
 /// One string property name retained by `JSON.stringify`.  The id drives the
 /// VM's property MOP, `key` is the exact String value passed to `toJSON` and a
 /// replacer callback, and `units` preserves the UTF-16 spelling used in the
@@ -780,30 +816,98 @@ impl Interp {
     /// `"[".repeat(1e6)` halts with [`Halt::ReentryLimit`] instead of
     /// overflowing the host stack (XS's `fxParseJSONValue` recurses the same
     /// way, bounded by its C stack).
+    ///
+    /// The nesting is an explicit stack of open containers rather than a
+    /// recursion (STACK-DEPTH-REFACTOR.md B3), so the host stack stays flat
+    /// whatever the depth. Every value still charges its light unit where the
+    /// recursion's frame did, before its first byte is read, and a container
+    /// holds its unit until its closing bracket: the budget, the meter and
+    /// every `SyntaxError` evolve exactly as they did.
     fn json_parse_value(
         &mut self,
         input: &[u8],
         pos: &mut usize,
         track_source: bool,
     ) -> Result<(Slot, JsonSource), Step> {
-        self.with_native_frame(LIGHT_FRAME_COST, |vm| {
-            vm.json_parse_value_inner(input, pos, track_source)
-        })
+        let base = self.native_depth;
+        let mut stack = Vec::new();
+        let result = self.json_parse_nested(input, pos, track_source, &mut stack);
+        // An error leaves the units of every open container (and of the value
+        // that failed) charged; the recursion released them on its way out.
+        debug_assert!(result.is_err() || self.native_depth == base);
+        self.native_depth = base;
+        result
     }
 
-    fn json_parse_value_inner(
+    fn json_parse_nested(
+        &mut self,
+        input: &[u8],
+        pos: &mut usize,
+        track_source: bool,
+        stack: &mut Vec<JsonParseFrame>,
+    ) -> Result<(Slot, JsonSource), Step> {
+        'value: loop {
+            self.enter_native_frame(LIGHT_FRAME_COST)?;
+            if *pos >= input.len() {
+                return Err(self.catchable_syntax_error());
+            }
+            let opened = match input[*pos] {
+                b'[' => self.json_parse_open_array(input, pos, track_source)?,
+                b'{' => self.json_parse_open_object(input, pos, track_source)?,
+                _ => JsonParseOpened::Value(self.json_parse_scalar(input, pos, track_source)?),
+            };
+            let mut done = match opened {
+                JsonParseOpened::Value(value) => {
+                    self.leave_native_frame(LIGHT_FRAME_COST);
+                    value
+                }
+                JsonParseOpened::Frame(frame) => {
+                    // Host memory the recursion took as stack: at most one
+                    // frame per unit of the budget, so this fails only if the
+                    // host allocator does.
+                    stack
+                        .try_reserve(1)
+                        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                    stack.push(frame);
+                    continue 'value;
+                }
+            };
+            // Hand the finished value to the innermost open container, and
+            // close each container whose input ends with it.
+            loop {
+                let Some(frame) = stack.last_mut() else {
+                    return Ok(done);
+                };
+                let delivered = match frame {
+                    JsonParseFrame::Array { .. } => {
+                        self.json_parse_array_element(input, pos, track_source, frame, done)?
+                    }
+                    JsonParseFrame::Object { .. } => {
+                        self.json_parse_object_member(input, pos, track_source, frame, done)?
+                    }
+                };
+                match delivered {
+                    JsonParseDelivered::Next => continue 'value,
+                    JsonParseDelivered::Closed => {
+                        let frame = stack.pop().expect("the frame just delivered to");
+                        self.leave_native_frame(LIGHT_FRAME_COST);
+                        done = self.json_parse_close(frame, track_source);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Parse one scalar JSON value at `pos`, which is in bounds: a string,
+    /// keyword or number, or the malformed-token `SyntaxError`.
+    fn json_parse_scalar(
         &mut self,
         input: &[u8],
         pos: &mut usize,
         track_source: bool,
     ) -> Result<(Slot, JsonSource), Step> {
-        if *pos >= input.len() {
-            return Err(self.catchable_syntax_error());
-        }
         let start = *pos;
         match input[*pos] {
-            b'{' => self.json_parse_object(input, pos, track_source),
-            b'[' => self.json_parse_array(input, pos, track_source),
             b'"' => {
                 let units = self.json_parse_string_units(input, pos)?;
                 // The tokenizer's `s = fxNewChunk(the, size + 1)`: always a
@@ -1053,178 +1157,248 @@ impl Interp {
         Ok(out)
     }
 
-    /// Parse a JSON array (`fxParseJSONArray`): the instance's two slots, one
+    /// Open a JSON array (`fxParseJSONArray`): the instance's two slots, one
     /// linked slot per element, and the one-time `fxCacheArray` item chunk
     /// (`length * sizeof(txSlot)` = `length * 32`, plus the chunk header).
-    fn json_parse_array(
+    fn json_parse_open_array(
         &mut self,
         input: &[u8],
         pos: &mut usize,
         track_source: bool,
-    ) -> Result<(Slot, JsonSource), Step> {
+    ) -> Result<JsonParseOpened, Step> {
         *pos += 1; // past '['
         self.charge_and_check(JSON_PARSE_ARRAY_INSTANCE_METERING)?;
         let inst = self.new_array_unmetered();
-        let mut length: u32 = 0;
-        let mut sources = Vec::new();
         self.json_parse_whitespace(input, pos);
         if *pos < input.len() && input[*pos] == b']' {
             *pos += 1;
             self.arrays.get_mut(&inst).unwrap().length = 0;
-            return Ok((
+            return Ok(JsonParseOpened::Value((
                 Slot::of(Kind::Reference, Payload::Reference(inst)),
                 if track_source {
-                    JsonSource::Array(sources)
+                    JsonSource::Array(Vec::new())
                 } else {
                     JsonSource::Empty
                 },
-            ));
+            )));
         }
-        loop {
-            self.json_parse_whitespace(input, pos);
-            self.charge_and_check(
-                JSON_PARSE_ARRAY_ELEMENT_METERING + 32 + if length == 0 { 16 } else { 0 },
-            )?;
-            let (v, source) = self.json_parse_value(input, pos, track_source)?;
-            self.admit_scratch::<Slot>(length as usize + 1)?;
-            self.arrays
-                .get_mut(&inst)
-                .unwrap()
-                .insert_item(length, v, &mut self.side_refs);
-            if track_source {
-                self.push_prepaid_scratch(&mut sources, source)?;
-            }
-            length += 1;
-            self.json_parse_whitespace(input, pos);
-            match input.get(*pos) {
-                Some(b',') => {
-                    *pos += 1;
-                }
-                Some(b']') => {
-                    *pos += 1;
-                    break;
-                }
-                _ => return Err(self.catchable_syntax_error()),
-            }
-        }
-        self.arrays.get_mut(&inst).unwrap().length = length;
-        // `fxCacheArray`: one chunk of `length * sizeof(txSlot)` bytes.
-
-        Ok((
-            Slot::of(Kind::Reference, Payload::Reference(inst)),
-            if track_source {
-                JsonSource::Array(sources)
-            } else {
-                JsonSource::Empty
-            },
-        ))
+        self.json_parse_whitespace(input, pos);
+        self.charge_and_check(JSON_PARSE_ARRAY_ELEMENT_METERING + 32 + 16)?;
+        Ok(JsonParseOpened::Frame(JsonParseFrame::Array {
+            inst,
+            length: 0,
+            sources: Vec::new(),
+        }))
     }
 
-    /// Parse a JSON object (`fxParseJSONObject`): the instance slot, and per
-    /// member the fixed body, the key-name intern (a novel name allocates one
-    /// key slot), the key-string tokenizer chunk, and the value's node cost.
-    fn json_parse_object(
+    /// Append a parsed element to the array `frame`, then read past its `,`
+    /// (charging the next element) or its closing `]`.
+    fn json_parse_array_element(
         &mut self,
         input: &[u8],
         pos: &mut usize,
         track_source: bool,
-    ) -> Result<(Slot, JsonSource), Step> {
+        frame: &mut JsonParseFrame,
+        (v, source): (Slot, JsonSource),
+    ) -> Result<JsonParseDelivered, Step> {
+        let JsonParseFrame::Array {
+            inst,
+            length,
+            sources,
+        } = frame
+        else {
+            unreachable!("an array element delivered to an object");
+        };
+        self.admit_scratch::<Slot>(*length as usize + 1)?;
+        self.arrays
+            .get_mut(inst)
+            .unwrap()
+            .insert_item(*length, v, &mut self.side_refs);
+        if track_source {
+            self.push_prepaid_scratch(sources, source)?;
+        }
+        *length += 1;
+        self.json_parse_whitespace(input, pos);
+        match input.get(*pos) {
+            Some(b',') => {
+                *pos += 1;
+                self.json_parse_whitespace(input, pos);
+                self.charge_and_check(JSON_PARSE_ARRAY_ELEMENT_METERING + 32)?;
+                Ok(JsonParseDelivered::Next)
+            }
+            Some(b']') => {
+                *pos += 1;
+                Ok(JsonParseDelivered::Closed)
+            }
+            _ => Err(self.catchable_syntax_error()),
+        }
+    }
+
+    /// Open a JSON object (`fxParseJSONObject`): the instance slot, and per
+    /// member the fixed body, the key-name intern (a novel name allocates one
+    /// key slot), the key-string tokenizer chunk, and the value's node cost.
+    fn json_parse_open_object(
+        &mut self,
+        input: &[u8],
+        pos: &mut usize,
+        track_source: bool,
+    ) -> Result<JsonParseOpened, Step> {
         *pos += 1; // past '{'
         self.charge_and_check(JSON_PARSE_OBJECT_INSTANCE_METERING)?;
         let inst = self.slots.alloc(Slot::instance(self.object_proto));
-        let mut sources = Vec::new();
-        let mut member_count = 0usize;
-        // Key → its position in `sources`, so a repeated key replaces in O(1).
-        let mut source_positions: std::collections::HashMap<ReadKey, usize> =
-            std::collections::HashMap::new();
         self.json_parse_whitespace(input, pos);
         if *pos < input.len() && input[*pos] == b'}' {
             *pos += 1;
-            return Ok((
+            return Ok(JsonParseOpened::Value((
+                Slot::of(Kind::Reference, Payload::Reference(inst)),
+                if track_source {
+                    JsonSource::Object(Vec::new())
+                } else {
+                    JsonSource::Empty
+                },
+            )));
+        }
+        let key = self.json_parse_member_key(input, pos, inst)?;
+        Ok(JsonParseOpened::Frame(JsonParseFrame::Object {
+            inst,
+            member_count: 0,
+            source_positions: std::collections::HashMap::new(),
+            sources: Vec::new(),
+            key,
+        }))
+    }
+
+    /// Read one member's key and its `:` up to the start of its value.
+    fn json_parse_member_key(
+        &mut self,
+        input: &[u8],
+        pos: &mut usize,
+        inst: crate::value::SlotIndex,
+    ) -> Result<ReadKey, Step> {
+        self.json_parse_whitespace(input, pos);
+        if *pos >= input.len() || input[*pos] != b'"' {
+            return Err(self.catchable_syntax_error());
+        }
+        let key_units = self.json_parse_string_units(input, pos)?;
+        let key = SymbolName::from_units(&key_units);
+        self.charge_and_check(JSON_PARSE_OBJECT_KEY_METERING)?;
+        // The key-string tokenizer chunk (`fxNewChunk(size + 1)`).
+        self.charge_and_check(string_chunk_cost(key_units.len() as u64))?;
+        // A canonical INDEX key goes to the index store; only a real name
+        // is interned. `fxNewName` is not reached for an index in XS
+        // either, and parsing `{"0":…,"1":…}` with 70,000 index keys
+        // minted 70,000 names — so an identity reviver over such an
+        // object poisoned the machine during the PARSE, before any
+        // revival ran.
+        let key_ref = match key.as_str().and_then(string_to_index) {
+            Some(index) if self.indexes_by_index(inst) => ReadKey::Index(index),
+            // A novel name allocates one key slot (metered directly by
+            // `intern_key`), a known name none.
+            _ => ReadKey::Id(self.intern_key(&key)?),
+        };
+        self.json_parse_whitespace(input, pos);
+        if *pos >= input.len() || input[*pos] != b':' {
+            return Err(self.catchable_syntax_error());
+        }
+        *pos += 1;
+        self.json_parse_whitespace(input, pos);
+        Ok(key_ref)
+    }
+
+    /// Define a parsed member value on the object `frame`, then read past its
+    /// `,` (and the next member's key) or its closing `}`.
+    fn json_parse_object_member(
+        &mut self,
+        input: &[u8],
+        pos: &mut usize,
+        track_source: bool,
+        frame: &mut JsonParseFrame,
+        (v, source): (Slot, JsonSource),
+    ) -> Result<JsonParseDelivered, Step> {
+        let JsonParseFrame::Object {
+            inst,
+            member_count,
+            source_positions,
+            sources,
+            key,
+        } = frame
+        else {
+            unreachable!("an object member delivered to an array");
+        };
+        let inst = *inst;
+        *member_count = member_count
+            .checked_add(1)
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        self.admit_scratch::<(ReadKey, Slot)>(*member_count)?;
+        match *key {
+            ReadKey::Id(id) => self.set_own_unmetered(inst, id, v),
+            ReadKey::Index(index) => self.index_prop_set(inst, index, v),
+        }
+        if track_source {
+            // Positions by key, not a linear scan: JSON allows a repeated
+            // key and the last one wins, but scanning the accumulated list
+            // per key is quadratic. It was unreachable while the parse
+            // exhausted the key space first; with index keys stored by
+            // index, `JSON.parse` of a 70,000-key object with a reviver
+            // completes — and took seventeen minutes doing this scan.
+            match source_positions.get(key) {
+                Some(&at) => sources[at].1 = source,
+                None => {
+                    self.admit_scratch::<(ReadKey, usize)>(source_positions.len() + 1)?;
+                    source_positions
+                        .try_reserve(1)
+                        .map_err(|_| Step::Host(Halt::HeapExhausted))?;
+                    source_positions.insert(*key, sources.len());
+                    self.push_prepaid_scratch(sources, (*key, source))?;
+                }
+            }
+        }
+        self.json_parse_whitespace(input, pos);
+        match input.get(*pos) {
+            Some(b',') => {
+                *pos += 1;
+                *key = self.json_parse_member_key(input, pos, inst)?;
+                Ok(JsonParseDelivered::Next)
+            }
+            Some(b'}') => {
+                *pos += 1;
+                Ok(JsonParseDelivered::Closed)
+            }
+            _ => Err(self.catchable_syntax_error()),
+        }
+    }
+
+    /// The value of a container whose closing bracket was just read.
+    fn json_parse_close(
+        &mut self,
+        frame: JsonParseFrame,
+        track_source: bool,
+    ) -> (Slot, JsonSource) {
+        match frame {
+            JsonParseFrame::Array {
+                inst,
+                length,
+                sources,
+            } => {
+                self.arrays.get_mut(&inst).unwrap().length = length;
+                (
+                    Slot::of(Kind::Reference, Payload::Reference(inst)),
+                    if track_source {
+                        JsonSource::Array(sources)
+                    } else {
+                        JsonSource::Empty
+                    },
+                )
+            }
+            JsonParseFrame::Object { inst, sources, .. } => (
                 Slot::of(Kind::Reference, Payload::Reference(inst)),
                 if track_source {
                     JsonSource::Object(sources)
                 } else {
                     JsonSource::Empty
                 },
-            ));
+            ),
         }
-        loop {
-            self.json_parse_whitespace(input, pos);
-            if *pos >= input.len() || input[*pos] != b'"' {
-                return Err(self.catchable_syntax_error());
-            }
-            let key_units = self.json_parse_string_units(input, pos)?;
-            let key = SymbolName::from_units(&key_units);
-            self.charge_and_check(JSON_PARSE_OBJECT_KEY_METERING)?;
-            // The key-string tokenizer chunk (`fxNewChunk(size + 1)`).
-            self.charge_and_check(string_chunk_cost(key_units.len() as u64))?;
-            // A canonical INDEX key goes to the index store; only a real name
-            // is interned. `fxNewName` is not reached for an index in XS
-            // either, and parsing `{"0":…,"1":…}` with 70,000 index keys
-            // minted 70,000 names — so an identity reviver over such an
-            // object poisoned the machine during the PARSE, before any
-            // revival ran.
-            let key_ref = match key.as_str().and_then(string_to_index) {
-                Some(index) if self.indexes_by_index(inst) => ReadKey::Index(index),
-                // A novel name allocates one key slot (metered directly by
-                // `intern_key`), a known name none.
-                _ => ReadKey::Id(self.intern_key(&key)?),
-            };
-            self.json_parse_whitespace(input, pos);
-            if *pos >= input.len() || input[*pos] != b':' {
-                return Err(self.catchable_syntax_error());
-            }
-            *pos += 1;
-            self.json_parse_whitespace(input, pos);
-            let (v, source) = self.json_parse_value(input, pos, track_source)?;
-            member_count = member_count
-                .checked_add(1)
-                .ok_or(Step::Host(Halt::HeapExhausted))?;
-            self.admit_scratch::<(ReadKey, Slot)>(member_count)?;
-            match key_ref {
-                ReadKey::Id(id) => self.set_own_unmetered(inst, id, v),
-                ReadKey::Index(index) => self.index_prop_set(inst, index, v),
-            }
-            if track_source {
-                // Positions by key, not a linear scan: JSON allows a repeated
-                // key and the last one wins, but scanning the accumulated list
-                // per key is quadratic. It was unreachable while the parse
-                // exhausted the key space first; with index keys stored by
-                // index, `JSON.parse` of a 70,000-key object with a reviver
-                // completes — and took seventeen minutes doing this scan.
-                match source_positions.get(&key_ref) {
-                    Some(&at) => sources[at].1 = source,
-                    None => {
-                        self.admit_scratch::<(ReadKey, usize)>(source_positions.len() + 1)?;
-                        source_positions
-                            .try_reserve(1)
-                            .map_err(|_| Step::Host(Halt::HeapExhausted))?;
-                        source_positions.insert(key_ref, sources.len());
-                        self.push_prepaid_scratch(&mut sources, (key_ref, source))?;
-                    }
-                }
-            }
-            self.json_parse_whitespace(input, pos);
-            match input.get(*pos) {
-                Some(b',') => {
-                    *pos += 1;
-                }
-                Some(b'}') => {
-                    *pos += 1;
-                    break;
-                }
-                _ => return Err(self.catchable_syntax_error()),
-            }
-        }
-        Ok((
-            Slot::of(Kind::Reference, Payload::Reference(inst)),
-            if track_source {
-                JsonSource::Object(sources)
-            } else {
-                JsonSource::Empty
-            },
-        ))
     }
 
     /// `InternalizeJSONProperty(holder, name, reviver)`, including the pinned
