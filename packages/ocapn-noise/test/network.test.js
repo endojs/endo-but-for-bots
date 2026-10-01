@@ -376,6 +376,10 @@ test('impostor SYN claiming a peer identity cannot displace that peer session', 
   // from A's `inboundSessions`, so it stays unclaimed: the state in
   // which a fresh SYN from V displaces it.
   const sessionV = await netV.provideSession(locA);
+  // The mock fabric settles A within microtasks of V's resolution;
+  // yield a macrotask so A has queued the session as unclaimed before
+  // anything claims it.
+  await new Promise(resolve => setTimeout(resolve, 10));
   const sessionA = await netA.waitForInboundSession(keyV);
   const pendingRead = sessionV.reader.next(undefined);
 
@@ -423,6 +427,10 @@ test('replayed genuine SYN cannot displace the peer unclaimed session', async t 
   // V dials A; A settles an unclaimed inbound session (nothing takes it
   // from `inboundSessions`).
   const sessionV = await netV.provideSession(locA);
+  // The mock fabric settles A within microtasks of V's resolution;
+  // yield a macrotask so A has queued the session as unclaimed before
+  // anything claims it.
+  await new Promise(resolve => setTimeout(resolve, 10));
   const sessionA = await netA.waitForInboundSession(victim.keyId);
   const pendingRead = sessionV.reader.next(undefined);
 
@@ -458,24 +466,158 @@ test('replayed genuine SYN cannot displace the peer unclaimed session', async t 
   }
 });
 
-test('inbound handshakes are capped per local identity, not per peer', async t => {
+/**
+ * Build a genuine prefixed SYN from `keys` to the responder `publicKey`:
+ * exactly the bytes an on-path observer captures and can replay.
+ *
+ * @param {{ privateKey: Uint8Array, publicKey: Uint8Array }} keys
+ * @param {Uint8Array} responderPublicKey
+ */
+const makeSynFrom = (keys, responderPublicKey) => {
+  const syn = new Uint8Array(PREFIXED_SYN_LENGTH);
+  makeOcapnSessionCryptography({
+    wasmModule,
+    getRandomValues,
+    signingKeys: { privateKey: keys.privateKey, publicKey: keys.publicKey },
+  })
+    .asInitiator()
+    .initiatorWriteSyn(responderPublicKey, syn);
+  return syn;
+};
+
+/**
+ * Re-send `syn` to the mesh listener `to` every `intervalMs`, holding each
+ * stream open (the replayer can never produce `op:start-session`), until
+ * the test tears down.
+ *
+ * @param {import('ava').ExecutionContext<unknown>} t
+ * @param {ReturnType<typeof makeMockMeshFabric>} fabric
+ * @param {string} to
+ * @param {Uint8Array} syn
+ * @param {number} intervalMs
+ */
+const startReplayLoop = (t, fabric, to, syn, intervalMs) => {
+  const replayer = fabric.transportFor(`replayer-${to}`);
+  /** @type {import('../src/types.js').ByteStream[]} */
+  const streams = [];
+  let stopped = false;
+  const send = async () => {
+    if (stopped) return;
+    const stream = await replayer.connect({ to });
+    streams.push(stream);
+    await stream.writer.next(syn);
+  };
+  send().catch(() => {});
+  const timer = setInterval(() => send().catch(() => {}), intervalMs);
+  t.teardown(() => {
+    stopped = true;
+    clearInterval(timer);
+    return Promise.all(streams.map(s => s.writer.return(undefined)));
+  });
+};
+
+/**
+ * Reject if `promise` has not settled within `ms`.
+ *
+ * @template T
+ * @param {Promise<T>} promise
+ * @param {number} ms
+ * @param {string} label
+ * @returns {Promise<T>}
+ */
+const within = (promise, ms, label) => {
+  /** @type {ReturnType<typeof setTimeout> | undefined} */
+  let timer;
+  return Promise.race([
+    promise,
+    new Promise((_resolve, reject) => {
+      timer = setTimeout(
+        () => reject(Error(`${label} did not settle within ${ms}ms`)),
+        ms,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
+};
+
+test('a sustained SYN replay cannot block settlement of an outbound dial', async t => {
+  t.timeout(15_000);
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, {
+    codec: cborCodec,
+    handshakeTimeoutMs: 400,
+  });
+  const netV = makeNetworkForTest(t, { codec: cborCodec });
+  const { publicKey: publicKeyA } = addFreshKey(netA);
+  const victim = addFreshKey(netV);
+  await netA.addTransport(fabric.transportFor('A'));
+  await netV.addTransport(fabric.transportFor('V'));
+  const locV = { ...netV.locationFor(victim.keyId), hints: { 'mesh:to': 'V' } };
+
+  // A captured genuine SYN from V to A, re-sent faster than A's handshake
+  // timeout, so some replay claiming V is always in flight at A. Each one
+  // holds a crossed-hello settlement slot for V until it times out.
+  startReplayLoop(t, fabric, 'A', makeSynFrom(victim, publicKeyA), 150);
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  const session = await within(
+    netA.provideSession(locV),
+    3000,
+    'provideSession',
+  );
+  t.is(session.remoteLocation.designator, victim.keyId);
+});
+
+test('a sustained SYN replay cannot block settlement of an inbound dial', async t => {
+  t.timeout(15_000);
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, {
+    codec: cborCodec,
+    handshakeTimeoutMs: 400,
+  });
+  const netV = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
+  const victim = addFreshKey(netV);
+  await netA.addTransport(fabric.transportFor('A'));
+  await netV.addTransport(fabric.transportFor('V'));
+  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
+
+  startReplayLoop(t, fabric, 'A', makeSynFrom(victim, publicKeyA), 150);
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  // V dials A genuinely. V's side settles at once; A's side must settle
+  // too, rather than leave V's adopted session stranded at A.
+  await within(netV.provideSession(locA), 3000, 'V provideSession');
+  const sessionA = await within(
+    netA.waitForInboundSession(victim.keyId),
+    3000,
+    'A waitForInboundSession',
+  );
+  t.is(sessionA.remoteLocation.designator, victim.keyId);
+});
+
+test('when the per-identity cap is full, the oldest unproven handshake is evicted', async t => {
   t.timeout(10_000);
   const fabric = makeFabricForTest(t);
   const cap = 3;
   const netA = makeNetworkForTest(t, {
     codec: cborCodec,
-    handshakeTimeoutMs: 2000,
+    handshakeTimeoutMs: 5000,
     maxInProgressPerLocalKey: cap,
   });
   const { publicKey: publicKeyA } = addFreshKey(netA);
   const { publicKey: publicKeyA2 } = addFreshKey(netA);
   await netA.addTransport(fabric.transportFor('A'));
   const dialer = fabric.transportFor('dialer');
+  /** @type {import('../src/types.js').ByteStream[]} */
+  const streams = [];
+  t.teardown(() =>
+    Promise.all(streams.map(stream => stream.writer.return(undefined))),
+  );
 
   /**
-   * Send a SYN from a fresh (distinct) initiator to responder `pub` and
-   * return the raw stream, stalled at the post-handshake identity
-   * exchange (no op:start-session is ever sent).
+   * Send a SYN from a fresh (distinct, keyless-attacker) initiator to
+   * responder `pub` and return the raw stream, stalled at the
+   * post-handshake identity exchange (no op:start-session is ever sent).
    * @param {Uint8Array} pub
    */
   const stalledSynTo = async pub => {
@@ -484,11 +626,12 @@ test('inbound handshakes are capped per local identity, not per peer', async t =
       .asInitiator()
       .initiatorWriteSyn(pub, syn);
     const stream = await dialer.connect({ to: 'A' });
+    streams.push(stream);
     await stream.writer.next(syn);
     return stream;
   };
 
-  // Hold `cap` inbound handshakes to keyA, each from a different peer.
+  // Fill keyA's cap with handshakes from distinct claimed peers.
   const held = [];
   for (let i = 0; i < cap; i += 1) {
     // eslint-disable-next-line no-await-in-loop
@@ -498,28 +641,109 @@ test('inbound handshakes are capped per local identity, not per peer', async t =
     t.false(reply.done, `held handshake ${i} got a SYNACK`);
     held.push(stream);
   }
-  t.teardown(async () => {
-    for (const stream of held) {
-      // eslint-disable-next-line no-await-in-loop
-      await stream.writer.return(undefined);
-    }
-  });
 
-  // The next inbound to keyA is dropped with no SYNACK, though it claims
-  // a fresh peer: the cap is on our identity, not on any peer.
+  // One more is still answered: the cap evicts the oldest unproven
+  // handshake instead of refusing the newest, so a flood cannot hold
+  // every slot against later (possibly genuine) peers.
   const overStream = await stalledSynTo(publicKeyA);
   const overReply = await overStream.reader.next(undefined);
-  t.true(overReply.done, 'over-cap handshake dropped without a SYNACK');
+  t.false(overReply.done, 'over-cap handshake is still answered');
+  // The evicted stream ends well before the 5s handshake timeout could
+  // have closed it (A's greeting frame may precede the close).
+  const readUntilDone = async () => {
+    await null;
+    for (;;) {
+      // eslint-disable-next-line no-await-in-loop
+      const { done } = await held[0].reader.next(undefined);
+      if (done) return true;
+    }
+  };
+  t.true(
+    await within(readUntilDone(), 2000, 'evicted stream close'),
+    'the oldest unproven handshake was evicted',
+  );
 
-  // A second local identity is unaffected by keyA being full.
+  // A second local identity has its own budget.
   const otherStream = await stalledSynTo(publicKeyA2);
-  t.teardown(async () => {
-    await otherStream.writer.return(undefined);
-  });
   const otherReply = await otherStream.reader.next(undefined);
   t.false(otherReply.done, 'a different local identity still answers');
 });
 
+test('a flood of stalled handshakes cannot lock a genuine peer out', async t => {
+  t.timeout(10_000);
+  const fabric = makeFabricForTest(t);
+  const cap = 3;
+  const netA = makeNetworkForTest(t, {
+    codec: cborCodec,
+    handshakeTimeoutMs: 5000,
+    maxInProgressPerLocalKey: cap,
+  });
+  const netV = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
+  addFreshKey(netV);
+  await netA.addTransport(fabric.transportFor('A'));
+  await netV.addTransport(fabric.transportFor('V'));
+  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
+  const dialer = fabric.transportFor('dialer');
+  /** @type {import('../src/types.js').ByteStream[]} */
+  const streams = [];
+  t.teardown(() =>
+    Promise.all(streams.map(stream => stream.writer.return(undefined))),
+  );
+
+  // A keyless attacker fills keyA's cap with stalled handshakes.
+  for (let i = 0; i < cap; i += 1) {
+    const syn = new Uint8Array(PREFIXED_SYN_LENGTH);
+    makeOcapnSessionCryptography({ wasmModule, getRandomValues })
+      .asInitiator()
+      .initiatorWriteSyn(publicKeyA, syn);
+    // eslint-disable-next-line no-await-in-loop
+    const stream = await dialer.connect({ to: 'A' });
+    streams.push(stream);
+    // eslint-disable-next-line no-await-in-loop
+    await stream.writer.next(syn);
+    // eslint-disable-next-line no-await-in-loop
+    await stream.reader.next(undefined);
+  }
+
+  // A genuine peer still gets through.
+  const session = await within(
+    netV.provideSession(locA),
+    3000,
+    'genuine provideSession',
+  );
+  t.is(session.remoteLocation.designator, keyA);
+});
+
+test('provideSession rejects a weak designator before opening a connection', async t => {
+  const fabric = makeFabricForTest(t);
+  const net = makeNetworkForTest(t, { codec: cborCodec });
+  addFreshKey(net);
+  let connects = 0;
+  const base = fabric.transportFor('A');
+  await net.addTransport(
+    harden({
+      ...base,
+      connect: async hints => {
+        connects += 1;
+        return base.connect(hints);
+      },
+    }),
+  );
+  // 32 zero bytes is canonical lowercase hex but a small-order key.
+  await t.throwsAsync(
+    () =>
+      net.provideSession({
+        type: 'ocapn-peer',
+        network: 'np',
+        transport: 'np',
+        designator: '00'.repeat(32),
+        hints: { 'mesh:to': 'nowhere' },
+      }),
+    { message: /not a valid, strong ed25519 verifying key/ },
+  );
+  t.is(connects, 0, 'no outbound connection was opened');
+});
 test('provideSession rejects after handshake timeout', async t => {
   const net = makeNetworkForTest(t, {
     codec: cborCodec,
@@ -739,6 +963,9 @@ test('inboundSessions.return closes queued sessions that nobody consumed', async
   // B initiates; A should buffer the session in its inboundSessions
   // queue because A hasn't started consuming.
   const sessionB = await netB.provideSession(locA);
+  // Let A finish settling (microtasks on the mock fabric) so the session
+  // is queued before the iterator returns.
+  await new Promise(resolve => setTimeout(resolve, 10));
   // Close A's iterator without ever pulling. The implementation
   // should close any buffered inbound session, which means our
   // outbound `sessionB` reader returns {done:true}.
