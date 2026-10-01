@@ -53,9 +53,10 @@ export const iterateReader = (readerRef, options = {}) => {
   // Call stream() - returns a promise for the acknowledge chain head
   /** @type {Promise<StreamNode<TRead, TReadReturn>>} */
   let nodePromise = E(readerRef).stream(synHead);
-  // The head is observed only by the first next() or return().  Mark it
-  // handled now so that a consumer that never pulls, abandoned while the
-  // peer disconnects, does not surface the disconnection as an unhandled
+  // Each link of the chain, starting with the head, is observed only by the
+  // following next() or return().  Mark every link handled as it becomes
+  // current so that a consumer that stops pulling, abandoned while the peer
+  // disconnects, does not surface the disconnection as an unhandled
   // rejection.  This attaches a separate reaction; next() and return() still
   // await `nodePromise` itself and observe the rejection.
   nodePromise.catch(() => {});
@@ -160,6 +161,8 @@ export const iterateReader = (readerRef, options = {}) => {
       nodePromise = /** @type {Promise<StreamNode<TRead, TReadReturn>>} */ (
         nextPromiseOrNull
       );
+      // Mark the new link handled, as for the head above.
+      nodePromise.catch(() => {});
 
       return harden({ done: false, value });
     } catch (error) {
