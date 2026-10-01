@@ -2005,6 +2005,94 @@ impl Interp {
         Ok(out)
     }
 
+    /// `Call(method, receiver, args)` for a String method's RegExp protocol
+    /// call, `method` being what [`Self::string_protocol_method`] read. When
+    /// it is the intrinsic `RegExp.prototype` method itself, the method's body
+    /// is called directly (STACK-DEPTH-REFACTOR.md C3): [`Self::invoke_value`]
+    /// would enter `call_native_method` and its two dispatchers, four frames
+    /// with its own on every level of a nest that re-enters through the
+    /// protocol (a `replace` callback, a user `exec`, a `@@species` getter).
+    /// The direct call builds the same value-stack frame, charges the same
+    /// native activation and counts the same builtin as that dispatch, which
+    /// consults no meter, so every outcome is the same. It mirrors
+    /// `invoke_value_turns`, `call_native_method` and
+    /// `call_native_method_inner`, which point back here.
+    pub(in crate::interp) fn invoke_regexp_protocol(
+        &mut self,
+        code: &[u8],
+        method: Slot,
+        receiver: Slot,
+        args: &[Slot],
+    ) -> Result<Slot, Step> {
+        match self.intrinsic_regexp_protocol(method) {
+            Some(m) => self.regexp_protocol_in_place(code, m, method, receiver, args),
+            None => self.invoke_value(code, method, receiver, args),
+        }
+    }
+
+    /// The intrinsic RegExp protocol method `method` is, if it is one: the
+    /// native method [`Self::invoke_value`] would dispatch, after its Proxy,
+    /// promise-function and bound-function tests.
+    fn intrinsic_regexp_protocol(&self, method: Slot) -> Option<NativeMethod> {
+        let Payload::Reference(f) = method.value else {
+            return None;
+        };
+        if method.kind != Kind::Reference
+            || self.proxies.contains_key(&f)
+            || self.promise_functions.contains_key(&f)
+            || self.bound_functions.contains_key(&f)
+        {
+            return None;
+        }
+        let fi = self.functions.get(&f)?;
+        if fi.native.is_some() {
+            return None;
+        }
+        match fi.method? {
+            m @ (NativeMethod::RegExpMatch
+            | NativeMethod::RegExpMatchAll
+            | NativeMethod::RegExpReplace
+            | NativeMethod::RegExpSearch
+            | NativeMethod::RegExpSplit) => Some(m),
+            _ => None,
+        }
+    }
+
+    /// [`Self::invoke_regexp_protocol`]'s direct call: the frame
+    /// `invoke_value` pushes for a native method (`[THIS, FUNCTION, RESULT,
+    /// FRAME]` and the arguments), `call_native_method`'s heavy charge and
+    /// builtin count around the method, and the frame cut on every return.
+    #[inline(never)]
+    fn regexp_protocol_in_place(
+        &mut self,
+        code: &[u8],
+        m: NativeMethod,
+        method: Slot,
+        receiver: Slot,
+        args: &[Slot],
+    ) -> Result<Slot, Step> {
+        let base = self.stack.len();
+        self.push(receiver);
+        self.push(method);
+        self.push(Slot::undefined());
+        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+        for a in args {
+            self.push(*a);
+        }
+        let result = self.with_native_frame(HEAVY_FRAME_COST, |vm| {
+            vm.cost.on_builtin(m);
+            let this = vm.stack.get(base).copied().unwrap_or_else(Slot::undefined);
+            let arg0 = vm
+                .stack
+                .get(base + 4)
+                .copied()
+                .unwrap_or_else(Slot::undefined);
+            vm.regexp_protocol(m, base, code, this, arg0)
+        });
+        self.stack.truncate(base);
+        result
+    }
+
     /// `GetMethod(value, @@name)` for String prototype protocols. The protocol
     /// is consulted only when `value` is an Object; primitive arguments proceed
     /// directly to coercion without reading their wrapper prototypes. Object
@@ -2062,7 +2150,7 @@ impl Interp {
             }
             let method = self.string_protocol_method(code, regexp, "matchAll")?;
             if !matches!(method.kind, Kind::Undefined | Kind::Null) {
-                return self.invoke_value(code, method, regexp, &[receiver]);
+                return self.invoke_regexp_protocol(code, method, regexp, &[receiver]);
             }
         }
 
@@ -2075,7 +2163,7 @@ impl Interp {
         let global = self.new_string_units(&[b'g' as u16]);
         let matcher = self.construct_value(code, constructor, &[regexp, global], constructor)?;
         let method = self.string_protocol_method(code, matcher, "matchAll")?;
-        self.invoke_value(code, method, matcher, &[subject])
+        self.invoke_regexp_protocol(code, method, matcher, &[subject])
     }
 
     /// ECMA-262 `IsRegExp(argument)`: non-objects are never RegExps; an
