@@ -1493,6 +1493,23 @@ stacks as well.
 - **Risks:** none beyond performance.
   **Do not** wrap `invoke_value` in a closure: in the `mop-proxy` prototype that added 205 B to
   every heavy callback level (forEach 13,926 → 14,131 B).
+- **As landed (Phase 1):** after B1, trap-absent layers no longer recurse, so the per-layer
+  saving applies only where the `[[Get]]` path still recurses: a Proxy in a prototype cycle,
+  and trapped layers.
+  The four metering parameters are one `GetMetering` argument on the Proxy functions
+  (`proxy_get_with_metering`, `proxy_get_forwarded`, `proxy_get_step`, `proxy_get_trapped`).
+  The guarded entry `mop_get_with_proxy_metering` and its body keep the four scalars.
+  Packing them there too stopped LLVM inlining the guarded entry, which made
+  `proxy-proto-cycle` need more V8 stack (Node `--liftoff-only` 978 → 1,066 KiB).
+  With the entry inlined again (by `#[inline(always)]`, or by keeping scalars on the entry
+  alone), a packed body won more on the Proxy path (932 KiB `--liftoff-only`, 802 KiB
+  `--no-liftoff`, 1,105,920 B WT), but it changed how LLVM inlined around the body: every
+  heavy family's native mark rose 0.3-1.9%, the iterator helpers the most.
+  As landed, `proxy-proto-cycle` needs 897 KiB under `--liftoff-only` (from 978), 851 KiB
+  under `--no-liftoff` (unchanged) and 1,187,840 B on WT (from 1,253,376), and 1.6% more
+  native stack; `getter`-119 needs 3.8% less native stack, and no heavy family's mark rises
+  (minimum host stacks bisected at 4 KiB).
+  B1 already outlined the `*_trapped` bodies, and B5 replaced `json_stringify_array`.
 
 ### 4.4 Class (b): explicit heap work stacks
 

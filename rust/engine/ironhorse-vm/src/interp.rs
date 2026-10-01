@@ -637,6 +637,25 @@ struct ProxyData {
     revoked: bool,
 }
 
+/// How a `[[Get]]` that may cross Proxy layers is metered, carried as one
+/// argument rather than four (STACK-DEPTH-REFACTOR.md A3): V8 passes a call's
+/// arguments past the fifth on the machine stack, once per Proxy layer.
+#[derive(Clone, Copy, Default)]
+struct GetMetering {
+    /// The caller-owned residual charged for each Proxy trap actually taken
+    /// (the Array Iterator's); zero for an ordinary `[[Get]]`.
+    proxy_trap: u64,
+    /// Charge a terminal primitive wrapper (its String receiver residual, or
+    /// the Symbol and BigInt tick), whether or not a Proxy was crossed.
+    terminal_wrapper: bool,
+    /// The read reached its object through a forward: the terminal target is
+    /// metered as forwarded, a trapped layer charges its forwarded-active
+    /// residual, and a String receiver takes the forwarded residual.
+    forwarded_target: bool,
+    /// The read runs inside an active `get` trap's own read of its target.
+    after_active_trap: bool,
+}
+
 /// What one Proxy layer of an internal method does: forward the method to
 /// its target (the trap is absent), or finish with the trap's checked result.
 /// The `mop_*` walks loop over `Forward` instead of recursing once per layer
