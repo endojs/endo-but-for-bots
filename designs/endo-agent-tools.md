@@ -499,14 +499,18 @@ the context of an endo daemon, with no second backend and no parallel
 in-memory map standing in for the store.
 
 **Binding is host-side, never the LLM.**
-The host binds a petname with `E(powers).storeIdentifier(petname,
-capFormulaId)` (for a formula-backed cap) or `E(powers).storeValue(value,
-petname)` (for a passable, which marshals the value into a `marshal`
-formula and then stores that id).
+The host binds a petname into the guest's petstore from the host side,
+addressing the guest by the host's own name for it: `introducedNames` at
+guest creation, `E(host).copy([capName], [guestName, petname])` (for a
+formula-backed cap the host already names), or `E(host).storeValue(value,
+[guestName, petname])` (for a passable, which marshals the value into a
+`marshal` formula and then stores that id).
+A guest has no `storeIdentifier` and consumes no formula identifiers
+(Update 2026-10-01, see #1404).
 The store outlives any single tool call.
 Timing differs by harness, the surface does not: **lal front-loads** every
-bind at sub-guest creation (the existing `primer` pattern: bind the cap's
-formula id into the fresh sub-guest before the loop starts), while **fae
+bind at sub-guest creation (the existing `primer` pattern: the host copies
+the cap into the fresh sub-guest's petstore before the loop starts), while **fae
 accretes** names at runtime via `adopt` as caps arrive in its inbox.
 Both end in a name in the guest petstore that `E(powers).lookup` resolves.
 
@@ -560,7 +564,8 @@ never a parallel resolution backend.
 A test must not stub the petstore with a hand-rolled `Map`.
 It spins up a real daemon-backed guest (`prepareHost` plus
 `E(host).provideGuest(...)`), binds petnames through the same
-`storeIdentifier` / `storeValue` the host uses in production, then lets the
+host-side `copy` / `storeValue` into the guest path the host uses in
+production, then lets the
 tool resolve them via the live `lookup`.
 This reuses the production resolution path end to end with no test-only
 registry to drift from the shipped mechanism.
@@ -577,7 +582,7 @@ Three rules govern how to persist it.
    then reconstruct, over inventing a storable cap-bearing value.**
    A workspace location is a pointer into a mount that already has a
    formula.
-   Persist the mount as a petname (it already binds via `storeIdentifier`
+   Persist the mount as a petname (the host already binds it via `copy`
    / `storeValue`) and the path as plain data, then reconstruct next turn
    via `E(mount).entry(path)`.
    The mount **re-clamps** the path to its own root, so the path string is
@@ -664,8 +669,8 @@ petname and path, re-endow next turn), not a new entry substrate.
 7. **Capability args are petnames resolved against the guest petstore.**
    A capref-typed arg is a camelCase petname string on the wire, resolved
    via `E(powers).lookup` (fail-closed on an unknown name).
-   The host binds petnames with `storeIdentifier` / `storeValue` at
-   provisioning (lal front-loads via the `primer` pattern; fae accretes via
+   The host binds petnames into the guest path (`introducedNames`, or
+   `copy` / `storeValue` on the host) at provisioning (lal front-loads via the `primer` pattern; fae accretes via
    `adopt`); the LLM never binds.
    Exactly one resolution path: no opaque `cap:<hex>` handle, no parallel
    in-memory map as backend, an in-process cache only as an optimization

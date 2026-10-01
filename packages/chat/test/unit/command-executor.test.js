@@ -1133,3 +1133,56 @@ test('execute js command surfaces the daemon trace when evaluation throws', asyn
     'criterion 3: authoritative worker id resolved for the chip',
   );
 });
+
+/**
+ * A guest's powers hold no identifiers or locators: no `identify`, `locate`,
+ * `invite`, or `accept`.
+ */
+const createGuestExecutor = () => {
+  /** @type {unknown[]} */
+  const showValueCalls = [];
+  /** @type {Error[]} */
+  const showErrorCalls = [];
+  const powers = /** @type {ERef<EndoHost>} */ (
+    /** @type {unknown} */ (
+      makeExo(
+        'MockGuestPowers',
+        M.interface('MockGuestPowers', {}, { defaultGuards: 'passable' }),
+        {
+          lookup: async () => 'the-value',
+          has: async () => true,
+        },
+      )
+    )
+  );
+  const executor = createCommandExecutor({
+    powers,
+    showValue: (v, id) => showValueCalls.push({ v, id }),
+    showMessage: () => {},
+    showError: e => showErrorCalls.push(e),
+  });
+  return { executor, showValueCalls, showErrorCalls };
+};
+
+for (const [command, params] of /** @type {const} */ ([
+  ['locate', { petName: 'thing' }],
+  ['invite', { guestName: 'bob' }],
+  ['accept', { locator: 'endo://x', guestName: 'bob' }],
+])) {
+  test(`/${command} errors clearly for a guest`, async t => {
+    const { executor, showErrorCalls } = createGuestExecutor();
+    const result = await executor.execute(command, params);
+    t.false(result.success);
+    t.is(
+      showErrorCalls[0]?.message,
+      `/${command} is not available to a guest agent`,
+    );
+  });
+}
+
+test('/show shows a guest value by pet name without an identifier', async t => {
+  const { executor, showValueCalls } = createGuestExecutor();
+  const result = await executor.execute('show', { petName: 'thing' });
+  t.true(result.success);
+  t.deepEqual(showValueCalls, [{ v: 'the-value', id: undefined }]);
+});

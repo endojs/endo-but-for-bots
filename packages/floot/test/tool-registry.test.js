@@ -58,7 +58,6 @@ test('subagent tools appear only when the session was given a spawner', async t 
     lookup: async () => {
       throw Error('no stored tools');
     },
-    locate: async () => undefined,
     listMessages: async () => harden([]),
   });
   const plain = await makeFlootToolRegistry(powers).snapshot();
@@ -88,7 +87,6 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
     lookup: async () => {
       throw Error('no stored tools');
     },
-    locate: async () => undefined,
     listMessages: async () => harden([]),
   });
   const plain = await makeFlootToolRegistry(powers).snapshot();
@@ -156,7 +154,7 @@ test('accountStatus appears only when an oracle was endowed, and renders provena
   t.regex(report, /No list price is configured/);
 });
 
-test('a stored caplet tool is located with the path as separate name arguments', async t => {
+test('a stored caplet tool is pinned by its pet name, not a locator', async t => {
   const stored = Far('FaeTool', {
     schema: () =>
       harden({
@@ -176,26 +174,21 @@ test('a stored caplet tool is located with the path as separate name arguments',
       t.deepEqual(path, ['tools', 'weather'], 'lookup accepts a path array');
       return stored;
     },
-    // The daemon's guard is `M.call().rest(NamePathShape)`, so an array
-    // argument is rejected outright — unlike `lookup`. Enforce that here, or
-    // the only session shape that exercises it (one with a caplet tool) goes
-    // untested and every turn in such a session fails in production.
-    locate: async (...path) => {
-      t.deepEqual(path, ['tools', 'weather']);
-      return 'endo://node/formula?type=lookup';
-    },
     listMessages: async () => harden([]),
   });
   const snapshot = await makeFlootToolRegistry(powers).snapshot();
   t.true(snapshot.names.includes('weather'));
-  t.true(snapshot.toolSetId.includes('endo://node/formula'));
+  const pinned = JSON.parse(snapshot.toolSetId);
+  t.deepEqual(pinned.storedIdentities, [
+    { functionName: 'weather', petName: 'weather' },
+  ]);
+  t.false(snapshot.toolSetId.includes('endo://'));
   t.is(await snapshot.execute('weather', harden({})), 'sunny');
 });
 
 test('extra tools join the pinned catalog and cannot shadow a built-in', async t => {
   const powers = Far('Powers', {
     list: () => harden([]),
-    locate: () => 'test-locator',
   });
   const extra = harden({
     schema: () =>

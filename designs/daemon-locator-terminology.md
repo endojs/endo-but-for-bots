@@ -7,6 +7,14 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | In Progress |
 
+> Update 2026-10-01: the identifier and locator methods below now belong to
+> `EndoHost` (and directories) only. `EndoGuest` no longer has `identify`,
+> `locate`, `reverseIdentify`, `reverseLocate`, `listIdentifiers`,
+> `listLocators`, `lookupById`, `lookupByLocator`, `storeIdentifier`,
+> `storeLocator`, `invite`, or `accept`; a host binds capabilities into its
+> guest by pet-name path, and durable cross-session designation goes
+> through sturdy refs. See #1404.
+
 ## Current State
 
 This document describes terminology and format changes for the daemon's

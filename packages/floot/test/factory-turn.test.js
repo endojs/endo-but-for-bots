@@ -33,7 +33,6 @@ test('factory facets retain disconnected turns, commit history, and provision de
       store.delete(name);
     },
     list: prefix => harden(prefix === 'tools' ? [] : [...store.keys()]),
-    locate: () => 'test-locator',
     followMessages: () => inbox.reader,
   });
   let dispatched = false;

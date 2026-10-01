@@ -7,6 +7,12 @@
 | **Author** | Kris Kowal (prompted) |
 | **Status** | **Complete** |
 
+> Update 2026-10-01: guests no longer have `identify` or `lookupById`, and
+> guest messages carry `fromNames`/`toNames` instead of `from`/`to` and no
+> `valueId`. The examples below recognize the guest's own mail with
+> `fromNames.includes('@self')` and read a submission by adopting the value
+> message's `value` edge. See #1404.
+
 ## What is the Problem Being Solved?
 
 Today, Lal and Fae receive their LLM configuration — model name, API host, and
@@ -144,8 +150,9 @@ The manager's inbox loop filters for `value` messages replying to the
 configuration form. For each submission:
 
 1. **Extract values.** The `value` message carries a marshalled
-   `Record<string, string>` as its `valueId`. The manager looks up the value
-   to obtain `{ name, host, model, authToken }`.
+   `Record<string, string>` on its `value` edge. The manager adopts that edge
+   under a scratch pet name and looks it up to obtain
+   `{ name, host, model, authToken }`.
 
 2. **Validate.** Assert that `name` is a non-empty string that is a valid pet
    name (no path separators, no reserved names like `@self` or `@host`).
@@ -279,7 +286,6 @@ export const make = (guestPowers, context) => {
   const runManager = async () => {
     await formSent;
     const agent = await agentP;
-    const selfId = await E(powers).identify('@self');
 
     const messageIterator = makeRefIterator(E(powers).followMessages());
 
@@ -288,7 +294,7 @@ export const make = (guestPowers, context) => {
       if (done) break;
 
       // Capture the form's messageId from our own outbound message.
-      if (message.from === selfId && message.type === 'form') {
+      if (message.fromNames.includes('@self') && message.type === 'form') {
         formMessageId = message.messageId;
         continue;
       }
@@ -299,7 +305,7 @@ export const make = (guestPowers, context) => {
 
       // Extract the submitted values.
       const values = await E(powers).adopt(
-        message.number, 'VALUE', `submission-${message.messageId}`,
+        message.number, 'value', `submission-${message.messageId}`,
       );
       const config = await E(powers).lookup(
         `submission-${message.messageId}`,
@@ -365,14 +371,13 @@ const spawnWorkerLoop = async (name, guest, config) => {
   const nodeCache = new Map();
   // ... getNode, putNode, assembleTranscript (same as today) ...
 
-  const selfId = await E(guest).identify('@self');
   const messageIterator = makeRefIterator(E(guest).followMessages());
 
   while (true) {
     const { value: message, done } = await messageIterator.next();
     if (done) break;
 
-    if (message.from === selfId) {
+    if (message.fromNames.includes('@self')) {
       handleOwnMessage(message);
       continue;
     }
@@ -390,16 +395,18 @@ pet store, and identity.
 ### Extracting the Value from a Submission
 
 When the manager receives a `value` message replying to the configuration
-form, the submitted values are carried as the message's `valueId`. The
+form, the submitted values are carried on the message's `value` edge. The
 manager needs to access the record `{ name, host, model, authToken }`.
 
 The `value` message type (per [daemon-value-message](daemon-value-message.md))
-exposes a `VALUE` edge on the message hub directory. The manager uses `adopt`
+exposes a `value` edge on the message hub directory. A guest's messages carry
+no `valueId` and a guest has no `lookupById`, so adopting the edge is the only
+way in. The manager uses `adopt`
 to bring the value into its pet store, then `lookup` to read it:
 
 ```js
 const petName = `submission-${message.messageId}`;
-await E(powers).adopt(message.number, 'VALUE', petName);
+await E(powers).adopt(message.number, 'value', petName);
 const config = await E(powers).lookup(petName);
 ```
 

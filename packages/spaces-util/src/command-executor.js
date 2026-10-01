@@ -8,7 +8,7 @@ import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 
 import { makeBrowserTree, checkoutToDirectory } from './browser-tree.js';
-import { lookupPath } from './name-hub.js';
+import { assertHoldsLocators, identifyIfHost, lookupPath } from './name-hub.js';
 import { resolveErrorTrace } from './error-trace.js';
 
 /**
@@ -371,7 +371,7 @@ export const createCommandExecutor = ({
           const { petName } = params;
           const pathParts = String(petName).split('/');
           const value = await lookupPath(powers, pathParts);
-          const id = await E(powers).identify(...pathParts);
+          const id = await identifyIfHost(powers, pathParts);
           showValue(value, id, pathParts, undefined);
           return { success: true, value };
         }
@@ -422,6 +422,7 @@ export const createCommandExecutor = ({
         case 'locate': {
           const { petName } = params;
           const pathParts = String(petName).split('/');
+          await assertHoldsLocators(powers, '/locate');
           let locator = await E(powers).locate(
             .../** @type {[string, ...string[]]} */ (pathParts),
           );
@@ -621,6 +622,7 @@ export const createCommandExecutor = ({
           }
 
           // Inbox mode: use host invite
+          await assertHoldsLocators(powers, '/invite');
           console.log(`[Chat] Creating invitation for "${guestName}"...`);
           const invitation = await E(powers).invite(String(guestName));
 
@@ -647,6 +649,7 @@ export const createCommandExecutor = ({
 
         case 'accept': {
           const { locator, guestName } = params;
+          await assertHoldsLocators(powers, '/accept');
           console.log(
             `[Chat] Accepting invitation for "${guestName}" from ${String(locator).slice(0, 40)}...`,
           );

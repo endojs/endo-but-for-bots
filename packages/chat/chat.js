@@ -21,6 +21,7 @@ import { E } from '@endo/eventual-send';
 import harden from '@endo/harden';
 import { fileExplorerComponent } from '@endo/space-file-explorer';
 import { idFromLocator } from '@endo/spaces-util/locator.js';
+import { holdsLocators } from '@endo/spaces-util/name-hub.js';
 import { channelComponent } from '@endo/space-channel/channel-component.js';
 import { forumComponent } from '@endo/space-channel/forum-component.js';
 import { microblogComponent } from '@endo/space-channel/microblog-component.js';
@@ -402,11 +403,12 @@ const bodyComponent = (
       ).lookup(hostName);
 
       // Verify the target has the minimum required interface for a profile
-      // by checking if it responds to identify() - a lightweight check
-      const selfId = await E(
-        /** @type {ERef<EndoHost>} */ (targetPowers),
-      ).identify('@self');
-      if (selfId === undefined) {
+      // by checking that it names itself - a lightweight check that a host
+      // and a guest both answer.
+      const hasSelf = await E(/** @type {ERef<EndoHost>} */ (targetPowers)).has(
+        '@self',
+      );
+      if (!hasSelf) {
         throw new Error(`"${hostName}" does not appear to be a valid host`);
       }
 
@@ -463,9 +465,17 @@ const bodyComponent = (
         const petNamePath = /** @type {[string, ...string[]]} */ (
           petName.split('/')
         );
-        E(/** @type {ERef<EndoHost>} */ (resolvedPowers))
-          .locate(...petNamePath)
-          .then(locator => {
+        holdsLocators(resolvedPowers)
+          .then(async isHost => {
+            // A guest holds no locators; its inbox matches the conversation
+            // by the correspondent's pet name alone.
+            if (!isHost) {
+              onConversationChange({ petName, id: petName });
+              return;
+            }
+            const locator = await E(
+              /** @type {ERef<EndoHost>} */ (resolvedPowers),
+            ).locate(...petNamePath);
             if (!locator) return;
             onConversationChange({ petName, id: locator });
           })
@@ -1461,10 +1471,10 @@ const bodyComponent = (
             );
           for (const m of memberList) {
             try {
-              const mid = await E(
+              const named = await E(
                 /** @type {ERef<EndoHost>} */ (resolvedPowers),
-              ).identify(m.invitedAs);
-              if (mid) {
+              ).has(m.invitedAs);
+              if (named) {
                 memberIdToRef.set(m.memberId, {
                   petName: m.invitedAs,
                   edgeName: m.invitedAs,
@@ -1591,10 +1601,9 @@ const bodyComponent = (
                 // Check if the pet name resolves to something
                 let isValid = false;
                 try {
-                  const id = await E(
+                  isValid = await E(
                     /** @type {ERef<EndoHost>} */ (resolvedPowers),
-                  ).identify(petName);
-                  isValid = Boolean(id);
+                  ).has(petName);
                 } catch {
                   // Not a valid pet name
                 }

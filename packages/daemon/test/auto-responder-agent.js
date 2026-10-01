@@ -20,7 +20,7 @@ export const AutoResponderInterface = M.interface(
  * restarts the follow loop against the still-durable mailbox, so the agent
  * resumes responding to new messages.
  *
- * @param {any} powers - The agent (a host or guest) whose mailbox to service.
+ * @param {any} powers - The guest agent whose mailbox to service.
  */
 export const make = async powers => {
   let responded = 0;

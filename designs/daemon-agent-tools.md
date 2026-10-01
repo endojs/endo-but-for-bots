@@ -358,11 +358,16 @@ const shell = await E(host).provideShell(worktree, 'repo-shell', policy);
 // git.filesystemAt(ref) for history. GitRemote composes per
 // daemon-git-remotes § Capability Construction.
 
-// Bind into the agent's petstore; the names are what the LLM utters:
-await E(faePowers).storeIdentifier('workspace', worktreeId);
-await E(faePowers).storeIdentifier('repoGit', gitId);
-await E(faePowers).storeIdentifier('repoShell', shellId);
+// Bind into the agent's petstore; the names are what the LLM utters.
+// The host binds by path into its guest 'fae' (a guest has no
+// storeIdentifier; see #1404):
+await E(host).copy(['repo-worktree'], ['fae', 'workspace']);
+await E(host).copy(['repo-git'], ['fae', 'repoGit']);
+await E(host).copy(['repo-shell'], ['fae', 'repoShell']);
 ```
+
+A guest created after the grant can instead receive these at
+provisioning through `introducedNames`.
 
 Tool composition is conditional on the grant: a tool group is composed
 into the agent's catalog only when the caller holds the backing

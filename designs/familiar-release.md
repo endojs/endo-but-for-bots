@@ -701,11 +701,13 @@ const primerTreeId = await E(agent).identify('lal-primer');
 ```
 
 For each new sub-guest spawned in response to a form submission,
-`provisionPrimer(guest)` does:
+`provisionPrimer(guestAgentName)` binds the Primer from the host
+side, by path into the guest's namespace, since a guest consumes
+no formula identifiers (see #1404):
 
 ```js
-if (!await E(guest).has('primer')) {
-  await E(guest).storeIdentifier('primer', primerTreeId);
+if (!await E(agent).has(guestAgentName, 'primer')) {
+  await E(agent).copy(['lal-primer'], [guestAgentName, 'primer']);
 }
 ```
 

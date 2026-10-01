@@ -7,7 +7,7 @@ import harden from '@endo/harden';
 import { E } from '@endo/eventual-send';
 import { isSpecialName } from '@endo/daemon/pet-name.js';
 import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
-import { lookupPath } from '@endo/spaces-util';
+import { identifyIfHost, lookupPath } from '@endo/spaces-util';
 
 import { h } from 'preact';
 import { useEffect, useReducer, useState } from 'preact/hooks';
@@ -297,10 +297,9 @@ const InventoryItem = ({
   }, [powers, name]);
 
   // Inspect: resolve the item's id + value and hand them to the host viewer.
+  // A guest holds no identifiers, so its viewer gets the value by path alone.
   const inspectItem = () => {
-    const idP = E(powers).identify(
-      .../** @type {[string, ...string[]]} */ (itemPath),
-    );
+    const idP = identifyIfHost(powers, itemPath);
     const valueP = lookupPath(powers, itemPath);
     Promise.all([idP, valueP]).then(
       ([id, value]) => showValue(value, id, itemPath, undefined),

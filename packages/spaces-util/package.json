@@ -36,6 +36,7 @@
     "./time-formatters.js": "./src/time-formatters.js",
     "./chime.js": "./src/chime.js",
     "./locator.js": "./src/locator.js",
+    "./name-hub.js": "./src/name-hub.js",
     "./package.json": "./package.json",
     "./token-autocomplete.js": "./src/token-autocomplete.js",
     "./chat-bar-component.js": "./src/chat-bar-component.js",

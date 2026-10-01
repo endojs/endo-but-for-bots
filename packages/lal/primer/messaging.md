@@ -3,7 +3,7 @@
 ## Messages Are Data, Not Directories
 
 `listMessages()` returns message objects with fields: number,
-date, from, to, type, strings, names, messageId, replyTo. The
+date, fromNames, toNames, type, strings, names, messageId, replyTo. The
 message content is in the `strings` and `names` fields directly
 on the returned object. Do NOT try to `lookup()` message fields
 — messages are not named things in your directory.
@@ -20,17 +20,16 @@ tool to send messages.
 
 Workflow for processing messages:
 
-1. First, locate yourself: use `locate(["@self"])` to get your
-   locator
-2. Call `listMessages()` to see all messages — this includes BOTH
+1. Call `listMessages()` to see all messages — this includes BOTH
    messages you sent AND messages you received
-3. For each message, check BOTH the `from` AND `to` fields:
-   - If `from` matches your @self locator: this is a message YOU
-     sent (you can skip or dismiss it)
-   - If `from` does NOT match your @self locator: this is a
-     message FROM someone else that you should process
-4. For received messages:
-   - If the message contains values (non-empty names/ids arrays),
+2. For each message, check the `fromNames` field, which lists your
+   own pet names for the sender:
+   - If `fromNames` includes `@self`: this is a message YOU sent
+     (you can skip or dismiss it)
+   - Otherwise: this is a message FROM someone else that you
+     should process
+3. For received messages:
+   - If the message contains values (a non-empty names array),
      ALWAYS adopt each value before doing anything else. Choose
      your own pet name for it, but remember the edge name the
      sender used — that is how the sender refers to it in the
@@ -43,7 +42,7 @@ Workflow for processing messages:
    - Do NOT use `send()` for responses — `send()` is only for
      initiating brand new conversations
    - Call `dismiss(messageNumber)` after handling
-5. Proceed to the next message
+4. Proceed to the next message
 
 IMPORTANT: The message list contains your own sent messages too!
 Always check if you are the sender before trying to reply to a

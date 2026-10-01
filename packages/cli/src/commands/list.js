@@ -117,16 +117,20 @@ export const groupForType = formulaType => {
 };
 
 /**
- * Resolve a pet name's locator-derived type via the agent's `locate` method.
- * Returns `undefined` when the name has no locator (e.g. immutable tree
- * children) or when the locator lacks a `type` parameter.
+ * Resolve a pet name's locator-derived type via the host's `locate` method,
+ * traversing the listed directory's path from the host. Asking the host
+ * rather than the listed hub keeps this working when the directory is a
+ * guest, which holds no locators. Returns `undefined` when the name has no
+ * locator (e.g. immutable tree children) or when the locator lacks a `type`
+ * parameter.
  *
- * @param {ERef<{ locate: (petName: string) => Promise<string | undefined> }>} agent
+ * @param {ERef<{ locate: (...petNamePath: string[]) => Promise<string | undefined> }>} host
+ * @param {string[]} directoryPath
  * @param {string} petName
  * @returns {Promise<string | undefined>}
  */
-const typeForPetName = async (agent, petName) => {
-  const locator = await E(agent).locate(petName);
+const typeForPetName = async (host, directoryPath, petName) => {
+  const locator = await E(host).locate(...directoryPath, petName);
   if (typeof locator !== 'string') {
     return undefined;
   }
@@ -146,11 +150,14 @@ export const list = async ({
   grouped,
   type: typeFilter,
 }) =>
-  withEndoHost({ os, process }, async ({ host: agent }) => {
+  withEndoHost({ os, process }, async ({ host }) => {
     await null;
+    let agent = host;
+    /** @type {string[]} */
+    let directoryPath = [];
     if (directory !== undefined) {
-      const directoryPath = parsePetNamePath(directory);
-      agent = E(agent).lookup(directoryPath);
+      directoryPath = parsePetNamePath(directory);
+      agent = E(host).lookup(directoryPath);
     }
     if (follow) {
       const topic = await E(agent).followNameChanges();
@@ -170,7 +177,7 @@ export const list = async ({
             // skip the round-trip and emit whatever the event provides.
             let { type } = change;
             if (typeFilter !== undefined && type === undefined) {
-              type = await typeForPetName(agent, change.add);
+              type = await typeForPetName(host, directoryPath, change.add);
             }
             if (typeFilter === undefined || type === typeFilter) {
               const suffix = type ? `\t${type}` : '';
@@ -194,7 +201,7 @@ export const list = async ({
           await null;
           return {
             petName,
-            type: await typeForPetName(agent, petName),
+            type: await typeForPetName(host, directoryPath, petName),
           };
         }),
       );

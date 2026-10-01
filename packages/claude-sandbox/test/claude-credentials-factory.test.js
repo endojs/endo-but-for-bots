@@ -102,6 +102,7 @@ const makeMockPowers = () => {
   };
 
   const valueStore = new Map();
+  const scratch = new Map();
 
   const powers = {
     async form(_target, _description, _fields) {
@@ -109,7 +110,8 @@ const makeMockPowers = () => {
       formMessageNumber += 1;
       currentFormId = `form-${formMessageNumber}`;
       pushMessage({
-        from: 'self-id',
+        fromNames: ['@self'],
+        toNames: ['@host'],
         type: 'form',
         messageId: currentFormId,
         number: formMessageNumber,
@@ -117,10 +119,8 @@ const makeMockPowers = () => {
     },
     async lookup(name) {
       if (name === 'host-agent') return powers.hostAgent;
+      if (scratch.has(name)) return scratch.get(name);
       throw new Error(`unknown lookup: ${name}`);
-    },
-    async locate() {
-      return 'self-id';
     },
     async listMessages() {
       return [];
@@ -128,8 +128,16 @@ const makeMockPowers = () => {
     followMessages() {
       return harden({ kind: 'fake-reader' });
     },
-    async lookupById(id) {
-      return valueStore.get(id);
+    // A guest reaches a reply's value by adopting the message's `value`
+    // edge under a scratch name, then reading and removing that name.
+    async adopt(number, edgeName, petName) {
+      if (edgeName !== 'value' || !valueStore.has(number)) {
+        throw new Error(`no ${edgeName} edge on message ${number}`);
+      }
+      scratch.set(petName, valueStore.get(number));
+    },
+    async remove(petName) {
+      scratch.delete(petName);
     },
     async reply(number, body) {
       replies.push({ number, body });
@@ -145,14 +153,14 @@ const makeMockPowers = () => {
       powers.hostAgent = hostAgent;
     },
     simulateSubmission(values, { number, replyTo } = {}) {
-      const id = `value-${Date.now()}-${Math.random()}`;
-      valueStore.set(id, values);
+      const messageNumber = number ?? ++formMessageNumber;
+      valueStore.set(messageNumber, values);
       pushMessage({
-        from: 'host-id',
+        fromNames: ['@host'],
+        toNames: ['@self'],
         type: 'value',
-        number: number ?? ++formMessageNumber,
+        number: messageNumber,
         replyTo: replyTo ?? currentFormId,
-        valueId: id,
       });
     },
   };

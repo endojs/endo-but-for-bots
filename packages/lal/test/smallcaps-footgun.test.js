@@ -202,9 +202,6 @@ test('dismiss: powers boundary sees BigInt for "+5" messageNumber', async t => {
       dismissed.push(value);
       return Promise.resolve();
     },
-    locate() {
-      return Promise.resolve('endo://localhost/?id=lal-self-id&type=handle');
-    },
     async *followMessages() {
       // No inbox traffic.
     },
@@ -451,9 +448,6 @@ test('evaluate: "#undefined" workerName decodes to undefined', async t => {
         resultName,
       });
       return Promise.resolve(undefined);
-    },
-    locate() {
-      return Promise.resolve('endo://localhost/?id=lal-self-id&type=handle');
     },
     // eslint-disable-next-line require-yield
     async *followMessages() {

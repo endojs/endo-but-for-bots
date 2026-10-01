@@ -127,7 +127,6 @@ This is the most fundamental difference between the two agents.
 | `request` | — | Request capability from agent |
 | `resolve` | — | Respond to request with value |
 | `reject` | — | Decline a request |
-| `identify` | — | Get formula ID for petname |
 | `inspectCapability` | — | Call help() on any capability |
 | `evaluate` | — | Propose code for HOST approval |
 | Filesystem tools | Via adopted caplets | — |
@@ -137,7 +136,7 @@ Key differences:
 - Fae has `store` (persist JSON) and `adoptTool` (meta-tool for installing tools)
 - Lal has richer directory ops (`has`, `move`, `copy`, `makeDirectory`)
 - Lal has richer mail ops (`request`, `resolve`, `reject`, `adopt`)
-- Lal has `identify` and `inspectCapability` for introspection
+- Lal has `inspectCapability` for introspection
 - Lal has `evaluate` for mediated code execution
 - Fae can gain filesystem/shell tools via capability adoption
 
@@ -199,7 +198,7 @@ interruption.
 |--------|-----|-----|
 | Message parsing | Extract text from `strings[]` + `@names[]` | Push generic "You have new mail" prompt |
 | Counter-proposals | Not applicable | Detected by message type, formatted with code |
-| Self-message filtering | `fromId === selfId` → skip | `fromId === selfId` → skip |
+| Self-message filtering | `fromNames` includes `@self` → skip | `fromNames` includes `@self` → skip |
 | User message format | `"Message #N from <id>: <text>"` | `"You have new mail. Check your messages..."` |
 
 Fae gives the LLM the actual message content inline. Lal tells the LLM
@@ -361,7 +360,7 @@ What Fae dropped from Lal:
    direct tool adoption from mail).
 3. **Directory operations** — fewer petname ops (no `has`, `move`, `copy`,
    `makeDirectory`; uses `store` instead).
-4. **Identity introspection** — no `identify()` or `inspectCapability()`.
+4. **Capability introspection** — no `inspectCapability()`.
 5. **SmallCaps documentation** — simpler prompt assumes the LLM can handle
    standard JSON.
 6. **TypeScript types** — JSDoc only (no `.d.ts` file).
