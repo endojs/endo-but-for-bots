@@ -225,6 +225,100 @@ Each entry names the copies; the fix is the one piece they should share.
 5. Framing and the control connection as a transient hub session, together with section 3.
 6. Test fixtures, as tests are touched.
 
+## 7. Host parts that a vat would simplify
+
+The host has no orthogonally persistent state of its own.
+Every durable thing it holds is a file with its own version, atomic write and
+recovery rule.
+Two of those files exist only because the host owns a control flow that can die
+halfway through: the alarm ledger and the installation phases.
+A vat's continuation is itself durable, and a host answer broken by a restart
+carries one known message (`PENDING_ANSWER_ABORTED_MESSAGE`, which the clock
+vat already retries on), so moving the control flow into a vat makes the file
+unnecessary.
+
+### 7.1 Alarms: the deadline set moves into the clock vat
+
+Today the host keeps `alarms.json`: pending deadlines and outcomes, at most
+1,024 rows, rewritten whole, written before the matching promise settles.
+It exists so that the `alarm {workerId, alarmId}` promise resource can be
+re-seated and settled after a host restart.
+Around it sit the release protocol in `guest-clock.js` (a row is reclaimed once
+the vat has recorded a local settlement, with a retry loop), `retireWorker` and
+the supervisor's `onRetireWorker` route, and the `alarm-settlement.md` argument
+for write-before-settle.
+
+Proposed: the clock vat owns its deadlines, as it already owns the promises its
+callers hold.
+The host provides one stateless timer resource whose `at(deadline)` returns a
+promise that settles at or after the deadline and does not survive a restart.
+At restart it breaks with the restart message, like every pending host answer,
+and the clock vat re-arms every outstanding deadline when it sees that message.
+An idle vat does not notice a restart, so the host sends each clock vat a start
+notice through the mechanism the native managers use, and finds which vats to
+notify from the endpoint's export records for `alarms {workerId}`; no new
+ledger is needed.
+
+Settlement stays exactly-once, now at the vat: the local promise settles when
+the vat journals the host's settlement message.
+If the host fires and dies before the vat journals it, the re-arm finds the
+deadline already passed and fires at once.
+
+Removed: the `durable-alarms.js` ledger (406 lines, replaced by a timer
+resource of a few dozen), `alarms.json` and its version 2 format, the row cap,
+the release and retry protocol in the clock vat, `retireWorker` and
+`onRetireWorker` (section 4 removes the route for its own reason), the
+per-alarm promise resource, and `alarm-settlement.md`.
+Cost: every vat holding a clock wakes once per host start to re-arm, inside
+the existing start-notice bound, and the cap on pending alarms becomes a
+per-vat matter of heap, which is where a quota belongs.
+
+### 7.2 Installation: the driver moves into the registry vat
+
+Today `install.js` is a host phase runner (`prepare`, `attach`, `start`,
+`finish`, `fail`, `lookup`, `remove`) against the registry in the workspace
+vat.
+Because the host can die between phases, each phase is recorded, a retry is
+explicit, the supervisor serialises installations and drains them within a
+bound at shutdown, and a removal interrupted between retiring the vat and
+forgetting the name is repaired by a fixup before the next `prepare`.
+
+Proposed: with the registry vat of section 1, run the driver there as one
+async function per installation.
+It asks the worker controller for a vat under the allocation key (idempotent),
+has the bundle staged, calls the factory and records the outcome.
+The function's continuation survives sleep and restart; a host answer broken by
+restart is retried under the same allocation key.
+The phases collapse into the function's own progress, the `fail` and `lookup`
+fixups and the shutdown drain disappear, and the serial queue becomes the
+vat's own `makeSerialQueue` from the prelude.
+
+Prerequisite: bundle bytes must not pass through the registry vat's heap or
+journal.
+Ironhorse journals every inbound message, and the 1 KiB decoder limit already
+forces source to be chunked.
+The host stages the bundle under its digest, through a staging resource or a
+worker-controller method that takes a digest, and the installed vat receives it
+from the host; the registry vat handles the digest only.
+Grants are presences the registry vat forwards.
+
+Removed: the phase driving in `install.js`, the phase states in
+`installations.js`, the drain bound and the removal fixup.
+Kept: allocation keys and the registry record (name, kind, digest, grants,
+allocation key, outcome).
+
+### 7.3 What stays in the host, and why
+
+Hub tables, peer session frames, the endpoint's export records, the runtime
+manifest and the store lease are the mechanism beneath vats.
+A vat exists only through them, so nothing can hold them in a vat.
+`workspace.json` shrinks to its version gate: the worker id is already found by
+label when the file is absent, and the publication name is derived from it.
+The gate must be read before any vat is restored, so it stays a file, and
+section 2 gives it the list of workspaces.
+
+Section 7.1 depends on nothing else and can go first; 7.2 follows section 1.
+
 ## Order of the larger changes
 
 1. Section 1, since sections 2 and 3 are simpler once installations are the host's.
