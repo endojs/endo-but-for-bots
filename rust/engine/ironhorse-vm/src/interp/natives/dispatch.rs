@@ -1,6 +1,13 @@
 //! Native constructor, function, and prototype-method dispatch.
 use super::super::*;
 
+/// What a native-method family hands back to its dispatcher: the result to
+/// leave on the stack, or `Pushed` when the method already left it there.
+enum NativeResult {
+    Value(Slot),
+    Pushed,
+}
+
 impl Interp {
     pub(in crate::interp) fn call_native_inner(
         &mut self,
@@ -32,6 +39,90 @@ impl Interp {
         } else {
             None
         };
+        let result: Slot = match native {
+            Native::Locale
+            | Native::Collator
+            | Native::ListFormat
+            | Native::PluralRules
+            | Native::Segmenter
+            | Native::DateTimeFormat
+            | Native::NumberFormat => self.native_ctor_intl(
+                native,
+                base,
+                argc,
+                has_target,
+                code,
+                new_target,
+                derived_native_construct,
+            )?,
+            Native::TemporalInstant
+            | Native::TemporalDuration
+            | Native::TemporalPlain(..)
+            | Native::TemporalZonedDateTime
+            | Native::Date => self.native_ctor_temporal(
+                native,
+                base,
+                argc,
+                has_target,
+                code,
+                new_target,
+                derived_native_construct,
+            )?,
+            Native::ArrayBuffer
+            | Native::SharedArrayBuffer
+            | Native::TypedArray(..)
+            | Native::DataView
+            | Native::TypedArrayBase => self.native_ctor_buffer(
+                native,
+                base,
+                argc,
+                has_target,
+                code,
+                new_target,
+                derived_native_construct,
+            )?,
+            Native::Promise => self.native_ctor_promise(
+                native,
+                base,
+                argc,
+                has_target,
+                code,
+                new_target,
+                derived_native_construct,
+            )?,
+            _ => self.native_ctor_core(
+                native,
+                base,
+                argc,
+                has_target,
+                code,
+                new_target,
+                derived_native_construct,
+            )?,
+        };
+        // Collapse the call region to the single result (frame teardown).
+        let _ = argc;
+        self.stack.truncate(base);
+        self.push(result);
+        Ok(())
+    }
+
+    /// The Intl natives of [`Self::call_native_inner`], out of line
+    /// (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of them
+    /// carries this family's frame and the thin dispatcher's, not the union of
+    /// every native's.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn native_ctor_intl(
+        &mut self,
+        native: Native,
+        base: usize,
+        argc: usize,
+        has_target: bool,
+        code: &[u8],
+        new_target: Option<crate::value::SlotIndex>,
+        derived_native_construct: bool,
+    ) -> Result<Slot, Step> {
         // Argument i is at `base + 4 + i` (arg0 is the deepest); missing
         // arguments read `undefined`.
         let arg = |i: usize| -> Slot {
@@ -40,55 +131,15 @@ impl Interp {
                 .copied()
                 .unwrap_or_else(Slot::undefined)
         };
+        let _ = (
+            &arg,
+            argc,
+            has_target,
+            code,
+            new_target,
+            derived_native_construct,
+        );
         let result: Slot = match native {
-            Native::Host => {
-                if has_target {
-                    return Err(self.catchable_type_error_msg("new: not a constructor".into()));
-                }
-                self.call_host(base, argc, code)?
-            }
-            // `eval`: a non-string input is returned unchanged (the spec's
-            // "not a String" fast return); a string is compiled and executed
-            // in this realm through the source-execution bridge
-            // ([`Self::eval_source`]) — the principled compiler/VM seam that
-            // replaced the former `eval:string-source` text boundary. The
-            // completion value becomes the call's result. `eval` is never
-            // constructable.
-            Native::Eval => {
-                if has_target {
-                    return Err(self.catchable_type_error_msg("new: not a constructor".into()));
-                }
-                let source = arg(0);
-                if source.kind == Kind::String {
-                    let text = match source.value {
-                        Payload::String(off) => self.str_units(off),
-                        _ => Vec::new(),
-                    };
-                    // A direct eval inherits the caller's strictness; an
-                    // indirect eval of ordinary source is sloppy (a
-                    // `"use strict"` prologue still promotes it, in the
-                    // compiler). `self.strict` is the calling script or
-                    // function frame's strictness at this direct-eval site.
-                    let strict = self.eval_direct && self.strict;
-                    self.eval_source(&text, strict)?
-                } else {
-                    source
-                }
-            }
-            // The dynamic-function constructor family (`Function`,
-            // `%GeneratorFunction%`, `%AsyncFunction%`,
-            // `%AsyncGeneratorFunction%`): CreateDynamicFunction
-            // (ECMA-262 20.2.1.1.1) assembles the source from the args and
-            // evaluates it in the realm; the completion is the new function.
-            // Call and construct are equivalent (both create the function), so
-            // `has_target` is ignored. The whole family shares one helper that
-            // varies only the function-head grammar per kind.
-            Native::Function
-            | Native::GeneratorFunction
-            | Native::AsyncFunction
-            | Native::AsyncGeneratorFunction => {
-                self.create_dynamic_function(native, base, argc, code)?
-            }
             Native::Locale => {
                 if !has_target {
                     return Err(self
@@ -325,6 +376,44 @@ impl Interp {
                 self.number_formats.insert(inst, data);
                 Slot::of(Kind::Reference, Payload::Reference(inst))
             }
+            _ => unreachable!("not one of the Intl constructors"),
+        };
+        Ok(result)
+    }
+
+    /// The Temporal and Date natives of [`Self::call_native_inner`], out of
+    /// line (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of them
+    /// carries this family's frame and the thin dispatcher's, not the union of
+    /// every native's.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn native_ctor_temporal(
+        &mut self,
+        native: Native,
+        base: usize,
+        argc: usize,
+        has_target: bool,
+        code: &[u8],
+        new_target: Option<crate::value::SlotIndex>,
+        derived_native_construct: bool,
+    ) -> Result<Slot, Step> {
+        // Argument i is at `base + 4 + i` (arg0 is the deepest); missing
+        // arguments read `undefined`.
+        let arg = |i: usize| -> Slot {
+            self.stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
+        let _ = (
+            &arg,
+            argc,
+            has_target,
+            code,
+            new_target,
+            derived_native_construct,
+        );
+        let result: Slot = match native {
             Native::TemporalInstant => {
                 if !has_target {
                     return Err(self.catchable_type_error_msg(
@@ -480,6 +569,692 @@ impl Interp {
                     self.dates.insert(inst, time);
                     Slot::of(Kind::Reference, Payload::Reference(inst))
                 }
+            }
+            _ => unreachable!("not one of the Temporal and Date constructors"),
+        };
+        Ok(result)
+    }
+
+    /// The ArrayBuffer, TypedArray and DataView natives of
+    /// [`Self::call_native_inner`], out of line (STACK-DEPTH-REFACTOR.md A1): a
+    /// re-entrant call through one of them carries this family's frame and the
+    /// thin dispatcher's, not the union of every native's.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn native_ctor_buffer(
+        &mut self,
+        native: Native,
+        base: usize,
+        argc: usize,
+        has_target: bool,
+        code: &[u8],
+        new_target: Option<crate::value::SlotIndex>,
+        derived_native_construct: bool,
+    ) -> Result<Slot, Step> {
+        // Argument i is at `base + 4 + i` (arg0 is the deepest); missing
+        // arguments read `undefined`.
+        let arg = |i: usize| -> Slot {
+            self.stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
+        let _ = (
+            &arg,
+            argc,
+            has_target,
+            code,
+            new_target,
+            derived_native_construct,
+        );
+        let result: Slot = match native {
+            // `new ArrayBuffer(byteLength)` (`fx_ArrayBuffer` +
+            // `fxNewArrayBufferInstance`): a fresh zero-filled buffer. The
+            // instance is `fxNewObjectInstance` + two internal `fxNewSlot`s
+            // (the `XS_ARRAY_BUFFER_KIND` address slot and the
+            // `XS_BUFFER_INFO_KIND` length slot), folded with the native host
+            // frame into [`ARRAY_BUFFER_CTOR_FRAME_METERING`]; the backing
+            // store is a single `fxNewChunk(byteLength)`. A resizable buffer
+            // (a reference second argument carrying `maxByteLength`), a
+            // negative/oversized/non-integer byteLength (each a RangeError),
+            // and the `ArrayBuffer(n)` call without `new` (a TypeError) are
+            // honest named skips — their abort metering is a later increment.
+            Native::ArrayBuffer if has_target => {
+                if argc >= 2 && arg(1).kind == Kind::Reference {
+                    return Err(Step::Host(Halt::NotImplemented(
+                        "native-call:ArrayBuffer:resizable",
+                    )));
+                }
+                let a = arg(0);
+                let byte_length = self.to_index_arg(code, a)?;
+                self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
+                let inst = self.alloc_array_buffer(byte_length)?;
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
+            // `new SharedArrayBuffer(byteLength)` (`xsAtomics.c`
+            // `fx_SharedArrayBuffer`). Single-agent: a plain byte buffer marked
+            // shared. Only the integer/number fixed-length form is covered; a
+            // growable buffer (2nd option-bag arg) or a byteLength needing
+            // general ToNumber self-names an honest skip.
+            Native::SharedArrayBuffer if has_target => {
+                if argc >= 2 && arg(1).kind == Kind::Reference {
+                    return Err(Step::Host(Halt::NotImplemented(
+                        "native-call:SharedArrayBuffer:growable",
+                    )));
+                }
+                let a = arg(0);
+                let byte_length = self.to_index_arg(code, a)?;
+                self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
+                let inst = self.alloc_array_buffer(byte_length)?;
+                self.shared_buffers.insert(inst);
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
+            // `new <TypedArray>(...)` (`fx_TypedArray` + `fxConstructTypedArray`
+            // + `fxNewTypedArrayInstance`). Two covered forms:
+            //   - `new TA(length)`: allocate a fresh `new ArrayBuffer(length <<
+            //     shift)` backing store (the inner construct's frame is folded
+            //     into [`TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING`]; the chunk is
+            //     metered by `alloc_array_buffer`), view offset 0.
+            //   - `new TA(buffer[, byteOffset[, length]])`: a view over an
+            //     existing ArrayBuffer, sharing its store (no allocation).
+            // The from-iterable / from-TypedArray / from-array-like copy forms
+            // (`fx_TypedArray_from_object`, the source-TypedArray element copy)
+            // drive the iterator/element protocol and self-name honest skips.
+            Native::TypedArray(idx) if has_target => {
+                let ty = TYPED_ARRAY_TYPES[idx as usize];
+                let shift = ty.shift as u32;
+                let proto = self
+                    .intrinsics
+                    .get(ty.name)
+                    .and_then(|&c| self.ctor_prototype.get(&c).copied())
+                    .unwrap_or(self.object_proto);
+                // Snapshot the arguments up front so the general-coercion path
+                // can take a `&mut self` borrow (`to_index_arg`) without keeping
+                // the `arg` closure's immutable borrow of `self.stack` alive.
+                let a = arg(0);
+                let a1 = arg(1);
+                let a2 = arg(2);
+                match a.value {
+                    // View over an existing ArrayBuffer.
+                    Payload::Reference(r) if self.array_buffers.contains_key(&r) => {
+                        let buf_len = self.array_buffers[&r].length;
+                        // byteOffset (arg1): `ToIndex` — a non-negative integer.
+                        // The integer/number fast paths stay inline (their exact
+                        // metering is pinned by the meter-exact corpus); a
+                        // boolean/string/object takes the general coercion
+                        // (`valueOf`/`toString`), and a Symbol/BigInt or a
+                        // negative/oversized value throws a catchable
+                        // TypeError/RangeError exactly as `fxToIndex` does.
+                        let offset: u32 = match self.arg_to_byte_length(base, 1, 0) {
+                            Some(o) => o,
+                            None => self.to_index_arg(code, a1)?,
+                        };
+                        // A byteOffset that is not a multiple of the element
+                        // size is a RangeError (`fxCheckTypedArrayIndex`).
+                        if offset & ((1 << shift) - 1) != 0 {
+                            return Err(self.catchable_range_error_msg(format!(
+                                "invalid byteOffset {offset}"
+                            )));
+                        }
+                        // length (arg2): explicit element count, or the
+                        // remaining buffer (which must divide evenly).
+                        let byte_size: u32;
+                        if argc >= 3 && a2.kind != Kind::Undefined {
+                            // length (arg2): `ToIndex` — explicit element count.
+                            // Integer/number inline (metering pinned); otherwise
+                            // the general coercion / catchable throw.
+                            let len = match self.arg_to_byte_length(base, 2, 0) {
+                                Some(l) => l,
+                                None => self.to_index_arg(code, a2)?,
+                            };
+                            // A length whose byte span overflows u32, runs past
+                            // the buffer, or (implicitly) exceeds the allocation
+                            // ceiling is a RangeError (`fxCheckTypedArrayLength`).
+                            if self.detached_buffers.contains(&r) {
+                                return Err(self.catchable_type_error_msg("detached buffer".into()));
+                            }
+                            let delta = match len.checked_mul(1 << shift) {
+                                Some(d) => d,
+                                None => {
+                                    return Err(self.catchable_range_error_msg(format!(
+                                        "invalid length {len}"
+                                    )))
+                                }
+                            };
+                            let end = match offset.checked_add(delta) {
+                                Some(e) => e,
+                                None => {
+                                    return Err(self.catchable_range_error_msg(format!(
+                                        "invalid length {len}"
+                                    )))
+                                }
+                            };
+                            if buf_len < end {
+                                return Err(
+                                    self.catchable_range_error_msg(format!("invalid length {len}"))
+                                );
+                            }
+                            byte_size = delta;
+                        } else {
+                            // Implicit length: the buffer must divide evenly by
+                            // the element size and contain the offset — else a
+                            // RangeError (`fxCheckTypedArrayLength`).
+                            if self.detached_buffers.contains(&r) {
+                                return Err(self.catchable_type_error_msg("detached buffer".into()));
+                            }
+                            if (buf_len & ((1 << shift) - 1)) != 0 {
+                                return Err(self.catchable_range_error_msg(format!(
+                                    "invalid byteLength {buf_len}"
+                                )));
+                            }
+                            if offset > buf_len {
+                                return Err(self.catchable_range_error_msg(format!(
+                                    "invalid byteLength {}",
+                                    buf_len.wrapping_sub(offset)
+                                )));
+                            }
+                            byte_size = buf_len - offset;
+                        }
+                        self.meter.tick_raw(TYPED_ARRAY_BUFFER_CTOR_FRAME_METERING);
+                        let inst = self.slots.alloc(Slot::instance(proto));
+                        self.typed_arrays.insert(
+                            inst,
+                            TypedArrayData {
+                                kind: idx,
+                                buffer: r,
+                                offset,
+                                length: byte_size >> shift,
+                            },
+                        );
+                        Slot::of(Kind::Reference, Payload::Reference(inst))
+                    }
+                    // `new TA(source)` from a **dense Array** (`new Uint8Array([
+                    // 1,2,3])`, the common boot-bundle form) or a **source
+                    // TypedArray** (`new Int16Array(u8)`): allocate a fresh
+                    // backing store of `length << shift` and copy each element,
+                    // coercing per the destination element type. A plain array
+                    // literal carries the default `Symbol.iterator`, so its
+                    // direct dense element sequence IS the iterator result the
+                    // spec-mandated protocol would yield — result-faithful. An
+                    // element needing `ToPrimitive`/`valueOf` (an object member)
+                    // takes the general coercion path. BigInt-element sources
+                    // materialize real BigInt values so same-domain copies work
+                    // and cross-domain copies throw the required TypeError.
+                    Payload::Reference(r)
+                        if self.arrays.contains_key(&r) || self.typed_arrays.contains_key(&r) =>
+                    {
+                        // The source LENGTH decides the allocation, so read it,
+                        // bound it, and charge for it BEFORE materializing
+                        // anything. This used to collect `0..len` into a
+                        // `Vec<Slot>` and sanity-check afterwards, which made
+                        // the source length an *unmetered allocation
+                        // instruction*: a sparse `a.length = 200_000_000` —
+                        // ordinary JS state, and ordinary snapshot bytes no
+                        // decoder can refuse, since a sparse array is legitimate
+                        // — reserved 32 bytes per declared element before any
+                        // bound and before any charge. What that costs depends
+                        // on the host and both outcomes are bad: where the
+                        // reservation fails, `handle_alloc_error` ABORTS THE
+                        // PROCESS, which no `catch_unwind` can contain; where
+                        // overcommit lets it succeed, the worker stalls filling
+                        // slots the meter never sees (measured: 132 seconds and
+                        // 8.6 GB for a two-call program).
+                        //
+                        // Ordered this way the from-source path is exposed
+                        // exactly as much as the length form `new TA(n)` it is
+                        // equivalent to, and no more: the bound rejects first,
+                        // and `alloc_array_buffer` charges
+                        // `tick_chunk_new(byte_length)` before it allocates.
+                        // `tests/typed_array_source_length.rs` holds the
+                        // deadline that keeps the order this way round.
+                        let (length, source_ta) = if let Some(src) = self.arrays.get(&r) {
+                            (src.length, None)
+                        } else {
+                            let src = self.typed_arrays[&r];
+                            (src.length, Some(src))
+                        };
+                        // A sparse snapshot is valid only with the intrinsic
+                        // array iterator and its intrinsic next method. Check
+                        // the resolved methods across the chain: an inherited
+                        // override is just as observable as an own property.
+                        if source_ta.is_none() {
+                            // Runtime keys (for example from JSON.parse) can
+                            // precede their lazy intrinsic bindings. Complete
+                            // that installation before inspecting next.
+                            self.install_pending_intrinsics();
+                            let iterator_id = self
+                                .well_known_symbol_property_id("iterator")
+                                .expect("well-known iterator symbol");
+                            // Unreferenced intrinsic names are linked lazily.
+                            // If no next key exists, guest code cannot yet have
+                            // replaced or deleted the intrinsic next method.
+                            let intrinsic_next = self.symbol_ids.get("next").is_none_or(|&id| {
+                                self.chain_resolves_native_data_method(
+                                    self.array_iterator_proto,
+                                    id,
+                                    NativeMethod::ArrayIteratorNext,
+                                )
+                            });
+                            if !self.chain_resolves_native_data_method(
+                                r,
+                                iterator_id,
+                                NativeMethod::ArrayValues,
+                            ) || !intrinsic_next
+                            {
+                                return Err(Step::Host(Halt::NotImplemented(
+                                    "native-call:TypedArray:from-array-like",
+                                )));
+                            }
+                        }
+                        if length > (0x7FFF_FFFFu32 >> shift) {
+                            return Err(Step::Host(Halt::NotImplemented(
+                                "native-call:TypedArray:bad-length",
+                            )));
+                        }
+                        let byte_length = length << shift;
+                        self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
+                        let buffer = self.alloc_array_buffer(byte_length)?;
+                        let inst = self.slots.alloc(Slot::instance(proto));
+                        let ta = TypedArrayData {
+                            kind: idx,
+                            buffer,
+                            offset: 0,
+                            length,
+                        };
+                        self.typed_arrays.insert(inst, ta);
+                        // An ARRAY source is snapshotted up front — the spec's
+                        // `IteratorToList` materializes every value BEFORE any
+                        // element coercion runs, so a `valueOf` that mutates the
+                        // source mid-copy (`iterated-array-changed-by-tonumber`)
+                        // must not change later reads. The snapshot CLONES the
+                        // source's sparse `items()` map (present entries only),
+                        // NOT a dense `0..length` `Vec<Slot>`: the declared
+                        // length is guest-controlled and unbounded up to the
+                        // arm's own cap, so a dense snapshot would re-arm the
+                        // dense-allocation hazard: reserving
+                        // `length * size_of::<Slot>()` outside the meter,
+                        // while `alloc_array_buffer` charged only the packed
+                        // `byte_length`. Cloning `items()` keeps the allocation
+                        // proportional to the storage the meter already charged
+                        // (present entries), and an absent index reads
+                        // `undefined` from the clone exactly as a hole would.
+                        // The snapshot comes AFTER the length bound and the
+                        // metered `alloc_array_buffer` charge above, so the
+                        // admission ordering (reject first, charge second, only
+                        // then any length-proportional allocation;
+                        // `tests/typed_array_source_length.rs`) still holds and
+                        // the length-proportional allocation the ordering exists
+                        // to bound — the backing store — remains the only one. A
+                        // TypedArray source needs no snapshot: its element reads
+                        // are pure numeric loads and its element coercions run no
+                        // guest code, so nothing can mutate it between reads. A
+                        // hole reads `undefined` (-> NaN -> 0 for an integer
+                        // view), matching the default-iterator result.
+                        let snapshot: Option<std::collections::BTreeMap<u32, Slot>> = source_ta
+                            .map_or_else(
+                                || self.arrays.get(&r).map(|src| src.items().clone()),
+                                |_| None,
+                            );
+                        for i in 0..length {
+                            let v = match source_ta {
+                                Some(src) if src.kind <= 1 => {
+                                    self.typed_array_element_get_bigint(src, i)
+                                }
+                                Some(src) => self
+                                    .typed_array_element_get(src, i)
+                                    .expect("numeric TypedArray element decodes"),
+                                None => snapshot
+                                    .as_ref()
+                                    .and_then(|items| items.get(&i).copied())
+                                    .unwrap_or_else(Slot::undefined),
+                            };
+                            self.typed_array_element_set(code, ta, i, v)?;
+                            self.meter
+                                .tick_raw(TYPED_ARRAY_FROM_SOURCE_ELEMENT_METERING);
+                        }
+                        Slot::of(Kind::Reference, Payload::Reference(inst))
+                    }
+                    // Any other **object** source (an array-like, custom
+                    // iterable, Map/Set, or proxy) first traverses the same
+                    // iterator/array-like protocol as `Array.from`. Re-enter
+                    // this constructor with the resulting dense Array so the
+                    // bounded allocation and element-coercion path above stays
+                    // single-sourced. A Symbol/BigInt first argument is a
+                    // primitive, not an Object (its `Payload` is a Reference to
+                    // the interned symbol/bigint), so it falls through to the
+                    // length path below, where `ToNumber` throws a catchable
+                    // TypeError exactly as the spec's `ToIndex` does.
+                    Payload::Reference(_) if a.kind == Kind::Reference => {
+                        let array_ctor = self
+                            .intrinsics
+                            .get("Array")
+                            .copied()
+                            .expect("Array intrinsic");
+                        let array_ctor = Slot::of(Kind::Reference, Payload::Reference(array_ctor));
+                        let collect_base = self.stack.len();
+                        self.push(array_ctor);
+                        self.push(Slot::undefined());
+                        self.push(Slot::undefined());
+                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                        self.push(a);
+                        let collected = self.array_from(code, collect_base, 1);
+                        self.stack.truncate(collect_base);
+                        let collected = collected?;
+
+                        let typed_array_ctor = self
+                            .stack
+                            .get(base + 1)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined);
+                        let construct_base = self.stack.len();
+                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                        self.push(typed_array_ctor);
+                        self.push(Slot::undefined());
+                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
+                        self.push(collected);
+                        let constructed = self.call_native(
+                            Native::TypedArray(idx),
+                            construct_base,
+                            1,
+                            true,
+                            code,
+                        );
+                        match constructed {
+                            Ok(()) => self.pop_checked()?,
+                            Err(halt) => {
+                                self.stack.truncate(construct_base);
+                                return Err(halt);
+                            }
+                        }
+                    }
+                    // Length form: `new TA(n)`. `n` is `ToIndex`-coerced.
+                    _ => {
+                        let length = self.to_index_arg(code, a)?;
+                        if length > (0x7FFF_FFFFu32 >> shift) {
+                            return Err(self.catchable_range_error_msg("byteLength too big".into()));
+                        }
+                        let byte_length = length << shift;
+                        self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
+                        let buffer = self.alloc_array_buffer(byte_length)?;
+                        let inst = self.slots.alloc(Slot::instance(proto));
+                        self.typed_arrays.insert(
+                            inst,
+                            TypedArrayData {
+                                kind: idx,
+                                buffer,
+                                offset: 0,
+                                length,
+                            },
+                        );
+                        Slot::of(Kind::Reference, Payload::Reference(inst))
+                    }
+                }
+            }
+            // `new DataView(buffer[, byteOffset[, byteLength]])` (`fx_DataView`
+            // + `fxNewDataViewInstance`): a view over an existing ArrayBuffer.
+            // The instance is `fxNewObjectInstance` + two internal `fxNewSlot`s
+            // (the `XS_DATA_VIEW_KIND` view slot + the buffer-ref slot), folded
+            // with the native host frame into
+            // [`DATA_VIEW_CTOR_FRAME_METERING`]; no backing store is allocated
+            // (the view shares the argument buffer). A non-ArrayBuffer first
+            // argument throws TypeError. Offset and length use ToIndex, and a
+            // span outside the backing store throws RangeError.
+            Native::DataView if has_target => {
+                let a = arg(0);
+                let buf = match a.value {
+                    Payload::Reference(r) if self.array_buffers.contains_key(&r) => r,
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "buffer: not an ArrayBuffer instance".into(),
+                        ))
+                    }
+                };
+                let offset_arg = arg(1);
+                let length_arg = arg(2);
+                let buf_len = self.array_buffers[&buf].length;
+                let offset = self.to_index_arg(code, offset_arg)?;
+                // A buffer detached by the `ToIndex(byteOffset)` coercion (a
+                // user `valueOf`) is a TypeError — after the coercion ran, so
+                // `ToNumber(byteOffset)` is still observed once, ahead of the
+                // out-of-range RangeError.
+                if self.detached_buffers.contains(&buf) {
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
+                }
+                if offset > buf_len {
+                    return Err(
+                        self.catchable_range_error_msg(format!("invalid byteOffset {offset}"))
+                    );
+                }
+                let size: u32;
+                if argc >= 3 && length_arg.kind != Kind::Undefined {
+                    let s = self.to_index_arg(code, length_arg)?;
+                    let end = match offset.checked_add(s) {
+                        Some(e) => e,
+                        None => {
+                            return Err(
+                                self.catchable_range_error_msg(format!("invalid byteLength {s}"))
+                            )
+                        }
+                    };
+                    if buf_len < end {
+                        return Err(
+                            self.catchable_range_error_msg(format!("invalid byteLength {s}"))
+                        );
+                    }
+                    size = s;
+                } else {
+                    size = buf_len - offset;
+                }
+                self.meter.tick_raw(DATA_VIEW_CTOR_FRAME_METERING);
+                let inst = self.slots.alloc(Slot::instance(self.dataview_proto));
+                self.data_views.insert(
+                    inst,
+                    DataViewData {
+                        buffer: buf,
+                        offset,
+                        size,
+                    },
+                );
+                Slot::of(Kind::Reference, Payload::Reference(inst))
+            }
+            // `DataView(...)` is constructor-only.
+            Native::DataView => return Err(self.catchable_type_error_msg("call: DataView".into())),
+            // `ArrayBuffer(...)` / `SharedArrayBuffer(...)` called WITHOUT `new`
+            // (`has_target` false): a constructor-only intrinsic whose
+            // `fx_ArrayBuffer`/`fx_SharedArrayBuffer` throws a catchable TypeError
+            // when `mxTarget` is undefined (`if (mxIsUndefined(mxTarget)) mxTypeError`).
+            Native::ArrayBuffer | Native::SharedArrayBuffer => {
+                let name = if matches!(native, Native::ArrayBuffer) {
+                    "ArrayBuffer"
+                } else {
+                    "SharedArrayBuffer"
+                };
+                return Err(self.catchable_type_error_msg(format!("call: {name}")));
+            }
+            Native::TypedArrayBase => {
+                return Err(self.catchable_type_error_msg(
+                    if has_target {
+                        "new: TypedArray"
+                    } else {
+                        "call: TypedArray"
+                    }
+                    .into(),
+                ));
+            }
+            Native::TypedArray(_) => {
+                return Err(self.catchable_type_error_msg("call: TypedArray".into()));
+            }
+            _ => unreachable!("not one of the ArrayBuffer, TypedArray and DataView constructors"),
+        };
+        Ok(result)
+    }
+
+    /// The Promise natives of [`Self::call_native_inner`], out of line
+    /// (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of them
+    /// carries this family's frame and the thin dispatcher's, not the union of
+    /// every native's.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn native_ctor_promise(
+        &mut self,
+        native: Native,
+        base: usize,
+        argc: usize,
+        has_target: bool,
+        code: &[u8],
+        new_target: Option<crate::value::SlotIndex>,
+        derived_native_construct: bool,
+    ) -> Result<Slot, Step> {
+        // Argument i is at `base + 4 + i` (arg0 is the deepest); missing
+        // arguments read `undefined`.
+        let arg = |i: usize| -> Slot {
+            self.stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
+        let _ = (
+            &arg,
+            argc,
+            has_target,
+            code,
+            new_target,
+            derived_native_construct,
+        );
+        let result: Slot = match native {
+            // `new Promise(executor)` (`fx_Promise`): a fresh pending promise
+            // whose resolve/reject functions are handed to the executor, which
+            // runs synchronously inside the construct (`mxRunCount(2)`). The
+            // promise instance is `fxNewPromiseInstance` (six `fxNewSlot`s), the
+            // resolving pair is `fxPushPromiseFunctions`
+            // ([`PROMISE_FUNCTIONS_METERING`]), and the native frame residual is
+            // [`PROMISE_CTOR_FRAME_METERING`]; the executor body is metered by
+            // the re-entrant `run_callback`. A non-user-function executor, and a
+            // non-`new` `Promise(...)` call throws a TypeError. Callability is
+            // checked before allocating the promise (and therefore before
+            // consulting `newTarget.prototype`), as required by the constructor
+            // algorithm.
+            Native::Promise if has_target => {
+                if argc == 0 {
+                    return Err(self.catchable_type_error_msg("no executor".into()));
+                }
+                let executor = arg(0);
+                if !self.is_callable_value(executor) {
+                    return Err(self.catchable_type_error_msg("executor: not a function".into()));
+                }
+                self.meter.tick_raw(PROMISE_CTOR_FRAME_METERING);
+                let proto = match new_target {
+                    Some(target) => {
+                        self.get_prototype_from_constructor(code, target, self.promise_proto)?
+                    }
+                    None => self.promise_proto,
+                };
+                let promise = self.new_promise_instance_with_proto(proto);
+                let (resolve, reject) = self.make_resolving_functions(promise);
+                // Invoke `executor(resolve, reject)` with `this = undefined`,
+                // re-entrant. A throw rejects the promise via `fxRejectException`
+                // — its thrown-value capture + metering is a later increment, so
+                // an executor throw self-names rather than mis-settle.
+                match self.run_callback_catching_throw(
+                    code,
+                    executor,
+                    Slot::undefined(),
+                    &[resolve, reject],
+                )? {
+                    Ok(_) => {}
+                    Err(thrown) => self.settle_via_function(code, reject, thrown)?,
+                }
+                Slot::of(Kind::Reference, Payload::Reference(promise))
+            }
+            // `%Promise%` is constructor-only. The call form fails before
+            // inspecting its argument, and the realm TypeError remains
+            // catchable by surrounding guest code.
+            Native::Promise => return Err(self.catchable_type_error_msg("call: Promise".into())),
+            _ => unreachable!("not one of the Promise constructors"),
+        };
+        Ok(result)
+    }
+
+    /// The remaining natives of [`Self::call_native_inner`], out of line
+    /// (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of them
+    /// carries this family's frame and the thin dispatcher's, not the union of
+    /// every native's.
+    #[allow(clippy::too_many_arguments)]
+    #[inline(never)]
+    fn native_ctor_core(
+        &mut self,
+        native: Native,
+        base: usize,
+        argc: usize,
+        has_target: bool,
+        code: &[u8],
+        new_target: Option<crate::value::SlotIndex>,
+        derived_native_construct: bool,
+    ) -> Result<Slot, Step> {
+        // Argument i is at `base + 4 + i` (arg0 is the deepest); missing
+        // arguments read `undefined`.
+        let arg = |i: usize| -> Slot {
+            self.stack
+                .get(base + 4 + i)
+                .copied()
+                .unwrap_or_else(Slot::undefined)
+        };
+        let _ = (
+            &arg,
+            argc,
+            has_target,
+            code,
+            new_target,
+            derived_native_construct,
+        );
+        let result: Slot = match native {
+            Native::Host => {
+                if has_target {
+                    return Err(self.catchable_type_error_msg("new: not a constructor".into()));
+                }
+                self.call_host(base, argc, code)?
+            }
+            // `eval`: a non-string input is returned unchanged (the spec's
+            // "not a String" fast return); a string is compiled and executed
+            // in this realm through the source-execution bridge
+            // ([`Self::eval_source`]) — the principled compiler/VM seam that
+            // replaced the former `eval:string-source` text boundary. The
+            // completion value becomes the call's result. `eval` is never
+            // constructable.
+            Native::Eval => {
+                if has_target {
+                    return Err(self.catchable_type_error_msg("new: not a constructor".into()));
+                }
+                let source = arg(0);
+                if source.kind == Kind::String {
+                    let text = match source.value {
+                        Payload::String(off) => self.str_units(off),
+                        _ => Vec::new(),
+                    };
+                    // A direct eval inherits the caller's strictness; an
+                    // indirect eval of ordinary source is sloppy (a
+                    // `"use strict"` prologue still promotes it, in the
+                    // compiler). `self.strict` is the calling script or
+                    // function frame's strictness at this direct-eval site.
+                    let strict = self.eval_direct && self.strict;
+                    self.eval_source(&text, strict)?
+                } else {
+                    source
+                }
+            }
+            // The dynamic-function constructor family (`Function`,
+            // `%GeneratorFunction%`, `%AsyncFunction%`,
+            // `%AsyncGeneratorFunction%`): CreateDynamicFunction
+            // (ECMA-262 20.2.1.1.1) assembles the source from the args and
+            // evaluates it in the realm; the completion is the new function.
+            // Call and construct are equivalent (both create the function), so
+            // `has_target` is ignored. The whole family shares one helper that
+            // varies only the function-head grammar per kind.
+            Native::Function
+            | Native::GeneratorFunction
+            | Native::AsyncFunction
+            | Native::AsyncGeneratorFunction => {
+                self.create_dynamic_function(native, base, argc, code)?
             }
             // `Boolean(value)` (`fx_Boolean`): ToBoolean(argument0), or
             // `false` when called with no argument. Measured against the pin,
@@ -978,505 +1753,6 @@ impl Interp {
             Native::Compartment => {
                 return Err(self.catchable_type_error_msg("call: Compartment".into()));
             }
-            // `new ArrayBuffer(byteLength)` (`fx_ArrayBuffer` +
-            // `fxNewArrayBufferInstance`): a fresh zero-filled buffer. The
-            // instance is `fxNewObjectInstance` + two internal `fxNewSlot`s
-            // (the `XS_ARRAY_BUFFER_KIND` address slot and the
-            // `XS_BUFFER_INFO_KIND` length slot), folded with the native host
-            // frame into [`ARRAY_BUFFER_CTOR_FRAME_METERING`]; the backing
-            // store is a single `fxNewChunk(byteLength)`. A resizable buffer
-            // (a reference second argument carrying `maxByteLength`), a
-            // negative/oversized/non-integer byteLength (each a RangeError),
-            // and the `ArrayBuffer(n)` call without `new` (a TypeError) are
-            // honest named skips — their abort metering is a later increment.
-            Native::ArrayBuffer if has_target => {
-                if argc >= 2 && arg(1).kind == Kind::Reference {
-                    return Err(Step::Host(Halt::NotImplemented(
-                        "native-call:ArrayBuffer:resizable",
-                    )));
-                }
-                let a = arg(0);
-                let byte_length = self.to_index_arg(code, a)?;
-                self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
-                let inst = self.alloc_array_buffer(byte_length)?;
-                Slot::of(Kind::Reference, Payload::Reference(inst))
-            }
-            // `new SharedArrayBuffer(byteLength)` (`xsAtomics.c`
-            // `fx_SharedArrayBuffer`). Single-agent: a plain byte buffer marked
-            // shared. Only the integer/number fixed-length form is covered; a
-            // growable buffer (2nd option-bag arg) or a byteLength needing
-            // general ToNumber self-names an honest skip.
-            Native::SharedArrayBuffer if has_target => {
-                if argc >= 2 && arg(1).kind == Kind::Reference {
-                    return Err(Step::Host(Halt::NotImplemented(
-                        "native-call:SharedArrayBuffer:growable",
-                    )));
-                }
-                let a = arg(0);
-                let byte_length = self.to_index_arg(code, a)?;
-                self.meter.tick_raw(ARRAY_BUFFER_CTOR_FRAME_METERING);
-                let inst = self.alloc_array_buffer(byte_length)?;
-                self.shared_buffers.insert(inst);
-                Slot::of(Kind::Reference, Payload::Reference(inst))
-            }
-            // `new <TypedArray>(...)` (`fx_TypedArray` + `fxConstructTypedArray`
-            // + `fxNewTypedArrayInstance`). Two covered forms:
-            //   - `new TA(length)`: allocate a fresh `new ArrayBuffer(length <<
-            //     shift)` backing store (the inner construct's frame is folded
-            //     into [`TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING`]; the chunk is
-            //     metered by `alloc_array_buffer`), view offset 0.
-            //   - `new TA(buffer[, byteOffset[, length]])`: a view over an
-            //     existing ArrayBuffer, sharing its store (no allocation).
-            // The from-iterable / from-TypedArray / from-array-like copy forms
-            // (`fx_TypedArray_from_object`, the source-TypedArray element copy)
-            // drive the iterator/element protocol and self-name honest skips.
-            Native::TypedArray(idx) if has_target => {
-                let ty = TYPED_ARRAY_TYPES[idx as usize];
-                let shift = ty.shift as u32;
-                let proto = self
-                    .intrinsics
-                    .get(ty.name)
-                    .and_then(|&c| self.ctor_prototype.get(&c).copied())
-                    .unwrap_or(self.object_proto);
-                // Snapshot the arguments up front so the general-coercion path
-                // can take a `&mut self` borrow (`to_index_arg`) without keeping
-                // the `arg` closure's immutable borrow of `self.stack` alive.
-                let a = arg(0);
-                let a1 = arg(1);
-                let a2 = arg(2);
-                match a.value {
-                    // View over an existing ArrayBuffer.
-                    Payload::Reference(r) if self.array_buffers.contains_key(&r) => {
-                        let buf_len = self.array_buffers[&r].length;
-                        // byteOffset (arg1): `ToIndex` — a non-negative integer.
-                        // The integer/number fast paths stay inline (their exact
-                        // metering is pinned by the meter-exact corpus); a
-                        // boolean/string/object takes the general coercion
-                        // (`valueOf`/`toString`), and a Symbol/BigInt or a
-                        // negative/oversized value throws a catchable
-                        // TypeError/RangeError exactly as `fxToIndex` does.
-                        let offset: u32 = match self.arg_to_byte_length(base, 1, 0) {
-                            Some(o) => o,
-                            None => self.to_index_arg(code, a1)?,
-                        };
-                        // A byteOffset that is not a multiple of the element
-                        // size is a RangeError (`fxCheckTypedArrayIndex`).
-                        if offset & ((1 << shift) - 1) != 0 {
-                            return Err(self.catchable_range_error_msg(format!(
-                                "invalid byteOffset {offset}"
-                            )));
-                        }
-                        // length (arg2): explicit element count, or the
-                        // remaining buffer (which must divide evenly).
-                        let byte_size: u32;
-                        if argc >= 3 && a2.kind != Kind::Undefined {
-                            // length (arg2): `ToIndex` — explicit element count.
-                            // Integer/number inline (metering pinned); otherwise
-                            // the general coercion / catchable throw.
-                            let len = match self.arg_to_byte_length(base, 2, 0) {
-                                Some(l) => l,
-                                None => self.to_index_arg(code, a2)?,
-                            };
-                            // A length whose byte span overflows u32, runs past
-                            // the buffer, or (implicitly) exceeds the allocation
-                            // ceiling is a RangeError (`fxCheckTypedArrayLength`).
-                            if self.detached_buffers.contains(&r) {
-                                return Err(self.catchable_type_error_msg("detached buffer".into()));
-                            }
-                            let delta = match len.checked_mul(1 << shift) {
-                                Some(d) => d,
-                                None => {
-                                    return Err(self.catchable_range_error_msg(format!(
-                                        "invalid length {len}"
-                                    )))
-                                }
-                            };
-                            let end = match offset.checked_add(delta) {
-                                Some(e) => e,
-                                None => {
-                                    return Err(self.catchable_range_error_msg(format!(
-                                        "invalid length {len}"
-                                    )))
-                                }
-                            };
-                            if buf_len < end {
-                                return Err(
-                                    self.catchable_range_error_msg(format!("invalid length {len}"))
-                                );
-                            }
-                            byte_size = delta;
-                        } else {
-                            // Implicit length: the buffer must divide evenly by
-                            // the element size and contain the offset — else a
-                            // RangeError (`fxCheckTypedArrayLength`).
-                            if self.detached_buffers.contains(&r) {
-                                return Err(self.catchable_type_error_msg("detached buffer".into()));
-                            }
-                            if (buf_len & ((1 << shift) - 1)) != 0 {
-                                return Err(self.catchable_range_error_msg(format!(
-                                    "invalid byteLength {buf_len}"
-                                )));
-                            }
-                            if offset > buf_len {
-                                return Err(self.catchable_range_error_msg(format!(
-                                    "invalid byteLength {}",
-                                    buf_len.wrapping_sub(offset)
-                                )));
-                            }
-                            byte_size = buf_len - offset;
-                        }
-                        self.meter.tick_raw(TYPED_ARRAY_BUFFER_CTOR_FRAME_METERING);
-                        let inst = self.slots.alloc(Slot::instance(proto));
-                        self.typed_arrays.insert(
-                            inst,
-                            TypedArrayData {
-                                kind: idx,
-                                buffer: r,
-                                offset,
-                                length: byte_size >> shift,
-                            },
-                        );
-                        Slot::of(Kind::Reference, Payload::Reference(inst))
-                    }
-                    // `new TA(source)` from a **dense Array** (`new Uint8Array([
-                    // 1,2,3])`, the common boot-bundle form) or a **source
-                    // TypedArray** (`new Int16Array(u8)`): allocate a fresh
-                    // backing store of `length << shift` and copy each element,
-                    // coercing per the destination element type. A plain array
-                    // literal carries the default `Symbol.iterator`, so its
-                    // direct dense element sequence IS the iterator result the
-                    // spec-mandated protocol would yield — result-faithful. An
-                    // element needing `ToPrimitive`/`valueOf` (an object member)
-                    // takes the general coercion path. BigInt-element sources
-                    // materialize real BigInt values so same-domain copies work
-                    // and cross-domain copies throw the required TypeError.
-                    Payload::Reference(r)
-                        if self.arrays.contains_key(&r) || self.typed_arrays.contains_key(&r) =>
-                    {
-                        // The source LENGTH decides the allocation, so read it,
-                        // bound it, and charge for it BEFORE materializing
-                        // anything. This used to collect `0..len` into a
-                        // `Vec<Slot>` and sanity-check afterwards, which made
-                        // the source length an *unmetered allocation
-                        // instruction*: a sparse `a.length = 200_000_000` —
-                        // ordinary JS state, and ordinary snapshot bytes no
-                        // decoder can refuse, since a sparse array is legitimate
-                        // — reserved 32 bytes per declared element before any
-                        // bound and before any charge. What that costs depends
-                        // on the host and both outcomes are bad: where the
-                        // reservation fails, `handle_alloc_error` ABORTS THE
-                        // PROCESS, which no `catch_unwind` can contain; where
-                        // overcommit lets it succeed, the worker stalls filling
-                        // slots the meter never sees (measured: 132 seconds and
-                        // 8.6 GB for a two-call program).
-                        //
-                        // Ordered this way the from-source path is exposed
-                        // exactly as much as the length form `new TA(n)` it is
-                        // equivalent to, and no more: the bound rejects first,
-                        // and `alloc_array_buffer` charges
-                        // `tick_chunk_new(byte_length)` before it allocates.
-                        // `tests/typed_array_source_length.rs` holds the
-                        // deadline that keeps the order this way round.
-                        let (length, source_ta) = if let Some(src) = self.arrays.get(&r) {
-                            (src.length, None)
-                        } else {
-                            let src = self.typed_arrays[&r];
-                            (src.length, Some(src))
-                        };
-                        // A sparse snapshot is valid only with the intrinsic
-                        // array iterator and its intrinsic next method. Check
-                        // the resolved methods across the chain: an inherited
-                        // override is just as observable as an own property.
-                        if source_ta.is_none() {
-                            // Runtime keys (for example from JSON.parse) can
-                            // precede their lazy intrinsic bindings. Complete
-                            // that installation before inspecting next.
-                            self.install_pending_intrinsics();
-                            let iterator_id = self
-                                .well_known_symbol_property_id("iterator")
-                                .expect("well-known iterator symbol");
-                            // Unreferenced intrinsic names are linked lazily.
-                            // If no next key exists, guest code cannot yet have
-                            // replaced or deleted the intrinsic next method.
-                            let intrinsic_next = self.symbol_ids.get("next").is_none_or(|&id| {
-                                self.chain_resolves_native_data_method(
-                                    self.array_iterator_proto,
-                                    id,
-                                    NativeMethod::ArrayIteratorNext,
-                                )
-                            });
-                            if !self.chain_resolves_native_data_method(
-                                r,
-                                iterator_id,
-                                NativeMethod::ArrayValues,
-                            ) || !intrinsic_next
-                            {
-                                return Err(Step::Host(Halt::NotImplemented(
-                                    "native-call:TypedArray:from-array-like",
-                                )));
-                            }
-                        }
-                        if length > (0x7FFF_FFFFu32 >> shift) {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "native-call:TypedArray:bad-length",
-                            )));
-                        }
-                        let byte_length = length << shift;
-                        self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
-                        let buffer = self.alloc_array_buffer(byte_length)?;
-                        let inst = self.slots.alloc(Slot::instance(proto));
-                        let ta = TypedArrayData {
-                            kind: idx,
-                            buffer,
-                            offset: 0,
-                            length,
-                        };
-                        self.typed_arrays.insert(inst, ta);
-                        // An ARRAY source is snapshotted up front — the spec's
-                        // `IteratorToList` materializes every value BEFORE any
-                        // element coercion runs, so a `valueOf` that mutates the
-                        // source mid-copy (`iterated-array-changed-by-tonumber`)
-                        // must not change later reads. The snapshot CLONES the
-                        // source's sparse `items()` map (present entries only),
-                        // NOT a dense `0..length` `Vec<Slot>`: the declared
-                        // length is guest-controlled and unbounded up to the
-                        // arm's own cap, so a dense snapshot would re-arm the
-                        // dense-allocation hazard: reserving
-                        // `length * size_of::<Slot>()` outside the meter,
-                        // while `alloc_array_buffer` charged only the packed
-                        // `byte_length`. Cloning `items()` keeps the allocation
-                        // proportional to the storage the meter already charged
-                        // (present entries), and an absent index reads
-                        // `undefined` from the clone exactly as a hole would.
-                        // The snapshot comes AFTER the length bound and the
-                        // metered `alloc_array_buffer` charge above, so the
-                        // admission ordering (reject first, charge second, only
-                        // then any length-proportional allocation;
-                        // `tests/typed_array_source_length.rs`) still holds and
-                        // the length-proportional allocation the ordering exists
-                        // to bound — the backing store — remains the only one. A
-                        // TypedArray source needs no snapshot: its element reads
-                        // are pure numeric loads and its element coercions run no
-                        // guest code, so nothing can mutate it between reads. A
-                        // hole reads `undefined` (-> NaN -> 0 for an integer
-                        // view), matching the default-iterator result.
-                        let snapshot: Option<std::collections::BTreeMap<u32, Slot>> = source_ta
-                            .map_or_else(
-                                || self.arrays.get(&r).map(|src| src.items().clone()),
-                                |_| None,
-                            );
-                        for i in 0..length {
-                            let v = match source_ta {
-                                Some(src) if src.kind <= 1 => {
-                                    self.typed_array_element_get_bigint(src, i)
-                                }
-                                Some(src) => self
-                                    .typed_array_element_get(src, i)
-                                    .expect("numeric TypedArray element decodes"),
-                                None => snapshot
-                                    .as_ref()
-                                    .and_then(|items| items.get(&i).copied())
-                                    .unwrap_or_else(Slot::undefined),
-                            };
-                            self.typed_array_element_set(code, ta, i, v)?;
-                            self.meter
-                                .tick_raw(TYPED_ARRAY_FROM_SOURCE_ELEMENT_METERING);
-                        }
-                        Slot::of(Kind::Reference, Payload::Reference(inst))
-                    }
-                    // Any other **object** source (an array-like, custom
-                    // iterable, Map/Set, or proxy) first traverses the same
-                    // iterator/array-like protocol as `Array.from`. Re-enter
-                    // this constructor with the resulting dense Array so the
-                    // bounded allocation and element-coercion path above stays
-                    // single-sourced. A Symbol/BigInt first argument is a
-                    // primitive, not an Object (its `Payload` is a Reference to
-                    // the interned symbol/bigint), so it falls through to the
-                    // length path below, where `ToNumber` throws a catchable
-                    // TypeError exactly as the spec's `ToIndex` does.
-                    Payload::Reference(_) if a.kind == Kind::Reference => {
-                        let array_ctor = self
-                            .intrinsics
-                            .get("Array")
-                            .copied()
-                            .expect("Array intrinsic");
-                        let array_ctor = Slot::of(Kind::Reference, Payload::Reference(array_ctor));
-                        let collect_base = self.stack.len();
-                        self.push(array_ctor);
-                        self.push(Slot::undefined());
-                        self.push(Slot::undefined());
-                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                        self.push(a);
-                        let collected = self.array_from(code, collect_base, 1);
-                        self.stack.truncate(collect_base);
-                        let collected = collected?;
-
-                        let typed_array_ctor = self
-                            .stack
-                            .get(base + 1)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined);
-                        let construct_base = self.stack.len();
-                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                        self.push(typed_array_ctor);
-                        self.push(Slot::undefined());
-                        self.push(Slot::of(Kind::Uninitialized, Payload::None));
-                        self.push(collected);
-                        let constructed = self.call_native(
-                            Native::TypedArray(idx),
-                            construct_base,
-                            1,
-                            true,
-                            code,
-                        );
-                        match constructed {
-                            Ok(()) => self.pop_checked()?,
-                            Err(halt) => {
-                                self.stack.truncate(construct_base);
-                                return Err(halt);
-                            }
-                        }
-                    }
-                    // Length form: `new TA(n)`. `n` is `ToIndex`-coerced.
-                    _ => {
-                        let length = self.to_index_arg(code, a)?;
-                        if length > (0x7FFF_FFFFu32 >> shift) {
-                            return Err(self.catchable_range_error_msg("byteLength too big".into()));
-                        }
-                        let byte_length = length << shift;
-                        self.meter.tick_raw(TYPED_ARRAY_LENGTH_CTOR_FRAME_METERING);
-                        let buffer = self.alloc_array_buffer(byte_length)?;
-                        let inst = self.slots.alloc(Slot::instance(proto));
-                        self.typed_arrays.insert(
-                            inst,
-                            TypedArrayData {
-                                kind: idx,
-                                buffer,
-                                offset: 0,
-                                length,
-                            },
-                        );
-                        Slot::of(Kind::Reference, Payload::Reference(inst))
-                    }
-                }
-            }
-            // `new DataView(buffer[, byteOffset[, byteLength]])` (`fx_DataView`
-            // + `fxNewDataViewInstance`): a view over an existing ArrayBuffer.
-            // The instance is `fxNewObjectInstance` + two internal `fxNewSlot`s
-            // (the `XS_DATA_VIEW_KIND` view slot + the buffer-ref slot), folded
-            // with the native host frame into
-            // [`DATA_VIEW_CTOR_FRAME_METERING`]; no backing store is allocated
-            // (the view shares the argument buffer). A non-ArrayBuffer first
-            // argument throws TypeError. Offset and length use ToIndex, and a
-            // span outside the backing store throws RangeError.
-            Native::DataView if has_target => {
-                let a = arg(0);
-                let buf = match a.value {
-                    Payload::Reference(r) if self.array_buffers.contains_key(&r) => r,
-                    _ => {
-                        return Err(self.catchable_type_error_msg(
-                            "buffer: not an ArrayBuffer instance".into(),
-                        ))
-                    }
-                };
-                let offset_arg = arg(1);
-                let length_arg = arg(2);
-                let buf_len = self.array_buffers[&buf].length;
-                let offset = self.to_index_arg(code, offset_arg)?;
-                // A buffer detached by the `ToIndex(byteOffset)` coercion (a
-                // user `valueOf`) is a TypeError — after the coercion ran, so
-                // `ToNumber(byteOffset)` is still observed once, ahead of the
-                // out-of-range RangeError.
-                if self.detached_buffers.contains(&buf) {
-                    return Err(self.catchable_type_error_msg("detached buffer".into()));
-                }
-                if offset > buf_len {
-                    return Err(
-                        self.catchable_range_error_msg(format!("invalid byteOffset {offset}"))
-                    );
-                }
-                let size: u32;
-                if argc >= 3 && length_arg.kind != Kind::Undefined {
-                    let s = self.to_index_arg(code, length_arg)?;
-                    let end = match offset.checked_add(s) {
-                        Some(e) => e,
-                        None => {
-                            return Err(
-                                self.catchable_range_error_msg(format!("invalid byteLength {s}"))
-                            )
-                        }
-                    };
-                    if buf_len < end {
-                        return Err(
-                            self.catchable_range_error_msg(format!("invalid byteLength {s}"))
-                        );
-                    }
-                    size = s;
-                } else {
-                    size = buf_len - offset;
-                }
-                self.meter.tick_raw(DATA_VIEW_CTOR_FRAME_METERING);
-                let inst = self.slots.alloc(Slot::instance(self.dataview_proto));
-                self.data_views.insert(
-                    inst,
-                    DataViewData {
-                        buffer: buf,
-                        offset,
-                        size,
-                    },
-                );
-                Slot::of(Kind::Reference, Payload::Reference(inst))
-            }
-            // `DataView(...)` is constructor-only.
-            Native::DataView => return Err(self.catchable_type_error_msg("call: DataView".into())),
-            // `new Promise(executor)` (`fx_Promise`): a fresh pending promise
-            // whose resolve/reject functions are handed to the executor, which
-            // runs synchronously inside the construct (`mxRunCount(2)`). The
-            // promise instance is `fxNewPromiseInstance` (six `fxNewSlot`s), the
-            // resolving pair is `fxPushPromiseFunctions`
-            // ([`PROMISE_FUNCTIONS_METERING`]), and the native frame residual is
-            // [`PROMISE_CTOR_FRAME_METERING`]; the executor body is metered by
-            // the re-entrant `run_callback`. A non-user-function executor, and a
-            // non-`new` `Promise(...)` call throws a TypeError. Callability is
-            // checked before allocating the promise (and therefore before
-            // consulting `newTarget.prototype`), as required by the constructor
-            // algorithm.
-            Native::Promise if has_target => {
-                if argc == 0 {
-                    return Err(self.catchable_type_error_msg("no executor".into()));
-                }
-                let executor = arg(0);
-                if !self.is_callable_value(executor) {
-                    return Err(self.catchable_type_error_msg("executor: not a function".into()));
-                }
-                self.meter.tick_raw(PROMISE_CTOR_FRAME_METERING);
-                let proto = match new_target {
-                    Some(target) => {
-                        self.get_prototype_from_constructor(code, target, self.promise_proto)?
-                    }
-                    None => self.promise_proto,
-                };
-                let promise = self.new_promise_instance_with_proto(proto);
-                let (resolve, reject) = self.make_resolving_functions(promise);
-                // Invoke `executor(resolve, reject)` with `this = undefined`,
-                // re-entrant. A throw rejects the promise via `fxRejectException`
-                // — its thrown-value capture + metering is a later increment, so
-                // an executor throw self-names rather than mis-settle.
-                match self.run_callback_catching_throw(
-                    code,
-                    executor,
-                    Slot::undefined(),
-                    &[resolve, reject],
-                )? {
-                    Ok(_) => {}
-                    Err(thrown) => self.settle_via_function(code, reject, thrown)?,
-                }
-                Slot::of(Kind::Reference, Payload::Reference(promise))
-            }
-            // `%Promise%` is constructor-only. The call form fails before
-            // inspecting its argument, and the realm TypeError remains
-            // catchable by surrounding guest code.
-            Native::Promise => return Err(self.catchable_type_error_msg("call: Promise".into())),
             // `new RegExp(pattern, flags)` and the bare-call `RegExp(...)`
             // (`fx_RegExp` + `fxInitializeRegExp`): coerce the pattern and
             // flags to strings, compile the pattern with `ironhorse_regexp`,
@@ -1603,31 +1879,6 @@ impl Interp {
                     regexp
                 }
             }
-            // `ArrayBuffer(...)` / `SharedArrayBuffer(...)` called WITHOUT `new`
-            // (`has_target` false): a constructor-only intrinsic whose
-            // `fx_ArrayBuffer`/`fx_SharedArrayBuffer` throws a catchable TypeError
-            // when `mxTarget` is undefined (`if (mxIsUndefined(mxTarget)) mxTypeError`).
-            Native::ArrayBuffer | Native::SharedArrayBuffer => {
-                let name = if matches!(native, Native::ArrayBuffer) {
-                    "ArrayBuffer"
-                } else {
-                    "SharedArrayBuffer"
-                };
-                return Err(self.catchable_type_error_msg(format!("call: {name}")));
-            }
-            Native::TypedArrayBase => {
-                return Err(self.catchable_type_error_msg(
-                    if has_target {
-                        "new: TypedArray"
-                    } else {
-                        "call: TypedArray"
-                    }
-                    .into(),
-                ));
-            }
-            Native::TypedArray(_) => {
-                return Err(self.catchable_type_error_msg("call: TypedArray".into()));
-            }
             // The inert stand-in `lockdown()` put on the function-family and
             // `Date` prototypes. Constructable on purpose, and identical either
             // way: XS's `fxThrowTypeError` (`xsArguments.c:220`) reads
@@ -1649,11 +1900,7 @@ impl Interp {
                 ))))
             }
         };
-        // Collapse the call region to the single result (frame teardown).
-        let _ = argc;
-        self.stack.truncate(base);
-        self.push(result);
-        Ok(())
+        Ok(result)
     }
 
     #[inline(never)]
@@ -1665,12 +1912,14 @@ impl Interp {
         code: &[u8],
     ) -> Result<(), Step> {
         let _ = code; // used by the callback-taking methods (run_callback)
-                      // Cost-calibration builtin histogram: one invocation per dispatched
-                      // native prototype method. This is the central native-method
-                      // dispatch seam (every `tick_builtin*` inside this function belongs
-                      // to `m`). The feature-off recorder is a no-op; cost.rs tests its
-                      // zero-sized representation. It records invocation counts, not
-                      // wall-clock timings or per-step work attribution.
+
+        // Cost-calibration builtin histogram: one invocation per dispatched
+        // native prototype method. This is the central native-method
+        // dispatch seam (every `tick_builtin*` in this function and in the
+        // `native_method_*` family it routes to belongs to `m`). The
+        // feature-off recorder is a no-op; cost.rs tests its zero-sized
+        // representation. It records invocation counts, not wall-clock
+        // timings or per-step work attribution.
         self.cost.on_builtin(m);
         let this = self
             .stack
@@ -1697,26 +1946,46 @@ impl Interp {
                 return Ok(());
             }
         }
-        let result: Slot = match m {
-            NativeMethod::Date(op) => self.date_method(op, this, base, argc, code)?,
-            NativeMethod::TemporalPlain(kind, op) => {
-                let arg1 = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                self.temporal_plain_method(kind, op, this, arg0, arg1, code)?
+        let result = match m {
+            NativeMethod::IntlGetCanonicalLocales
+            | NativeMethod::IntlSupportedLocalesOf
+            | NativeMethod::IntlSupportedValuesOf
+            | NativeMethod::LocaleToString
+            | NativeMethod::LocaleMaximize
+            | NativeMethod::LocaleMinimize
+            | NativeMethod::CollatorResolvedOptions
+            | NativeMethod::CollatorCompare
+            | NativeMethod::ListFormatFormat
+            | NativeMethod::ListFormatFormatToParts
+            | NativeMethod::ListFormatResolvedOptions
+            | NativeMethod::PluralRulesSelect
+            | NativeMethod::PluralRulesSelectRange
+            | NativeMethod::PluralRulesResolvedOptions
+            | NativeMethod::NumberFormatFormat
+            | NativeMethod::NumberFormatFormatGetter
+            | NativeMethod::NumberFormatBoundFormat
+            | NativeMethod::NumberFormatFormatToParts
+            | NativeMethod::NumberFormatFormatRange
+            | NativeMethod::NumberFormatFormatRangeToParts
+            | NativeMethod::NumberFormatResolvedOptions
+            | NativeMethod::SegmenterSegment
+            | NativeMethod::SegmenterResolvedOptions
+            | NativeMethod::SegmentsIterator
+            | NativeMethod::SegmentIteratorSymbolIterator
+            | NativeMethod::SegmentIteratorNext
+            | NativeMethod::SegmentsContaining
+            | NativeMethod::DateTimeFormatFormat
+            | NativeMethod::DateTimeFormatFormatToParts
+            | NativeMethod::DateTimeFormatFormatRange
+            | NativeMethod::DateTimeFormatFormatRangeToParts
+            | NativeMethod::DateTimeFormatResolvedOptions => {
+                self.native_method_intl(m, base, argc, code, this, arg0)?
             }
-            NativeMethod::TemporalZoned(op) => {
-                let arg1 = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                self.temporal_zoned_method(op, this, arg0, arg1, code)?
-            }
-            NativeMethod::TemporalNow(op) => self.temporal_now_method(op, arg0, code)?,
-            NativeMethod::TemporalInstantFrom
+            NativeMethod::Date(..)
+            | NativeMethod::TemporalPlain(..)
+            | NativeMethod::TemporalZoned(..)
+            | NativeMethod::TemporalNow(..)
+            | NativeMethod::TemporalInstantFrom
             | NativeMethod::TemporalInstantFromEpochMilliseconds
             | NativeMethod::TemporalInstantFromEpochNanoseconds
             | NativeMethod::TemporalInstantCompare
@@ -1740,19 +2009,343 @@ impl Interp {
             | NativeMethod::TemporalDurationTotal
             | NativeMethod::TemporalDurationToString
             | NativeMethod::TemporalDurationToJSON
-            | NativeMethod::TemporalDurationValueOf => {
-                let arg1 = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let arg2 = self
-                    .stack
-                    .get(base + 6)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                self.temporal_method(m, this, arg0, arg1, arg2, code)?
+            | NativeMethod::TemporalDurationValueOf
+            | NativeMethod::DateToPrimitive => {
+                self.native_method_temporal(m, base, argc, code, this, arg0)?
             }
+            NativeMethod::ArrayForEach
+            | NativeMethod::ArrayMap
+            | NativeMethod::ArraySome
+            | NativeMethod::ArrayEvery
+            | NativeMethod::ArrayFind
+            | NativeMethod::ArrayFindIndex
+            | NativeMethod::ArrayFilter
+            | NativeMethod::ArrayReduce
+            | NativeMethod::ArrayReduceRight
+            | NativeMethod::ArrayFindLast
+            | NativeMethod::ArrayFindLastIndex => {
+                self.native_method_array_callback(m, base, argc, code, this, arg0)?
+            }
+            NativeMethod::TypedArrayCopyWithin
+            | NativeMethod::TypedArrayFill
+            | NativeMethod::TypedArraySet
+            | NativeMethod::TypedArrayReverse
+            | NativeMethod::TypedArrayJoin
+            | NativeMethod::TypedArrayValues
+            | NativeMethod::TypedArrayKeys
+            | NativeMethod::TypedArrayEntries
+            | NativeMethod::TypedArrayReadonly(..)
+            | NativeMethod::TypedArraySlice
+            | NativeMethod::TypedArraySubarray
+            | NativeMethod::TypedArrayMap
+            | NativeMethod::TypedArrayFilter
+            | NativeMethod::TypedArraySort
+            | NativeMethod::TypedArrayToLocaleString
+            | NativeMethod::TypedArrayLengthGetter
+            | NativeMethod::TypedArrayByteLengthGetter
+            | NativeMethod::TypedArrayByteOffsetGetter
+            | NativeMethod::TypedArrayBufferGetter
+            | NativeMethod::TypedArrayToStringTagGetter
+            | NativeMethod::TypedArrayFrom
+            | NativeMethod::TypedArrayOf
+            | NativeMethod::ArrayBufferSlice
+            | NativeMethod::ArrayBufferTransfer
+            | NativeMethod::ArrayBufferTransferToFixedLength
+            | NativeMethod::ArrayBufferDetachedGetter
+            | NativeMethod::ArrayBufferMaxByteLengthGetter
+            | NativeMethod::ArrayBufferResizableGetter
+            | NativeMethod::ArrayBufferResize
+            | NativeMethod::ArrayBufferConcat
+            | NativeMethod::ArrayBufferIsView
+            | NativeMethod::Atomic(..)
+            | NativeMethod::DataViewAccessor(..)
+            | NativeMethod::DataViewGet(..)
+            | NativeMethod::DataViewSet(..) => {
+                self.native_method_buffer(m, base, argc, code, this, arg0)?
+            }
+            NativeMethod::ArrayPush
+            | NativeMethod::ArrayPop
+            | NativeMethod::ArrayIndexOf
+            | NativeMethod::ArrayIncludes
+            | NativeMethod::ArrayLastIndexOf
+            | NativeMethod::ArrayFill
+            | NativeMethod::ArrayReverse
+            | NativeMethod::ArraySlice
+            | NativeMethod::ArrayConcat
+            | NativeMethod::ArrayAt
+            | NativeMethod::ArrayShift
+            | NativeMethod::ArrayUnshift
+            | NativeMethod::ArrayCopyWithin
+            | NativeMethod::ArrayWith
+            | NativeMethod::ArrayToReversed
+            | NativeMethod::ArraySplice
+            | NativeMethod::ArrayToSpliced
+            | NativeMethod::ArrayFlat
+            | NativeMethod::ArrayFlatMap
+            | NativeMethod::ArrayJoin
+            | NativeMethod::ArrayToString
+            | NativeMethod::ArraySort
+            | NativeMethod::ArrayToSorted
+            | NativeMethod::ArrayToLocaleString
+            | NativeMethod::ArrayFrom
+            | NativeMethod::ArrayFromAsync
+            | NativeMethod::ArrayIsArray
+            | NativeMethod::ArrayOf
+            | NativeMethod::ArrayValues
+            | NativeMethod::ArrayKeys
+            | NativeMethod::ArrayEntries => {
+                self.native_method_array(m, base, argc, code, this, arg0)?
+            }
+            NativeMethod::ArrayIteratorNext
+            | NativeMethod::MapIteratorNext
+            | NativeMethod::SetIteratorNext
+            | NativeMethod::RegExpStringIteratorNext
+            | NativeMethod::IteratorFrom
+            | NativeMethod::IteratorWrapperNext
+            | NativeMethod::IteratorWrapperReturn
+            | NativeMethod::IteratorConstructorGetter
+            | NativeMethod::IteratorToStringTagGetter
+            | NativeMethod::IteratorConstructorSetter
+            | NativeMethod::IteratorToStringTagSetter
+            | NativeMethod::IteratorHelper(..)
+            | NativeMethod::IteratorHelperNext
+            | NativeMethod::IteratorHelperReturn
+            | NativeMethod::GeneratorNext
+            | NativeMethod::GeneratorReturn
+            | NativeMethod::GeneratorThrow
+            | NativeMethod::AsyncGeneratorNext
+            | NativeMethod::AsyncGeneratorReturn
+            | NativeMethod::AsyncGeneratorThrow
+            | NativeMethod::AsyncIteratorIdentity => {
+                self.native_method_iterator(m, base, argc, code, this, arg0)?
+            }
+            NativeMethod::MapSizeGetter
+            | NativeMethod::SetSizeGetter
+            | NativeMethod::MapSet
+            | NativeMethod::MapGet
+            | NativeMethod::MapHas
+            | NativeMethod::MapDelete
+            | NativeMethod::WeakMapSet
+            | NativeMethod::WeakMapGet
+            | NativeMethod::WeakMapHas
+            | NativeMethod::WeakMapDelete
+            | NativeMethod::SetAdd
+            | NativeMethod::SetHas
+            | NativeMethod::SetDelete
+            | NativeMethod::WeakSetAdd
+            | NativeMethod::WeakSetHas
+            | NativeMethod::WeakSetDelete
+            | NativeMethod::CollForEach
+            | NativeMethod::SetUnion
+            | NativeMethod::SetIntersection
+            | NativeMethod::SetDifference
+            | NativeMethod::SetSymmetricDifference
+            | NativeMethod::SetIsSubsetOf
+            | NativeMethod::SetIsSupersetOf
+            | NativeMethod::SetIsDisjointFrom
+            | NativeMethod::MapGetOrInsert
+            | NativeMethod::MapGetOrInsertComputed
+            | NativeMethod::WeakMapGetOrInsert
+            | NativeMethod::WeakMapGetOrInsertComputed
+            | NativeMethod::MapGroupBy
+            | NativeMethod::ObjectGroupBy
+            | NativeMethod::CollEntries
+            | NativeMethod::CollKeys
+            | NativeMethod::CollValues
+            | NativeMethod::CollClear => {
+                self.native_method_collection(m, base, argc, code, this, arg0)?
+            }
+            NativeMethod::PromiseThen
+            | NativeMethod::PromiseResolveStatic
+            | NativeMethod::PromiseRejectStatic
+            | NativeMethod::PromiseCatch
+            | NativeMethod::PromiseFinally
+            | NativeMethod::PromiseSpeciesGetter
+            | NativeMethod::RegExpSpeciesGetter
+            | NativeMethod::ArrayBufferSpeciesGetter
+            | NativeMethod::PromiseAll
+            | NativeMethod::PromiseAllSettled
+            | NativeMethod::PromiseRace
+            | NativeMethod::PromiseAny
+            | NativeMethod::PromiseResolveFunction
+            | NativeMethod::PromiseRejectFunction
+            | NativeMethod::PromiseCapabilityExecutor
+            | NativeMethod::PromiseFinallyHandler
+            | NativeMethod::PromiseFinallyValue => {
+                self.native_method_promise(m, base, argc, code, this, arg0)?
+            }
+            NativeMethod::RegExpExec
+            | NativeMethod::RegExpTest
+            | NativeMethod::RegExpCompile
+            | NativeMethod::RegExpMatch
+            | NativeMethod::RegExpMatchAll
+            | NativeMethod::RegExpSearch
+            | NativeMethod::RegExpSplit
+            | NativeMethod::RegExpReplace
+            | NativeMethod::RegExpToString => {
+                self.native_method_regexp(m, base, argc, code, this, arg0)?
+            }
+            NativeMethod::StringCharCodeAt
+            | NativeMethod::StringCodePointAt
+            | NativeMethod::StringCharAt
+            | NativeMethod::StringAt
+            | NativeMethod::StringSlice
+            | NativeMethod::StringSubstring
+            | NativeMethod::StringIndexOf
+            | NativeMethod::StringLastIndexOf
+            | NativeMethod::StringIncludes
+            | NativeMethod::StringStartsWith
+            | NativeMethod::StringEndsWith
+            | NativeMethod::StringConcat
+            | NativeMethod::StringToLowerCase
+            | NativeMethod::StringToUpperCase
+            | NativeMethod::StringToLocaleLowerCase
+            | NativeMethod::StringToLocaleUpperCase
+            | NativeMethod::StringLocaleCompare
+            | NativeMethod::StringNormalize
+            | NativeMethod::StringRepeat
+            | NativeMethod::StringTrim
+            | NativeMethod::StringTrimStart
+            | NativeMethod::StringTrimEnd
+            | NativeMethod::StringPadStart
+            | NativeMethod::StringPadEnd
+            | NativeMethod::StringIsWellFormed
+            | NativeMethod::StringToWellFormed
+            | NativeMethod::StringIterator
+            | NativeMethod::StringFromCharCode
+            | NativeMethod::StringFromCodePoint
+            | NativeMethod::StringRaw
+            | NativeMethod::StringSearch
+            | NativeMethod::StringMatch
+            | NativeMethod::StringMatchAll
+            | NativeMethod::StringReplace
+            | NativeMethod::StringReplaceAll
+            | NativeMethod::StringSplit => {
+                self.native_method_string(m, base, argc, code, this, arg0)?
+            }
+            NativeMethod::DisposableStackUse
+            | NativeMethod::DisposableStackAdopt
+            | NativeMethod::DisposableStackDefer
+            | NativeMethod::DisposableStackMove
+            | NativeMethod::DisposableStackDispose
+            | NativeMethod::AsyncDisposableStackUse
+            | NativeMethod::AsyncDisposableStackAdopt
+            | NativeMethod::AsyncDisposableStackDefer
+            | NativeMethod::AsyncDisposableStackMove
+            | NativeMethod::AsyncDisposableStackDisposeAsync
+            | NativeMethod::ProxyRevocable
+            | NativeMethod::ProxyRevoke
+            | NativeMethod::ObjectGetPrototypeOf
+            | NativeMethod::ObjectSetPrototypeOf
+            | NativeMethod::CopyObject
+            | NativeMethod::ObjectValueOf
+            | NativeMethod::WrapperValueOf
+            | NativeMethod::ObjectToString
+            | NativeMethod::ObjectToLocaleString
+            | NativeMethod::WrapperToString
+            | NativeMethod::ObjectHasOwnProperty
+            | NativeMethod::ObjectIsPrototypeOf
+            | NativeMethod::ObjectIs
+            | NativeMethod::ObjectHasOwn
+            | NativeMethod::ObjectAssign
+            | NativeMethod::ObjectFromEntries
+            | NativeMethod::ObjectKeys
+            | NativeMethod::ObjectGetOwnPropertyDescriptor
+            | NativeMethod::ObjectGetOwnPropertyNames
+            | NativeMethod::ObjectCreate
+            | NativeMethod::ObjectDefineProperties
+            | NativeMethod::ObjectGetOwnPropertySymbols
+            | NativeMethod::ObjectDefineProperty
+            | NativeMethod::ObjectPropertyIsEnumerable
+            | NativeMethod::ObjectValues
+            | NativeMethod::ObjectEntries
+            | NativeMethod::ObjectGetOwnPropertyDescriptors
+            | NativeMethod::ObjectPreventExtensions
+            | NativeMethod::ObjectSeal
+            | NativeMethod::ObjectFreeze
+            | NativeMethod::ObjectIsExtensible
+            | NativeMethod::ObjectIsSealed
+            | NativeMethod::ObjectIsFrozen
+            | NativeMethod::GlobalHarden
+            | NativeMethod::GlobalPetrify
+            | NativeMethod::GlobalLockdown
+            | NativeMethod::CompartmentEvaluate
+            | NativeMethod::CompartmentGlobalThisGetter
+            | NativeMethod::Test262DetachArrayBuffer => {
+                self.native_method_object(m, base, argc, code, this, arg0)?
+            }
+            NativeMethod::FunctionCall
+            | NativeMethod::FunctionApply
+            | NativeMethod::FunctionPrototype
+            | NativeMethod::FunctionToString
+            | NativeMethod::ErrorToString
+            | NativeMethod::FunctionBind
+            | NativeMethod::FunctionHasInstance
+            | NativeMethod::SymbolToString
+            | NativeMethod::SymbolValueOf
+            | NativeMethod::SymbolToPrimitive
+            | NativeMethod::SymbolDescriptionGetter
+            | NativeMethod::BigIntValueOf
+            | NativeMethod::BigIntAsIntN
+            | NativeMethod::BigIntAsUintN
+            | NativeMethod::BigIntToString
+            | NativeMethod::BigIntToLocaleString
+            | NativeMethod::SymbolFor
+            | NativeMethod::SymbolKeyFor
+            | NativeMethod::Math(..)
+            | NativeMethod::ReflectGetPrototypeOf
+            | NativeMethod::ReflectSetPrototypeOf
+            | NativeMethod::ReflectIsExtensible
+            | NativeMethod::ReflectPreventExtensions
+            | NativeMethod::ReflectGetOwnPropertyDescriptor
+            | NativeMethod::ReflectDefineProperty
+            | NativeMethod::ReflectOwnKeys
+            | NativeMethod::ReflectHas
+            | NativeMethod::ReflectGet
+            | NativeMethod::ReflectSet
+            | NativeMethod::ReflectDeleteProperty
+            | NativeMethod::ReflectApply
+            | NativeMethod::ReflectConstruct
+            | NativeMethod::NumberIsFinite
+            | NativeMethod::NumberIsInteger
+            | NativeMethod::NumberIsNaN
+            | NativeMethod::NumberIsSafeInteger
+            | NativeMethod::NumberToString
+            | NativeMethod::NumberToLocaleString
+            | NativeMethod::GlobalParseInt
+            | NativeMethod::GlobalParseFloat
+            | NativeMethod::GlobalIsNaN
+            | NativeMethod::GlobalIsFinite
+            | NativeMethod::JsonStringify
+            | NativeMethod::JsonParse
+            | NativeMethod::ErrorStackGetter
+            | NativeMethod::ErrorStackSetter => {
+                self.native_method_function(m, base, argc, code, this, arg0)?
+            }
+        };
+        if let NativeResult::Value(result) = result {
+            self.stack.truncate(base);
+            self.push(result);
+        }
+        Ok(())
+    }
+
+    /// The Intl methods of [`Self::call_native_method_inner`], out of line
+    /// (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of them
+    /// carries this family's frame and the thin dispatcher's, not the union of
+    /// every method's.
+    #[inline(never)]
+    fn native_method_intl(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
             NativeMethod::IntlGetCanonicalLocales => {
                 let locales = self.intl_locale_list(code, arg0)?;
                 let values = locales
@@ -2472,6 +3065,2864 @@ impl Interp {
                     .unwrap_or_else(Slot::undefined);
                 self.date_time_format_method(m, this, arg0, arg1, code)?
             }
+            _ => unreachable!("not one of the Intl methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The Temporal and Date methods of [`Self::call_native_method_inner`], out
+    /// of line (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of
+    /// them carries this family's frame and the thin dispatcher's, not the
+    /// union of every method's.
+    #[inline(never)]
+    fn native_method_temporal(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
+            NativeMethod::Date(op) => self.date_method(op, this, base, argc, code)?,
+            NativeMethod::TemporalPlain(kind, op) => {
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                self.temporal_plain_method(kind, op, this, arg0, arg1, code)?
+            }
+            NativeMethod::TemporalZoned(op) => {
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                self.temporal_zoned_method(op, this, arg0, arg1, code)?
+            }
+            NativeMethod::TemporalNow(op) => self.temporal_now_method(op, arg0, code)?,
+            NativeMethod::TemporalInstantFrom
+            | NativeMethod::TemporalInstantFromEpochMilliseconds
+            | NativeMethod::TemporalInstantFromEpochNanoseconds
+            | NativeMethod::TemporalInstantCompare
+            | NativeMethod::TemporalInstantAdd
+            | NativeMethod::TemporalInstantSubtract
+            | NativeMethod::TemporalInstantUntil
+            | NativeMethod::TemporalInstantSince
+            | NativeMethod::TemporalInstantRound
+            | NativeMethod::TemporalInstantEquals
+            | NativeMethod::TemporalInstantToString
+            | NativeMethod::TemporalInstantToJSON
+            | NativeMethod::TemporalInstantValueOf
+            | NativeMethod::TemporalDurationFrom
+            | NativeMethod::TemporalDurationCompare
+            | NativeMethod::TemporalDurationWith
+            | NativeMethod::TemporalDurationNegated
+            | NativeMethod::TemporalDurationAbs
+            | NativeMethod::TemporalDurationAdd
+            | NativeMethod::TemporalDurationSubtract
+            | NativeMethod::TemporalDurationRound
+            | NativeMethod::TemporalDurationTotal
+            | NativeMethod::TemporalDurationToString
+            | NativeMethod::TemporalDurationToJSON
+            | NativeMethod::TemporalDurationValueOf => {
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let arg2 = self
+                    .stack
+                    .get(base + 6)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                self.temporal_method(m, this, arg0, arg1, arg2, code)?
+            }
+            NativeMethod::DateToPrimitive => {
+                if !matches!(
+                    this,
+                    Slot {
+                        kind: Kind::Reference,
+                        value: Payload::Reference(_),
+                        ..
+                    }
+                ) {
+                    return Err(self.catchable_type_error_msg("invalid this".into()));
+                }
+                let hint = match arg0 {
+                    Slot {
+                        kind: Kind::String,
+                        value: Payload::String(offset),
+                        ..
+                    } => self
+                        .str_scalar_text(offset)
+                        .ok_or_else(|| self.catchable_type_error_msg("invalid hint".into()))?,
+                    _ => return Err(self.catchable_type_error_msg("invalid hint".into())),
+                };
+                match hint.as_str() {
+                    "string" | "default" => self.ordinary_to_primitive(code, this, true)?,
+                    "number" => self.ordinary_to_primitive(code, this, false)?,
+                    _ => return Err(self.catchable_type_error_msg("invalid hint".into())),
+                }
+            }
+            _ => unreachable!("not one of the Temporal and Date methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The callback-taking Array methods of [`Self::call_native_method_inner`],
+    /// out of line (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one
+    /// of them carries this family's frame and the thin dispatcher's, not the
+    /// union of every method's.
+    #[inline(never)]
+    fn native_method_array_callback(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
+            // `Array.prototype.forEach(callback[, thisArg])` — dense fast path.
+            // Call `callback(item, index, array)` for each present element (via
+            // the re-entrant [`Self::run_callback`]); returns `undefined`. The
+            // callback body's own opcodes are metered by the nested dispatch;
+            // this adds the per-element `fxCallThisItem` overhead
+            // (`mxGetIndex` + the call frame setup) and the frame constant.
+            NativeMethod::ArrayForEach => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i) => i,
+                    None => {
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_FOREACH_FRAME_METERING);
+                for i in 0..length {
+                    let item = self.arrays[&inst].items().get(&i).copied();
+                    if let Some(item) = item {
+                        self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
+                        let cb_args = [item, Slot::integer(i as i32), this];
+                        self.run_callback(code, callback, this_arg, &cb_args)?;
+                    }
+                }
+                Slot::undefined()
+            }
+            // `Array.prototype.map` — a new array of the callback results.
+            // Per element: the `fxCallThisItem` overhead + the callback body +
+            // `mxMeterSome(2)` (the result store); plus the result chunk.
+            NativeMethod::ArrayMap => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i) if self.array_allocating_uses_default_species(i) => i,
+                    _ => {
+                        let result = self.array_generic_map_filter(code, m, this, base)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_MAP_FRAME_METERING);
+                let result = self.new_array_unmetered();
+                if length > 0 {
+                    self.charge_and_check(self.array_chunk_size_metering(length))?;
+                }
+                // The partial result otherwise exists only in this Rust local
+                // while guest callbacks run, so a mid-callback GC would sweep it.
+                let root_sp = self.stack.len();
+                self.stack
+                    .push(Slot::of(Kind::Reference, Payload::Reference(result)));
+                let mapped: Result<(), Step> = (|| {
+                    for i in 0..length {
+                        let item = self.arrays[&inst].items().get(&i).copied();
+                        if let Some(item) = item {
+                            self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
+                            let cb_args = [item, Slot::integer(i as i32), this];
+                            // Re-read the rooted argument after any prior callback GC.
+                            let this_arg = if argc > 1 {
+                                self.stack[base + 5]
+                            } else {
+                                Slot::undefined()
+                            };
+                            let r = self.run_callback(code, callback, this_arg, &cb_args)?;
+                            self.charge_builtin_work(2)?;
+                            let mut v = r;
+                            v.id = 0;
+                            v.next = crate::value::SlotIndex::NULL;
+                            self.arrays.get_mut(&result).unwrap().insert_item(
+                                i,
+                                v,
+                                &mut self.side_refs,
+                            );
+                        }
+                    }
+                    self.arrays.get_mut(&result).unwrap().length = length;
+                    Ok(())
+                })();
+                self.stack.truncate(root_sp);
+                mapped?;
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            // `Array.prototype.some`/`every` — short-circuiting boolean folds.
+            // Per element: the `fxCallThisItem` overhead + the callback body +
+            // the `fxToBoolean` of its result.
+            NativeMethod::ArraySome | NativeMethod::ArrayEvery => {
+                let is_every = m == NativeMethod::ArrayEvery;
+                let inst = match self.dense_array_this(this) {
+                    Some(i) => i,
+                    None => {
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_SOMEEVERY_FRAME_METERING);
+                let mut answer = is_every;
+                for i in 0..length {
+                    let item = self.arrays[&inst].items().get(&i).copied();
+                    if let Some(item) = item {
+                        self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
+                        let cb_args = [item, Slot::integer(i as i32), this];
+                        let r = self.run_callback(code, callback, this_arg, &cb_args)?;
+                        self.meter.tick_raw(ARRAY_PREDICATE_TOBOOL_METERING);
+                        let truthy = self.truthy(&r);
+                        if is_every && !truthy {
+                            answer = false;
+                            break;
+                        }
+                        if !is_every && truthy {
+                            answer = true;
+                            break;
+                        }
+                    }
+                }
+                Slot::boolean(answer)
+            }
+            // `Array.prototype.find`/`findIndex` — the first element/index whose
+            // callback is truthy. `fxFindThisItem` calls the callback for EVERY
+            // index (holes yield `undefined`), so the receiver need not be
+            // dense; the per-element cost is the find overhead + callback body.
+            NativeMethod::ArrayFind | NativeMethod::ArrayFindIndex => {
+                let want_index = m == NativeMethod::ArrayFindIndex;
+                let inst = match self.dense_array_this(this) {
+                    Some(i) => i,
+                    None => {
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_FIND_FRAME_METERING);
+                if !want_index {
+                    // `find` (not `findIndex`) allocates a temporary for the
+                    // element result (`mxTemporary(item)`): a fixed 2<<14 over
+                    // `findIndex`, independent of the match.
+                    self.meter.tick_raw(ARRAY_FIND_VALUE_METERING);
+                }
+                let mut found: Option<(u32, Slot)> = None;
+                for i in 0..length {
+                    let item = self.arrays[&inst]
+                        .items()
+                        .get(&i)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    self.meter.tick_raw(ARRAY_FIND_PER_ELEM_METERING);
+                    let cb_args = [item, Slot::integer(i as i32), this];
+                    let r = self.run_callback(code, callback, this_arg, &cb_args)?;
+                    self.meter.tick_raw(ARRAY_PREDICATE_TOBOOL_METERING);
+                    if self.truthy(&r) {
+                        found = Some((i, item));
+                        break;
+                    }
+                }
+                match found {
+                    Some((i, item)) => {
+                        if want_index {
+                            Slot::integer(i as i32)
+                        } else {
+                            item
+                        }
+                    }
+                    None => {
+                        if want_index {
+                            Slot::integer(-1)
+                        } else {
+                            Slot::undefined()
+                        }
+                    }
+                }
+            }
+            // `Array.prototype.filter` — a new array of the truthy-callback
+            // elements. Per element: the `fxCallThisItem` overhead + the
+            // callback body + `fxToBoolean`; a kept element appends (a slot +
+            // `mxMeterSome`). The result chunk is sized to the kept count.
+            NativeMethod::ArrayFilter => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i) if self.array_allocating_uses_default_species(i) => i,
+                    _ => {
+                        let result = self.array_generic_map_filter(code, m, this, base)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_FILTER_FRAME_METERING);
+                let mut kept: Vec<Slot> = Vec::new();
+                for i in 0..length {
+                    let item = self.arrays[&inst].items().get(&i).copied();
+                    if let Some(item) = item {
+                        self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
+                        let cb_args = [item, Slot::integer(i as i32), this];
+                        let r = self.run_callback(code, callback, this_arg, &cb_args)?;
+                        self.meter.tick_raw(ARRAY_PREDICATE_TOBOOL_METERING);
+                        if self.truthy(&r) {
+                            self.meter.tick_raw(ARRAY_FILTER_KEEP_METERING);
+                            kept.push(item);
+                        }
+                    }
+                }
+                let result = self.new_array_unmetered();
+                let total = kept.len() as u32;
+                if total > 0 {
+                    self.charge_and_check(self.array_chunk_size_metering(total))?;
+                }
+                {
+                    let a = self.arrays.get_mut(&result).unwrap();
+                    for (i, mut v) in kept.into_iter().enumerate() {
+                        v.id = 0;
+                        v.next = crate::value::SlotIndex::NULL;
+                        a.insert_item(i as u32, v, &mut self.side_refs);
+                    }
+                    a.length = total;
+                }
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            // `Array.prototype.reduce`/`reduceRight` — fold with
+            // `callback(acc, item, index, array)` (`this` = undefined). With no
+            // initial value the first (or last, for `reduceRight`) present
+            // element seeds the accumulator; an empty array with no initial is
+            // a TypeError (self-named). Per element: the `fxReduceThisItem`
+            // 4-arg-callback overhead + the callback body.
+            NativeMethod::ArrayReduce | NativeMethod::ArrayReduceRight => {
+                let right = m == NativeMethod::ArrayReduceRight;
+                let inst = match self.dense_array_this(this) {
+                    Some(i) => i,
+                    None => {
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
+                self.meter.tick_raw(ARRAY_REDUCE_FRAME_METERING);
+                // The present indices in fold order.
+                let buffer = self.reserve_work_scratch(self.arrays[&inst].items().len())?;
+                let order = if right {
+                    Self::fill_scratch(buffer, self.arrays[&inst].items().keys().rev().copied())
+                } else {
+                    Self::fill_scratch(buffer, self.arrays[&inst].items().keys().copied())
+                };
+                let mut it = order.into_iter();
+                let mut acc = if argc >= 2 {
+                    self.stack
+                        .get(base + 4 + 1)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined)
+                } else {
+                    match it.next() {
+                        Some(i) => {
+                            // The seed-finding scan (one iteration for a dense
+                            // array — the first/last present element).
+                            self.meter.tick_raw(ARRAY_REDUCE_INIT_SCAN_METERING);
+                            match self.arrays[&inst].items().get(&i) {
+                                Some(s) => *s,
+                                None => {
+                                    return Err(Step::Host(Halt::NotImplemented(
+                                        "reduce:concurrent-mutation",
+                                    )))
+                                }
+                            }
+                        }
+                        None => {
+                            return Err(self.catchable_type_error_msg("no initial value".into()))
+                        }
+                    }
+                };
+                for i in it {
+                    // A prior callback may have mutated the receiver (e.g. the
+                    // test262 `delete arr[i]` pattern); a vanished snapshotted
+                    // index self-names rather than panicking on a missing key.
+                    let item = match self.arrays[&inst].items().get(&i) {
+                        Some(s) => *s,
+                        None => {
+                            return Err(Step::Host(Halt::NotImplemented(
+                                "reduce:concurrent-mutation",
+                            )))
+                        }
+                    };
+                    self.meter.tick_raw(ARRAY_REDUCE_PER_ELEM_METERING);
+                    let cb_args = [acc, item, Slot::integer(i as i32), this];
+                    acc = self.run_callback(code, callback, Slot::undefined(), &cb_args)?;
+                }
+                acc
+            }
+            // `Array.prototype.findLast`/`findLastIndex` — the last element/
+            // index whose callback is truthy, scanning backward. Like
+            // `find`/`findIndex` but reversed.
+            NativeMethod::ArrayFindLast | NativeMethod::ArrayFindLastIndex => {
+                let want_index = m == NativeMethod::ArrayFindLastIndex;
+                let inst = match self.dense_array_this(this) {
+                    Some(i) => i,
+                    None => {
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let callback = arg0;
+                if !self.is_callable_value(callback) {
+                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
+                }
+                let this_arg = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_FIND_FRAME_METERING);
+                // The `findLast`/`findLastIndex` backward-scan setup, a fixed
+                // cost over the forward `find`/`findIndex`.
+                self.meter.tick_raw(ARRAY_FINDLAST_EXTRA_METERING);
+                if !want_index {
+                    self.meter.tick_raw(ARRAY_FIND_VALUE_METERING);
+                }
+                let mut found: Option<(u32, Slot)> = None;
+                for i in (0..length).rev() {
+                    let item = self.arrays[&inst]
+                        .items()
+                        .get(&i)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    self.meter.tick_raw(ARRAY_FIND_PER_ELEM_METERING);
+                    let cb_args = [item, Slot::integer(i as i32), this];
+                    let r = self.run_callback(code, callback, this_arg, &cb_args)?;
+                    self.meter.tick_raw(ARRAY_PREDICATE_TOBOOL_METERING);
+                    if self.truthy(&r) {
+                        found = Some((i, item));
+                        break;
+                    }
+                }
+                match found {
+                    Some((i, item)) => {
+                        if want_index {
+                            Slot::integer(i as i32)
+                        } else {
+                            item
+                        }
+                    }
+                    None => {
+                        if want_index {
+                            Slot::integer(-1)
+                        } else {
+                            Slot::undefined()
+                        }
+                    }
+                }
+            }
+            _ => unreachable!("not one of the callback-taking Array methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The TypedArray, ArrayBuffer, DataView and Atomics methods of
+    /// [`Self::call_native_method_inner`], out of line (STACK-DEPTH-REFACTOR.md A1): a re-entrant
+    /// call through one of them carries this family's frame and the thin dispatcher's, not the
+    /// union of every method's.
+    #[inline(never)]
+    fn native_method_buffer(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
+            NativeMethod::TypedArrayCopyWithin
+            | NativeMethod::TypedArrayFill
+            | NativeMethod::TypedArraySet
+            | NativeMethod::TypedArrayReverse => {
+                self.typed_array_mutator(m, this, base, argc, code)?
+            }
+            NativeMethod::TypedArrayJoin => self.typed_array_join(this, base, argc, code)?,
+            NativeMethod::TypedArrayValues
+            | NativeMethod::TypedArrayKeys
+            | NativeMethod::TypedArrayEntries => {
+                let typed_array = match this.value {
+                    Payload::Reference(typed_array)
+                        if this.kind == Kind::Reference
+                            && self.typed_arrays.contains_key(&typed_array) =>
+                    {
+                        typed_array
+                    }
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a TypedArray instance".into())
+                        )
+                    }
+                };
+                self.validate_typed_array(this)?;
+                let kind = match m {
+                    NativeMethod::TypedArrayValues => 0,
+                    NativeMethod::TypedArrayKeys => 1,
+                    NativeMethod::TypedArrayEntries => 2,
+                    _ => unreachable!(),
+                };
+                self.make_array_iterator(typed_array, kind)
+            }
+            NativeMethod::TypedArrayReadonly(operation) => {
+                self.typed_array_readonly(operation, this, base, argc, code)?
+            }
+            NativeMethod::TypedArraySlice | NativeMethod::TypedArraySubarray => {
+                self.typed_array_slice_or_subarray(m, this, base, argc, code)?
+            }
+            NativeMethod::TypedArrayMap | NativeMethod::TypedArrayFilter => {
+                self.typed_array_map_filter(m, this, base, code)?
+            }
+            NativeMethod::TypedArraySort => self.typed_array_sort(this, base, argc, code)?,
+            NativeMethod::TypedArrayToLocaleString => {
+                self.typed_array_to_locale_string(this, base, argc, code)?
+            }
+            NativeMethod::TypedArrayLengthGetter
+            | NativeMethod::TypedArrayByteLengthGetter
+            | NativeMethod::TypedArrayByteOffsetGetter
+            | NativeMethod::TypedArrayBufferGetter
+            | NativeMethod::TypedArrayToStringTagGetter => self.typed_array_accessor(m, this)?,
+            NativeMethod::TypedArrayFrom | NativeMethod::TypedArrayOf => {
+                self.typed_array_static(m, this, base, argc, code)?
+            }
+            NativeMethod::ArrayBufferSlice => self.array_buffer_slice(code, this, base, argc)?,
+            NativeMethod::ArrayBufferTransfer | NativeMethod::ArrayBufferTransferToFixedLength => {
+                self.array_buffer_transfer(code, this, arg0)?
+            }
+            NativeMethod::ArrayBufferDetachedGetter
+            | NativeMethod::ArrayBufferMaxByteLengthGetter
+            | NativeMethod::ArrayBufferResizableGetter => {
+                let buffer = self.array_buffer_ref(this).ok_or_else(|| {
+                    self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
+                })?;
+                if self.shared_buffers.contains(&buffer) {
+                    return Err(
+                        self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
+                    );
+                }
+                match m {
+                    NativeMethod::ArrayBufferDetachedGetter => {
+                        Slot::boolean(self.detached_buffers.contains(&buffer))
+                    }
+                    NativeMethod::ArrayBufferMaxByteLengthGetter => {
+                        let length = if self.detached_buffers.contains(&buffer) {
+                            0
+                        } else {
+                            self.array_buffers[&buffer].length
+                        };
+                        Slot::number(length as f64)
+                    }
+                    NativeMethod::ArrayBufferResizableGetter => Slot::boolean(false),
+                    _ => unreachable!(),
+                }
+            }
+            // `ArrayBuffer.prototype.resize`/`concat`: resizable buffers and
+            // the XS concat extension remain honest named skips.
+            NativeMethod::ArrayBufferResize => {
+                return Err(Step::Host(Halt::NotImplemented(
+                    "array-buffer-resize:unsupported",
+                )))
+            }
+            NativeMethod::ArrayBufferConcat => {
+                return Err(Step::Host(Halt::NotImplemented(
+                    "array-buffer-concat:unsupported",
+                )))
+            }
+            // `ArrayBuffer.isView(arg)` (`fx_ArrayBuffer_isView`): `true` iff
+            // the argument is a TypedArray or DataView view, else `false`. The
+            // host-frame residual is calibrated raw against the pin.
+            NativeMethod::ArrayBufferIsView => {
+                self.meter.tick_raw(ARRAY_BUFFER_ISVIEW_METERING);
+                let is_view = match arg0.value {
+                    Payload::Reference(r) => {
+                        self.typed_arrays.contains_key(&r) || self.data_views.contains_key(&r)
+                    }
+                    _ => false,
+                };
+                Slot::boolean(is_view)
+            }
+            // `Atomics.*` — single-agent read-modify-write over an integer
+            // TypedArray. All logic (validation, ToIndex, coercion, the RMW)
+            // lives in the helper; a non-integer view / OOB index / non-clean
+            // operand / the blocking-agent surface self-names an honest skip.
+            NativeMethod::Atomic(op) => self.atomics_dispatch(op, base)?,
+            NativeMethod::DataViewAccessor(index) => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.data_views.contains_key(&r) => r,
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a DataView instance".into())
+                        )
+                    }
+                };
+                let view = self.data_views[&inst];
+                if index != 0 && self.detached_buffers.contains(&view.buffer) {
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
+                }
+                self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
+                match index {
+                    0 => Slot::of(Kind::Reference, Payload::Reference(view.buffer)),
+                    1 => Slot::number(view.size as f64),
+                    _ => Slot::number(view.offset as f64),
+                }
+            }
+            // `DataView.prototype.get<Type>(byteOffset[, littleEndian])`
+            // (`fx_DataView_prototype_get`): read an element at `byteOffset`
+            // honoring endianness (default big-endian). One `mxMeterOne`.
+            NativeMethod::DataViewGet(kind) => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.data_views.contains_key(&r) => r,
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a DataView instance".into())
+                        )
+                    }
+                };
+                let dv = self.data_views[&inst];
+                let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
+                let offset = self.to_index_arg(code, arg0)?;
+                // `GetViewValue`: after ToIndex, a detached backing buffer is a
+                // TypeError — and it precedes the out-of-range RangeError, so a
+                // detached view with an out-of-range offset still throws
+                // TypeError (`detached-buffer-before-outofrange-byteoffset`).
+                if self.detached_buffers.contains(&dv.buffer) {
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
+                }
+                // `(size < delta) || ((size - delta) < offset)` → RangeError.
+                if dv.size < delta || (dv.size - delta) < offset {
+                    return Err(self.catchable_range_error_msg("invalid byteOffset".into()));
+                }
+                let little = self.arg_is_truthy(base, 1);
+                let abs = dv.offset + offset;
+                self.meter.tick_raw(DATA_VIEW_GET_METERING);
+                // `getBigInt64`/`getBigUint64` (kinds 0/1) decode into a
+                // freshly allocated BigInt (metered by `make_bigint`); the
+                // numeric getters return a metering-neutral primitive.
+                if kind <= 1 {
+                    self.data_view_read_bigint(dv.buffer, abs, kind, little)
+                } else {
+                    self.data_view_read(dv.buffer, abs, kind, little)?
+                }
+            }
+            // `DataView.prototype.set<Type>(byteOffset, value[, littleEndian])`
+            // (`fx_DataView_prototype_set`): coerce + write. One `mxMeterOne`.
+            NativeMethod::DataViewSet(kind) => {
+                let inst = match this.value {
+                    Payload::Reference(r) if self.data_views.contains_key(&r) => r,
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a DataView instance".into())
+                        )
+                    }
+                };
+                let dv = self.data_views[&inst];
+                let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
+                let offset = self.to_index_arg(code, arg0)?;
+                let value = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                // The littleEndian flag is argument 2 for set.
+                let little = self.arg_is_truthy(base, 2);
+                // `SetViewValue` coerces the value (ToNumber/ToBigInt — which
+                // may run a user `valueOf`/`Symbol.toPrimitive` that detaches
+                // the buffer) BEFORE the IsDetachedBuffer and range tests.
+                // `setBigInt64`/`setBigUint64` (kinds 0/1) take a BigInt value
+                // (ToBigInt); the 8-byte two's-complement store is identical
+                // for signed/unsigned, differing only in the getter's decode.
+                let le = if kind <= 1 {
+                    self.data_view_encode_bigint(code, value, little)?.to_vec()
+                } else {
+                    self.data_view_encode(code, kind, value, little)?
+                };
+                // A detached backing buffer is a TypeError, ahead of the
+                // out-of-range RangeError (`detached-buffer-*` ordering cases).
+                if self.detached_buffers.contains(&dv.buffer) {
+                    return Err(self.catchable_type_error_msg("detached buffer".into()));
+                }
+                if dv.size < delta || (dv.size - delta) < offset {
+                    return Err(self.catchable_range_error_msg("invalid byteOffset".into()));
+                }
+                let abs = dv.offset + offset;
+                self.data_view_store(dv.buffer, abs, &le);
+                self.meter.tick_raw(DATA_VIEW_SET_METERING);
+                Slot::undefined()
+            }
+            _ => {
+                unreachable!("not one of the TypedArray, ArrayBuffer, DataView and Atomics methods")
+            }
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The Array methods of [`Self::call_native_method_inner`], out of line
+    /// (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of them
+    /// carries this family's frame and the thin dispatcher's, not the union of
+    /// every method's.
+    #[inline(never)]
+    fn native_method_array(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
+            // `Array.prototype.push(...items)` — retain the exact-metered
+            // packed path only when the writes cannot observe descriptors or
+            // the prototype chain; all other receivers use the generic MOP.
+            NativeMethod::ArrayPush => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if !self.arguments_objects.contains(&i)
+                            && self.array_push_fast_safe(i, argc) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_push_pop(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let args: Vec<Slot> = (0..argc)
+                    .map(|i| {
+                        self.stack
+                            .get(base + 4 + i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    })
+                    .collect();
+                let c = args.len() as u32;
+                let length = self.arrays[&inst].length;
+                // `mxMeterSome(2)` + the grow to `length + c`
+                // (`fxSetIndexSize`, growable chunk) + `mxMeterSome(5)` per
+                // appended item + a closing `mxMeterSome(2)`, plus the fixed
+                // native-method frame constant.
+                self.meter.tick_raw(ARRAY_PUSH_FRAME_METERING);
+                self.charge_builtin_work(2)?;
+                if c > 0 {
+                    self.charge_and_check(self.array_chunk_size_metering(length + c))?;
+                }
+                for (i, a) in args.into_iter().enumerate() {
+                    let idx = length + i as u32;
+                    let mut v = a;
+                    v.id = 0;
+                    v.next = crate::value::SlotIndex::NULL;
+                    self.arrays
+                        .get_mut(&inst)
+                        .unwrap()
+                        .insert_item(idx, v, &mut self.side_refs);
+                    self.charge_builtin_work(5)?;
+                }
+                let a = self.arrays.get_mut(&inst).unwrap();
+                a.length = length + c;
+                self.charge_builtin_work(2)?;
+                Self::array_index_number(u64::from(length + c))
+            }
+            // `Array.prototype.pop()` — likewise, a non-writable length or
+            // non-configurable last element must take the throwing MOP path.
+            NativeMethod::ArrayPop => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if !self.arguments_objects.contains(&i) && self.array_pop_fast_safe(i) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_push_pop(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                self.meter.tick_raw(ARRAY_POP_FRAME_METERING);
+                let length = self.arrays[&inst].length;
+                self.charge_builtin_work(2)?;
+                let result = if length > 0 {
+                    let new_len = length - 1;
+                    self.charge_and_check(self.array_chunk_size_metering(new_len))?;
+                    let removed = self
+                        .arrays
+                        .get_mut(&inst)
+                        .unwrap()
+                        .remove_item(&new_len, &mut self.side_refs)
+                        .unwrap_or_else(Slot::undefined);
+                    // `fxSetIndexSize(length-1, XS_CHUNK)` reallocs the item
+                    // chunk down; `mxMeterSome(8)`.
+                    self.charge_builtin_work(8)?;
+                    self.arrays.get_mut(&inst).unwrap().length = new_len;
+                    Slot::of(removed.kind, removed.value)
+                } else {
+                    Slot::undefined()
+                };
+                self.charge_builtin_work(4)?;
+                result
+            }
+            // `Array.prototype.indexOf(value[, from])` — dense fast path.
+            NativeMethod::ArrayIndexOf => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i) => i,
+                    None => {
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let target = arg0;
+                self.charge_and_check(ARRAY_METHOD_INDEXOF_FRAME_METERING)?;
+                let length = self.arrays[&inst].length;
+                let mut found = -1i32;
+                for i in 0..length {
+                    self.charge_and_check(ARRAY_INDEXOF_PER_STEP)?;
+                    if let Some(item) = self.arrays[&inst].items().get(&i) {
+                        if self.strict_equal(item, &target) {
+                            found = i as i32;
+                            break;
+                        }
+                    }
+                }
+                Slot::integer(found)
+            }
+            // `Array.prototype.includes(value[, from])` — dense fast path. Scan
+            // from `from` (default 0) by SameValueZero; `true` on the first
+            // match, else `false`. Metered like `indexOf` (a frame constant +
+            // per-element scan step), calibrated against the pin.
+            NativeMethod::ArrayIncludes => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i) => i,
+                    None => {
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let target = arg0;
+                let from = self.arg_to_index(base, 1, 0, self.arrays[&inst].length);
+                self.charge_and_check(ARRAY_INCLUDES_FRAME_METERING)?;
+                let length = self.arrays[&inst].length;
+                let mut found = false;
+                for i in from..length {
+                    self.charge_and_check(ARRAY_INCLUDES_PER_STEP)?;
+                    let item = self.arrays[&inst]
+                        .items()
+                        .get(&i)
+                        .copied()
+                        .unwrap_or_else(Slot::undefined);
+                    if self.same_value_zero(&item, &target) {
+                        found = true;
+                        break;
+                    }
+                }
+                Slot::boolean(found)
+            }
+            // `Array.prototype.lastIndexOf(value[, from])` — dense fast path.
+            // Scan backward from the end by strict equality; the last matching
+            // index, or `-1`.
+            NativeMethod::ArrayLastIndexOf => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i) => i,
+                    None => {
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let target = arg0;
+                self.charge_and_check(ARRAY_LASTINDEXOF_FRAME_METERING)?;
+                let length = self.arrays[&inst].length;
+                let mut found = -1i32;
+                for i in (0..length).rev() {
+                    self.charge_and_check(ARRAY_LASTINDEXOF_PER_STEP)?;
+                    if let Some(item) = self.arrays[&inst].items().get(&i) {
+                        if self.strict_equal(item, &target) {
+                            found = i as i32;
+                            break;
+                        }
+                    }
+                }
+                Slot::integer(found)
+            }
+            // `Array.prototype.fill(value[, start[, end]])` — dense fast path.
+            // Set `[start, end)` to `value` and return the array. A full fill
+            // (`start == 0 && end == length`) reallocs the item chunk
+            // (`fxSetIndexSize`); each written element meters `mxMeterSome(5)`.
+            NativeMethod::ArrayFill => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if (1..argc.min(3)).all(|index| {
+                            matches!(
+                                self.stack.get(base + 4 + index).map(|slot| slot.kind),
+                                Some(Kind::Integer | Kind::Number | Kind::Undefined)
+                            )
+                        }) && self.array_fill_fast_safe(i, base) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_fill(code, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let value = if argc > 0 { arg0 } else { Slot::undefined() };
+                let length = self.arrays[&inst].length;
+                let start = self.arg_to_index(base, 1, 0, length);
+                let end = self.arg_to_index(base, 2, length, length);
+                self.meter.tick_raw(ARRAY_FILL_FRAME_METERING);
+                // A full fill runs `fxSetIndexSize(length)`, but for an
+                // already-dense array the chunk is already that size, so the
+                // resize is a no-op and meters nothing.
+                let _ = (start, end, length);
+                let mut v = value;
+                v.id = 0;
+                v.next = crate::value::SlotIndex::NULL;
+                for i in start..end {
+                    self.arrays
+                        .get_mut(&inst)
+                        .unwrap()
+                        .insert_item(i, v, &mut self.side_refs);
+                    self.charge_builtin_work(5)?;
+                }
+                this
+            }
+            // `Array.prototype.reverse()` — reverse the elements in place and
+            // return the array. XS reverses via the generic `mxHasAt`/`mxGetAt`/
+            // `mxSetAt` path; metering is a frame constant plus a per-swap cost
+            // (`length/2` swaps), calibrated against the pin.
+            NativeMethod::ArrayReverse => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i) => i,
+                    None => {
+                        let result = self.array_generic_reverse(code, this)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_REVERSE_FRAME_METERING);
+                let swaps = (length / 2) as u64;
+                self.charge_and_check(swaps * ARRAY_REVERSE_PER_SWAP_METERING)?;
+                let a = self.arrays.get_mut(&inst).unwrap();
+                let mut lo = 0u32;
+                let mut hi = length.saturating_sub(1);
+                while lo < hi {
+                    let l = a.remove_item(&lo, &mut self.side_refs);
+                    let h = a.remove_item(&hi, &mut self.side_refs);
+                    if let Some(h) = h {
+                        a.insert_item(lo, h, &mut self.side_refs);
+                    }
+                    if let Some(l) = l {
+                        a.insert_item(hi, l, &mut self.side_refs);
+                    }
+                    lo += 1;
+                    hi -= 1;
+                }
+                this
+            }
+            // `Array.prototype.slice([start[, end]])` — dense fast path. A new
+            // array with the elements of `[start, end)`. Metering: a frame
+            // constant, plus (when the slice is non-empty) the result chunk
+            // and `mxMeterSome(count*10)`, plus a closing `mxMeterSome(3)`.
+            NativeMethod::ArraySlice => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if self.array_allocating_uses_default_species(i)
+                            && matches!(
+                                arg0.kind,
+                                Kind::Integer | Kind::Number | Kind::Undefined
+                            )
+                            && (argc < 2
+                                || matches!(
+                                    self.stack
+                                        .get(base + 5)
+                                        .copied()
+                                        .unwrap_or_else(Slot::undefined)
+                                        .kind,
+                                    Kind::Integer | Kind::Number | Kind::Undefined
+                                )) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_slice(code, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let length = self.arrays[&inst].length;
+                let start = self.arg_to_index(base, 0, 0, length);
+                let end = self.arg_to_index(base, 1, length, length);
+                let count = end.saturating_sub(start);
+                self.meter.tick_raw(ARRAY_SLICE_FRAME_METERING);
+                let result = self.new_array_unmetered();
+                if count > 0 {
+                    self.charge_and_check(self.array_chunk_size_metering(count))?;
+                    self.charge_builtin_work((count as u64) * 10)?;
+                    let buffer = self.reserve_scratch(count as usize)?;
+                    let items = Self::fill_scratch(
+                        buffer,
+                        (0..count).filter_map(|i| {
+                            self.arrays[&inst]
+                                .items()
+                                .get(&(start + i))
+                                .map(|s| (i, *s))
+                        }),
+                    );
+                    let a = self.arrays.get_mut(&result).unwrap();
+                    for (i, s) in items {
+                        a.insert_item(i, Slot::of(s.kind, s.value), &mut self.side_refs);
+                    }
+                    a.length = count;
+                }
+                self.charge_builtin_work(3)?;
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            // `Array.prototype.concat(...args)` — dense fast path, with a
+            // generic fallback for observable spreadability/species and exotic
+            // receivers. A new array contains the receiver's elements followed
+            // by each argument: an array argument contributes its elements and
+            // any other value is appended as one element. Metering for the
+            // packed default case models `fxNewInstance` (the list) + a
+            // Symbol.isConcatSpreadable check per reference operand + a key slot
+            // and `mxMeterSome(2)` per spread element + a key slot and
+            // `mxMeterSome(4)` per appended value + the result chunk +
+            // `mxMeterSome(3)`, plus a frame constant.
+            NativeMethod::ArrayConcat => {
+                let recv = match self.dense_array_this(this) {
+                    Some(i)
+                        if !self.arguments_objects.contains(&i)
+                            && self.array_allocating_uses_default_species(i)
+                            && self.array_concat_uses_default_spreadability(this)
+                            && (0..argc).all(|argi| {
+                                let operand = self
+                                    .stack
+                                    .get(base + 4 + argi)
+                                    .copied()
+                                    .unwrap_or_else(Slot::undefined);
+                                self.array_concat_uses_default_spreadability(operand)
+                                    && match operand.value {
+                                        Payload::Reference(inst)
+                                            if self.arrays.contains_key(&inst)
+                                                && !self.arguments_objects.contains(&inst) =>
+                                        {
+                                            let array = &self.arrays[&inst];
+                                            array.items().len() as u32 == array.length
+                                        }
+                                        _ => true,
+                                    }
+                            }) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_concat(code, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                // Collect the operands: the receiver, then each argument.
+                let mut operands: Vec<Slot> = self.reserve_scratch(argc + 1)?;
+                operands.push(this);
+                for i in 0..argc {
+                    operands.push(
+                        self.stack
+                            .get(base + 4 + i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined),
+                    );
+                }
+                self.meter.tick_raw(ARRAY_CONCAT_FRAME_METERING);
+                self.meter.tick_slot_alloc(); // `fxNewInstance` (the list)
+                let result = self.new_array_unmetered();
+                let mut out: Vec<Slot> = Vec::new();
+                for op in operands {
+                    // Every reference operand runs the `Symbol.isConcatSpreadable`
+                    // check.
+                    let is_array = matches!(op.value, Payload::Reference(r)
+                        if self.arrays.contains_key(&r)
+                            && !self.arguments_objects.contains(&r));
+                    if let Payload::Reference(_) = op.value {
+                        self.meter.tick_raw(ARRAY_CONCAT_CHECK_METERING);
+                    }
+                    if is_array {
+                        let r = match op.value {
+                            Payload::Reference(r) => r,
+                            _ => unreachable!(),
+                        };
+                        // Dense array only (a hole needs the uninitialized-slot
+                        // path).
+                        let (len, dense) = {
+                            let a = &self.arrays[&r];
+                            (a.length, a.items().len() as u32 == a.length)
+                        };
+                        if !dense {
+                            return Err(Step::Host(Halt::NotImplemented("concat:sparse-arg")));
+                        }
+                        for i in 0..len {
+                            let s = self.arrays[&r]
+                                .items()
+                                .get(&i)
+                                .copied()
+                                .unwrap_or_else(Slot::undefined);
+                            self.meter.tick_slot_alloc();
+                            self.charge_builtin_work(2)?;
+                            self.meter.tick_raw(ARRAY_CONCAT_SPREAD_EXTRA_METERING);
+                            self.extend_prepaid_scratch(&mut out, &[Slot::of(s.kind, s.value)])?;
+                        }
+                    } else {
+                        // A non-array value is appended as a single element.
+                        self.meter.tick_slot_alloc();
+                        self.charge_builtin_work(4)?;
+                        self.meter.tick_raw(ARRAY_CONCAT_PRIM_EXTRA_METERING);
+                        self.extend_prepaid_scratch(&mut out, &[op])?;
+                    }
+                }
+                let total = out.len() as u32;
+                if total > 0 {
+                    self.charge_and_check(self.array_chunk_size_metering(total))?;
+                }
+                {
+                    let a = self.arrays.get_mut(&result).unwrap();
+                    for (i, s) in out.into_iter().enumerate() {
+                        a.insert_item(i as u32, s, &mut self.side_refs);
+                    }
+                    a.length = total;
+                }
+                self.charge_builtin_work(3)?;
+                let _ = recv;
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            // `Array.prototype.at(index)` — dense fast path. Relative index
+            // (negative counts from the end); the element there, or
+            // `undefined`. Metering: a frame constant, plus (when in range) the
+            // element read (`mxGetAt`).
+            NativeMethod::ArrayAt => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                self.meter.tick_raw(ARRAY_AT_FRAME_METERING);
+                let length = self.arrays[&inst].length as i64;
+                let number = self.to_number_f64(code, arg0)?;
+                let raw = if number.is_nan() {
+                    0
+                } else {
+                    number.trunc() as i64
+                };
+                let idx = if raw < 0 { length + raw } else { raw };
+                let result = if idx >= 0 && idx < length {
+                    self.meter.tick_raw(ARRAY_AT_READ_METERING);
+                    self.arrays
+                        .get(&inst)
+                        .and_then(|a| a.items().get(&(idx as u32)).copied())
+                        .map(|s| Slot::of(s.kind, s.value))
+                        .unwrap_or_else(Slot::undefined)
+                } else {
+                    Slot::undefined()
+                };
+                result
+            }
+            // `Array.prototype.shift()` — dense fast path. Remove and return
+            // the first element, shifting the rest down and shrinking the item
+            // chunk. Metering: `mxMeterSome(2 + 3 + 3 + 4)` when non-empty
+            // (else 2+4), the shrink chunk, and `mxMeterSome((length-1)*10)`.
+            NativeMethod::ArrayShift => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if !self.arguments_objects.contains(&i)
+                            && self.array_shift_fast_safe(i) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_shift_unshift(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let length = self.arrays[&inst].length;
+                self.charge_builtin_work(2)?;
+                let result = if length > 0 {
+                    self.charge_builtin_work(3)?;
+                    let new_len = length - 1;
+                    self.charge_and_check(self.array_chunk_size_metering(new_len))?;
+                    self.charge_builtin_work((new_len as u64) * 10)?;
+                    let removed = {
+                        let a = self.arrays.get_mut(&inst).unwrap();
+                        let first = a
+                            .remove_item(&0, &mut self.side_refs)
+                            .unwrap_or_else(Slot::undefined);
+                        let mut shifted = std::collections::BTreeMap::new();
+                        for (&k, &v) in a.items().iter() {
+                            shifted.insert(k - 1, v);
+                        }
+                        a.replace_items(shifted, &mut self.side_refs);
+                        a.length = new_len;
+                        first
+                    };
+                    self.charge_builtin_work(3)?;
+                    Slot::of(removed.kind, removed.value)
+                } else {
+                    Slot::undefined()
+                };
+                self.charge_builtin_work(4)?;
+                result
+            }
+            // `Array.prototype.unshift(...items)` — dense fast path. Prepend the
+            // arguments, shifting existing elements up, and return the new
+            // length. Metering: the grow chunk, `mxMeterSome(length*10)` for the
+            // shift, `mxMeterSome(4)` per inserted argument, `mxMeterSome(2)`.
+            NativeMethod::ArrayUnshift => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if !self.arguments_objects.contains(&i)
+                            && self.array_unshift_fast_safe(i, argc) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_shift_unshift(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let length = self.arrays[&inst].length;
+                let c = argc as u32;
+                let args: Vec<Slot> = Self::fill_scratch(
+                    self.reserve_scratch(argc as usize)?,
+                    (0..argc).map(|i| {
+                        self.stack
+                            .get(base + 4 + i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    }),
+                );
+                self.meter.tick_raw(ARRAY_UNSHIFT_FRAME_METERING);
+                if c > 0 {
+                    self.charge_and_check(self.array_chunk_size_metering(length + c))?;
+                    self.charge_builtin_work((length as u64) * 10)?;
+                    self.charge_builtin_work(c as u64 * 4)?;
+                    let a = self.arrays.get_mut(&inst).unwrap();
+                    let mut shifted = std::collections::BTreeMap::new();
+                    for (&k, &v) in a.items().iter() {
+                        shifted.insert(k + c, v);
+                    }
+                    for (i, mut v) in args.into_iter().enumerate() {
+                        v.id = 0;
+                        v.next = crate::value::SlotIndex::NULL;
+                        shifted.insert(i as u32, v);
+                    }
+                    a.replace_items(shifted, &mut self.side_refs);
+                    a.length = length + c;
+                }
+                self.charge_builtin_work(2)?;
+                Self::array_index_number(u64::from(length + c))
+            }
+            // `Array.prototype.copyWithin(target[, start[, end]])` — dense fast
+            // path. Copy the block `[start, end)` (clamped to fit) to `target`
+            // in place. Metering: a frame constant + `mxMeterSome(count*10)`.
+            NativeMethod::ArrayCopyWithin => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if (0..argc.min(3)).all(|index| {
+                            matches!(
+                                self.stack.get(base + 4 + index).map(|slot| slot.kind),
+                                Some(Kind::Integer | Kind::Number | Kind::Undefined)
+                            )
+                        }) && self.array_copy_within_fast_safe(i, base) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_copy_within(code, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let length = self.arrays[&inst].length;
+                let to = self.arg_to_index(base, 0, 0, length);
+                let from = self.arg_to_index(base, 1, 0, length);
+                let end = self.arg_to_index(base, 2, length, length);
+                let mut count = end.saturating_sub(from);
+                if count > length - to {
+                    count = length - to;
+                }
+                self.meter.tick_raw(ARRAY_COPYWITHIN_FRAME_METERING);
+                if count > 0 {
+                    self.charge_builtin_work((count as u64) * 10)?;
+                    // Snapshot the source range, then write to the destination
+                    // (memmove semantics — overlapping ranges are handled by the
+                    // snapshot).
+                    let src: Vec<Option<Slot>> = Self::fill_scratch(
+                        self.reserve_scratch(count as usize)?,
+                        (0..count).map(|i| self.arrays[&inst].items().get(&(from + i)).copied()),
+                    );
+                    let a = self.arrays.get_mut(&inst).unwrap();
+                    for (i, s) in src.into_iter().enumerate() {
+                        let dst = to + i as u32;
+                        match s {
+                            Some(v) => {
+                                a.insert_item(dst, v, &mut self.side_refs);
+                            }
+                            None => {
+                                a.remove_item(&dst, &mut self.side_refs);
+                            }
+                        }
+                    }
+                }
+                this
+            }
+            // `Array.prototype.with(index, value)` — a new array copying the
+            // receiver with `index` replaced by `value`. Out-of-range index is
+            // a RangeError (self-named). Metering: a frame constant + a
+            // per-element copy cost over the generic `mxGetAt`/`mxDefineAt`
+            // path, calibrated against the pin.
+            NativeMethod::ArrayWith => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result =
+                            self.array_generic_change_by_copy(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let length = self.arrays[&inst].length;
+                let raw = match numeric_of(&arg0) {
+                    Some(n) if !n.is_nan() => n.trunc() as i64,
+                    _ => 0,
+                };
+                let index = if raw < 0 { length as i64 + raw } else { raw };
+                if index < 0 || index >= length as i64 {
+                    return Err(self.catchable_range_error_msg("invalid index".into()));
+                }
+                let value = self
+                    .stack
+                    .get(base + 4 + 1)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                self.meter.tick_raw(ARRAY_WITH_FRAME_METERING);
+                self.charge_and_check((length as u64) * ARRAY_WITH_PER_ELEM_METERING)?;
+                let result = self.new_array_unmetered();
+                if length > 0 {
+                    self.charge_and_check(self.array_chunk_size_metering(length))?;
+                    let items: Vec<Slot> = Self::fill_scratch(
+                        self.reserve_scratch(length as usize)?,
+                        (0..length).map(|i| {
+                            if i as i64 == index {
+                                value
+                            } else {
+                                self.arrays[&inst]
+                                    .items()
+                                    .get(&i)
+                                    .copied()
+                                    .unwrap_or_else(Slot::undefined)
+                            }
+                        }),
+                    );
+                    let a = self.arrays.get_mut(&result).unwrap();
+                    for (i, s) in items.into_iter().enumerate() {
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                    }
+                    a.length = length;
+                }
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            // `Array.prototype.toReversed()` — a new array with the elements
+            // reversed (non-mutating), copied over the generic
+            // `mxGetAt`/`mxDefineAt` path. Metering reuses `with`'s frame +
+            // per-element constants (same copy loop) + the result chunk.
+            NativeMethod::ArrayToReversed => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i) => i,
+                    None => {
+                        let result =
+                            self.array_generic_change_by_copy(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_TOREVERSED_FRAME_METERING);
+                self.charge_and_check((length as u64) * ARRAY_WITH_PER_ELEM_METERING)?;
+                let result = self.new_array_unmetered();
+                if length > 0 {
+                    self.charge_and_check(self.array_chunk_size_metering(length))?;
+                    let items: Vec<Slot> = Self::fill_scratch(
+                        self.reserve_scratch(length as usize)?,
+                        (0..length).map(|to| {
+                            let from = length - 1 - to;
+                            self.arrays[&inst]
+                                .items()
+                                .get(&from)
+                                .copied()
+                                .unwrap_or_else(Slot::undefined)
+                        }),
+                    );
+                    let a = self.arrays.get_mut(&result).unwrap();
+                    for (to, s) in items.into_iter().enumerate() {
+                        a.insert_item(to as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                    }
+                    a.length = length;
+                }
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            // `Array.prototype.splice(start[, deleteCount, ...items])` — dense
+            // fast path. Remove `deleteCount` elements at `start` and insert
+            // `items`, returning a new array of the removed elements. Metering
+            // models the result chunk + `mxMeterSome(deletions*10 + 4)`, the
+            // tail shift + array resize, `mxMeterSome(5)` per inserted item, and
+            // a closing `mxMeterSome(4)`, plus a frame constant.
+            NativeMethod::ArraySplice => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if self.array_splice_fast_safe(i, argc)
+                            && (argc == 0
+                                || matches!(
+                                    arg0.kind,
+                                    Kind::Integer | Kind::Number | Kind::Undefined
+                                ))
+                            && (argc < 2
+                                || matches!(
+                                    self.stack.get(base + 5).map(|slot| slot.kind),
+                                    Some(Kind::Integer | Kind::Number | Kind::Undefined)
+                                )) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_splice(code, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let length = self.arrays[&inst].length;
+                let start = self.arg_to_index(base, 0, 0, length);
+                let (insertions, deletions): (u32, u32) = if argc == 0 {
+                    (0, 0)
+                } else if argc == 1 {
+                    (0, length - start)
+                } else {
+                    let ins = (argc - 2) as u32;
+                    // deleteCount clamped to [0, length - start].
+                    let dc = match numeric_of(
+                        &self
+                            .stack
+                            .get(base + 4 + 1)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined),
+                    ) {
+                        Some(n) if n.is_nan() || n < 0.0 => 0,
+                        Some(n) if n > (length - start) as f64 => length - start,
+                        Some(n) => n.trunc() as u32,
+                        None => 0,
+                    };
+                    (ins, dc)
+                };
+                self.meter.tick_raw(ARRAY_SPLICE_FRAME_METERING);
+                // The removed-elements result array.
+                let result = self.new_array_unmetered();
+                if deletions > 0 {
+                    self.charge_and_check(self.array_chunk_size_metering(deletions))?;
+                }
+                self.charge_builtin_work((deletions as u64) * 10)?;
+                self.charge_builtin_work(4)?;
+                let tail_len = length - (start + deletions);
+                if insertions < deletions {
+                    self.charge_builtin_work((tail_len as u64) * 10)?;
+                    self.charge_builtin_work(((deletions - insertions) as u64) * 4)?;
+                    let new_len = length - (deletions - insertions);
+                    if new_len > 0 {
+                        self.charge_and_check(self.array_chunk_size_metering(new_len))?;
+                    }
+                } else if insertions > deletions {
+                    let new_len = length + (insertions - deletions);
+                    self.charge_and_check(self.array_chunk_size_metering(new_len))?;
+                    self.charge_builtin_work((tail_len as u64) * 10)?;
+                }
+                for _ in 0..insertions {
+                    self.charge_builtin_work(5)?;
+                }
+                self.charge_builtin_work(4)?;
+                // Perform the splice on a dense element vector.
+                let cur: Vec<Slot> = Self::fill_scratch(
+                    self.reserve_scratch(length as usize)?,
+                    (0..length).map(|i| {
+                        self.arrays[&inst]
+                            .items()
+                            .get(&i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    }),
+                );
+                let removed = Self::fill_scratch(
+                    self.reserve_scratch(deletions as usize)?,
+                    cur[start as usize..(start + deletions) as usize]
+                        .iter()
+                        .copied(),
+                );
+                let inserted: Vec<Slot> = Self::fill_scratch(
+                    self.reserve_scratch(insertions as usize)?,
+                    (0..insertions).map(|k| {
+                        self.stack
+                            .get(base + 4 + 2 + k as usize)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    }),
+                );
+                let mut rebuilt: Vec<Slot> = self.reserve_scratch(
+                    (length as usize)
+                        .checked_add(insertions as usize)
+                        .ok_or(Step::Host(Halt::HeapExhausted))?,
+                )?;
+                rebuilt.extend_from_slice(&cur[..start as usize]);
+                rebuilt.extend(inserted);
+                rebuilt.extend_from_slice(&cur[(start + deletions) as usize..]);
+                {
+                    let a = self.arrays.get_mut(&inst).unwrap();
+                    a.clear_items(&mut self.side_refs);
+                    for (i, s) in rebuilt.into_iter().enumerate() {
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                    }
+                    a.length = length - deletions + insertions;
+                }
+                {
+                    let a = self.arrays.get_mut(&result).unwrap();
+                    for (i, s) in removed.into_iter().enumerate() {
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                    }
+                    a.length = deletions;
+                }
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            // `Array.prototype.toSpliced(start, deleteCount, ...items)` — a
+            // non-mutating splice: build a NEW array `head ++ inserted ++ tail`
+            // and leave the receiver untouched. XS meters the head copy at
+            // `start * 10`, each insertion at `5`, the tail copy at `rest * 10`,
+            // plus a trailing `mxMeterSome(4)` and the result item chunk.
+            NativeMethod::ArrayToSpliced => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if (argc == 0
+                            || matches!(
+                                arg0.kind,
+                                Kind::Integer | Kind::Number | Kind::Undefined
+                            ))
+                            && (argc < 2
+                                || matches!(
+                                    self.stack.get(base + 5).map(|slot| slot.kind),
+                                    Some(Kind::Integer | Kind::Number | Kind::Undefined)
+                                )) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result =
+                            self.array_generic_change_by_copy(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let length = self.arrays[&inst].length;
+                let start = self.arg_to_index(base, 0, 0, length);
+                let (insertions, skip): (u32, u32) = if argc == 0 {
+                    (0, 0)
+                } else if argc == 1 {
+                    (0, length - start)
+                } else {
+                    let ins = (argc - 2) as u32;
+                    let dc = match numeric_of(
+                        &self
+                            .stack
+                            .get(base + 4 + 1)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined),
+                    ) {
+                        Some(n) if n.is_nan() || n < 0.0 => 0,
+                        Some(n) if n > (length - start) as f64 => length - start,
+                        Some(n) => n.trunc() as u32,
+                        None => 0,
+                    };
+                    (ins, dc)
+                };
+                let result_len = length + insertions - skip;
+                let rest = length - (start + skip);
+                self.meter.tick_raw(ARRAY_TOSPLICED_FRAME_METERING);
+                if result_len > 0 {
+                    self.charge_and_check(self.array_chunk_size_metering(result_len))?;
+                }
+                self.charge_builtin_work((start as u64) * 10)?;
+                for _ in 0..insertions {
+                    self.charge_builtin_work(5)?;
+                }
+                self.charge_builtin_work((rest as u64) * 10)?;
+                self.charge_builtin_work(4)?;
+                // Build the result densely; the receiver stays untouched.
+                let cur: Vec<Slot> = Self::fill_scratch(
+                    self.reserve_scratch(length as usize)?,
+                    (0..length).map(|i| {
+                        self.arrays[&inst]
+                            .items()
+                            .get(&i)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    }),
+                );
+                let inserted: Vec<Slot> = Self::fill_scratch(
+                    self.reserve_scratch(insertions as usize)?,
+                    (0..insertions).map(|k| {
+                        self.stack
+                            .get(base + 4 + 2 + k as usize)
+                            .copied()
+                            .unwrap_or_else(Slot::undefined)
+                    }),
+                );
+                let mut rebuilt: Vec<Slot> = self.reserve_scratch(
+                    (length as usize)
+                        .checked_add(insertions as usize)
+                        .ok_or(Step::Host(Halt::HeapExhausted))?,
+                )?;
+                rebuilt.extend_from_slice(&cur[..start as usize]);
+                rebuilt.extend(inserted);
+                rebuilt.extend_from_slice(&cur[(start + skip) as usize..]);
+                let result = self.new_array_unmetered();
+                {
+                    let a = self.arrays.get_mut(&result).unwrap();
+                    for (i, s) in rebuilt.into_iter().enumerate() {
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                    }
+                    a.length = result_len;
+                }
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            // `Array.prototype.flat([depth])` — a new array with sub-array
+            // elements flattened to `depth` (default 1). XS's `flatAux` visits
+            // each source index, recursing into array elements (up to `depth`)
+            // and appending leaves via `mxDefineIndex` (which grows the result
+            // item chunk one slot at a time). Metering models the per-visit
+            // read, the per-array-element length read, and the per-appended
+            // element chunk growth, plus a frame constant.
+            NativeMethod::ArrayFlat => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if self.array_allocating_uses_default_species(i)
+                            && matches!(
+                                arg0.kind,
+                                Kind::Integer | Kind::Number | Kind::Undefined
+                            )
+                            && self.array_flat_fast_safe(
+                                i,
+                                if argc == 0 || arg0.kind == Kind::Undefined {
+                                    1
+                                } else {
+                                    match numeric_of(&arg0) {
+                                        Some(n) if n.is_nan() || n < 0.0 => 0,
+                                        Some(n) => n.trunc() as u32,
+                                        None => 0,
+                                    }
+                                },
+                                &mut 1024,
+                            ) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result =
+                            self.array_generic_flat_or_flat_map(code, m, this, base, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                let depth = if argc >= 1 && arg0.kind != Kind::Undefined {
+                    match numeric_of(&arg0) {
+                        Some(n) if n.is_nan() || n < 0.0 => 0,
+                        Some(n) => n.trunc() as u32,
+                        None => 0,
+                    }
+                } else {
+                    1
+                };
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_FLAT_FRAME_METERING);
+                let mut out: Vec<Slot> = Vec::new();
+                self.flat_into(inst, length, depth, &mut out)?;
+                let result = self.new_array_unmetered();
+                let total = out.len() as u32;
+                {
+                    let a = self.arrays.get_mut(&result).unwrap();
+                    for (i, s) in out.into_iter().enumerate() {
+                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
+                    }
+                    a.length = total;
+                }
+                Slot::of(Kind::Reference, Payload::Reference(result))
+            }
+            // `Array.prototype.flatMap(callback[, thisArg])` — call
+            // `callback(item, index, array)` per element, then flatten the
+            // results by one level. Re-entrant (uses `run_callback`); the
+            // result flattening reuses `flat`'s per-leaf/per-array constants,
+            // plus a per-source callback overhead.
+            NativeMethod::ArrayFlatMap => {
+                let result = self.array_generic_flat_or_flat_map(code, m, this, base, argc)?;
+                self.stack.truncate(base);
+                self.push(result);
+                return Ok(NativeResult::Pushed);
+            }
+            // `Array.prototype.join([sep])` — dense fast path. Each element is
+            // ToString'd into a key slot, the pieces joined by `sep` (default
+            // ","), and the result materialized into one final chunk. Metering
+            // models `fxNewInstance` (the key list) + a key slot per element
+            // and per separator + each element's `fxToString` (a number renders
+            // to a fresh chunk + a built-in step) + the final `fxNewChunk`.
+            NativeMethod::ArrayJoin => {
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if self.array_join_fast_safe(i)
+                            && self.array_join_separator_fast_safe(arg0, argc) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_join(code, this, arg0, argc)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                if argc > 0 && arg0.kind != Kind::Undefined && arg0.kind != Kind::String {
+                    // The calibrated fast path below keeps the historic exact
+                    // metering for the default/string separator. Other values
+                    // still follow ordinary ToString, including re-entrant
+                    // object conversion and abrupt Symbol/guest completions.
+                    // Capture length before separator coercion, then read each
+                    // element live so a conversion can mutate later indices.
+                    let length = self.arrays[&inst].length;
+                    let sep = self.to_string_units(code, arg0)?;
+                    let mut out = Vec::new();
+                    for i in 0..length {
+                        if i > 0 {
+                            self.extend_reserved_units(&mut out, &sep)?;
+                        }
+                        let value = self.array_generic_get(code, inst, u64::from(i))?;
+                        if !matches!(value.kind, Kind::Undefined | Kind::Null) {
+                            let units = self.to_string_units(code, value)?;
+                            self.extend_reserved_units(&mut out, &units)?;
+                        }
+                    }
+                    self.stack.truncate(base);
+                    let result = self.new_reserved_string_units(&out);
+                    self.push(result);
+                    return Ok(NativeResult::Pushed);
+                }
+                let sep: Vec<u16> = if argc == 0 || arg0.kind == Kind::Undefined {
+                    vec![u16::from(b',')]
+                } else if arg0.kind == Kind::String {
+                    match arg0.value {
+                        Payload::String(off) => self.str_units(off),
+                        _ => vec![u16::from(b',')],
+                    }
+                } else {
+                    unreachable!("non-string separators use the general path")
+                };
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
+                self.meter.tick_slot_alloc(); // `fxNewInstance` (the key list)
+                let mut out: Vec<u16> = Vec::new();
+                for i in 0..length {
+                    let item = self.arrays[&inst].items().get(&i).copied();
+                    // Every index is read (`mxGetIndex`) regardless of type.
+                    self.charge_and_check(ARRAY_JOIN_PER_ELEMENT_METERING)?;
+                    if i > 0 {
+                        self.meter.tick_slot_alloc(); // the separator key slot
+                        self.extend_reserved_units(&mut out, &sep)?;
+                    }
+                    match item {
+                        Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
+                            if s.kind == Kind::Reference {
+                                return Err(Step::Host(Halt::NotImplemented(
+                                    "join:reference-element",
+                                )));
+                            }
+                            self.meter.tick_slot_alloc(); // the element key slot
+                            let bytes = self.to_string_units_metered(s);
+                            self.extend_reserved_units(&mut out, &bytes)?;
+                        }
+                        _ => {}
+                    }
+                }
+                if out.is_empty() {
+                    self.charge_and_check(string_chunk_cost(0))?; // empty join chunk
+                }
+                let off = self.chunks.alloc(&units_to_be16(&out));
+                Slot::of(Kind::String, Payload::String(off))
+            }
+            // `Array.prototype.toString()` delegates to `this.join()` with the
+            // default separator: it meters a small prelude (the `join` lookup +
+            // the `mxRunCount(0)` call-frame setup) and then the identical join
+            // body (frame + per-element read + the result chunk). Modeled by
+            // running the default-separator join and adding the prelude.
+            NativeMethod::ArrayToString => {
+                let typed_reference = match this.value {
+                    Payload::Reference(reference)
+                        if this.kind == Kind::Reference
+                            && self.typed_arrays.contains_key(&reference) =>
+                    {
+                        Some(reference)
+                    }
+                    _ => None,
+                };
+                if let Some(reference) = typed_reference {
+                    let join_id = self.intern_static_key("join");
+                    if self.chain_resolves_native_data_method(
+                        reference,
+                        join_id,
+                        NativeMethod::TypedArrayJoin,
+                    ) {
+                        self.meter.tick_raw(ARRAY_TOSTRING_PRELUDE_METERING);
+                        let result = self.typed_array_join(this, base, 0, code)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                }
+                let inst = match self.dense_array_this(this) {
+                    Some(i)
+                        if self.array_to_string_fast_safe(i) && self.array_join_fast_safe(i) =>
+                    {
+                        i
+                    }
+                    _ => {
+                        let result = self.array_generic_to_string(code, this)?;
+                        self.stack.truncate(base);
+                        self.push(result);
+                        return Ok(NativeResult::Pushed);
+                    }
+                };
+                self.meter.tick_raw(ARRAY_TOSTRING_PRELUDE_METERING);
+                let length = self.arrays[&inst].length;
+                self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
+                self.meter.tick_slot_alloc();
+                let mut out: Vec<u16> = Vec::new();
+                for i in 0..length {
+                    self.charge_and_check(ARRAY_JOIN_PER_ELEMENT_METERING)?;
+                    let item = self.arrays[&inst].items().get(&i).copied();
+                    if i > 0 {
+                        self.meter.tick_slot_alloc();
+                        self.extend_reserved_units(&mut out, &[u16::from(b',')])?;
+                    }
+                    match item {
+                        Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
+                            if s.kind == Kind::Reference {
+                                return Err(Step::Host(Halt::NotImplemented(
+                                    "toString:reference-element",
+                                )));
+                            }
+                            self.meter.tick_slot_alloc();
+                            let bytes = self.to_string_units_metered(s);
+                            self.extend_reserved_units(&mut out, &bytes)?;
+                        }
+                        _ => {}
+                    }
+                }
+                if out.is_empty() {
+                    self.charge_chunk_work(1)?;
+                }
+                let off = self.chunks.alloc(&units_to_be16(&out));
+                Slot::of(Kind::String, Payload::String(off))
+            }
+            NativeMethod::ArraySort => self.array_sort(this, base, argc, code, false)?,
+            NativeMethod::ArrayToSorted => self.array_sort(this, base, argc, code, true)?,
+            NativeMethod::ArrayToLocaleString => {
+                self.array_to_locale_string(this, base, argc, code)?
+            }
+            NativeMethod::ArrayFrom => self.array_from(code, base, argc)?,
+            NativeMethod::ArrayFromAsync => self.array_from_async(code, base, argc)?,
+            // `Array.isArray(v)`: whether `v` is an array exotic object.
+            NativeMethod::ArrayIsArray => {
+                self.meter.tick_raw(ARRAY_ISARRAY_METERING);
+                let r = match arg0.value {
+                    Payload::Reference(r) if arg0.kind == Kind::Reference => {
+                        self.array_generic_is_array(r)?
+                    }
+                    _ => false,
+                };
+                Slot::boolean(r)
+            }
+            NativeMethod::ArrayOf => self.array_of(code, base, argc)?,
+            // `Array.prototype.values()`/`keys()`/`entries()`: build an Array
+            // Iterator over the receiver.
+            NativeMethod::ArrayValues | NativeMethod::ArrayKeys | NativeMethod::ArrayEntries => {
+                // CreateArrayIterator performs ToObject but does not require an
+                // Array exotic. The iterator's next method re-reads
+                // LengthOfArrayLike and indexed properties through the MOP, so
+                // ordinary objects, primitive wrappers, and Proxies remain live.
+                let object = self.array_to_object(this)?;
+                let Payload::Reference(iterated) = object.value else {
+                    unreachable!("ToObject result")
+                };
+                let kind = match m {
+                    NativeMethod::ArrayValues => 0u8,
+                    NativeMethod::ArrayKeys => 1u8,
+                    _ => 2u8,
+                };
+                self.make_array_iterator(iterated, kind)
+            }
+            _ => unreachable!("not one of the Array methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The iterator and generator methods of
+    /// [`Self::call_native_method_inner`], out of line (STACK-DEPTH-REFACTOR.md
+    /// A1): a re-entrant call through one of them carries this family's frame
+    /// and the thin dispatcher's, not the union of every method's.
+    #[inline(never)]
+    fn native_method_iterator(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
+            // `%ArrayIteratorPrototype%.next()`.
+            NativeMethod::ArrayIteratorNext => {
+                let iter = match this.value {
+                    Payload::Reference(i)
+                        if self.iterators.get(&i).is_some_and(|state| state.kind <= 4) =>
+                    {
+                        i
+                    }
+                    _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
+                };
+                self.array_iterator_next(code, iter)?
+            }
+            NativeMethod::MapIteratorNext | NativeMethod::SetIteratorNext => {
+                let expected = if m == NativeMethod::MapIteratorNext {
+                    CollKind::Map
+                } else {
+                    CollKind::Set
+                };
+                let iter = match this.value {
+                    Payload::Reference(i)
+                        if self
+                            .iterators
+                            .get(&i)
+                            // The COLLECTION-CURSOR kinds, not merely a row whose
+                            // `iterable` happens to be a collection of the right
+                            // family. A lazy Iterator helper can be built over a
+                            // Map or Set directly — `Iterator.prototype.map.call(m,
+                            // f)` — so without this its row satisfied the
+                            // collection half of the brand, and
+                            // `collection_iterator_next` handed the helper's
+                            // PRIVATE holder array back to the guest: the captured
+                            // `next` and the callback, readable and writable. The
+                            // sibling brands already gate this way (`kind <= 4`
+                            // above, `kind == 8` on the `Iterator.from` wrapper,
+                            // `kind == 9` on the RegExp String Iterator).
+                            .filter(|state| (5..=7).contains(&state.kind))
+                            .and_then(|state| self.collections.get(&state.iterable))
+                            .is_some_and(|collection| collection.kind == expected) =>
+                    {
+                        i
+                    }
+                    _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
+                };
+                self.collection_iterator_next(iter)
+            }
+            NativeMethod::RegExpStringIteratorNext => {
+                self.regexp_string_iterator_next(code, this)?
+            }
+            NativeMethod::IteratorFrom => self.iterator_from(code, arg0)?,
+            NativeMethod::IteratorWrapperNext => self.iterator_wrapper_next(code, this)?,
+            NativeMethod::IteratorWrapperReturn => self.iterator_wrapper_return(code, this)?,
+            NativeMethod::IteratorConstructorGetter => {
+                let constructor = self.intrinsics.get("Iterator").copied().ok_or(Step::Host(
+                    Halt::EngineInvariant("Iterator:missing-constructor"),
+                ))?;
+                Slot::of(Kind::Reference, Payload::Reference(constructor))
+            }
+            NativeMethod::IteratorToStringTagGetter => self.new_string_metered(b"Iterator"),
+            NativeMethod::IteratorConstructorSetter | NativeMethod::IteratorToStringTagSetter => {
+                unreachable!("Iterator setters dispatch in the small wrapper")
+            }
+            NativeMethod::IteratorHelper(op @ 5..=10) => {
+                self.iterator_terminal_helper(code, op, this, base, argc)?
+            }
+            NativeMethod::IteratorHelper(op @ 0..=4) => {
+                self.iterator_lazy_helper(code, op, this, base)?
+            }
+            NativeMethod::IteratorHelper(_) => {
+                // `create_intrinsics` installs exactly eleven helpers, so an id
+                // outside 0..=10 can only come from a corrupted method
+                // identity, not from guest code.
+                return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-id")));
+            }
+            NativeMethod::IteratorHelperNext => self.iterator_helper_next(code, this)?,
+            NativeMethod::IteratorHelperReturn => self.iterator_helper_return(code, this)?,
+            // `%GeneratorPrototype%.next/return/throw` (`fx_Generator_prototype_
+            // aux`): resume the suspended body and return `{value, done}`. A
+            // non-generator receiver is a catchable `TypeError`.
+            NativeMethod::GeneratorNext => {
+                let gen = match this.value {
+                    Payload::Reference(r) if self.generators.contains_key(&r) => r,
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a Generator instance".into())
+                        )
+                    }
+                };
+                self.resume_generator(code, gen, arg0, GenStatus::Next)?
+            }
+            NativeMethod::GeneratorReturn => {
+                let gen = match this.value {
+                    Payload::Reference(r) if self.generators.contains_key(&r) => r,
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a Generator instance".into())
+                        )
+                    }
+                };
+                self.resume_generator(code, gen, arg0, GenStatus::Return)?
+            }
+            NativeMethod::GeneratorThrow => {
+                let gen = match this.value {
+                    Payload::Reference(r) if self.generators.contains_key(&r) => r,
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a Generator instance".into())
+                        )
+                    }
+                };
+                self.resume_generator(code, gen, arg0, GenStatus::Throw)?
+            }
+            NativeMethod::AsyncGeneratorNext => match this.value {
+                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
+                    self.enqueue_async_generator(code, r, arg0, GenStatus::Next)?
+                }
+                _ => self.reject_async_generator_brand()?,
+            },
+            NativeMethod::AsyncGeneratorReturn => match this.value {
+                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
+                    self.enqueue_async_generator(code, r, arg0, GenStatus::Return)?
+                }
+                _ => self.reject_async_generator_brand()?,
+            },
+            NativeMethod::AsyncGeneratorThrow => match this.value {
+                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
+                    self.enqueue_async_generator(code, r, arg0, GenStatus::Throw)?
+                }
+                _ => self.reject_async_generator_brand()?,
+            },
+            NativeMethod::AsyncIteratorIdentity => this,
+            _ => unreachable!("not one of the iterator and generator methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The Map, Set and collection methods of
+    /// [`Self::call_native_method_inner`], out of line (STACK-DEPTH-REFACTOR.md
+    /// A1): a re-entrant call through one of them carries this family's frame
+    /// and the thin dispatcher's, not the union of every method's.
+    #[inline(never)]
+    fn native_method_collection(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot =
+            match m {
+                NativeMethod::MapSizeGetter | NativeMethod::SetSizeGetter => {
+                    let expected = if m == NativeMethod::MapSizeGetter {
+                        CollKind::Map
+                    } else {
+                        CollKind::Set
+                    };
+                    let inst = self
+                        .collection_ref(this)
+                        .filter(|inst| self.collections[inst].kind == expected)
+                        .ok_or_else(|| self.collection_brand_error(expected, false))?;
+                    self.meter.tick_raw(COLLECTION_SIZE_GET_METERING);
+                    Slot::integer(self.collections[&inst].live_len() as i32)
+                }
+                NativeMethod::MapSet
+                | NativeMethod::MapGet
+                | NativeMethod::MapHas
+                | NativeMethod::MapDelete
+                | NativeMethod::WeakMapSet
+                | NativeMethod::WeakMapGet
+                | NativeMethod::WeakMapHas
+                | NativeMethod::WeakMapDelete
+                | NativeMethod::SetAdd
+                | NativeMethod::SetHas
+                | NativeMethod::SetDelete
+                | NativeMethod::WeakSetAdd
+                | NativeMethod::WeakSetHas
+                | NativeMethod::WeakSetDelete => self.call_collection(m, this, base, argc)?,
+                // `Map`/`Set` `forEach` — re-entrant (drives a user callback per
+                // live entry); needs the code buffer for the nested dispatch.
+                NativeMethod::CollForEach => {
+                    self.call_collection_foreach(this, base, argc, code)?
+                }
+                // The seven ES2025 "new Set methods" — each drives the argument's
+                // `has` callback or `keys()` iterator (re-entrant), so it needs the
+                // code buffer for the nested dispatch.
+                NativeMethod::SetUnion
+                | NativeMethod::SetIntersection
+                | NativeMethod::SetDifference
+                | NativeMethod::SetSymmetricDifference
+                | NativeMethod::SetIsSubsetOf
+                | NativeMethod::SetIsSupersetOf
+                | NativeMethod::SetIsDisjointFrom => self.call_set_method(m, this, base, code)?,
+                // The upsert-proposal `Map.prototype` methods. `getOrInsert` is
+                // allocation-only; `getOrInsertComputed` drives a user callback, so
+                // both take the code buffer for the (possible) nested dispatch.
+                NativeMethod::MapGetOrInsert
+                | NativeMethod::MapGetOrInsertComputed
+                | NativeMethod::WeakMapGetOrInsert
+                | NativeMethod::WeakMapGetOrInsertComputed => {
+                    self.call_map_get_or_insert(m, this, base, code)?
+                }
+                // The array-grouping-proposal statics — each iterates `items` and
+                // drives a user callback per element (re-entrant).
+                NativeMethod::MapGroupBy | NativeMethod::ObjectGroupBy => {
+                    self.call_group_by(m, base, code)?
+                }
+                // `entries`/`keys`/`values` → a Map/Set Iterator over the receiver.
+                NativeMethod::CollEntries | NativeMethod::CollKeys | NativeMethod::CollValues => {
+                    let expected = self.collection_method_brand(base).ok_or(Step::Host(
+                        Halt::EngineInvariant("collection:missing-method-brand"),
+                    ))?;
+                    let inst = match self.collection_ref(this) {
+                        Some(i) => i,
+                        None => return Err(self.collection_brand_error(expected, false)),
+                    };
+                    // The shared dispatch variants still retain their declaring
+                    // prototype through the method function at `base + 1`.
+                    // Require that exact brand: Map methods cannot operate on Set
+                    // receivers (or vice versa), even though both use the same
+                    // collection side-table representation.
+
+                    if self.collections[&inst].kind != expected {
+                        self.charge_and_check(if expected == CollKind::Map {
+                            MAP_METHOD_ON_SET_METERING
+                        } else {
+                            SET_METHOD_ON_MAP_METERING
+                        })?;
+                        return Err(self.collection_brand_error(expected, false));
+                    }
+                    let iter_kind = match m {
+                        NativeMethod::CollKeys => 5u8,
+                        NativeMethod::CollValues => 6u8,
+                        _ => 7u8,
+                    };
+                    self.make_collection_iterator(inst, iter_kind)
+                }
+                // `Map`/`Set` `clear` (`fxClearEntries`): drop all entries and
+                // shrink the table back toward its minimum length.
+                NativeMethod::CollClear => {
+                    let expected = self.collection_method_brand(base).ok_or(Step::Host(
+                        Halt::EngineInvariant("collection:missing-method-brand"),
+                    ))?;
+                    let inst = match self.collection_ref(this) {
+                        Some(i) => i,
+                        None => return Err(self.collection_brand_error(expected, false)),
+                    };
+
+                    if self.collections[&inst].kind != expected {
+                        self.charge_and_check(if expected == CollKind::Map {
+                            MAP_METHOD_ON_SET_METERING
+                        } else {
+                            SET_METHOD_ON_MAP_METERING
+                        })?;
+                        return Err(self.collection_brand_error(expected, false));
+                    }
+                    if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
+                        return Err(self.collection_brand_error(expected, true));
+                    }
+                    self.meter.tick_raw(COLLECTION_CLEAR_FRAME_METERING);
+                    self.collections
+                        .get_mut(&inst)
+                        .unwrap()
+                        .clear_entries(&mut self.side_refs);
+                    // `fxResizeEntries` with size 0 shrinks the address chunk back
+                    // toward `mxTableMinLength`, charging the rehash chunk if the
+                    // length changes (modeled by [`Self::collection_table_resize`]).
+                    self.collection_table_resize(inst);
+                    Slot::undefined()
+                }
+                _ => unreachable!("not one of the Map, Set and collection methods"),
+            };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The Promise methods of [`Self::call_native_method_inner`], out of line
+    /// (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of them
+    /// carries this family's frame and the thin dispatcher's, not the union of
+    /// every method's.
+    #[inline(never)]
+    fn native_method_promise(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
+            // The `Promise.prototype` methods and statics that re-enter user
+            // code / build derived promises are handled outside this
+            // value-returning match (`.then` and the statics thread `code`);
+            // this arm is reached only for the not-yet-modeled ones, an honest
+            // named skip. `.then`/`resolve`/`reject` are intercepted before the
+            // generic method dispatch (see `call_native_method_reentrant`).
+            // `Promise.prototype.then`: register the reaction and return the
+            // derived promise. The reaction runs later, at the pump-loop drain
+            // — no synchronous re-entry here, so it fits the value-returning
+            // method dispatch.
+            NativeMethod::PromiseThen => {
+                let promise = match this.value {
+                    Payload::Reference(r) if self.promises.contains_key(&r) => r,
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            if this.kind == Kind::Reference {
+                                "this: not a Promise instance"
+                            } else {
+                                "this: not an object"
+                            }
+                            .into(),
+                        ))
+                    }
+                };
+                self.promise_then(code, promise, base)?
+            }
+            // `Promise.resolve(v)` (`fx_Promise_resolve`): a native promise
+            // whose observable constructor is the receiver is returned as-is;
+            // otherwise a capability is built and its `resolve` called with
+            // `v`. The intrinsic Promise keeps its calibrated fast path;
+            // arbitrary constructors go through `NewPromiseCapability`.
+            NativeMethod::PromiseResolveStatic => {
+                if !self.is_constructor_value(this) {
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Reference {
+                            "new: not a constructor"
+                        } else {
+                            "this: not an object"
+                        }
+                        .into(),
+                    ));
+                }
+                let intrinsic = self.intrinsics.get("Promise").copied();
+                let same_constructor = if let Payload::Reference(promise) = arg0.value {
+                    if arg0.kind == Kind::Reference && self.promises.contains_key(&promise) {
+                        let constructor_id = self.intern_static_key("constructor");
+                        let constructor = self.mop_get(code, promise, constructor_id, arg0)?;
+                        self.same_value(constructor, this)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+                if same_constructor {
+                    self.meter.tick_raw(PROMISE_RESOLVE_SAME_METERING);
+                    arg0
+                } else if matches!(this.value,
+                    Payload::Reference(c)
+                        if this.kind == Kind::Reference && Some(c) == intrinsic)
+                {
+                    self.meter.tick_raw(PROMISE_RESOLVE_STATIC_METERING);
+                    let (derived, _resolve, _reject) = self.new_promise_capability();
+                    self.settle_promise(code, derived, arg0, false)?;
+                    Slot::of(Kind::Reference, Payload::Reference(derived))
+                } else {
+                    let capability = self.new_promise_capability_for(code, this)?;
+                    self.call_any(code, capability.resolve, Slot::undefined(), &[arg0])?;
+                    capability.promise
+                }
+            }
+            // `Promise.reject(reason)` (`fx_Promise_reject`): a capability whose
+            // `reject` is called with `reason` (any value).
+            NativeMethod::PromiseRejectStatic => {
+                if !self.is_constructor_value(this) {
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Reference {
+                            "new: not a constructor"
+                        } else {
+                            "this: not an object"
+                        }
+                        .into(),
+                    ));
+                }
+                let intrinsic = self.intrinsics.get("Promise").copied();
+                if matches!(this.value,
+                    Payload::Reference(c)
+                        if this.kind == Kind::Reference && Some(c) == intrinsic)
+                {
+                    self.meter.tick_raw(PROMISE_REJECT_STATIC_METERING);
+                    let (derived, _resolve, _reject) = self.new_promise_capability();
+                    self.settle_promise(code, derived, arg0, true)?;
+                    Slot::of(Kind::Reference, Payload::Reference(derived))
+                } else {
+                    let capability = self.new_promise_capability_for(code, this)?;
+                    self.call_any(code, capability.reject, Slot::undefined(), &[arg0])?;
+                    capability.promise
+                }
+            }
+            // `Promise.prototype.catch(onRejected)`: Invoke the receiver's
+            // observable `then` method with `(undefined, onRejected)`. The
+            // method is deliberately generic: primitive receivers use GetV,
+            // accessors and proxies are observable, and a missing/non-callable
+            // `then` throws synchronously.
+            NativeMethod::PromiseCatch => {
+                self.meter.tick_raw(PROMISE_CATCH_FRAME_METERING);
+                self.invoke_value_method(code, this, "then", &[Slot::undefined(), arg0])?
+            }
+            // `Promise.prototype.finally(onFinally)` (`fx_Promise_prototype_
+            // finally`): observable SpeciesConstructor + Invoke dispatch, with
+            // the default native path registering a FINALLY reaction whose
+            // callback runs at the drain.
+            NativeMethod::PromiseFinally => self.promise_finally_dispatch(code, this, arg0)?,
+            NativeMethod::PromiseSpeciesGetter
+            | NativeMethod::RegExpSpeciesGetter
+            | NativeMethod::ArrayBufferSpeciesGetter => this,
+            // `Promise.all`/`allSettled`/`race`/`any` (`fx_Promise_all` …): build
+            // the derived promise, resolve each (dense-Array) element to a
+            // promise, and register a native COMBINE reaction on it; the shared
+            // `remainingElementsCount`/results state settles the derived at the
+            // drain. No synchronous user re-entry.
+            NativeMethod::PromiseAll => {
+                self.promise_combinator(code, CombinatorKind::All, arg0, this)?
+            }
+            NativeMethod::PromiseAllSettled => {
+                self.promise_combinator(code, CombinatorKind::AllSettled, arg0, this)?
+            }
+            NativeMethod::PromiseRace => {
+                self.promise_combinator(code, CombinatorKind::Race, arg0, this)?
+            }
+            NativeMethod::PromiseAny => {
+                self.promise_combinator(code, CombinatorKind::Any, arg0, this)?
+            }
+            // The resolve/reject functions settle in the `RUN` dispatch
+            // (`call_promise_function`) and never reach here.
+            NativeMethod::PromiseResolveFunction
+            | NativeMethod::PromiseRejectFunction
+            | NativeMethod::PromiseCapabilityExecutor
+            | NativeMethod::PromiseFinallyHandler
+            | NativeMethod::PromiseFinallyValue => {
+                return Err(Step::Host(Halt::EngineInvariant(
+                    "promise:resolving-fn-unexpected",
+                )))
+            }
+            _ => unreachable!("not one of the Promise methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The RegExp methods of [`Self::call_native_method_inner`], out of line
+    /// (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of them
+    /// carries this family's frame and the thin dispatcher's, not the union of
+    /// every method's.
+    #[inline(never)]
+    fn native_method_regexp(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
+            // `RegExp.prototype.exec`/`test`/`toString` — the JavaScript RegExp
+            // surface over `ironhorse_regexp`.
+            NativeMethod::RegExpExec => {
+                let inst = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => {
+                        return Err(
+                            self.catchable_type_error_msg("this: not a RegExp instance".into())
+                        )
+                    }
+                };
+                if self.regexps.contains_key(&inst) {
+                    self.regexp_exec(code, inst, arg0)?
+                } else {
+                    // The builtin rejects a receiver without
+                    // [[RegExpMatcher]] before coercing its argument.
+                    return Err(self.catchable_type_error_msg("this: not a RegExp instance".into()));
+                }
+            }
+            NativeMethod::RegExpTest => {
+                let inst = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            match this.kind {
+                                Kind::Null => "cannot coerce null to object",
+                                Kind::Undefined => "cannot coerce undefined to object",
+                                _ => "this: not a RegExp instance",
+                            }
+                            .into(),
+                        ))
+                    }
+                };
+                self.regexp_test(code, inst, this, arg0)?
+            }
+            NativeMethod::RegExpCompile => this,
+            NativeMethod::RegExpMatch => self.regexp_match(code, this, arg0)?,
+            NativeMethod::RegExpMatchAll => self.regexp_match_all(code, this, arg0)?,
+            NativeMethod::RegExpSearch => self.regexp_search(code, this, arg0)?,
+            NativeMethod::RegExpSplit => {
+                let limit = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                self.regexp_split(code, this, arg0, limit)?
+            }
+            NativeMethod::RegExpReplace => {
+                let regexp = match this.value {
+                    Payload::Reference(regexp) if this.kind == Kind::Reference => regexp,
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            match this.kind {
+                                Kind::Null => "cannot coerce null to object",
+                                Kind::Undefined => "cannot coerce undefined to object",
+                                _ => "this: not a RegExp instance",
+                            }
+                            .into(),
+                        ))
+                    }
+                };
+                let replacement = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let subject = if arg0.kind == Kind::String {
+                    arg0
+                } else {
+                    let units = self.to_string_units(code, arg0)?;
+                    self.new_string_units(&units)
+                };
+                if self.regexps.contains_key(&regexp) && self.regexp_replace_fast_safe(regexp) {
+                    self.string_replace(code, regexp, subject, replacement)?
+                } else {
+                    self.regexp_replace_generic(code, regexp, this, subject, replacement)?
+                }
+            }
+            NativeMethod::RegExpToString => {
+                let inst = match this.value {
+                    Payload::Reference(r) if this.kind == Kind::Reference => r,
+                    _ if matches!(this.kind, Kind::Null | Kind::Undefined) => {
+                        return Err(
+                            self.catchable_type_error_msg(cannot_coerce_to_object(this.kind))
+                        )
+                    }
+                    // Spec requires an object. XS boxes other primitives and
+                    // can complete, so this guard has no XS error counterpart.
+                    _ => {
+                        return Err(self.catchable_type_error_msg(
+                            "RegExp.toString: receiver must be an object".into(),
+                        ))
+                    }
+                };
+                let source_id = self.intern_static_key("source");
+                let flags_id = self.intern_static_key("flags");
+                let default_source = self.regexps.contains_key(&inst)
+                    && self.regexp_getter_uses_default(inst, source_id);
+                let default_flags = self.regexps.contains_key(&inst)
+                    && self.regexp_getter_uses_default(inst, flags_id);
+                if default_source && default_flags {
+                    self.regexp_to_string(inst)?
+                } else {
+                    self.regexp_to_string_generic(code, inst, this)?
+                }
+            }
+            _ => unreachable!("not one of the RegExp methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The String methods of [`Self::call_native_method_inner`], out of line
+    /// (STACK-DEPTH-REFACTOR.md A1): a re-entrant call through one of them
+    /// carries this family's frame and the thin dispatcher's, not the union of
+    /// every method's.
+    #[inline(never)]
+    fn native_method_string(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
+            NativeMethod::StringCharCodeAt
+            | NativeMethod::StringCodePointAt
+            | NativeMethod::StringCharAt
+            | NativeMethod::StringAt
+            | NativeMethod::StringSlice
+            | NativeMethod::StringSubstring
+            | NativeMethod::StringIndexOf
+            | NativeMethod::StringLastIndexOf
+            | NativeMethod::StringIncludes
+            | NativeMethod::StringStartsWith
+            | NativeMethod::StringEndsWith
+            | NativeMethod::StringConcat
+            | NativeMethod::StringToLowerCase
+            | NativeMethod::StringToUpperCase
+            | NativeMethod::StringToLocaleLowerCase
+            | NativeMethod::StringToLocaleUpperCase
+            | NativeMethod::StringLocaleCompare
+            | NativeMethod::StringNormalize
+            | NativeMethod::StringRepeat
+            | NativeMethod::StringTrim
+            | NativeMethod::StringTrimStart
+            | NativeMethod::StringTrimEnd
+            | NativeMethod::StringPadStart
+            | NativeMethod::StringPadEnd
+            | NativeMethod::StringIsWellFormed
+            | NativeMethod::StringToWellFormed
+            | NativeMethod::StringIterator => self.call_string(m, this, base, argc, code)?,
+            NativeMethod::StringFromCharCode | NativeMethod::StringFromCodePoint => {
+                self.call_string_static(m, base, argc, code)?
+            }
+            NativeMethod::StringRaw => self.call_string_raw(base, argc, code)?,
+            // `String.prototype.search`: a custom `regexp[Symbol.search]` is
+            // called with the original receiver before string coercion. The
+            // intrinsic RegExp path uses the existing matcher; every other
+            // argument is converted through `RegExpCreate(regexp, undefined)`.
+            NativeMethod::StringSearch => {
+                if matches!(this.kind, Kind::Undefined | Kind::Null) {
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Null {
+                            "this: null"
+                        } else {
+                            "this: undefined"
+                        }
+                        .into(),
+                    ));
+                }
+                self.meter.tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
+                let search_method = self.string_protocol_method(code, arg0, "search")?;
+                if !matches!(search_method.kind, Kind::Undefined | Kind::Null) {
+                    self.invoke_value(code, search_method, arg0, &[this])?
+                } else {
+                    let subject = if this.kind == Kind::String {
+                        this
+                    } else {
+                        let units = self.string_this_units(code, this)?;
+                        self.new_string_units(&units)
+                    };
+                    let regexp_constructor = *self
+                        .intrinsics
+                        .get("RegExp")
+                        .expect("RegExp intrinsic is linked");
+                    let constructor =
+                        Slot::of(Kind::Reference, Payload::Reference(regexp_constructor));
+                    let matcher = self.construct_value(code, constructor, &[arg0], constructor)?;
+                    let method = self.string_protocol_method(code, matcher, "search")?;
+                    self.invoke_value(code, method, matcher, &[subject])?
+                }
+            }
+            // `String.prototype.match`: a custom `regexp[Symbol.match]` is
+            // called with the original receiver before string coercion. The
+            // intrinsic RegExp path uses the existing matcher; every other
+            // argument is converted through `RegExpCreate(regexp, undefined)`.
+            NativeMethod::StringMatch => {
+                if matches!(this.kind, Kind::Undefined | Kind::Null) {
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Null {
+                            "this: null"
+                        } else {
+                            "this: undefined"
+                        }
+                        .into(),
+                    ));
+                }
+                self.meter.tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
+                let match_method = self.string_protocol_method(code, arg0, "match")?;
+                if !matches!(match_method.kind, Kind::Undefined | Kind::Null) {
+                    self.invoke_value(code, match_method, arg0, &[this])?
+                } else {
+                    let subject = if this.kind == Kind::String {
+                        this
+                    } else {
+                        let units = self.string_this_units(code, this)?;
+                        self.new_string_units(&units)
+                    };
+                    let regexp_constructor = *self
+                        .intrinsics
+                        .get("RegExp")
+                        .expect("RegExp intrinsic is linked");
+                    let constructor =
+                        Slot::of(Kind::Reference, Payload::Reference(regexp_constructor));
+                    let matcher = self.construct_value(code, constructor, &[arg0], constructor)?;
+                    let method = self.string_protocol_method(code, matcher, "match")?;
+                    self.invoke_value(code, method, matcher, &[subject])?
+                }
+            }
+            NativeMethod::StringMatchAll => self.string_match_all(code, this, arg0)?,
+            // `String.prototype.replace`: a custom `searchValue[Symbol.replace]`
+            // runs with the original receiver before string coercion. Internal
+            // RegExps use the matcher worker; every other value follows the
+            // ordinary first-string-occurrence algorithm.
+            NativeMethod::StringReplace => {
+                if matches!(this.kind, Kind::Undefined | Kind::Null) {
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Null {
+                            "this: null"
+                        } else {
+                            "this: undefined"
+                        }
+                        .into(),
+                    ));
+                }
+                let repl = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let replace_method = self.string_protocol_method(code, arg0, "replace")?;
+                if !matches!(replace_method.kind, Kind::Undefined | Kind::Null) {
+                    self.invoke_value(code, replace_method, arg0, &[this, repl])?
+                } else {
+                    let subject = if this.kind == Kind::String {
+                        this
+                    } else {
+                        let units = self.string_this_units(code, this)?;
+                        self.new_string_units(&units)
+                    };
+                    self.string_replace_plain(code, subject, arg0, repl)?
+                }
+            }
+            // `String.prototype.replaceAll`: RequireObjectCoercible precedes
+            // the observable IsRegExp/flags check. A custom `@@replace` still
+            // receives the original receiver; otherwise the string branch
+            // replaces every non-overlapping UTF-16 occurrence. IronHorse's
+            // intrinsic RegExp `@@replace` delegates to the shared global
+            // matcher worker.
+            NativeMethod::StringReplaceAll => {
+                if matches!(this.kind, Kind::Undefined | Kind::Null) {
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Undefined {
+                            "this: undefined"
+                        } else {
+                            "this: null"
+                        }
+                        .into(),
+                    ));
+                }
+                let repl = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let is_regexp = if matches!(arg0.kind, Kind::Undefined | Kind::Null) {
+                    false
+                } else {
+                    self.string_is_regexp(code, arg0)?
+                };
+                if is_regexp {
+                    let Payload::Reference(search_object) = arg0.value else {
+                        unreachable!("IsRegExp is false for primitive values")
+                    };
+                    let flags = self.regexp_flags_units(code, search_object, arg0, true)?;
+                    if !flags.contains(&(b'g' as u16)) {
+                        return Err(self.catchable_type_error_msg("regexp has no g flag".into()));
+                    }
+                }
+
+                let replace_method = self.string_protocol_method(code, arg0, "replace")?;
+                if !matches!(replace_method.kind, Kind::Undefined | Kind::Null) {
+                    self.invoke_value(code, replace_method, arg0, &[this, repl])?
+                } else {
+                    let subject = if this.kind == Kind::String {
+                        this
+                    } else {
+                        let units = self.string_this_units(code, this)?;
+                        self.new_string_units(&units)
+                    };
+                    self.string_replace_all_plain(code, subject, arg0, repl)?
+                }
+            }
+            // `String.prototype.split(separator[, limit])`: a custom
+            // `separator[Symbol.split]` runs before receiver coercion; a RegExp
+            // without an override uses the sticky-splitter worker; everything
+            // else follows the ordinary UTF-16 string-separator algorithm.
+            NativeMethod::StringSplit => {
+                // RequireObjectCoercible precedes the separator protocol, so a
+                // custom `@@split` cannot observe a nullish receiver.
+                if matches!(this.kind, Kind::Undefined | Kind::Null) {
+                    return Err(self.catchable_type_error_msg(
+                        if this.kind == Kind::Undefined {
+                            "this: undefined"
+                        } else {
+                            "this: null"
+                        }
+                        .into(),
+                    ));
+                }
+                let limit = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let split_method = self.string_protocol_method(code, arg0, "split")?;
+                if !matches!(split_method.kind, Kind::Undefined | Kind::Null) {
+                    self.meter.tick_raw(STRING_SPLIT_PROTOCOL_FRAME_METERING);
+                    self.invoke_value(code, split_method, arg0, &[this, limit])?
+                } else {
+                    self.string_split_plain(code, this, arg0, limit)?
+                }
+            }
+            _ => unreachable!("not one of the String methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The Object, Proxy and realm methods of
+    /// [`Self::call_native_method_inner`], out of line (STACK-DEPTH-REFACTOR.md
+    /// A1): a re-entrant call through one of them carries this family's frame
+    /// and the thin dispatcher's, not the union of every method's.
+    #[inline(never)]
+    fn native_method_object(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
             NativeMethod::DisposableStackUse
             | NativeMethod::DisposableStackAdopt
             | NativeMethod::DisposableStackDefer
@@ -2558,7 +6009,7 @@ impl Interp {
                         }
                         self.stack.truncate(base);
                         self.push(Slot::of(Kind::Reference, Payload::Reference(proto)));
-                        return Ok(());
+                        return Ok(NativeResult::Pushed);
                     }
                 };
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
@@ -2588,7 +6039,7 @@ impl Interp {
                         // A primitive receiver: return it unchanged.
                         self.stack.truncate(base);
                         self.push(arg0);
-                        return Ok(());
+                        return Ok(NativeResult::Pushed);
                     }
                 };
                 self.meter.tick_raw(REFLECT_FRAME_METERING);
@@ -2663,17 +6114,6 @@ impl Interp {
                     arg0
                 }
             }
-            // `Function.prototype.call` is handled by the `run` trampoline
-            // (`enter_call_dot_call`) and never reaches here.
-            NativeMethod::FunctionCall => {
-                return Err(Step::Host(Halt::EngineInvariant("call:unexpected")))
-            }
-            // `Function.prototype.apply` is handled by the `run` trampoline
-            // (`enter_call_dot_apply`) and never reaches here.
-            NativeMethod::FunctionApply => {
-                return Err(Step::Host(Halt::EngineInvariant("apply:unexpected")))
-            }
-            NativeMethod::FunctionPrototype => Slot::undefined(),
             // `Object.prototype.valueOf`: `ToObject(this)`. Object receivers
             // retain their identity, primitive receivers become their realm
             // wrappers, and nullish receivers throw a catchable TypeError.
@@ -2823,38 +6263,6 @@ impl Interp {
             NativeMethod::ObjectToLocaleString => {
                 self.invoke_value_method(code, this, "toString", &[])?
             }
-            // `Function.prototype.toString`: XS renders any function as
-            // `function ["name"] (){[native code]}`.
-            NativeMethod::FunctionToString => {
-                if !self.is_callable_value(this) {
-                    return Err(
-                        self.catchable_type_error_msg("this: not a Function instance".into())
-                    );
-                }
-                let name = match this.value {
-                    Payload::Reference(r) => self
-                        .functions
-                        .get(&r)
-                        .map(|fi| self.str_units(fi.name_chunk))
-                        .unwrap_or_default(),
-                    _ => Vec::new(),
-                };
-                self.meter.tick_raw(METHOD_FUNCTION_TOSTRING_METERING);
-                let mut units: Vec<u16> = "function [\"".encode_utf16().collect();
-                units.extend(name);
-                units.extend("\"] (){[native code]}".encode_utf16());
-                self.charge_and_check(string_chunk_cost(units.len() as u64))?;
-                let off = self.chunks.alloc(&units_to_be16(&units));
-                Slot::of(Kind::String, Payload::String(off))
-            }
-            // `Error.prototype.toString`: `name` / `name: message`.
-            NativeMethod::ErrorToString => {
-                let units = self.error_to_string(code, this)?;
-                self.meter.tick_raw(METHOD_ERROR_TOSTRING_METERING);
-                self.charge_and_check(string_chunk_cost(units.len() as u64))?;
-                let off = self.chunks.alloc(&units_to_be16(&units));
-                Slot::of(Kind::String, Payload::String(off))
-            }
             // `<wrapper>.toString`: stringify the wrapped primitive with the
             // same per-type ToString metering the `String(v)` call uses (a
             // number renders through `fxNumberToString` — one built-in step
@@ -2866,178 +6274,6 @@ impl Interp {
                 }
                 .unwrap_or(this);
                 self.to_string_slot_metered(prim)
-            }
-            // `Function.prototype.bind(thisArg, ...boundArgs)`: create a bound
-            // function (its creation; the bound call is a `run` trampoline).
-            NativeMethod::FunctionBind => self.make_bound_function(base, argc)?,
-            NativeMethod::FunctionHasInstance => {
-                Slot::boolean(self.ordinary_has_instance(code, this, arg0)?)
-            }
-            // `Symbol.prototype.toString()` → `Symbol(<description>)`
-            // (`fxSymbolToString`: `fxStringX("Symbol(")` + the description +
-            // `")"`). Accept either a Symbol primitive or its realm wrapper.
-            NativeMethod::SymbolToString => {
-                let symbol = self.symbol_this_value(this)?;
-                let units = self.symbol_descriptive_units(symbol);
-                self.meter.tick_raw(SYMBOL_TO_STRING_METERING);
-                let off = self.chunks.alloc(&units_to_be16(&units));
-                Slot::of(Kind::String, Payload::String(off))
-            }
-            // `Symbol.prototype.valueOf()`: the symbol primitive itself.
-            NativeMethod::SymbolValueOf | NativeMethod::SymbolToPrimitive => {
-                self.symbol_this_value(this)?
-            }
-            // `get Symbol.prototype.description`: the `[[Description]]` the
-            // constructor coerced and stored, or `undefined`. The description
-            // slot is the symbol's identity, so this reads it in place — no
-            // chunk is allocated and nothing beyond the accessor dispatch is
-            // metered (XS's `fx_Symbol_prototype_get_description` calls no
-            // `mxMeter` of its own).
-            NativeMethod::SymbolDescriptionGetter => {
-                let symbol = self.symbol_this_value(this)?;
-                match symbol.value {
-                    Payload::Reference(d) => {
-                        let slot = self.slots.get(d);
-                        match slot.kind {
-                            Kind::String => Slot::of(Kind::String, slot.value),
-                            _ => Slot::undefined(),
-                        }
-                    }
-                    _ => Slot::undefined(),
-                }
-            }
-            NativeMethod::DateToPrimitive => {
-                if !matches!(
-                    this,
-                    Slot {
-                        kind: Kind::Reference,
-                        value: Payload::Reference(_),
-                        ..
-                    }
-                ) {
-                    return Err(self.catchable_type_error_msg("invalid this".into()));
-                }
-                let hint = match arg0 {
-                    Slot {
-                        kind: Kind::String,
-                        value: Payload::String(offset),
-                        ..
-                    } => self
-                        .str_scalar_text(offset)
-                        .ok_or_else(|| self.catchable_type_error_msg("invalid hint".into()))?,
-                    _ => return Err(self.catchable_type_error_msg("invalid hint".into())),
-                };
-                match hint.as_str() {
-                    "string" | "default" => self.ordinary_to_primitive(code, this, true)?,
-                    "number" => self.ordinary_to_primitive(code, this, false)?,
-                    _ => return Err(self.catchable_type_error_msg("invalid hint".into())),
-                }
-            }
-            NativeMethod::BigIntValueOf => self.bigint_this_value(this)?,
-            NativeMethod::BigIntAsIntN | NativeMethod::BigIntAsUintN => {
-                let bits = self.to_bigint_width(code, arg0)?;
-                let arg1 = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let value = self.to_bigint_value(code, arg1)?;
-                self.bigint_as_n(value, bits, m == NativeMethod::BigIntAsIntN)?
-            }
-            NativeMethod::BigIntToString => {
-                let value = self.bigint_this_value(this)?;
-                let radix = if arg0.kind == Kind::Undefined {
-                    10
-                } else {
-                    let n = self.number_radix_integer(code, arg0)?;
-                    if !(2..=36).contains(&n) {
-                        return Err(self.catchable_range_error_msg("invalid radix".into()));
-                    }
-                    n as u32
-                };
-                let Payload::BigInt(off) = value.value else {
-                    return Err(self
-                        .catchable_type_error_msg("BigInt.asIntN: value must be a BigInt".into()));
-                };
-                let (negative, magnitude) = self.read_bigint(off);
-                let rendered = bi_to_radix(self, negative, &magnitude, radix)?;
-                self.meter.tick_builtin();
-                let off = self.alloc_str_text_metered(rendered.as_bytes())?;
-                Slot::of(Kind::String, Payload::String(off))
-            }
-            NativeMethod::BigIntToLocaleString => {
-                let value = self.bigint_this_value(this)?;
-                let locale = self
-                    .stack
-                    .get(base + 4)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let options = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let Payload::BigInt(off) = value.value else {
-                    return Err(self.catchable_type_error_msg(
-                        "BigInt.asUintN: value must be a BigInt".into(),
-                    ));
-                };
-                let (negative, magnitude) = self.read_bigint(off);
-                let digits = bi_to_decimal(false, &magnitude);
-                let data = self.build_number_format(code, locale, options)?;
-                let resolved = self.nf_resolved(&data);
-                let rendered =
-                    crate::intl_number::format_bigint_to_string(&resolved, negative, &digits);
-                self.intl_string(&rendered)
-            }
-            // `Symbol.for(key)`: apply ToString, then return the registry
-            // symbol for that key — the same symbol identity on repeat calls.
-            NativeMethod::SymbolFor => {
-                let primitive = self.to_primitive(code, arg0, true)?;
-                if primitive.kind == Kind::Symbol {
-                    return Err(
-                        self.catchable_type_error_msg("cannot coerce symbol to string".into())
-                    );
-                }
-                let string = self.to_string_slot_metered(primitive);
-                let key = match string.value {
-                    Payload::String(off) => self.str_content(off).to_vec(),
-                    _ => unreachable!("ToString returns a String slot"),
-                };
-                self.meter.tick_raw(SYMBOL_FOR_METERING);
-                let d = if let Some(&d) = self.symbol_registry.get(&key) {
-                    d
-                } else {
-                    // Intern the key as the registered symbol's description
-                    // slot (its identity); `Symbol.for(k)` returns this same
-                    // slot forever after, so `=== ` holds.
-                    let desc_off = self.chunks.alloc(&key);
-                    let d = self
-                        .slots
-                        .alloc(Slot::of(Kind::String, Payload::String(desc_off)));
-                    self.symbol_registry.insert(key.clone(), d);
-                    self.symbol_registry_keys.insert(d, key);
-                    d
-                };
-                Slot::of(Kind::Symbol, Payload::Reference(d))
-            }
-            // `Symbol.keyFor(sym)`: the registry key a registered symbol was
-            // interned under, or `undefined` for a non-registered symbol.
-            NativeMethod::SymbolKeyFor => {
-                if arg0.kind != Kind::Symbol {
-                    return Err(self.catchable_type_error_msg("sym: not a symbol".into()));
-                }
-                self.meter.tick_raw(SYMBOL_KEYFOR_METERING);
-                match arg0.value {
-                    Payload::Reference(d) => match self.symbol_registry_keys.get(&d) {
-                        Some(key) => {
-                            let off = self.chunks.alloc(&key.clone());
-                            Slot::of(Kind::String, Payload::String(off))
-                        }
-                        None => Slot::undefined(),
-                    },
-                    _ => Slot::undefined(),
-                }
             }
             // `Object.prototype.hasOwnProperty(V)` (ECMA-262 20.1.3.2): the full
             // `? ToPropertyKey(V)` / `? ToObject(this)` / `HasOwnProperty(O, P)`
@@ -3055,7 +6291,7 @@ impl Interp {
                     _ => {
                         self.stack.truncate(base);
                         self.push(Slot::boolean(false));
-                        return Ok(());
+                        return Ok(NativeResult::Pushed);
                     }
                 };
                 let prototype = self.array_to_object(this)?;
@@ -3907,1762 +7143,215 @@ impl Interp {
                 self.detach_array_buffer(buffer);
                 Slot::undefined()
             }
-            NativeMethod::TypedArrayCopyWithin
-            | NativeMethod::TypedArrayFill
-            | NativeMethod::TypedArraySet
-            | NativeMethod::TypedArrayReverse => {
-                self.typed_array_mutator(m, this, base, argc, code)?
+            _ => unreachable!("not one of the Object, Proxy and realm methods"),
+        };
+        Ok(NativeResult::Value(result))
+    }
+
+    /// The Function, Reflect, Symbol, Error, Number, BigInt, Math and JSON methods of
+    /// [`Self::call_native_method_inner`], out of line (STACK-DEPTH-REFACTOR.md A1): a re-entrant
+    /// call through one of them carries this family's frame and the thin dispatcher's, not the
+    /// union of every method's.
+    #[inline(never)]
+    fn native_method_function(
+        &mut self,
+        m: NativeMethod,
+        base: usize,
+        argc: usize,
+        code: &[u8],
+        this: Slot,
+        arg0: Slot,
+    ) -> Result<NativeResult, Step> {
+        let _ = (base, argc, code, this, arg0);
+        let result: Slot = match m {
+            // `Function.prototype.call` is handled by the `run` trampoline
+            // (`enter_call_dot_call`) and never reaches here.
+            NativeMethod::FunctionCall => {
+                return Err(Step::Host(Halt::EngineInvariant("call:unexpected")))
             }
-            NativeMethod::TypedArrayJoin => self.typed_array_join(this, base, argc, code)?,
-            NativeMethod::TypedArrayValues
-            | NativeMethod::TypedArrayKeys
-            | NativeMethod::TypedArrayEntries => {
-                let typed_array = match this.value {
-                    Payload::Reference(typed_array)
-                        if this.kind == Kind::Reference
-                            && self.typed_arrays.contains_key(&typed_array) =>
-                    {
-                        typed_array
-                    }
-                    _ => {
-                        return Err(
-                            self.catchable_type_error_msg("this: not a TypedArray instance".into())
-                        )
-                    }
-                };
-                self.validate_typed_array(this)?;
-                let kind = match m {
-                    NativeMethod::TypedArrayValues => 0,
-                    NativeMethod::TypedArrayKeys => 1,
-                    NativeMethod::TypedArrayEntries => 2,
-                    _ => unreachable!(),
-                };
-                self.make_array_iterator(typed_array, kind)
+            // `Function.prototype.apply` is handled by the `run` trampoline
+            // (`enter_call_dot_apply`) and never reaches here.
+            NativeMethod::FunctionApply => {
+                return Err(Step::Host(Halt::EngineInvariant("apply:unexpected")))
             }
-            NativeMethod::TypedArrayReadonly(operation) => {
-                self.typed_array_readonly(operation, this, base, argc, code)?
-            }
-            NativeMethod::TypedArraySlice | NativeMethod::TypedArraySubarray => {
-                self.typed_array_slice_or_subarray(m, this, base, argc, code)?
-            }
-            NativeMethod::TypedArrayMap | NativeMethod::TypedArrayFilter => {
-                self.typed_array_map_filter(m, this, base, code)?
-            }
-            NativeMethod::TypedArraySort => self.typed_array_sort(this, base, argc, code)?,
-            NativeMethod::TypedArrayToLocaleString => {
-                self.typed_array_to_locale_string(this, base, argc, code)?
-            }
-            NativeMethod::TypedArrayLengthGetter
-            | NativeMethod::TypedArrayByteLengthGetter
-            | NativeMethod::TypedArrayByteOffsetGetter
-            | NativeMethod::TypedArrayBufferGetter
-            | NativeMethod::TypedArrayToStringTagGetter => self.typed_array_accessor(m, this)?,
-            NativeMethod::TypedArrayFrom | NativeMethod::TypedArrayOf => {
-                self.typed_array_static(m, this, base, argc, code)?
-            }
-            // `Array.prototype.push(...items)` — retain the exact-metered
-            // packed path only when the writes cannot observe descriptors or
-            // the prototype chain; all other receivers use the generic MOP.
-            NativeMethod::ArrayPush => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if !self.arguments_objects.contains(&i)
-                            && self.array_push_fast_safe(i, argc) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_push_pop(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let args: Vec<Slot> = (0..argc)
-                    .map(|i| {
-                        self.stack
-                            .get(base + 4 + i)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined)
-                    })
-                    .collect();
-                let c = args.len() as u32;
-                let length = self.arrays[&inst].length;
-                // `mxMeterSome(2)` + the grow to `length + c`
-                // (`fxSetIndexSize`, growable chunk) + `mxMeterSome(5)` per
-                // appended item + a closing `mxMeterSome(2)`, plus the fixed
-                // native-method frame constant.
-                self.meter.tick_raw(ARRAY_PUSH_FRAME_METERING);
-                self.charge_builtin_work(2)?;
-                if c > 0 {
-                    self.charge_and_check(self.array_chunk_size_metering(length + c))?;
-                }
-                for (i, a) in args.into_iter().enumerate() {
-                    let idx = length + i as u32;
-                    let mut v = a;
-                    v.id = 0;
-                    v.next = crate::value::SlotIndex::NULL;
-                    self.arrays
-                        .get_mut(&inst)
-                        .unwrap()
-                        .insert_item(idx, v, &mut self.side_refs);
-                    self.charge_builtin_work(5)?;
-                }
-                let a = self.arrays.get_mut(&inst).unwrap();
-                a.length = length + c;
-                self.charge_builtin_work(2)?;
-                Self::array_index_number(u64::from(length + c))
-            }
-            // `Array.prototype.pop()` — likewise, a non-writable length or
-            // non-configurable last element must take the throwing MOP path.
-            NativeMethod::ArrayPop => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if !self.arguments_objects.contains(&i) && self.array_pop_fast_safe(i) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_push_pop(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                self.meter.tick_raw(ARRAY_POP_FRAME_METERING);
-                let length = self.arrays[&inst].length;
-                self.charge_builtin_work(2)?;
-                let result = if length > 0 {
-                    let new_len = length - 1;
-                    self.charge_and_check(self.array_chunk_size_metering(new_len))?;
-                    let removed = self
-                        .arrays
-                        .get_mut(&inst)
-                        .unwrap()
-                        .remove_item(&new_len, &mut self.side_refs)
-                        .unwrap_or_else(Slot::undefined);
-                    // `fxSetIndexSize(length-1, XS_CHUNK)` reallocs the item
-                    // chunk down; `mxMeterSome(8)`.
-                    self.charge_builtin_work(8)?;
-                    self.arrays.get_mut(&inst).unwrap().length = new_len;
-                    Slot::of(removed.kind, removed.value)
-                } else {
-                    Slot::undefined()
-                };
-                self.charge_builtin_work(4)?;
-                result
-            }
-            // `Array.prototype.indexOf(value[, from])` — dense fast path.
-            NativeMethod::ArrayIndexOf => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
-                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let target = arg0;
-                self.charge_and_check(ARRAY_METHOD_INDEXOF_FRAME_METERING)?;
-                let length = self.arrays[&inst].length;
-                let mut found = -1i32;
-                for i in 0..length {
-                    self.charge_and_check(ARRAY_INDEXOF_PER_STEP)?;
-                    if let Some(item) = self.arrays[&inst].items().get(&i) {
-                        if self.strict_equal(item, &target) {
-                            found = i as i32;
-                            break;
-                        }
-                    }
-                }
-                Slot::integer(found)
-            }
-            // `Array.prototype.includes(value[, from])` — dense fast path. Scan
-            // from `from` (default 0) by SameValueZero; `true` on the first
-            // match, else `false`. Metered like `indexOf` (a frame constant +
-            // per-element scan step), calibrated against the pin.
-            NativeMethod::ArrayIncludes => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
-                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let target = arg0;
-                let from = self.arg_to_index(base, 1, 0, self.arrays[&inst].length);
-                self.charge_and_check(ARRAY_INCLUDES_FRAME_METERING)?;
-                let length = self.arrays[&inst].length;
-                let mut found = false;
-                for i in from..length {
-                    self.charge_and_check(ARRAY_INCLUDES_PER_STEP)?;
-                    let item = self.arrays[&inst]
-                        .items()
-                        .get(&i)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
-                    if self.same_value_zero(&item, &target) {
-                        found = true;
-                        break;
-                    }
-                }
-                Slot::boolean(found)
-            }
-            // `Array.prototype.lastIndexOf(value[, from])` — dense fast path.
-            // Scan backward from the end by strict equality; the last matching
-            // index, or `-1`.
-            NativeMethod::ArrayLastIndexOf => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
-                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let target = arg0;
-                self.charge_and_check(ARRAY_LASTINDEXOF_FRAME_METERING)?;
-                let length = self.arrays[&inst].length;
-                let mut found = -1i32;
-                for i in (0..length).rev() {
-                    self.charge_and_check(ARRAY_LASTINDEXOF_PER_STEP)?;
-                    if let Some(item) = self.arrays[&inst].items().get(&i) {
-                        if self.strict_equal(item, &target) {
-                            found = i as i32;
-                            break;
-                        }
-                    }
-                }
-                Slot::integer(found)
-            }
-            // `Array.prototype.fill(value[, start[, end]])` — dense fast path.
-            // Set `[start, end)` to `value` and return the array. A full fill
-            // (`start == 0 && end == length`) reallocs the item chunk
-            // (`fxSetIndexSize`); each written element meters `mxMeterSome(5)`.
-            NativeMethod::ArrayFill => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if (1..argc.min(3)).all(|index| {
-                            matches!(
-                                self.stack.get(base + 4 + index).map(|slot| slot.kind),
-                                Some(Kind::Integer | Kind::Number | Kind::Undefined)
-                            )
-                        }) && self.array_fill_fast_safe(i, base) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_fill(code, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let value = if argc > 0 { arg0 } else { Slot::undefined() };
-                let length = self.arrays[&inst].length;
-                let start = self.arg_to_index(base, 1, 0, length);
-                let end = self.arg_to_index(base, 2, length, length);
-                self.meter.tick_raw(ARRAY_FILL_FRAME_METERING);
-                // A full fill runs `fxSetIndexSize(length)`, but for an
-                // already-dense array the chunk is already that size, so the
-                // resize is a no-op and meters nothing.
-                let _ = (start, end, length);
-                let mut v = value;
-                v.id = 0;
-                v.next = crate::value::SlotIndex::NULL;
-                for i in start..end {
-                    self.arrays
-                        .get_mut(&inst)
-                        .unwrap()
-                        .insert_item(i, v, &mut self.side_refs);
-                    self.charge_builtin_work(5)?;
-                }
-                this
-            }
-            // `Array.prototype.reverse()` — reverse the elements in place and
-            // return the array. XS reverses via the generic `mxHasAt`/`mxGetAt`/
-            // `mxSetAt` path; metering is a frame constant plus a per-swap cost
-            // (`length/2` swaps), calibrated against the pin.
-            NativeMethod::ArrayReverse => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
-                        let result = self.array_generic_reverse(code, this)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_REVERSE_FRAME_METERING);
-                let swaps = (length / 2) as u64;
-                self.charge_and_check(swaps * ARRAY_REVERSE_PER_SWAP_METERING)?;
-                let a = self.arrays.get_mut(&inst).unwrap();
-                let mut lo = 0u32;
-                let mut hi = length.saturating_sub(1);
-                while lo < hi {
-                    let l = a.remove_item(&lo, &mut self.side_refs);
-                    let h = a.remove_item(&hi, &mut self.side_refs);
-                    if let Some(h) = h {
-                        a.insert_item(lo, h, &mut self.side_refs);
-                    }
-                    if let Some(l) = l {
-                        a.insert_item(hi, l, &mut self.side_refs);
-                    }
-                    lo += 1;
-                    hi -= 1;
-                }
-                this
-            }
-            // `Array.prototype.slice([start[, end]])` — dense fast path. A new
-            // array with the elements of `[start, end)`. Metering: a frame
-            // constant, plus (when the slice is non-empty) the result chunk
-            // and `mxMeterSome(count*10)`, plus a closing `mxMeterSome(3)`.
-            NativeMethod::ArraySlice => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if self.array_allocating_uses_default_species(i)
-                            && matches!(
-                                arg0.kind,
-                                Kind::Integer | Kind::Number | Kind::Undefined
-                            )
-                            && (argc < 2
-                                || matches!(
-                                    self.stack
-                                        .get(base + 5)
-                                        .copied()
-                                        .unwrap_or_else(Slot::undefined)
-                                        .kind,
-                                    Kind::Integer | Kind::Number | Kind::Undefined
-                                )) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_slice(code, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let length = self.arrays[&inst].length;
-                let start = self.arg_to_index(base, 0, 0, length);
-                let end = self.arg_to_index(base, 1, length, length);
-                let count = end.saturating_sub(start);
-                self.meter.tick_raw(ARRAY_SLICE_FRAME_METERING);
-                let result = self.new_array_unmetered();
-                if count > 0 {
-                    self.charge_and_check(self.array_chunk_size_metering(count))?;
-                    self.charge_builtin_work((count as u64) * 10)?;
-                    let buffer = self.reserve_scratch(count as usize)?;
-                    let items = Self::fill_scratch(
-                        buffer,
-                        (0..count).filter_map(|i| {
-                            self.arrays[&inst]
-                                .items()
-                                .get(&(start + i))
-                                .map(|s| (i, *s))
-                        }),
-                    );
-                    let a = self.arrays.get_mut(&result).unwrap();
-                    for (i, s) in items {
-                        a.insert_item(i, Slot::of(s.kind, s.value), &mut self.side_refs);
-                    }
-                    a.length = count;
-                }
-                self.charge_builtin_work(3)?;
-                Slot::of(Kind::Reference, Payload::Reference(result))
-            }
-            // `Array.prototype.concat(...args)` — dense fast path, with a
-            // generic fallback for observable spreadability/species and exotic
-            // receivers. A new array contains the receiver's elements followed
-            // by each argument: an array argument contributes its elements and
-            // any other value is appended as one element. Metering for the
-            // packed default case models `fxNewInstance` (the list) + a
-            // Symbol.isConcatSpreadable check per reference operand + a key slot
-            // and `mxMeterSome(2)` per spread element + a key slot and
-            // `mxMeterSome(4)` per appended value + the result chunk +
-            // `mxMeterSome(3)`, plus a frame constant.
-            NativeMethod::ArrayConcat => {
-                let recv = match self.dense_array_this(this) {
-                    Some(i)
-                        if !self.arguments_objects.contains(&i)
-                            && self.array_allocating_uses_default_species(i)
-                            && self.array_concat_uses_default_spreadability(this)
-                            && (0..argc).all(|argi| {
-                                let operand = self
-                                    .stack
-                                    .get(base + 4 + argi)
-                                    .copied()
-                                    .unwrap_or_else(Slot::undefined);
-                                self.array_concat_uses_default_spreadability(operand)
-                                    && match operand.value {
-                                        Payload::Reference(inst)
-                                            if self.arrays.contains_key(&inst)
-                                                && !self.arguments_objects.contains(&inst) =>
-                                        {
-                                            let array = &self.arrays[&inst];
-                                            array.items().len() as u32 == array.length
-                                        }
-                                        _ => true,
-                                    }
-                            }) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_concat(code, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                // Collect the operands: the receiver, then each argument.
-                let mut operands: Vec<Slot> = self.reserve_scratch(argc + 1)?;
-                operands.push(this);
-                for i in 0..argc {
-                    operands.push(
-                        self.stack
-                            .get(base + 4 + i)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined),
+            NativeMethod::FunctionPrototype => Slot::undefined(),
+            // `Function.prototype.toString`: XS renders any function as
+            // `function ["name"] (){[native code]}`.
+            NativeMethod::FunctionToString => {
+                if !self.is_callable_value(this) {
+                    return Err(
+                        self.catchable_type_error_msg("this: not a Function instance".into())
                     );
                 }
-                self.meter.tick_raw(ARRAY_CONCAT_FRAME_METERING);
-                self.meter.tick_slot_alloc(); // `fxNewInstance` (the list)
-                let result = self.new_array_unmetered();
-                let mut out: Vec<Slot> = Vec::new();
-                for op in operands {
-                    // Every reference operand runs the `Symbol.isConcatSpreadable`
-                    // check.
-                    let is_array = matches!(op.value, Payload::Reference(r)
-                        if self.arrays.contains_key(&r)
-                            && !self.arguments_objects.contains(&r));
-                    if let Payload::Reference(_) = op.value {
-                        self.meter.tick_raw(ARRAY_CONCAT_CHECK_METERING);
-                    }
-                    if is_array {
-                        let r = match op.value {
-                            Payload::Reference(r) => r,
-                            _ => unreachable!(),
-                        };
-                        // Dense array only (a hole needs the uninitialized-slot
-                        // path).
-                        let (len, dense) = {
-                            let a = &self.arrays[&r];
-                            (a.length, a.items().len() as u32 == a.length)
-                        };
-                        if !dense {
-                            return Err(Step::Host(Halt::NotImplemented("concat:sparse-arg")));
-                        }
-                        for i in 0..len {
-                            let s = self.arrays[&r]
-                                .items()
-                                .get(&i)
-                                .copied()
-                                .unwrap_or_else(Slot::undefined);
-                            self.meter.tick_slot_alloc();
-                            self.charge_builtin_work(2)?;
-                            self.meter.tick_raw(ARRAY_CONCAT_SPREAD_EXTRA_METERING);
-                            self.extend_prepaid_scratch(&mut out, &[Slot::of(s.kind, s.value)])?;
-                        }
-                    } else {
-                        // A non-array value is appended as a single element.
-                        self.meter.tick_slot_alloc();
-                        self.charge_builtin_work(4)?;
-                        self.meter.tick_raw(ARRAY_CONCAT_PRIM_EXTRA_METERING);
-                        self.extend_prepaid_scratch(&mut out, &[op])?;
-                    }
-                }
-                let total = out.len() as u32;
-                if total > 0 {
-                    self.charge_and_check(self.array_chunk_size_metering(total))?;
-                }
-                {
-                    let a = self.arrays.get_mut(&result).unwrap();
-                    for (i, s) in out.into_iter().enumerate() {
-                        a.insert_item(i as u32, s, &mut self.side_refs);
-                    }
-                    a.length = total;
-                }
-                self.charge_builtin_work(3)?;
-                let _ = recv;
-                Slot::of(Kind::Reference, Payload::Reference(result))
-            }
-            // `Array.prototype.at(index)` — dense fast path. Relative index
-            // (negative counts from the end); the element there, or
-            // `undefined`. Metering: a frame constant, plus (when in range) the
-            // element read (`mxGetAt`).
-            NativeMethod::ArrayAt => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
+                let name = match this.value {
+                    Payload::Reference(r) => self
+                        .functions
+                        .get(&r)
+                        .map(|fi| self.str_units(fi.name_chunk))
+                        .unwrap_or_default(),
+                    _ => Vec::new(),
                 };
-                self.meter.tick_raw(ARRAY_AT_FRAME_METERING);
-                let length = self.arrays[&inst].length as i64;
-                let number = self.to_number_f64(code, arg0)?;
-                let raw = if number.is_nan() {
-                    0
-                } else {
-                    number.trunc() as i64
-                };
-                let idx = if raw < 0 { length + raw } else { raw };
-                let result = if idx >= 0 && idx < length {
-                    self.meter.tick_raw(ARRAY_AT_READ_METERING);
-                    self.arrays
-                        .get(&inst)
-                        .and_then(|a| a.items().get(&(idx as u32)).copied())
-                        .map(|s| Slot::of(s.kind, s.value))
-                        .unwrap_or_else(Slot::undefined)
-                } else {
-                    Slot::undefined()
-                };
-                result
-            }
-            // `Array.prototype.shift()` — dense fast path. Remove and return
-            // the first element, shifting the rest down and shrinking the item
-            // chunk. Metering: `mxMeterSome(2 + 3 + 3 + 4)` when non-empty
-            // (else 2+4), the shrink chunk, and `mxMeterSome((length-1)*10)`.
-            NativeMethod::ArrayShift => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if !self.arguments_objects.contains(&i)
-                            && self.array_shift_fast_safe(i) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_shift_unshift(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let length = self.arrays[&inst].length;
-                self.charge_builtin_work(2)?;
-                let result = if length > 0 {
-                    self.charge_builtin_work(3)?;
-                    let new_len = length - 1;
-                    self.charge_and_check(self.array_chunk_size_metering(new_len))?;
-                    self.charge_builtin_work((new_len as u64) * 10)?;
-                    let removed = {
-                        let a = self.arrays.get_mut(&inst).unwrap();
-                        let first = a
-                            .remove_item(&0, &mut self.side_refs)
-                            .unwrap_or_else(Slot::undefined);
-                        let mut shifted = std::collections::BTreeMap::new();
-                        for (&k, &v) in a.items().iter() {
-                            shifted.insert(k - 1, v);
-                        }
-                        a.replace_items(shifted, &mut self.side_refs);
-                        a.length = new_len;
-                        first
-                    };
-                    self.charge_builtin_work(3)?;
-                    Slot::of(removed.kind, removed.value)
-                } else {
-                    Slot::undefined()
-                };
-                self.charge_builtin_work(4)?;
-                result
-            }
-            // `Array.prototype.unshift(...items)` — dense fast path. Prepend the
-            // arguments, shifting existing elements up, and return the new
-            // length. Metering: the grow chunk, `mxMeterSome(length*10)` for the
-            // shift, `mxMeterSome(4)` per inserted argument, `mxMeterSome(2)`.
-            NativeMethod::ArrayUnshift => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if !self.arguments_objects.contains(&i)
-                            && self.array_unshift_fast_safe(i, argc) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_shift_unshift(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let length = self.arrays[&inst].length;
-                let c = argc as u32;
-                let args: Vec<Slot> = Self::fill_scratch(
-                    self.reserve_scratch(argc as usize)?,
-                    (0..argc).map(|i| {
-                        self.stack
-                            .get(base + 4 + i)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined)
-                    }),
-                );
-                self.meter.tick_raw(ARRAY_UNSHIFT_FRAME_METERING);
-                if c > 0 {
-                    self.charge_and_check(self.array_chunk_size_metering(length + c))?;
-                    self.charge_builtin_work((length as u64) * 10)?;
-                    self.charge_builtin_work(c as u64 * 4)?;
-                    let a = self.arrays.get_mut(&inst).unwrap();
-                    let mut shifted = std::collections::BTreeMap::new();
-                    for (&k, &v) in a.items().iter() {
-                        shifted.insert(k + c, v);
-                    }
-                    for (i, mut v) in args.into_iter().enumerate() {
-                        v.id = 0;
-                        v.next = crate::value::SlotIndex::NULL;
-                        shifted.insert(i as u32, v);
-                    }
-                    a.replace_items(shifted, &mut self.side_refs);
-                    a.length = length + c;
-                }
-                self.charge_builtin_work(2)?;
-                Self::array_index_number(u64::from(length + c))
-            }
-            // `Array.prototype.copyWithin(target[, start[, end]])` — dense fast
-            // path. Copy the block `[start, end)` (clamped to fit) to `target`
-            // in place. Metering: a frame constant + `mxMeterSome(count*10)`.
-            NativeMethod::ArrayCopyWithin => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if (0..argc.min(3)).all(|index| {
-                            matches!(
-                                self.stack.get(base + 4 + index).map(|slot| slot.kind),
-                                Some(Kind::Integer | Kind::Number | Kind::Undefined)
-                            )
-                        }) && self.array_copy_within_fast_safe(i, base) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_copy_within(code, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let length = self.arrays[&inst].length;
-                let to = self.arg_to_index(base, 0, 0, length);
-                let from = self.arg_to_index(base, 1, 0, length);
-                let end = self.arg_to_index(base, 2, length, length);
-                let mut count = end.saturating_sub(from);
-                if count > length - to {
-                    count = length - to;
-                }
-                self.meter.tick_raw(ARRAY_COPYWITHIN_FRAME_METERING);
-                if count > 0 {
-                    self.charge_builtin_work((count as u64) * 10)?;
-                    // Snapshot the source range, then write to the destination
-                    // (memmove semantics — overlapping ranges are handled by the
-                    // snapshot).
-                    let src: Vec<Option<Slot>> = Self::fill_scratch(
-                        self.reserve_scratch(count as usize)?,
-                        (0..count).map(|i| self.arrays[&inst].items().get(&(from + i)).copied()),
-                    );
-                    let a = self.arrays.get_mut(&inst).unwrap();
-                    for (i, s) in src.into_iter().enumerate() {
-                        let dst = to + i as u32;
-                        match s {
-                            Some(v) => {
-                                a.insert_item(dst, v, &mut self.side_refs);
-                            }
-                            None => {
-                                a.remove_item(&dst, &mut self.side_refs);
-                            }
-                        }
-                    }
-                }
-                this
-            }
-            // `Array.prototype.with(index, value)` — a new array copying the
-            // receiver with `index` replaced by `value`. Out-of-range index is
-            // a RangeError (self-named). Metering: a frame constant + a
-            // per-element copy cost over the generic `mxGetAt`/`mxDefineAt`
-            // path, calibrated against the pin.
-            NativeMethod::ArrayWith => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if matches!(arg0.kind, Kind::Integer | Kind::Number | Kind::Undefined) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result =
-                            self.array_generic_change_by_copy(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let length = self.arrays[&inst].length;
-                let raw = match numeric_of(&arg0) {
-                    Some(n) if !n.is_nan() => n.trunc() as i64,
-                    _ => 0,
-                };
-                let index = if raw < 0 { length as i64 + raw } else { raw };
-                if index < 0 || index >= length as i64 {
-                    return Err(self.catchable_range_error_msg("invalid index".into()));
-                }
-                let value = self
-                    .stack
-                    .get(base + 4 + 1)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                self.meter.tick_raw(ARRAY_WITH_FRAME_METERING);
-                self.charge_and_check((length as u64) * ARRAY_WITH_PER_ELEM_METERING)?;
-                let result = self.new_array_unmetered();
-                if length > 0 {
-                    self.charge_and_check(self.array_chunk_size_metering(length))?;
-                    let items: Vec<Slot> = Self::fill_scratch(
-                        self.reserve_scratch(length as usize)?,
-                        (0..length).map(|i| {
-                            if i as i64 == index {
-                                value
-                            } else {
-                                self.arrays[&inst]
-                                    .items()
-                                    .get(&i)
-                                    .copied()
-                                    .unwrap_or_else(Slot::undefined)
-                            }
-                        }),
-                    );
-                    let a = self.arrays.get_mut(&result).unwrap();
-                    for (i, s) in items.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
-                    }
-                    a.length = length;
-                }
-                Slot::of(Kind::Reference, Payload::Reference(result))
-            }
-            // `Array.prototype.forEach(callback[, thisArg])` — dense fast path.
-            // Call `callback(item, index, array)` for each present element (via
-            // the re-entrant [`Self::run_callback`]); returns `undefined`. The
-            // callback body's own opcodes are metered by the nested dispatch;
-            // this adds the per-element `fxCallThisItem` overhead
-            // (`mxGetIndex` + the call frame setup) and the frame constant.
-            NativeMethod::ArrayForEach => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
-                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let callback = arg0;
-                if !self.is_callable_value(callback) {
-                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
-                }
-                let this_arg = self
-                    .stack
-                    .get(base + 4 + 1)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_FOREACH_FRAME_METERING);
-                for i in 0..length {
-                    let item = self.arrays[&inst].items().get(&i).copied();
-                    if let Some(item) = item {
-                        self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
-                        let cb_args = [item, Slot::integer(i as i32), this];
-                        self.run_callback(code, callback, this_arg, &cb_args)?;
-                    }
-                }
-                Slot::undefined()
-            }
-            // `Array.prototype.map` — a new array of the callback results.
-            // Per element: the `fxCallThisItem` overhead + the callback body +
-            // `mxMeterSome(2)` (the result store); plus the result chunk.
-            NativeMethod::ArrayMap => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i) if self.array_allocating_uses_default_species(i) => i,
-                    _ => {
-                        let result = self.array_generic_map_filter(code, m, this, base)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let callback = arg0;
-                if !self.is_callable_value(callback) {
-                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
-                }
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_MAP_FRAME_METERING);
-                let result = self.new_array_unmetered();
-                if length > 0 {
-                    self.charge_and_check(self.array_chunk_size_metering(length))?;
-                }
-                // The partial result otherwise exists only in this Rust local
-                // while guest callbacks run, so a mid-callback GC would sweep it.
-                let root_sp = self.stack.len();
-                self.stack
-                    .push(Slot::of(Kind::Reference, Payload::Reference(result)));
-                let mapped: Result<(), Step> = (|| {
-                    for i in 0..length {
-                        let item = self.arrays[&inst].items().get(&i).copied();
-                        if let Some(item) = item {
-                            self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
-                            let cb_args = [item, Slot::integer(i as i32), this];
-                            // Re-read the rooted argument after any prior callback GC.
-                            let this_arg = if argc > 1 {
-                                self.stack[base + 5]
-                            } else {
-                                Slot::undefined()
-                            };
-                            let r = self.run_callback(code, callback, this_arg, &cb_args)?;
-                            self.charge_builtin_work(2)?;
-                            let mut v = r;
-                            v.id = 0;
-                            v.next = crate::value::SlotIndex::NULL;
-                            self.arrays.get_mut(&result).unwrap().insert_item(
-                                i,
-                                v,
-                                &mut self.side_refs,
-                            );
-                        }
-                    }
-                    self.arrays.get_mut(&result).unwrap().length = length;
-                    Ok(())
-                })();
-                self.stack.truncate(root_sp);
-                mapped?;
-                Slot::of(Kind::Reference, Payload::Reference(result))
-            }
-            // `Array.prototype.some`/`every` — short-circuiting boolean folds.
-            // Per element: the `fxCallThisItem` overhead + the callback body +
-            // the `fxToBoolean` of its result.
-            NativeMethod::ArraySome | NativeMethod::ArrayEvery => {
-                let is_every = m == NativeMethod::ArrayEvery;
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
-                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let callback = arg0;
-                if !self.is_callable_value(callback) {
-                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
-                }
-                let this_arg = self
-                    .stack
-                    .get(base + 4 + 1)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_SOMEEVERY_FRAME_METERING);
-                let mut answer = is_every;
-                for i in 0..length {
-                    let item = self.arrays[&inst].items().get(&i).copied();
-                    if let Some(item) = item {
-                        self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
-                        let cb_args = [item, Slot::integer(i as i32), this];
-                        let r = self.run_callback(code, callback, this_arg, &cb_args)?;
-                        self.meter.tick_raw(ARRAY_PREDICATE_TOBOOL_METERING);
-                        let truthy = self.truthy(&r);
-                        if is_every && !truthy {
-                            answer = false;
-                            break;
-                        }
-                        if !is_every && truthy {
-                            answer = true;
-                            break;
-                        }
-                    }
-                }
-                Slot::boolean(answer)
-            }
-            // `Array.prototype.find`/`findIndex` — the first element/index whose
-            // callback is truthy. `fxFindThisItem` calls the callback for EVERY
-            // index (holes yield `undefined`), so the receiver need not be
-            // dense; the per-element cost is the find overhead + callback body.
-            NativeMethod::ArrayFind | NativeMethod::ArrayFindIndex => {
-                let want_index = m == NativeMethod::ArrayFindIndex;
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
-                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let callback = arg0;
-                if !self.is_callable_value(callback) {
-                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
-                }
-                let this_arg = self
-                    .stack
-                    .get(base + 4 + 1)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_FIND_FRAME_METERING);
-                if !want_index {
-                    // `find` (not `findIndex`) allocates a temporary for the
-                    // element result (`mxTemporary(item)`): a fixed 2<<14 over
-                    // `findIndex`, independent of the match.
-                    self.meter.tick_raw(ARRAY_FIND_VALUE_METERING);
-                }
-                let mut found: Option<(u32, Slot)> = None;
-                for i in 0..length {
-                    let item = self.arrays[&inst]
-                        .items()
-                        .get(&i)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
-                    self.meter.tick_raw(ARRAY_FIND_PER_ELEM_METERING);
-                    let cb_args = [item, Slot::integer(i as i32), this];
-                    let r = self.run_callback(code, callback, this_arg, &cb_args)?;
-                    self.meter.tick_raw(ARRAY_PREDICATE_TOBOOL_METERING);
-                    if self.truthy(&r) {
-                        found = Some((i, item));
-                        break;
-                    }
-                }
-                match found {
-                    Some((i, item)) => {
-                        if want_index {
-                            Slot::integer(i as i32)
-                        } else {
-                            item
-                        }
-                    }
-                    None => {
-                        if want_index {
-                            Slot::integer(-1)
-                        } else {
-                            Slot::undefined()
-                        }
-                    }
-                }
-            }
-            // `Array.prototype.filter` — a new array of the truthy-callback
-            // elements. Per element: the `fxCallThisItem` overhead + the
-            // callback body + `fxToBoolean`; a kept element appends (a slot +
-            // `mxMeterSome`). The result chunk is sized to the kept count.
-            NativeMethod::ArrayFilter => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i) if self.array_allocating_uses_default_species(i) => i,
-                    _ => {
-                        let result = self.array_generic_map_filter(code, m, this, base)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let callback = arg0;
-                if !self.is_callable_value(callback) {
-                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
-                }
-                let this_arg = self
-                    .stack
-                    .get(base + 4 + 1)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_FILTER_FRAME_METERING);
-                let mut kept: Vec<Slot> = Vec::new();
-                for i in 0..length {
-                    let item = self.arrays[&inst].items().get(&i).copied();
-                    if let Some(item) = item {
-                        self.meter.tick_raw(ARRAY_FOREACH_PER_ELEM_METERING);
-                        let cb_args = [item, Slot::integer(i as i32), this];
-                        let r = self.run_callback(code, callback, this_arg, &cb_args)?;
-                        self.meter.tick_raw(ARRAY_PREDICATE_TOBOOL_METERING);
-                        if self.truthy(&r) {
-                            self.meter.tick_raw(ARRAY_FILTER_KEEP_METERING);
-                            kept.push(item);
-                        }
-                    }
-                }
-                let result = self.new_array_unmetered();
-                let total = kept.len() as u32;
-                if total > 0 {
-                    self.charge_and_check(self.array_chunk_size_metering(total))?;
-                }
-                {
-                    let a = self.arrays.get_mut(&result).unwrap();
-                    for (i, mut v) in kept.into_iter().enumerate() {
-                        v.id = 0;
-                        v.next = crate::value::SlotIndex::NULL;
-                        a.insert_item(i as u32, v, &mut self.side_refs);
-                    }
-                    a.length = total;
-                }
-                Slot::of(Kind::Reference, Payload::Reference(result))
-            }
-            // `Array.prototype.reduce`/`reduceRight` — fold with
-            // `callback(acc, item, index, array)` (`this` = undefined). With no
-            // initial value the first (or last, for `reduceRight`) present
-            // element seeds the accumulator; an empty array with no initial is
-            // a TypeError (self-named). Per element: the `fxReduceThisItem`
-            // 4-arg-callback overhead + the callback body.
-            NativeMethod::ArrayReduce | NativeMethod::ArrayReduceRight => {
-                let right = m == NativeMethod::ArrayReduceRight;
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
-                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let callback = arg0;
-                if !self.is_callable_value(callback) {
-                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
-                }
-                self.meter.tick_raw(ARRAY_REDUCE_FRAME_METERING);
-                // The present indices in fold order.
-                let buffer = self.reserve_work_scratch(self.arrays[&inst].items().len())?;
-                let order = if right {
-                    Self::fill_scratch(buffer, self.arrays[&inst].items().keys().rev().copied())
-                } else {
-                    Self::fill_scratch(buffer, self.arrays[&inst].items().keys().copied())
-                };
-                let mut it = order.into_iter();
-                let mut acc = if argc >= 2 {
-                    self.stack
-                        .get(base + 4 + 1)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined)
-                } else {
-                    match it.next() {
-                        Some(i) => {
-                            // The seed-finding scan (one iteration for a dense
-                            // array — the first/last present element).
-                            self.meter.tick_raw(ARRAY_REDUCE_INIT_SCAN_METERING);
-                            match self.arrays[&inst].items().get(&i) {
-                                Some(s) => *s,
-                                None => {
-                                    return Err(Step::Host(Halt::NotImplemented(
-                                        "reduce:concurrent-mutation",
-                                    )))
-                                }
-                            }
-                        }
-                        None => {
-                            return Err(self.catchable_type_error_msg("no initial value".into()))
-                        }
-                    }
-                };
-                for i in it {
-                    // A prior callback may have mutated the receiver (e.g. the
-                    // test262 `delete arr[i]` pattern); a vanished snapshotted
-                    // index self-names rather than panicking on a missing key.
-                    let item = match self.arrays[&inst].items().get(&i) {
-                        Some(s) => *s,
-                        None => {
-                            return Err(Step::Host(Halt::NotImplemented(
-                                "reduce:concurrent-mutation",
-                            )))
-                        }
-                    };
-                    self.meter.tick_raw(ARRAY_REDUCE_PER_ELEM_METERING);
-                    let cb_args = [acc, item, Slot::integer(i as i32), this];
-                    acc = self.run_callback(code, callback, Slot::undefined(), &cb_args)?;
-                }
-                acc
-            }
-            // `Array.prototype.findLast`/`findLastIndex` — the last element/
-            // index whose callback is truthy, scanning backward. Like
-            // `find`/`findIndex` but reversed.
-            NativeMethod::ArrayFindLast | NativeMethod::ArrayFindLastIndex => {
-                let want_index = m == NativeMethod::ArrayFindLastIndex;
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
-                        let result = self.array_generic_readonly(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let callback = arg0;
-                if !self.is_callable_value(callback) {
-                    return Err(self.catchable_type_error_msg("callback: not a function".into()));
-                }
-                let this_arg = self
-                    .stack
-                    .get(base + 4 + 1)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_FIND_FRAME_METERING);
-                // The `findLast`/`findLastIndex` backward-scan setup, a fixed
-                // cost over the forward `find`/`findIndex`.
-                self.meter.tick_raw(ARRAY_FINDLAST_EXTRA_METERING);
-                if !want_index {
-                    self.meter.tick_raw(ARRAY_FIND_VALUE_METERING);
-                }
-                let mut found: Option<(u32, Slot)> = None;
-                for i in (0..length).rev() {
-                    let item = self.arrays[&inst]
-                        .items()
-                        .get(&i)
-                        .copied()
-                        .unwrap_or_else(Slot::undefined);
-                    self.meter.tick_raw(ARRAY_FIND_PER_ELEM_METERING);
-                    let cb_args = [item, Slot::integer(i as i32), this];
-                    let r = self.run_callback(code, callback, this_arg, &cb_args)?;
-                    self.meter.tick_raw(ARRAY_PREDICATE_TOBOOL_METERING);
-                    if self.truthy(&r) {
-                        found = Some((i, item));
-                        break;
-                    }
-                }
-                match found {
-                    Some((i, item)) => {
-                        if want_index {
-                            Slot::integer(i as i32)
-                        } else {
-                            item
-                        }
-                    }
-                    None => {
-                        if want_index {
-                            Slot::integer(-1)
-                        } else {
-                            Slot::undefined()
-                        }
-                    }
-                }
-            }
-            // `Array.prototype.toReversed()` — a new array with the elements
-            // reversed (non-mutating), copied over the generic
-            // `mxGetAt`/`mxDefineAt` path. Metering reuses `with`'s frame +
-            // per-element constants (same copy loop) + the result chunk.
-            NativeMethod::ArrayToReversed => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i) => i,
-                    None => {
-                        let result =
-                            self.array_generic_change_by_copy(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_TOREVERSED_FRAME_METERING);
-                self.charge_and_check((length as u64) * ARRAY_WITH_PER_ELEM_METERING)?;
-                let result = self.new_array_unmetered();
-                if length > 0 {
-                    self.charge_and_check(self.array_chunk_size_metering(length))?;
-                    let items: Vec<Slot> = Self::fill_scratch(
-                        self.reserve_scratch(length as usize)?,
-                        (0..length).map(|to| {
-                            let from = length - 1 - to;
-                            self.arrays[&inst]
-                                .items()
-                                .get(&from)
-                                .copied()
-                                .unwrap_or_else(Slot::undefined)
-                        }),
-                    );
-                    let a = self.arrays.get_mut(&result).unwrap();
-                    for (to, s) in items.into_iter().enumerate() {
-                        a.insert_item(to as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
-                    }
-                    a.length = length;
-                }
-                Slot::of(Kind::Reference, Payload::Reference(result))
-            }
-            // `Array.prototype.splice(start[, deleteCount, ...items])` — dense
-            // fast path. Remove `deleteCount` elements at `start` and insert
-            // `items`, returning a new array of the removed elements. Metering
-            // models the result chunk + `mxMeterSome(deletions*10 + 4)`, the
-            // tail shift + array resize, `mxMeterSome(5)` per inserted item, and
-            // a closing `mxMeterSome(4)`, plus a frame constant.
-            NativeMethod::ArraySplice => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if self.array_splice_fast_safe(i, argc)
-                            && (argc == 0
-                                || matches!(
-                                    arg0.kind,
-                                    Kind::Integer | Kind::Number | Kind::Undefined
-                                ))
-                            && (argc < 2
-                                || matches!(
-                                    self.stack.get(base + 5).map(|slot| slot.kind),
-                                    Some(Kind::Integer | Kind::Number | Kind::Undefined)
-                                )) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_splice(code, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let length = self.arrays[&inst].length;
-                let start = self.arg_to_index(base, 0, 0, length);
-                let (insertions, deletions): (u32, u32) = if argc == 0 {
-                    (0, 0)
-                } else if argc == 1 {
-                    (0, length - start)
-                } else {
-                    let ins = (argc - 2) as u32;
-                    // deleteCount clamped to [0, length - start].
-                    let dc = match numeric_of(
-                        &self
-                            .stack
-                            .get(base + 4 + 1)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined),
-                    ) {
-                        Some(n) if n.is_nan() || n < 0.0 => 0,
-                        Some(n) if n > (length - start) as f64 => length - start,
-                        Some(n) => n.trunc() as u32,
-                        None => 0,
-                    };
-                    (ins, dc)
-                };
-                self.meter.tick_raw(ARRAY_SPLICE_FRAME_METERING);
-                // The removed-elements result array.
-                let result = self.new_array_unmetered();
-                if deletions > 0 {
-                    self.charge_and_check(self.array_chunk_size_metering(deletions))?;
-                }
-                self.charge_builtin_work((deletions as u64) * 10)?;
-                self.charge_builtin_work(4)?;
-                let tail_len = length - (start + deletions);
-                if insertions < deletions {
-                    self.charge_builtin_work((tail_len as u64) * 10)?;
-                    self.charge_builtin_work(((deletions - insertions) as u64) * 4)?;
-                    let new_len = length - (deletions - insertions);
-                    if new_len > 0 {
-                        self.charge_and_check(self.array_chunk_size_metering(new_len))?;
-                    }
-                } else if insertions > deletions {
-                    let new_len = length + (insertions - deletions);
-                    self.charge_and_check(self.array_chunk_size_metering(new_len))?;
-                    self.charge_builtin_work((tail_len as u64) * 10)?;
-                }
-                for _ in 0..insertions {
-                    self.charge_builtin_work(5)?;
-                }
-                self.charge_builtin_work(4)?;
-                // Perform the splice on a dense element vector.
-                let cur: Vec<Slot> = Self::fill_scratch(
-                    self.reserve_scratch(length as usize)?,
-                    (0..length).map(|i| {
-                        self.arrays[&inst]
-                            .items()
-                            .get(&i)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined)
-                    }),
-                );
-                let removed = Self::fill_scratch(
-                    self.reserve_scratch(deletions as usize)?,
-                    cur[start as usize..(start + deletions) as usize]
-                        .iter()
-                        .copied(),
-                );
-                let inserted: Vec<Slot> = Self::fill_scratch(
-                    self.reserve_scratch(insertions as usize)?,
-                    (0..insertions).map(|k| {
-                        self.stack
-                            .get(base + 4 + 2 + k as usize)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined)
-                    }),
-                );
-                let mut rebuilt: Vec<Slot> = self.reserve_scratch(
-                    (length as usize)
-                        .checked_add(insertions as usize)
-                        .ok_or(Step::Host(Halt::HeapExhausted))?,
-                )?;
-                rebuilt.extend_from_slice(&cur[..start as usize]);
-                rebuilt.extend(inserted);
-                rebuilt.extend_from_slice(&cur[(start + deletions) as usize..]);
-                {
-                    let a = self.arrays.get_mut(&inst).unwrap();
-                    a.clear_items(&mut self.side_refs);
-                    for (i, s) in rebuilt.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
-                    }
-                    a.length = length - deletions + insertions;
-                }
-                {
-                    let a = self.arrays.get_mut(&result).unwrap();
-                    for (i, s) in removed.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
-                    }
-                    a.length = deletions;
-                }
-                Slot::of(Kind::Reference, Payload::Reference(result))
-            }
-            // `Array.prototype.toSpliced(start, deleteCount, ...items)` — a
-            // non-mutating splice: build a NEW array `head ++ inserted ++ tail`
-            // and leave the receiver untouched. XS meters the head copy at
-            // `start * 10`, each insertion at `5`, the tail copy at `rest * 10`,
-            // plus a trailing `mxMeterSome(4)` and the result item chunk.
-            NativeMethod::ArrayToSpliced => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if (argc == 0
-                            || matches!(
-                                arg0.kind,
-                                Kind::Integer | Kind::Number | Kind::Undefined
-                            ))
-                            && (argc < 2
-                                || matches!(
-                                    self.stack.get(base + 5).map(|slot| slot.kind),
-                                    Some(Kind::Integer | Kind::Number | Kind::Undefined)
-                                )) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result =
-                            self.array_generic_change_by_copy(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let length = self.arrays[&inst].length;
-                let start = self.arg_to_index(base, 0, 0, length);
-                let (insertions, skip): (u32, u32) = if argc == 0 {
-                    (0, 0)
-                } else if argc == 1 {
-                    (0, length - start)
-                } else {
-                    let ins = (argc - 2) as u32;
-                    let dc = match numeric_of(
-                        &self
-                            .stack
-                            .get(base + 4 + 1)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined),
-                    ) {
-                        Some(n) if n.is_nan() || n < 0.0 => 0,
-                        Some(n) if n > (length - start) as f64 => length - start,
-                        Some(n) => n.trunc() as u32,
-                        None => 0,
-                    };
-                    (ins, dc)
-                };
-                let result_len = length + insertions - skip;
-                let rest = length - (start + skip);
-                self.meter.tick_raw(ARRAY_TOSPLICED_FRAME_METERING);
-                if result_len > 0 {
-                    self.charge_and_check(self.array_chunk_size_metering(result_len))?;
-                }
-                self.charge_builtin_work((start as u64) * 10)?;
-                for _ in 0..insertions {
-                    self.charge_builtin_work(5)?;
-                }
-                self.charge_builtin_work((rest as u64) * 10)?;
-                self.charge_builtin_work(4)?;
-                // Build the result densely; the receiver stays untouched.
-                let cur: Vec<Slot> = Self::fill_scratch(
-                    self.reserve_scratch(length as usize)?,
-                    (0..length).map(|i| {
-                        self.arrays[&inst]
-                            .items()
-                            .get(&i)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined)
-                    }),
-                );
-                let inserted: Vec<Slot> = Self::fill_scratch(
-                    self.reserve_scratch(insertions as usize)?,
-                    (0..insertions).map(|k| {
-                        self.stack
-                            .get(base + 4 + 2 + k as usize)
-                            .copied()
-                            .unwrap_or_else(Slot::undefined)
-                    }),
-                );
-                let mut rebuilt: Vec<Slot> = self.reserve_scratch(
-                    (length as usize)
-                        .checked_add(insertions as usize)
-                        .ok_or(Step::Host(Halt::HeapExhausted))?,
-                )?;
-                rebuilt.extend_from_slice(&cur[..start as usize]);
-                rebuilt.extend(inserted);
-                rebuilt.extend_from_slice(&cur[(start + skip) as usize..]);
-                let result = self.new_array_unmetered();
-                {
-                    let a = self.arrays.get_mut(&result).unwrap();
-                    for (i, s) in rebuilt.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
-                    }
-                    a.length = result_len;
-                }
-                Slot::of(Kind::Reference, Payload::Reference(result))
-            }
-            // `Array.prototype.flat([depth])` — a new array with sub-array
-            // elements flattened to `depth` (default 1). XS's `flatAux` visits
-            // each source index, recursing into array elements (up to `depth`)
-            // and appending leaves via `mxDefineIndex` (which grows the result
-            // item chunk one slot at a time). Metering models the per-visit
-            // read, the per-array-element length read, and the per-appended
-            // element chunk growth, plus a frame constant.
-            NativeMethod::ArrayFlat => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if self.array_allocating_uses_default_species(i)
-                            && matches!(
-                                arg0.kind,
-                                Kind::Integer | Kind::Number | Kind::Undefined
-                            )
-                            && self.array_flat_fast_safe(
-                                i,
-                                if argc == 0 || arg0.kind == Kind::Undefined {
-                                    1
-                                } else {
-                                    match numeric_of(&arg0) {
-                                        Some(n) if n.is_nan() || n < 0.0 => 0,
-                                        Some(n) => n.trunc() as u32,
-                                        None => 0,
-                                    }
-                                },
-                                &mut 1024,
-                            ) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result =
-                            self.array_generic_flat_or_flat_map(code, m, this, base, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                let depth = if argc >= 1 && arg0.kind != Kind::Undefined {
-                    match numeric_of(&arg0) {
-                        Some(n) if n.is_nan() || n < 0.0 => 0,
-                        Some(n) => n.trunc() as u32,
-                        None => 0,
-                    }
-                } else {
-                    1
-                };
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_FLAT_FRAME_METERING);
-                let mut out: Vec<Slot> = Vec::new();
-                self.flat_into(inst, length, depth, &mut out)?;
-                let result = self.new_array_unmetered();
-                let total = out.len() as u32;
-                {
-                    let a = self.arrays.get_mut(&result).unwrap();
-                    for (i, s) in out.into_iter().enumerate() {
-                        a.insert_item(i as u32, Slot::of(s.kind, s.value), &mut self.side_refs);
-                    }
-                    a.length = total;
-                }
-                Slot::of(Kind::Reference, Payload::Reference(result))
-            }
-            // `Array.prototype.flatMap(callback[, thisArg])` — call
-            // `callback(item, index, array)` per element, then flatten the
-            // results by one level. Re-entrant (uses `run_callback`); the
-            // result flattening reuses `flat`'s per-leaf/per-array constants,
-            // plus a per-source callback overhead.
-            NativeMethod::ArrayFlatMap => {
-                let result = self.array_generic_flat_or_flat_map(code, m, this, base, argc)?;
-                self.stack.truncate(base);
-                self.push(result);
-                return Ok(());
-            }
-            // `Array.prototype.join([sep])` — dense fast path. Each element is
-            // ToString'd into a key slot, the pieces joined by `sep` (default
-            // ","), and the result materialized into one final chunk. Metering
-            // models `fxNewInstance` (the key list) + a key slot per element
-            // and per separator + each element's `fxToString` (a number renders
-            // to a fresh chunk + a built-in step) + the final `fxNewChunk`.
-            NativeMethod::ArrayJoin => {
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if self.array_join_fast_safe(i)
-                            && self.array_join_separator_fast_safe(arg0, argc) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_join(code, this, arg0, argc)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                if argc > 0 && arg0.kind != Kind::Undefined && arg0.kind != Kind::String {
-                    // The calibrated fast path below keeps the historic exact
-                    // metering for the default/string separator. Other values
-                    // still follow ordinary ToString, including re-entrant
-                    // object conversion and abrupt Symbol/guest completions.
-                    // Capture length before separator coercion, then read each
-                    // element live so a conversion can mutate later indices.
-                    let length = self.arrays[&inst].length;
-                    let sep = self.to_string_units(code, arg0)?;
-                    let mut out = Vec::new();
-                    for i in 0..length {
-                        if i > 0 {
-                            self.extend_reserved_units(&mut out, &sep)?;
-                        }
-                        let value = self.array_generic_get(code, inst, u64::from(i))?;
-                        if !matches!(value.kind, Kind::Undefined | Kind::Null) {
-                            let units = self.to_string_units(code, value)?;
-                            self.extend_reserved_units(&mut out, &units)?;
-                        }
-                    }
-                    self.stack.truncate(base);
-                    let result = self.new_reserved_string_units(&out);
-                    self.push(result);
-                    return Ok(());
-                }
-                let sep: Vec<u16> = if argc == 0 || arg0.kind == Kind::Undefined {
-                    vec![u16::from(b',')]
-                } else if arg0.kind == Kind::String {
-                    match arg0.value {
-                        Payload::String(off) => self.str_units(off),
-                        _ => vec![u16::from(b',')],
-                    }
-                } else {
-                    unreachable!("non-string separators use the general path")
-                };
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
-                self.meter.tick_slot_alloc(); // `fxNewInstance` (the key list)
-                let mut out: Vec<u16> = Vec::new();
-                for i in 0..length {
-                    let item = self.arrays[&inst].items().get(&i).copied();
-                    // Every index is read (`mxGetIndex`) regardless of type.
-                    self.charge_and_check(ARRAY_JOIN_PER_ELEMENT_METERING)?;
-                    if i > 0 {
-                        self.meter.tick_slot_alloc(); // the separator key slot
-                        self.extend_reserved_units(&mut out, &sep)?;
-                    }
-                    match item {
-                        Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
-                            if s.kind == Kind::Reference {
-                                return Err(Step::Host(Halt::NotImplemented(
-                                    "join:reference-element",
-                                )));
-                            }
-                            self.meter.tick_slot_alloc(); // the element key slot
-                            let bytes = self.to_string_units_metered(s);
-                            self.extend_reserved_units(&mut out, &bytes)?;
-                        }
-                        _ => {}
-                    }
-                }
-                if out.is_empty() {
-                    self.charge_and_check(string_chunk_cost(0))?; // empty join chunk
-                }
-                let off = self.chunks.alloc(&units_to_be16(&out));
+                self.meter.tick_raw(METHOD_FUNCTION_TOSTRING_METERING);
+                let mut units: Vec<u16> = "function [\"".encode_utf16().collect();
+                units.extend(name);
+                units.extend("\"] (){[native code]}".encode_utf16());
+                self.charge_and_check(string_chunk_cost(units.len() as u64))?;
+                let off = self.chunks.alloc(&units_to_be16(&units));
                 Slot::of(Kind::String, Payload::String(off))
             }
-            // `Array.prototype.toString()` delegates to `this.join()` with the
-            // default separator: it meters a small prelude (the `join` lookup +
-            // the `mxRunCount(0)` call-frame setup) and then the identical join
-            // body (frame + per-element read + the result chunk). Modeled by
-            // running the default-separator join and adding the prelude.
-            NativeMethod::ArrayToString => {
-                let typed_reference = match this.value {
-                    Payload::Reference(reference)
-                        if this.kind == Kind::Reference
-                            && self.typed_arrays.contains_key(&reference) =>
-                    {
-                        Some(reference)
-                    }
-                    _ => None,
-                };
-                if let Some(reference) = typed_reference {
-                    let join_id = self.intern_static_key("join");
-                    if self.chain_resolves_native_data_method(
-                        reference,
-                        join_id,
-                        NativeMethod::TypedArrayJoin,
-                    ) {
-                        self.meter.tick_raw(ARRAY_TOSTRING_PRELUDE_METERING);
-                        let result = self.typed_array_join(this, base, 0, code)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                }
-                let inst = match self.dense_array_this(this) {
-                    Some(i)
-                        if self.array_to_string_fast_safe(i) && self.array_join_fast_safe(i) =>
-                    {
-                        i
-                    }
-                    _ => {
-                        let result = self.array_generic_to_string(code, this)?;
-                        self.stack.truncate(base);
-                        self.push(result);
-                        return Ok(());
-                    }
-                };
-                self.meter.tick_raw(ARRAY_TOSTRING_PRELUDE_METERING);
-                let length = self.arrays[&inst].length;
-                self.meter.tick_raw(ARRAY_JOIN_FRAME_METERING);
-                self.meter.tick_slot_alloc();
-                let mut out: Vec<u16> = Vec::new();
-                for i in 0..length {
-                    self.charge_and_check(ARRAY_JOIN_PER_ELEMENT_METERING)?;
-                    let item = self.arrays[&inst].items().get(&i).copied();
-                    if i > 0 {
-                        self.meter.tick_slot_alloc();
-                        self.extend_reserved_units(&mut out, &[u16::from(b',')])?;
-                    }
-                    match item {
-                        Some(s) if s.kind != Kind::Undefined && s.kind != Kind::Null => {
-                            if s.kind == Kind::Reference {
-                                return Err(Step::Host(Halt::NotImplemented(
-                                    "toString:reference-element",
-                                )));
-                            }
-                            self.meter.tick_slot_alloc();
-                            let bytes = self.to_string_units_metered(s);
-                            self.extend_reserved_units(&mut out, &bytes)?;
-                        }
-                        _ => {}
-                    }
-                }
-                if out.is_empty() {
-                    self.charge_chunk_work(1)?;
-                }
-                let off = self.chunks.alloc(&units_to_be16(&out));
+            // `Error.prototype.toString`: `name` / `name: message`.
+            NativeMethod::ErrorToString => {
+                let units = self.error_to_string(code, this)?;
+                self.meter.tick_raw(METHOD_ERROR_TOSTRING_METERING);
+                self.charge_and_check(string_chunk_cost(units.len() as u64))?;
+                let off = self.chunks.alloc(&units_to_be16(&units));
                 Slot::of(Kind::String, Payload::String(off))
             }
-            NativeMethod::ArraySort => self.array_sort(this, base, argc, code, false)?,
-            NativeMethod::ArrayToSorted => self.array_sort(this, base, argc, code, true)?,
-            NativeMethod::ArrayToLocaleString => {
-                self.array_to_locale_string(this, base, argc, code)?
+            // `Function.prototype.bind(thisArg, ...boundArgs)`: create a bound
+            // function (its creation; the bound call is a `run` trampoline).
+            NativeMethod::FunctionBind => self.make_bound_function(base, argc)?,
+            NativeMethod::FunctionHasInstance => {
+                Slot::boolean(self.ordinary_has_instance(code, this, arg0)?)
             }
-            NativeMethod::ArrayFrom => self.array_from(code, base, argc)?,
-            NativeMethod::ArrayFromAsync => self.array_from_async(code, base, argc)?,
-            // `Array.isArray(v)`: whether `v` is an array exotic object.
-            NativeMethod::ArrayIsArray => {
-                self.meter.tick_raw(ARRAY_ISARRAY_METERING);
-                let r = match arg0.value {
-                    Payload::Reference(r) if arg0.kind == Kind::Reference => {
-                        self.array_generic_is_array(r)?
+            // `Symbol.prototype.toString()` → `Symbol(<description>)`
+            // (`fxSymbolToString`: `fxStringX("Symbol(")` + the description +
+            // `")"`). Accept either a Symbol primitive or its realm wrapper.
+            NativeMethod::SymbolToString => {
+                let symbol = self.symbol_this_value(this)?;
+                let units = self.symbol_descriptive_units(symbol);
+                self.meter.tick_raw(SYMBOL_TO_STRING_METERING);
+                let off = self.chunks.alloc(&units_to_be16(&units));
+                Slot::of(Kind::String, Payload::String(off))
+            }
+            // `Symbol.prototype.valueOf()`: the symbol primitive itself.
+            NativeMethod::SymbolValueOf | NativeMethod::SymbolToPrimitive => {
+                self.symbol_this_value(this)?
+            }
+            // `get Symbol.prototype.description`: the `[[Description]]` the
+            // constructor coerced and stored, or `undefined`. The description
+            // slot is the symbol's identity, so this reads it in place — no
+            // chunk is allocated and nothing beyond the accessor dispatch is
+            // metered (XS's `fx_Symbol_prototype_get_description` calls no
+            // `mxMeter` of its own).
+            NativeMethod::SymbolDescriptionGetter => {
+                let symbol = self.symbol_this_value(this)?;
+                match symbol.value {
+                    Payload::Reference(d) => {
+                        let slot = self.slots.get(d);
+                        match slot.kind {
+                            Kind::String => Slot::of(Kind::String, slot.value),
+                            _ => Slot::undefined(),
+                        }
                     }
-                    _ => false,
-                };
-                Slot::boolean(r)
+                    _ => Slot::undefined(),
+                }
             }
-            NativeMethod::ArrayOf => self.array_of(code, base, argc)?,
-            // `Array.prototype.values()`/`keys()`/`entries()`: build an Array
-            // Iterator over the receiver.
-            NativeMethod::ArrayValues | NativeMethod::ArrayKeys | NativeMethod::ArrayEntries => {
-                // CreateArrayIterator performs ToObject but does not require an
-                // Array exotic. The iterator's next method re-reads
-                // LengthOfArrayLike and indexed properties through the MOP, so
-                // ordinary objects, primitive wrappers, and Proxies remain live.
-                let object = self.array_to_object(this)?;
-                let Payload::Reference(iterated) = object.value else {
-                    unreachable!("ToObject result")
-                };
-                let kind = match m {
-                    NativeMethod::ArrayValues => 0u8,
-                    NativeMethod::ArrayKeys => 1u8,
-                    _ => 2u8,
-                };
-                self.make_array_iterator(iterated, kind)
+            NativeMethod::BigIntValueOf => self.bigint_this_value(this)?,
+            NativeMethod::BigIntAsIntN | NativeMethod::BigIntAsUintN => {
+                let bits = self.to_bigint_width(code, arg0)?;
+                let arg1 = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let value = self.to_bigint_value(code, arg1)?;
+                self.bigint_as_n(value, bits, m == NativeMethod::BigIntAsIntN)?
             }
-            // `%ArrayIteratorPrototype%.next()`.
-            NativeMethod::ArrayIteratorNext => {
-                let iter = match this.value {
-                    Payload::Reference(i)
-                        if self.iterators.get(&i).is_some_and(|state| state.kind <= 4) =>
-                    {
-                        i
-                    }
-                    _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
-                };
-                self.array_iterator_next(code, iter)?
-            }
-            NativeMethod::MapIteratorNext | NativeMethod::SetIteratorNext => {
-                let expected = if m == NativeMethod::MapIteratorNext {
-                    CollKind::Map
+            NativeMethod::BigIntToString => {
+                let value = self.bigint_this_value(this)?;
+                let radix = if arg0.kind == Kind::Undefined {
+                    10
                 } else {
-                    CollKind::Set
-                };
-                let iter = match this.value {
-                    Payload::Reference(i)
-                        if self
-                            .iterators
-                            .get(&i)
-                            // The COLLECTION-CURSOR kinds, not merely a row whose
-                            // `iterable` happens to be a collection of the right
-                            // family. A lazy Iterator helper can be built over a
-                            // Map or Set directly — `Iterator.prototype.map.call(m,
-                            // f)` — so without this its row satisfied the
-                            // collection half of the brand, and
-                            // `collection_iterator_next` handed the helper's
-                            // PRIVATE holder array back to the guest: the captured
-                            // `next` and the callback, readable and writable. The
-                            // sibling brands already gate this way (`kind <= 4`
-                            // above, `kind == 8` on the `Iterator.from` wrapper,
-                            // `kind == 9` on the RegExp String Iterator).
-                            .filter(|state| (5..=7).contains(&state.kind))
-                            .and_then(|state| self.collections.get(&state.iterable))
-                            .is_some_and(|collection| collection.kind == expected) =>
-                    {
-                        i
+                    let n = self.number_radix_integer(code, arg0)?;
+                    if !(2..=36).contains(&n) {
+                        return Err(self.catchable_range_error_msg("invalid radix".into()));
                     }
-                    _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
+                    n as u32
                 };
-                self.collection_iterator_next(iter)
+                let Payload::BigInt(off) = value.value else {
+                    return Err(self
+                        .catchable_type_error_msg("BigInt.asIntN: value must be a BigInt".into()));
+                };
+                let (negative, magnitude) = self.read_bigint(off);
+                let rendered = bi_to_radix(self, negative, &magnitude, radix)?;
+                self.meter.tick_builtin();
+                let off = self.alloc_str_text_metered(rendered.as_bytes())?;
+                Slot::of(Kind::String, Payload::String(off))
             }
-            NativeMethod::RegExpStringIteratorNext => {
-                self.regexp_string_iterator_next(code, this)?
+            NativeMethod::BigIntToLocaleString => {
+                let value = self.bigint_this_value(this)?;
+                let locale = self
+                    .stack
+                    .get(base + 4)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let options = self
+                    .stack
+                    .get(base + 5)
+                    .copied()
+                    .unwrap_or_else(Slot::undefined);
+                let Payload::BigInt(off) = value.value else {
+                    return Err(self.catchable_type_error_msg(
+                        "BigInt.asUintN: value must be a BigInt".into(),
+                    ));
+                };
+                let (negative, magnitude) = self.read_bigint(off);
+                let digits = bi_to_decimal(false, &magnitude);
+                let data = self.build_number_format(code, locale, options)?;
+                let resolved = self.nf_resolved(&data);
+                let rendered =
+                    crate::intl_number::format_bigint_to_string(&resolved, negative, &digits);
+                self.intl_string(&rendered)
             }
-            NativeMethod::IteratorFrom => self.iterator_from(code, arg0)?,
-            NativeMethod::IteratorWrapperNext => self.iterator_wrapper_next(code, this)?,
-            NativeMethod::IteratorWrapperReturn => self.iterator_wrapper_return(code, this)?,
-            NativeMethod::IteratorConstructorGetter => {
-                let constructor = self.intrinsics.get("Iterator").copied().ok_or(Step::Host(
-                    Halt::EngineInvariant("Iterator:missing-constructor"),
-                ))?;
-                Slot::of(Kind::Reference, Payload::Reference(constructor))
+            // `Symbol.for(key)`: apply ToString, then return the registry
+            // symbol for that key — the same symbol identity on repeat calls.
+            NativeMethod::SymbolFor => {
+                let primitive = self.to_primitive(code, arg0, true)?;
+                if primitive.kind == Kind::Symbol {
+                    return Err(
+                        self.catchable_type_error_msg("cannot coerce symbol to string".into())
+                    );
+                }
+                let string = self.to_string_slot_metered(primitive);
+                let key = match string.value {
+                    Payload::String(off) => self.str_content(off).to_vec(),
+                    _ => unreachable!("ToString returns a String slot"),
+                };
+                self.meter.tick_raw(SYMBOL_FOR_METERING);
+                let d = if let Some(&d) = self.symbol_registry.get(&key) {
+                    d
+                } else {
+                    // Intern the key as the registered symbol's description
+                    // slot (its identity); `Symbol.for(k)` returns this same
+                    // slot forever after, so `=== ` holds.
+                    let desc_off = self.chunks.alloc(&key);
+                    let d = self
+                        .slots
+                        .alloc(Slot::of(Kind::String, Payload::String(desc_off)));
+                    self.symbol_registry.insert(key.clone(), d);
+                    self.symbol_registry_keys.insert(d, key);
+                    d
+                };
+                Slot::of(Kind::Symbol, Payload::Reference(d))
             }
-            NativeMethod::IteratorToStringTagGetter => self.new_string_metered(b"Iterator"),
-            NativeMethod::IteratorConstructorSetter | NativeMethod::IteratorToStringTagSetter => {
-                unreachable!("Iterator setters dispatch in the small wrapper")
+            // `Symbol.keyFor(sym)`: the registry key a registered symbol was
+            // interned under, or `undefined` for a non-registered symbol.
+            NativeMethod::SymbolKeyFor => {
+                if arg0.kind != Kind::Symbol {
+                    return Err(self.catchable_type_error_msg("sym: not a symbol".into()));
+                }
+                self.meter.tick_raw(SYMBOL_KEYFOR_METERING);
+                match arg0.value {
+                    Payload::Reference(d) => match self.symbol_registry_keys.get(&d) {
+                        Some(key) => {
+                            let off = self.chunks.alloc(&key.clone());
+                            Slot::of(Kind::String, Payload::String(off))
+                        }
+                        None => Slot::undefined(),
+                    },
+                    _ => Slot::undefined(),
+                }
             }
-            NativeMethod::IteratorHelper(op @ 5..=10) => {
-                self.iterator_terminal_helper(code, op, this, base, argc)?
-            }
-            NativeMethod::IteratorHelper(op @ 0..=4) => {
-                self.iterator_lazy_helper(code, op, this, base)?
-            }
-            NativeMethod::IteratorHelper(_) => {
-                // `create_intrinsics` installs exactly eleven helpers, so an id
-                // outside 0..=10 can only come from a corrupted method
-                // identity, not from guest code.
-                return Err(Step::Host(Halt::EngineInvariant("Iterator:helper-id")));
-            }
-            NativeMethod::IteratorHelperNext => self.iterator_helper_next(code, this)?,
-            NativeMethod::IteratorHelperReturn => self.iterator_helper_return(code, this)?,
             NativeMethod::Math(id) => self.call_math(id, base, argc, code)?,
             NativeMethod::ReflectGetPrototypeOf
             | NativeMethod::ReflectSetPrototypeOf
@@ -5677,37 +7366,6 @@ impl Interp {
             | NativeMethod::ReflectDeleteProperty
             | NativeMethod::ReflectApply
             | NativeMethod::ReflectConstruct => self.call_reflect(m, base, argc, code)?,
-            NativeMethod::StringCharCodeAt
-            | NativeMethod::StringCodePointAt
-            | NativeMethod::StringCharAt
-            | NativeMethod::StringAt
-            | NativeMethod::StringSlice
-            | NativeMethod::StringSubstring
-            | NativeMethod::StringIndexOf
-            | NativeMethod::StringLastIndexOf
-            | NativeMethod::StringIncludes
-            | NativeMethod::StringStartsWith
-            | NativeMethod::StringEndsWith
-            | NativeMethod::StringConcat
-            | NativeMethod::StringToLowerCase
-            | NativeMethod::StringToUpperCase
-            | NativeMethod::StringToLocaleLowerCase
-            | NativeMethod::StringToLocaleUpperCase
-            | NativeMethod::StringLocaleCompare
-            | NativeMethod::StringNormalize
-            | NativeMethod::StringRepeat
-            | NativeMethod::StringTrim
-            | NativeMethod::StringTrimStart
-            | NativeMethod::StringTrimEnd
-            | NativeMethod::StringPadStart
-            | NativeMethod::StringPadEnd
-            | NativeMethod::StringIsWellFormed
-            | NativeMethod::StringToWellFormed
-            | NativeMethod::StringIterator => self.call_string(m, this, base, argc, code)?,
-            NativeMethod::StringFromCharCode | NativeMethod::StringFromCodePoint => {
-                self.call_string_static(m, base, argc, code)?
-            }
-            NativeMethod::StringRaw => self.call_string_raw(base, argc, code)?,
             NativeMethod::NumberIsFinite
             | NativeMethod::NumberIsInteger
             | NativeMethod::NumberIsNaN
@@ -5721,526 +7379,6 @@ impl Interp {
             NativeMethod::JsonStringify | NativeMethod::JsonParse => {
                 self.call_json(m, base, argc, code)?
             }
-            NativeMethod::MapSizeGetter | NativeMethod::SetSizeGetter => {
-                let expected = if m == NativeMethod::MapSizeGetter {
-                    CollKind::Map
-                } else {
-                    CollKind::Set
-                };
-                let inst = self
-                    .collection_ref(this)
-                    .filter(|inst| self.collections[inst].kind == expected)
-                    .ok_or_else(|| self.collection_brand_error(expected, false))?;
-                self.meter.tick_raw(COLLECTION_SIZE_GET_METERING);
-                Slot::integer(self.collections[&inst].live_len() as i32)
-            }
-            NativeMethod::MapSet
-            | NativeMethod::MapGet
-            | NativeMethod::MapHas
-            | NativeMethod::MapDelete
-            | NativeMethod::WeakMapSet
-            | NativeMethod::WeakMapGet
-            | NativeMethod::WeakMapHas
-            | NativeMethod::WeakMapDelete
-            | NativeMethod::SetAdd
-            | NativeMethod::SetHas
-            | NativeMethod::SetDelete
-            | NativeMethod::WeakSetAdd
-            | NativeMethod::WeakSetHas
-            | NativeMethod::WeakSetDelete => self.call_collection(m, this, base, argc)?,
-            // `Map`/`Set` `forEach` — re-entrant (drives a user callback per
-            // live entry); needs the code buffer for the nested dispatch.
-            NativeMethod::CollForEach => self.call_collection_foreach(this, base, argc, code)?,
-            // The seven ES2025 "new Set methods" — each drives the argument's
-            // `has` callback or `keys()` iterator (re-entrant), so it needs the
-            // code buffer for the nested dispatch.
-            NativeMethod::SetUnion
-            | NativeMethod::SetIntersection
-            | NativeMethod::SetDifference
-            | NativeMethod::SetSymmetricDifference
-            | NativeMethod::SetIsSubsetOf
-            | NativeMethod::SetIsSupersetOf
-            | NativeMethod::SetIsDisjointFrom => self.call_set_method(m, this, base, code)?,
-            // The upsert-proposal `Map.prototype` methods. `getOrInsert` is
-            // allocation-only; `getOrInsertComputed` drives a user callback, so
-            // both take the code buffer for the (possible) nested dispatch.
-            NativeMethod::MapGetOrInsert
-            | NativeMethod::MapGetOrInsertComputed
-            | NativeMethod::WeakMapGetOrInsert
-            | NativeMethod::WeakMapGetOrInsertComputed => {
-                self.call_map_get_or_insert(m, this, base, code)?
-            }
-            // The array-grouping-proposal statics — each iterates `items` and
-            // drives a user callback per element (re-entrant).
-            NativeMethod::MapGroupBy | NativeMethod::ObjectGroupBy => {
-                self.call_group_by(m, base, code)?
-            }
-            // `entries`/`keys`/`values` → a Map/Set Iterator over the receiver.
-            NativeMethod::CollEntries | NativeMethod::CollKeys | NativeMethod::CollValues => {
-                let expected =
-                    self.collection_method_brand(base)
-                        .ok_or(Step::Host(Halt::EngineInvariant(
-                            "collection:missing-method-brand",
-                        )))?;
-                let inst = match self.collection_ref(this) {
-                    Some(i) => i,
-                    None => return Err(self.collection_brand_error(expected, false)),
-                };
-                // The shared dispatch variants still retain their declaring
-                // prototype through the method function at `base + 1`.
-                // Require that exact brand: Map methods cannot operate on Set
-                // receivers (or vice versa), even though both use the same
-                // collection side-table representation.
-
-                if self.collections[&inst].kind != expected {
-                    self.charge_and_check(if expected == CollKind::Map {
-                        MAP_METHOD_ON_SET_METERING
-                    } else {
-                        SET_METHOD_ON_MAP_METERING
-                    })?;
-                    return Err(self.collection_brand_error(expected, false));
-                }
-                let iter_kind = match m {
-                    NativeMethod::CollKeys => 5u8,
-                    NativeMethod::CollValues => 6u8,
-                    _ => 7u8,
-                };
-                self.make_collection_iterator(inst, iter_kind)
-            }
-            // `Map`/`Set` `clear` (`fxClearEntries`): drop all entries and
-            // shrink the table back toward its minimum length.
-            NativeMethod::CollClear => {
-                let expected =
-                    self.collection_method_brand(base)
-                        .ok_or(Step::Host(Halt::EngineInvariant(
-                            "collection:missing-method-brand",
-                        )))?;
-                let inst = match self.collection_ref(this) {
-                    Some(i) => i,
-                    None => return Err(self.collection_brand_error(expected, false)),
-                };
-
-                if self.collections[&inst].kind != expected {
-                    self.charge_and_check(if expected == CollKind::Map {
-                        MAP_METHOD_ON_SET_METERING
-                    } else {
-                        SET_METHOD_ON_MAP_METERING
-                    })?;
-                    return Err(self.collection_brand_error(expected, false));
-                }
-                if self.slots.get(inst).flag & XS_DONT_MODIFY_FLAG != 0 {
-                    return Err(self.collection_brand_error(expected, true));
-                }
-                self.meter.tick_raw(COLLECTION_CLEAR_FRAME_METERING);
-                self.collections
-                    .get_mut(&inst)
-                    .unwrap()
-                    .clear_entries(&mut self.side_refs);
-                // `fxResizeEntries` with size 0 shrinks the address chunk back
-                // toward `mxTableMinLength`, charging the rehash chunk if the
-                // length changes (modeled by [`Self::collection_table_resize`]).
-                self.collection_table_resize(inst);
-                Slot::undefined()
-            }
-            NativeMethod::ArrayBufferSlice => self.array_buffer_slice(code, this, base, argc)?,
-            NativeMethod::ArrayBufferTransfer | NativeMethod::ArrayBufferTransferToFixedLength => {
-                self.array_buffer_transfer(code, this, arg0)?
-            }
-            NativeMethod::ArrayBufferDetachedGetter
-            | NativeMethod::ArrayBufferMaxByteLengthGetter
-            | NativeMethod::ArrayBufferResizableGetter => {
-                let buffer = self.array_buffer_ref(this).ok_or_else(|| {
-                    self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
-                })?;
-                if self.shared_buffers.contains(&buffer) {
-                    return Err(
-                        self.catchable_type_error_msg("this: not an ArrayBuffer instance".into())
-                    );
-                }
-                match m {
-                    NativeMethod::ArrayBufferDetachedGetter => {
-                        Slot::boolean(self.detached_buffers.contains(&buffer))
-                    }
-                    NativeMethod::ArrayBufferMaxByteLengthGetter => {
-                        let length = if self.detached_buffers.contains(&buffer) {
-                            0
-                        } else {
-                            self.array_buffers[&buffer].length
-                        };
-                        Slot::number(length as f64)
-                    }
-                    NativeMethod::ArrayBufferResizableGetter => Slot::boolean(false),
-                    _ => unreachable!(),
-                }
-            }
-            // `ArrayBuffer.prototype.resize`/`concat`: resizable buffers and
-            // the XS concat extension remain honest named skips.
-            NativeMethod::ArrayBufferResize => {
-                return Err(Step::Host(Halt::NotImplemented(
-                    "array-buffer-resize:unsupported",
-                )))
-            }
-            NativeMethod::ArrayBufferConcat => {
-                return Err(Step::Host(Halt::NotImplemented(
-                    "array-buffer-concat:unsupported",
-                )))
-            }
-            // `ArrayBuffer.isView(arg)` (`fx_ArrayBuffer_isView`): `true` iff
-            // the argument is a TypedArray or DataView view, else `false`. The
-            // host-frame residual is calibrated raw against the pin.
-            NativeMethod::ArrayBufferIsView => {
-                self.meter.tick_raw(ARRAY_BUFFER_ISVIEW_METERING);
-                let is_view = match arg0.value {
-                    Payload::Reference(r) => {
-                        self.typed_arrays.contains_key(&r) || self.data_views.contains_key(&r)
-                    }
-                    _ => false,
-                };
-                Slot::boolean(is_view)
-            }
-            // `Atomics.*` — single-agent read-modify-write over an integer
-            // TypedArray. All logic (validation, ToIndex, coercion, the RMW)
-            // lives in the helper; a non-integer view / OOB index / non-clean
-            // operand / the blocking-agent surface self-names an honest skip.
-            NativeMethod::Atomic(op) => self.atomics_dispatch(op, base)?,
-            NativeMethod::DataViewAccessor(index) => {
-                let inst = match this.value {
-                    Payload::Reference(r) if self.data_views.contains_key(&r) => r,
-                    _ => {
-                        return Err(
-                            self.catchable_type_error_msg("this: not a DataView instance".into())
-                        )
-                    }
-                };
-                let view = self.data_views[&inst];
-                if index != 0 && self.detached_buffers.contains(&view.buffer) {
-                    return Err(self.catchable_type_error_msg("detached buffer".into()));
-                }
-                self.meter.tick_raw(TYPED_ARRAY_LENGTH_GET_METERING);
-                match index {
-                    0 => Slot::of(Kind::Reference, Payload::Reference(view.buffer)),
-                    1 => Slot::number(view.size as f64),
-                    _ => Slot::number(view.offset as f64),
-                }
-            }
-            // `DataView.prototype.get<Type>(byteOffset[, littleEndian])`
-            // (`fx_DataView_prototype_get`): read an element at `byteOffset`
-            // honoring endianness (default big-endian). One `mxMeterOne`.
-            NativeMethod::DataViewGet(kind) => {
-                let inst = match this.value {
-                    Payload::Reference(r) if self.data_views.contains_key(&r) => r,
-                    _ => {
-                        return Err(
-                            self.catchable_type_error_msg("this: not a DataView instance".into())
-                        )
-                    }
-                };
-                let dv = self.data_views[&inst];
-                let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
-                let offset = self.to_index_arg(code, arg0)?;
-                // `GetViewValue`: after ToIndex, a detached backing buffer is a
-                // TypeError — and it precedes the out-of-range RangeError, so a
-                // detached view with an out-of-range offset still throws
-                // TypeError (`detached-buffer-before-outofrange-byteoffset`).
-                if self.detached_buffers.contains(&dv.buffer) {
-                    return Err(self.catchable_type_error_msg("detached buffer".into()));
-                }
-                // `(size < delta) || ((size - delta) < offset)` → RangeError.
-                if dv.size < delta || (dv.size - delta) < offset {
-                    return Err(self.catchable_range_error_msg("invalid byteOffset".into()));
-                }
-                let little = self.arg_is_truthy(base, 1);
-                let abs = dv.offset + offset;
-                self.meter.tick_raw(DATA_VIEW_GET_METERING);
-                // `getBigInt64`/`getBigUint64` (kinds 0/1) decode into a
-                // freshly allocated BigInt (metered by `make_bigint`); the
-                // numeric getters return a metering-neutral primitive.
-                if kind <= 1 {
-                    self.data_view_read_bigint(dv.buffer, abs, kind, little)
-                } else {
-                    self.data_view_read(dv.buffer, abs, kind, little)?
-                }
-            }
-            // `DataView.prototype.set<Type>(byteOffset, value[, littleEndian])`
-            // (`fx_DataView_prototype_set`): coerce + write. One `mxMeterOne`.
-            NativeMethod::DataViewSet(kind) => {
-                let inst = match this.value {
-                    Payload::Reference(r) if self.data_views.contains_key(&r) => r,
-                    _ => {
-                        return Err(
-                            self.catchable_type_error_msg("this: not a DataView instance".into())
-                        )
-                    }
-                };
-                let dv = self.data_views[&inst];
-                let delta = TYPED_ARRAY_TYPES[kind as usize].size as u32;
-                let offset = self.to_index_arg(code, arg0)?;
-                let value = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                // The littleEndian flag is argument 2 for set.
-                let little = self.arg_is_truthy(base, 2);
-                // `SetViewValue` coerces the value (ToNumber/ToBigInt — which
-                // may run a user `valueOf`/`Symbol.toPrimitive` that detaches
-                // the buffer) BEFORE the IsDetachedBuffer and range tests.
-                // `setBigInt64`/`setBigUint64` (kinds 0/1) take a BigInt value
-                // (ToBigInt); the 8-byte two's-complement store is identical
-                // for signed/unsigned, differing only in the getter's decode.
-                let le = if kind <= 1 {
-                    self.data_view_encode_bigint(code, value, little)?.to_vec()
-                } else {
-                    self.data_view_encode(code, kind, value, little)?
-                };
-                // A detached backing buffer is a TypeError, ahead of the
-                // out-of-range RangeError (`detached-buffer-*` ordering cases).
-                if self.detached_buffers.contains(&dv.buffer) {
-                    return Err(self.catchable_type_error_msg("detached buffer".into()));
-                }
-                if dv.size < delta || (dv.size - delta) < offset {
-                    return Err(self.catchable_range_error_msg("invalid byteOffset".into()));
-                }
-                let abs = dv.offset + offset;
-                self.data_view_store(dv.buffer, abs, &le);
-                self.meter.tick_raw(DATA_VIEW_SET_METERING);
-                Slot::undefined()
-            }
-            // The `Promise.prototype` methods and statics that re-enter user
-            // code / build derived promises are handled outside this
-            // value-returning match (`.then` and the statics thread `code`);
-            // this arm is reached only for the not-yet-modeled ones, an honest
-            // named skip. `.then`/`resolve`/`reject` are intercepted before the
-            // generic method dispatch (see `call_native_method_reentrant`).
-            // `Promise.prototype.then`: register the reaction and return the
-            // derived promise. The reaction runs later, at the pump-loop drain
-            // — no synchronous re-entry here, so it fits the value-returning
-            // method dispatch.
-            NativeMethod::PromiseThen => {
-                let promise = match this.value {
-                    Payload::Reference(r) if self.promises.contains_key(&r) => r,
-                    _ => {
-                        return Err(self.catchable_type_error_msg(
-                            if this.kind == Kind::Reference {
-                                "this: not a Promise instance"
-                            } else {
-                                "this: not an object"
-                            }
-                            .into(),
-                        ))
-                    }
-                };
-                self.promise_then(code, promise, base)?
-            }
-            // `%GeneratorPrototype%.next/return/throw` (`fx_Generator_prototype_
-            // aux`): resume the suspended body and return `{value, done}`. A
-            // non-generator receiver is a catchable `TypeError`.
-            NativeMethod::GeneratorNext => {
-                let gen = match this.value {
-                    Payload::Reference(r) if self.generators.contains_key(&r) => r,
-                    _ => {
-                        return Err(
-                            self.catchable_type_error_msg("this: not a Generator instance".into())
-                        )
-                    }
-                };
-                self.resume_generator(code, gen, arg0, GenStatus::Next)?
-            }
-            NativeMethod::GeneratorReturn => {
-                let gen = match this.value {
-                    Payload::Reference(r) if self.generators.contains_key(&r) => r,
-                    _ => {
-                        return Err(
-                            self.catchable_type_error_msg("this: not a Generator instance".into())
-                        )
-                    }
-                };
-                self.resume_generator(code, gen, arg0, GenStatus::Return)?
-            }
-            NativeMethod::GeneratorThrow => {
-                let gen = match this.value {
-                    Payload::Reference(r) if self.generators.contains_key(&r) => r,
-                    _ => {
-                        return Err(
-                            self.catchable_type_error_msg("this: not a Generator instance".into())
-                        )
-                    }
-                };
-                self.resume_generator(code, gen, arg0, GenStatus::Throw)?
-            }
-            NativeMethod::AsyncGeneratorNext => match this.value {
-                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
-                    self.enqueue_async_generator(code, r, arg0, GenStatus::Next)?
-                }
-                _ => self.reject_async_generator_brand()?,
-            },
-            NativeMethod::AsyncGeneratorReturn => match this.value {
-                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
-                    self.enqueue_async_generator(code, r, arg0, GenStatus::Return)?
-                }
-                _ => self.reject_async_generator_brand()?,
-            },
-            NativeMethod::AsyncGeneratorThrow => match this.value {
-                Payload::Reference(r) if self.async_generators.contains_key(&r) => {
-                    self.enqueue_async_generator(code, r, arg0, GenStatus::Throw)?
-                }
-                _ => self.reject_async_generator_brand()?,
-            },
-            NativeMethod::AsyncIteratorIdentity => this,
-            // `Promise.resolve(v)` (`fx_Promise_resolve`): a native promise
-            // whose observable constructor is the receiver is returned as-is;
-            // otherwise a capability is built and its `resolve` called with
-            // `v`. The intrinsic Promise keeps its calibrated fast path;
-            // arbitrary constructors go through `NewPromiseCapability`.
-            NativeMethod::PromiseResolveStatic => {
-                if !self.is_constructor_value(this) {
-                    return Err(self.catchable_type_error_msg(
-                        if this.kind == Kind::Reference {
-                            "new: not a constructor"
-                        } else {
-                            "this: not an object"
-                        }
-                        .into(),
-                    ));
-                }
-                let intrinsic = self.intrinsics.get("Promise").copied();
-                let same_constructor = if let Payload::Reference(promise) = arg0.value {
-                    if arg0.kind == Kind::Reference && self.promises.contains_key(&promise) {
-                        let constructor_id = self.intern_static_key("constructor");
-                        let constructor = self.mop_get(code, promise, constructor_id, arg0)?;
-                        self.same_value(constructor, this)
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
-                if same_constructor {
-                    self.meter.tick_raw(PROMISE_RESOLVE_SAME_METERING);
-                    arg0
-                } else if matches!(this.value,
-                    Payload::Reference(c)
-                        if this.kind == Kind::Reference && Some(c) == intrinsic)
-                {
-                    self.meter.tick_raw(PROMISE_RESOLVE_STATIC_METERING);
-                    let (derived, _resolve, _reject) = self.new_promise_capability();
-                    self.settle_promise(code, derived, arg0, false)?;
-                    Slot::of(Kind::Reference, Payload::Reference(derived))
-                } else {
-                    let capability = self.new_promise_capability_for(code, this)?;
-                    self.call_any(code, capability.resolve, Slot::undefined(), &[arg0])?;
-                    capability.promise
-                }
-            }
-            // `Promise.reject(reason)` (`fx_Promise_reject`): a capability whose
-            // `reject` is called with `reason` (any value).
-            NativeMethod::PromiseRejectStatic => {
-                if !self.is_constructor_value(this) {
-                    return Err(self.catchable_type_error_msg(
-                        if this.kind == Kind::Reference {
-                            "new: not a constructor"
-                        } else {
-                            "this: not an object"
-                        }
-                        .into(),
-                    ));
-                }
-                let intrinsic = self.intrinsics.get("Promise").copied();
-                if matches!(this.value,
-                    Payload::Reference(c)
-                        if this.kind == Kind::Reference && Some(c) == intrinsic)
-                {
-                    self.meter.tick_raw(PROMISE_REJECT_STATIC_METERING);
-                    let (derived, _resolve, _reject) = self.new_promise_capability();
-                    self.settle_promise(code, derived, arg0, true)?;
-                    Slot::of(Kind::Reference, Payload::Reference(derived))
-                } else {
-                    let capability = self.new_promise_capability_for(code, this)?;
-                    self.call_any(code, capability.reject, Slot::undefined(), &[arg0])?;
-                    capability.promise
-                }
-            }
-            // `Promise.prototype.catch(onRejected)`: Invoke the receiver's
-            // observable `then` method with `(undefined, onRejected)`. The
-            // method is deliberately generic: primitive receivers use GetV,
-            // accessors and proxies are observable, and a missing/non-callable
-            // `then` throws synchronously.
-            NativeMethod::PromiseCatch => {
-                self.meter.tick_raw(PROMISE_CATCH_FRAME_METERING);
-                self.invoke_value_method(code, this, "then", &[Slot::undefined(), arg0])?
-            }
-            // `Promise.prototype.finally(onFinally)` (`fx_Promise_prototype_
-            // finally`): observable SpeciesConstructor + Invoke dispatch, with
-            // the default native path registering a FINALLY reaction whose
-            // callback runs at the drain.
-            NativeMethod::PromiseFinally => self.promise_finally_dispatch(code, this, arg0)?,
-            NativeMethod::PromiseSpeciesGetter
-            | NativeMethod::RegExpSpeciesGetter
-            | NativeMethod::ArrayBufferSpeciesGetter => this,
-            // `Promise.all`/`allSettled`/`race`/`any` (`fx_Promise_all` …): build
-            // the derived promise, resolve each (dense-Array) element to a
-            // promise, and register a native COMBINE reaction on it; the shared
-            // `remainingElementsCount`/results state settles the derived at the
-            // drain. No synchronous user re-entry.
-            NativeMethod::PromiseAll => {
-                self.promise_combinator(code, CombinatorKind::All, arg0, this)?
-            }
-            NativeMethod::PromiseAllSettled => {
-                self.promise_combinator(code, CombinatorKind::AllSettled, arg0, this)?
-            }
-            NativeMethod::PromiseRace => {
-                self.promise_combinator(code, CombinatorKind::Race, arg0, this)?
-            }
-            NativeMethod::PromiseAny => {
-                self.promise_combinator(code, CombinatorKind::Any, arg0, this)?
-            }
-            // The resolve/reject functions settle in the `RUN` dispatch
-            // (`call_promise_function`) and never reach here.
-            NativeMethod::PromiseResolveFunction
-            | NativeMethod::PromiseRejectFunction
-            | NativeMethod::PromiseCapabilityExecutor
-            | NativeMethod::PromiseFinallyHandler
-            | NativeMethod::PromiseFinallyValue => {
-                return Err(Step::Host(Halt::EngineInvariant(
-                    "promise:resolving-fn-unexpected",
-                )))
-            }
-            // `RegExp.prototype.exec`/`test`/`toString` — the JavaScript RegExp
-            // surface over `ironhorse_regexp`.
-            NativeMethod::RegExpExec => {
-                let inst = match this.value {
-                    Payload::Reference(r) if this.kind == Kind::Reference => r,
-                    _ => {
-                        return Err(
-                            self.catchable_type_error_msg("this: not a RegExp instance".into())
-                        )
-                    }
-                };
-                if self.regexps.contains_key(&inst) {
-                    self.regexp_exec(code, inst, arg0)?
-                } else {
-                    // The builtin rejects a receiver without
-                    // [[RegExpMatcher]] before coercing its argument.
-                    return Err(self.catchable_type_error_msg("this: not a RegExp instance".into()));
-                }
-            }
-            NativeMethod::RegExpTest => {
-                let inst = match this.value {
-                    Payload::Reference(r) if this.kind == Kind::Reference => r,
-                    _ => {
-                        return Err(self.catchable_type_error_msg(
-                            match this.kind {
-                                Kind::Null => "cannot coerce null to object",
-                                Kind::Undefined => "cannot coerce undefined to object",
-                                _ => "this: not a RegExp instance",
-                            }
-                            .into(),
-                        ))
-                    }
-                };
-                self.regexp_test(code, inst, this, arg0)?
-            }
-            NativeMethod::RegExpCompile => this,
             NativeMethod::ErrorStackGetter => {
                 let inst = match this.value {
                     Payload::Reference(r) if this.kind == Kind::Reference => r,
@@ -6304,267 +7442,10 @@ impl Interp {
                 }
                 Slot::undefined()
             }
-            NativeMethod::RegExpMatch => self.regexp_match(code, this, arg0)?,
-            NativeMethod::RegExpMatchAll => self.regexp_match_all(code, this, arg0)?,
-            NativeMethod::RegExpSearch => self.regexp_search(code, this, arg0)?,
-            NativeMethod::RegExpSplit => {
-                let limit = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                self.regexp_split(code, this, arg0, limit)?
-            }
-            NativeMethod::RegExpReplace => {
-                let regexp = match this.value {
-                    Payload::Reference(regexp) if this.kind == Kind::Reference => regexp,
-                    _ => {
-                        return Err(self.catchable_type_error_msg(
-                            match this.kind {
-                                Kind::Null => "cannot coerce null to object",
-                                Kind::Undefined => "cannot coerce undefined to object",
-                                _ => "this: not a RegExp instance",
-                            }
-                            .into(),
-                        ))
-                    }
-                };
-                let replacement = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let subject = if arg0.kind == Kind::String {
-                    arg0
-                } else {
-                    let units = self.to_string_units(code, arg0)?;
-                    self.new_string_units(&units)
-                };
-                if self.regexps.contains_key(&regexp) && self.regexp_replace_fast_safe(regexp) {
-                    self.string_replace(code, regexp, subject, replacement)?
-                } else {
-                    self.regexp_replace_generic(code, regexp, this, subject, replacement)?
-                }
-            }
-            NativeMethod::RegExpToString => {
-                let inst = match this.value {
-                    Payload::Reference(r) if this.kind == Kind::Reference => r,
-                    _ if matches!(this.kind, Kind::Null | Kind::Undefined) => {
-                        return Err(
-                            self.catchable_type_error_msg(cannot_coerce_to_object(this.kind))
-                        )
-                    }
-                    // Spec requires an object. XS boxes other primitives and
-                    // can complete, so this guard has no XS error counterpart.
-                    _ => {
-                        return Err(self.catchable_type_error_msg(
-                            "RegExp.toString: receiver must be an object".into(),
-                        ))
-                    }
-                };
-                let source_id = self.intern_static_key("source");
-                let flags_id = self.intern_static_key("flags");
-                let default_source = self.regexps.contains_key(&inst)
-                    && self.regexp_getter_uses_default(inst, source_id);
-                let default_flags = self.regexps.contains_key(&inst)
-                    && self.regexp_getter_uses_default(inst, flags_id);
-                if default_source && default_flags {
-                    self.regexp_to_string(inst)?
-                } else {
-                    self.regexp_to_string_generic(code, inst, this)?
-                }
-            }
-            // `String.prototype.search`: a custom `regexp[Symbol.search]` is
-            // called with the original receiver before string coercion. The
-            // intrinsic RegExp path uses the existing matcher; every other
-            // argument is converted through `RegExpCreate(regexp, undefined)`.
-            NativeMethod::StringSearch => {
-                if matches!(this.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error_msg(
-                        if this.kind == Kind::Null {
-                            "this: null"
-                        } else {
-                            "this: undefined"
-                        }
-                        .into(),
-                    ));
-                }
-                self.meter.tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
-                let search_method = self.string_protocol_method(code, arg0, "search")?;
-                if !matches!(search_method.kind, Kind::Undefined | Kind::Null) {
-                    self.invoke_value(code, search_method, arg0, &[this])?
-                } else {
-                    let subject = if this.kind == Kind::String {
-                        this
-                    } else {
-                        let units = self.string_this_units(code, this)?;
-                        self.new_string_units(&units)
-                    };
-                    let regexp_constructor = *self
-                        .intrinsics
-                        .get("RegExp")
-                        .expect("RegExp intrinsic is linked");
-                    let constructor =
-                        Slot::of(Kind::Reference, Payload::Reference(regexp_constructor));
-                    let matcher = self.construct_value(code, constructor, &[arg0], constructor)?;
-                    let method = self.string_protocol_method(code, matcher, "search")?;
-                    self.invoke_value(code, method, matcher, &[subject])?
-                }
-            }
-            // `String.prototype.match`: a custom `regexp[Symbol.match]` is
-            // called with the original receiver before string coercion. The
-            // intrinsic RegExp path uses the existing matcher; every other
-            // argument is converted through `RegExpCreate(regexp, undefined)`.
-            NativeMethod::StringMatch => {
-                if matches!(this.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error_msg(
-                        if this.kind == Kind::Null {
-                            "this: null"
-                        } else {
-                            "this: undefined"
-                        }
-                        .into(),
-                    ));
-                }
-                self.meter.tick_raw(STRING_REGEXP_PROTOCOL_FRAME_METERING);
-                let match_method = self.string_protocol_method(code, arg0, "match")?;
-                if !matches!(match_method.kind, Kind::Undefined | Kind::Null) {
-                    self.invoke_value(code, match_method, arg0, &[this])?
-                } else {
-                    let subject = if this.kind == Kind::String {
-                        this
-                    } else {
-                        let units = self.string_this_units(code, this)?;
-                        self.new_string_units(&units)
-                    };
-                    let regexp_constructor = *self
-                        .intrinsics
-                        .get("RegExp")
-                        .expect("RegExp intrinsic is linked");
-                    let constructor =
-                        Slot::of(Kind::Reference, Payload::Reference(regexp_constructor));
-                    let matcher = self.construct_value(code, constructor, &[arg0], constructor)?;
-                    let method = self.string_protocol_method(code, matcher, "match")?;
-                    self.invoke_value(code, method, matcher, &[subject])?
-                }
-            }
-            NativeMethod::StringMatchAll => self.string_match_all(code, this, arg0)?,
-            // `String.prototype.replace`: a custom `searchValue[Symbol.replace]`
-            // runs with the original receiver before string coercion. Internal
-            // RegExps use the matcher worker; every other value follows the
-            // ordinary first-string-occurrence algorithm.
-            NativeMethod::StringReplace => {
-                if matches!(this.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error_msg(
-                        if this.kind == Kind::Null {
-                            "this: null"
-                        } else {
-                            "this: undefined"
-                        }
-                        .into(),
-                    ));
-                }
-                let repl = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let replace_method = self.string_protocol_method(code, arg0, "replace")?;
-                if !matches!(replace_method.kind, Kind::Undefined | Kind::Null) {
-                    self.invoke_value(code, replace_method, arg0, &[this, repl])?
-                } else {
-                    let subject = if this.kind == Kind::String {
-                        this
-                    } else {
-                        let units = self.string_this_units(code, this)?;
-                        self.new_string_units(&units)
-                    };
-                    self.string_replace_plain(code, subject, arg0, repl)?
-                }
-            }
-            // `String.prototype.replaceAll`: RequireObjectCoercible precedes
-            // the observable IsRegExp/flags check. A custom `@@replace` still
-            // receives the original receiver; otherwise the string branch
-            // replaces every non-overlapping UTF-16 occurrence. IronHorse's
-            // intrinsic RegExp `@@replace` delegates to the shared global
-            // matcher worker.
-            NativeMethod::StringReplaceAll => {
-                if matches!(this.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error_msg(
-                        if this.kind == Kind::Undefined {
-                            "this: undefined"
-                        } else {
-                            "this: null"
-                        }
-                        .into(),
-                    ));
-                }
-                let repl = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let is_regexp = if matches!(arg0.kind, Kind::Undefined | Kind::Null) {
-                    false
-                } else {
-                    self.string_is_regexp(code, arg0)?
-                };
-                if is_regexp {
-                    let Payload::Reference(search_object) = arg0.value else {
-                        unreachable!("IsRegExp is false for primitive values")
-                    };
-                    let flags = self.regexp_flags_units(code, search_object, arg0, true)?;
-                    if !flags.contains(&(b'g' as u16)) {
-                        return Err(self.catchable_type_error_msg("regexp has no g flag".into()));
-                    }
-                }
-
-                let replace_method = self.string_protocol_method(code, arg0, "replace")?;
-                if !matches!(replace_method.kind, Kind::Undefined | Kind::Null) {
-                    self.invoke_value(code, replace_method, arg0, &[this, repl])?
-                } else {
-                    let subject = if this.kind == Kind::String {
-                        this
-                    } else {
-                        let units = self.string_this_units(code, this)?;
-                        self.new_string_units(&units)
-                    };
-                    self.string_replace_all_plain(code, subject, arg0, repl)?
-                }
-            }
-            // `String.prototype.split(separator[, limit])`: a custom
-            // `separator[Symbol.split]` runs before receiver coercion; a RegExp
-            // without an override uses the sticky-splitter worker; everything
-            // else follows the ordinary UTF-16 string-separator algorithm.
-            NativeMethod::StringSplit => {
-                // RequireObjectCoercible precedes the separator protocol, so a
-                // custom `@@split` cannot observe a nullish receiver.
-                if matches!(this.kind, Kind::Undefined | Kind::Null) {
-                    return Err(self.catchable_type_error_msg(
-                        if this.kind == Kind::Undefined {
-                            "this: undefined"
-                        } else {
-                            "this: null"
-                        }
-                        .into(),
-                    ));
-                }
-                let limit = self
-                    .stack
-                    .get(base + 5)
-                    .copied()
-                    .unwrap_or_else(Slot::undefined);
-                let split_method = self.string_protocol_method(code, arg0, "split")?;
-                if !matches!(split_method.kind, Kind::Undefined | Kind::Null) {
-                    self.meter.tick_raw(STRING_SPLIT_PROTOCOL_FRAME_METERING);
-                    self.invoke_value(code, split_method, arg0, &[this, limit])?
-                } else {
-                    self.string_split_plain(code, this, arg0, limit)?
-                }
-            }
+            _ => unreachable!(
+                "not a Function, Reflect, Symbol, Error, Number, BigInt, Math or JSON method"
+            ),
         };
-        self.stack.truncate(base);
-        self.push(result);
-        Ok(())
+        Ok(NativeResult::Value(result))
     }
 }
