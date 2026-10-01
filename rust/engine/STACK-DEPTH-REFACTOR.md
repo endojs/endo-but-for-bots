@@ -1669,6 +1669,15 @@ The common recipe is a `Vec<Frame>` loop in which:
   is held, then leaves and delivers the result to the parent.
   Replace the recursive `enum JsonSource` with an arena of `Vec<SourceNode>` plus child index
   ranges.
+- **As landed (Phase 1):** without the arena.
+  The parse admits its retained sources with `push_prepaid_scratch`, which charges
+  `size_of::<JsonSource>()` and `size_of::<(ReadKey, JsonSource)>()` bytes per entry, so a new
+  node type would move `HeapExhausted` decisions; those widths also differ between native and
+  wasm32, the separate defect of §6.
+  The walk borrows its sources from the tree instead of cloning a subtree per level, which removes
+  the O(n·d) copies, and `JsonSource` drops through a worklist, so neither the walk nor the
+  teardown recurses.
+  The arena can follow in a versioned release that reprices that admission.
 - **Effort:** M.
 - **Reduction:** 627 B N / 496 B WT → about 0 per level *(est.)*.
   It also removes the unmetered O(n·d) clone.

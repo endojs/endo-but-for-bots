@@ -208,7 +208,7 @@
       "outcome": "compiled"
     },
     "json-reviver-10k.run": {
-      "bytes": 1274639,
+      "bytes": 23855,
       "outcome": "ReentryLimit"
     },
     "json-reviver-200.compile": {
@@ -216,7 +216,7 @@
       "outcome": "compiled"
     },
     "json-reviver-200.run": {
-      "bytes": 148999,
+      "bytes": 23863,
       "outcome": "completed"
     },
     "json-stringify-10k.compile": {
@@ -976,7 +976,7 @@
       "outcome": "compiled"
     },
     "jrevive-arr-2000.run": {
-      "bytes": 1270655,
+      "bytes": 23567,
       "outcome": "completed"
     },
     "jrevive-arr-2001.compile": {
@@ -984,7 +984,7 @@
       "outcome": "compiled"
     },
     "jrevive-arr-2001.run": {
-      "bytes": 1266815,
+      "bytes": 18927,
       "outcome": "ReentryLimit"
     },
     "jrevive-obj-1999.compile": {
@@ -992,7 +992,7 @@
       "outcome": "compiled"
     },
     "jrevive-obj-1999.run": {
-      "bytes": 1270655,
+      "bytes": 23567,
       "outcome": "completed"
     },
     "jrevive-obj-2000.compile": {
@@ -1000,7 +1000,7 @@
       "outcome": "compiled"
     },
     "jrevive-obj-2000.run": {
-      "bytes": 1266639,
+      "bytes": 18927,
       "outcome": "ReentryLimit"
     },
     "jstr-arr-2014.compile": {
