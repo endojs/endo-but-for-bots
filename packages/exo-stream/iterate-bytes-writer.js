@@ -41,8 +41,9 @@ export const iterateBytesWriter = (bytesWriterRef, options = {}) => {
   // Call streamBase64() - returns a promise for the acknowledge (flow-control) chain head
   /** @type {Promise<StreamNode<undefined, TWriteReturn>>} */
   let ackPromise = E(bytesWriterRef).streamBase64(synHead);
-  // Observed only by the first pull; mark it handled so an abandoned
-  // iterator does not surface a peer disconnection as an unhandled rejection.
+  // Each link is observed only by the following pull; mark it handled so an
+  // abandoned iterator does not surface a peer disconnection as an unhandled
+  // rejection.
   // See iterate-reader.js.
   ackPromise.catch(() => {});
 
@@ -103,6 +104,8 @@ export const iterateBytesWriter = (bytesWriterRef, options = {}) => {
         );
       }
       ackPromise = ackNode.promise;
+      // Mark the new link handled, as for the head above.
+      ackPromise.catch(() => {});
       return harden({ done: false, value: undefined });
     } catch (error) {
       return fail(error);
