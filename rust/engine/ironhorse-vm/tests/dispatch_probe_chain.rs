@@ -93,7 +93,10 @@ const MAX_PROPERTY_READ_PROBES: usize = 27;
 /// guards and five were unrelated paths. It called that "the size of the
 /// thing that recommendation is about", and an unrelated `update` in a
 /// 3,700-line file would have tripped a gate whose message is about calls.
-const MAX_CALLEE_PROBES: usize = 12;
+///
+/// 11 since `class … extends` moved its heritage check, a `functions` probe,
+/// out of `dispatch.rs` into `Interp::class_heritage_prototype`.
+const MAX_CALLEE_PROBES: usize = 11;
 
 /// The callee-class tables F119 names, so unrelated growth in the dispatch
 /// loop does not trip a gate about calls.
