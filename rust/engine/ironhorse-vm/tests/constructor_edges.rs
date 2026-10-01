@@ -179,3 +179,20 @@ fn a_bound_native_constructs() {
         ),
     ]);
 }
+
+#[test]
+fn a_regexp_reads_its_prototype_between_its_reads_and_conversions() {
+    check(&[
+        // The specification, as V8; XS answers `like:Psrcflgpsfs>ok,like_flags:Psrcpsgs>ok`.
+        (
+            "regexp_like",
+            r#"var log = []; function NT() { return new Proxy(function () {}, {get: function (t, k, r) { if (k === 'prototype') log.push('P'); return Reflect.get(t, k, r); }}); } function A(n, v) { return {valueOf: function () { log.push(n + 'v'); return v; }, toString: function () { log.push(n + 's'); return String(v); }}; } function t(name, C, args) { log = []; var r; try { Reflect.construct(C, args, NT()); r = 'ok'; } catch (e) { r = e.constructor.name; } out.push(name + ':' + log.join('') + '>' + r); } var out = []; var like = {[Symbol.match]: true, get source() { log.push('src'); return A('p', 'x'); }, get flags() { log.push('flg'); return A('f', 'g'); }}; t('like', RegExp, [like]); t('like_flags', RegExp, [like, A('g', 'i')]); out.join()"#,
+            r#"like:srcflgPpsfs>ok,like_flags:srcPpsgs>ok"#,
+        ),
+        (
+            "regexp_plain",
+            r#"var log = []; function NT() { return new Proxy(function () {}, {get: function (t, k, r) { if (k === 'prototype') log.push('P'); return Reflect.get(t, k, r); }}); } function A(n, v) { return {valueOf: function () { log.push(n + 'v'); return v; }, toString: function () { log.push(n + 's'); return String(v); }}; } function t(name, C, args) { log = []; var r; try { Reflect.construct(C, args, NT()); r = 'ok'; } catch (e) { r = e.constructor.name; } out.push(name + ':' + log.join('') + '>' + r); } var out = []; t('plain', RegExp, [A('p', 'z'), A('f', 'y')]); t('bad', RegExp, [A('p', '('), A('f', 'g')]); t('bad_flags', RegExp, [A('p', 'a'), A('f', 'gg')]); t('regexp', RegExp, [/q/m, undefined]); out.join()"#,
+            r#"plain:Ppsfs>ok,bad:Ppsfs>SyntaxError,bad_flags:Ppsfs>SyntaxError,regexp:P>ok"#,
+        ),
+    ]);
+}

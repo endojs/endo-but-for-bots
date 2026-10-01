@@ -1985,76 +1985,73 @@ impl Interp {
                 if return_pattern {
                     pattern_arg
                 } else {
+                    /// A pattern or flags text: taken from the RegExp's own
+                    /// record, or a value RegExpInitialize converts.
+                    enum Text {
+                        Ready(Vec<u16>),
+                        Convert(Slot),
+                    }
+                    // Steps 4-6 read `source` and `flags` (observably, for a
+                    // RegExp-like pattern) before RegExpAlloc reads the
+                    // prototype; their ToString waits for RegExpInitialize,
+                    // after it. V8 agrees; XS's `fx_RegExp` reads the
+                    // prototype first, which is the departure here.
                     let pattern = if pattern_is_regexp {
                         let source_id = self.intern_static_key("source");
                         if let Some(r) = pattern_regexp {
                             // The ordinary Get is observable through own and
                             // inherited overrides, including Proxy prototypes.
                             if !self.regexp_getter_uses_default(r, source_id) {
-                                let source = self.mop_get(code, r, source_id, pattern_arg)?;
-                                if source.kind == Kind::Undefined {
-                                    Vec::new()
-                                } else {
-                                    self.to_string_units(code, source)?
-                                }
+                                Text::Convert(self.mop_get(code, r, source_id, pattern_arg)?)
                             } else {
-                                self.regexps[&r].source.clone()
+                                Text::Ready(self.regexps[&r].source.clone())
                             }
                         } else {
                             let Payload::Reference(r) = pattern_arg.value else {
                                 unreachable!("IsRegExp is false for primitives")
                             };
-                            let source = self.mop_get(code, r, source_id, pattern_arg)?;
-                            if source.kind == Kind::Undefined {
-                                Vec::new()
-                            } else {
-                                self.to_string_units(code, source)?
-                            }
+                            Text::Convert(self.mop_get(code, r, source_id, pattern_arg)?)
                         }
-                    } else if pattern_arg.kind == Kind::Undefined {
-                        Vec::new()
                     } else {
-                        self.to_string_units(code, pattern_arg)?
+                        Text::Convert(pattern_arg)
                     };
-                    let flags = if flags_arg.kind == Kind::Undefined {
-                        if pattern_is_regexp {
-                            let flags_id = self.intern_static_key("flags");
-                            if let Some(r) = pattern_regexp {
-                                if !self.regexp_getter_uses_default(r, flags_id) {
-                                    let value = self.mop_get(code, r, flags_id, pattern_arg)?;
-                                    if value.kind == Kind::Undefined {
-                                        String::new()
-                                    } else {
-                                        String::from_utf16(&self.to_string_units(code, value)?)
-                                            .map_err(|_| self.catchable_syntax_error())?
-                                    }
-                                } else {
-                                    self.regexps[&r].flags.clone()
-                                }
+                    let flags = if flags_arg.kind == Kind::Undefined && pattern_is_regexp {
+                        let flags_id = self.intern_static_key("flags");
+                        if let Some(r) = pattern_regexp {
+                            if !self.regexp_getter_uses_default(r, flags_id) {
+                                Text::Convert(self.mop_get(code, r, flags_id, pattern_arg)?)
                             } else {
-                                let Payload::Reference(r) = pattern_arg.value else {
-                                    unreachable!("IsRegExp is false for primitives")
-                                };
-                                let value = self.mop_get(code, r, flags_id, pattern_arg)?;
-                                if value.kind == Kind::Undefined {
-                                    String::new()
-                                } else {
-                                    String::from_utf16(&self.to_string_units(code, value)?)
-                                        .map_err(|_| self.catchable_syntax_error())?
-                                }
+                                Text::Ready(self.regexps[&r].flags.encode_utf16().collect())
                             }
                         } else {
-                            String::new()
+                            let Payload::Reference(r) = pattern_arg.value else {
+                                unreachable!("IsRegExp is false for primitives")
+                            };
+                            Text::Convert(self.mop_get(code, r, flags_id, pattern_arg)?)
                         }
                     } else {
-                        String::from_utf16(&self.to_string_units(code, flags_arg)?)
-                            .map_err(|_| self.catchable_syntax_error())?
+                        Text::Convert(flags_arg)
                     };
+                    let proto = match new_target {
+                        Some(target) if has_target => Some(self.get_prototype_from_constructor(
+                            code,
+                            target,
+                            self.regexp_proto,
+                        )?),
+                        _ => None,
+                    };
+                    let text = |this: &mut Self, text: Text| -> Result<Vec<u16>, Step> {
+                        match text {
+                            Text::Ready(units) => Ok(units),
+                            Text::Convert(value) if value.kind == Kind::Undefined => Ok(Vec::new()),
+                            Text::Convert(value) => this.to_string_units(code, value),
+                        }
+                    };
+                    let pattern = text(self, pattern)?;
+                    let flags = String::from_utf16(&text(self, flags)?)
+                        .map_err(|_| self.catchable_syntax_error())?;
                     let regexp = self.build_regexp(pattern, flags)?;
-                    if has_target {
-                        let target = new_target.expect("a RegExp construct has a new.target");
-                        let proto =
-                            self.get_prototype_from_constructor(code, target, self.regexp_proto)?;
+                    if let Some(proto) = proto {
                         let Payload::Reference(instance) = regexp.value else {
                             unreachable!("build_regexp returns an object")
                         };
