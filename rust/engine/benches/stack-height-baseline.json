@@ -3,12 +3,12 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "commit": "73507bdec1ee76cce5fa7e03c65c55ea8f215b86"
+    "commit": "5b5bcbf884a019b66bc8d9687f37d0cbf1f6fe41"
   },
   "slack": 0.02,
   "cases": {
     "floor.run": {
-      "bytes": 8519,
+      "bytes": 8535,
       "outcome": "completed"
     },
     "proxy-get-10k.compile": {
@@ -80,7 +80,7 @@
       "outcome": "compiled"
     },
     "proxy-getownproperty-10k.run": {
-      "bytes": 693703,
+      "bytes": 693735,
       "outcome": "ReentryLimit"
     },
     "proxy-define-10k.compile": {
@@ -148,7 +148,7 @@
       "outcome": "ReentryLimit"
     },
     "join-self.compile": {
-      "bytes": 8871,
+      "bytes": 8887,
       "outcome": "compiled"
     },
     "join-self.run": {
@@ -156,7 +156,7 @@
       "outcome": "ReentryLimit"
     },
     "string-self.compile": {
-      "bytes": 8871,
+      "bytes": 8887,
       "outcome": "compiled"
     },
     "string-self.run": {
@@ -172,7 +172,7 @@
       "outcome": "completed"
     },
     "render-self.compile": {
-      "bytes": 8871,
+      "bytes": 8887,
       "outcome": "compiled"
     },
     "render-self.run": {
@@ -236,7 +236,7 @@
       "outcome": "completed"
     },
     "flat-self.compile": {
-      "bytes": 8871,
+      "bytes": 8887,
       "outcome": "compiled"
     },
     "flat-self.run": {
@@ -292,7 +292,7 @@
       "outcome": "ReentryLimit"
     },
     "iter-setter.compile": {
-      "bytes": 8871,
+      "bytes": 8887,
       "outcome": "compiled"
     },
     "iter-setter.run": {
@@ -304,7 +304,7 @@
       "outcome": "compiled"
     },
     "regexp-deep.run": {
-      "bytes": 236087,
+      "bytes": 235999,
       "outcome": "completed"
     },
     "proto-chain-ordinary-20k.compile": {
@@ -332,7 +332,7 @@
       "outcome": "completed"
     },
     "async-gen-drain-40k.compile": {
-      "bytes": 8871,
+      "bytes": 8887,
       "outcome": "compiled"
     },
     "async-gen-drain-40k.run": {
@@ -720,7 +720,7 @@
       "outcome": "compiled"
     },
     "has-instance-126.run": {
-      "bytes": 745871,
+      "bytes": 753935,
       "outcome": "completed"
     },
     "has-instance-127.compile": {
@@ -728,7 +728,7 @@
       "outcome": "compiled"
     },
     "has-instance-127.run": {
-      "bytes": 750991,
+      "bytes": 759119,
       "outcome": "ReentryLimit"
     },
     "iterator-126.compile": {
@@ -792,7 +792,7 @@
       "outcome": "compiled"
     },
     "function-call-64.run": {
-      "bytes": 607783,
+      "bytes": 607775,
       "outcome": "ReentryLimit"
     },
     "eval-direct-42.compile": {
@@ -1328,7 +1328,7 @@
       "outcome": "compiled"
     },
     "mixed-value-stack-30.run": {
-      "bytes": 426799,
+      "bytes": 426863,
       "outcome": "StackOverflow"
     },
     "mixed-value-stack-60.compile": {
@@ -1344,7 +1344,7 @@
       "outcome": "compiled"
     },
     "u1-uncharged-bound-instanceof-2000.run": {
-      "bytes": 424575,
+      "bytes": 17071,
       "outcome": "completed"
     },
     "u2-tojson-flat-1022.compile": {

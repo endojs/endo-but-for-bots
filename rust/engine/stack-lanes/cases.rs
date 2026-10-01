@@ -492,13 +492,14 @@ pub fn cases() -> Vec<Case> {
             mixed_value_stack(k),
         ));
     }
-    // U1-U4 compositions (§3, §5), accepted natively and expected traps on
-    // wasm. U1 is `instanceof` through 2,000 bound functions with no
+    // U1-U4 compositions (§3, §5), accepted natively; U2-U4 are expected
+    // traps on wasm, and U1 was until B2. U1 is `instanceof` through 2,000
+    // bound functions with no
     // `@@hasInstance` in the chain (null prototypes), the walk §3 found
-    // uncharged: `OrdinaryHasInstance` unwraps each bound target with no
-    // native frame charged, so it completes natively at any depth the heap
-    // admits and traps on the Worker-sized wasm stacks of lane B. A chain
-    // over an ordinary function is charged instead, one intrinsic
+    // uncharged: each bound target is unwrapped with no native frame
+    // charged, so it completes at any depth the heap admits. It trapped on
+    // the Worker-sized wasm stacks of lane B until B2 made the walk a loop.
+    // A chain over an ordinary function is charged instead, one intrinsic
     // `@@hasInstance` call per layer, and halts at 126
     // (`native_recursion_budget.rs`).
     cases.push(run(

@@ -419,7 +419,8 @@ pub struct Interp {
     /// overflowing the real thread stack. (A recursion with its own small node
     /// budget — the compact `flat` path's 1,024-node pre-check — and a
     /// redispatch that loops instead, such as the bound-function fold and the
-    /// `call`/`apply` trampolines in [`Self::invoke_value`], need no charge.)
+    /// `call`/`apply` trampolines in [`Self::invoke_value`] and the bound
+    /// `instanceof` walk in [`Self::instanceof_operator`], need no charge.)
     /// Always `0` at a crank boundary. A leaked charge indicates an unwound
     /// native entry; accepting it would make a restored twin halt at a different
     /// recursion depth, so the boundary policy refuses it.
