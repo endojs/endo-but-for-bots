@@ -11,9 +11,11 @@ An operator installs a trusted directory into the selected daemon's workspace in
 `thix install-native STATE NAME DIRECTORY`.
 Each installation bundles its durable module and evaluates it once in a dedicated manager vat;
 the workspace retains the installation record and the public inventory reference.
-The ephemeral module is imported by a separate Node process, which owns its native APIs and
-exposes only its root over the existing OCapN pipe protocol; the primary daemon never imports or
-executes it.
+The ephemeral module is bundled at installation as well, in the compartment mapper's CommonJS
+form, and stored in the state directory under its digest; a separate Node process loads the
+stored bundle, owns its native APIs and exposes only its root over the existing OCapN pipe
+protocol.
+The primary daemon never imports or executes it.
 
 The durable factory is synchronous and receives `{adapters, makeKeeper, makeManager}`, with the
 guest prelude in scope as globals.
@@ -36,19 +38,28 @@ reconstructs only declared state; it does not restart an adapter autonomously af
 ## Installation identity and compatibility
 
 A state directory selects the daemon's existing single workspace.
-An installation's identity is its inventory name together with a digest over the directory's real
-path, a digest of its contents and a digest of the bundled durable module.
-The contents digest covers every file under the directory, each hashed with its relative path and
-length, in sorted order; the bundle is hashed on its own.
-An edit to any file is therefore a different installation, and so is the same contents at another
-path: the directory must stay present and unchanged for every later incarnation, since the native
-process is started from it and re-describes it before importing the ephemeral module, refusing to
-start a durable module's successor from edited native code.
-Dependencies outside the directory resolve the ordinary way and are not part of the digest.
+An installation's identity is its inventory name together with a digest over the pair of bundle
+digests, the durable module's and the ephemeral module's.
+Each bundle freezes what its module imports, so a dependency's change is a change of the bundle;
+the directory's path is not part of the identity, and the same modules at another path are the
+same installation.
+The ephemeral bundle is stored under its digest in the state directory's `bundles/`, written once
+and never rewritten, and the launcher's description names that digest together with the manager
+vat that owns it.
+Every adapter process reads the stored file, verifies the digest over its bytes and refuses to
+start on a mismatch, so a damaged or substituted file does not run; a launcher recorded before
+bundling names no bundle and refuses to launch, saying the resource is to be installed again.
+The directory is consulted only at installation: an edit or a removal afterwards changes nothing
+for a running or restarted installation, and edited source is a different installation, installed
+explicitly under another name or after a removal.
+Bundles that no launcher record names are freed at the next daemon start, once the endpoint's
+records are settled, which releases a removed installation's bundle and one left by an
+installation interrupted before its manager held the launcher.
 Reinstalling the same identity returns the same installation record without replacing later
 inventory edits.
-A directory containing `node_modules` is refused, so a directory holds source rather than vendored
-packages; links are refused, so the digest covers only bytes that live inside the directory.
+The two entries must be files rather than links, so what is bundled is what is there; nothing else
+in the directory is inspected, and packages vendored beside the entries are the bundler's to
+resolve.
 
 ## The manager vat
 

@@ -308,8 +308,10 @@ it owns the timers a vat lacks: the first exit after a life of ten seconds or mo
 once, and consecutive quicker exits double the delay from one second up to thirty.
 Each adapter incarnation has one transient session, shared by its requests; retiring the process
 retires that session and breaks its references.
-Directory contents and the durable bundle are pinned by digest; source changes require a new
-installation, and dependencies outside the directory are not part of the digest.
+Both modules are bundled at installation, each with what it imports frozen in, and the pair of
+bundle digests is the installation's identity; the ephemeral bundle is stored under its digest and
+verified by the process that loads it, so the directory may be edited or removed afterwards, and
+changed source is a new installation.
 Removing an installation retires the manager vat first, which closes the processes it launched and
 withdraws its start notice, and only then forgets the name.
 

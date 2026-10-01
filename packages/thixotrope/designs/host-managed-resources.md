@@ -103,8 +103,8 @@ facet a vat holds is the authority over that vat's alarms and no other's.
 It can be reduced to one shape.
 Every per-instance description in the code today carries a worker id: `{ workerId }` for the
 clock facet and the worker facade, `{ workerId, alarmId }` for an alarm's settlement promise, and
-`{ moduleUrl, resourceIdentity, workerId }` for the adapter launcher, whose other two fields are
-the installation's and will be in the host index of section 1.
+`{ bundleDigest, workerId }` for the adapter launcher, whose other field is the installation's
+and will be in the host index of section 1.
 The two singletons, the worker controller and mail introductions, carry none.
 
 Proposal: a resource is **bound to a worker**, `makeResource(name, workerId, key?)`, where `key`
@@ -422,33 +422,39 @@ would run the hub's transport over a hub session.
    A missing or broken control resource is reinstalled at start, since it is
    the operator's only way in.
 3. Bundle the ephemeral module at install, as the durable one already is.
-   Today `installNative` bundles `durable.js` with `makeBundle` and
-   evaluates the bundle into the manager vat, so that half is detached from
-   the directory from the first moment.
-   `ephemeral.js` is not: the launcher's description carries the module URL
-   and the directory's identity, and the adapter process re-digests the
-   directory and imports the module from disk at every launch, which is why
-   the directory must stay present and unchanged, and why an edit refuses to
-   start.
-   Bundle `ephemeral.js` at install too, in the mapper's `cjs` format, which
-   turns Node builtins (`node:http`, `node:timers`) into exits that the
-   process resolves natively while the resource's own modules and the adapter
-   kit it imports are frozen in the bundle, as `makeManager` is already
-   frozen in the manager's heap.
-   Store the bundle in the state directory under its digest
-   (`bundles/<sha256>`), the content-addressed store that section 7.2 wants
-   for application bundles as well: manually persisted, immutable, verified
-   by digest on read, freed when the installation is removed.
-   The launcher's description then names the bundle digest instead of a
-   module URL and a directory, the process imports the bundle file, and the
-   digest check at launch replaces `describeNativeResource` there.
-   The installation's identity becomes the pair of bundle digests, so the
-   directory's real path drops out of it and a resource can be installed from
-   a pair of bundles without a directory at all.
-   An edited directory no longer matters, and a new version is a new
-   installation under a new name or after a removal, exactly as for an
-   application; what becomes of the old manager's registrations across that
-   is out of scope here.
+   (Done.)
+   `installNative` bundled `durable.js` with `makeBundle` and evaluated the
+   bundle into the manager vat, so that half was detached from the directory
+   from the first moment.
+   `ephemeral.js` was not: the launcher's description carried the module URL
+   and the directory's identity, and the adapter process re-digested the
+   directory and imported the module from disk at every launch, which is why
+   the directory had to stay present and unchanged, and why an edit refused
+   to start.
+   Now `ephemeral.js` is bundled at install too, in the mapper's `cjs`
+   functor form, which turns Node builtins (`node:http`, `node:timers`) into
+   exits the process resolves with its own `require` while the resource's
+   own modules and the adapter kit it imports are frozen in the bundle, as
+   `makeManager` is already frozen in the manager's heap.
+   The bundle is stored in the state directory under its digest
+   (`bundles/<sha256>.cjs`), the content-addressed store that section 7.2
+   wants for application bundles as well: manually persisted, immutable,
+   verified by digest in the process that loads it, and freed at the next
+   daemon start once no launcher record names it.
+   The launcher's description names the bundle digest and the owning vat
+   instead of a module URL and a directory, and the digest check at launch
+   replaced `describeNativeResource` there, which now only locates the two
+   entries; a launcher recorded before this refuses to launch and says the
+   resource is to be installed again.
+   The installation's identity is the pair of bundle digests, so the
+   directory's real path dropped out of it; an edited directory no longer
+   matters, and a new version is a new installation under a new name or
+   after a removal, exactly as for an application.
+   A default import of a Node builtin has no binding in the bundle, since
+   the mapper's exit cells are the host namespace's own names; builtins are
+   imported by name or as a namespace.
+   What becomes of the old manager's registrations across a new version is
+   out of scope here.
 
 4. Let a registration resolve at bind time. (Done.)
    The kit recorded the spec the manager sent, and `restore` sent it back

@@ -3,7 +3,8 @@ import { E } from '@endo/far';
 import { makeTcpNetLayer } from '@endo/ocapn/netlayer/tcp-testing';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import test from '@endo/ses-ava/test.js';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { fork } from 'node:child_process';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import process from 'node:process';
 import { setImmediate } from 'node:timers';
 import { fileURLToPath } from 'node:url';
@@ -433,5 +434,58 @@ test.serial(
       { started: 0, exited: 1 },
       'a retirement is not reported',
     );
+  },
+);
+
+test.serial(
+  'a stored bundle that does not match its digest refuses to start, and says so',
+  async t => {
+    t.timeout(30_000);
+    const { daemon, store, bundleDigest } = await makeNativeFixture(t);
+    const launcher = /** @type {{create: () => Promise<any>}} */ (
+      daemon.makeResource('native-adapter', { bundleDigest })
+    );
+    const incarnation = await E(launcher).create();
+    await E(incarnation).retire();
+    // The same path, other bytes: the digest the launcher names no longer
+    // describes the file, and the process is the one that notices.
+    await writeFile(
+      store.bundlePath(bundleDigest),
+      'module.exports = { make: () => undefined };\n',
+    );
+    await t.throwsAsync(() => E(launcher).create(), {
+      message: /exited before readiness/,
+    });
+    // The process says why on its stderr, which the daemon only inherits.
+    const child = fork(
+      fileURLToPath(
+        new URL('../src/platform/node/native-worker-entry.js', import.meta.url),
+      ),
+      ['tampered', store.bundlePath(bundleDigest), bundleDigest],
+      { stdio: ['ignore', 'ignore', 'pipe', 'ipc'], execArgv: [] },
+    );
+    let stderr = '';
+    child.stderr?.on('data', chunk => {
+      stderr += chunk;
+    });
+    const code = await new Promise(resolve => child.once('exit', resolve));
+    t.is(code, 1);
+    t.regex(stderr, /does not match its installed digest/);
+  },
+);
+
+test.serial(
+  'a launcher recorded before bundling refuses to launch and asks for a reinstallation',
+  async t => {
+    const { adapters } = makeExitFixture();
+    t.teardown(() => adapters.shutdown());
+    const launcher = adapters.resource({
+      moduleUrl: 'file:///resource/ephemeral.js',
+      resourceIdentity: { directory: '/resource', digest: 'x' },
+      workerId: 'a',
+    });
+    await t.throwsAsync(() => launcher.create(), {
+      message: /installed before its ephemeral module was bundled/,
+    });
   },
 );
