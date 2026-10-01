@@ -201,6 +201,30 @@ ZonedDateTime:true,true,1970"#,
     );
 }
 
+/// A Temporal constructor converts its fields — guest `valueOf` included, which
+/// halted the engine when the conversion re-entered without the caller's
+/// bytecode — and only then reads the prototype (the proposal's
+/// ToIntegerWithTruncation steps precede CreateTemporal…'s
+/// OrdinaryCreateFromConstructor). Neither oracle has Temporal.
+#[test]
+fn a_temporal_constructor_converts_its_fields_before_the_prototype() {
+    assert_eq!(
+        run(r#"var log = [];
+function NT() { return new Proxy(function () {}, { get: function (t, k, r) { if (k === "prototype") log.push("P"); return Reflect.get(t, k, r); } }); }
+function A(n, v) { return { valueOf: function () { log.push(n); return v; } }; }
+function t(name, C, args) { log = []; var r; try { var o = Reflect.construct(C, args, NT()); r = "ok"; } catch (e) { r = e.name; } out.push(name + ":" + log.join(",") + ">" + r); }
+t("Duration", Temporal.Duration, [A("y", 1), A("m", 2)]);
+t("DurationBad", Temporal.Duration, [A("y", 1), A("m", -2)]);
+t("PlainDate", Temporal.PlainDate, [A("y", 2020), A("m", 1), A("d", 2)]);
+t("PlainDateBad", Temporal.PlainDate, [A("y", 2020), A("m", 13), A("d", 2)]);
+t("PlainTime", Temporal.PlainTime, [A("h", 1), A("m", 2)]);
+t("Instant", Temporal.Instant, [0n]);
+out.push(new Temporal.Duration(A("y", 3)).years);
+out.join("\n")"#),
+        "Duration:y,m,P>ok\nDurationBad:y,m>RangeError\nPlainDate:y,m,d,P>ok\nPlainDateBad:y,m,d>RangeError\nPlainTime:h,m,P>ok\nInstant:P>ok\n3",
+    );
+}
+
 /// The `prototype` read is observable — here through a Proxy `new.target`'s
 /// `get` trap — and each constructor performs it at XS's step: before an
 /// Error's message, a Map's iterable or an Array's elements; after a

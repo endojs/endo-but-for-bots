@@ -473,7 +473,7 @@ impl Interp {
                     if value.kind == Kind::Undefined {
                         continue;
                     }
-                    *field = self.temporal_integer(value)?;
+                    *field = self.temporal_integer(code, value)?;
                 }
                 let record = TemporalDurationRecord::from_fields(fields);
                 if !temporal_duration_sign_valid(record) {

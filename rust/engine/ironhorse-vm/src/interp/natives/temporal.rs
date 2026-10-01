@@ -38,8 +38,14 @@ impl Interp {
         self.make_bigint(negative, limbs)
     }
 
-    pub(in crate::interp) fn temporal_integer(&mut self, value: Slot) -> Result<i64, Step> {
-        let value = self.to_number_value(&[], value)?;
+    pub(in crate::interp) fn temporal_integer(
+        &mut self,
+        code: &[u8],
+        value: Slot,
+    ) -> Result<i64, Step> {
+        // `code` is the caller's bytecode: a guest `valueOf` re-enters the
+        // interpreter and resumes there.
+        let value = self.to_number_value(code, value)?;
         let n = to_number(&value);
         if !n.is_finite() || n.fract() != 0.0 || n.abs() > 9_007_199_254_740_991.0 {
             return Err(self.catchable_range_error_msg(
@@ -118,7 +124,7 @@ impl Interp {
             if value.kind == Kind::Undefined {
                 Ok(default)
             } else {
-                this.temporal_integer(value)
+                this.temporal_integer(code, value)
             }
         };
         let mut r = TemporalPlainRecord {
@@ -135,10 +141,10 @@ impl Interp {
                     self.catchable_range_error_msg("Temporal: day out of range".into())
                 })?;
                 if kind == 2 {
-                    temporal_set_time_args(self, &mut r, args, 3)?;
+                    temporal_set_time_args(self, code, &mut r, args, 3)?;
                 }
             }
-            1 => temporal_set_time_args(self, &mut r, args, 0)?,
+            1 => temporal_set_time_args(self, code, &mut r, args, 0)?,
             3 => {
                 r.year = integer(self, 0, 0)?;
                 r.month = u32::try_from(integer(self, 1, 0)?).map_err(|_| {
@@ -211,7 +217,7 @@ impl Interp {
                 if item.kind == Kind::Undefined {
                     continue;
                 }
-                let v = self.temporal_integer(item)?;
+                let v = self.temporal_integer(code, item)?;
                 seen[n] = true;
                 match n {
                     0 => r.year = v,
@@ -337,7 +343,7 @@ impl Interp {
                     if v.kind == Kind::Undefined {
                         continue;
                     }
-                    let v = self.temporal_integer(v)?;
+                    let v = self.temporal_integer(code, v)?;
                     any = true;
                     match n {
                         0 => r.year = v,
@@ -507,7 +513,7 @@ impl Interp {
                 let receiver = Slot::of(Kind::Reference, Payload::Reference(r));
                 let item = self.mop_get_option_field(code, r, name, receiver)?;
                 if item.kind != Kind::Undefined {
-                    fields[i] = self.temporal_integer(item)?;
+                    fields[i] = self.temporal_integer(code, item)?;
                     any = true;
                 }
             }
@@ -658,7 +664,7 @@ impl Interp {
                 if v.kind == Kind::Undefined {
                     1
                 } else {
-                    self.temporal_integer(v)?
+                    self.temporal_integer(code, v)?
                 }
             };
             if increment < 1 {
@@ -827,7 +833,7 @@ impl Interp {
                 self.temporal_new_instant(ns)
             }
             TemporalInstantFromEpochMilliseconds => {
-                let n = self.temporal_integer(arg0)? as i128;
+                let n = self.temporal_integer(code, arg0)? as i128;
                 let ns = match n.checked_mul(1_000_000) {
                     Some(ns) => ns,
                     None => {
@@ -1003,7 +1009,7 @@ impl Interp {
                 for (i, name) in names.iter().enumerate() {
                     let item = self.mop_get_option_field(code, r, name, arg0)?;
                     if item.kind != Kind::Undefined {
-                        fields[i] = self.temporal_integer(item)?;
+                        fields[i] = self.temporal_integer(code, item)?;
                         any = true;
                     }
                 }
@@ -1176,7 +1182,7 @@ impl Interp {
                     if item.kind == Kind::Undefined {
                         continue;
                     }
-                    let v = self.temporal_integer(item)?;
+                    let v = self.temporal_integer(code, item)?;
                     seen[n] = true;
                     match n {
                         0 => p.year = v,
@@ -1335,7 +1341,7 @@ impl Interp {
             if v.kind == Kind::Undefined {
                 1
             } else {
-                self.temporal_integer(v)? as i128
+                self.temporal_integer(code, v)? as i128
             }
         };
         if increment < 1 {
@@ -1401,7 +1407,7 @@ impl Interp {
                     if v.kind == Kind::Undefined {
                         continue;
                     }
-                    let v = self.temporal_integer(v)?;
+                    let v = self.temporal_integer(code, v)?;
                     any = true;
                     match n {
                         0 => p.year = v,
