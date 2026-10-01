@@ -9,6 +9,7 @@ import {
   assertPinnedVersion,
   assertRequiredFlags,
   assertEmptyValueFlags,
+  assertPinnedValueFlags,
   REQUIRED_FLAGS,
   PINNED_CLI_VERSION,
 } from '../src/argv.js';
@@ -64,8 +65,32 @@ test('buildArgv joins variadic values into single comma tokens (no swallowable r
 
 test('assertPinnedVersion fails closed on any mismatch', t => {
   t.notThrows(() => assertPinnedVersion(PINNED_CLI_VERSION));
-  t.throws(() => assertPinnedVersion('2.1.233'), { message: /!= pinned/ });
-  t.throws(() => assertPinnedVersion('2.1.231'), { message: /!= pinned/ });
+  t.throws(() => assertPinnedVersion('2.1.281'), { message: /!= pinned/ });
+  t.throws(() => assertPinnedVersion('2.1.279'), { message: /!= pinned/ });
+  // The previous pin, measured before 2.1.280's live re-run.
+  t.throws(() => assertPinnedVersion('2.1.232'), { message: /!= pinned/ });
+});
+
+test('buildArgv pins the permission mode to dontAsk with no prompting', t => {
+  const argv = buildArgv(spec());
+  t.is(argv[argv.indexOf('--permission-mode') + 1], 'dontAsk');
+  t.is(argv[argv.indexOf('--permission-prompts') + 1], 'none');
+});
+
+test('a missing, altered, or repeated pinned-value flag is refused', t => {
+  for (const flag of ['--permission-mode', '--permission-prompts']) {
+    const missing = conformingArgv();
+    missing.splice(missing.indexOf(flag), 2);
+    t.throws(() => assertPinnedValueFlags(missing), { message: /missing/ });
+
+    const altered = conformingArgv();
+    altered[altered.indexOf(flag) + 1] = 'bypassPermissions';
+    t.throws(() => assertConfinedArgv(altered), { message: /must carry/ });
+
+    // A later occurrence would override the pinned one.
+    const repeated = [...conformingArgv(), flag, 'bypassPermissions'];
+    t.throws(() => assertConfinedArgv(repeated), { message: /more than once/ });
+  }
 });
 
 // --- property: five-flag spawn-refusal predicate -------------------------

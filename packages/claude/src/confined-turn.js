@@ -45,7 +45,7 @@ import { PINNED_CLI_VERSION } from './argv.js';
 /** @import { DaemonConnection } from '@endo/agent-mcp-stdio' */
 
 /**
- * Read `claude --version` (for example `2.1.232 (Claude Code)`) under the
+ * Read `claude --version` (for example `2.1.280 (Claude Code)`) under the
  * constructed PATH only.
  *
  * @param {string} claudePath

@@ -21,7 +21,7 @@ import process from 'node:process';
 
 const argv = process.argv.slice(2);
 if (argv[0] === '--version') {
-  process.stdout.write(`${process.env.FAKE_CLAUDE_VERSION ?? '2.1.232'} (Claude Code)\n`);
+  process.stdout.write(`${process.env.FAKE_CLAUDE_VERSION ?? '2.1.280'} (Claude Code)\n`);
   process.exit(0);
 }
 

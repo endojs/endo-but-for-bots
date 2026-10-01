@@ -6,10 +6,13 @@
 // The hermetic `claude -p` invocation confines Claude with a COMBINATION of
 // flags, no one of which suffices. This module owns:
 //
-//   - the pinned CLI version whose flag semantics the design measured (2.1.232);
+//   - the pinned CLI version whose flag semantics were last measured live
+//     (2.1.280; the design's original measurement was 2.1.232);
 //   - the five presence-required flags the harness refuses to spawn without;
 //   - the value assertion that `--tools` and `--setting-sources` each carry
-//     exactly the empty string (presence-only is the `"alg":"none"` shape);
+//     exactly the empty string (presence-only is the `"alg":"none"` shape),
+//     and that `--permission-mode` / `--permission-prompts` carry `dontAsk` /
+//     `none`;
 //   - `buildArgv`, which emits the prompt at NO index (it is delivered on stdin),
 //     so the construction invariant holds by construction.
 
@@ -22,7 +25,7 @@ import { KNOWN_BUILTIN_TOOLS } from './tool-permissions.js';
  * `claude` on PATH — which would spawn happily with silently changed semantics —
  * must fail closed until the live confinement test is re-run against it.
  */
-export const PINNED_CLI_VERSION = '2.1.232';
+export const PINNED_CLI_VERSION = '2.1.280';
 
 /**
  * The five flags whose PRESENCE the harness asserts before every spawn
@@ -46,6 +49,19 @@ export const REQUIRED_FLAGS = harden([
  * `--setting-sources` re-admits a discovered layer. Each must carry exactly `""`.
  */
 const EMPTY_VALUE_FLAGS = harden(['--tools', '--setting-sources']);
+
+/**
+ * Flags whose value is pinned. Without `--permission-mode`, 2.1.280's `init`
+ * reports `permissionMode: "default"`; `dontAsk` denies any tool not
+ * pre-allowed, so a tool that leaks past the other layers is refused rather
+ * than run (designs/endo-claude-inference-backends.md § Confinement recipe).
+ * `--permission-prompts none` (new in 2.1.280) denies anything that would
+ * otherwise prompt.
+ */
+const PINNED_VALUE_FLAGS = harden({
+  '--permission-mode': 'dontAsk',
+  '--permission-prompts': 'none',
+});
 
 /**
  * Flags that must NEVER appear: both restore the full prior transcript (past tool
@@ -114,6 +130,10 @@ export const buildArgv = spec => {
     '--tools',
     '',
     '--disable-slash-commands',
+    '--permission-mode',
+    'dontAsk',
+    '--permission-prompts',
+    'none',
     '--disallowedTools',
     [...disallowedTools].join(','),
     '--allowedTools',
@@ -179,6 +199,32 @@ export const assertEmptyValueFlags = argv => {
 harden(assertEmptyValueFlags);
 
 /**
+ * `--permission-mode` and `--permission-prompts` must each be present and carry
+ * exactly their pinned value.
+ *
+ * @param {readonly string[]} argv
+ */
+export const assertPinnedValueFlags = argv => {
+  for (const [flag, value] of Object.entries(PINNED_VALUE_FLAGS)) {
+    const at = argv.indexOf(flag);
+    if (at === -1) {
+      throw makeError(X`confinement: pinned-value flag ${q(flag)} missing`);
+    }
+    if (argv[at + 1] !== value) {
+      throw makeError(
+        X`confinement: flag ${q(flag)} must carry ${q(value)}, got ${q(
+          argv[at + 1],
+        )}`,
+      );
+    }
+    if (argv.indexOf(flag, at + 1) !== -1) {
+      throw makeError(X`confinement: flag ${q(flag)} appears more than once`);
+    }
+  }
+};
+harden(assertPinnedValueFlags);
+
+/**
  * No `--resume` / `--continue` (or their short forms) may appear.
  *
  * @param {readonly string[]} argv
@@ -196,7 +242,8 @@ harden(assertNoTranscriptResume);
 
 /**
  * The full structural confinement gate over an argv (version-independent):
- * required flags present, empty-value flags carry `""`, no transcript resume.
+ * required flags present, empty-value flags carry `""`, pinned-value flags
+ * carry their value, no transcript resume.
  * `buildArgv` output always passes this; the property tests feed it arbitrary
  * argvs.
  *
@@ -208,6 +255,7 @@ export const assertConfinedArgv = argv => {
   }
   assertRequiredFlags(argv);
   assertEmptyValueFlags(argv);
+  assertPinnedValueFlags(argv);
   assertNoTranscriptResume(argv);
 };
 harden(assertConfinedArgv);

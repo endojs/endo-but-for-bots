@@ -25,7 +25,8 @@ Naively, "run `claude -p` with `--allowedTools` naming the guest's tools" is
 Code startup that load *before and outside* the tool-permission system:
 `CLAUDE.md` memory, hooks, `settings.json` layers, and MCP auto-discovery.
 Closing every surface takes a combination, asserted before **every** spawn
-(measured on Claude Code **2.1.232**):
+(designed against Claude Code **2.1.232**; the pin is **2.1.280**, re-checked
+live as described under [Known gaps](#known-gaps-prerequisites)):
 
 | Flag | What it closes |
 | --- | --- |
@@ -34,13 +35,17 @@ Closing every surface takes a combination, asserted before **every** spawn
 | `--setting-sources ""` | the discovered user/project/local `settings.json` layers. |
 | `--tools ""` | the built-in tool set — deny **by construction**, so a future built-in is denied without a harness edit. |
 | `--disable-slash-commands` | the `/skill-name` surface `--bare` leaves resolving and `--tools ""` cannot reach. |
+| `--permission-mode dontAsk` | the default mode. Without it, 2.1.280's `init` reports `permissionMode: "default"`. `dontAsk` denies any tool not on the allow-list, so a tool that leaks past the other layers is refused. |
+| `--permission-prompts none` | prompting: anything that would ask is denied (new in 2.1.280). |
+| `enabledPlugins` in `--settings` | the builtin plugins `agents-md` and `telemetry`, which `init` lists even under `--bare`. |
 | never `--resume` / `--continue` | both restore the full prior transcript across the confinement boundary. |
 
 The harness **refuses to spawn** unless all five presence flags appear, `--tools`
 and `--setting-sources` each carry exactly the empty string (a non-empty value
-re-opens the surface — the `"alg":"none"` shape), and `claude --version` equals
-the pinned version (an upgraded CLI may have changed the flag semantics the
-confinement rests on).
+re-opens the surface — the `"alg":"none"` shape), `--permission-mode` and
+`--permission-prompts` each appear once with their pinned value, and
+`claude --version` equals the pinned version (an upgraded CLI may have changed
+the flag semantics the confinement rests on).
 
 ## The allow-list is generated, pruned, and pinned
 
@@ -168,13 +173,25 @@ This increment is honest about what it does **not** yet do:
   `--mcp-config` path. The spawn files are `0600` files in a `0700` directory,
   removed on every exit path, until a live check shows that the pinned CLI reads
   `--settings` only once.
-- **A live negative-and-positive confinement test** against a real `claude -p`:
-  no built-in runs, no `/skill-name` resolves, no other MCP server is reachable,
-  an unanchored `mcp__*` grants nothing — *and* the guest's tools do invoke, an
-  anchored `mcp__endo__read*` glob is honored, a planted `settings.json` has no
-  effect, and the pooled `apiKeyHelper` is the consumed credential. The DI unit
-  tests cannot catch a wrong-flag gap; this is version-specific and re-run on any
-  CLI bump.
+- **A scripted live negative-and-positive confinement test** against a real
+  `claude -p`: no built-in runs, no `/skill-name` resolves, no other MCP server
+  is reachable, an unanchored `mcp__*` grants nothing — *and* the guest's tools
+  do invoke, an anchored `mcp__endo__read*` glob is honored, a planted
+  `settings.json` has no effect, and the pooled `apiKeyHelper` is the consumed
+  credential. The DI unit tests cannot catch a wrong-flag gap; this is
+  version-specific and re-run on any CLI bump. The 2.1.280 pin rests on a
+  manual re-run against a scratch daemon: `init` showed `permissionMode:
+  "dontAsk"`, no plugins, skills, slash commands, or built-in tools, and one
+  `endo` server. The confined `claude` environment was `PATH`, `LANG`,
+  `LC_ALL`, `ENDO_CLAUDE_SESSION_TAG`, and the relay's environment was empty.
+  No socket in either process reached the daemon socket: `claude` held its
+  stdio pairs and TCP connections to the API, and the relay held its stdio
+  pairs and the per-turn broker socket. An extra `formulaId` argument
+  returned `tool-not-permitted`, `mcp__endo__evaluate` was denied by
+  `dontAsk`, a leading `/agents-md` line was plain text, and an invalid token
+  ended in `auth-failed` after two `401` retries. `init` still lists the
+  builtin subagents (`Explore`, `general-purpose`, and others), but no
+  `Agent`/`Task` tool exists to start them.
 - **The credential path under `--bare`** (the DD5 residual), answered by a
   live turn on Claude Code 2.1.280: a subscription OAuth access token
   (`sk-ant-oat...`) is **not** accepted through an `apiKeyHelper` (`claude`
