@@ -9,7 +9,7 @@ import {
   passStyleOf,
   getRemotableMethodNames,
 } from '@endo/pass-style';
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { makeMarshal } from './marshal.js';
 
 /**
@@ -108,6 +108,9 @@ const makeConverter = (mirrorConverter = undefined) => {
           yours = Far(iface, fromEntries(yourMethods));
         }
         break;
+      }
+      case 'sturdyRef': {
+        throw Fail`A ${q(passStyle)} cannot pass through a membrane`;
       }
       default: {
         Fail`internal: Unrecognized passStyle ${passStyle}`;

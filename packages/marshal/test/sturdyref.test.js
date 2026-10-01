@@ -3,7 +3,7 @@ import '@endo/sturdyref/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
-import { passStyleOf } from '@endo/pass-style';
+import { Far, passStyleOf } from '@endo/pass-style';
 
 import {
   compareRank,
@@ -12,6 +12,7 @@ import {
 } from '../src/rankOrder.js';
 import { makeEncodePassable } from '../src/encodePassable.js';
 import { makeMarshal } from '../src/marshal.js';
+import { makeDotMembraneKit } from '../src/dot-membrane.js';
 
 /** @type {any} */
 const { SturdyRef } = globalThis;
@@ -30,6 +31,15 @@ test('a SturdyRef cannot be rank-ordered', t => {
   t.throws(() => sortByRank(harden([1, ref]), compareRank), { message });
   t.throws(() => getPassStyleCover('sturdyRef'), { message });
   t.throws(() => compareRank(ref, makeRef()), { message });
+});
+
+test('a SturdyRef compares equal to itself without a rank', t => {
+  // compareRank answers 0 for identical operands before it consults their
+  // pass style, so only a SturdyRef compared with a different value throws.
+  const ref = makeRef();
+  t.is(compareRank(ref, ref), 0);
+  const refs = harden([ref, ref]);
+  t.is(sortByRank(refs, compareRank), refs);
 });
 
 test('a SturdyRef cannot be encoded', t => {
@@ -55,4 +65,13 @@ test('a SturdyRef cannot be marshalled', t => {
       serializeBodyFormat,
     );
   }
+});
+
+test('a SturdyRef cannot pass through a membrane', t => {
+  const message = /"sturdyRef" cannot/;
+  t.throws(() => makeDotMembraneKit(makeRef()), { message });
+  const { proxy } = makeDotMembraneKit(
+    Far('holder', { getRef: () => makeRef() }),
+  );
+  t.throws(() => proxy.getRef(), { message });
 });
