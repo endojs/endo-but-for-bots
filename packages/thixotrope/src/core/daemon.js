@@ -135,14 +135,6 @@ const START_NOTICE_MS = 10_000;
  * @param {number} [options.idleSleepMs] park a worker after this long
  *   with no deliveries (see the durable worker transport's idle-sleep
  *   policy); omitted means workers sleep only on request
- * @param {(workerId: string) => void | Promise<void>} [options.onRetireWorker]
- *   called once a worker has been retired and its store and session deleted,
- *   so a host service holding state keyed by that worker (alarm rows, say)
- *   can drop it; a failure is reported and does not undo the retirement
- * @param {() => void | Promise<void>} [options.beforeStartNotices] runs once
- *   every session is seated and the netlayer is up, before start notices are
- *   delivered, so a host service that resumes from durable state (the alarm
- *   table, say) does so before any vat runs
  * @param {boolean} [options.verbose]
  * @returns {Promise<ThixotropeDaemon>}
  */
@@ -156,8 +148,6 @@ const buildDaemon = async (
     resources = {},
     nativeWorkers,
     idleSleepMs = undefined,
-    onRetireWorker = undefined,
-    beforeStartNotices = undefined,
     verbose = false,
   },
 ) => {
@@ -993,22 +983,13 @@ const buildDaemon = async (
     hub.forgetSession(workerId);
     store.deleteWorker(workerId);
     // Only now is the worker gone for good; host state keyed by it can be
-    // released: the native processes it launched, then whatever the embedder
-    // keys by worker. A failure here is reported, not allowed to leave the
-    // worker half-retired: the store and session are already deleted.
-    // Not opt-in: host state keyed by a worker that no longer exists is a
-    // leak the operator should hear about.
+    // released: the native processes it launched. A failure here is
+    // reported, not allowed to leave the worker half-retired: the store and
+    // session are already deleted.
     const retireLog = logging.sub('thixotrope', 'daemon');
     await nativeAdapters
       .retireWorker(workerId)
       .catch(error => retireLog.error('native adapters not retired:', error));
-    if (onRetireWorker !== undefined) {
-      try {
-        await onRetireWorker(workerId);
-      } catch (error) {
-        retireLog.error('retire hook failed:', error);
-      }
-    }
   };
 
   /**
@@ -1315,11 +1296,6 @@ const buildDaemon = async (
         }
       }),
     );
-
-    // Host services resume from their durable state before any vat runs, so
-    // what they settle on resumption (an overdue alarm, say) is part of this
-    // startup rather than something that happens after it.
-    if (beforeStartNotices !== undefined) await beforeStartNotices();
 
     // Start notices, after every session is seated and the netlayer is up.
     //

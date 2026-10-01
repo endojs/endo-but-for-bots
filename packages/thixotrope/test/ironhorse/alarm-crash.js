@@ -23,18 +23,15 @@ const powersModuleSpecifier = JSON.stringify(
   new URL('../../src/platform/node/powers.js', import.meta.url).href,
 );
 
-// Hold wall time constant in each process so even a slow CI worker cannot
-// deliver the first alarm before the crash. Only the host receives this power.
+// The clock keeps real time in its adapter process: the alarm is armed far
+// enough out that even a slow CI worker cannot deliver it before the crash.
 const supervisorScript = `
 import '@endo/init';
 import { serveThixotrope } from ${supervisorModuleSpecifier};
 import { makeNodePowers } from ${powersModuleSpecifier};
 const nodePowers = makeNodePowers();
-const [path, timestamp] = process.argv.slice(1);
-if (!/^[0-9]+$/.test(timestamp)) throw Error('Invalid test timestamp');
-const now = BigInt(timestamp);
-if (now >= 2n ** 63n) throw Error('Invalid test timestamp');
-const supervisor = await serveThixotrope(nodePowers, path, { alarmNow: () => now });
+const [path] = process.argv.slice(1);
+const supervisor = await serveThixotrope(nodePowers, path);
 console.log('Alarm supervisor ready');
 await supervisor.stopped;
 await supervisor.close();
@@ -43,12 +40,11 @@ await supervisor.close();
 /**
  * @param {ExecutionContext} t
  * @param {string} path
- * @param {bigint} now
  */
-const start = async (t, path, now) => {
+const start = async (t, path) => {
   const child = spawn(
     process.execPath,
-    ['--input-type=module', '--eval', supervisorScript, path, String(now)],
+    ['--input-type=module', '--eval', supervisorScript, path],
     { stdio: ['ignore', 'pipe', 'pipe'] },
   );
   const exited = once(child, 'exit');
@@ -81,14 +77,19 @@ const start = async (t, path, now) => {
   return { child, exited, client };
 };
 
-/** @param {() => Promise<boolean>} predicate */
+/**
+ * Bounded by time rather than attempts: after a restart the clock's adapter
+ * is a fresh process, forked and restored behind the start notices.
+ * @param {() => Promise<boolean>} predicate
+ */
 const waitUntil = async predicate => {
   await null;
-  for (let attempt = 0; attempt < 200; attempt += 1) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
     // eslint-disable-next-line no-await-in-loop
     if (await predicate()) return;
     // eslint-disable-next-line no-await-in-loop
-    await setTimeout(25);
+    await setTimeout(50);
   }
   throw Error('Alarm condition did not become true');
 };
@@ -99,22 +100,23 @@ test.serial(
     t.timeout(180_000);
     const path = await mkdtemp('/tmp/thix-alarm-crash-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
-    const first = await start(t, path, 1000n);
+    const first = await start(t, path);
     const { bundle } = await nodePowers.bundler.bundle(
       fileURLToPath(new URL('../../examples/reminder.js', import.meta.url)),
     );
     await first.client.call('install', 'reminders', bundle, [
       ['clock', 'clock'],
     ]);
+    const armedAt = BigInt(Date.now());
     t.is(
       await first.client.call(
         'evaluate',
-        "E(inventory.get('reminders')).arm(2000n, 'survive SIGKILL')",
+        "E(inventory.get('reminders')).arm(8000n, 'survive SIGKILL')",
       ),
       'true',
     );
-    // arm() itself acknowledges before the cross-vat when() runs. A host
-    // registration proves the clock's authoritative guest map admitted it.
+    // arm() itself acknowledges before the cross-vat after() runs. A pending
+    // alarm in the clock's count proves its manager admitted it.
     await waitUntil(async () => {
       const status = await first.client.call('alarmStatus');
       return status.pending === 1;
@@ -129,35 +131,37 @@ test.serial(
     first.child.kill('SIGKILL');
     t.deepEqual(await first.exited, [null, 'SIGKILL']);
 
-    const recovered = await start(t, path, 3000n);
+    // The deadline passes while no host runs.
+    const elapsed = BigInt(Date.now()) - armedAt;
+    if (elapsed < 8200n) await setTimeout(Number(8200n - elapsed));
+    const recovered = await start(t, path);
     const waitForDelivery = () =>
       waitUntil(async () => {
         const status = await recovered.client.call('alarmStatus');
-        // Delivered and acknowledged: the table holds no row at all.
-        return status.pending === 0 && status.retained === 0;
+        return status.pending === 0;
       });
     await waitForDelivery();
     t.is(
       await recovered.client.call(
         'evaluate',
-        "E(inventory.get('reminders')).status().then(s => s.count === 1n && s.items.length === 1 && s.items[0].state === 'fired' && s.items[0].message === 'survive SIGKILL' && s.items[0].firedAt === 3000n)",
+        `E(inventory.get('reminders')).status().then(s => s.count === 1n && s.items.length === 1 && s.items[0].state === 'fired' && s.items[0].message === 'survive SIGKILL' && s.items[0].firedAt >= ${armedAt + 8000n}n)`,
       ),
       'true',
-      'restart settles the original listener exactly once at the new host time',
+      'restart settles the original listener exactly once, at or after the deadline',
     );
     // The installed application still holds the original clock grant; neither
     // the application nor its clock is replaced or granted again on restart.
     t.is(
       await recovered.client.call(
         'evaluate',
-        "E(inventory.get('reminders')).arm(3000n, 'retained clock')",
+        "E(inventory.get('reminders')).arm(100n, 'retained clock')",
       ),
       'true',
     );
     await waitUntil(async () => {
       const result = await recovered.client.call(
         'evaluate',
-        "E(inventory.get('reminders')).status().then(s => s.count === 2n && s.items.length === 2 && s.items.every(item => item.state === 'fired' && item.firedAt === 3000n))",
+        "E(inventory.get('reminders')).status().then(s => s.count === 2n && s.items.length === 2 && s.items.every(item => item.state === 'fired'))",
       );
       return result === 'true';
     });

@@ -55,7 +55,6 @@ They distinguish intended behavior from current implementation gaps.
   Unix netlayers.
 - `store/`: durable worker and session stores, validators, and string
   atoms.
-- `alarms/`: the guest clock, its host deadline/outcome ledger, and the timer resource.
 - `mail/`: the guest mail protocol, contacts, and address book.
 - `tui/`: the terminal views the CLI opens over a control connection.
 - `observable-map.js`: the string-keyed observable Map that backs both the
@@ -66,8 +65,9 @@ They distinguish intended behavior from current implementation gaps.
 - `platform/`: capability interfaces, and `platform/node/` for the Node
   implementations of them.
 
-The package-level `resources/http/` directory contains the installable durable HTTP manager and
-native adapter.
+The package-level `resources/` directory holds the native resources the package ships, each a
+durable manager and a native adapter: `resources/http/`, installable with `thix install-native`,
+and `resources/clock/`, which the supervisor installs at every start.
 
 Each module directly under `platform/` names one capability — `timers`,
 `random`, `files`, `processes`, `sockets`, and so on — whose methods take
@@ -306,7 +306,8 @@ See [native resource installation](designs/native-resource-installation.md) for 
 
 ## Durable alarms and reminders
 
-The workspace provides a clock under `clock`; grant it to an application like any inventory entry:
+The workspace provides a clock under `clock`, a native resource the supervisor installs at every
+start; grant it to an application like any inventory entry:
 
 ```sh
 thix install ./private-state reminders ./examples/reminder.js clock=clock
@@ -314,59 +315,53 @@ thix alarms ./private-state
 thix attach ./private-state
 ```
 
-In the attached workspace, enter each line separately to schedule a reminder using Unix milliseconds:
+In the attached workspace, enter each line separately to schedule a reminder a minute out:
 
 <!-- prettier-ignore -->
 ```js
-globalThis.clock = inventory.get('clock');
-E(clock).now().then(now => E(inventory.get('reminders')).arm(now + 60000n, 'check the oven'));
+E(inventory.get('reminders')).arm(60000n, 'check the oven');
 E(inventory.get('reminders')).status();
 ```
 
-Applications receive `now()`, `when(deadline)`, and `arm(deadline)`.
-The last returns `{settlement, canceller}`, with `E(canceller).cancel()` cancelling that alarm.
-The clock is an installation the supervisor provides at every start, in a vat of its own, and it
-gives applications guest-owned promises; `thix installations` lists it, and removing it is undone by
-the next start.
-A start learns what the workspace holds of them in the delivery that creates its registry, and
-the first start creates their vats.
+Applications receive `at(deadline)`, `after(delay)` and `arm({ at } | { after })`.
+The first two settle at or after the deadline with the host time; the last also returns a
+canceller for that one alarm, `E(canceller).cancel()`.
+There is no `now()`: a program that only needs a delay never learns what time it is.
+The clock is a native resource, `resources/clock`: its durable module runs in a manager vat of its
+own and holds every pending deadline in its heap, and its ephemeral module is a process that arms
+one OS timer per alarm against its own clock and reports each firing to the manager.
+A delay is resolved to a deadline in that process when the alarm is armed, and the manager adopts
+the resolved registration, so a restart restores the deadline rather than counting the delay again.
+A restart, or the process ending on its own, rebuilds the process and re-arms every pending alarm;
+one whose deadline passed meanwhile fires at once, and a firing the manager had not recorded is
+reported again and settles once.
+`thix installations` lists the clock; removing it retires its vat, its alarms and its process, and
+the next start provides a fresh one.
 A capability granted from a removed clock is a dead reference like any other; an application that
 held it is reinstalled to receive the new one.
 A name the user holds is theirs: the supervisor logs that it could not provide the installation and
 serves without it, and a provided installation whose factory failed stays listed as failed until it
 is removed and the next start provides it again.
 The reminder example attaches its listener in another guest vat; both survive restart.
-If a deadline passes while the supervisor is down, restart delivers the overdue alarm to the
-original promise and listener.
+`alarms` asks the clock in the workspace for the number of `pending` alarms, so it fails while the
+workspace vat is quarantined or the clock is not installed.
 
-The host retains each deadline and its eventual fulfillment time or cancellation in an alarm ledger.
-It records the outcome before notifying the clock, and deletes it only after the clock acknowledges
-recording its own settlement.
-Interrupted acknowledgements retry at once; other cleanup failures retry the next time the clock
-arms an alarm, since arming is the operation that needs a row.
-Acknowledgement retires the alarm's promise resource, so a restart re-seats only alarms still pending
-or unacknowledged, and retiring a vat drops the rows it armed.
-OS timers are disposable, and there is no periodic scan of a guest clock vat.
-`alarms` reports `pending` deadlines, `retained` rows in the durable table (armed, or settled and
-awaiting the clock's acknowledgement), `materialised` promise resources, and `stopped` status.
-
-This version supports one-shot absolute deadlines, with up to 1,024 pending or unacknowledged rows.
-Deadlines are nonnegative signed 64-bit bigint milliseconds.
-The host checks wall-clock time before firing, so this is not a precise timer.
+Deadlines are nonnegative signed 64-bit bigint Unix milliseconds; a delay is a bigint of
+milliseconds up to 2^53.
+The process checks wall-clock time before reporting, so this is not a precise timer.
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
 Workspace metadata version 9 is required.
-It includes dedicated native manager vats (version 4), the alarm acknowledgement protocol
-(version 3), the mail address book that introduces contacts through the `mail-introductions`
-resource with observable inbox and outbox maps (version 5), adapter launchers described by the
-manager vat that owns them, so that removing or collecting a manager closes its processes
-(version 6), one installation registry for applications and native resources whose values live
-in the inventory (version 7), the clock and mailbox provided as installations in vats of their
-own (version 8), and native adapters launched from bundles stored under their digest (version 9).
+It includes dedicated native manager vats (version 4), the mail address book that introduces
+contacts through the `mail-introductions` resource with observable inbox and outbox maps
+(version 5), adapter launchers described by the manager vat that owns them, so that removing or
+collecting a manager closes its processes (version 6), one installation registry for applications
+and native resources whose values live in the inventory (version 7), the clock and mailbox provided
+as installations in vats of their own (version 8), and native adapters launched from bundles stored
+under their digest together with the clock as a native resource with no host ledger (version 9).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
-See [alarm settlement](designs/alarm-settlement.md) for recovery and cleanup details.
 
 ## Local introductions and capability mail
 
@@ -662,7 +657,6 @@ There is no bootstrap priming workaround for `Symbol.unscopables`.
 Host factories take their platform powers explicitly as their first argument.
 The Node composition entry creates filesystem, socket, subprocess, timer, entropy, and diagnostic
 capabilities; the core never imports that entry or acquires platform authority by default.
-The alarm host primitive receives a `SyncStringAtom` for metadata.
 Each installed native-resource manager keeps its durable state in its own vat heap.
 
 ```js
@@ -948,8 +942,7 @@ embedder's worker object (and on the guest-visible `worker-facade`
 resource) permanently deletes the worker — its session aborts so live
 presences reject, publications rooted in it drop, its store is
 deleted, its snapshot is released, the native adapter processes it
-launched are closed, and host state keyed by it (alarm rows) is
-dropped.
+launched are closed, and host state keyed by it is dropped.
 
 Unreferenced workers die by collection instead:
 `daemon.collectVats({ keep })` marks workers reachable from

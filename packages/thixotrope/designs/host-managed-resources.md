@@ -237,7 +237,7 @@ carries one known message (`PENDING_ANSWER_ABORTED_MESSAGE`, which the clock
 vat already retries on), so moving the control flow into a vat makes the file
 unnecessary.
 
-### 7.1 Alarms: the deadline set moves into the clock vat
+### 7.1 Alarms: the deadline set moves into the clock vat (superseded by 8.1)
 
 Today the host keeps `alarms.json`: pending deadlines and outcomes, at most
 1,024 rows, rewritten whole, written before the matching promise settles.
@@ -329,46 +329,49 @@ controller), processes (the adapter launcher), publication (the hub) and the
 peer transport.
 Everything else is a vat or a native resource the host installed.
 
-### 8.1 Alarms
+### 8.1 Alarms (Done.)
 
-`resources/alarms/durable.js` makes a manager labelled `Alarms`.
-A spec is `{ deadline, sink }`, where `sink` is one exo of the manager with
-`fire(key, at)`; `same` compares the deadline and the sink, `replaces` is
-always false.
-The facet's `when(deadline)` registers a fresh key, keeps a promise kit in the
-manager's heap and returns its promise; `fire` settles it (idempotently, per
-key) and closes the handle; `arm` returns a canceller that closes the handle
-and rejects the promise.
+The clock is a native resource the package ships, `resources/clock`, and the
+supervisor installs it at every start under `clock`, as it did the guest
+clock.
+`durable.js` makes a manager labelled `Alarm`.
+A spec is `{ at, sink }` or `{ after, sink }`, where `sink` is one exo of the
+manager with `fire(key, now)`; `same` compares the sink and, when the wanted
+spec has one, the deadline; `replaces` is never.
+The facet has `at(deadline)` and `after(delay)`, each settling at or after the
+deadline with the host time; `arm({ at } | { after })`, which also returns a
+canceller for that one alarm; and `status()`, a count of pending alarms, since
+a holder that could enumerate alarms could cancel every other holder's.
+Each alarm is a fresh key with a promise kit in the manager's heap; `fire`
+settles it once, idempotently per key, and closes the registration; a fire
+that outruns the registration's own answer is kept until the answer arrives.
 The deadlines live in the manager's heap, durable for free, and the manager is
-the clock vat: `guest-clock.js` folds into it.
+the clock vat.
 
-`resources/alarms/ephemeral.js` binds a key by arming a timer (chained beyond
-the 2^31-1 ms limit of a single timer), calls `E(sink).fire(key, now)` on
-expiry and clears it on unbind.
-`restore` re-arms the desired set, so after a daemon restart every pending
-deadline is armed again and one that passed during downtime fires at once.
-A fire the manager did not journal before the host died is simply fired again
-by the rebuilt adapter, and the key's idempotence makes it exactly-once.
+`ephemeral.js` binds a key by arming a timer against its own clock, re-arming
+within the single-timer limit until the deadline is near, and reports
+`fire(key, now)` on expiry; `unbind` clears it.
+A registration made with `after` is resolved there to `{ at, sink }`, which
+the manager adopts (8.3 item 4), so a restart restores the deadline and never
+the delay counted again.
+`restore` re-arms the desired set, so after a daemon restart, or the process's
+own exit (8.3 item 1), every pending deadline is armed again and one that
+passed meanwhile fires at once.
 
-Registrations clean themselves up at their deadline, so a retired workspace's
-alarms cost at most one timer each; no retirement route is needed.
-`now()` is dropped.
-The manager never needs the time, deadlines are pushed to the adapter, which
-owns the timers and its own clock, and a guest should not need it either.
-The facet takes both forms: an absolute deadline (`at`) and a relative delay
-(`after`), so a program can say "in five minutes" without ever learning what
-time it is.
-A relative registration is resolved in the adapter: `bind` computes the
-absolute deadline from its own clock, arms the timer, and returns the
-resolved spec `{ at }`, which the kit records as the registration's desired
-spec (8.3, item 4).
-A restart therefore restores `{ at }`, not the delay counted again from the
-restart, and `fire(key, at)` carries the deadline it fired for.
+`now()` is gone: the manager never needs the time, the adapter owns the
+timers and its own clock, and a program that only needs a delay never learns
+what time it is.
+The durable factory is shipped by source like every other built-in, so a start
+bundles nothing; it is whole, and a test evaluates it with only the prelude
+in scope.
 
-Removed: everything section 7.1 removes, plus the host timer resource and the
-separate clock vat.
-The platform `timers` power stays in the host for its own bounds only (idle,
-drains, start notices).
+Removed: the host alarm ledger (`durable-alarms.js`, `alarms.json`), its
+row cap, the release and retry protocol of the guest clock
+(`guest-clock.js`), the `alarm` and `alarms` host resources, the daemon's
+`onRetireWorker` and `beforeStartNotices` hooks, the supervisor's `alarmNow`
+test power, and `alarm-settlement.md`; section 7.1 is superseded.
+`alarmStatus` asks the clock for its count and reports `{ pending }`.
+Workspace metadata is version 9.
 
 ### 8.2 The control socket
 
@@ -415,12 +418,13 @@ would run the hub's transport over a hub session.
    consecutive quicker exits double the delay from one second up to thirty.
    No per-resource flag is needed, since an empty desired set has nothing to
    restore.
-2. Built-in resources the host installs.
-   On first start the host installs `resources/alarms` and `resources/control`
-   under reserved names in the registry of section 1, and grants each
-   workspace the alarm facet (section 2).
-   A missing or broken control resource is reinstalled at start, since it is
-   the operator's only way in.
+2. Built-in resources the host installs. (Clock done; control socket with 8.2.)
+   The supervisor installs `resources/clock` under `clock` at every start
+   through the same `provide` rule as the mailbox, and will install
+   `resources/control` the same way; a missing or broken control resource is
+   reinstalled at start, since it is the operator's only way in.
+   The registry of section 1 and the per-workspace grant of section 2 follow
+   when those land.
 3. Bundle the ephemeral module at install, as the durable one already is.
    (Done.)
    `installNative` bundled `durable.js` with `makeBundle` and evaluated the
@@ -481,6 +485,64 @@ operator's administration facet is an exo in a vat.
 
 Order: the monitor (8.3.1) first, then alarms (8.1, in place of 7.1), then
 the control socket once section 1 and the administration facet move are done.
+
+## 9. Collection hooks for native resources
+
+A requirement recorded during the work above, not yet designed in detail.
+
+Some native resources hold something in the adapter, or on disk, whose lifetime should follow a
+durable object in the manager.
+The example: a native resource that creates data stores backed by files on disk.
+A guest holds a durable handle to a store; when nothing holds that handle any more and the vat's
+collector drops it, the files behind it should go too.
+The manager must therefore learn that its durable object was collected, and tell the adapter,
+which deletes the files.
+This generalises to any native resource whose registrations stand for something the adapter or the
+operating system keeps: files, directories, sockets, subprocesses, caches.
+
+What exists today:
+
+- The kit's registration model already carries the right verb: a registration closed through its
+  handle reaches the adapter as `unbind(key)`, and `unbind` is where the adapter releases what it
+  acquired.
+  Collection is one more reason to close a registration.
+- The hub and the host endpoint already account for exports: a reference a vat or the host no
+  longer holds is reported (`slotCollected` and the `gc-exports` operation in
+  `worker-session-records.js`), so an object exported from the manager vat to a consumer vat is
+  dropped from the manager's export table once every holder has let go.
+- A `FinalizationRegistry` in the manager vat, registered with the durable object and the
+  registration's key, would fire once the object is unreachable from the heap, including through
+  the export table, and could close the registration.
+
+What has to be settled:
+
+- Determinism under replay.
+  A vat is the image plus a replay of its journal; a finalizer that fires at a point the collector
+  chose is not in the journal, so a replayed vat could fire it elsewhere, or not at all, and
+  diverge.
+  The engine must deliver collection as a journaled event: the collector's verdict recorded as an
+  inbound message before the vat acts on it, or finalization confined to a checkpoint boundary
+  where the recorded image is the authority.
+  Neither the Ironhorse engine nor the vat peers mention `FinalizationRegistry` today, so a vat
+  under Ironhorse has no finalizer of its own to fire; XS has the intrinsic but a deterministic
+  profile would keep it from the guest for the same reason.
+  The engine-delivered event is therefore the likely shape: the engine reports what it collected
+  at a checkpoint, the host journals that report as a delivery, and the vat acts on it in a crank
+  like any other.
+- Where the hook lives.
+  Preferred: in the kit, so authors write nothing new.
+  `register(key, spec, { heldBy: object })` lets the manager kit register `object` with a
+  finalization registry under `key` and close the registration when it is collected; the adapter
+  sees an ordinary `unbind`.
+  The alternative is a host-driven hook: the hub knows when an export is dropped and could tell the
+  manager, as it tells it of a start or an exit, through the lifecycle facet.
+- Exactly-once and ordering.
+  A collection that races a close, or a rebuild that restores a registration whose holder was
+  collected in between, must not resurrect a deleted store or delete one still held: the
+  registration's own generation (the handle's) decides, as it does for `close`.
+- Durable state outliving its holder on purpose.
+  Some stores should survive the handle (a named store a user expects to find again): collection
+  must be opt-in per registration, never the default for every native resource.
 
 ## Order of the larger changes
 
