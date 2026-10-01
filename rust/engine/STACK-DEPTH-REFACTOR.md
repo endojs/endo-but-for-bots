@@ -2354,7 +2354,9 @@ does not have.
 So `--check-baseline` against it measures the reference's other targets and then stops before it
 measures the candidate.
 The nightly job's baseline step failed on every scheduled run on the base branch from
-2026-09-21 to 2026-09-30.
+2026-09-11, the first after the fixtures began calling them on 2026-09-10, to 2026-10-01.
+`benches/baseline.json` has since been re-pinned at 3a30ab1e9, the end of Phase 1
+(`benches/README.md`).
 Both gates were therefore run with `--check-baseline --baseline` on a copy of the baseline
 whose provenance names a revision that builds every target, which `run.py` remeasures on the
 same host: Phase 1 (c0a9708f) against the PR base (825c598b), and A2a

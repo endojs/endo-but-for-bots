@@ -34,24 +34,54 @@ Reports identify same-host comparisons separately from historical context.
 Both measured sides record a SHA-256 digest of the fixture sources and toolchain pin,
 plus the compiler and relevant build environment; a check refuses mismatched provenance.
 The archived reference uses its own build directory even if `CARGO_TARGET_DIR` is set.
-The pinned revision, 1.25x floor, and growth policies are unchanged.
 The roster is 52 metrics.
 `reentry_bench` added four call and re-entry workloads (guest calls, guest recursion,
 `forEach` callbacks and getter reads) for the dispatch-split gate of
 [`STACK-DEPTH-REFACTOR.md`](../STACK-DEPTH-REFACTOR.md) §4.3, which `dispatch_bench`'s
 straight-line loops do not cross.
-Their checked-in medians were measured at the pinned revision on a Linux x86_64 host, not the
-host of the other 48 (`provenance.reentry_medians`).
-A check remeasures both sides on its own host either way, but the `BENCH_RATIO` lines of a run
-without `--check-baseline` compare against medians from two different hosts.
 
-The pinned revision cannot build today's `attached_bench` and `gc_bench`, which call
-`Interp::slots()` and `Interp::chunks()`, so `--check-baseline` against it stops before it
-measures the candidate.
-Until the baseline is re-pinned, compare against a revision that builds every target by
-passing a copy of `baseline.json` whose `provenance.commit` names it:
-`run.py --check-baseline --baseline <copy>` remeasures that revision on the same host.
-`STACK-DEPTH-REFACTOR.md` §5 Phase 1 ("As run") records two such comparisons.
+The baseline is pinned at `3a30ab1e9`, the end of stack-depth Phase 1, and all 52 medians
+were measured there with `--write-baseline` and today's fixtures on 2026-10-01, on a shared
+4-core Linux x86_64 host.
+The previous pin, `51b99651`, could not build `attached_bench` and `gc_bench` once they
+called `Interp::slots()` and `Interp::chunks()` (2026-09-10), so every nightly check from
+2026-09-11 to 2026-10-01 failed building the reference, before it measured the candidate.
+Re-pin whenever a fixture needs an API the pinned revision lacks: build the pinned revision
+with today's fixtures, `benches/` and toolchain pin copied in, and run `--write-baseline`
+there with `IRONHORSE_REFERENCE_COMMIT` naming it, which is what a check does to its
+reference.
+The 1.25x floor and the growth policies are unchanged.
+[`results/repin-3a30ab1e9.json`](results/repin-3a30ab1e9.json) keeps the evidence below.
+Measured against each other with today's fixtures, in four rounds alternating which runs
+first (`pin_drift_ab`), the new pin is no slower than the old on any of the 13 metrics of
+`dispatch_bench`, `reentry_bench` and `wake_latency_bench`: the dispatch, call and re-entry
+workloads run at 0.87-1.00x of the old pin's medians, the placeholder workloads at
+0.04-0.70x and the wake workloads at 0.12-0.22x.
+So a check against the old pin would also have let regressions of up to those factors
+through in the placeholder and wake workloads.
+
+`run.py` runs every target `RUNS` (three) times on each side and keeps each metric's median
+across those runs, and a check alternates the sides run by run, so load that changes
+during a check moves both sides alike.
+For each metric it prints
+`BENCH_CHECK <metric> reference=<ms> candidate=<ms> ratio=<candidate/reference>`.
+Both sides' medians come from the same number of runs, and the baseline records that
+number (`provenance.runs`).
+The reason is noise on a shared host.
+Most of the GC, slide, placeholder and wake timings take a few milliseconds (the
+attached-store rounds and the largest collections tens), and the medians of five to nine
+samples their fixtures used to take moved by up to 2.2x between runs of one binary: 34 of
+those 45 metrics exceeded 1.25x across five interleaved runs, and the nightly check of
+2026-09-10 failed on `slide_500_front_ms` at 1.28x.
+Their fixtures now take 21 samples per measurement (12 of 45 above 1.25x across five
+runs), and the median of three runs brings the worst case of nine runs from 27 to 10 of 45.
+That narrows the noise rather than removing it.
+Before the runs alternated, a check measured the whole reference and then the whole
+candidate, minutes apart: the first check against the new pin flagged `calls_ms`,
+`recursion_ms`, `chunks_ms` and `callbacks_ms` at 1.33-1.54x and `slide_2000_tail_ms` at
+1.26x, and four interleaved rounds of the same two binaries put all seven dispatch, call
+and re-entry workloads at 0.96-1.05x.
+On a shared host, re-run a flagged workload before treating it as a regression.
 The 1A records below also retain local predecessor and original-branch comparisons.
 Those additional references provide diagnostic evidence; they do not replace the
 repository gate against `baseline.json` or create additional CI thresholds.
