@@ -2278,6 +2278,7 @@ impl Interp {
                 self.native_method_array(m, base, argc, code, this, arg0)?
             }
             NativeMethod::ArrayIteratorNext
+            | NativeMethod::EnumeratorNext
             | NativeMethod::MapIteratorNext
             | NativeMethod::SetIteratorNext
             | NativeMethod::RegExpStringIteratorNext
@@ -5284,13 +5285,30 @@ impl Interp {
             NativeMethod::ArrayIteratorNext => {
                 let iter = match this.value {
                     Payload::Reference(i)
-                        if self.iterators.get(&i).is_some_and(|state| state.kind <= 4) =>
+                        if self
+                            .iterators
+                            .get(&i)
+                            .is_some_and(|state| state.kind <= 4 && state.kind != 3) =>
                     {
                         i
                     }
                     _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
                 };
                 self.array_iterator_next(code, iter)?
+            }
+            // The for-in enumerator's own `next`, which only an enumerator a
+            // program captured (through `%IteratorPrototype%.return`) can
+            // reach. XS does not check its receiver; this refuses any other.
+            NativeMethod::EnumeratorNext => {
+                let iter = match this.value {
+                    Payload::Reference(i)
+                        if self.iterators.get(&i).is_some_and(|state| state.kind == 3) =>
+                    {
+                        i
+                    }
+                    _ => return Err(self.catchable_type_error_msg("this: not an iterator".into())),
+                };
+                self.enumerator_next(code, iter)?
             }
             NativeMethod::MapIteratorNext | NativeMethod::SetIteratorNext => {
                 let expected = if m == NativeMethod::MapIteratorNext {

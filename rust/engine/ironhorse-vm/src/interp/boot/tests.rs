@@ -156,6 +156,7 @@ const FRESH_ORDER: &[&str] = &[
     "length_id",
     "name_id",
     "array_iterator_proto",
+    "enumerator_proto",
     "iterator_proto",
     "iterator_wrapper_proto",
     "iterator_helper_proto",

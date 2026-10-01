@@ -631,6 +631,7 @@ impl Interp {
                 done: false,
                 enum_keys: std::rc::Rc::default(),
                 str_bytes: std::rc::Rc::new(bytes),
+                enum_visited: None,
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
@@ -671,6 +672,7 @@ impl Interp {
                 done: false,
                 enum_keys: std::rc::Rc::default(),
                 str_bytes: std::rc::Rc::default(),
+                enum_visited: None,
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iter))
@@ -754,6 +756,7 @@ impl Interp {
                 done: false,
                 enum_keys: std::rc::Rc::default(),
                 str_bytes: std::rc::Rc::default(),
+                enum_visited: None,
             },
         );
         Ok(Slot::of(Kind::Reference, Payload::Reference(wrapper)))
@@ -1166,6 +1169,7 @@ impl Interp {
                 done: false,
                 enum_keys: std::rc::Rc::default(),
                 str_bytes: std::rc::Rc::default(),
+                enum_visited: None,
             },
         );
         Ok(Ok(Slot::of(Kind::Reference, Payload::Reference(helper))))

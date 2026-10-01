@@ -29,10 +29,6 @@ const KNOWN_DIVERGENCES: &[(&str, &str)] = &[
         "early SyntaxError text: the compile-time abort carries no XS message (review F151)",
     ),
     (
-        "var r='ok'; for (var k in null) { r='iterated' } r",
-        "for-in over a nullish base is a named `Unsupported(\"for_in\")` gap",
-    ),
-    (
         "var r=0; function f(){ 'use strict'; var s='abc'; try { s[0] = 'x'; r=s } catch(e){ r=e instanceof TypeError } } f(); r",
         "strict indexed write to a primitive string is a silent no-op; XS throws (property_at_set on primitives, adjacent to F007)",
     ),

@@ -38,14 +38,17 @@ pub struct IteratorRow {
     pub owner: u32,
     pub kind: u8,
     /// The iterated slot (weak). `u32::MAX` — [`crate::value::SlotIndex::NULL`]
-    /// — for a string iterator, whose text lives in `str_bytes`.
+    /// — for a string iterator, whose text lives in `str_bytes`. For a for-in
+    /// enumerator (kind 3), the prototype level it is stepping.
     pub iterable: u32,
     pub index: u32,
     pub done: bool,
     /// The reused `{value, done}` result object's slot. For kind 8, an
     /// internal arena holder containing the cached `next` value.
     pub result: u32,
-    /// For-in keys as `(id, index)` pairs (`id == 0` ⇒ an array index).
+    /// A for-in enumerator's keys as `(id, index)` pairs (`id == 0` ⇒ an
+    /// array index): the own string keys of every level listed so far, in
+    /// order, where a key that was gone at its turn is `(0, u32::MAX)`.
     pub enum_keys: Vec<(u16, u32)>,
     /// A String or RegExp String Iterator's UTF-16BE input; kind 4 uses `index`
     /// as a byte offset.

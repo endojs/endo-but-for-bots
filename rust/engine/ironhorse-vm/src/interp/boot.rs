@@ -228,6 +228,7 @@ impl Interp {
         term(format!("arraybuffer_proto={:?}", self.arraybuffer_proto).as_bytes());
         term(format!("dataview_proto={:?}", self.dataview_proto).as_bytes());
         term(format!("array_iterator_proto={:?}", self.array_iterator_proto).as_bytes());
+        term(format!("enumerator_proto={:?}", self.enumerator_proto).as_bytes());
         term(format!("string_proto={:?}", self.string_proto).as_bytes());
         term(format!("number_proto={:?}", self.number_proto).as_bytes());
         term(format!("boolean_proto={:?}", self.boolean_proto).as_bytes());
@@ -773,6 +774,14 @@ impl Interp {
         self.array_iterator_proto = array_iter_proto;
         let next_mf = self.alloc_method(NativeMethod::ArrayIteratorNext);
         self.proto_methods.push((array_iter_proto, "next", next_mf));
+        // The for-in enumerators' private prototype (XS's
+        // `mxEnumeratorFunction.prototype`): it inherits
+        // `%IteratorPrototype%` and holds a `next` no global reaches.
+        let enumerator_proto = self.slots.alloc(Slot::instance(self.iterator_proto));
+        self.enumerator_proto = enumerator_proto;
+        let enumerator_next = self.alloc_named_method(NativeMethod::EnumeratorNext, "next", 0);
+        self.proto_methods
+            .push((enumerator_proto, "next", enumerator_next));
         // Collection iterators have distinct intrinsic prototypes and `next`
         // function identities.  They share the iterator-state representation
         // with Array iterators, but the methods must reject an iterator of the

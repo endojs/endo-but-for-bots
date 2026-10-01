@@ -1734,7 +1734,7 @@ impl Interp {
     /// The dispatch loop's `FOR_IN` arm.
     #[inline(never)]
     fn exec_for_in(&mut self, code: &[u8], mut pc: usize, return_depth: usize, size: i8) -> Flow {
-        dispatch_result_flow!(self.dispatch_for_in(), self, return_depth, code);
+        dispatch_result_flow!(self.dispatch_for_in(code), self, return_depth, code);
         pc += size as usize;
         Flow::Next(pc)
     }

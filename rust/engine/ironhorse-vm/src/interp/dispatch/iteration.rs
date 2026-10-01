@@ -137,36 +137,47 @@ impl Interp {
         Ok(())
     }
 
-    pub(super) fn dispatch_for_in(&mut self) -> Result<(), Step> {
+    pub(super) fn dispatch_for_in(&mut self, code: &[u8]) -> Result<(), Step> {
         let obj = self.pop_checked()?;
-        let inst = match obj.value {
-            // A primitive symbol carries `Payload::Reference(desc)`
-            // — its description slot, NOT an instance — so this
-            // must precede the generic arm, or the loop enumerates
-            // an object handed to `Symbol()` and hands the guest
-            // its keys. XS boxes the primitive (`fxToInstance`) and
-            // enumerates the wrapper: no own properties, so the
-            // enumerable set is exactly `%Symbol.prototype%`'s
-            // chain (empty, since every built-in there is
-            // `XS_DONT_ENUM` — but a guest-added enumerable
-            // property on it does show up, as the spec says).
-            // Enumerating that prototype directly gets the same
-            // keys without the wrapper allocation XS pre-pays for
-            // in the enumerator's own cost.
-            Payload::Reference(_) if obj.kind == Kind::Symbol && !self.symbol_proto.is_null() => {
-                self.symbol_proto
+        // XS's `fx_Enumerator` boxes a primitive (`fxToInstance`) and
+        // enumerates the wrapper, metered as ToObject's two slots and
+        // dispatch: a String wrapper owns its indices, and every other one
+        // owns nothing, so its prototype's chain is the enumerable set.
+        let native = match obj.kind {
+            // `undefined`/`null`: a loop over nothing. XS's `fx_Enumerator`
+            // builds the enumerator and returns before collecting a key.
+            Kind::Undefined | Kind::Null => {
+                let it = self.make_enumerator(code, crate::value::SlotIndex::NULL)?;
+                self.push(it);
+                return Ok(());
             }
-            // `undefined`/`null` for-in is a legal empty loop, but
-            // its zero-key enumerator setup is a later increment;
-            // an object receiver is the covered case.
-            Payload::Reference(i) if obj.kind != Kind::Symbol => i,
+            // A primitive symbol carries `Payload::Reference(desc)` — its
+            // description slot, NOT an instance — so it must not be
+            // enumerated as an object. Its wrapper's chain is
+            // `%Symbol.prototype%`'s, enumerated directly at the cost the
+            // enumerator has always charged for it.
+            Kind::Symbol if !self.symbol_proto.is_null() => {
+                let it = self.make_enumerator(code, self.symbol_proto)?;
+                self.push(it);
+                return Ok(());
+            }
+            Kind::Symbol => Some(Native::Symbol),
+            Kind::String => Some(Native::String),
+            Kind::Integer | Kind::Number => Some(Native::Number),
+            Kind::Boolean => Some(Native::Boolean),
+            Kind::BigInt => Some(Native::BigInt),
+            _ => None,
+        };
+        let inst = match (native, obj.value) {
+            (Some(native), _) => self.box_primitive_to_instance(native, obj),
+            (None, Payload::Reference(inst)) if obj.kind == Kind::Reference => inst,
             _ => {
                 return Err(Step::Host(Halt::NotImplemented(
                     "for_in:non-object-receiver",
                 )))
             }
         };
-        let it = self.make_enumerator(inst);
+        let it = self.make_enumerator(code, inst)?;
         self.push(it);
         Ok(())
     }

@@ -831,6 +831,7 @@ mod tests {
             "arraybuffer_proto",
             "dataview_proto",
             "array_iterator_proto",
+            "enumerator_proto",
             "string_proto",
             "number_proto",
             "boolean_proto",

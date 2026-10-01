@@ -1293,9 +1293,10 @@ struct FromAsyncData {
 
 /// An iterator's state. For an **array iterator** (`kind` 0 = values, 1 =
 /// keys, 2 = entries) `iterable` is the array and `index` the cursor. For a
-/// **for-in enumerator** (`kind` = 3) `enum_keys` is the pre-collected list of
-/// enumerable property keys `(id, index)` to yield as strings (an `id ==
-/// XS_NO_ID` entry is an array index), and `index` cursors it. `result` is the
+/// **for-in enumerator** (`kind` = 3) `iterable` is the prototype level being
+/// stepped, `enum_keys` every own string key `(id, index)` of the levels listed
+/// so far (an `id == XS_NO_ID` entry is an array index; one that was gone at
+/// its turn is `FOR_IN_GONE`), and `index` cursors it. `result` is the
 /// reused `{value, done}` object `next()` mutates and returns. Kind 9 is a
 /// RegExp String Iterator: `iterable` is its matcher, `str_bytes` its input,
 /// and the low two `index` bits carry `global`/`fullUnicode`.
@@ -1327,6 +1328,11 @@ struct IterState {
     /// matcher carries its own observable `lastIndex`, leaving `index` for its
     /// two persisted mode bits.
     str_bytes: std::rc::Rc<Vec<u8>>,
+    /// For a for-in enumerator (`kind == 3`): the keys of `enum_keys` before
+    /// the cursor that are not `FOR_IN_GONE` — XS's visited list — as a set.
+    /// Derived state, never persisted: `None` until an enumerator first
+    /// needs it, and after a restore, when it is rebuilt from `enum_keys`.
+    enum_visited: Option<std::rc::Rc<std::collections::HashSet<(u16, u32)>>>,
 }
 
 /// Construction metadata retained in the existing snapshot format, plus the

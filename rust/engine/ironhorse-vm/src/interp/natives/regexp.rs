@@ -911,6 +911,7 @@ impl Interp {
                 done: false,
                 enum_keys: std::rc::Rc::default(),
                 str_bytes: std::rc::Rc::new(units_to_be16(subject)),
+                enum_visited: None,
             },
         );
         Slot::of(Kind::Reference, Payload::Reference(iterator))
