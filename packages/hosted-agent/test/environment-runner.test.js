@@ -148,6 +148,8 @@ const fixture = async t => {
     }),
     close: async () => {
       calls.push('listener-close');
+      if (requireScopeBeforeListener && !scopeClosed)
+        throw Error('listener runtime has dependents');
     },
   };
   const makeEgress = () => ({
@@ -369,4 +371,24 @@ test('joined native scope cleanup acknowledges before network listener removal',
   t.true(f.calls.indexOf('scope-close') < f.calls.indexOf('network-stop'));
   t.true(f.calls.indexOf('network-stop') < f.calls.indexOf('unmount'));
   await E(f.runner).removeEnvironmentStorage(id);
+});
+
+test('runner-wide shutdown retains listeners until dependent scopes acknowledge', async t => {
+  const f = await fixture(t);
+  const controller = await E(f.runner).provideEnvironment(
+    id,
+    harden({ ...recipe, networkPolicy: 'public-internet' }),
+    f.dependencies,
+  );
+  await E(controller).open();
+  f.requireScopeBeforeListener();
+  const scope = f.blockScope();
+  const stopped = f.kit.close();
+  await scope.entered;
+  t.false(f.calls.includes('network-stop'));
+  t.false(f.calls.includes('listener-close'));
+  scope.resolve();
+  await stopped;
+  t.true(f.calls.indexOf('network-stop') < f.calls.indexOf('listener-close'));
+  t.deepEqual(await readdir(f.socketRoot), []);
 });

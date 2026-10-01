@@ -340,7 +340,6 @@ export const makeEnvironmentRunnerKit = (
         const stopped = Promise.allSettled([
           owners.shutdown(),
           runtime.close(),
-          listener.close(),
         ]);
         await opening?.catch(() => {});
         const results = await stopped;
@@ -352,6 +351,9 @@ export const makeEnvironmentRunnerKit = (
             failures,
             'Environment runner shutdown pending',
           );
+        // Listener namespaces outlive every dependent native scope, including
+        // runner-wide shutdown. Failed containment keeps that owner retained.
+        await listener.close();
       })().catch(error => {
         closeFlight = undefined;
         throw error;
