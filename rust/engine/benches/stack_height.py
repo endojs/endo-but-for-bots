@@ -4,9 +4,15 @@
 Runs `ironhorse-vm/tests/stack_height.rs` in release mode, parses its
 `STACK_METRIC` lines and compares each case against `stack-height-baseline.json`.
 A case fails the check when it uses more stack than the baseline allows or
-when its outcome (completed, ReentryLimit, ...) changes. The marks are
-deterministic for one compiler, target and profile, so the baseline records
-that provenance and the check refuses a mismatch unless told otherwise.
+when its outcome (completed, ReentryLimit, ...) changes. Frame sizes are a
+property of the build, so the baseline records the compiler, target and
+profile it was measured with, and the check refuses a mismatch unless told
+otherwise.
+
+Within one build the marks still vary from run to run, by up to about 1.4%:
+the standard library seeds its hash tables randomly in each process, which
+changes what runs at a case's deepest point. The baseline's 2% slack
+(`DEFAULT_SLACK`) absorbs that variation.
 
 The baseline also records the commit it was measured at. `--write-baseline`
 refuses a tree with uncommitted engine changes, whose marks HEAD would not

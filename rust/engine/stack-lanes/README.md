@@ -97,8 +97,12 @@ Natively the probe's `--stack` does the same with `paint.rs`.
 
 ## What the numbers mean
 
-The marks are exact for one build and host: frame sizes are a property of the
-compiler, so a change in a mark is a change in the code, not noise.
+Frame sizes are a property of the compiler, so the marks belong to one build and
+host, but they are not exactly reproducible: the engine's hash tables are seeded
+per process, which changes what runs at a case's deepest point.
+Natively, runs of one build differ by up to about 1.4% (`../benches/README.md`);
+the wasm lanes draw their seeds from WASI's `random_get` and have not been
+measured for it.
 Node's minima do not predict workerd's, and neither predicts a browser; the
 lanes exist because the hosts differ (report §1.3).
 The workerd lane pins both tiers; default tiering is timing-dependent and a

@@ -3,9 +3,11 @@
 //! (`ironhorse-vm/tests/stack_height.rs`) and the probe (`probe/src/main.rs`).
 //!
 //! `stage(f)` paints the unused stack below its frame with a sentinel, runs
-//! `f`, then finds the lowest byte `f` dirtied. One run, byte-exact, no
-//! bisection. Frame sizes are a property of the build, so the mark is
-//! deterministic for one compiler, target and profile.
+//! `f`, then finds the lowest byte `f` dirtied. One run, read to the byte, no
+//! bisection. Frame sizes are a property of the build, but what runs at the
+//! deepest point is not fixed by it: the engine's hash tables are seeded per
+//! process, so marks of one native build vary from run to run by up to about
+//! 1.4% (`benches/README.md`).
 //!
 //! The painter needs a downward-growing, contiguous stack below the caller
 //! with at least `NATIVE_STACK_BYTES` of room, which the harness and the
