@@ -242,7 +242,7 @@ export const spawnWorkerLoop = async (
    * Runs as a background loop — fire-and-forget via void.
    *
    * @param {string} channelName - petname for the channel
-   * @param {string} channelId - canonical formula identifier
+   * @param {string} channelId - the agent's own pet name for the channel
    * @param {object} member - channel member handle
    * @param {string | null} selfMemberId - own member ID to skip own msgs
    */
@@ -421,7 +421,8 @@ export const spawnWorkerLoop = async (
       try {
         const ch = await E(powers).lookup(chName);
         const member = await E(ch).join('jaine');
-        const channelId = await E(powers).identify(chName);
+        // A guest holds no identifiers; its own pet name keys the channel.
+        const channelId = chName;
 
         if (!watchedChannels.has(channelId)) {
           watchedChannels.set(channelId, true);
@@ -518,9 +519,7 @@ export const spawnWorkerLoop = async (
         // the response using channel-scoped layers
         if (mentionResult) {
           try {
-            const channelId = await E(powers).identify(
-              mentionResult.channelName,
-            );
+            const channelId = mentionResult.channelName;
             if (!channelLayers.has(channelId)) {
               channelLayers.set(
                 channelId,
@@ -881,11 +880,17 @@ harden(handleInbox);
 /**
  * @param {any} guestPowers
  * @param {Promise<object> | object | undefined} _context
+ * @param {{ env?: Record<string, string> }} [options]
  * @returns {object}
  */
-export const make = (guestPowers, _context) => {
+export const make = (guestPowers, _context, { env: factoryEnv = {} } = {}) => {
   /** @type {any} */
   const powers = guestPowers;
+  // The factory's own agent name in the host's namespace. The factory is a
+  // guest and holds no identifiers, so the host copies the factory's
+  // provider references into each driver by this name.
+  const factoryAgentName =
+    factoryEnv.JAINE_FACTORY_AGENT_NAME || 'profile-for-jaine-factory-handle';
 
   return makeExo('JaineFactory', JaineFactoryInterface, {
     /**
@@ -918,28 +923,24 @@ export const make = (guestPowers, _context) => {
         });
       }
 
-      // Write provider + agent refs into driver namespace
-      const driverPowers = await E(hostAgent).lookup(driverProfileName);
-      const providerId = await E(powers).identify('llm-provider');
-      await E(driverPowers).storeIdentifier('llm-provider', providerId);
+      // Write provider + agent refs into driver namespace. The host binds
+      // them, so no guest handles a formula identifier.
+      await E(hostAgent).copy(
+        [factoryAgentName, 'llm-provider'],
+        [driverProfileName, 'llm-provider'],
+      );
 
       // Propagate fast provider if configured
       try {
-        const fastProviderId = await E(powers).identify('llm-provider-fast');
-        if (fastProviderId) {
-          await E(driverPowers).storeIdentifier(
-            'llm-provider-fast',
-            fastProviderId,
-          );
-        }
+        await E(hostAgent).copy(
+          [factoryAgentName, 'llm-provider-fast'],
+          [driverProfileName, 'llm-provider-fast'],
+        );
       } catch {
         // No fast provider configured — that's fine.
       }
 
-      // eslint-disable-next-line no-unused-vars
-      const agentLocator = await E(hostAgent).locate(agentName);
-      const agentId = await E(hostAgent).identify(agentName);
-      await E(driverPowers).storeIdentifier('agent', agentId);
+      await E(hostAgent).copy([agentName], [driverProfileName, 'agent']);
 
       // Launch driver
       /** @type {Record<string, string>} */

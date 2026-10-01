@@ -1,5 +1,4 @@
 // @ts-nocheck — E() generics don't work well with JSDoc types for remote objects
-import { E } from '@endo/eventual-send';
 import { extractToolCallsFromContent } from '@endo/fae/src/extract-tool-calls.js';
 import { createLogger } from './logger.js';
 
@@ -181,13 +180,11 @@ harden(buildRoutingPrompt);
  * 2. Channel messages (LLM-powered): uses the provider to decide whether
  *    to engage based on the participation level and channel context.
  *
- * @param {object} powers - agent guest powers
+ * @param {object} _powers - agent guest powers (unused; kept for callers)
  * @param {{ chat: (messages: object[], tools: object[]) => Promise<{ message: object }> }} [provider]
  * @returns {Promise<object>}
  */
-export const makeRouter = async (powers, provider) => {
-  const selfLocator = await E(powers).locate('@self');
-
+export const makeRouter = async (_powers, provider) => {
   /** @type {Set<bigint>} */
   const processedMessages = new Set();
 
@@ -235,9 +232,11 @@ export const makeRouter = async (powers, provider) => {
    * @returns {RouteDecision}
    */
   const route = message => {
-    const { from: fromId, number } = /** @type {any} */ (message);
+    const { fromNames = [], number } = /** @type {any} */ (message);
 
-    if (fromId === selfLocator) {
+    // A guest reads its correspondents by its own pet names; its own
+    // outbound mail names it `@self`.
+    if (Array.isArray(fromNames) && fromNames.includes('@self')) {
       return harden({ action: 'ignore', reason: 'own message' });
     }
 
