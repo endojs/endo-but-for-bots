@@ -2,6 +2,7 @@ import '@endo/sturdyref/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
+import { isDeepStrictEqual } from 'node:util';
 import fc from 'fast-check';
 import { Far, Remotable } from '@endo/marshal';
 import { isPromise } from '@endo/promise-kit';
@@ -469,4 +470,51 @@ test('the SturdyRef locator refuses a non-string object id', async t => {
   await t.throwsAsync(() => E(locator).locate(1), {
     message: /object id must be a string/,
   });
+});
+
+test('constructing a SturdyRef from data refuses non-enumerable properties', t => {
+  const { left } = makeOptionsPair({}, {});
+  const data = { peerId: 'right', objectId: 'x' };
+  Object.defineProperty(data, 'smuggled', { value: true, enumerable: false });
+  t.throws(() => left.makeSturdyRefFromData(data), {
+    message: /Unexpected SturdyRef data properties/,
+  });
+  /** @type {Record<string, string>} */
+  const hints = {};
+  Object.defineProperty(hints, 'port', { value: '1', enumerable: false });
+  t.throws(
+    () => left.makeSturdyRefFromData({ peerId: 'right', objectId: 'x', hints }),
+    { message: /hints must be a record of strings/ },
+  );
+});
+
+test('a CapTP returns the data it constructed a SturdyRef from', t => {
+  const { left } = makeOptionsPair({}, {});
+  const sturdyRefDataArbitrary = fc
+    .tuple(
+      fc.string(),
+      fc.string(),
+      fc.option(fc.string(), { nil: undefined }),
+      fc.option(fc.array(fc.tuple(fc.string(), fc.string())), {
+        nil: undefined,
+      }),
+    )
+    .map(([peerId, objectId, network, hintEntries]) => ({
+      peerId,
+      objectId,
+      ...(network === undefined ? {} : { network }),
+      ...(hintEntries === undefined
+        ? {}
+        : { hints: Object.fromEntries(hintEntries) }),
+    }));
+  fc.assert(
+    fc.property(sturdyRefDataArbitrary, data =>
+      isDeepStrictEqual(
+        left.getSturdyRefData(left.makeSturdyRefFromData(data)),
+        // The recorded data always has hints.
+        { hints: {}, ...data },
+      ),
+    ),
+  );
+  t.pass();
 });

@@ -1,7 +1,7 @@
 /** @import {RemoteKit, Settler} from '@endo/eventual-send' */
 /** @import {CapData} from '@endo/marshal' */
 /** @import {SturdyRef} from '@endo/pass-style' */
-/** @import {CapTPSlot, TrapHost, TrapGuest, TrapImpl} from './types.js' */
+/** @import {CapTPSlot, SturdyRefData, TrapHost, TrapGuest, TrapImpl} from './types.js' */
 
 // Your app may need to `import '@endo/eventual-send/shim.js'` to get HandledPromise
 
@@ -253,17 +253,6 @@ export const makeDefaultCapTPImportExportTables = ({
  */
 
 /**
- * The coordinates a SturdyRef can be reconstructed from.
- *
- * @typedef {object} SturdyRefData
- * @property {string} peerId the peer that holds the referent
- * @property {string} objectId the peer's name for the referent, such as a
- * swiss number
- * @property {string} [network] the network the peer is reachable on
- * @property {Record<string, string>} [hints] how to connect to the peer
- */
-
-/**
  * The entries of `record` if it is an object whose own properties are all
  * enumerable string-keyed strings, or `undefined` otherwise. The entries are
  * read once, so a getter or proxy cannot answer validation and copying
@@ -285,6 +274,9 @@ const stringRecordEntries = record => {
   }
   return entries;
 };
+
+/** @type {readonly PropertyKey[]} */
+const sturdyRefDataKeys = harden(['peerId', 'objectId', 'network', 'hints']);
 
 /** @type {CapTPRejectionContext} */
 const PROMISE_REJECTION = harden({
@@ -1214,15 +1206,18 @@ export const makeCapTP = (
   const makeSturdyRefFromData = data => {
     (typeof data === 'object' && data !== null) ||
       Fail`SturdyRef data must be an object`;
+    // Compare every own key, so a symbol-keyed or non-enumerable property
+    // cannot slip past the check.
+    const extra = Reflect.ownKeys(data).filter(
+      key => !sturdyRefDataKeys.includes(key),
+    );
+    extra.length === 0 || Fail`Unexpected SturdyRef data properties ${extra}`;
     const {
       peerId: dataPeerId,
       objectId,
       network = undefined,
       hints = {},
-      ...rest
     } = data;
-    const extra = Reflect.ownKeys(rest);
-    extra.length === 0 || Fail`Unexpected SturdyRef data properties ${extra}`;
     typeof dataPeerId === 'string' ||
       Fail`SturdyRef peerId must be a string, not ${dataPeerId}`;
     // Intentionally do NOT include `objectId` in errors: it is the secret.
