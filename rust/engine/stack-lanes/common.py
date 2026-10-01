@@ -26,6 +26,7 @@ NODE_RUNNER = LANES / "node/run.cjs"
 TIER_MIX_HEADROOM = 0.176
 CHROMIUM_WORKER_STACK_KB = 500  # a dedicated Worker's limit, which Node's --stack-size stands in for
 WORKERD_STACK_KB = 984  # workerd's V8 limit, which it does not expose a knob for
+V8_DEFAULT_STACK_KB = 984  # V8's own --stack-size default on 64-bit hosts
 
 
 def lane_b_stack(limit_kb):
@@ -118,6 +119,17 @@ def stack_limit_raiser(stack_kb, limits=None):
     if hard != resource.RLIM_INFINITY and hard < need:
         raise HarnessError(f"the stack hard limit ({hard} B) cannot hold a {stack_kb} KiB V8 stack")
     return lambda: resource.setrlimit(resource.RLIMIT_STACK, (need, hard))
+
+
+def largest_stack_kb(limits=None):
+    """The largest V8 stack in KiB that `stack_limit_raiser` can make room
+    for under the stack hard limit, or None when the hard limit is
+    unlimited. `limits` is (soft, hard) for tests; the default reads this
+    process's."""
+    _, hard = limits or resource.getrlimit(resource.RLIMIT_STACK)
+    if hard == resource.RLIM_INFINITY:
+        return None
+    return hard // 1024 - NODE_STACK_SLACK_KB
 
 
 def run_native(probe, args, stdin=None, timeout=600):

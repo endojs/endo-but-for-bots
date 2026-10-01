@@ -10,8 +10,8 @@ STACK-DEPTH-REFACTOR.md §5, "Lane C, trend only":
            (node --print-wasm-code with the tier pinned);
   slopes   for each heavy family, bytes of stack per level and per budget unit
            at two depths: native (the probe's --stack painter) and the shadow
-           stack (node/run.cjs painting, under a host stack large enough for
-           every family's ceiling);
+           stack (node/run.cjs painting, under V8's default host stack, or a
+           larger one for a family that traps there);
   chains   for each heavy family, the functions of one recursion level, from
            the stack trace of a trap under Node at a host stack too small for
            the ceiling, cut at the repeating period;
@@ -316,17 +316,40 @@ def native_stack(native, family, n):
     return int(line.rsplit("stack=", 1)[1])
 
 
-# The host stack the shadow painter runs under: room for every heavy family at
-# its ceiling under V8's default tiering, which needs more than V8's default
-# and more than lane B's limits (lane B's expected traps). The painter
-# measures; a family that does not fit has no mark to give.
+# The host stack the shadow painter paints a family under again when it traps
+# under V8's default, so that a family that outgrows the default keeps its
+# shadow slope. Every heavy family fits the default at its ceiling today
+# (lane B traps on none at its ceiling, even at 425 KiB), so the larger
+# stack, and the stack limit raised to hold it, is asked for only after a
+# trap.
 SLOPE_STACK_KB = 16 * 1024
 
 
-def shadow_stack(wasm, family, n, stack_kb=SLOPE_STACK_KB):
-    """The painted shadow mark of a run that returned (`painted`)."""
-    outcome = common.run_node(wasm, ["family", "heavy", family, str(n)], paint=True, stack_kb=stack_kb)
-    painted("shadow", outcome, n, f" under a {stack_kb} KiB host stack")
+def slope_stack_kb(limits=None):
+    """SLOPE_STACK_KB, or as much of it as the stack hard limit can hold
+    (`common.largest_stack_kb`). `limits` is (soft, hard) for tests."""
+    room = common.largest_stack_kb(limits)
+    return SLOPE_STACK_KB if room is None else min(SLOPE_STACK_KB, room)
+
+
+def shadow_stack(wasm, family, n):
+    """The painted shadow mark of a run that returned (`painted`): under V8's
+    default host stack, and, for a family that traps there, again under
+    `slope_stack_kb()`. The shadow stack is wasm memory, so the host stack's
+    size moves no mark; it only decides whether the run returns. A host
+    whose stack hard limit cannot hold SLOPE_STACK_KB thus fails only the
+    families that outgrow both the default and what it can hold, and one
+    whose limit holds no more than the default does not retry."""
+    args = ["family", "heavy", family, str(n)]
+    outcome = common.run_node(wasm, args, paint=True)
+    where = " under V8's default host stack"
+    # A hard limit that holds no more than V8's default leaves nothing to
+    # retry with; the default's trap is the family's problem.
+    stack_kb = slope_stack_kb()
+    if outcome.trapped and stack_kb > common.V8_DEFAULT_STACK_KB:
+        outcome = common.run_node(wasm, args, paint=True, stack_kb=stack_kb)
+        where = f" under a {stack_kb} KiB host stack"
+    painted("shadow", outcome, n, where)
     if outcome.shadow_stack is None:
         raise common.HarnessError(f"the shadow painter printed no mark at depth {n}")
     return outcome.shadow_stack
