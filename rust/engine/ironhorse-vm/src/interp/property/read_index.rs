@@ -141,10 +141,10 @@ impl Interp {
     /// engine minting a key id for it. A proxy that traps nothing forwards to
     /// its target with the key still unbuilt.
     ///
-    /// The recursion's re-entry for a target, [`Self::uninterned_index_get`],
-    /// runs the Array Iterator's context check and the target's ordinary
-    /// levels first, so the walk is [`Self::forwarding_levels_loop`]'s: a
-    /// Proxy past them is the next layer.
+    /// The forwarding loop of `forwarding_loop`, written out because the
+    /// recursion's re-entry for a target, [`Self::uninterned_index_get`], runs
+    /// the Array Iterator's context check and the target's ordinary levels
+    /// first: a Proxy past them is the next layer.
     #[inline(never)]
     pub(in crate::interp) fn uninterned_index_proxy_get(
         &mut self,
@@ -153,26 +153,26 @@ impl Interp {
         index: u32,
         receiver: Slot,
     ) -> Result<Slot, Step> {
-        self.forwarding_levels_loop(
-            proxy,
-            |vm, proxy| {
-                vm.proxy_get_step(
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            loop {
+                let target = match vm.proxy_get_step(
                     code,
                     proxy,
                     ReadKey::Index(index),
                     receiver,
                     GetMetering::default(),
-                )
-            },
-            |vm, target| {
-                Ok(
-                    match vm.uninterned_index_get_levels(code, target, index, receiver)? {
-                        IndexLevels::Answered(value) => ProxyStep::Done(value),
-                        IndexLevels::Proxy(next) => ProxyStep::Forward(next),
-                    },
-                )
-            },
-        )
+                )? {
+                    ProxyStep::Done(value) => return Ok(value),
+                    ProxyStep::Forward(target) => target,
+                };
+                vm.forwarding_hop(held)?;
+                match vm.uninterned_index_get_levels(code, target, index, receiver)? {
+                    IndexLevels::Answered(value) => return Ok(value),
+                    IndexLevels::Proxy(next) => proxy = next,
+                }
+            }
+        })
     }
 
     /// Whether `o` has an OWN property at `index` whose name the table has
@@ -394,18 +394,23 @@ impl Interp {
         proxy: crate::value::SlotIndex,
         index: u32,
     ) -> Result<bool, Step> {
-        // The recursion's re-entry for a target, `uninterned_index_has`, first
+        // The forwarding loop of `forwarding_loop`, written out because the
+        // recursion's re-entry for a target, `uninterned_index_has`, first
         // walks the target's ordinary levels.
-        self.forwarding_levels_loop(
-            proxy,
-            |vm, proxy| vm.uninterned_index_proxy_has_step(code, proxy, index),
-            |vm, target| {
-                Ok(match vm.uninterned_index_has_levels(code, target, index)? {
-                    HasLevels::Answered(found, _) => ProxyStep::Done(found),
-                    HasLevels::Proxy(next, _) => ProxyStep::Forward(next),
-                })
-            },
-        )
+        self.with_forwarding_walk(|vm, held| {
+            let mut proxy = proxy;
+            loop {
+                let target = match vm.uninterned_index_proxy_has_step(code, proxy, index)? {
+                    ProxyStep::Done(found) => return Ok(found),
+                    ProxyStep::Forward(target) => target,
+                };
+                vm.forwarding_hop(held)?;
+                match vm.uninterned_index_has_levels(code, target, index)? {
+                    HasLevels::Answered(found, _) => return Ok(found),
+                    HasLevels::Proxy(next, _) => proxy = next,
+                }
+            }
+        })
     }
 
     /// One layer of [`Self::uninterned_index_proxy_has`].
