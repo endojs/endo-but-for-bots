@@ -1479,6 +1479,7 @@ __metadata:
     ava: "catalog:dev"
     c8: "catalog:dev"
     eslint: "catalog:dev"
+    fast-check: "npm:^4.10.2"
     ses: "workspace:^"
     typescript: "catalog:dev"
   languageName: unknown
@@ -2967,6 +2968,7 @@ __metadata:
     c8: "catalog:dev"
     cbor: "npm:^10.0.12"
     eslint: "catalog:dev"
+    fast-check: "npm:^4.10.2"
     ses: "workspace:^"
     typescript: "catalog:dev"
     ws: "npm:^8.21.3"
