@@ -922,14 +922,7 @@ impl Interp {
         value: Slot,
         done: bool,
     ) -> Slot {
-        let value_id = self
-            .value_id
-            .unwrap_or_else(|| self.intern_static_key("value"));
-        let done_id = self
-            .done_id
-            .unwrap_or_else(|| self.intern_static_key("done"));
-        self.value_id = Some(value_id);
-        self.done_id = Some(done_id);
+        let (value_id, done_id) = self.iterator_result_ids();
         let result = self.slots.alloc(Slot::instance(self.object_proto));
         self.set_own_unmetered(result, value_id, value);
         self.set_own_unmetered(result, done_id, Slot::boolean(done));

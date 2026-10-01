@@ -582,13 +582,7 @@ impl Interp {
     /// the same [`NativeMethod::ArrayIteratorNext`], which branches on kind).
     pub(in crate::interp) fn make_string_iterator(&mut self, bytes: Vec<u8>) -> Slot {
         self.meter.tick_raw(STRING_ITERATOR_CREATE_METERING);
-        let result = self.slots.alloc(Slot::instance(self.object_proto));
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::undefined());
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(false));
-        }
+        let result = self.new_reused_iterator_result();
         let iter = self.slots.alloc(Slot::instance(self.array_iterator_proto));
         self.iterators.insert(
             iter,
@@ -623,13 +617,7 @@ impl Interp {
     ) -> Slot {
         self.meter.tick_raw(COLLECTION_ITERATOR_CREATE_METERING);
         let coll_generation = self.collections.get(&inst).map_or(0, |c| c.generation());
-        let result = self.slots.alloc(Slot::instance(self.object_proto));
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::undefined());
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(false));
-        }
+        let result = self.new_reused_iterator_result();
         let proto = match self.collections.get(&inst).map(|c| c.kind) {
             Some(CollKind::Map) => self.map_iterator_proto,
             Some(CollKind::Set) => self.set_iterator_proto,
@@ -1771,12 +1759,9 @@ impl Interp {
             s.index = next_index;
             s.done = new_done;
         }
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(new_done));
-        }
+        let (vid, did) = self.iterator_result_ids();
+        self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
+        self.set_own_unmetered(result, did, Slot::boolean(new_done));
         Slot::of(Kind::Reference, Payload::Reference(result))
     }
 
@@ -2760,12 +2745,9 @@ impl Interp {
             s.index = next_index;
             s.done = new_done;
         }
-        if let Some(vid) = self.value_id {
-            self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
-        }
-        if let Some(did) = self.done_id {
-            self.set_own_unmetered(result, did, Slot::boolean(new_done));
-        }
+        let (vid, did) = self.iterator_result_ids();
+        self.set_own_unmetered(result, vid, Slot::of(new_value.kind, new_value.value));
+        self.set_own_unmetered(result, did, Slot::boolean(new_done));
         Ok(Slot::of(Kind::Reference, Payload::Reference(result)))
     }
 
