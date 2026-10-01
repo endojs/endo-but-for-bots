@@ -58,6 +58,52 @@ impl Interp {
         })
     }
 
+    /// The `[[Prototype]]` of a derived class's prototype object
+    /// (ClassDefinitionEvaluation, XS's `fxRunExtends`). The heritage must be
+    /// a constructor — a Proxy or bound function over one included — and its
+    /// `prototype`, read with an observable `Get`, must be an object or `null`.
+    ///
+    /// The previous check accepted any function and read `prototype` from the
+    /// property cache, so `class C extends F {}` with `F.prototype = 3` built a
+    /// class whose instances silently inherited from nothing, where XS and V8
+    /// throw a TypeError, and a Proxy over a constructor was refused.
+    pub(super) fn class_heritage_prototype(
+        &mut self,
+        code: &[u8],
+        heritage: Slot,
+    ) -> Result<crate::value::SlotIndex, Step> {
+        if heritage.kind == Kind::Null {
+            return Ok(crate::value::SlotIndex::NULL);
+        }
+        let constructor = match heritage.value {
+            Payload::Reference(constructor)
+                if heritage.kind == Kind::Reference && self.slot_is_constructor(constructor) =>
+            {
+                constructor
+            }
+            _ => {
+                return Err(
+                    self.catchable_type_error_msg("extends: class is not a constructor".into())
+                )
+            }
+        };
+        let id = self.intern_static_key("prototype");
+        match self.mop_get(code, constructor, id, heritage)? {
+            Slot {
+                kind: Kind::Null, ..
+            } => Ok(crate::value::SlotIndex::NULL),
+            Slot {
+                kind: Kind::Reference,
+                value: Payload::Reference(prototype),
+                ..
+            } => Ok(prototype),
+            _ => {
+                Err(self
+                    .catchable_type_error_msg("extends: class prototype is not an object".into()))
+            }
+        }
+    }
+
     /// `GetPrototypeFromConstructor(newTarget, …)` for an object a native
     /// constructor creates, when a derived constructor's `super()` or a
     /// `Reflect.construct` names the `new.target`.
@@ -524,10 +570,15 @@ impl Interp {
     }
 
     /// `IsConstructor(v)` (ECMA-262 7.2.4). A bound/proxy callable follows its
-    /// target. Native prototype methods, `eval`, `Symbol`, and `BigInt` have no
-    /// `[[Construct]]`. A user function has it only when its constructor opcode
-    /// retained a default-prototype link; generator functions use that link for
-    /// their generator instances but are themselves non-constructable.
+    /// target. Native prototype methods and `eval` have no `[[Construct]]`.
+    /// `Symbol` and `BigInt` do — the specification makes them constructors
+    /// whose construction throws, so `Reflect.construct(Symbol, [])`, an
+    /// `extends Symbol` class's `super()` and `Array.of.call(BigInt)` reach
+    /// that TypeError (`new: Symbol` or `new: BigInt`, as XS says) rather than
+    /// "not a constructor", and either can be a `new.target`. A user function
+    /// has it only when its constructor opcode retained a default-prototype
+    /// link; generator functions use that link for their generator instances
+    /// but are themselves non-constructable.
     pub(super) fn is_constructor_value(&self, v: Slot) -> bool {
         matches!(v.value, Payload::Reference(r) if v.kind == Kind::Reference && self.slot_is_constructor(r))
     }
@@ -553,10 +604,9 @@ impl Interp {
         }
         match self.functions.get(&r) {
             Some(fi) if fi.method.is_some() => false,
-            Some(fi) if fi.native.is_some() => !matches!(
-                fi.native,
-                Some(Native::Host | Native::Eval | Native::Symbol | Native::BigInt)
-            ),
+            Some(fi) if fi.native.is_some() => {
+                !matches!(fi.native, Some(Native::Host | Native::Eval))
+            }
             Some(fi) => !fi.is_generator && self.ctor_prototype.contains_key(&r),
             None => false,
         }

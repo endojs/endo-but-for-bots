@@ -2142,20 +2142,12 @@ impl Interp {
     #[inline(never)]
     fn exec_extend(&mut self, code: &[u8], mut pc: usize, return_depth: usize, size: i8) -> Flow {
         let heritage = dispatch_result_flow!(self.peek_checked(), self, return_depth, code);
-        let parent_proto = match heritage.value {
-            Payload::None if heritage.kind == Kind::Null => crate::value::SlotIndex::NULL,
-            Payload::Reference(parent)
-                if heritage.kind == Kind::Reference && self.functions.contains_key(&parent) =>
-            {
-                self.prototype_of(parent)
-                    .unwrap_or(crate::value::SlotIndex::NULL)
-            }
-            _ => {
-                let error =
-                    self.internal_error("TypeError", "extends: class is not a constructor".into());
-                dispatch_halt_flow!(self.raise_js(error), self, return_depth, code);
-            }
-        };
+        let parent_proto = dispatch_result_flow!(
+            self.class_heritage_prototype(code, heritage),
+            self,
+            return_depth,
+            code
+        );
         let proto = self.slots.alloc(Slot::instance(parent_proto));
         self.push(Slot::of(Kind::Reference, Payload::Reference(proto)));
         pc += size as usize;
