@@ -193,6 +193,7 @@ impl<'scope> HostCallContext<'scope> {
         }
         let args: Vec<_> = args.iter().map(|v| v.slot).collect();
         let native_depth = self.interp.native_depth;
+        let held = self.interp.held_total;
         let jumps = self.interp.jumps.clone();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             self.interp
@@ -201,7 +202,14 @@ impl<'scope> HostCallContext<'scope> {
         let outcome = match outcome {
             Ok(outcome) => outcome,
             Err(payload) => {
-                self.interp.native_depth = native_depth;
+                // The panic skipped the loops' releases. Restoring the depth
+                // drops the charges of the frames the callback left, and the
+                // call stack may hold an `eval` unit's frames in place of the
+                // caller's, so no frame may release a charge later: the units
+                // the caller's frames held leave the depth now, and their
+                // loops release none.
+                self.interp.native_depth = native_depth - held;
+                self.interp.clear_held();
                 self.interp.jumps = jumps;
                 self.stopped = Some(Step::Host(if payload.is::<crate::value::HeapExhausted>() {
                     Halt::HeapExhausted

@@ -159,6 +159,7 @@ impl Interp {
         let saved_id_map = std::mem::take(&mut self.id_map);
         let saved_args = std::mem::take(&mut self.args);
         let saved_call_stack = std::mem::take(&mut self.call_stack);
+        let saved_held_total = std::mem::take(&mut self.held_total);
         let saved_jumps = std::mem::take(&mut self.jumps);
         let saved_env = self.env;
         let saved_result = self.result;
@@ -217,6 +218,9 @@ impl Interp {
         self.id_map = saved_id_map;
         self.args = saved_args;
         self.call_stack = saved_call_stack;
+        // The unit's loop released what its frames held as it exited.
+        debug_assert_eq!(self.held_total, 0, "an eval unit's frames hold units");
+        self.held_total = saved_held_total;
         self.jumps = saved_jumps;
         self.env = saved_env;
         self.result = saved_result;

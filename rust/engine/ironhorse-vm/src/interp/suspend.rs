@@ -270,6 +270,7 @@ impl Interp {
             // The resumed frame's operands begin at the current top: the
             // driver's stack is suspended below it, and `END` restores to here.
             stack_base: self.stack.len(),
+            held: 0,
         });
         // Sync generators may unwind directly into a caller's live handler.
         self.run_guest_under_native_try(CallerHandlers::Preserve, |machine| {
@@ -607,6 +608,7 @@ impl Interp {
             // The resumed frame's operands begin at the current top: the
             // driver's stack is suspended below it, and `END` restores to here.
             stack_base: self.stack.len(),
+            held: 0,
         });
         // Async body throws reject their promise, without consuming a handler
         // live around the caller's synchronous start. Rebased body handlers
@@ -820,6 +822,7 @@ impl Interp {
             // The resumed frame's operands begin at the current top: the
             // driver's stack is suspended below it, and `END` restores to here.
             stack_base: self.stack.len(),
+            held: 0,
         });
         // Async body throws reject their promise, without consuming a handler
         // live around the caller's synchronous start. Rebased body handlers

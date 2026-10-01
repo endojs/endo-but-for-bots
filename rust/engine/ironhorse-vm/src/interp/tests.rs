@@ -286,6 +286,9 @@ fn b(op: Opcode) -> u8 {
 thread_local! {
     pub(super) static GC_AT_STEP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
     pub(super) static GC_HITS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// A step at which the dispatch loop panics, for the abort paths that
+    /// unwind native activations without returning a `Step`.
+    pub(super) static PANIC_AT_STEP: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 #[test]
@@ -3858,4 +3861,148 @@ fn a_stale_evaluator_environment_row_restores_without_restoring_the_pin() {
         restored.functions[&function].global_env.is_null(),
         "the stale pin must be dropped, not applied"
     );
+}
+
+/// The bound-call nest the in-place tests run: each level calls the next
+/// through `f.bind(…)()`, which `RUN` enters in the caller's dispatch loop
+/// (STACK-DEPTH-REFACTOR.md C1), and the innermost calls `bottom`.
+const IN_PLACE_NEST: &str =
+    "function f(n, bottom) { return n > 0 ? f.bind(null, n - 1, bottom)() : bottom(); }";
+
+fn in_place_machine(program: &str) -> (Interp, Vec<u8>) {
+    let source = format!("{IN_PLACE_NEST} {program}");
+    let (code, symbols) = ironhorse_compile::compile_atoms(&source).unwrap();
+    let mut m = Interp::new();
+    m.link_intrinsics(&crate::parse_symbols(&symbols));
+    (m, code)
+}
+
+/// No charge outlives the crank: the depth is zero, the frames the halted
+/// activation retains hold none, and the next crank's bound nest completes at
+/// its ceiling and is refused one level past it, as with nested loops.
+fn assert_no_charge_survives(m: &mut Interp, kind: &str) {
+    assert_eq!(m.native_depth, 0, "{kind}: native depth after the crank");
+    assert!(
+        m.call_stack.iter().all(|frame| frame.held == 0),
+        "{kind}: a retained frame still holds units"
+    );
+    m.reattach_meter_host(Box::new(|_| true));
+    for (depth, completes) in [(127, true), (128, false)] {
+        let (next, names) = ironhorse_compile::compile_atoms(&format!(
+            "{IN_PLACE_NEST} f({depth}, function () {{ return 'bottom'; }})"
+        ))
+        .unwrap();
+        let next = m
+            .relink_crank(&next, &crate::parse_symbols(&names))
+            .unwrap();
+        let out = m.run(&next);
+        if completes {
+            assert!(out.completed, "{kind}: f({depth}): {:?}", out.halt);
+            assert_eq!(out.result, "bottom", "{kind}: f({depth})");
+        } else {
+            assert!(
+                matches!(
+                    out.halt,
+                    Halt::ReentryLimit {
+                        depth: 2049,
+                        limit: 2048
+                    }
+                ),
+                "{kind}: f({depth}): {:?}",
+                out.halt
+            );
+        }
+        assert_eq!(m.native_depth, 0, "{kind}: native depth after f({depth})");
+    }
+}
+
+#[test]
+fn in_place_frames_release_their_charge_after_every_halt() {
+    let cases = [
+        ("StepLimit", "f(60, function () { while (true) {} })"),
+        ("MeterAbort", "f(60, function () { while (true) {} })"),
+        (
+            "StackOverflow",
+            "function deep() { return deep(); } f(60, deep)",
+        ),
+        ("ReentryLimit", "f(200, function () { return 0; })"),
+        ("Throw", "f(60, function () { throw new Error('bottom'); })"),
+    ];
+    for (kind, program) in cases {
+        let (mut m, code) = in_place_machine(program);
+        if kind == "MeterAbort" {
+            let mut checks = 0;
+            m.arm_meter(
+                1,
+                Box::new(move |_| {
+                    checks += 1;
+                    checks < 400
+                }),
+            );
+        }
+        let out = if kind == "StepLimit" {
+            m.run_bounded(&code, 200_000)
+        } else {
+            m.run(&code)
+        };
+        assert!(
+            format!("{:?}", out.halt).starts_with(kind),
+            "{kind}: {:?}",
+            out.halt
+        );
+        assert!(
+            m.call_stack.len() > 50,
+            "{kind}: the halt must come from inside the in-place frames"
+        );
+        assert_no_charge_survives(&mut m, kind);
+    }
+}
+
+#[test]
+fn in_place_frames_release_their_charge_after_a_panic_or_heap_exhaustion() {
+    // A panic unwinds every native activation without the loops' releases:
+    // the generic handler zeroes the depth and the frames' units.
+    let (mut m, code) = in_place_machine("f(60, function () { while (true) {} })");
+    PANIC_AT_STEP.with(|step| step.set(Some(200_000)));
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| m.run(&code)));
+    PANIC_AT_STEP.with(|step| step.set(None));
+    assert!(panicked.is_err(), "the dispatch loop must panic");
+    assert!(
+        m.call_stack.len() > 50,
+        "the panic must come from inside the in-place frames"
+    );
+    assert_no_charge_survives(&mut m, "panic");
+
+    // So does heap exhaustion, which unwinds as a panic payload.
+    let (mut m, code) = in_place_machine("f(60, function () { var a = []; for (;;) a.push({}); })");
+    m.set_slot_ceiling(m.slots.capacity() + 2_000);
+    let out = m.run(&code);
+    m.set_slot_ceiling(u32::MAX);
+    assert!(matches!(out.halt, Halt::HeapExhausted), "{:?}", out.halt);
+    assert_no_charge_survives(&mut m, "HeapExhausted");
+}
+
+#[test]
+fn a_walk_that_throws_past_in_place_frames_restores_only_its_own_charge() {
+    // Each throw from inside an explicit-stack walk, caught below the bound
+    // frame that called it, pops that frame inside the walk; the walk's
+    // restore must not charge its units again, or 200 rounds leave the next
+    // nest no budget (the C1 pre-commit review's regression).
+    for walk in [
+        "JSON.parse('{')",
+        "JSON.stringify({ toJSON: function () { throw 1; } })",
+        "JSON.parse('{\"a\":[1]}', function (k, w) { if (k === 'a') throw 2; return w; })",
+        "[[1]].flatMap(function () { throw 3; })",
+    ] {
+        let (mut m, code) = in_place_machine(&format!(
+            "function w() {{ return {walk}; }} var wb = w.bind(null); \
+             for (var i = 0; i < 200; i++) {{ try {{ wb(); }} catch (e) {{}} }} \
+             f(126, function () {{ return 'bottom'; }})"
+        ));
+        let out = m.run(&code);
+        assert!(out.completed, "{walk}: {:?}", out.halt);
+        assert_eq!(out.result, "bottom", "{walk}");
+        assert_eq!(m.native_depth, 0, "{walk}");
+        assert_eq!(m.held_total, 0, "{walk}");
+    }
 }

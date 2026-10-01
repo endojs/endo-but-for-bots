@@ -19,6 +19,7 @@
 //! through `dispatch_halt_flow!`/`dispatch_result_flow!`, the loop macros'
 //! twins with the same ownership and metering checks.
 //! `tests/dispatch_loop_control_transfer.rs` locks this boundary and its roster.
+use super::invoke::BoundCall;
 use super::{
     branch_target, cannot_coerce_to_object, canonicalize_nan, cesu8_to_units, count_new_locals,
     to_int32, to_number, unary_minus, units_to_be16, ArithOp, AsyncGeneratorState, BitOp,
@@ -182,6 +183,7 @@ impl Interp {
     /// inner loop's many early returns; every re-entry site
     /// (`run_callback`/`step_async`/`step_async_generator`/`resume_generator`)
     /// calls back through here, so their native recursion is counted uniformly.
+    #[inline]
     pub(super) fn dispatch_at(
         &mut self,
         code: &[u8],
@@ -194,6 +196,11 @@ impl Interp {
             return halt;
         }
         let halt = self.dispatch_at_inner(code, start_pc, return_depth);
+        // Frames this loop ran in place and left on the call stack release
+        // their charge now, where the nested loops they replace released it.
+        if self.call_stack.len() > return_depth {
+            self.release_held_above(return_depth);
+        }
         self.leave_native_frame(HEAVY_FRAME_COST);
         halt
     }
@@ -238,6 +245,10 @@ impl Interp {
                     assert_eq!(super::tests::refusal_state(self), before);
                     assert!(!self.gc_failed);
                     super::tests::GC_HITS.with(|hits| hits.set(hits.get() + 1));
+                }
+                if super::tests::PANIC_AT_STEP.with(|step| step.get() == Some(self.n_dispatched)) {
+                    super::tests::PANIC_AT_STEP.with(|step| step.set(None));
+                    panic!("PANIC_AT_STEP");
                 }
             }
             if self.n_dispatched >= self.step_limit {
@@ -2685,13 +2696,31 @@ impl Interp {
                     Err(halt) => dispatch_halt_flow!(halt, self, return_depth, code),
                 }
             }
-            let result = dispatch_result_flow!(
-                self.call_bound_frame(code, bf, base, argc),
+            // BoundFunction.[[Call]] is ordinary abstract Call
+            // redispatch: prepend this wrapper's arguments,
+            // substitute its `this`, and repeat for a chain. A target
+            // that is a user function over this loop's buffer runs in
+            // this loop (STACK-DEPTH-REFACTOR.md C1); any other goes
+            // through the shared dispatcher, so user/native/method
+            // targets have identical semantics at opcode and callback
+            // call sites.
+            match dispatch_result_flow!(
+                self.bound_call(bf, base, argc, ret_pc),
                 self,
                 return_depth,
                 code
-            );
-            self.push(result);
+            ) {
+                BoundCall::Entered(body_start) => return Flow::Next(body_start),
+                BoundCall::Call(target, receiver, args) => {
+                    let result = dispatch_result_flow!(
+                        self.invoke_value(code, target, receiver, &args),
+                        self,
+                        return_depth,
+                        code
+                    );
+                    self.push(result);
+                }
+            }
             if self.check_meter() == MeterCheck::Abort {
                 return Flow::Exit(Step::Host(Halt::MeterAbort));
             }

@@ -383,3 +383,91 @@ fn host_creation_preserves_applied_compiler_policy_after_source_drop() {
     drop(h);
     assert_eq!(eval(&b, "host(f)"), "41");
 }
+
+/// STACK-DEPTH-REFACTOR.md C1: a bound call's target runs in the caller's
+/// dispatch loop, its frame holding the units a nested loop would have held.
+/// A host callback that exhausts the heap below such frames, directly, under
+/// in-place frames of its own, or inside an `eval` (which parks the call stack
+/// and loses it to the unwind), leaves no charge at the crank boundary (a value
+/// that needs nearly the whole budget still renders) and the next evaluation's
+/// bound nest the ceiling it had before.
+struct EvalCompiler;
+impl ironhorse_vm::SourceCompiler for EvalCompiler {
+    fn compile_source(
+        &self,
+        source: &str,
+        strict: bool,
+        raw_budget: u64,
+        charge: &mut dyn FnMut(u64) -> bool,
+    ) -> Result<ironhorse_vm::CompiledSource, ironhorse_vm::SourceCompileError> {
+        let compiled = ironhorse_compile::compile_atoms_budgeted_with_limit(
+            source,
+            ironhorse_compile::Goal::Eval,
+            strict,
+            raw_budget,
+            charge,
+        )
+        .expect("valid eval fixture within budget");
+        Ok(ironhorse_vm::CompiledSource {
+            bytecode: compiled.bytecode,
+            symbols: compiled.symbols,
+            parse_meter_raw: compiled.parse_meter_raw,
+            parse_computrons: compiled.parse_computrons,
+        })
+    }
+}
+#[test]
+fn heap_exhaustion_in_a_callback_under_in_place_frames_leaves_the_ceilings() {
+    let nest = "function f(n, bottom) { return n > 0 ? f.bind(null, n - 1, bottom)() : bottom(); }";
+    // The deepest nest an evaluation in a compartment completes.
+    let ceiling = |c: &Compartment| {
+        (0..200)
+            .take_while(|n| {
+                evaluate(c, &format!("f({n}, function () {{ return 'bottom'; }})")).completed
+            })
+            .count()
+    };
+    for bottom in [
+        "allocate",
+        "function () { return f(30, allocate); }",
+        "function () { return eval('allocate()'); }",
+        "function () { return eval('f(30, allocate)'); }",
+    ] {
+        let m = Machine::new();
+        let mut c = m.new_compartment();
+        c.set_source_compiler(Rc::new(EvalCompiler));
+        let visited = Rc::new(Cell::new(false));
+        install(
+            &m,
+            &mut c,
+            Rc::new(IgnoreGuestStop {
+                visited: visited.clone(),
+            }),
+        );
+        eval(
+            &c,
+            &format!(
+                "{nest} function allocate() {{ var a = []; for (;;) a.push({{}}); }} \
+                 var inner = {bottom}; \
+                 var deep = [1]; for (var i = 0; i < 2000; i++) deep = [deep]; 0"
+            ),
+        );
+        let before = ceiling(&c);
+        assert!(before > 100, "{bottom}: ceiling {before}");
+        let renders = || m.with_persistence(|i| i.global_string("deep")).unwrap();
+        assert!(renders().is_some(), "{bottom}: renders before");
+        m.with_persistence(|i| i.set_slot_ceiling(i.slots().capacity() + 2_000))
+            .unwrap();
+        let out = evaluate(&c, "f(60, function () { return host(inner); })");
+        assert!(visited.get(), "{bottom}");
+        assert!(
+            matches!(out.halt, Halt::HeapExhausted),
+            "{bottom}: {:?}",
+            out.halt
+        );
+        m.with_persistence(|i| i.set_slot_ceiling(u32::MAX))
+            .unwrap();
+        assert!(renders().is_some(), "{bottom}: a charge outlived the crank");
+        assert_eq!(ceiling(&c), before, "{bottom}");
+    }
+}

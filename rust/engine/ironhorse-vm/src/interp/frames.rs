@@ -95,19 +95,24 @@ impl Interp {
     /// `native_depth` where it found it, but an error leaves the units of
     /// every level still open charged. The recursion released them on its way
     /// out; this restores the depth on every return path so none leaks across
-    /// a crank.
+    /// a crank. A throw from inside the walk can pop frames from before it
+    /// that held units for a call run in place (§4.5): they released them as
+    /// they were popped, where the recursion released them only after the
+    /// walk, so the depth restored is less what they released.
     #[inline(always)]
     pub(super) fn with_native_depth_restored<T>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, Step>,
     ) -> Result<T, Step> {
         let base = self.native_depth;
+        let held = self.held_total;
         let result = f(self);
         debug_assert!(
             result.is_err() || self.native_depth == base,
             "an explicit-stack walk returned with its levels still charged"
         );
-        self.native_depth = base;
+        debug_assert!(self.held_total <= held, "a walk left frames holding units");
+        self.native_depth = base - held.saturating_sub(self.held_total);
         result
     }
 
@@ -412,6 +417,7 @@ impl Interp {
             target_func: self.target_func,
             ret_pc,
             stack_base: base,
+            held: 0,
         });
         self.switch_environment(self.functions[&func].global_env);
         self.result = Slot::undefined();
@@ -535,6 +541,35 @@ impl Interp {
         self.cur_func = caller.cur_func;
         self.cur_target = caller.cur_target;
         self.target_func = caller.target_func;
+        // The frame's activation is over: release the units it held.
+        self.held_total -= caller.held;
+        self.leave_native_frame(caller.held);
         caller.ret_pc
+    }
+
+    /// Release the units held by the frames above `depth` (see
+    /// `CallerState::held`), as each nested `dispatch_at` released its own
+    /// charge on its way out, and clear them so a later pop releases nothing.
+    /// The dispatch loop that pushed them calls this when it exits with them
+    /// still on the call stack (a halt, or a throw no frame of it caught).
+    #[cold]
+    #[inline(never)]
+    pub(super) fn release_held_above(&mut self, depth: usize) {
+        let mut held = 0;
+        for caller in self.call_stack.iter_mut().skip(depth) {
+            held += std::mem::take(&mut caller.held);
+        }
+        self.held_total -= held;
+        self.leave_native_frame(held);
+    }
+
+    /// Clear the units every frame on the call stack holds, without releasing
+    /// them: for the paths that reset `native_depth` itself, after which the
+    /// frames' charges are no longer in it.
+    pub(super) fn clear_held(&mut self) {
+        for caller in &mut self.call_stack {
+            caller.held = 0;
+        }
+        self.held_total = 0;
     }
 }
