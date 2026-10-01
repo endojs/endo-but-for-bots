@@ -112,7 +112,7 @@ Two smaller changes follow:
   next except through the inventory.
   The session is already OCapN; the admin facet could return references and render client-side.
 
-## 4. Resources bound to workers, not described
+## 4. Resources bound to workers, not described (Done.)
 
 A resource description is the static constructor argument of a host resource: any passable value,
 memoised and persisted as `(name, JSON(description))` so the host can make the same instance again
@@ -135,8 +135,18 @@ Then the maker signature is typed per resource name, `retireResource` takes chec
 retiring a worker retires every resource bound to it generically rather than through the
 `onRetireWorker` hook each service registers today, and the launcher's description shrinks to the
 worker id with its module and identity looked up in the host index.
-The export record persists `(name, workerId, key)` instead of an opaque value; the launcher's
-read-side fallback for the field renamed this session retires with the old shape.
+The export record persists `(name, workerId, key)` instead of an opaque value; no read-side
+fallback is kept for the old shape, which the workspace version refuses.
+
+Done: `makeResource(name, { workerId, key })` is the one shape, checked at the daemon (a worker it
+serves, a string key, nothing else); a daemon-wide singleton is bound to neither.
+Retiring a worker retires every resource bound to it generically, through the records' retirement
+by predicate, before the native processes it launched are closed; a start retires those bound to
+workers it will not serve, ephemeral ones and any whose retirement ended between deleting the store
+and nulling the records, before it seats the records.
+The launcher's key is the ephemeral bundle digest: the host index is the supervisor's, and the
+daemon's sweep reads the launcher's record alone, so the digest stays with the launcher rather than
+being looked up.
 
 ## 4a. `debugLabel`
 

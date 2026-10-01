@@ -77,7 +77,20 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {(target: object) => void} notifyOnStart ask the host to call
  *   `started()` on this held object at every daemon startup
  * @property {() => void} clearStartNotice
+ */
+
+/**
+ * What a host resource is bound to: a worker, in which case retiring the
+ * worker retires the resource, and a small key a resource may add to tell
+ * instances bound to one worker apart (an adapter launcher's bundle digest,
+ * say). A resource bound to neither is a daemon-wide singleton.
  *
+ * @typedef {object} ResourceBinding
+ * @property {string} [workerId] a worker this daemon serves
+ * @property {string} [key]
+ */
+
+/**
  * @typedef {object} ThixotropeDaemon
  * @property {any} location this daemon's OCapN location; combine with a
  *   publication's swissnum to mint a sturdy ref on any peer
@@ -89,8 +102,10 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @property {(options?: { debugLabel?: string, ephemeral?: boolean, allocationKey?: string }) => Promise<ThixotropeWorkerFacade>} createWorker
  * @property {(workerId: string) => ThixotropeWorkerFacade} getWorker
  * @property {() => Array<string>} listWorkerIds
- * @property {(name: string, description?: unknown) => object} makeResource
- * @property {(name: string, description?: unknown) => boolean} retireResource
+ * @property {(name: string, binding?: ResourceBinding) => object} makeResource
+ *   a host resource, memoised per name and binding and recorded as such
+ *   against every export of it, so a restart makes the same instance again
+ * @property {(name: string, binding?: ResourceBinding) => boolean} retireResource
  *   forget a resource instance and null its recorded exports, so a restart
  *   seats tombstones for it rather than re-running its factory
  * @property {(value: object, secret?: string) => string} publish
@@ -965,6 +980,47 @@ const buildDaemon = async (
     if (startNotify !== undefined) hub.unpublish(startNotify);
   };
 
+  /**
+   * The description a binding is recorded as: a record with its defined
+   * fields in one order, so the same binding is the same key, or null for
+   * a daemon-wide singleton. A binding to a worker names one this daemon
+   * serves.
+   * @param {ResourceBinding | null | undefined} binding
+   */
+  const bindingDescription = binding => {
+    if (binding === undefined || binding === null) return null;
+    (typeof binding === 'object' &&
+      Object.keys(binding).every(
+        field => field === 'workerId' || field === 'key',
+      )) ||
+      Fail`A resource binding names a worker and a key, or neither`;
+    const { workerId, key } = binding;
+    workerId === undefined ||
+      (typeof workerId === 'string' && workers.has(workerId)) ||
+      Fail`A resource is bound to a worker this daemon serves`;
+    key === undefined ||
+      typeof key === 'string' ||
+      Fail`A resource key is a string`;
+    if (workerId === undefined && key === undefined) return null;
+    return harden({
+      ...(workerId === undefined ? {} : { workerId }),
+      ...(key === undefined ? {} : { key }),
+    });
+  };
+
+  /**
+   * The worker a recorded resource description binds the resource to, if
+   * any.
+   * @param {unknown} description
+   */
+  const boundWorkerOf = description =>
+    typeof description === 'object' &&
+    description !== null &&
+    'workerId' in description &&
+    typeof description.workerId === 'string'
+      ? description.workerId
+      : undefined;
+
   /** @param {string} workerId */
   const retireWorkerNow = async workerId => {
     const entry = workers.get(workerId);
@@ -986,11 +1042,21 @@ const buildDaemon = async (
     withdrawStartNotice(workerId);
     hub.forgetSession(workerId);
     store.deleteWorker(workerId);
-    // Only now is the worker gone for good; host state keyed by it can be
-    // released: the native processes it launched. A failure here is
+    // Only now is the worker gone for good; what is bound to it can be
+    // released: every host resource bound to the worker, whose instances
+    // are forgotten and whose recorded exports a restart seats tombstones
+    // for, and the native processes it launched. A failure here is
     // reported, not allowed to leave the worker half-retired: the store and
     // session are already deleted.
     const retireLog = logging.sub('thixotrope', 'daemon');
+    try {
+      records.retireResourcesWhere(
+        (_, description) => boundWorkerOf(description) === workerId,
+      );
+    } catch (error) {
+      // The next start retires what is bound to a worker it does not serve.
+      retireLog.error('bound resources not retired:', error);
+    }
     await nativeAdapters
       .retireWorker(workerId)
       .catch(error => retireLog.error('native adapters not retired:', error));
@@ -1137,6 +1203,38 @@ const buildDaemon = async (
     'worker-controller': makeWorkerControllerResource,
   });
 
+  // An ephemeral worker's heap is not a recovery baseline. Discard it before
+  // anything can reattach to it, so its holders meet a tombstone rather than a
+  // half-restored incarnation of whatever it was adapting. A clean shutdown
+  // could have retired these, but a crash does not, so startup is the path
+  // that has to be right.
+  const storedWorkerIds = store
+    .listWorkerIds()
+    .filter(workerId => workerId !== ENDPOINT_ID);
+  const ephemeralWorkers = storedWorkerIds
+    .map(
+      workerId =>
+        /** @type {const} */ ([
+          workerId,
+          store.provideWorkerStore(workerId).getMeta(),
+        ]),
+    )
+    .filter(([, meta]) => meta.ephemeral === true);
+  // A resource bound to a worker this start will not serve, an ephemeral
+  // one or one whose retirement ended between deleting its store and
+  // nulling its records, is retired before the records are seated, so its
+  // holders meet tombstones rather than instances for a worker that is gone.
+  const surviving = new Set(
+    storedWorkerIds.filter(
+      workerId =>
+        !ephemeralWorkers.some(([ephemeral]) => ephemeral === workerId),
+    ),
+  );
+  records.retireResourcesWhere((_, description) => {
+    const bound = boundWorkerOf(description);
+    return bound !== undefined && !surviving.has(bound);
+  });
+
   // Seat the endpoint's recorded exports before accepting any retained hub
   // output. Startup writes toward the hub wait until its sink is attached.
   records.restoreWorker(ENDPOINT_ID);
@@ -1146,22 +1244,6 @@ const buildDaemon = async (
   });
   for (const bytes of endpointOutbound.splice(0)) endpointSink.deliver(bytes);
 
-  // An ephemeral worker's heap is not a recovery baseline. Discard it before
-  // anything can reattach to it, so its holders meet a tombstone rather than a
-  // half-restored incarnation of whatever it was adapting. A clean shutdown
-  // could have retired these, but a crash does not, so startup is the path
-  // that has to be right.
-  const ephemeralWorkers = store
-    .listWorkerIds()
-    .filter(workerId => workerId !== ENDPOINT_ID)
-    .map(
-      workerId =>
-        /** @type {const} */ ([
-          workerId,
-          store.provideWorkerStore(workerId).getMeta(),
-        ]),
-    )
-    .filter(([, meta]) => meta.ephemeral === true);
   for (const [workerId, meta] of ephemeralWorkers) {
     // An image left by an explicit sleep, or by a build that parked ephemeral
     // workers at shutdown, will never be restored: release it with the
@@ -1271,9 +1353,9 @@ const buildDaemon = async (
       if (
         found?.kind === 'resource' &&
         found.name === 'native-adapter' &&
-        typeof found.description?.bundleDigest === 'string'
+        typeof found.description?.key === 'string'
       )
-        namedBundles.add(found.description.bundleDigest);
+        namedBundles.add(found.description.key);
     }
     // The embedder may name bundles its own records still need: the
     // supervisor's installation index names the bundles of installations
@@ -1408,10 +1490,10 @@ const buildDaemon = async (
       return makeAdminFacade(workerId);
     },
     listWorkerIds: () => [...workers.keys()].sort(),
-    makeResource: (name, description = null) =>
-      records.provideResource(name, description),
-    retireResource: (name, description = null) =>
-      records.retireResource(name, description),
+    makeResource: (name, binding = undefined) =>
+      records.provideResource(name, bindingDescription(binding)),
+    retireResource: (name, binding = undefined) =>
+      records.retireResource(name, bindingDescription(binding)),
     // Persist a swissnum locator for this held capability. Remote bootstrap
     // fetch(secret) obtains it; withdrawing the locator leaves existing refs valid.
     publish: (value, secret = randomHex128()) => {

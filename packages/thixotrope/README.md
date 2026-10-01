@@ -382,7 +382,7 @@ The process checks wall-clock time before reporting, so this is not a precise ti
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 11 is required.
+Workspace metadata version 12 is required.
 It includes dedicated native manager vats (version 4), the mail address book that introduces
 contacts through the `mail-introductions` resource with observable inbox and outbox maps
 (version 5), adapter launchers described by the manager vat that owns them, so that removing or
@@ -390,9 +390,10 @@ collecting a manager closes its processes (version 6), one installation registry
 and native resources whose values live in the inventory (version 7), the clock and mailbox provided
 as installations in vats of their own (version 8), native adapters launched from bundles stored
 under their digest together with the clock as a native resource with no host ledger (version 9),
-the registry in a vat of the daemon's own with the host's index beside it (version 10), and a
+the registry in a vat of the daemon's own with the host's index beside it (version 10), a
 table of workspaces, each allocated under a key derived from its name, with installations
-belonging to a workspace or to the daemon (version 11).
+belonging to a workspace or to the daemon (version 11), and host resources bound to a worker and
+a key, the adapter launcher's key being its bundle digest (version 12).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 
@@ -1055,11 +1056,20 @@ const clock = await worker.evaluate(
 );
 ```
 
-When a resource is exported into a worker session, its
-`(name, description)` is recorded against the export slot; on daemon
-restart the export is re-instantiated at the same slot, so presences
-inside the worker's snapshot keep working.
-`daemon.retireResource(name, description)` ends one: the instance is
+A resource is bound to a worker, a key, both or neither:
+`daemon.makeResource(name, { workerId, key })`.
+One bound to neither is a daemon-wide singleton; one bound to a worker
+is the authority over that worker's affairs and no other's (its facade,
+the launcher of its native processes), and is retired with the worker,
+whether the worker is retired or, being ephemeral, discarded at a start;
+a guest still holding one meets a tombstone after the next restart. The
+key tells instances bound to one worker apart (the launcher's bundle
+digest).
+When a resource is exported into a worker session, its name and binding
+are recorded against the export slot; on daemon restart the export is
+re-instantiated at the same slot, so presences inside the worker's
+snapshot keep working.
+`daemon.retireResource(name, binding)` ends one: the instance is
 forgotten and its recorded exports are nulled, so a restart seats
 tombstones there instead of re-running the maker, and a guest's release
 of an export drops that export's record.
@@ -1087,8 +1097,10 @@ have no timer queue, so frame silence is exact dormancy):
 - `getWorker(workerId)` — the worker object of an existing worker;
   throws for unknown ids (the embedder's admin route).
 - `listWorkerIds()` — sorted ids of the live workers (admin/debug).
-- `makeResource(name, description?)` — instantiates a registered
-  resource maker; interned by `(name, description)`.
+- `makeResource(name, binding?)` — instantiates a registered
+  resource maker; interned by `(name, binding)`.
+- `retireResource(name, binding?)` — forgets one, so a restart seats
+  tombstones where its exports were.
 - `publish(value, secret?)` — durably registers a capability the
   endpoint holds under a swissnum and returns the swissnum.
 - `unpublish(secret)` — removes a publication.

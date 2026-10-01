@@ -44,7 +44,8 @@ Each bundle freezes what its module imports, so a dependency's change is a chang
 the directory's path is not part of the identity, and the same modules at another path are the
 same installation.
 The ephemeral bundle is stored under its digest in the state directory's `bundles/`, written once
-and never rewritten, and the launcher's description names that digest together with the manager
+and never rewritten, and the launcher, bound to the manager vat, has that digest as its key, so
+the host knows, from the launcher's record alone, which bundle it launches together with the manager
 vat that owns it.
 Every adapter process reads the stored file, verifies the digest over its bytes and refuses to
 start on a mismatch, so a damaged or substituted file does not run; a launcher recorded before

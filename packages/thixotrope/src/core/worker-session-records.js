@@ -56,6 +56,8 @@ export const makeWorkerSessionRecords = ({
   const resourceOrigins = new WeakMap();
   /** @type {Map<string, object>} (name, description) -> singleton */
   const resourceInstances = new Map();
+  /** @type {Map<string, { name: string, description: unknown }>} by key */
+  const resourceOriginsByKey = new Map();
   /** @type {Map<string, any>} workerId -> ResumedSession controls */
   const resumedByWorkerId = new Map();
   // Pins for the resolvers of *answers* owed by this process. An unrooted
@@ -114,9 +116,53 @@ export const makeWorkerSessionRecords = ({
         Fail`thixotrope worker sessions: unknown resource ${q(name)}`;
       instance = makeResource(description);
       resourceInstances.set(key, instance);
-      resourceOrigins.set(instance, harden({ name, description }));
+      const origin = harden({ name, description });
+      resourceOrigins.set(instance, origin);
+      resourceOriginsByKey.set(key, origin);
     }
     return instance;
+  };
+  /**
+   * Forget every resource whose name and description the predicate
+   * accepts: drop its per-process instance and null its recorded exports,
+   * so a restart seats tombstones at those positions rather than re-running
+   * its factory. Each worker's tables record is one read-modify-write.
+   * @param {(name: string, description: unknown) => boolean} accepts
+   * @returns {boolean} whether an instance or a record was forgotten
+   */
+  const retireResourcesWhere = accepts => {
+    let retired = false;
+    for (const [key, origin] of [...resourceOriginsByKey]) {
+      if (accepts(origin.name, origin.description)) {
+        const instance = resourceInstances.get(key);
+        resourceInstances.delete(key);
+        resourceOriginsByKey.delete(key);
+        if (instance !== undefined) resourceOrigins.delete(instance);
+        retired = true;
+      }
+    }
+    for (const workerId of resumedByWorkerId.keys()) {
+      const workerStore = store.provideWorkerStore(workerId);
+      const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
+      /** @type {Record<string, unknown>} */
+      const exports = { ...record.exports };
+      let changed = false;
+      for (const [slot, recorded] of Object.entries(exports)) {
+        const found = /** @type {any} */ (recorded);
+        if (
+          found?.kind === 'resource' &&
+          accepts(found.name, found.description ?? null)
+        ) {
+          exports[slot] = null;
+          changed = true;
+        }
+      }
+      if (changed) {
+        workerStore.setTablesRecord({ ...record, exports });
+        retired = true;
+      }
+    }
+    return retired;
   };
 
   /**
@@ -304,35 +350,13 @@ export const makeWorkerSessionRecords = ({
      * @returns {boolean} whether an instance or a record was forgotten
      */
     retireResource: (name, description = null) => {
-      const key = resourceKey(name, description);
-      const instance = resourceInstances.get(key);
-      let retired = resourceInstances.delete(key);
-      if (instance !== undefined) resourceOrigins.delete(instance);
       const wanted = JSON.stringify(description);
-      for (const workerId of resumedByWorkerId.keys()) {
-        const workerStore = store.provideWorkerStore(workerId);
-        const record = /** @type {any} */ (workerStore.getTablesRecord()) ?? {};
-        /** @type {Record<string, unknown>} */
-        const exports = { ...record.exports };
-        let changed = false;
-        for (const [slot, recorded] of Object.entries(exports)) {
-          const found = /** @type {any} */ (recorded);
-          if (
-            found?.kind === 'resource' &&
-            found.name === name &&
-            JSON.stringify(found.description ?? null) === wanted
-          ) {
-            exports[slot] = null;
-            changed = true;
-          }
-        }
-        if (changed) {
-          workerStore.setTablesRecord({ ...record, exports });
-          retired = true;
-        }
-      }
-      return retired;
+      return retireResourcesWhere(
+        (found, recorded) =>
+          found === name && JSON.stringify(recorded) === wanted,
+      );
     },
+    retireResourcesWhere,
     /**
      * Bind a connection to its session's record id so the hooks can
      * attribute session traffic. Call before restoring the session.
