@@ -1,5 +1,7 @@
 import contextlib
 import io
+import resource
+import subprocess
 import unittest
 from unittest import mock
 
@@ -316,14 +318,95 @@ class Slopes(unittest.TestCase):
 
     def test_a_shadow_painter_trap_is_a_problem_not_a_missing_entry(self):
         trapped = common.Outcome(trap="TRAP: Maximum call stack size exceeded")
-        with mock.patch.object(common, "run_node", return_value=trapped) as run_node:
+        with mock.patch.object(resource, "getrlimit", return_value=(8 << 20, resource.RLIM_INFINITY)), \
+                mock.patch.object(common, "run_node", return_value=trapped) as run_node:
             with self.assertRaisesRegex(common.HarnessError, "trapped at depth 7"):
                 lane_c.shadow_stack("probe.wasm", "valueOf", 7)
-        self.assertEqual(run_node.call_args.kwargs["stack_kb"], lane_c.SLOPE_STACK_KB)
+        self.assertEqual([call.kwargs.get("stack_kb") for call in run_node.call_args_list],
+                         [None, lane_c.SLOPE_STACK_KB])
         returned = common.Outcome(line="halt=none result=x")
         returned.shadow_stack = 4096
         with mock.patch.object(common, "run_node", return_value=returned):
             self.assertEqual(lane_c.shadow_stack("probe.wasm", "valueOf", 7), 4096)
+
+
+class SlopeStack(unittest.TestCase):
+    """The shadow painter's host stack under stack limits put in place of
+    this process's: V8's default first, and a larger stack, as much of
+    SLOPE_STACK_KB as the hard limit holds, only for a family that traps
+    there."""
+    TRAP = "TRAP: Maximum call stack size exceeded\n"
+
+    def paint(self, limits, traps_under_default=False, traps_under_larger=False):
+        """lane_c.shadow_stack at depth 7 with Node's process replaced: the
+        mark (or the HarnessError) and the (command, preexec_fn) of each run."""
+        runs = []
+
+        def run(command, stdin, timeout, env=None, preexec_fn=None):
+            runs.append((command, preexec_fn))
+            larger = any(flag.startswith("--stack-size=") for flag in command)
+            if traps_under_larger if larger else traps_under_default:
+                return subprocess.CompletedProcess(command, 3, "", self.TRAP)
+            return subprocess.CompletedProcess(command, 0, 'halt=Return result="x" meter=1\n',
+                                               "SHADOW_STACK: 4096\n")
+
+        with mock.patch.object(resource, "getrlimit", return_value=limits), \
+                mock.patch.object(common, "_run", side_effect=run):
+            try:
+                return lane_c.shadow_stack("probe.wasm", "valueOf", 7), runs
+            except common.HarnessError as error:
+                return error, runs
+
+    def test_the_slope_stack_is_what_the_hard_limit_holds(self):
+        self.assertEqual(lane_c.slope_stack_kb((8 << 20, resource.RLIM_INFINITY)), lane_c.SLOPE_STACK_KB)
+        self.assertEqual(lane_c.slope_stack_kb((8 << 20, 64 << 20)), lane_c.SLOPE_STACK_KB)
+        self.assertEqual(lane_c.slope_stack_kb((8 << 20, 12 << 20)), 12 * 1024 - common.NODE_STACK_SLACK_KB)
+
+    def test_a_family_that_fits_the_default_stack_asks_for_no_larger_one(self):
+        """Under a hard limit too small for SLOPE_STACK_KB, a family that
+        fits V8's default is painted, not failed for want of a stack it
+        does not need."""
+        for limits in ((8 << 20, 8 << 20), (4 << 20, 12 << 20), (8 << 20, resource.RLIM_INFINITY)):
+            with self.subTest(limits=limits):
+                mark, runs = self.paint(limits)
+                self.assertEqual(mark, 4096)
+                self.assertEqual(len(runs), 1)
+                command, preexec_fn = runs[0]
+                self.assertFalse([flag for flag in command if flag.startswith("--stack-size=")])
+                self.assertIsNone(preexec_fn)
+
+    def test_a_family_that_traps_under_the_default_is_painted_under_what_the_hard_limit_holds(self):
+        for limits, stack_kb in (((4 << 20, 12 << 20), 12 * 1024 - common.NODE_STACK_SLACK_KB),
+                                 ((4 << 20, resource.RLIM_INFINITY), lane_c.SLOPE_STACK_KB)):
+            with self.subTest(limits=limits):
+                mark, runs = self.paint(limits, traps_under_default=True)
+                self.assertEqual(mark, 4096)
+                self.assertEqual(len(runs), 2)
+                self.assertFalse([flag for flag in runs[0][0] if flag.startswith("--stack-size=")])
+                command, preexec_fn = runs[1]
+                self.assertIn(f"--stack-size={stack_kb}", command)
+                with mock.patch.object(resource, "setrlimit") as setrlimit:
+                    preexec_fn()
+                setrlimit.assert_called_once_with(
+                    resource.RLIMIT_STACK, ((stack_kb + common.NODE_STACK_SLACK_KB) * 1024, limits[1]))
+
+    def test_a_hard_limit_that_holds_no_more_than_the_default_does_not_retry(self):
+        """Under a hard limit of 1 MiB, the most the raiser can make room
+        for is under V8's default, so a family that traps there is a problem
+        at once rather than a retry under a smaller, or invalid, stack."""
+        for limits in ((1 << 20, 1 << 20), (512 << 10, 2000 << 10)):
+            with self.subTest(limits=limits):
+                self.assertLessEqual(lane_c.slope_stack_kb(limits), common.V8_DEFAULT_STACK_KB)
+                error, runs = self.paint(limits, traps_under_default=True)
+                self.assertIsInstance(error, common.HarnessError)
+                self.assertIn("V8's default host stack", str(error))
+                self.assertEqual(len(runs), 1)
+
+    def test_a_family_that_traps_under_both_is_a_harness_error(self):
+        error, runs = self.paint((4 << 20, 12 << 20), traps_under_default=True, traps_under_larger=True)
+        self.assertIsInstance(error, common.HarnessError)
+        self.assertRegex(str(error), r"^the shadow painter trapped at depth 7 under a 11264 KiB host stack: TRAP: ")
+        self.assertEqual(len(runs), 2)
 
 
 class ChainRuns(unittest.TestCase):
