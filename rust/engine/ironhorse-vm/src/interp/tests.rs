@@ -467,8 +467,13 @@ fn hidden_control_latches_independently_refuse_quiescence() {
     assert!(m.is_quiescent());
 }
 
+/// `super(...)` keeps its `new.target` in the RESULT slot of the frame it
+/// builds, and RUN arms the one-shot register only when it enters the
+/// parent. A halt while the arguments evaluate must therefore leave the
+/// register empty, the frame holding the derived constructor as its target,
+/// and nothing for the next crank to inherit.
 #[test]
-fn pending_new_target_is_rooted_and_gated_after_every_non_throw_halt() {
+fn a_super_target_survives_every_non_throw_halt_in_its_frame() {
     use crate::opcode::instruction_len;
     use crate::value::SlotIndex;
     let cases = [
@@ -517,23 +522,40 @@ fn pending_new_target_is_rooted_and_gated_after_every_non_throw_halt() {
             "{kind}: {:?}",
             out.halt
         );
-        let target = m
-            .pending_new_target
-            .unwrap_or_else(|| panic!("{kind}: SUPER must still be armed at the halt"));
         assert!(
-            m.gc_roots().contains(&target),
-            "{kind}: pending target must be rooted"
+            m.pending_new_target.is_none(),
+            "{kind}: SUPER armed the register before RUN"
         );
+        // The pending `super` frame: [THIS(uninitialized), FUNCTION,
+        // RESULT(new.target), FRAME]. The corrupted `CLASS` of the
+        // EngineInvariant case pops three slots before it halts, so there the
+        // frame — and with it anything to keep alive — is gone.
+        let derived = m
+            .functions
+            .iter()
+            .find_map(|(&function, info)| (info.name == "B").then_some(function))
+            .expect("class B");
+        let target = m.stack.windows(4).find_map(|frame| {
+            match (frame[0].kind, frame[2].kind, frame[2].value) {
+                (Kind::Uninitialized, Kind::Reference, Payload::Reference(target)) => Some(target),
+                _ => None,
+            }
+        });
+        if kind == "EngineInvariant" {
+            assert_eq!(target, None, "{kind}: the frame was popped");
+        } else {
+            assert_eq!(
+                target,
+                Some(derived),
+                "{kind}: the SUPER frame must hold B as its new.target"
+            );
+        }
         assert!(
             !m.is_quiescent(),
             "{kind}: halted activation must not persist"
         );
         assert_eq!(m.collect_garbage(), Err(NotQuiescent));
         assert_eq!(m.free_pages(&[]), Err(NotQuiescent));
-        assert!(
-            !m.slots.free_list().contains(&target.0),
-            "{kind}: collection lost the target"
-        );
         m.reattach_meter_host(Box::new(|_| true));
         let (next, names) = ironhorse_compile::compile_atoms(
             "class K { constructor() { this.ok = new.target === K; } } new K().ok",
