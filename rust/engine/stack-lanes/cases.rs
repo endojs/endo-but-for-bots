@@ -156,6 +156,85 @@ pub fn heavy(family: &str, n: usize) -> Option<(String, bool)> {
         "proxy-trap" => level(
             "var p = new Proxy(function () {}, { apply: function () { return f(n - 1); } }); return p();",
         ),
+        // Every other Proxy trap, each recursing from the trap. A trap call
+        // runs inside the Proxy arm's forwarding walk, so these measure that
+        // walk's frame as `proxy-trap` measures the `apply` turn's.
+        "proxy-get-trap" => level(
+            "var p = new Proxy({}, { get: function () { return f(n - 1); } }); return p.x;",
+        ),
+        "proxy-set-trap" => level(
+            "var p = new Proxy({}, { set: function () { f(n - 1); return true; } }); p.x = 1;",
+        ),
+        "proxy-has-trap" => level(
+            "var p = new Proxy({}, { has: function () { f(n - 1); return true; } }); return 'x' in p ? 0 : 1;",
+        ),
+        "proxy-delete-trap" => level(
+            "var p = new Proxy({}, { deleteProperty: function () { f(n - 1); return true; } }); delete p.x;",
+        ),
+        "proxy-define-trap" => level(
+            "var p = new Proxy({}, { defineProperty: function () { f(n - 1); return true; } }); \
+             Object.defineProperty(p, 'x', { value: 1, configurable: true });",
+        ),
+        "proxy-getownproperty-trap" => level(
+            "var p = new Proxy({}, { getOwnPropertyDescriptor: function () { f(n - 1); } }); \
+             Object.getOwnPropertyDescriptor(p, 'x');",
+        ),
+        "proxy-ownkeys-trap" => level(
+            "var p = new Proxy({}, { ownKeys: function () { f(n - 1); return []; } }); Object.keys(p);",
+        ),
+        "proxy-getprototypeof-trap" => level(
+            "var p = new Proxy({}, { getPrototypeOf: function () { f(n - 1); return null; } }); \
+             Object.getPrototypeOf(p);",
+        ),
+        "proxy-setprototypeof-trap" => level(
+            "var p = new Proxy({}, { setPrototypeOf: function () { f(n - 1); return true; } }); \
+             Object.setPrototypeOf(p, null);",
+        ),
+        "proxy-isextensible-trap" => level(
+            "var p = new Proxy({}, { isExtensible: function () { f(n - 1); return true; } }); \
+             Object.isExtensible(p);",
+        ),
+        "proxy-preventextensions-trap" => level(
+            "var p = new Proxy({}, { preventExtensions: function () { f(n - 1); return false; } }); \
+             Reflect.preventExtensions(p);",
+        ),
+        "proxy-construct-trap" => level(
+            "var p = new Proxy(function () {}, { construct: function () { f(n - 1); return {}; } }); new p();",
+        ),
+        // The same traps reached through other entry points: an index key, a
+        // lookup inherited through the Proxy, `Reflect`, a `with` scope and a
+        // for-in walk. Each takes its own path into the Proxy arm.
+        "proxy-index-get-trap" => level(
+            "var p = new Proxy([], { get: function () { return f(n - 1); } }); return p[0];",
+        ),
+        "proxy-index-has-trap" => level(
+            "var p = new Proxy([], { has: function () { f(n - 1); return true; } }); \
+             return 0 in p ? 0 : 1;",
+        ),
+        "proxy-inherited-get-trap" => level(
+            "var p = new Proxy({}, { get: function () { return f(n - 1); } }); \
+             return Object.create(p).x;",
+        ),
+        "proxy-inherited-set-trap" => level(
+            "var p = new Proxy({}, { set: function () { f(n - 1); return true; } }); \
+             Object.create(p).x = 1;",
+        ),
+        "proxy-reflect-get-trap" => level(
+            "var p = new Proxy({}, { get: function () { return f(n - 1); } }); \
+             return Reflect.get(p, 'x');",
+        ),
+        "proxy-with-has-trap" => level(
+            "var p = new Proxy({}, { has: function () { f(n - 1); return false; } }); \
+             with (p) { return typeof x; }",
+        ),
+        "proxy-forin-ownkeys-trap" => level(
+            "var p = new Proxy({}, { ownKeys: function () { f(n - 1); return []; } }); \
+             for (var k in p) {}",
+        ),
+        "proxy-forin-getprototypeof-trap" => level(
+            "var p = new Proxy({}, { getPrototypeOf: function () { f(n - 1); return null; } }); \
+             for (var k in p) {}",
+        ),
         "replace-re-fn" => level("'a'.replace(/a/, function () { f(n - 1); return ''; });"),
         "user-exec" => level(
             "var re = /a/; re.exec = function () { f(n - 1); return null; }; 'a'.replace(re, 'b');",
@@ -215,6 +294,26 @@ pub const HEAVY: &[(&str, usize)] = &[
     ("eval-indirect", 42),
     ("compartment", 42),
     ("proxy-trap", 119),
+    ("proxy-get-trap", 126),
+    ("proxy-set-trap", 126),
+    ("proxy-has-trap", 126),
+    ("proxy-delete-trap", 126),
+    ("proxy-define-trap", 61),
+    ("proxy-getownproperty-trap", 61),
+    ("proxy-ownkeys-trap", 61),
+    ("proxy-getprototypeof-trap", 61),
+    ("proxy-setprototypeof-trap", 61),
+    ("proxy-isextensible-trap", 61),
+    ("proxy-preventextensions-trap", 61),
+    ("proxy-construct-trap", 119),
+    ("proxy-index-get-trap", 119),
+    ("proxy-index-has-trap", 126),
+    ("proxy-inherited-get-trap", 112),
+    ("proxy-inherited-set-trap", 112),
+    ("proxy-reflect-get-trap", 61),
+    ("proxy-with-has-trap", 119),
+    ("proxy-forin-ownkeys-trap", 126),
+    ("proxy-forin-getprototypeof-trap", 61),
     ("replace-re-fn", 42),
     ("user-exec", 42),
     ("species", 41),
