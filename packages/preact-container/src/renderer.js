@@ -13,14 +13,16 @@ import { render as preactRender, Fragment, options, h } from 'preact';
 //   _render     -> __r   (options[OPT_RENDER])
 //   _catchError -> __e   (options[OPT_CATCH_ERROR])
 //   _parent     -> __    (vnode[VNODE_PARENT])
+//   _parentDom  -> __P   (props[PROP_PARENT_DOM], preact 11 portal root)
 //
-// These three short names have been stable across preact 10.x. The
+// These short names are the same in preact 10.x and 11.x. The
 // library's own private vnode/options fields (`_secureCtx`,
 // `_secureBracketed`, …) are NOT part of preact's mangle map and pass
 // through unchanged.
 const OPT_RENDER = '__r';
 const OPT_CATCH_ERROR = '__e';
 const VNODE_PARENT = '__';
+const PROP_PARENT_DOM = '__P';
 
 // Best-effort deep-freeze. Used both for the module-level allowlists
 // and for the per-event `SafeEvent` / `SafeEventTarget` facades handed
@@ -1076,26 +1078,70 @@ function sanitizeVNode(vnode, allowedTags, safeAttrs) {
     // strip every legitimate prop name a host passes through.
     vnode.props = sanitizeElementProps(props, safeAttrs);
   }
-  // Function component: leave props as-is (the renderer doesn't
-  // write them to the DOM directly), but null out any own `ref`
-  // slot. We do NOT iterate the prototype chain — function
-  // components legitimately consume rich, structured props bags,
-  // and rebuilding them would break host code.
-  else if (Object.prototype.hasOwnProperty.call(props, 'ref')) {
-    // `props` may be a frozen/sealed bag — an attacker can hand-build a
-    // vnode with `Object.freeze({ ref })`. A bare `delete` throws in
-    // strict mode (all ESM is strict) and would abort the host render
-    // as a DoS. The critical ref defense already happened above
-    // (`vnode.ref` is nulled); a surviving own `props.ref` on a
-    // function component is inert (function components are never written
-    // to the DOM), so dropping it is best-effort. Guard the delete and
-    // fail closed so sanitization never throws.
-    try {
-      delete props.ref;
-    } catch (_) {
-      // frozen/sealed props bag — leave the inert slot in place.
-    }
+  // Function component: the renderer doesn't write its props to the DOM,
+  // so they pass through with their values intact, minus the slots
+  // Preact itself acts on (`COMPONENT_DROPPED_PROPS`). Text vnodes
+  // (`type: null`, whose `props` may be a `String` object) are left alone.
+  else if (typeof vnode.type === 'function') {
+    vnode.props = copyComponentProps(props);
   }
+}
+
+// Props Preact itself acts on when they appear on a FUNCTION component's
+// vnode; dropped from every one in a secure tree.
+//   * `ref` — Preact 11 forwards refs by default: `h()` leaves `ref` in a
+//     function component's props, where the component can attach it to an
+//     element it renders.
+//   * `__P` (`_parentDom`, see the note at the top of the file) — Preact
+//     11 renders a component vnode carrying this prop as a new root (what
+//     its core `createPortal` builds) into the given container, inserting
+//     each real DOM node it creates by calling that container's own
+//     `insertBefore`. A confined component that passes a fake container
+//     would be handed the live nodes. Without the prop the subtree renders
+//     in place; a host that needs a portal renders it from a
+//     `HostPassthrough` island.
+const COMPONENT_DROPPED_PROPS = new Set(['ref', PROP_PARENT_DOM]);
+deepFreeze(COMPONENT_DROPPED_PROPS);
+
+// Shallow-copy a function component's props into a fresh bag without the
+// `COMPONENT_DROPPED_PROPS` slots. A copy rather than an in-place `delete`:
+// an attacker can hand-build a vnode whose `props` is frozen (the delete
+// would throw) or a Proxy that lies about its own keys (the delete would
+// not stick), and Preact reads the portal root with a plain property get.
+// Preact then only ever sees this bag. `h()` already hands over a fresh
+// bag of own enumerable data props, so for ordinary vnodes the copy is
+// lossless. Only OWN keys are copied, so a `__P` the bag inherits (`h()`
+// assigning a guest's own `__proto__` key re-parents the bag it builds)
+// does not survive. Each prop is DEFINED, not assigned, so an own
+// `__proto__` key cannot re-parent the copy either. Hostile shapes fail
+// closed: a throwing getter drops that prop, throwing traps drop them all,
+// and sanitization never throws.
+function copyComponentProps(props) {
+  const out = {};
+  let keys;
+  try {
+    keys = Object.keys(props);
+  } catch (_) {
+    return out;
+  }
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    if (COMPONENT_DROPPED_PROPS.has(key)) continue;
+    let value;
+    try {
+      value = props[key];
+    } catch (_) {
+      // hostile getter: drop this prop
+      continue;
+    }
+    Object.defineProperty(out, key, {
+      value,
+      writable: true,
+      enumerable: true,
+      configurable: true,
+    });
+  }
+  return out;
 }
 
 // Build a fresh null-prototype props bag containing only the
@@ -1391,10 +1437,11 @@ function walkSanitize(node, allowedTags, safeAttrs) {
   ) {
     return;
   }
-  // Guard the `children` read: for function-component vnodes
-  // `sanitizeVNode` leaves `props` as-is (no rebuilt null-proto bag),
-  // so a hostile own `children` getter is still live here. A throw must
-  // not abort the host render — fail closed by skipping the subtree.
+  // Guard the `children` read: `sanitizeVNode` rebuilds the props of
+  // element and function-component vnodes, but leaves any other `type`
+  // alone, so a hostile own `children` getter can still be live here. A
+  // throw must not abort the host render — fail closed by skipping the
+  // subtree.
   let children;
   try {
     children = node.props && node.props.children;

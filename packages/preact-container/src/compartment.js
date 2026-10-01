@@ -26,9 +26,11 @@ import {
  */
 
 // See the note in `renderer.js`: preact mangles `options[OPT_RENDER]` to
-// `__r` and `options[OPT_CATCH_ERROR]` to `__e` in its published build.
+// `__r`, `options[OPT_CATCH_ERROR]` to `__e`, and the `_parentDom` prop to
+// `__P` in its published build.
 const OPT_RENDER = '__r';
 const OPT_CATCH_ERROR = '__e';
+const PROP_PARENT_DOM = '__P';
 
 /**
  * `@endo/preact-container/compartment` — mount untrusted component code inside a Preact
@@ -51,12 +53,20 @@ const confinedComponents = new WeakSet();
 
 // Prop names the coercer drops on EVERY vnode (regardless of whether
 // `renderConfined` is on top, and regardless of whether the vnode is a
-// DOM element or a function component). Today this is just `ref` —
-// `h()` extracts `ref` off props onto `vnode.ref`, and the secure
-// layer's sanitizer strips it again, but when the attacker hand-builds
-// a vnode (`{ type:'div', constructor: undefined, props:{ ref: fn }}`)
-// without going through `h()`, the only defense is dropping `ref`
-// here in the coercer.
+// DOM element or a function component), and that a `Confined` wrapper
+// never passes on to its guest. These are the props Preact itself acts
+// on:
+//   * `ref` — `h()` extracts `ref` off a DOM element's props onto
+//     `vnode.ref`, and Preact 11 leaves it in a function component's
+//     props (refs forward by default). The secure layer's sanitizer
+//     strips it again, but when the attacker hand-builds a vnode
+//     (`{ type:'div', constructor: undefined, props:{ ref: fn }}`)
+//     without going through `h()`, the only defense is dropping `ref`
+//     here in the coercer.
+//   * `__P` (`_parentDom`) — Preact 11 renders a component vnode
+//     carrying it into that container (a portal root), handing the real
+//     DOM nodes it creates to the container's `insertBefore`. See
+//     `COMPONENT_DROPPED_PROPS` in `src/renderer.js`, which drops it too.
 //
 // `key` is intentionally not in this list because the coercer reads
 // it from the vnode directly and re-emits it via `rest.key`; the
@@ -70,7 +80,7 @@ const confinedComponents = new WeakSet();
 // `DROPPED_PROPS_DOM` enumerated — is dropped at the renderer
 // boundary. Mounting `confineComponent` WITHOUT `renderConfined` on
 // top is documented as unsupported.
-const DROPPED_PROPS_ALWAYS = new Set(['ref']);
+const DROPPED_PROPS_ALWAYS = new Set(['ref', PROP_PARENT_DOM]);
 
 // Per-render opaque-slot map. `currentSlotMap` points at the slot map of
 // the confined component currently rendering (or whose subtree is
@@ -354,8 +364,8 @@ function coerceProps(props, depth) {
   for (let i = 0; i < keys.length; i++) {
     const key = keys[i];
     // `key` is always a string here (Object.keys / the string-filtered
-    // Reflect.ownKeys fallback). Match `ref` exactly — Preact only
-    // treats the lowercase `ref` slot specially, so case variants are
+    // Reflect.ownKeys fallback). Match `ref` and `__P` exactly — Preact
+    // only treats those exact slots specially, so case variants are
     // ordinary data props that the renderer's allowlist drops anyway.
     if (DROPPED_PROPS_ALWAYS.has(key)) continue;
     // `children` is special: split out so we can recursively coerce
@@ -675,6 +685,13 @@ export function confineComponent(fn, opts) {
     // walk is unforgeable because `SecureBoundary` is module-
     // private to `@endo/preact-container/renderer`).
     const { children: rawChildren, ...rest } = rawProps;
+    // Preact 11 forwards refs, so a host's `h(Confined, { ref })` leaves
+    // the host's ref in these props, and a wrapper placed with `__P` gets
+    // its real container here. Both are the host's handles, never the
+    // guest's. The renderer already drops them from a wrapper created in
+    // a secure subtree; this covers one placed from a `HostPassthrough`
+    // island.
+    for (const name of DROPPED_PROPS_ALWAYS) delete rest[name];
     // Drop any raw vnode in a non-children prop (see `dropRawVNodeProps`):
     // only `children` carries content opaquely, and a throw here would be
     // a guest-triggerable crash when a guest places trusted content.

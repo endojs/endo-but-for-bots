@@ -51,10 +51,10 @@ overstating the guarantee.
 The original lives inside the Preact monorepo, where Preact's internal
 option-hook and vnode field names are renamed at build time via
 `mangle.json`. Because this package depends on the **published** `preact`
-package instead, the three internal names it touches are referenced by
-their stable mangled forms (`options.__r` for `_render`, `options.__e`
-for `_catchError`, `vnode.__` for `_parent`). See the comment block at
-the top of `src/renderer.js`.
+package instead, the internal names it touches are referenced by their
+stable mangled forms (`options.__r` for `_render`, `options.__e` for
+`_catchError`, `vnode.__` for `_parent`, `props.__P` for `_parentDom`).
+See the comment block at the top of `src/renderer.js`.
 
 ## SES / lockdown is a hard precondition
 
@@ -132,6 +132,16 @@ prop bag with a null prototype), dangerous element types (replaced with
 `Fragment`), URL-scheme injection (`javascript:` etc. dropped), and
 inline event-handler strings.
 
+Function components in a confined tree receive a copy of their props
+without `ref` (Preact 11 forwards refs to function components as an
+ordinary prop) and without Preact 11's portal-root prop (`_parentDom`,
+published as `__P`, which is what `createPortal` sets).
+A component vnode carrying that prop renders into the given container
+and hands each real DOM node it creates to the container's own
+`insertBefore`, so a guest-supplied fake container would receive them.
+Without it the subtree renders in place.
+A host that needs a portal renders it from a `HostPassthrough` island.
+
 ### `SafeEvent` — what a handler receives
 
 Every `on*` handler in a confined tree is invoked with a frozen `SafeEvent`,
@@ -198,6 +208,9 @@ prop.
 Function-valued props are **not** dropped: passing a callback is a
 deliberate capability grant, and the receiver must treat the arguments
 it gets as untrusted data.
+`ref` and the portal-root prop `__P` are always dropped: Preact 11 would
+put the host's ref, or the real container of a wrapper placed with
+`__P`, into the guest's props.
 
 `opts.name` sets the devtools display name; `opts.onError` is invoked
 when `fn` throws (the host render is not interrupted; exceptions from

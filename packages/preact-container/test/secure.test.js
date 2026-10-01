@@ -1,4 +1,4 @@
-import { h, createRef, render } from 'preact';
+import { h, createRef, Fragment, render } from 'preact';
 import { useState } from 'preact/hooks';
 import { setupRerender } from 'preact/test-utils';
 import { renderConfined, unmount, HostPassthrough } from '../src/renderer.js';
@@ -1694,6 +1694,106 @@ describe('../src/renderer.js', () => {
       // `confineComponent` path; this test confirms the throw is
       // general to anything in secureReentryTypes.
       expect(() => render(h(HostBoundary), scratch)).to.not.throw();
+    });
+  });
+  describe('portal-root prop (`__P`) on component vnodes', () => {
+    // Preact 11 renders a component vnode whose props carry `_parentDom`
+    // (published as `__P`) into that container — the mechanism behind
+    // its core `createPortal` — inserting each real DOM node it creates
+    // by calling the container's own `insertBefore`. A confined
+    // component that passes a fake container must not be handed them.
+    function makeFakeContainer(stolen) {
+      const grab = node => {
+        stolen.push(node);
+      };
+      return {
+        nodeType: 1,
+        namespaceURI: 'http://www.w3.org/1999/xhtml',
+        insertBefore: grab,
+        appendChild: grab,
+        removeChild() {},
+      };
+    }
+
+    it('drops `__P` from a Fragment a confined component renders', () => {
+      const stolen = [];
+      function Guest() {
+        return h(
+          'div',
+          null,
+          h(
+            Fragment,
+            { __P: makeFakeContainer(stolen) },
+            h('span', { class: 'kid' }, 'x'),
+          ),
+        );
+      }
+      renderConfined(h(Guest, null), scratch);
+      expect(stolen).to.deep.equal([]);
+      // The subtree renders in place instead.
+      expect(scratch.querySelector('div > span.kid').textContent).to.equal('x');
+    });
+
+    it("drops `__P` from a confined component's own function component", () => {
+      const stolen = [];
+      function Inner(props) {
+        return props.children;
+      }
+      function Guest() {
+        return h(
+          'div',
+          null,
+          h(
+            Inner,
+            { __P: makeFakeContainer(stolen) },
+            h('span', { class: 'kid' }, 'x'),
+          ),
+        );
+      }
+      renderConfined(h(Guest, null), scratch);
+      expect(stolen).to.deep.equal([]);
+      expect(scratch.querySelector('div > span.kid').textContent).to.equal('x');
+    });
+
+    it('drops a `__P` inherited through an own `__proto__` key', () => {
+      // `h()` copies props by assignment, so an own `__proto__` key
+      // re-parents the bag it builds: `__P` then arrives inherited, where
+      // deleting an own slot would miss it.
+      const stolen = [];
+      function Guest() {
+        const props = { ['__proto__']: { __P: makeFakeContainer(stolen) } };
+        return h(
+          'div',
+          null,
+          h(Fragment, props, h('span', { class: 'kid' }, 'x')),
+        );
+      }
+      renderConfined(h(Guest, null), scratch);
+      expect(stolen).to.deep.equal([]);
+      expect(scratch.querySelector('div > span.kid').textContent).to.equal('x');
+    });
+
+    it('drops `__P` from the frozen props of a hand-built reused vnode', () => {
+      // Preact re-creates a hand-built vnode that claims a `_depth`
+      // (published as `__b`) through `createVNode`, which hands its own
+      // props bag to the sanitizer. Frozen, that bag refuses `delete`.
+      const stolen = [];
+      function Guest() {
+        return h('div', null, {
+          type: Fragment,
+          props: Object.freeze({
+            __P: makeFakeContainer(stolen),
+            children: h('span', { class: 'kid' }, 'x'),
+          }),
+          key: undefined,
+          ref: undefined,
+          constructor: undefined,
+          __b: 1,
+        });
+      }
+      expect(() => renderConfined(h(Guest, null), scratch)).to.not.throw();
+      expect(stolen).to.deep.equal([]);
+      expect(scratch.querySelector('div > span.kid').textContent).to.equal('x');
     });
   });
 });

@@ -1190,4 +1190,52 @@ describe('../src/compartment.js', () => {
     // function should detect this and throw.
     expect(() => render(h(Confined, null), scratch)).to.throw(/renderConfined/);
   });
+  it('a guest cannot portal its output into a fake container with `__P`', () => {
+    // Preact 11 renders a component vnode carrying `__P` (`_parentDom`)
+    // into that container, inserting real DOM nodes through the
+    // container's own `insertBefore`.
+    const stolen = [];
+    const fake = {
+      nodeType: 1,
+      namespaceURI: 'http://www.w3.org/1999/xhtml',
+      insertBefore(node) {
+        stolen.push(node);
+      },
+      appendChild(node) {
+        stolen.push(node);
+      },
+      removeChild() {},
+    };
+    const ViaH = confineComponent(({ h, Fragment }) =>
+      h('div', null, h(Fragment, { __P: fake }, h('span', null, 'a'))),
+    );
+    const HandBuilt = confineComponent(({ h, Fragment }) =>
+      h('div', null, {
+        constructor: undefined,
+        type: Fragment,
+        props: { __P: fake, children: 'b' },
+      }),
+    );
+    renderConfined(h('div', null, h(ViaH, null), h(HandBuilt, null)), scratch);
+    expect(stolen).to.deep.equal([]);
+    expect(scratch.textContent).to.equal('ab');
+  });
+
+  it("a host's ref on a Confined wrapper never reaches the guest", () => {
+    // Preact 11 forwards refs: `h(Confined, { ref })` leaves the ref in
+    // the wrapper's props. Placed from a `HostPassthrough` island the
+    // wrapper's vnode is not sanitized, so the wrapper itself must drop it.
+    let seen;
+    const Confined = confineComponent((_, props) => {
+      seen = props;
+      return null;
+    });
+    const hostRef = createRef();
+    renderConfined(
+      h(HostPassthrough, null, h(Confined, { ref: hostRef, title: 't' })),
+      scratch,
+    );
+    expect(seen.title).to.equal('t');
+    expect(Object.prototype.hasOwnProperty.call(seen, 'ref')).to.equal(false);
+  });
 });
