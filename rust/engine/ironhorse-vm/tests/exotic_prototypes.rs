@@ -82,6 +82,42 @@ fn array_prototype_is_an_array() {
             r#"Array.prototype.foo = 1; var r = [].foo + ':' + Array.prototype.length; delete Array.prototype.foo; r"#,
             r#"1:0"#,
         ),
+        (
+            "length_beyond_its_elements",
+            r#"Array.prototype.length = 2; var r = [Array.prototype.length, Object.keys(Array.prototype).length, [].length, 1 in Array.prototype].join(); Array.prototype.length = 0; r"#,
+            r#"2,0,0,false"#,
+        ),
+        (
+            "invalid_length",
+            r#"var r; try { Array.prototype.length = -1; r = 'no'; } catch (e) { r = e.constructor.name; } r + ':' + Array.prototype.length"#,
+            r#"RangeError:0"#,
+        ),
+        (
+            "length_redefined",
+            r#"Object.defineProperty(Array.prototype, 'length', {value: 2}); var r = [Array.prototype.length, [].length, String(Array.prototype[1])].join(); Array.prototype.length = 0; r"#,
+            r#"2,0,undefined"#,
+        ),
+        (
+            "length_made_an_accessor",
+            r#"var r; try { Object.defineProperty(Array.prototype, 'length', {get: function () { return 1; }}); r = 'no'; } catch (e) { r = e.constructor.name; } r + ':' + Array.prototype.length"#,
+            r#"TypeError:0"#,
+        ),
+        (
+            "length_made_read_only",
+            r#"var d = Object.getOwnPropertyDescriptor(Array.prototype, 'length'); Object.defineProperty(Array.prototype, 'length', {writable: false}); var d2 = Object.getOwnPropertyDescriptor(Array.prototype, 'length'); var r; try { Array.prototype.push(1); r = 'pushed'; } catch (e) { r = e.constructor.name; } [d.writable, d2.writable, r, Array.prototype.length, [].length].join()"#,
+            r#"true,false,TypeError,0,0"#,
+        ),
+        (
+            "frozen",
+            r#"'use strict'; Object.freeze(Array.prototype); var r; try { Array.prototype.push(1); r = 'pushed'; } catch (e) { r = e.constructor.name; } [r, Object.isFrozen(Array.prototype), Array.prototype.length, [1].concat([2]).length].join()"#,
+            r#"TypeError,true,0,2"#,
+        ),
+        // `harden` is an XS (and SES) global; V8 has none.
+        (
+            "hardened",
+            r#"harden(Array.prototype); harden(String.prototype); [Object.isFrozen(Array.prototype), Object.isFrozen(String.prototype), Array.prototype.length, String.prototype.length].join()"#,
+            r#"true,true,0,0"#,
+        ),
     ]);
 }
 
@@ -107,6 +143,11 @@ fn string_prototype_is_a_string_wrapper() {
             "length_is_read_only",
             r#"'use strict'; var r; try { String.prototype.length = 3; r = 'wrote'; } catch (e) { r = e.constructor.name; } r + ':' + String.prototype.length"#,
             r#"TypeError:0"#,
+        ),
+        (
+            "frozen",
+            r#"'use strict'; Object.freeze(String.prototype); var r; try { String.prototype[0] = 'a'; r = 'wrote'; } catch (e) { r = e.constructor.name; } [r, Object.isFrozen(String.prototype), String.prototype.length, 'ab'.toUpperCase()].join()"#,
+            r#"TypeError,true,0,AB"#,
         ),
     ]);
 }
@@ -139,6 +180,59 @@ fn wrapper_methods_require_their_type() {
             "right_receivers",
             r#"[Number.prototype.valueOf.call(5), Number.prototype.valueOf.call(Object(2.5)), Boolean.prototype.valueOf.call(Object(true)), Boolean.prototype.toString.call(false), String.prototype.valueOf.call(Object('s')), String.prototype.toString.call('t')].join()"#,
             r#"5,2.5,true,false,s,t"#,
+        ),
+        (
+            "symbol_bigint_and_number_wrong_receivers",
+            r#"var r = []; [[Symbol.prototype.toString, {}], [Symbol.prototype.valueOf, Object.create(Symbol.prototype)], [BigInt.prototype.toString, 1], [BigInt.prototype.valueOf, Object.create(BigInt.prototype)], [Number.prototype.toString, '1'], [Number.prototype.toLocaleString, {}], [Number.prototype.toString, Object.create(Number.prototype)]].forEach(function (p) { try { p[0].call(p[1]); r.push('no'); } catch (e) { r.push(e.constructor.name + ':' + e.message); } }); r.join()"#,
+            r#"TypeError:this: not a symbol,TypeError:this: not a symbol,TypeError:this: not a bigint,TypeError:this: not a bigint,TypeError:this: not a number,TypeError:this: not a number,TypeError:this: not a number"#,
+        ),
+        (
+            "symbol_bigint_and_number_right_receivers",
+            r#"[Symbol.prototype.toString.call(Symbol('a')), Symbol.prototype.toString.call(Object(Symbol('b'))), BigInt.prototype.toString.call(Object(5n)), BigInt.prototype.toLocaleString.call(Object(1n)), Number.prototype.toString.call(Object(5), 2), String(Symbol.prototype.valueOf.call(Object(Symbol('c'))).description)].join()"#,
+            r#"Symbol(a),Symbol(b),5,1,101,c"#,
+        ),
+    ]);
+}
+
+#[test]
+fn the_other_prototypes_are_ordinary() {
+    // `%Date.prototype%`, `%RegExp.prototype%`, `%Symbol.prototype%`,
+    // `%BigInt.prototype%`, the collection, buffer and TypedArray prototypes
+    // and `%Error.prototype%` are ordinary objects without their instances'
+    // internal slots: a method that reads such a slot throws on them, and
+    // `Object.prototype.toString` finds no builtin tag, only an
+    // `@@toStringTag`. `%Function.prototype%` is a function that accepts any
+    // arguments and returns undefined.
+    check(&[
+        (
+            "slot_reads_throw",
+            r#"var r = []; [function () { return Date.prototype.getTime(); }, function () { return RegExp.prototype.exec('a'); }, function () { return Symbol.prototype.valueOf(); }, function () { return Symbol.prototype.description; }, function () { return Map.prototype.size; }, function () { return Set.prototype.size; }, function () { return ArrayBuffer.prototype.byteLength; }, function () { return Uint8Array.prototype.length; }, function () { return BigInt.prototype.valueOf(); }].forEach(function (f) { try { f(); r.push('no'); } catch (e) { r.push(e.constructor.name + ':' + e.message); } }); r.join()"#,
+            r#"TypeError:this: not a Date instance,TypeError:this: not a RegExp instance,TypeError:this: not a symbol,TypeError:this: not a symbol,TypeError:this: not a Map instance,TypeError:this: not a Set instance,TypeError:this: not an ArrayBuffer instance,TypeError:this: not a TypedArray instance,TypeError:this: not a bigint"#,
+        ),
+        (
+            "more_slot_reads_throw",
+            r#"var r = []; [function () { return DataView.prototype.byteLength; }, function () { return Date.prototype.valueOf(); }, function () { return Date.prototype.toISOString(); }, function () { return WeakMap.prototype.has({}); }, function () { return WeakSet.prototype.has({}); }, function () { return Promise.prototype.then(); }, function () { return Object.getPrototypeOf(Uint8Array.prototype).length; }, function () { return Float64Array.prototype.byteOffset; }, function () { return Map.prototype.get(1); }, function () { return Set.prototype.has(1); }, function () { return DataView.prototype.getInt8(0); }].forEach(function (f) { try { f(); r.push('no'); } catch (e) { r.push(e.constructor.name + ':' + e.message); } }); r.join()"#,
+            r#"TypeError:this: not a DataView instance,TypeError:this: not a Date instance,TypeError:this: not a Date instance,TypeError:this: not a WeakMap instance,TypeError:this: not a WeakSet instance,TypeError:this: not a Promise instance,TypeError:this: not a TypedArray instance,TypeError:this: not a TypedArray instance,TypeError:this: not a Map instance,TypeError:this: not a Set instance,TypeError:this: not a DataView instance"#,
+        ),
+        (
+            "builtin_tags",
+            r#"var ts = Object.prototype.toString; [Date.prototype, RegExp.prototype, Error.prototype, Function.prototype, Map.prototype, Symbol.prototype, BigInt.prototype, Object.getPrototypeOf(Uint8Array.prototype), Uint8Array.prototype, ArrayBuffer.prototype, Promise.prototype].map(function (o) { return ts.call(o); }).join()"#,
+            r#"[object Object],[object Object],[object Object],[object Function],[object Map],[object Symbol],[object BigInt],[object Object],[object Object],[object ArrayBuffer],[object Promise]"#,
+        ),
+        (
+            "typed_array_prototype_index",
+            r#"var P = Uint8Array.prototype; P[0] = 'x'; var r = [P[0], P.hasOwnProperty(0), String(new Uint8Array(0)[0]), String(Object.getPrototypeOf(P)[0])].join(); delete P[0]; r"#,
+            r#"x,true,undefined,undefined"#,
+        ),
+        (
+            "function_prototype",
+            r#"[String(Uint8Array.prototype[0]), String(Object.getPrototypeOf(Uint8Array.prototype)[0]), String(Function.prototype()), String(Function.prototype(1, 2)), typeof Function.prototype, Function.prototype.length].join()"#,
+            r#"undefined,undefined,undefined,undefined,function,0"#,
+        ),
+        (
+            "function_prototype_does_not_construct",
+            r#"var r = []; try { new Function.prototype(); r.push('no'); } catch (e) { r.push(e.constructor.name); } r.push(Function.prototype.hasOwnProperty('prototype'), Object.getPrototypeOf(Function.prototype) === Object.prototype); r.join()"#,
+            r#"TypeError,false,true"#,
         ),
     ]);
 }
