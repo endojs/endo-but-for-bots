@@ -58,10 +58,14 @@ first message.
      until `op:start-session` verifies, so a replay cannot close it.
      A replay can still occupy a crossed-hello settlement slot for the
      peer — that slot is needed so two genuine simultaneous dials
-     converge on one session — but once any handshake for the peer
-     finishes, settlement waits at most one more handshake timeout for
-     the rest, so a sustained replay can delay a dial by at most that
-     much and cannot keep a failed dial's caller waiting.
+     converge on one session — but once no local dial to the peer is in
+     flight and either a handshake has proven or a caller is waiting,
+     settlement waits at most one more handshake timeout for the rest.
+     A sustained replay can therefore delay a dial by at most that much,
+     and cannot keep a failed dial's caller waiting.
+     The same bound means a genuine crossed hello whose second direction
+     takes longer than a handshake timeout to prove is settled without
+     it, which can leave the two sides on different sessions.
      Total pre-`op:start-session` work is bounded by a cap on concurrent
      inbound handshakes per local (responder) identity
      (`maxInProgressPerLocalKey`).

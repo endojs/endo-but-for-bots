@@ -650,6 +650,43 @@ test('a genuine re-dial is not refused while a replay is in flight', async t => 
   t.not(second, first);
 });
 
+test('a replay that fails fast cannot fail a slow outbound dial', async t => {
+  t.timeout(15_000);
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, {
+    codec: cborCodec,
+    handshakeTimeoutMs: 400,
+  });
+  const netV = makeNetworkForTest(t, { codec: cborCodec });
+  const { publicKey: publicKeyA } = addFreshKey(netA);
+  const victim = addFreshKey(netV);
+  // A's outbound connect is slower than the handshake timeout; the dial
+  // is still healthy, since each handshake step has its own budget.
+  const base = fabric.transportFor('A');
+  await netA.addTransport(
+    harden({
+      ...base,
+      connect: async hints => {
+        await new Promise(resolve => setTimeout(resolve, 700));
+        return base.connect(hints);
+      },
+    }),
+  );
+  await netV.addTransport(fabric.transportFor('V'));
+  const locV = { ...netV.locationFor(victim.keyId), hints: { 'mesh:to': 'V' } };
+
+  const dial = netA.provideSession(locV);
+  // One replay claiming V that hangs up as soon as it is answered.
+  const stream = await fabric.transportFor('M').connect({ to: 'A' });
+  await stream.writer.next(makeSynFrom(victim, publicKeyA));
+  await stream.reader.next(undefined);
+  await stream.writer.return(undefined);
+
+  const session = await within(dial, 3000, 'provideSession');
+  t.true(session.isInitiator);
+  t.is(await netA.provideSession(locV), session);
+});
+
 test('when the per-identity cap is full, the oldest unproven handshake is evicted', async t => {
   t.timeout(10_000);
   const fabric = makeFabricForTest(t);
