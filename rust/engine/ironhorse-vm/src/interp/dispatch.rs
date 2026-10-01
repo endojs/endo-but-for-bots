@@ -4578,24 +4578,30 @@ impl Interp {
         {
             return Flow::Exit(Step::Host(Halt::NotImplemented("module:static-linking")));
         }
-        let execute_function = match execute.value {
-            Payload::Reference(function) if execute.kind == Kind::Reference => function,
-            _ => return Flow::Exit(Step::Host(Halt::NotImplemented("module:execute-function"))),
+        let Some((execute_function, execute_record)) = self.module_envelope_function(execute)
+        else {
+            return Flow::Exit(Step::Host(Halt::NotImplemented("module:execute-function")));
         };
-        if self.functions[&execute_function].body_start.is_none() {
+        if execute_record.body_start.is_none() {
             return Flow::Exit(Step::Host(Halt::NotImplemented("module:execute-body")));
         }
+        let execute_environment = execute_record.closures;
         if self.instance_prototype(execute_function) == self.async_function_proto {
             return Flow::Exit(Step::Host(Halt::NotImplemented("module:top-level-await")));
         }
-        let execute_environment = self.functions[&execute_function].closures;
-        let initialize_function = match initialize.value {
-            Payload::Reference(function) if initialize.kind == Kind::Reference => Some(function),
-            _ => None,
+        let (initialize_function, initialize_environment) = match initialize.value {
+            Payload::Reference(_) if initialize.kind == Kind::Reference => {
+                match self.module_envelope_function(initialize) {
+                    Some((function, record)) => (Some(function), record.closures),
+                    None => {
+                        return Flow::Exit(Step::Host(Halt::EngineInvariant(
+                            "module:envelope-shape",
+                        )))
+                    }
+                }
+            }
+            _ => (None, crate::value::SlotIndex::NULL),
         };
-        let initialize_environment = initialize_function
-            .map(|function| self.functions[&function].closures)
-            .unwrap_or(crate::value::SlotIndex::NULL);
         for transfer in &transfers {
             let Payload::At(local_id, _) = transfer.value else {
                 return Flow::Exit(Step::Host(Halt::EngineInvariant("module:transfer-record")));
