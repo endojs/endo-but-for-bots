@@ -402,9 +402,10 @@ export const makeOcapnNoiseNetwork = ({
   const pendingInbound = [];
 
   /**
-   * Local outbound dials (`runInitiator`) in flight per peer. These are
-   * bounded by their own timeouts and only we can start them, so a
-   * settlement deadline never cuts one short.
+   * Local outbound dials (`runInitiator`) in flight per peer. Only we
+   * can start them, and their handshake steps carry their own timeouts
+   * (the transport's `connect` does not), so a settlement deadline never
+   * cuts one short.
    *
    * @type {Map<KeyIdHex, number>}
    */
@@ -1459,7 +1460,9 @@ export const makeOcapnNoiseNetwork = ({
     // sweep, future `recordCandidate` calls short-circuit on
     // `isShutdown` and close their candidate inline.
     for (const [, list] of candidates) {
-      for (const c of list) c.close();
+      // Copy first: each close drops the candidate from `list` via
+      // `forgetActive`, which would otherwise skip the next one.
+      for (const c of [...list]) c.close();
     }
     candidates.clear();
     recentErrors.clear();

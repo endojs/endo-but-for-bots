@@ -687,6 +687,48 @@ test('a replay that fails fast cannot fail a slow outbound dial', async t => {
   t.is(await netA.provideSession(locV), session);
 });
 
+test('shutdown closes every candidate still awaiting settlement', async t => {
+  t.timeout(15_000);
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, {
+    codec: cborCodec,
+    handshakeTimeoutMs: 5000,
+  });
+  // Two networks holding the same identity each dial A once, so A holds
+  // two proven candidates for one peer, kept pending by a held replay.
+  const netV1 = makeNetworkForTest(t, { codec: cborCodec });
+  const netV2 = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
+  const victim = addFreshKey(netV1);
+  netV2.addSigningKeys({
+    privateKey: victim.privateKey,
+    publicKey: victim.publicKey,
+  });
+  await netA.addTransport(fabric.transportFor('A'));
+  await netV1.addTransport(fabric.transportFor('V1'));
+  await netV2.addTransport(fabric.transportFor('V2'));
+  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
+
+  startReplayLoop(t, fabric, 'A', makeSynFrom(victim, publicKeyA), 60_000);
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  const session1 = await within(netV1.provideSession(locA), 3000, 'V1');
+  const session2 = await within(netV2.provideSession(locA), 3000, 'V2');
+  await new Promise(resolve => setTimeout(resolve, 10));
+  netA.shutdown();
+
+  const [result1, result2] = await within(
+    Promise.all([
+      session1.reader.next(undefined),
+      session2.reader.next(undefined),
+    ]),
+    3000,
+    'both sessions closed',
+  );
+  t.true(result1.done);
+  t.true(result2.done);
+});
+
 test('when the per-identity cap is full, the oldest unproven handshake is evicted', async t => {
   t.timeout(10_000);
   const fabric = makeFabricForTest(t);
