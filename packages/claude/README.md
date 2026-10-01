@@ -104,13 +104,14 @@ const result = await runConfinedTurn({
   credential,           // presented through the apiKeyHelper only
   prompt,               // delivered on stdin
   model: 'claude-sonnet-4-5',
-  claudePath: '/usr/local/bin/claude', // the pinned binary, or a sandbox wrapper
+  claudePath: '/usr/local/bin/claude', // the pinned binary
+  sandbox: { bwrapPath: '/usr/bin/bwrap' }, // run claude in the bwrap slice
 });
 ```
 
 The `endo-claude-turn` bin does the same thing. It takes `--formula-id`,
-`--model`, `--claude`, and `--credential-file`, reads the prompt from stdin,
-and writes the tagged result as JSON.
+`--model`, `--claude`, `--credential-file`, and optionally `--bwrap`, reads
+the prompt from stdin, and writes the tagged result as JSON.
 
 `runConfinedTurn` opens the ordinary daemon client in the harness process and
 starts `@endo/agent-mcp-stdio`'s `startGuestBroker` for the one guest. It then
@@ -126,6 +127,34 @@ malformed stream is a `parse-error`, or a `nonzero-exit` if the process failed.
 maps to `rate-limited`, with `retryAfterMs` taken from the last
 `rate_limit_event`. Every exit path closes the broker, the daemon session, and
 the files.
+
+### The `bwrap` slice
+
+With `sandbox`, `claude` runs under `bwrap` (`src/bwrap-slice.js`) in fresh
+user, mount, PID, IPC, and UTS namespaces with every capability dropped. The
+slice root is an empty tmpfs. Into it are mounted:
+
+- read-only: `/usr`, `/bin`, `/sbin`, `/lib*` (top-level symlinks recreated as
+  symlinks) and the `/etc` entries for name resolution, TLS roots, the user
+  database, and the dynamic linker (a symlinked `/etc/resolv.conf` is bound
+  from its target, so `/run` stays unbound);
+- read-only: `claudePath` and its installation directory, the relay's `node`
+  and script, the broker socket's directory, and that spawn's files directory;
+- writable: the turn's working directory;
+- fresh tmpfs: `/tmp` and a scratch `HOME` (`/home/endo-claude`, set only
+  inside the slice).
+
+The daemon socket lives under `$XDG_RUNTIME_DIR`, the user's home, or the host
+`/tmp`, none of which is mounted, so it has no path inside the slice. The
+tests start a listening socket outside the grants and assert that a connect
+from inside fails with `ENOENT`, while the same probe without the slice
+connects. They skip where `bwrap` is absent or cannot create namespaces; CI's
+`sandbox-drivers` job installs `bwrap` and sets `ENDO_CLAUDE_REQUIRE_BWRAP=1`
+so the skip becomes a failure there.
+
+The network namespace is shared, because `claude` must reach the inference
+API. A loopback TCP listener on the host is therefore still reachable from the
+slice (see § Known gaps).
 
 ## Two transports
 
@@ -144,9 +173,9 @@ the files.
 
 Scrubbing `ENDO_SOCK` is **defense-in-depth only**: `whereEndoSock` re-derives the
 default socket path from an empty env, so unsetting the variable makes the path
-the *default*, not absent. The structural boundary is the
-[`@endo/claude-sandbox`](../claude-sandbox/README.md) slice's
-filesystem-namespace isolation, which is **required** for any prompt a guest can
+the *default*, not absent. The structural boundary is the slice's
+filesystem-namespace isolation ([§ The `bwrap` slice](#the-bwrap-slice)), which
+is **required** for any prompt a guest can
 influence — and "influence" includes any facet-method result that returns
 externally authored bytes, since that result re-enters the model's context. The
 child is spawned with a constructed env allowlist (not inherited-minus-one), so
@@ -156,14 +185,13 @@ an inherited `ANTHROPIC_API_KEY` cannot silently bypass the pool.
 
 This increment is honest about what it does **not** yet do:
 
-- **Kernel-level confinement of the `claude` tree.** `runConfinedTurn` (below)
-  builds the harness side of the confined shape: the daemon connection, its
-  socket path, and the formula id stay in the harness, and the confined tree
-  gets only a guest-pinned broker socket and an empty-environment relay. Making
-  the daemon socket *structurally* unreachable is still the job of the
-  `@endo/claude-sandbox` / `@endo/sandbox` slice that wraps `claudePath`. That
-  slice must bind the broker and per-spawn directories and supply a scratch
-  home, because the constructed environment carries no `HOME`.
+- **The slice is opt-in and shares the network.** `runConfinedTurn` runs
+  `claude` in the `bwrap` slice only when given `sandbox`; without it the
+  daemon socket is still reachable by path. Inside the slice the daemon socket
+  has no path, but the host network namespace is shared, so a loopback TCP
+  listener (a gateway, a daemon-side HTTP port) is reachable. Closing that
+  waits on the `@endo/sandbox` `network: private` egress profile, or a
+  harness-side egress proxy.
 - **Config through `/dev/fd`.** The design prefers a pipe- or `memfd`-backed
   `--mcp-config` path. The spawn files are `0600` files in a `0700` directory,
   removed on every exit path, until a live check shows that the pinned CLI reads
@@ -177,7 +205,7 @@ This increment is honest about what it does **not** yet do:
   CLI bump.
 - **The credential path under `--bare`** (the DD5 residual), answered by a
   live turn on Claude Code 2.1.280: a subscription OAuth access token
-  (`sk-ant-oat…`) is **not** accepted through an `apiKeyHelper` (`claude`
+  (`sk-ant-oat...`) is **not** accepted through an `apiKeyHelper` (`claude`
   presents it as an API key and gets `401`). The spawn files therefore present
   such a token as `ANTHROPIC_AUTH_TOKEN` in the `--settings` file's `env` key,
   never in the spawn environment. `claude` still holds it in memory, the same

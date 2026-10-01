@@ -20,11 +20,10 @@
 // `apiKeyHelper`. The relay is spawned with an empty environment, so nothing
 // `claude` holds in its own environment reaches it.
 //
-// This module is the harness side only. Kernel-level confinement of the
-// `claude` tree (the `@endo/claude-sandbox` / `@endo/sandbox` slice that makes
-// the daemon socket structurally unreachable) wraps `claudePath`; the slice
-// must bind the broker directory and the per-spawn directory, and supply a
-// scratch home, since the constructed environment carries no HOME.
+// With `sandbox`, `claude` runs inside the `bwrap` slice of `bwrap-slice.js`,
+// which binds the broker directory and that spawn's files directory, supplies
+// a scratch HOME, and leaves the daemon socket without a path. Without it, the
+// confinement is the harness-side shape alone.
 
 import childProcess from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -33,16 +32,22 @@ import path from 'node:path';
 
 import { E } from '@endo/eventual-send';
 import { makeError, X } from '@endo/errors';
-import { connectToDaemon, startGuestBroker } from '@endo/agent-mcp-stdio';
+import {
+  connectToDaemon,
+  startGuestBroker,
+  RELAY_PATH,
+} from '@endo/agent-mcp-stdio';
 
 import { make } from './harness.js';
 import { makeLaunch } from './launch.js';
 import { makeSpawnFilesPreparer } from './spawn-files.js';
+import { makeBwrapSpawn, resolveSystemMounts } from './bwrap-slice.js';
 import { PINNED_CLI_VERSION } from './argv.js';
 
 /** @import { SpawnOptions, ChildProcess } from 'node:child_process' */
 /** @import { InferResult } from './claude.types.js' */
 /** @import { DaemonConnection } from '@endo/agent-mcp-stdio' */
+/** @import { SliceMount } from './bwrap-slice.js' */
 
 /**
  * Read `claude --version` (for example `2.1.232 (Claude Code)`) under the
@@ -105,6 +110,10 @@ const defaultPathValue = nodePath =>
  * @param {(chunk: Buffer) => void} [options.onStderr] - the confined child's
  *   stderr, for diagnostics.
  * @param {(command: string, args: readonly string[], options: SpawnOptions) => ChildProcess} [options.spawn]
+ * @param {{ bwrapPath: string, home?: string, systemMounts?: ReadonlyArray<SliceMount> }} [options.sandbox]
+ *   - run `claude` inside the `bwrap` slice: `bwrapPath` is absolute, `home`
+ *   is the scratch HOME inside it, and `systemMounts` defaults to this host's
+ *   `resolveSystemMounts()`.
  * @returns {Promise<InferResult>}
  */
 export const runConfinedTurn = async ({
@@ -134,6 +143,7 @@ export const runConfinedTurn = async ({
   cancelled,
   onStderr,
   spawn = childProcess.spawn,
+  sandbox,
 }) => {
   if (typeof claudePath !== 'string' || !path.isAbsolute(claudePath)) {
     throw makeError(X`runConfinedTurn: claudePath must be absolute`);
@@ -145,7 +155,7 @@ export const runConfinedTurn = async ({
   const turnDir = await fs.mkdtemp(path.join(parentDir, 'endo-claude-turn-'));
   /** @type {DaemonConnection | undefined} */
   let connection;
-  /** @type {{ close: () => Promise<void> } | undefined} */
+  /** @type {{ socketPath: string, close: () => Promise<void> } | undefined} */
   let broker;
   try {
     await fs.chmod(turnDir, 0o700);
@@ -178,6 +188,59 @@ export const runConfinedTurn = async ({
       },
     });
 
+    /** @type {Map<string, string>} */
+    const spawnDirectoryByTag = new Map();
+    const prepareSpawnFiles = makeSpawnFilesPreparer({
+      parentDir: turnDir,
+      pathValue,
+      credentialFor: async sessionTag => {
+        const found = bySession.get(sessionTag);
+        if (found === undefined) {
+          throw makeError(X`no credential acquired for this spawn`);
+        }
+        return found;
+      },
+    });
+
+    const unsandboxedLaunch = makeLaunch({
+      spawn,
+      claudePath,
+      cwd: workDir,
+      onStderr,
+    });
+    /** @type {ReturnType<typeof makeLaunch>} */
+    let launch = unsandboxedLaunch;
+    if (sandbox !== undefined) {
+      const systemMounts =
+        sandbox.systemMounts ?? (await resolveSystemMounts());
+      const claudeDirectory = path.dirname(await fs.realpath(claudePath));
+      const toolPaths = [claudePath, claudeDirectory, nodePath, envCommand];
+      launch = async spec => {
+        const spawnDirectory = spawnDirectoryByTag.get(spec.sessionTag);
+        if (broker === undefined || spawnDirectory === undefined) {
+          throw makeError(X`sandbox: no broker or spawn files for this spawn`);
+        }
+        return makeLaunch({
+          spawn: makeBwrapSpawn({
+            spawn,
+            bwrapPath: sandbox.bwrapPath,
+            systemMounts,
+            readOnlyPaths: [
+              ...toolPaths,
+              RELAY_PATH,
+              path.dirname(broker.socketPath),
+              spawnDirectory,
+            ],
+            writablePaths: [workDir],
+            home: sandbox.home,
+          }),
+          claudePath,
+          cwd: workDir,
+          onStderr,
+        })(spec);
+      };
+    }
+
     let tagCount = 0;
     const provider = make(
       {
@@ -205,18 +268,15 @@ export const runConfinedTurn = async ({
           tagCount += 1;
           return `${path.basename(turnDir)}-${tagCount}`;
         },
-        prepareSpawnFiles: makeSpawnFilesPreparer({
-          parentDir: turnDir,
-          pathValue,
-          credentialFor: async sessionTag => {
-            const found = bySession.get(sessionTag);
-            if (found === undefined) {
-              throw makeError(X`no credential acquired for this spawn`);
-            }
-            return found;
-          },
-        }),
-        launch: makeLaunch({ spawn, claudePath, cwd: workDir, onStderr }),
+        prepareSpawnFiles: async request => {
+          const files = await prepareSpawnFiles(request);
+          spawnDirectoryByTag.set(
+            request.sessionTag,
+            path.dirname(files.mcpConfigPath),
+          );
+          return files;
+        },
+        launch,
         ...(limits === undefined ? {} : { limits }),
       },
     );

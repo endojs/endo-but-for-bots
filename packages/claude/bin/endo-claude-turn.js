@@ -5,10 +5,11 @@
 //
 //   endo-claude-turn --formula-id <64-hex> --model <model> \
 //     --claude <absolute path> --credential-file <path> \
-//     [--pinned-cli-version <version>] < prompt
+//     [--pinned-cli-version <version>] [--bwrap <absolute path>] < prompt
 //
 // The credential is read from a file, never from argv or the environment; the
-// prompt is read from stdin. The tagged result is written to stdout as JSON.
+// prompt is read from stdin. With `--bwrap`, `claude` runs inside the bwrap
+// slice. The tagged result is written to stdout as JSON.
 import '@endo/init';
 
 import fs from 'node:fs';
@@ -23,6 +24,7 @@ const { values } = parseArgs({
     claude: { type: 'string' },
     'credential-file': { type: 'string' },
     'pinned-cli-version': { type: 'string' },
+    bwrap: { type: 'string' },
   },
   strict: true,
 });
@@ -48,6 +50,9 @@ runConfinedTurn({
   ...(values['pinned-cli-version'] === undefined
     ? {}
     : { pinnedCliVersion: values['pinned-cli-version'] }),
+  ...(values.bwrap === undefined
+    ? {}
+    : { sandbox: { bwrapPath: values.bwrap } }),
 }).then(
   result => {
     process.stdout.write(`${JSON.stringify(result)}\n`, () =>

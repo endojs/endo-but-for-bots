@@ -255,7 +255,7 @@ def classify(paths, graphs, all_jobs=False):
         jobs["lint"] |= bool(packages)
         jobs["viable-release"] |= any(not graph.js.get(n, {}).get("private", False) for n in packages)
         for job, roots in {
-            "familiar-bundle": {"@endo/familiar", "@endo/cli", "@endo/daemon", "@endo/lal"}, "sandbox-drivers": {"@endo/sandbox"},
+            "familiar-bundle": {"@endo/familiar", "@endo/cli", "@endo/daemon", "@endo/lal"}, "sandbox-drivers": {"@endo/sandbox", "@endo/claude"},
             "test-async-hooks": {"@endo/init"}, "test-hermes": {"ses"},
             "test-ocapn-python": {"@endo/ocapn"},
             "browser-tests": {"ses", "@endo/chat"},
