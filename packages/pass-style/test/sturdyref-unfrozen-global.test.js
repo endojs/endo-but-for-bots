@@ -2,7 +2,7 @@ import test from '@endo/ses-ava/test.js';
 
 import { passStyleOf } from '../src/passStyleOf.js';
 
-const { create, freeze } = Object;
+const { create, defineProperty, freeze } = Object;
 
 test('an unfrozen SturdyRef global is not trusted', t => {
   // The shim always freezes its constructor, its statics, and its prototype.
@@ -14,7 +14,13 @@ test('an unfrozen SturdyRef global is not trusted', t => {
     return;
   }
   const impostor = function SturdyRef() {};
+  // Shaped like the shim's prototype, so that only the condition under test
+  // can reject the impostor.
+  defineProperty(impostor.prototype, Symbol.toStringTag, {
+    value: 'SturdyRef',
+  });
   impostor.isSturdyRef = () => true;
+  freeze(impostor.isSturdyRef);
   freeze(impostor.prototype);
   /** @type {any} */ (globalThis).SturdyRef = impostor;
   try {

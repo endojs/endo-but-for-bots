@@ -40,9 +40,11 @@ const isTrusted = async impostor => {
   );
   /** @type {any} */ (globalThis).SturdyRef = impostor;
   try {
-    const proto = impostor.prototype;
+    const { prototype } = impostor;
     const candidate = freeze(
-      create(typeof proto === 'object' || proto === null ? proto : null),
+      create(
+        typeof prototype === 'object' || prototype === null ? prototype : null,
+      ),
     );
     return isSturdyRefObject(candidate);
   } finally {
@@ -163,3 +165,60 @@ test.serial(
     );
   },
 );
+
+test.serial(
+  'a prototype carrying an enumerable tag is not trusted',
+  async t => {
+    await assertNotTrusted(
+      t,
+      makeImpostor(impostor => {
+        impostor.prototype = {};
+        defineProperty(impostor.prototype, 'constructor', { value: impostor });
+        defineProperty(impostor.prototype, Symbol.toStringTag, {
+          value: 'SturdyRef',
+          enumerable: true,
+        });
+      }),
+    );
+  },
+);
+
+test.serial('a throwing isSturdyRef accessor is not trusted', async t => {
+  // Freezing a constructor does not stop its accessors from throwing, so
+  // pass-style must not invoke them.
+  await assertNotTrusted(
+    t,
+    makeImpostor(
+      impostor => {
+        delete impostor.isSturdyRef;
+        defineProperty(impostor, 'isSturdyRef', {
+          get() {
+            throw Error('boom');
+          },
+        });
+      },
+      { freezeCheck: false },
+    ),
+  );
+});
+
+test.serial('a rejected global does not stop a later one', async t => {
+  // Only a trusted global is captured, so a malformed one that appears first
+  // cannot keep the shim's from being recognized afterward.
+  instance += 1;
+  const { isSturdyRefObject } = await import(
+    `../src/sturdyref.js?instance=${instance}`
+  );
+  const malformed = makeImpostor(impostor => {
+    impostor.prototype.transfer = () => {};
+  });
+  const wellShaped = makeImpostor();
+  try {
+    /** @type {any} */ (globalThis).SturdyRef = malformed;
+    t.false(isSturdyRefObject(freeze(create(malformed.prototype))));
+    /** @type {any} */ (globalThis).SturdyRef = wellShaped;
+    t.true(isSturdyRefObject(freeze(create(wellShaped.prototype))));
+  } finally {
+    delete (/** @type {any} */ (globalThis).SturdyRef);
+  }
+});
