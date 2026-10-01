@@ -7,6 +7,11 @@ A case fails the check when it uses more stack than the baseline allows or
 when its outcome (completed, ReentryLimit, ...) changes. The marks are
 deterministic for one compiler, target and profile, so the baseline records
 that provenance and the check refuses a mismatch unless told otherwise.
+
+The baseline also records the commit it was measured at. `--write-baseline`
+refuses a tree with uncommitted engine changes, whose marks HEAD would not
+reproduce: commit the change, write the baseline, and commit the baseline on
+its own. `--allow-dirty` writes one anyway and records `"dirty": true`.
 """
 import argparse
 import json
@@ -77,15 +82,42 @@ def validate_provenance(reference, candidate):
             )
 
 
-def provenance():
+def uncommitted_changes(baseline):
+    """Tracked engine paths whose working copy differs from HEAD, the baseline
+    file itself excepted (re-writing it is not a change to what it measures)."""
+    command = ["git", "status", "--porcelain=v1", "--untracked-files=no", "--", "."]
+    try:
+        command.append(f":(exclude){Path(baseline).resolve().relative_to(ROOT)}")
+    except ValueError:
+        pass  # a baseline outside the engine is not under the pathspec
+    output = subprocess.check_output(command, cwd=ROOT, text=True)
+    return [line[3:] for line in output.splitlines() if line.strip()]
+
+
+def provenance(changed=()):
+    """The build and commit the marks belong to; `dirty` when the tree had
+    uncommitted engine changes, so `commit` alone does not reproduce them."""
     verbose = subprocess.check_output(["rustc", "-vV"], cwd=ROOT, text=True)
     host = next(line.split(": ", 1)[1] for line in verbose.splitlines() if line.startswith("host: "))
-    return {
+    record = {
         "target": host,
         "rustc": verbose.splitlines()[0].strip(),
         "profile": "release",
         "commit": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
     }
+    if changed:
+        record["dirty"] = True
+    return record
+
+
+def refuse_dirty(changed, allow_dirty):
+    """The reason a baseline may not be written from this tree, or None."""
+    if not changed or allow_dirty:
+        return None
+    shown = ", ".join(changed[:10]) + (f" and {len(changed) - 10} more" if len(changed) > 10 else "")
+    return (f"uncommitted engine changes ({shown}): the baseline would name a commit that does "
+            "not reproduce its marks. Commit them, write the baseline and commit it on its own, "
+            "or pass --allow-dirty to record a dirty baseline")
 
 
 def measure():
@@ -114,9 +146,16 @@ def main():
     parser.add_argument("--slack", type=float, help="allowed growth over the baseline (default: the baseline's)")
     parser.add_argument("--ignore-provenance", action="store_true",
                         help="compare even when compiler, target or profile differ from the baseline")
+    parser.add_argument("--allow-dirty", action="store_true",
+                        help="with --write-baseline, write from uncommitted changes, recorded as dirty")
     args = parser.parse_args()
 
-    current = provenance()
+    changed = uncommitted_changes(args.baseline)
+    if args.write_baseline:
+        reason = refuse_dirty(changed, args.allow_dirty)
+        if reason:
+            raise SystemExit(f"stack height: {reason}")
+    current = provenance(changed)
     metrics = measure()
     report = {"provenance": current, "cases": metrics}
 

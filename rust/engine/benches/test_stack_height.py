@@ -84,6 +84,19 @@ class Provenance(unittest.TestCase):
             stack_height.validate_provenance(reference, candidate)
         stack_height.validate_provenance(reference, dict(reference, commit="other"))
 
+    def test_a_dirty_tree_refuses_a_baseline_unless_allowed(self):
+        self.assertIsNone(stack_height.refuse_dirty([], allow_dirty=False))
+        self.assertIsNone(stack_height.refuse_dirty(["ironhorse-vm/src/lib.rs"], allow_dirty=True))
+        reason = stack_height.refuse_dirty(["ironhorse-vm/src/lib.rs"], allow_dirty=False)
+        self.assertIn("ironhorse-vm/src/lib.rs", reason)
+        self.assertIn("--allow-dirty", reason)
+        many = [f"f{i}.rs" for i in range(12)]
+        self.assertIn("and 2 more", stack_height.refuse_dirty(many, allow_dirty=False))
+
+    def test_the_baseline_file_is_not_a_change(self):
+        changed = stack_height.uncommitted_changes(stack_height.BASELINE)
+        self.assertFalse([path for path in changed if path.endswith("stack-height-baseline.json")])
+
 
 if __name__ == "__main__":
     unittest.main()
