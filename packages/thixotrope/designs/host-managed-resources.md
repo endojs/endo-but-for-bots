@@ -319,6 +319,116 @@ section 2 gives it the list of workspaces.
 
 Section 7.1 depends on nothing else and can go first; 7.2 follows section 1.
 
+## 8. Alarms and the control socket as native resources
+
+Section 7.1 keeps a stateless timer resource in the host.
+One step further, alarms become a native resource shipped with the package,
+and so does the operator's control socket.
+The host then provides exactly what a vat cannot have: vats (the worker
+controller), processes (the adapter launcher), publication (the hub) and the
+peer transport.
+Everything else is a vat or a native resource the host installed.
+
+### 8.1 Alarms
+
+`resources/alarms/durable.js` makes a manager labelled `Alarms`.
+A spec is `{ deadline, sink }`, where `sink` is one exo of the manager with
+`fire(key, at)`; `same` compares the deadline and the sink, `replaces` is
+always false.
+The facet's `when(deadline)` registers a fresh key, keeps a promise kit in the
+manager's heap and returns its promise; `fire` settles it (idempotently, per
+key) and closes the handle; `arm` returns a canceller that closes the handle
+and rejects the promise.
+The deadlines live in the manager's heap, durable for free, and the manager is
+the clock vat: `guest-clock.js` folds into it.
+
+`resources/alarms/ephemeral.js` binds a key by arming a timer (chained beyond
+the 2^31-1 ms limit of a single timer), calls `E(sink).fire(key, now)` on
+expiry and clears it on unbind.
+`restore` re-arms the desired set, so after a daemon restart every pending
+deadline is armed again and one that passed during downtime fires at once.
+A fire the manager did not journal before the host died is simply fired again
+by the rebuilt adapter, and the key's idempotence makes it exactly-once.
+
+Registrations clean themselves up at their deadline, so a retired workspace's
+alarms cost at most one timer each; no retirement route is needed.
+`now()` needs the adapter: the manager holds the adapter's presence through
+the keeper, so the kit should let `makeAdapter` take methods beyond the four
+of the protocol (`methods: { now }`), since a vat cannot read time itself.
+
+Removed: everything section 7.1 removes, plus the host timer resource and the
+separate clock vat.
+The platform `timers` power stays in the host for its own bounds only (idle,
+drains, start notices).
+
+### 8.2 The control socket
+
+`resources/control/durable.js` is `make({ makeManager, admin })`: it registers
+one key with `{ path, admin }` and its facet reports status.
+`admin` is a grant made at install: the administration facet, held in a vat
+over the worker controller, the registry and the workspace, as section 3
+already allows ("control surfaces can be held by the workspace").
+
+`resources/control/ephemeral.js` binds by listening on the Unix socket at
+`path`.
+Each connection is an OCapN session over that socket whose bootstrap object is
+`E(admin).connect()`, a per-connection facet the adapter closes on disconnect,
+so inventory-view subscriptions end with the connection.
+If the adapter dies, its transient session is swept and those presences become
+unreachable, which is the rule the view bridge already relies on.
+The adapter uses the package's own unix netlayer and framing, which section 6
+lists as duplicated in `local-control.js`; that file goes.
+The cost is one more hop (client, adapter, hub, target), acceptable on a local
+socket.
+
+`peers.sock` stays in the host.
+It is the hub's own durable transport, correct because frames are committed
+before output is released; an adapter relaying frames over a transient session
+would run the hub's transport over a hub session.
+
+### 8.3 What the kit needs first
+
+1. A restart monitor.
+   Today an adapter that dies between daemon starts is rebuilt by the next
+   operation that needs it.
+   For HTTP that already means a closed port until something calls the manager;
+   for alarms it would silence every reminder, and for the control socket it
+   would lock the operator out, since no operation could reach the manager.
+   The launcher already observes exit (`onExit` in `adapters.js`); it should
+   report it to the keeper, which rebuilds with backoff.
+   This is a kit change that HTTP benefits from as well, and it gates the rest.
+2. Built-in resources the host installs.
+   On first start the host installs `resources/alarms` and `resources/control`
+   under reserved names in the registry of section 1, and grants each
+   workspace the alarm facet (section 2).
+   A missing or broken control resource is reinstalled at start, since it is
+   the operator's only way in.
+3. Adapter methods beyond the protocol, for `now()` (8.1).
+4. A code-upgrade path.
+   A native resource's identity pins the directory's digest, so a package
+   upgrade that changes `durable.js` cannot start under the old manager, and
+   the deadlines in that manager's heap would be stranded.
+   HTTP tolerates a reinstall; alarms do not.
+   Either the identity pins only `durable.js` and `ephemeral.js` may change
+   under a stable protocol, with `durable.js` kept minimal, or the lifecycle
+   gains `export()` and `import()` of desired registrations across a
+   reinstall, a small generic migration.
+   This is the general problem of upgrading a durable vat's code, met here
+   first.
+
+### 8.4 The host afterwards
+
+The hub and the store; the endpoint with the worker controller, the worker
+facade, the adapter launcher and publication; the peer netlayer; the startup
+sequence.
+The supervisor becomes the main of `thix serve`: take the lease, check
+versions, start the daemon, install the built-ins if missing.
+Alarm status is `describe` over the manager's registrations, and the
+operator's administration facet is an exo in a vat.
+
+Order: the monitor (8.3.1) first, then alarms (8.1, in place of 7.1), then
+the control socket once section 1 and the administration facet move are done.
+
 ## Order of the larger changes
 
 1. Section 1, since sections 2 and 3 are simpler once installations are the host's.
@@ -326,3 +436,4 @@ Section 7.1 depends on nothing else and can go first; 7.2 follows section 1.
 3. Section 4 (worker-bound resources, which removes `onRetireWorker`), 4a, and the documentation
    rewording in section 3.
 4. Section 5 as they come up.
+5. Section 8, after its kit prerequisites (8.3), with 7.2 alongside section 1.
