@@ -18,3 +18,9 @@ export {
 export { makeMcpConfig, renderGuestAllowedTools } from './src/config.js';
 export { parseClaudeStreamJson } from './src/claude-stream.js';
 export { serveStdio, makeLineWriter } from './src/stdio.js';
+export {
+  BROKER_SOCKET_NAME,
+  RELAY_PATH,
+  makeRelayTransport,
+  startGuestBroker,
+} from './src/broker.js';

@@ -11,7 +11,7 @@
 import { makeError, X, q } from '@endo/errors';
 import { toPassableError } from '@endo/pass-style';
 
-/** @import { BridgeDownResult, CancelledResult, FacetThrewResult, LimitExceededResult, NonzeroExitResult, OkResult, ParseErrorResult, PoolExhaustedResult, RateLimitedResult } from './claude.types.js' */
+/** @import { AuthFailedResult, BridgeDownResult, CancelledResult, FacetThrewResult, LimitExceededResult, NonzeroExitResult, OkResult, ParseErrorResult, PoolExhaustedResult, RateLimitedResult } from './claude.types.js' */
 
 /** The exhaustive set of `type` discriminants, for validation and tests. */
 export const INFER_RESULT_TYPES = harden([
@@ -23,6 +23,7 @@ export const INFER_RESULT_TYPES = harden([
   'nonzero-exit',
   'parse-error',
   'limit-exceeded',
+  'auth-failed',
   'cancelled',
 ]);
 
@@ -114,6 +115,17 @@ harden(nonzeroExit);
 export const parseError = detail =>
   harden({ type: 'parse-error', detail: String(detail) });
 harden(parseError);
+
+/**
+ * The credential was rejected: `claude` reported repeated `401`/`403` API
+ * retries, so the harness stopped it rather than wait out its retry budget.
+ *
+ * @param {number} status
+ * @returns {AuthFailedResult}
+ */
+export const authFailed = status =>
+  harden({ type: 'auth-failed', status: Number(status) });
+harden(authFailed);
 
 /**
  * @param {'wall-clock' | 'output-bytes' | 'max-turns'} which

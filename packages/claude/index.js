@@ -40,3 +40,11 @@ export {
 } from './src/credentials-pool.js';
 export { assertGuestFormulaId, isGuestFormulaId } from './src/formula-id.js';
 export { INFER_RESULT_TYPES } from './src/results.js';
+
+// The confined shape: the harness-owned broker and relay from
+// `@endo/agent-mcp-stdio`, composed with this package's argv, environment, and
+// launch (designs/endo-guest-stdio-mcp.md § How the confinement properties
+// change, shape 1).
+export { runConfinedTurn, readClaudeVersion } from './src/confined-turn.js';
+export { makeLaunch, resultFromStream } from './src/launch.js';
+export { makeSpawnFilesPreparer } from './src/spawn-files.js';

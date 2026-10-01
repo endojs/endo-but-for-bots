@@ -3,6 +3,7 @@
   "include": [
     "*.js",
     "src/*.js",
+    "bin/*.js",
     "test",
     "claude.types.d.ts"
   ]

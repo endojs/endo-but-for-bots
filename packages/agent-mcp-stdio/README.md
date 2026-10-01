@@ -33,6 +33,19 @@ must not be used where the sandbox confines `claude` against the daemon socket.
 In the **confined** shape a harness-owned process outside the slice holds the
 connection and binds the resolved facet with `makeGuestMcpServer`.
 
+`startGuestBroker({ connection, formulaId, version })` is that harness-owned
+process's half. Over a daemon connection the caller already holds, it resolves
+the one guest, then serves the static catalog as newline-delimited JSON-RPC on
+a `0600` Unix socket in a `0700` per-inference directory, with a fresh MCP
+session per connection. Its `transport()` names the claude-spawned half:
+`src/relay.mjs`, a plain-Node byte pipe between stdio and that socket, launched
+as `env -i <node> relay.mjs <socket>`. The relay never sees the daemon socket,
+a daemon descriptor, or the formula id, and it starts with an **empty**
+environment. Claude Code merges its own environment into a stdio server's
+(endojs/endo-but-for-bots#1369 gap 2), so without `env -i` a credential in
+`claude`'s environment would reach the MCP child. `@endo/claude`'s
+`runConfinedTurn` composes the two.
+
 ## Tool catalog
 
 The catalog is static: `makeAgentTools()` in `src/agent-interface.js` declares

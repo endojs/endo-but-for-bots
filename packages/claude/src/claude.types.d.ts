@@ -148,6 +148,11 @@ export interface LimitExceededResult {
   which: 'wall-clock' | 'output-bytes' | 'max-turns';
 }
 
+export interface AuthFailedResult {
+  type: 'auth-failed';
+  status: number;
+}
+
 export interface CancelledResult {
   type: 'cancelled';
   at: 'before-spawn' | 'mid-stream' | 'after-exit';
@@ -162,6 +167,7 @@ export type InferResult =
   | NonzeroExitResult
   | ParseErrorResult
   | LimitExceededResult
+  | AuthFailedResult
   | CancelledResult;
 
 export type GuestFormulaId = string & {

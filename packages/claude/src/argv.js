@@ -122,6 +122,12 @@ export const buildArgv = spec => {
     model,
     '--max-turns',
     String(maxTurns),
+    // The launch seam reads a structured transcript, never scraped text
+    // (designs/endo-guest-stdio-mcp.md § Structured signals). In print mode
+    // `stream-json` requires `--verbose`.
+    '--output-format',
+    'stream-json',
+    '--verbose',
     '-p',
   ]);
 

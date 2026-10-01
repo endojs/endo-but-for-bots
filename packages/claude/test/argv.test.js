@@ -31,6 +31,12 @@ test('buildArgv emits all five required flags, empty-value flags, and never --re
   t.false(argv.includes('--continue'));
 });
 
+test('buildArgv asks for the stream-json transcript the launch seam parses', t => {
+  const argv = buildArgv(spec());
+  t.is(argv[argv.indexOf('--output-format') + 1], 'stream-json');
+  t.true(argv.includes('--verbose'));
+});
+
 test('buildArgv delivers the prompt at NO index (stdin only)', t => {
   // The prompt is not even a parameter to buildArgv, so it cannot appear.
   // Construction invariant: the last token is the `-p` print flag, never a prompt
