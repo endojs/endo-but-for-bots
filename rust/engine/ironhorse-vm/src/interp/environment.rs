@@ -630,6 +630,24 @@ impl Interp {
         self.append_environment_capture(env, id, Slot::of(Kind::Closure, Payload::Reference(cell)));
     }
 
+    /// A `MODULE` envelope's function slot: the function and its record, or
+    /// `None` when the slot holds anything but a function. Corrupt bytecode
+    /// can put any value in either slot, so it is looked up, not indexed.
+    /// The lookup lives here rather than in the dispatch loop, whose
+    /// callee-class probes `tests/dispatch_probe_chain.rs` counts: a module
+    /// envelope is checked once per module, not on any call.
+    pub(super) fn module_envelope_function(
+        &self,
+        slot: Slot,
+    ) -> Option<(crate::value::SlotIndex, &FuncInfo)> {
+        match slot.value {
+            Payload::Reference(function) if slot.kind == Kind::Reference => {
+                self.functions.get(&function).map(|info| (function, info))
+            }
+            _ => None,
+        }
+    }
+
     /// `XS_CODE_BEGIN_SLOPPY`'s `this` binding: an `undefined`/`null` `this`
     /// in a sloppy function frame binds to the realm global. Recorded for
     /// the `this`/method semantics that observe it; the covered call

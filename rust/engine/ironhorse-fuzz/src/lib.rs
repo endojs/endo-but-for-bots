@@ -4257,7 +4257,27 @@ mod tests {
         // head did not. A null owner is "no object", so it has no properties,
         // and the generator now falls back to its default prototype.
         let _ = decoder_is_panic_free(NULL_OWNER_TROPHY);
+        // Regression (tripwire trophy `crash-80142803`, CI run 36913967827):
+        // a `MODULE` envelope whose execute slot holds an object that is not
+        // a function. The arm indexed the function table with it and
+        // panicked; it now halts on either function slot it cannot find.
+        let _ = decoder_is_panic_free(MODULE_NON_FUNCTION_TROPHY);
     }
+
+    /// The tripwire trophy above, verbatim: the 178-byte unit libFuzzer wrote
+    /// to `artifacts/bytecode_decoder/crash-8014280300719a4d79a440f3ea27a97f1
+    /// 11174bc`. Kept whole because the seed corpus is generated and cannot
+    /// carry a hand-added file, as with the two below.
+    const MODULE_NON_FUNCTION_TROPHY: &[u8] = &[
+        11, 0, 75, 82, 221, 114, 2, 141, 114, 0, 116, 65, 0, 0, 20, 199, 127, 141, 31, 42, 82, 66,
+        31, 4, 146, 114, 1, 125, 66, 228, 228, 228, 228, 228, 228, 228, 51, 228, 228, 228, 228,
+        228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 228, 3, 3, 11,
+        0, 75, 114, 2, 32, 212, 0, 143, 154, 153, 153, 153, 153, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        89, 48, 64, 140, 221, 66, 31, 2, 146, 82, 141, 31, 7, 114, 8, 221, 118, 19, 22, 4, 114, 2,
+        126, 140, 125, 114, 34, 125, 19, 221, 66, 34, 4, 146, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+        3, 3, 3, 3, 3, 3, 3, 114, 68, 125, 21, 66, 31, 34, 3, 3, 3, 3,
+    ];
 
     /// The tripwire trophy above, verbatim: the 274-byte unit libFuzzer wrote
     /// to `artifacts/bytecode_decoder/crash-5fa46bee9d784811e6c5a75006e8b3f45a
