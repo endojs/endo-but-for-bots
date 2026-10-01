@@ -615,6 +615,38 @@ impl Interp {
         }
     }
 
+    /// One bound layer of [`Self::construct_value_turns`]: BoundFunction
+    /// [[Construct]] (ECMA-262 10.4.1.2). Prepend the bound arguments to
+    /// `args`, returning the new list; let a `newTarget` naming the bound
+    /// function `f` name its target instead; and turn `func` to the target.
+    /// Charged as [`Self::invoke_value`] charges a bound call. Out of line, so
+    /// its locals do not widen the frame every construct level holds.
+    #[inline(never)]
+    fn bound_construct_step(
+        &mut self,
+        f: crate::value::SlotIndex,
+        func: &mut Slot,
+        new_target: &mut Slot,
+        args: &[Slot],
+    ) -> Result<Vec<Slot>, Step> {
+        let data = &self.bound_functions[&f];
+        let target = data.target;
+        let length = data
+            .args
+            .len()
+            .checked_add(args.len())
+            .ok_or(Step::Host(Halt::HeapExhausted))?;
+        self.charge_and_check(BIND_CALL_METERING + length as u64 * BIND_CALL_PER_ARG)?;
+        let mut next = self.reserve_scratch(length)?;
+        next.extend_from_slice(&self.bound_functions[&f].args);
+        next.extend_from_slice(args);
+        if self.same_value(*new_target, *func) {
+            *new_target = Slot::of(Kind::Reference, Payload::Reference(target));
+        }
+        *func = Slot::of(Kind::Reference, Payload::Reference(target));
+        Ok(next)
+    }
+
     /// The loop of [`Self::construct_value`].
     #[inline(always)]
     fn construct_value_turns(
@@ -626,13 +658,22 @@ impl Interp {
         held: &mut usize,
     ) -> Result<Slot, Step> {
         let mut func = func;
+        let mut new_target = new_target;
+        // A bound function's construct rebuilds the argument list.
+        let mut bound_args: Option<Vec<Slot>> = None;
         let f = loop {
+            let args = bound_args.as_deref().unwrap_or(args);
             let f = match func.value {
                 Payload::Reference(f) if func.kind == Kind::Reference => f,
                 _ => return Err(self.catchable_type_error_msg("new: not a constructor".into())),
             };
             if !self.is_constructor_value(func) {
                 return Err(self.catchable_type_error_msg("new: not a constructor".into()));
+            }
+            if self.bound_functions.contains_key(&f) {
+                let next = self.bound_construct_step(f, &mut func, &mut new_target, args)?;
+                bound_args = Some(next);
+                continue;
             }
             if !self.proxies.contains_key(&f) {
                 break f;
@@ -645,6 +686,7 @@ impl Interp {
                 ProxyStep::Done(result) => return Ok(result),
             }
         };
+        let args = bound_args.as_deref().unwrap_or(args);
         if let Some(n) = self.native_of(f) {
             let target = match new_target.value {
                 Payload::Reference(target) if new_target.kind == Kind::Reference => target,
