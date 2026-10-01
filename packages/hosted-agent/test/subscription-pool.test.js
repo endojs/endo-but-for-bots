@@ -343,20 +343,18 @@ test('a pool keeps a session where it was served while warm, and hands it over w
   t.is(kept.at(-1).refusals.home.untilMs, at('2026-09-20T14:00:00.000Z'));
   // Another session sees the same refusal.
   t.deepEqual(pool.forSession('s2').select(), ['work']);
-  t.true(pool.standings().find(entry => entry.id === 'home').blocked);
   const drained = kept.at(-1);
   t.like(drained.refusals.home, { sinceMs: clock, dated: true });
 
   // The provider says otherwise before the time it named: a reading taken
   // after the refusal shows the window open again. The newer word wins, the
-  // mark goes and is not kept, and status agrees with selection.
+  // mark goes and is not kept by the production selection path.
   clock += 60_000;
   readings.home = limits([weekly(0.2, '2026-09-20T14:00:00.000Z')], {
     observedAt: new Date(clock).toISOString(),
   });
-  t.false(pool.standings().find(entry => entry.id === 'home').blocked);
-  t.deepEqual(kept.at(-1).refusals, {});
   t.deepEqual(pool.forSession('s3').select(), ['home', 'work']);
+  t.deepEqual(kept.at(-1).refusals, {});
 
   // After a restart the drained account is not retried on a reading from
   // before its refusal, and the session is still judged warm where it was.
@@ -374,9 +372,6 @@ test('a pool keeps a session where it was served while warm, and hands it over w
   // Once its reset time has passed it is back in the running.
   clock = at('2026-09-20T14:00:01.000Z');
   t.deepEqual(revived.forSession('s1').select(), ['work', 'home']);
-  // A deleted session leaves no record.
-  pool.forget('s1');
-  t.false('s1' in kept.at(-1).sessions);
 });
 
 test('a raw reading, as a broker holds it, stands the same as a normalized one', t => {

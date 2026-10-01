@@ -696,47 +696,6 @@ export const makeSubscriptionPool = ({
       },
     });
 
-  return harden({
-    forSession,
-    /**
-     * A session is gone: its record is not kept. @param {string} sessionId
-     * @param sessionId
-     */
-    forget: sessionId => {
-      sessions.delete(sessionId);
-      if (kept.delete(sessionId)) save();
-    },
-    /** Where every member stands now, for status. */
-    standings: () => {
-      const nowMs = now();
-      return harden(
-        members().map(member => {
-          const reading = readingOf(member.id);
-          const standing = standingOf(reading, nowMs);
-          // Status tells the same story as selection: a mark a newer reading
-          // has outranked is not reported, nor kept.
-          const refused = refusalAgainstReading({
-            memberId: member.id,
-            reading,
-            standing,
-            nowMs,
-            refusedUntil: marks.blockedUntil,
-            refusalSupersededBy: marks.supersededBy,
-          });
-          return {
-            ...member,
-            ...standing,
-            blocked: standing.blocked || refused !== null,
-            blockedUntilMs:
-              refused !== null &&
-              (standing.blockedUntilMs === null ||
-                refused > standing.blockedUntilMs)
-                ? refused
-                : standing.blockedUntilMs,
-          };
-        }),
-      );
-    },
-  });
+  return harden({ forSession });
 };
 harden(makeSubscriptionPool);

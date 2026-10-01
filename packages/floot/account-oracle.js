@@ -10,7 +10,7 @@
  *
  * Its namespace may hold `account-profile` (the operator's declared plan,
  * quota and price list) and `account-source` (a capability with `observe()`,
- * and optionally `watch()` and `refresh()`), and the journal of what was
+ * `watch()` and `refresh()`), and the journal of what was
  * observed. See
  * `@endo/hosted-agent/account-oracle-module.js`.
  */

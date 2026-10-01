@@ -277,8 +277,21 @@ The source review does not establish that either branch is dead.
   Hosted types, scoped ESLint, operator syntax and formatting pass.
   Existing pins and persisted authority are unchanged; live Podman probes were
   not run and this source cleanup is not deployed.
-- **SB-02 through SB-04 and SB-08 pending:** the operator authorizes removing
-  the alternate public/operator APIs after in-repository caller migration.
+- **SB-02 through SB-04 done:** removed unused pool `forget`/`standings`, the
+  old-broker missing-method-to-empty-list fallback, and observe-only account
+  source negotiation.
+  Pool selection, refusal persistence, stale-list handling and absent-source
+  fallback remain; current account sources expose observe, watch and refresh.
+  Regression tests exercise the production selection and active-refresh paths,
+  and distinguish an unavailable broker from an explicit empty list.
+  This removes 69 source lines; the committed count after this slice is 42,612.
+  Focused tests pass: 32 pool/list/oracle/source tests; independent review reruns
+  51 pool/list/oracle/setup tests successfully.
+  The full shared suite above includes this slice; hosted types and scoped ESLint pass.
+  No stored credential, renewal owner, journal format or release pin changes;
+  not deployed.
+- **SB-08 pending:** the operator authorizes removing the alternate
+  identity-only persistence API after in-repository caller migration.
   No compatibility shim or replacement framework is required.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
