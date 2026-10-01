@@ -24,6 +24,9 @@ read/stdin failures, delayed admission, and termination refusal.
 Durable environment provisioning, independent egress composition, and live
 Fae/Floot/two-daemon acceptance remain to be implemented.
 No new native recovery mechanism or deployment is included in these slices.
+The next implementation adds a Floot development preset, Fae inference through
+the existing Codex subscription pool, and durable Fae context compaction.
+These are authorized work, not implemented or deployed capabilities.
 Focused factory, native-factory, ownership, lifecycle, and runtime suites pass
 78 tests in each of the four SES configurations; package types and ESLint pass
 with warnings, and root documentation builds with 0 errors and 180 warnings.
@@ -276,9 +279,34 @@ do not copy a native supervisor into the environment caplet.
 Failed or uncertain cleanup keeps the environment fenced, with operator-assisted
 cleanup where needed; this does not select process-loss recovery from #1323.
 
+### Formula collection and permanent cleanup
+
+Permanent collection is distinct from cancelling a native incarnation.
+Endo's collector currently cancels live controllers before reclaiming formula
+records and daemon-owned scratch mounts; the worker Context exposes disposal
+hooks for cancellation, not a separate permanent-collection hook.
+The sandbox factory observes cancellation and closes its slices, but those
+observers alone do not give the collector an acknowledged per-slice cleanup barrier.
+Individual slices are not independently durable formulas today.
+Do not claim a complete GC integration from the existing shutdown path.
+
+The durable environment and independently revivable Shell facet must retain each
+other's required dependencies so a retained Shell keeps its environment alive.
+After the last durable root is removed, collection must close the environment and
+dispose only its owned development storage, while cancellation preserves the recipe
+and storage for reconstruction.
+The integration needs an acknowledged collection cleanup obligation that cannot
+vanish before native disposal is proved; failures retain cleanup evidence and
+storage rather than reporting successful collection.
+Determine the narrow daemon hook required before native provisioning lands, using
+existing formula collection and ownership mechanisms rather than a new GC platform.
+Test collection of an active environment, a dormant environment, a retained Shell,
+and failed cleanup separately from explicit session deletion and restart.
+
 These constraints need formula-backed tests for passive lookup, exact dependency
 retention after name rebinding, stop during acquisition, failed cleanup, and
-graceful restart before environment provisioning is described as complete.
+graceful restart and permanent collection before environment provisioning is
+described as complete.
 
 ## Network and development storage
 
@@ -318,6 +346,96 @@ Before deploying persistent managed environments, reconcile these sweeps with ex
 ownership and storage retention; a matching name alone is not adoption or cleanup proof.
 This is host integration work, not a requirement to expose host-specific service management
 through the portable shell.
+
+## Floot development preset and Fae inference
+
+Agent execution, inference, and POSIX execution are independent choices.
+A development session should use Fae's agent loop with the Codex subscription
+pool while holding a Shell capability for its own Podman environment.
+Selecting that pool does not select the Codex CLI harness.
+In Floot this means its existing direct-agent loop, Fae tools, and shared turn
+machinery, not replacing that loop with the standalone Fae inbox driver.
+Floot keeps its effect journal as conversation owner; standalone Fae keeps its
+conversation tree.
+Share the provider adapter and equivalent compaction mechanics, not a second
+conversation owner inside one session.
+
+The new development preset provisions one environment and puts its public
+Shell in the session inventory as `shell`.
+Floot retains the administration facet; the model receives neither environment
+destruction authority, a Podman socket, nor inference credentials.
+Use the existing Shell tool projection with an unambiguous `runCommand` name:
+Floot's `exec` already means JavaScript capability evaluation.
+File tools and commands must share the same workspace view.
+Do not fall back to Fae's host-local command executor when a supplied Shell fails.
+
+Keep the shared development image immutable and give each session owned native
+storage for its home, installed tools, caches, and build output.
+Every operation container mounts that same storage.
+User-space tools therefore survive subsequent commands and graceful restart;
+operation-local tmpfs and the 9P source mount are not installation targets.
+Stop preserves storage.
+Deletion explicitly disposes session-owned storage after acknowledged cleanup,
+without deleting shared or adopted workspaces.
+An interrupted command is reported as interrupted or unknown, never replayed.
+Pin the actual environment recipe and dependencies, rather than reinterpreting
+an edited preset catalog when a session is reconstructed.
+
+Derive command network settings from the environment, not the inference backend.
+Compose the existing managed public HTTP/HTTPS egress without a fake provider
+or credentialed broker listener.
+Fence execution before changing the network configuration and preserve storage.
+Reconcile Tokyo's native cleanup sweeps with explicit retained ownership before
+deployment; this does not add systemd to the portable Shell interface.
+
+### Codex subscription provider adapter
+
+The existing Subscription exposes `openEndpoint` for inference without a listener.
+Fae should use a local provider adapter over this eventual-send capability.
+Reuse the current pool's account routing, renewal owners, model catalog, capacity
+readings, and optional bounded shares; do not create a second credential owner.
+Retain the subscription dependency, model, reasoning option, and stable session
+identity as the recipe, not a live endpoint or a credential.
+Acquire endpoints lazily and revoke them on cancellation or disposal.
+
+Translate dialogue, tools, and tool outcomes into Responses requests, with
+non-stored streaming responses as required by the current subscription policy.
+Decode text, complete tool calls, terminal errors, usage, and opaque continuation
+items; do not flatten backend-specific context into dialogue.
+Reject malformed, truncated, incomplete, or unsuccessful streams before exposing
+tool execution, and do not blindly repeat uncertain inference.
+Use the same adapter in standalone Fae and Floot's direct-agent provider path.
+The UI must distinguish Fae using the Codex pool from the hosted Codex CLI agent.
+Model and reasoning choices come from the pool's catalog; live Codex acceptance
+uses the catalog's Luna model.
+
+### Fae context compaction
+
+The user has lifted the earlier hold on Fae compaction.
+Long-running development sessions are not ready until compaction is exercised.
+Use the selected or actually serving model's context window and observed usage,
+with space reserved for the next reply and tools, rather than a fixed message cap.
+If the model's window is unknown, report that limitation instead of pretending
+that an arbitrary limit is its context capacity.
+
+Compact completed conversation segments into a continuation checkpoint.
+Preserve unresolved tool calls and outcomes verbatim, required call identifiers,
+and backend-specific opaque context required for valid continuation.
+The provider adapter owns its wire/context rules; the agent owns conversation
+selection and durable checkpoint publication.
+Share equivalent checkpoint validation and selection machinery with Floot rather
+than copying its conversation loop or creating another transcript authority.
+
+Persist a checkpoint's source boundary, summary, retained context, and provider
+identity before selecting it for the next inference request.
+Select it only when that boundary is on the current conversation branch and its
+provider/context identity is compatible with the next request.
+Late publication onto a different branch must not replace that branch's context.
+Keep the original transcript available and restore the selected checkpoint after
+restart without repeating compaction or tool effects merely to infer their status.
+Cancelled, failed, or invalid compaction must leave the previous context selected
+and expose a clear error.
+Compaction itself uses the granted inference capability and its existing budget.
 
 ## Dependencies and existing documentation
 
@@ -360,6 +478,23 @@ are reviewed; no additional critical-path duration is assigned.
    Add VM or adopted-machine implementations only when needed; a full VM provisioning API
    is not required to establish the portable Shell contract.
 
+The next delivery order is:
+
+1. Record this expanded plan, then implement and test the capability-backed
+   Codex provider adapter independently of environment provisioning.
+2. Wire the provider recipe into standalone Fae and Floot, preserving context,
+   cancellation, model discovery, and existing subscription ownership.
+3. Implement and exercise durable Fae compaction, including forced compaction
+   followed by tool use and daemon restart.
+4. Finish durable environment provisioning, native development storage, and
+   independent network policy under the constraints above.
+5. Add the development preset and run the combined Fae/Codex/Rust acceptance,
+   followed by remote Shell acceptance and Tokyo deployment.
+
+Use the adversarial subagent review loop before every commit.
+Update this document after each slice and distinguish unit tests, formula-backed
+tests, live acceptance, and deployment rather than treating one as proof of another.
+
 ## Acceptance and unresolved decisions
 
 Acceptance must cover create, inspect without activation, tool use, nonzero exit, spawn/read
@@ -370,6 +505,16 @@ and retained cleanup after failed acquisition or removal.
 Keep the existing cross-backend lifecycle and restoration matrix for Floot consumers.
 Existing focused factory/runtime and exo-shell tests passed during investigation;
 they do not establish the proposed integration, remote execution, or crash recovery.
+
+Provider acceptance covers a reply, multiple tool calls/results, malformed and
+failed streams, cancellation during endpoint acquisition and reading, account
+exhaustion, credential isolation, retained opaque context, and graceful restart.
+The combined development task installs Rust, compiles and tests a small program,
+reuses installed binaries across commands, observes a nonzero exit, cancels a
+command, exceeds the compaction threshold, restarts and continues, changes
+network policy, and deletes only its owned environment resources.
+Compaction tests also cover stale or late publication, wrong-branch selection,
+and incompatible provider restoration, leaving the previous valid selection intact.
 
 Before implementation, decide where a durable environment is minted and how its execution
 and administration facets are retained, whether process streaming is needed by Fae initially,
@@ -388,3 +533,12 @@ or automatic native-resource recovery project.
 > code. ideally the shell capability would not be specific to podman and would have
 > the same interface if its a vm or remote machine. consider the design and what it
 > would take to get us there
+
+> so in Floot id like to create a new preset that includes a new podman slice whose
+> shell can be placed in the inventory. it would need to work in such a way that the
+> session can install tools and use them. map out what needs to be done to make that
+> work. additionally, id like to use fae against the codex provider pool
+
+> ill just add we need a compaction mechanism on fae
+
+> document the plan, then enact the plan
