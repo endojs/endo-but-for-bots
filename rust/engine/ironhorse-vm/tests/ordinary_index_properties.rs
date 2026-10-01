@@ -299,6 +299,41 @@ fn a_promoted_index_keeps_its_place_among_the_integer_keys() {
     );
 }
 
+/// A function is an ordinary object for index storage, so `f[1] = 1` lands in
+/// the index store — which the function arm of `[[OwnPropertyKeys]]` never
+/// listed. The property was invisible to every key walk, and because
+/// `Object.freeze` and `harden` freeze what that walk reports, it stayed
+/// writable (and its referent unhardened) behind a `true` from
+/// `Object.isFrozen`.
+#[test]
+fn a_function_lists_and_freezes_its_stored_index_keys() {
+    let keyed = "var g = function () {}; g[3] = 1; g[1] = 1; \
+         Object.defineProperty(g, '2', {get: function () {}, enumerable: true}); g.z = 1;";
+    for (probe, expected) in [
+        ("Object.keys(g).join('+')", "1+2+3+z"),
+        (
+            "Reflect.ownKeys(g).join('+')",
+            "1+2+3+length+name+prototype+caller+z",
+        ),
+        (
+            "var r = []; for (var k in g) r.push(k); r.join('+')",
+            "1+2+3+z",
+        ),
+    ] {
+        assert_result(&format!("{keyed} {probe}"), expected);
+    }
+    assert_result(
+        "var f = function () {}; f[1] = 1; Object.freeze(f); f[1] = 2; \
+         [f[1], Object.isFrozen(f), Object.getOwnPropertyDescriptor(f, '1').writable].join('|')",
+        "1|true|false",
+    );
+    assert_result(
+        "var h = function () {}; h[0] = {}; harden(h); h[0].x = 1; \
+         [Object.isFrozen(h[0]), h[0].x].join('|')",
+        "true|",
+    );
+}
+
 /// Every "this index is provably absent" claim in the engine enumerates the
 /// storages an index can live in, and adding one falsifies each of them. These
 /// are the sites that got it wrong: the generic-Array answerability probe, the

@@ -1777,16 +1777,15 @@ impl Interp {
             let prototype_id = self.intern_static_key("prototype");
             let has_proto = self.ctor_prototype.contains_key(&inst);
             let ordinary_ids = self.ordered_own_key_ids(inst);
-            for &id in &ordinary_ids {
-                if !self.is_symbol_key_id(id)
-                    && self
-                        .scalar_key_text(id)
-                        .is_some_and(|name| string_to_index(&name).is_some())
-                {
-                    self.charge_builtin_work(1)?;
-                    let key = self.property_key_slot(id)?;
-                    self.push_prepaid_scratch(&mut out, key)?;
-                }
+            // A function is an ordinary object for index storage, so `f[1] = 1`
+            // lands in the index store. Listing only the index-NAMED slots
+            // here hid such a property from every key walk — and so from
+            // `Object.freeze`, which left it writable while `Object.isFrozen`
+            // answered `true`.
+            for index in self.own_index_keys(inst, &ordinary_ids) {
+                self.charge_builtin_work(1)?;
+                let key = self.read_key_slot(ReadKey::Index(index))?;
+                self.push_prepaid_scratch(&mut out, key)?;
             }
             self.charge_builtin_work(1)?;
             let key = self.property_key_slot(length_id)?;
@@ -1812,10 +1811,7 @@ impl Interp {
                     || id == name_id
                     || (has_proto && id == prototype_id)
                     || intrinsic_ids.contains(&id)
-                    || (!self.is_symbol_key_id(id)
-                        && self
-                            .scalar_key_text(id)
-                            .is_some_and(|name| string_to_index(&name).is_some()))
+                    || self.key_id_index(id).is_some()
                 {
                     continue;
                 }
