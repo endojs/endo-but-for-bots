@@ -3323,10 +3323,12 @@ __metadata:
   resolution: "@endo/sandbox@workspace:packages/sandbox"
   dependencies:
     "@endo/cancel": "workspace:^"
+    "@endo/captp": "workspace:^"
     "@endo/daemon": "workspace:^"
     "@endo/errors": "workspace:^"
     "@endo/eventual-send": "workspace:^"
     "@endo/exo": "workspace:^"
+    "@endo/exo-shell": "workspace:^"
     "@endo/exo-stream": "workspace:^"
     "@endo/init": "workspace:^"
     "@endo/lockdown": "workspace:^"
