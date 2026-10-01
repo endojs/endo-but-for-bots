@@ -447,6 +447,18 @@ pub struct Coder<'a, 'm> {
     /// the whole chain's value `undefined`; the `Chain` wrapper creates and
     /// places it. `None` outside a chain.
     chain_target: Option<usize>,
+    /// The stack level a short-circuit must land at on `chain_target`: one
+    /// above the chain's start for a value, two for a callee's
+    /// receiver/value pair (`fxChainNodeCodeThis`).
+    chain_level: i32,
+    /// The landing pads a short-circuit deeper than `chain_level` takes
+    /// instead: the swap path of each enclosing optional call whose callee
+    /// is being coded (`a?.b()?.()`), with the stack level it expects. XS
+    /// branches every link of a chain to `chain_target`, whatever the stack
+    /// holds; these keep each landing balanced. Those below
+    /// `chain_pads_floor` belong to an outer chain.
+    chain_pads: Vec<(usize, i32)>,
+    chain_pads_floor: usize,
     /// The atom table (`parser->symbolTable`), seeded with the built-ins.
     symbols: SymbolTable<'m>,
     tree: &'a ScopeTree,
@@ -537,6 +549,9 @@ impl<'a, 'm> Coder<'a, 'm> {
             first_continue_target: None,
             return_target: None,
             chain_target: None,
+            chain_level: 0,
+            chain_pads: Vec::new(),
+            chain_pads_floor: 0,
             symbols: SymbolTable::seeded(meter),
             tree,
             declaration_flags: tree
