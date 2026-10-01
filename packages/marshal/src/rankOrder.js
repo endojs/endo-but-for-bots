@@ -233,6 +233,9 @@ const comparatorMirrorImages = new WeakMap();
 export const makeComparatorKit = (compareRemotables = (_x, _y) => NaN) => {
   /** @type {PartialCompare} */
   const comparator = (left, right) => {
+    // Identical operands are equal before their pass style is consulted, so a
+    // value without a rank, such as a SturdyRef, still compares equal to
+    // itself.
     if (sameValueZero(left, right)) {
       return 0;
     }
