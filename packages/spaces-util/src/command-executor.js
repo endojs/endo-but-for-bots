@@ -160,7 +160,7 @@ export const createCommandExecutor = ({
           const { messageNumber, petName } = params;
           await E(powers).resolve(
             BigInt(/** @type {number} */ (messageNumber)),
-            String(petName).split('/'),
+            [String(petName)],
           );
           return {
             success: true,
@@ -203,7 +203,7 @@ export const createCommandExecutor = ({
             await E(/** @type {CommandChannelRef} */ (channelRef)).post(
               strings,
               edgeNames,
-              petNames.map(petName => petName.split('/')),
+              petNames.map(petName => [petName]),
               String(messageNumber),
               resolvedIds,
             );
@@ -218,7 +218,7 @@ export const createCommandExecutor = ({
             BigInt(/** @type {number} */ (messageNumber)),
             strings,
             edgeNames,
-            petNames.map(petName => petName.split('/')),
+            petNames.map(petName => [petName]),
           );
           return {
             success: true,
@@ -286,13 +286,13 @@ export const createCommandExecutor = ({
           for (const pair of /** @type {Array<{codeName: string, petName: string}>} */ (
             bindingPairs
           )) {
-            bindings[pair.codeName] = pair.petName.split('/');
+            bindings[pair.codeName] = [pair.petName];
           }
           await E(powers).endow(
             BigInt(/** @type {number} */ (messageNumber)),
             bindings,
-            String(workerName).split('/'),
-            resultName ? String(resultName).split('/') : undefined,
+            [String(workerName)],
+            resultName ? [String(resultName)] : undefined,
           );
           return {
             success: true,
@@ -325,7 +325,7 @@ export const createCommandExecutor = ({
           let result;
           try {
             result = await E(powers).evaluate(
-              String(workerName).split('/'),
+              [String(workerName)],
               String(source),
               codeNames,
               petNamePaths,
@@ -622,9 +622,7 @@ export const createCommandExecutor = ({
 
           // Inbox mode: use host invite
           console.log(`[Chat] Creating invitation for "${guestName}"...`);
-          const invitation = await E(powers).invite(
-            String(guestName).split('/'),
-          );
+          const invitation = await E(powers).invite([String(guestName)]);
 
           if (delivery === 'inventory') {
             console.log(
@@ -652,10 +650,9 @@ export const createCommandExecutor = ({
           console.log(
             `[Chat] Accepting invitation for "${guestName}" from ${String(locator).slice(0, 40)}...`,
           );
-          const accepted = E(powers).accept(
-            String(locator),
-            String(guestName).split('/'),
-          );
+          const accepted = E(powers).accept(String(locator), [
+            String(guestName),
+          ]);
           /** @type {ReturnType<typeof setTimeout> | undefined} */
           let timeoutId;
           const timeout = new Promise((_, reject) => {
@@ -709,10 +706,7 @@ export const createCommandExecutor = ({
           const { locator, petName } = params;
           const petNameStr = String(petName);
           console.log(`[Chat] Adopting from locator as "${petNameStr}"...`);
-          await E(powers).adoptFromLocator(
-            String(locator),
-            petNameStr.split('/'),
-          );
+          await E(powers).adoptFromLocator(String(locator), [petNameStr]);
           return {
             success: true,
             message: `Adopted as "${petNameStr}" from locator`,
@@ -882,8 +876,8 @@ export const createCommandExecutor = ({
         case 'mkhost':
         case 'host': {
           const { handleName, agentName } = params;
-          await E(powers).provideHost(String(handleName).split('/'), {
-            agentName: String(agentName).split('/'),
+          await E(powers).provideHost([String(handleName)], {
+            agentName: [String(agentName)],
           });
           return { success: true, message: `Host "${agentName}" created` };
         }
@@ -891,8 +885,8 @@ export const createCommandExecutor = ({
         case 'mkguest':
         case 'guest': {
           const { handleName, agentName } = params;
-          await E(powers).provideGuest(String(handleName).split('/'), {
-            agentName: String(agentName).split('/'),
+          await E(powers).provideGuest([String(handleName)], {
+            agentName: [String(agentName)],
           });
           return { success: true, message: `Guest "${agentName}" created` };
         }

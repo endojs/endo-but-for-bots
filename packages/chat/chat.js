@@ -1522,7 +1522,7 @@ const bodyComponent = (
         /** @type {string[]} */
         const sendEdgeNames = [edgeName];
         /** @type {string[][]} */
-        const sendPetNames = [channelPetName.split('/')];
+        const sendPetNames = [[channelPetName]];
 
         if (recap.edgeNames.length > 0) {
           // String after the channel ref: separator + recap
@@ -1538,7 +1538,7 @@ const bodyComponent = (
             }
             usedEdgeNames.add(recapEdge);
             sendEdgeNames.push(recapEdge);
-            sendPetNames.push(recap.petNames[ri].split('/'));
+            sendPetNames.push([recap.petNames[ri]]);
             sendStrings.push(recap.strings[ri + 1] || '');
           }
           sendStrings[sendStrings.length - 1] += instructions;
@@ -1550,7 +1550,7 @@ const bodyComponent = (
         }
 
         await E(/** @type {ERef<EndoHost>} */ (resolvedPowers)).send(
-          petName.split('/'),
+          [petName],
           sendStrings,
           sendEdgeNames,
           sendPetNames,
