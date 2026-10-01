@@ -251,6 +251,7 @@ pub const ENGINE_INVARIANT_LABELS: &[&str] = &[
     "add:stack-underflow",
     "apply:unexpected",
     "arithmetic:stack-underflow",
+    "array_index_set:defer",
     "async-generator:no-active-request",
     "async-generator:no-frame",
     "async-generator:non-boundary-return",

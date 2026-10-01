@@ -460,6 +460,20 @@ enum ProtoAccessorKey {
     WellKnownSymbol(&'static str),
 }
 
+/// Where [`Interp::index_set_walk`] leaves an index write.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IndexSetWalk {
+    /// A setter or a Proxy's `set` trap decided, or a TypedArray took no
+    /// element (`true`), or a missing setter or a non-writable value rejected
+    /// the write (`false`).
+    Done(bool),
+    /// No inherited property decides: the receiver creates or updates its own.
+    Create,
+    /// The receiver is a TypedArray reached on its own chain, whose element
+    /// `[[Set]]` the caller runs by name.
+    Defer,
+}
+
 /// Result of writing through XS's exotic closure-environment behavior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EnvironmentSet {
