@@ -75,10 +75,12 @@ for (const serializeBodyFormat of /** @type {const} */ ([
     const p = Promise.resolve();
     const capData = toCapData(harden([live, ref, p]));
     t.deepEqual(capData.slots, ['remotable:0', 'sturdyRef:1', 'promise:2']);
-    const [dLive, dRef, dP] = /** @type {any} */ (fromCapData(capData));
-    t.is(dLive, live);
-    t.is(dRef, ref);
-    t.is(dP, p);
+    const [decodedLive, decodedRef, decodedPromise] = /** @type {any} */ (
+      fromCapData(capData)
+    );
+    t.is(decodedLive, live);
+    t.is(decodedRef, ref);
+    t.is(decodedPromise, p);
   });
 
   test(`${serializeBodyFormat} rejects a non-SturdyRef in a sturdyRef slot`, t => {
@@ -121,6 +123,41 @@ test('a slot decoded as a remotable cannot be reused as a sturdyRef', t => {
     },
   );
 });
+
+// Every ordered pair of slot kinds that includes a SturdyRef, since the
+// decoder's slot cache is keyed only by index and shared among the kinds.
+{
+  const smallcapsEncodings = {
+    remotable: '"$0.Alleged: Oscar"',
+    promise: '"&0"',
+    sturdyRef: `"'0"`,
+  };
+  const makeSlotValue = kind => {
+    const { ref, live } = makeRef('Oscar');
+    if (kind === 'remotable') return live;
+    if (kind === 'promise') return harden(Promise.resolve());
+    return ref;
+  };
+  const kinds = Object.keys(smallcapsEncodings);
+  const pairs = kinds.flatMap(first =>
+    kinds
+      .filter(second => second !== first)
+      .filter(second => first === 'sturdyRef' || second === 'sturdyRef')
+      .map(second => [first, second]),
+  );
+  for (const [first, second] of pairs) {
+    test(`smallcaps cannot reuse a ${first} slot as a ${second}`, t => {
+      const value = makeSlotValue(first);
+      const { fromCapData } = makeMarshal(undefined, () => value, {
+        serializeBodyFormat: 'smallcaps',
+      });
+      const body = `#[${smallcapsEncodings[first]},${smallcapsEncodings[second]}]`;
+      t.throws(() => fromCapData({ body, slots: [0] }), {
+        message: new RegExp(`must return a ${second}`),
+      });
+    });
+  }
+}
 
 test('capdata cannot reuse a sturdyRef slot as a plain slot', t => {
   const { ref } = makeRef('Mallory');
