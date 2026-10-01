@@ -9,6 +9,10 @@ import { iterateReader } from '@endo/exo-stream/iterate-reader.js';
 import { Far } from '@endo/pass-style';
 import { makePromiseKit } from '@endo/promise-kit';
 import {
+  planContextCompaction,
+  summarizeContext,
+} from '@endo/lal/providers/index.js';
+import {
   makeConversationTree,
   makeEndoPetstoreBackend,
 } from '@endo/conversation-tree';
@@ -199,6 +203,8 @@ Example: if a message says "Here is @counter for you", adopt it:
  *   token afresh for each turn, so a rotated secret reaches a running agent and
  *   a revoked one stops it. Absent when the caller injected a built provider.
  * @param {string} [options.sessionId] - Stable pool identity, required for subscriptions.
+ * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
+ * @param {string} [options.providerIdentity] Locator of the exact retained provider recipe.
  * @returns {Promise<void>}
  */
 export const spawnWorkerLoop = async (
@@ -206,7 +212,15 @@ export const spawnWorkerLoop = async (
   context,
   providerConfig,
   systemPrompt,
-  { spawner, timers, provideAuthToken, delegatedPrompt, sessionId } = {},
+  {
+    spawner,
+    timers,
+    provideAuthToken,
+    delegatedPrompt,
+    sessionId,
+    forceCompaction = false,
+    providerIdentity,
+  } = {},
 ) => {
   /**
    * The agent's cancellation promise, boxed.
@@ -462,6 +476,8 @@ export const spawnWorkerLoop = async (
    */
   const runAgenticLoop = async (initialSchemas, initialToolMap, leafNodeId) => {
     let toolWrite;
+    let responseUsage;
+    let forced = false;
     const firstTools = harden({
       schemas: initialSchemas,
       toolMap: initialToolMap,
@@ -472,16 +488,54 @@ export const spawnWorkerLoop = async (
       maxRounds: MAX_TOOL_ROUNDS,
       getTools: round =>
         round === 0 ? firstTools : discoverTools(powers, localTools),
-      getContext: async currentLeafId => {
-        const providerContext = await conversation.getContext(currentLeafId);
+      getContext: async (currentLeafId, tools) => {
+        let providerContext = await conversation.getContext(currentLeafId);
+        const reading = await conversation.getLatestUsage(currentLeafId);
+        const plan = planContextCompaction(providerContext, {
+          tools: tools.schemas,
+          // Only caller-supplied exact next-model catalog metadata is a
+          // capacity guarantee. A router's previous served model is not.
+          windowTokens: providerConfig.contextLength ?? 0,
+          usedTokens: reading?.context?.usedTokens ?? 0,
+          force:
+            forceCompaction &&
+            !forced &&
+            Number(
+              providerContext.filter(item => item.role === 'user').length,
+            ) >= 3,
+        });
+        if (plan) {
+          const checkpoint = await summarizeContext(
+            plan,
+            messages => chat(messages, []),
+            loopAbort.signal,
+          );
+          loopAbort.signal.throwIfAborted();
+          const write = retainWrite();
+          try {
+            const node = await conversation.appendCheckpoint(
+              currentLeafId,
+              checkpoint.summary,
+              checkpoint.retained,
+            );
+            currentLeafId = node.id;
+            providerContext = checkpoint.context;
+            forced = true;
+            write.resolve(undefined);
+          } catch (error) {
+            write.reject(error);
+            throw error;
+          }
+        }
         console.log(
           `[fae] context has ${providerContext.length} messages, sending to LLM`,
         );
-        return providerContext;
+        return harden({ leafId: currentLeafId, messages: providerContext });
       },
       invoke: async (providerContext, tools) => {
         const response = await chat(providerContext, tools.schemas);
         loopAbort.signal.throwIfAborted();
+        responseUsage = response.usage;
         const responseMessage = response.message;
         if (responseMessage) {
           const rm = /** @type {any} */ (responseMessage);
@@ -519,10 +573,11 @@ export const spawnWorkerLoop = async (
       },
       commitStep: async (currentLeafId, message, results) => {
         try {
-          const node = await conversation.append(currentLeafId, [
-            message,
-            ...results,
-          ]);
+          const node = await conversation.append(
+            currentLeafId,
+            [message, ...results],
+            { providerUsage: responseUsage ?? null },
+          );
           toolWrite.resolve(undefined);
           return node.id;
         } catch (error) {
@@ -533,7 +588,9 @@ export const spawnWorkerLoop = async (
       commitFinal: async (currentLeafId, message) => {
         const write = retainWrite();
         try {
-          const node = await conversation.append(currentLeafId, [message]);
+          const node = await conversation.append(currentLeafId, [message], {
+            providerUsage: responseUsage ?? null,
+          });
           write.resolve(undefined);
           if (message.content) console.log(`[fae] ${message.content}`);
           return node.id;
@@ -638,6 +695,13 @@ export const spawnWorkerLoop = async (
         powers,
         tree,
         prompt: effectivePrompt,
+        providerIdentity: JSON.stringify([
+          'common-context-v1',
+          providerConfig.kind ?? 'http',
+          providerConfig.host ?? '',
+          providerConfig.model ?? 'injected',
+          providerIdentity ?? 'borrowed',
+        ]),
       });
       startup.resolve(undefined);
     } catch (error) {

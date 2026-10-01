@@ -46,6 +46,44 @@ const options = harden({
   modelId: 'sol',
 });
 
+test('compaction publication compares the captured journal cut atomically', async t => {
+  const f = fixture();
+  const journal = makeTurnJournal(f.powers);
+  const id = await journal.begin(options);
+  await journal.dispatch(id);
+  const { frontier } = await journal.readView();
+  await journal.recordTranscript(id, '0', {
+    kind: 'message',
+    role: 'user',
+    content: 'newer evidence',
+  });
+  await t.throwsAsync(
+    journal.recordTranscript(
+      id,
+      '1',
+      {
+        kind: 'compaction',
+        summary: 'stale',
+        retainedTail: [],
+      },
+      frontier,
+    ),
+    { message: /Compaction source changed/ },
+  );
+  t.is((await journal.get(id)).transcript.length, 1);
+  await journal.recordTranscript(
+    id,
+    '1',
+    {
+      kind: 'compaction',
+      summary: 'current',
+      retainedTail: [],
+    },
+    (await journal.readView()).frontier,
+  );
+  t.is((await journal.get(id)).transcript.length, 2);
+});
+
 test('admission and dispatch are distinct durable transitions', async t => {
   const f = fixture();
   const journal = makeTurnJournal(f.powers);

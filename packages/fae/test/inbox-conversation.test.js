@@ -26,8 +26,8 @@ const makeFixture = () => {
   return {
     tree,
     records,
-    restore: (prompt = 'prompt') =>
-      restoreInboxConversation({ powers, tree, prompt }),
+    restore: (prompt = 'prompt', providerIdentity = 'injected') =>
+      restoreInboxConversation({ powers, tree, prompt, providerIdentity }),
     refuse: () => {
       refused = true;
     },
@@ -189,4 +189,106 @@ test('missing, cyclic and wrong-root selections fail closed', async t => {
       message: /inbox conversation (node|branch|selection)/i,
     });
   }
+});
+
+test('a selected checkpoint restores context without losing transcript or receipts', async t => {
+  const f = makeFixture();
+  const conversation = await f.restore();
+  const user = await conversation.append(
+    conversation.getLeafId(),
+    [{ role: 'user', content: 'older long task' }],
+    { inboundNumber: 8n },
+  );
+  const answer = await conversation.append(
+    user.id,
+    [{ role: 'assistant', content: 'done' }],
+    { providerUsage: { context: { usedTokens: 500 } } },
+  );
+  const tail = [{ role: 'user', content: 'continue' }];
+  const checkpoint = await conversation.appendCheckpoint(
+    answer.id,
+    'completed older task',
+    tail,
+  );
+  const restored = await f.restore();
+  t.deepEqual(await restored.getContext(checkpoint.id), [
+    { role: 'system', content: 'prompt' },
+    { role: 'assistant', content: 'completed older task' },
+    ...tail,
+  ]);
+  t.is(await restored.getLatestUsage(checkpoint.id), undefined);
+  t.true(restored.hasAdmission(8n));
+  t.truthy(await f.tree.getNode(answer.id));
+  const next = await restored.append(checkpoint.id, [
+    { role: 'assistant', content: 'next' },
+  ]);
+  t.is((await restored.getContext(next.id)).at(-1).content, 'next');
+});
+
+test('a missing latest usage reading invalidates older observations', async t => {
+  const f = makeFixture();
+  const conversation = await f.restore();
+  const old = await conversation.append(conversation.getLeafId(), [], {
+    providerUsage: { context: { usedTokens: 500 } },
+  });
+  const latest = await conversation.append(old.id, [], { providerUsage: null });
+  t.is(await conversation.getLatestUsage(latest.id), null);
+});
+
+test('an ambiguous checkpoint node write keeps the active turn fenced', async t => {
+  const f = makeFixture();
+  const tree = harden({
+    ...f.tree,
+    addNode: async (...args) => {
+      const node = await f.tree.addNode(...args);
+      if (args[2]?.compaction) throw Error('checkpoint acknowledgement lost');
+      return node;
+    },
+  });
+  const powers = Far('SelectionStore', {
+    has: name => f.records.has(name),
+    lookup: name => f.records.get(name),
+    storeValue: (value, [name]) => f.records.set(name, value),
+  });
+  const conversation = await restoreInboxConversation({
+    powers,
+    tree,
+    prompt: 'prompt',
+  });
+  await conversation.beginTurn();
+  await t.throwsAsync(
+    () =>
+      conversation.appendCheckpoint(conversation.getLeafId(), 'summary', []),
+    { message: /acknowledgement lost/ },
+  );
+  await t.throwsAsync(() => conversation.finishTurn(), {
+    message: /publication failed/,
+  });
+});
+
+test('a late checkpoint cannot rewind a newer descendant', async t => {
+  const f = makeFixture();
+  const conversation = await f.restore();
+  const source = conversation.getLeafId();
+  const descendant = await conversation.append(source, [
+    { role: 'user', content: 'newer' },
+  ]);
+  await t.throwsAsync(conversation.appendCheckpoint(source, 'late', []), {
+    message: /source changed/,
+  });
+  t.is(conversation.getLeafId(), descendant.id);
+});
+
+test('a checkpoint is incompatible with a replaced same-model provider recipe', async t => {
+  const f = makeFixture();
+  const first = await f.restore('prompt', 'responses-v1:luna:recipe-1');
+  const checkpoint = await first.appendCheckpoint(
+    first.getLeafId(),
+    'summary',
+    [{ role: 'user', content: 'continue' }],
+  );
+  const replaced = await f.restore('prompt', 'responses-v1:luna:recipe-2');
+  await t.throwsAsync(replaced.getContext(checkpoint.id), {
+    message: /Incompatible inbox compaction checkpoint/,
+  });
 });

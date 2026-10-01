@@ -39,6 +39,8 @@ import { resolveAuthToken } from '@endo/fae/src/credentials.js';
 import {
   makeSubscriptionResponsesProvider,
   assertSubscriptionResponsesRecipe,
+  planContextCompaction,
+  summarizeContext,
 } from '@endo/lal/providers/index.js';
 import { assertHostedBackendDescriptor } from '@endo/hosted-agent';
 import { makeAnthropicModelRead } from '@endo/hosted-agent/anthropic-model-read.js';
@@ -493,6 +495,8 @@ const provisionPresetObjects = async (
  * @param {{ setTimeout: typeof setTimeout, clearTimeout: typeof clearTimeout }} [options.timers]
  * @param {Map<string, any>} [options.extraTools] - Session-specific tools
  *   the factory built (see `makeFlootToolRegistry`).
+ * @param {number} [options.contextLength] Exact selected-model catalog reading.
+ * @param {boolean} [options.forceCompaction] Acceptance-only trigger.
  * @param {(kind: 'turn-started' | 'turn-settled' | 'turn-resolved', detail?: { input: string, from?: string }) => void} [options.onChange]
  *   Told when this session's turn records change, whoever started the turn —
  *   the UI, the mailbox, a queued submission. It is how a view learns that the
@@ -541,6 +545,8 @@ export const makeStreamingAgent = async (
     timers,
     maxToolRounds = DEFAULT_MAX_TOOL_ROUNDS,
     extraTools,
+    contextLength,
+    forceCompaction = false,
     journalPowers,
     onChange,
   } = { journalPowers: undefined },
@@ -984,12 +990,33 @@ export const makeStreamingAgent = async (
     const stagedMessages = [...inputMessages];
     // Publish the ordered prefix before admitting tool effects.
     let transcriptOrdinal = 0;
+    let inputRecorded = false;
+    let compactedContext;
+    let forced = false;
+    let lastRequestContext;
+    let requestObservationInitialized = false;
+    const recordInput = async () => {
+      await turnJournal.dispatch(turnId);
+      if (signal?.aborted) throw Error('Floot turn aborted');
+      if (!inputRecorded) {
+        await recordProviderTranscript({
+          kind: 'message',
+          role: 'user',
+          content: text,
+        });
+        inputRecorded = true;
+      }
+    };
     /** @param {import('@endo/hosted-agent/transcript-records.js').TranscriptRecord} record */
-    const recordProviderTranscript = async record => {
+    const recordProviderTranscript = async (
+      record,
+      expectedFrontier = undefined,
+    ) => {
       await turnJournal.recordTranscript(
         turnId,
         `${transcriptOrdinal}`,
         record,
+        expectedFrontier,
       );
       transcriptOrdinal += 1;
     };
@@ -1016,21 +1043,93 @@ export const makeStreamingAgent = async (
         if (signal?.aborted) throw Error('Floot turn aborted');
         return toolRegistry.snapshot();
       },
-      getContext: async () => {
+      getContext: async (_leafId, tools) => {
+        await recordInput();
+        // Capture before hydration/summary. The serialized journal writer
+        // compares this cut atomically; newer evidence must not be hidden.
+        const { frontier, retained } = await turnJournal.readView();
         // Include prior failed/cancelled turns and their known effects, not just
         // successful turns. The active turn's staging stays separate.
         // Model context is not a UI history projection: the latter deliberately
         // carries previews. Hydrate the same full transcript hosted runners use.
-        const transcript = await getContextTranscript(turnId);
-        const path = transcriptToProviderMessages(
-          transcript,
-          runtime.providerFormat,
-        );
-        return [
-          { role: 'system', content: effectivePrompt },
-          ...path.filter(message => message.role !== 'system'),
-          ...stagedMessages,
-        ];
+        let context;
+        if (compactedContext) {
+          context = [...compactedContext, ...stagedMessages];
+        } else {
+          const transcript = await getContextTranscript(turnId);
+          const path = transcriptToProviderMessages(
+            transcript,
+            runtime.providerFormat,
+          );
+          context = [
+            { role: 'system', content: effectivePrompt },
+            ...path.filter(message => message.role !== 'system'),
+            ...stagedMessages,
+          ];
+          const latest = retained
+            .filter(item => item.turnId !== turnId)
+            .sort((a, b) => (BigInt(a.turnId) < BigInt(b.turnId) ? -1 : 1))
+            .at(-1);
+          if (!requestObservationInitialized) {
+            lastRequestContext = latest?.usage?.context;
+            requestObservationInitialized = true;
+          }
+        }
+        const plan = planContextCompaction(context, {
+          tools: tools.providerSchemas,
+          windowTokens: contextLength ?? 0,
+          usedTokens: lastRequestContext?.usedTokens ?? 0,
+          force:
+            forceCompaction &&
+            !forced &&
+            context.filter(item => item.role === 'user').length >= 3,
+        });
+        if (plan) {
+          writer.setPhase('compacting context');
+          const checkpoint = await summarizeContext(
+            plan,
+            async messages => {
+              const provider = await currentProvider();
+              let reported = false;
+              const charge = usage => {
+                const counts = { ...usage };
+                delete counts.context;
+                turnUsage = addUsage(turnUsage, counts);
+                activeJournalUsage = turnUsage;
+              };
+              const answer = await provider.chatStream(
+                messages,
+                [],
+                () => {},
+                signal,
+                usage => {
+                  // Summary cost counts, but this is not continuation occupancy.
+                  reported = true;
+                  charge(usage);
+                },
+              );
+              if (!reported && answer.usage) charge(answer.usage);
+              return answer;
+            },
+            signal,
+          );
+          if (signal?.aborted) throw Error('Floot turn aborted');
+          await recordProviderTranscript(
+            {
+              kind: 'compaction',
+              summary: checkpoint.summary,
+              retainedTail: projectTranscript(checkpoint.retained),
+            },
+            frontier,
+          );
+          compactedContext = checkpoint.context;
+          stagedMessages.splice(0);
+          lastRequestContext = undefined;
+          forced = true;
+          context = compactedContext;
+          writer.setPhase('thinking');
+        }
+        return harden({ leafId: turnId, messages: context });
       },
       invoke: async (context, tools, round) => {
         console.error(
@@ -1041,15 +1140,7 @@ export const makeStreamingAgent = async (
         const provider = await currentProvider();
         let answer;
         try {
-          await turnJournal.dispatch(turnId);
-          if (signal?.aborted) throw Error('Floot turn aborted');
-          if (transcriptOrdinal === 0) {
-            await recordProviderTranscript({
-              kind: 'message',
-              role: 'user',
-              content: text,
-            });
-          }
+          await recordInput();
           if (signal?.aborted) throw Error('Floot turn aborted');
           answer = await provider.chatStream(
             context,
@@ -1063,6 +1154,7 @@ export const makeStreamingAgent = async (
               // Providers can report usage before rejecting an unusable reply.
               // Notifications are incremental; a returned total is fallback only.
               usageReported = true;
+              lastRequestContext = roundUsage.context;
               turnUsage = addUsage(turnUsage, roundUsage);
               activeJournalUsage = turnUsage;
             },
@@ -1086,6 +1178,7 @@ export const makeStreamingAgent = async (
           throw error;
         }
         const { message, usage: roundUsage, servedBy } = answer;
+        if (!usageReported) lastRequestContext = roundUsage?.context;
         if (servedBy?.model || servedBy?.provider) {
           // Cut to what the journal accepts: a finish event it refused would
           // leave the turn pending and the session unable to begin another.
@@ -2543,6 +2636,21 @@ export const make = async (
               });
             } else {
               entry.subscriptionIds.push(account.subscriptionId);
+              // A pooled request can use any listed account. Unknown capacity
+              // on one route must not become another account's window claim.
+              const { contextLength, ...rest } = entry.model;
+              entry.model = {
+                ...rest,
+                ...(contextLength === undefined ||
+                model.contextLength === undefined
+                  ? {}
+                  : {
+                      contextLength: Math.min(
+                        contextLength,
+                        model.contextLength,
+                      ),
+                    }),
+              };
             }
           }
         }
@@ -3156,6 +3264,14 @@ export const make = async (
           }
           for (const entry of stored.sessions) {
             assertSessionIdentity(entry);
+            if (entry.contextLength !== undefined) {
+              (entry.backendId === 'provider' &&
+                typeof entry.contextLength === 'number' &&
+                Number.isInteger(entry.contextLength) &&
+                Number(entry.contextLength) > 0 &&
+                Number(entry.contextLength) <= 0xffff_ffff) ||
+                Fail`Invalid retained provider context window`;
+            }
             if (entry.backendId === 'fae-codex') {
               assertSubscriptionResponsesRecipe(entry.inferenceRecipe);
               (entry.inferenceRecipe.model === entry.modelId &&
@@ -4117,6 +4233,9 @@ export const make = async (
             nativeContextFormat,
             portableContextFallback,
             modelId: await sessionModelId(entry),
+            contextLength:
+              entry.inferenceRecipe?.contextLength ?? entry.contextLength,
+            forceCompaction: env?.FLOOT_FORCE_COMPACTION === 'true',
             reasoningEffort: entry?.reasoningEffort || '',
             onChange: (kind, detail) => {
               const watch = sessionWatches.get(id);
@@ -4868,8 +4987,19 @@ export const make = async (
     const backendId = options.backendId || 'provider';
     const modelId = selectedModel;
     let inferenceRecipe;
+    let contextLength;
     const providerConfig = await getProviderConfig().catch(() => undefined);
     const openRouter = providerConfig?.provider === 'openrouter';
+    if (backendId === 'provider') {
+      const effectiveModel = modelId;
+      // Auto routes name a router, not the model that will serve the request.
+      if (effectiveModel && !effectiveModel.startsWith('openrouter/')) {
+        const snapshot = await (await getProviderCatalog()).snapshot();
+        contextLength = snapshot.models.find(
+          model => model.id === effectiveModel,
+        )?.contextLength;
+      }
+    }
     if (
       backendId === 'provider' &&
       openRouter &&
@@ -5047,6 +5177,7 @@ export const make = async (
       backendId,
       modelId,
       ...(inferenceRecipe ? { inferenceRecipe } : {}),
+      ...(contextLength === undefined ? {} : { contextLength }),
       ...(backendId !== 'provider'
         ? {
             ...(options.reasoningEffort

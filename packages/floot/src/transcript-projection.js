@@ -215,6 +215,9 @@ export const transcriptToProviderMessages = (records, providerFormat) => {
           role: 'tool',
           tool_call_id: record.id,
           content: result?.content ?? UNKNOWN_TOOL_OUTCOME,
+          ...(!result || result.content === UNKNOWN_TOOL_OUTCOME
+            ? { outcomeUnknown: true }
+            : {}),
           ...(result?.failed === undefined ? {} : { failed: result.failed }),
         });
         // The exact assistant already includes this call; do not synthesize it.
@@ -238,6 +241,9 @@ export const transcriptToProviderMessages = (records, providerFormat) => {
         role: 'tool',
         tool_call_id: id,
         content: result?.content ?? UNKNOWN_TOOL_OUTCOME,
+        ...(!result || result.content === UNKNOWN_TOOL_OUTCOME
+          ? { outcomeUnknown: true }
+          : {}),
         ...(result?.failed === undefined ? {} : { failed: result.failed }),
       });
     }

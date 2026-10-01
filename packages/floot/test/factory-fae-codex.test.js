@@ -10,7 +10,11 @@ import { make } from '../agent.js';
 
 const world = (
   t,
-  { catalogState = 'current', endpointGate = undefined } = {},
+  {
+    catalogState = 'current',
+    endpointGate = undefined,
+    forceCompaction = false,
+  } = {},
 ) => {
   t.timeout(10_000);
   const requests = [];
@@ -78,7 +82,7 @@ const world = (
                 default: true,
                 defaultReasoningEffort: 'high',
                 reasoningEfforts: ['high'],
-                contextLength: 1000,
+                contextLength: 128_000,
               },
             ],
           },
@@ -134,7 +138,7 @@ const world = (
     for (const inbox of inboxes) inbox.close();
   });
   const hooks = [];
-  const makeFactory = () =>
+  const makeFactory = (force = forceCompaction) =>
     make(
       host,
       Far('Context', {
@@ -142,12 +146,13 @@ const world = (
           hooks.push(hook);
         },
       }),
+      { env: { FLOOT_FORCE_COMPACTION: String(force) } },
     );
   return {
     factory: makeFactory(),
-    restart: async () => {
+    restart: async (force = forceCompaction) => {
       await E(hooks.at(-1))();
-      return makeFactory();
+      return makeFactory(force);
     },
     close: () => E(hooks.at(-1))(),
     store,
@@ -166,7 +171,7 @@ test('Floot Fae Codex pins inference, preserves opaque journal context, and neve
     ),
   );
   const rows = await E(subject.factory).listModels('fae-codex');
-  t.is(rows[0].contextLength, 1000);
+  t.is(rows[0].contextLength, 128_000);
   await t.throwsAsync(
     E(subject.factory).createSession({
       backendId: 'fae-codex',
@@ -211,6 +216,58 @@ test('Floot Fae Codex pins inference, preserves opaque journal context, and neve
   );
   await E(restoredFactory).deleteSession(id);
   t.false((await E(restoredFactory).listSessions()).some(row => row.id === id));
+  await subject.close();
+});
+
+test('Fae Codex compaction is journal-owned, preserves opaque tail, and restores without summary replay', async t => {
+  const subject = world(t, { forceCompaction: true });
+  const session = await E(subject.factory).createSession({
+    backendId: 'fae-codex',
+    modelId: 'luna',
+  });
+  const { id } = await E(session).getInfo();
+  const old = 'completed old work '.repeat(500);
+  for (const input of [old, 'recent', 'continue']) {
+    const turn = await E(session).startTurn(input);
+    await E(turn).whenFinished();
+  }
+  t.is(subject.requests.length, 4);
+  t.is(subject.requests[2].tools?.length ?? 0, 0);
+  t.true(
+    subject.requests[2].input.some(
+      item => item.encrypted_content === 'opaque-1',
+    ),
+  );
+  t.false(JSON.stringify(subject.requests[3].input).includes(old));
+  t.true(
+    subject.requests[3].input.some(
+      item => item.encrypted_content === 'opaque-2',
+    ),
+  );
+  t.is(
+    subject.requests[3].input.filter(
+      item =>
+        item.role === 'user' &&
+        (item.content === 'continue' ||
+          (Array.isArray(item.content) &&
+            item.content.some(part => part.text === 'continue'))),
+    ).length,
+    1,
+  );
+  const history = await E(session).getHistory();
+  t.true(JSON.stringify(history).includes(old));
+  const factory = await subject.restart(false);
+  const restored = await E(factory).getSession(id);
+  const recall = await E(restored).startTurn('recall after compaction');
+  await E(recall).whenFinished();
+  t.is(subject.requests.length, 5);
+  t.false(JSON.stringify(subject.requests[4].input).includes(old));
+  t.true(
+    subject.requests[4].input.some(
+      item => item.encrypted_content === 'opaque-2',
+    ),
+  );
+  await E(factory).deleteSession(id);
   await subject.close();
 });
 

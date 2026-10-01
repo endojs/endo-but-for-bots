@@ -508,6 +508,7 @@ test.serial(
       backendId: 'provider',
       modelId: '',
     });
+    t.is(registryOf(world.hostStore).at(-1).contextLength, undefined);
     const first = await E(session).startTurn('First');
     await entered.promise;
     world.hostStore.set(
@@ -522,6 +523,7 @@ test.serial(
     await E(second).whenFinished();
     t.falsy((await E(second).getStatus()).error);
     t.deepEqual(models, ['vendor/old-default', 'vendor/new-default']);
+    t.is(registryOf(world.hostStore).at(-1).contextLength, undefined);
     const third = await E(session).startTurn('Third');
     await E(third).whenFinished();
     t.deepEqual(models, [

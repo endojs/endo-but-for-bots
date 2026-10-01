@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | **Created** | 2026-10-01 |
-| **Updated** | 2026-10-01 |
+| **Updated** | 2026-10-02 |
 | **Author** | kumavis (prompted) |
 | **Status** | In Progress |
 
@@ -80,8 +80,7 @@ the pool's petname is rebound; the same account/renewal owners serve both choice
 Registry validation rejects malformed recipes before guest acquisition.
 Factory tests cover passive creation, failed model/effort discovery, interrupted
 creation cleanup, retained opaque context and deletion.
-Context-window metadata integration, compaction, the development preset, live
-acceptance, and deployment remain pending.
+The development preset, live acceptance, and deployment remain pending.
 Floot's journal now carries validated per-assistant provider context. Responses
 restoration preserves complete output, encrypted reasoning and native call IDs,
 and checks dialogue/calls against their canonical records. These annotations do
@@ -91,9 +90,31 @@ remains Floot's only conversation authority.
 Pool selection is locally tested; live acceptance is not yet claimed.
 Automatic environment GC is a recorded design gap, not implementation scope for
 this PR; cleanup remains explicit on the administration facet.
-The Codex catalog currently omits context-window metadata; the adapter reports
-unknown (`0`) unless a caller supplies provider-observed catalog metadata.
-This slice does not claim provider-sized compaction or live pool acceptance.
+Shared Fae compaction now selects only older completed turns and retains the last
+two user turns, their complete tool groups and backend-specific context verbatim.
+Standalone checkpoints live in the existing conversation tree; Floot checkpoints
+live in its journal, not another transcript store.
+Publication checks the captured source head/frontier and provider identity before
+selecting a checkpoint; cancellation, ambiguous writes and stale summaries do not
+replace newer context.
+The common turn engine accepts an owner-selected context head before committing
+the next step, allowing compaction between tool rounds as well as between turns.
+The Codex catalog projects its optional `context_window` field.
+The minimum observed window across eligible pool routes is captured, or unknown
+if any route is unknown; fixed HTTP models may capture their catalog window.
+Unpinned HTTP models and OpenRouter auto routes retain no fixed capacity claim.
+No model size is invented when metadata is absent.
+Planning uses last-request occupancy and a conservative wire-byte heuristic
+(including tool schemas and opaque context), with 30% headroom.
+This can compact early; it is not a tokenizer or a provider-sized token estimate.
+An oversized recent tail or one large unfinished turn fails explicitly instead
+of dropping evidence.
+Original history remains available; restart restores the checkpoint without
+repeating summarization or tool effects.
+Focused tests cover forced compaction/continuation and factory reconstruction,
+unknown capacity, malformed summaries, recent opaque context, cancelled/stale
+publication and ambiguous checkpoint writes.
+Live pool/compaction acceptance is not yet claimed.
 No admitted inbox command or inference is replayed to discover its result.
 The delegation registry's closed-ask and unsolicited-sender routing remains
 process-local; published claimed-reply receipts prevent their replay, but an

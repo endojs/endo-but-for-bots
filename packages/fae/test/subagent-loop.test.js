@@ -1215,13 +1215,15 @@ test('the durable driver derives pool affinity from the retained agent locator w
     },
   });
   const driverPowers = Far('DriverPowers', {
+    lookupByLocator: locator => {
+      t.is(locator, locatorFor(HOST));
+      return harden({
+        kind: 'subscription-responses',
+        subscription,
+        model: 'test-luna',
+      });
+    },
     lookup: name => {
-      if (name === 'llm-provider')
-        return harden({
-          kind: 'subscription-responses',
-          subscription,
-          model: 'test-luna',
-        });
       if (name === 'agent') return mailbox.powers;
       throw Error(`Unexpected driver lookup ${name}`);
     },
@@ -1230,8 +1232,8 @@ test('the durable driver derives pool affinity from the retained agent locator w
       return false;
     },
     locate: name => {
-      t.is(name, 'agent');
-      return locatorFor(SELF);
+      t.true(['agent', 'llm-provider'].includes(name));
+      return locatorFor(name === 'agent' ? SELF : HOST);
     },
   });
   t.teardown(async () => {

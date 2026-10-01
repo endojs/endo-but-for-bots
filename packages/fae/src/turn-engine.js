@@ -15,7 +15,7 @@ import { Fail } from '@endo/errors';
  * @param {number} options.maxRounds
  * @param {AbortSignal} [options.signal] Fence late provider outcomes and further tool admission.
  * @param {(round: number) => Promise<any>} options.getTools
- * @param {(leafId: string) => Promise<readonly any[]>} options.getContext
+ * @param {(leafId: string, tools: any, round: number) => Promise<{leafId: string, messages: readonly any[]}>} options.getContext A selected context snapshot; checkpoint selection may advance the durable head.
  * @param {(context: readonly any[], tools: any, round: number) => Promise<{ message?: any }>} options.invoke
  * @param {(message: any) => readonly any[]} options.getToolCalls
  * @param {(calls: readonly any[], tools: any, round: number) => Promise<any>} options.runTools
@@ -44,10 +44,11 @@ export const runAgenticTurn = async ({
     const tools = await getTools(round);
     signal?.throwIfAborted();
     // eslint-disable-next-line no-await-in-loop
-    const context = await getContext(currentLeafId);
+    const snapshot = await getContext(currentLeafId, tools, round);
+    currentLeafId = snapshot.leafId;
     signal?.throwIfAborted();
     // eslint-disable-next-line no-await-in-loop
-    const outcome = await invoke(context, tools, round);
+    const outcome = await invoke(snapshot.messages, tools, round);
     signal?.throwIfAborted();
     if (!outcome.message) {
       return harden({

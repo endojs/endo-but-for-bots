@@ -19,8 +19,14 @@ const SELECTION_NAME = 'fae-conversation';
  * @param {any} options.powers
  * @param {ConversationTree} options.tree
  * @param {string} options.prompt
+ * @param {string} [options.providerIdentity] Exact inference/context selection.
  */
-export const restoreInboxConversation = async ({ powers, tree, prompt }) => {
+export const restoreInboxConversation = async ({
+  powers,
+  tree,
+  prompt,
+  providerIdentity = 'injected',
+}) => {
   const nodes = await tree.getNodes();
   /** @type {Set<bigint>} */
   const admittedNumbers = new Set();
@@ -38,6 +44,12 @@ export const restoreInboxConversation = async ({ powers, tree, prompt }) => {
   /** @type {{ rootId: string, leafId: string, turnActive: boolean }} */
   let selection;
   let publicationFailed = false;
+  let mutation = Promise.resolve();
+  const serialized = operation => {
+    const pending = mutation.then(operation);
+    mutation = pending.catch(() => {});
+    return pending;
+  };
   const publish = async (rootId, leafId, turnActive) => {
     const next = harden({ rootId, leafId, turnActive });
     await E(powers).storeValue(next, [SELECTION_NAME]);
@@ -97,17 +109,20 @@ export const restoreInboxConversation = async ({ powers, tree, prompt }) => {
   return harden({
     hasAdmission: number => admittedNumbers.has(number),
     getLeafId: () => selection.leafId,
-    async beginTurn() {
-      !selection.turnActive || Fail`Inbox turn already active`;
-      await publish(selection.rootId, selection.leafId, true);
-    },
-    async finishTurn() {
-      await null;
-      !publicationFailed || Fail`Inbox publication failed; turn remains fenced`;
-      if (selection.turnActive) {
-        await publish(selection.rootId, selection.leafId, false);
-      }
-    },
+    beginTurn: () =>
+      serialized(async () => {
+        !selection.turnActive || Fail`Inbox turn already active`;
+        await publish(selection.rootId, selection.leafId, true);
+      }),
+    finishTurn: () =>
+      serialized(async () => {
+        await null;
+        !publicationFailed ||
+          Fail`Inbox publication failed; turn remains fenced`;
+        if (selection.turnActive) {
+          await publish(selection.rootId, selection.leafId, false);
+        }
+      }),
     async parentForReply(replyTo) {
       await null;
       if (typeof replyTo === 'string' && (await tree.getNode(replyTo))) {
@@ -124,8 +139,47 @@ export const restoreInboxConversation = async ({ powers, tree, prompt }) => {
       const chain = await getChain(leafId);
       chain[0].id === selection.rootId ||
         Fail`Inbox context has the wrong root`;
-      return chain.flatMap(node => node.messages);
+      let context = [];
+      for (const node of chain) {
+        if (node.metadata.compaction !== undefined) {
+          const checkpoint = /** @type {any} */ (node.metadata.compaction);
+          (checkpoint.sourceId === node.parentId &&
+            checkpoint.providerIdentity === providerIdentity &&
+            Object.keys(checkpoint).length === 2) ||
+            Fail`Incompatible inbox compaction checkpoint`;
+          context = [...chain[0].messages];
+        }
+        context.push(...node.messages);
+      }
+      return context;
     },
+    async getLatestUsage(leafId) {
+      const chain = await getChain(leafId);
+      for (const node of chain.reverse()) {
+        if (node.metadata.providerUsage !== undefined)
+          return node.metadata.providerUsage;
+        if (node.metadata.compaction !== undefined) return undefined;
+      }
+      return undefined;
+    },
+    appendCheckpoint: (sourceId, summary, retained) =>
+      serialized(async () => {
+        sourceId === selection.leafId || Fail`Compaction source changed`;
+        const chain = await getChain(sourceId);
+        chain[0].id === selection.rootId || Fail`Compaction has the wrong root`;
+        try {
+          const node = await tree.addNode(
+            sourceId,
+            [{ role: 'assistant', content: summary }, ...retained],
+            { compaction: { sourceId, providerIdentity } },
+          );
+          await publish(selection.rootId, node.id, selection.turnActive);
+          return node;
+        } catch (error) {
+          publicationFailed = true;
+          throw error;
+        }
+      }),
     /**
      * Publish a node before selecting it. A failed pointer write fences the
      * caller; the immutable node still retains its receipt/evidence.
@@ -133,23 +187,24 @@ export const restoreInboxConversation = async ({ powers, tree, prompt }) => {
      * @param {ChatMessage[]} messages
      * @param {Record<string, unknown>} [metadata]
      */
-    async append(parentId, messages, metadata = {}) {
-      await null;
-      try {
-        const chain = await getChain(parentId);
-        chain[0].id === selection.rootId ||
-          Fail`Inbox append has the wrong root`;
-        const node = await tree.addNode(parentId, messages, metadata);
-        if (typeof metadata.inboundNumber === 'bigint') {
-          admittedNumbers.add(metadata.inboundNumber);
+    append: (parentId, messages, metadata = {}) =>
+      serialized(async () => {
+        await null;
+        try {
+          const chain = await getChain(parentId);
+          chain[0].id === selection.rootId ||
+            Fail`Inbox append has the wrong root`;
+          const node = await tree.addNode(parentId, messages, metadata);
+          if (typeof metadata.inboundNumber === 'bigint') {
+            admittedNumbers.add(metadata.inboundNumber);
+          }
+          await publish(selection.rootId, node.id, selection.turnActive);
+          return node;
+        } catch (error) {
+          publicationFailed = true;
+          throw error;
         }
-        await publish(selection.rootId, node.id, selection.turnActive);
-        return node;
-      } catch (error) {
-        publicationFailed = true;
-        throw error;
-      }
-    },
+      }),
     async recordClaimedReply(number) {
       // Receipt-only roots do not select or modify an active inference branch.
       await tree.addNode(null, [], { inboundNumber: number });

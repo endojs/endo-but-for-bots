@@ -126,3 +126,7 @@ export {
   messageFromResponsesOutput,
   assertSubscriptionResponsesRecipe,
 } from './subscription-responses.js';
+export {
+  planContextCompaction,
+  summarizeContext,
+} from './context-compaction.js';

@@ -20,7 +20,7 @@ test('turn engine commits every complete tool step before the final answer', asy
     },
     getContext: async leafId => {
       trace.push(`context:${leafId}`);
-      return harden([leafId]);
+      return harden({ leafId, messages: [leafId] });
     },
     invoke: async (context, tools, round) => {
       trace.push(`invoke:${context[0]}:${tools.round}:${round}`);
@@ -65,7 +65,7 @@ test('turn engine reports empty and exhausted outcomes without a false final', a
   const common = {
     leafId: 'root',
     getTools: async () => harden({}),
-    getContext: async () => harden([]),
+    getContext: async leafId => harden({ leafId, messages: [] }),
     getToolCalls: message => message.calls,
     runTools: async () => harden([]),
     commitStep: async () => 'next',
@@ -106,7 +106,7 @@ test('turn engine rejects an invalid round bound', async t => {
         leafId: 'root',
         maxRounds: 0,
         getTools: async () => undefined,
-        getContext: async () => [],
+        getContext: async leafId => ({ leafId, messages: [] }),
         invoke: async () => ({}),
         getToolCalls: () => [],
         runTools: async () => [],
@@ -115,6 +115,30 @@ test('turn engine rejects an invalid round bound', async t => {
       }),
     { message: /maxRounds must be a positive integer/ },
   );
+});
+
+test('context selection advances the committed head before inference', async t => {
+  const outcome = await runAgenticTurn({
+    leafId: 'old',
+    maxRounds: 1,
+    getTools: async () => harden({}),
+    getContext: async () =>
+      harden({ leafId: 'checkpoint', messages: ['summary'] }),
+    invoke: async messages => {
+      t.deepEqual(messages, ['summary']);
+      return harden({ message: { content: 'done' } });
+    },
+    getToolCalls: () => [],
+    runTools: async () => [],
+    commitStep: async () => {
+      throw Error('unexpected tool step');
+    },
+    commitFinal: async leafId => {
+      t.is(leafId, 'checkpoint');
+      return 'final';
+    },
+  });
+  t.is(outcome.leafId, 'final');
 });
 
 test('a provider response that arrives after cancellation cannot admit tools or a final', async t => {
@@ -127,7 +151,7 @@ test('a provider response that arrives after cancellation cannot admit tools or 
         maxRounds: 1,
         signal: controller.signal,
         getTools: async () => ({}),
-        getContext: async () => [],
+        getContext: async leafId => ({ leafId, messages: [] }),
         invoke: async () => {
           controller.abort(Error('cancelled during inference'));
           return { message: { calls: ['tool'] } };

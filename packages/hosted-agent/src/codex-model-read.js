@@ -60,6 +60,9 @@ export const modelsFromCodexCatalog = payload => {
       default: false,
       defaultReasoningEffort: row.default_reasoning_level ?? null,
       reasoningEfforts,
+      ...(row.context_window == null
+        ? {}
+        : { contextLength: row.context_window }),
     });
     return { model, visibility: row.visibility, priority };
   });

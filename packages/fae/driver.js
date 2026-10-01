@@ -44,9 +44,10 @@ export const make = async (powers, context, { env } = {}) => {
   const delegatedPrompt = env?.FAE_SUBAGENT_PROMPT || undefined;
 
   const startLoop = async () => {
+    const providerIdentity = await E(powers).locate('llm-provider');
     const storedConfig =
       /** @type {{ host?: string, model: string, kind?: string, subscription?: object }} */ (
-        await E(powers).lookup('llm-provider')
+        await E(powers).lookupByLocator(providerIdentity)
       );
     const agentPowers = await E(powers).lookup('agent');
     const spawner = (await E(powers).has('subagent-spawner'))
@@ -70,6 +71,8 @@ export const make = async (powers, context, { env } = {}) => {
       storedConfig,
       systemPrompt,
       harden({
+        forceCompaction: env?.FAE_FORCE_COMPACTION === 'true',
+        providerIdentity,
         ...(spawner ? { spawner } : {}),
         ...(delegatedPrompt ? { delegatedPrompt } : {}),
         ...(sessionId === undefined
