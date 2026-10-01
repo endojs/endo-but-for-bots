@@ -52,3 +52,48 @@ fn an_empty_object_or_array_still_meters_as_xs() {
         exact(&format!("for (var k in {operand}); 1"));
     }
 }
+
+#[test]
+fn other_operands_meter_as_xs() {
+    // The rest of the class: an object with no prototype, a TypedArray, and
+    // primitives boxed by ToObject.
+    for operand in [
+        "Object.create(null)",
+        "new Uint8Array(2)",
+        "1n",
+        "true",
+        "1",
+    ] {
+        exact(&format!("for (var k in {operand}); 1"));
+    }
+}
+
+/// for-in loops still metered off XS's count by a computron: a metering gap
+/// left for a follow-up. The program, then Ironhorse's and XS's computrons.
+/// A row fails once either count moves, so closing a gap fails its row.
+const RESIDUALS: &[(&str, u64, u64)] = &[
+    ("for (var k in Symbol()); 1", 57, 58),
+    ("for (var k in Object('ab')); 1", 105, 106),
+    ("for (var k in ''); 1", 53, 54),
+    (
+        "for (var k in new Proxy(Object.create(null), {})); 1",
+        71,
+        72,
+    ),
+];
+
+#[test]
+fn the_remaining_residuals_are_as_recorded() {
+    let mut moved = Vec::new();
+    for &(source, ironhorse, xs) in RESIDUALS {
+        let run = dual_run(source).expect("the XS oracle machine must start");
+        assert!(run.observables_agree(), "{source}: {run:?}");
+        if (run.ironhorse_computrons, run.oracle_computrons) != (ironhorse, xs) {
+            moved.push(format!(
+                "    (\"{source}\", {}, {}),",
+                run.ironhorse_computrons, run.oracle_computrons
+            ));
+        }
+    }
+    assert!(moved.is_empty(), "residuals moved:\n{}", moved.join("\n"));
+}
