@@ -19,6 +19,7 @@ output line byte for byte against a native reference produced in the same run.
 | `lane_c.py`, `wasmbin.py` | **Lane C**: per-function frame sizes from five compilers, per-family bytes per level and per budget unit, one level of the deepest recursion per family (from a trap's stack trace under Node), the chains' frames summed against the measured slopes, and the worst per-function tier mix against lane B's headroom. |
 | `sweep.py`, `sweep-pins.json` | The grammar sweep: every folding or right-nested production bisected to its ceiling; a shape with no ceiling is classified by its compile-stack slope. Its pins are also tests in `ironhorse-compile/tests/recursion_bounds.rs`. |
 | `expected-traps/` | One list per host configuration of the cases allowed to trap there. |
+| `differential.py`, `differential/` | The release-neutral gate for the refactors of Phase 1 onward: the native probe at a base revision against the working tree, both handed the same program text (the corpus, every family around its ceiling, and the per-change programs in `differential/`), compared byte for byte, compiles by bytecode, symbols and every parse-meter charge (`--digest`), runs by where the meter is checked, to the computron (`--meter-trace`). |
 | `../benches/stack_height.py` | The native ratchet over the same corpus (`benches/README.md`). |
 
 ## Running
@@ -40,8 +41,17 @@ python3 lane_b_node.py --no-build --shard all --paint
 python3 lane_b_workerd.py --no-build --shard all --paint
 python3 lane_c.py --no-build --output lane-c.json
 python3 sweep.py --no-build --check
+python3 differential.py                     # uncommitted work against HEAD
 python3 -m unittest discover -s . -p 'test_*.py'
 ```
+
+A refactor of the report's Phase 1 or later must pass `differential.py` against the
+revision before it (`--base HEAD^` once it is committed): no halt, result, computron,
+meter check, bytecode byte or parse-meter charge may change.
+The one allowed difference is a program the base build overflows the contract stack
+on natively and the change completes.
+It then lowers the marks, so the change re-records the native baseline and shrinks
+the expected-trap lists it clears.
 
 `regexp-backtrack` is its own shard (`--shard slow`); the default `fast` shard is
 everything else and `all` is both.
