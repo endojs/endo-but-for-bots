@@ -480,12 +480,14 @@ test('the SturdyRef locator refuses other methods, arguments, and gets', async t
   );
   const { promise } = left.makeRemoteKit('l-0');
   const locator = /** @type {any} */ (promise);
-  t.is(await E(await E(locator).locate('x')).hello(), 'hi');
+  const located = await E(locator).locate('x');
+  t.is(await E(located).hello(), 'hi');
 
   const refusal = { message: /answers only locate\(objectId\)/ };
   await t.throwsAsync(() => E(locator).locate('x', 'extra'), refusal);
   await t.throwsAsync(() => E(locator).locate(), refusal);
   await t.throwsAsync(() => E(locator).toString(), refusal);
+  // eslint-disable-next-line no-prototype-builtins
   await t.throwsAsync(() => E(locator).hasOwnProperty('locate'), refusal);
   await t.throwsAsync(() => E.get(locator).locate, refusal);
 });
