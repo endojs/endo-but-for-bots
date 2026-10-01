@@ -298,10 +298,16 @@ pub enum NativeMethod {
     AsyncDisposableStackDefer,
     AsyncDisposableStackMove,
     AsyncDisposableStackDisposeAsync,
-    /// A primitive wrapper's `valueOf` (returns the wrapped primitive).
-    WrapperValueOf,
-    /// A primitive wrapper's `toString` (stringifies the wrapped primitive).
-    WrapperToString,
+    /// `Boolean.prototype.valueOf`/`toString`, `Number.prototype.valueOf`
+    /// and `String.prototype.valueOf`/`toString`: the receiver's primitive,
+    /// which a primitive of the type is itself and a wrapper of the type
+    /// holds, or XS's TypeError (`this: not a boolean`, `… number`,
+    /// `… string`).
+    BooleanValueOf,
+    BooleanToString,
+    NumberValueOf,
+    StringValueOf,
+    StringToString,
     /// `Symbol.prototype.toString()` (`fx_Symbol_prototype_toString` →
     /// `fxSymbolToString`): the descriptive string `Symbol(<description>)`.
     SymbolToString,

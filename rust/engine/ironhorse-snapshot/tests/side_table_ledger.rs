@@ -60,6 +60,32 @@ fn resumed_array_length_and_elements_read_like_uninterrupted() {
     );
 }
 
+/// `%Array.prototype%` is an array and the String, Number and Boolean
+/// prototypes are wrappers from boot. Their rows are boot state, stored only
+/// once a program changes them, so a resume keeps their shape either way.
+#[test]
+fn resumed_exotic_prototypes_keep_their_shape() {
+    assert_twin(
+        "ih-ledger-twin-exotic-pristine",
+        [
+            "var t = 1; t",
+            "var t; t = [Array.isArray(Array.prototype), Array.prototype.length, \
+             String.prototype.length, Number.prototype.valueOf(), \
+             Boolean.prototype.valueOf(), \
+             Object.prototype.toString.call(String.prototype)].join(); t",
+        ],
+        "true,0,0,0,false,[object String]",
+    );
+    assert_twin(
+        "ih-ledger-twin-exotic-changed",
+        [
+            "Array.prototype.push(5, 6); var t = 1; t",
+            "var t; t = [Array.prototype.length, [][1], Array.isArray(Array.prototype)].join(); t",
+        ],
+        "2,6,true",
+    );
+}
+
 #[test]
 fn resumed_map_and_set_answer_like_uninterrupted() {
     // Crank 1's first-appearance name order is m, Map, s, Set, a, b,
@@ -189,7 +215,13 @@ fn side_tables_round_trip_the_container_and_stay_canonical() {
         .expect("gated image");
     assert!(empty.arrays.is_empty() && empty.collections.is_empty() && empty.registry.is_empty());
     let empty_bytes = write_machine_unchecked(&empty);
-    for tag in [b"ARRY".as_slice(), b"COLL".as_slice(), b"REGY".as_slice()] {
+    // The boot prototypes' array and wrapper rows are boot state.
+    for tag in [
+        b"ARRY".as_slice(),
+        b"COLL".as_slice(),
+        b"REGY".as_slice(),
+        b"WRAP".as_slice(),
+    ] {
         assert!(
             !empty_bytes.windows(4).any(|w| w == tag),
             "side-table-free container carries no ledger atoms",

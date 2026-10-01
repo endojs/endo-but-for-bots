@@ -1460,6 +1460,8 @@ mod tests {
             let mut interp = Interp::new();
             let owner = interp.new_object();
             let descriptor = interp.slots.alloc(Slot::undefined());
+            // The booted tables, `%Array.prototype%`'s row among them.
+            let booted_arrays = interp.arrays_snapshot();
             let mut arrays = vec![(owner.0, 1, vec![(0, Slot::integer(1))])];
             let mut indices = vec![];
             let mut collections = vec![];
@@ -1512,7 +1514,7 @@ mod tests {
                 .unwrap_err();
             assert_eq!(error.row, "BulkSideTables");
             assert_eq!(error.reason, expected, "case {case}");
-            assert!(interp.arrays_snapshot().is_empty());
+            assert_eq!(interp.arrays_snapshot(), booted_arrays);
             assert!(interp.index_props_snapshot().is_empty());
             assert!(interp.collections_snapshot().is_empty());
             assert!(interp.symbol_registry_snapshot().is_empty());

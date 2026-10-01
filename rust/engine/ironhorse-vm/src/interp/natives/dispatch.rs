@@ -2436,10 +2436,13 @@ impl Interp {
             | NativeMethod::ObjectSetPrototypeOf
             | NativeMethod::CopyObject
             | NativeMethod::ObjectValueOf
-            | NativeMethod::WrapperValueOf
+            | NativeMethod::BooleanValueOf
+            | NativeMethod::NumberValueOf
+            | NativeMethod::StringValueOf
             | NativeMethod::ObjectToString
             | NativeMethod::ObjectToLocaleString
-            | NativeMethod::WrapperToString
+            | NativeMethod::BooleanToString
+            | NativeMethod::StringToString
             | NativeMethod::ObjectHasOwnProperty
             | NativeMethod::ObjectIsPrototypeOf
             | NativeMethod::ObjectIs
@@ -6367,11 +6370,13 @@ impl Interp {
                     ))
                 }
             },
-            // `<wrapper>.valueOf`: the wrapped primitive.
-            NativeMethod::WrapperValueOf => match this.value {
-                Payload::Reference(r) => self.wrapper_data.get(&r).copied().unwrap_or(this),
-                _ => this,
-            },
+            // `thisBooleanValue`, `thisNumberValue` and `thisStringValue`: the
+            // primitive itself, or the one a wrapper of the type holds.
+            NativeMethod::BooleanValueOf => self.this_primitive(this, Kind::Boolean)?,
+            NativeMethod::NumberValueOf => self.this_primitive(this, Kind::Number)?,
+            NativeMethod::StringValueOf | NativeMethod::StringToString => {
+                self.this_primitive(this, Kind::String)?
+            }
             // `Object.prototype.toString` steps 1-2: a nullish receiver answers
             // before ToObject, so it skips the IsArray / IsCallable /
             // Get(@@toStringTag) work the ordinary arm below does — which is
@@ -6504,12 +6509,8 @@ impl Interp {
             // same per-type ToString metering the `String(v)` call uses (a
             // number renders through `fxNumberToString` — one built-in step
             // plus its chunk; a boolean/string is interned/identity, no cost).
-            NativeMethod::WrapperToString => {
-                let prim = match this.value {
-                    Payload::Reference(r) => self.wrapper_data.get(&r).copied(),
-                    _ => None,
-                }
-                .unwrap_or(this);
+            NativeMethod::BooleanToString => {
+                let prim = self.this_primitive(this, Kind::Boolean)?;
                 self.to_string_slot_metered(prim)
             }
             // `Object.prototype.hasOwnProperty(V)` (ECMA-262 20.1.3.2): the full
