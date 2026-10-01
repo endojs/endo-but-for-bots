@@ -1,8 +1,8 @@
 //! The XSRE pattern compiler: a faithful transliteration of the
-//! `fxCompileRegExp` pipeline in `xsre.c` — recursive-descent parse into
-//! a term tree, a `measure` pass that assigns each term its byte offset
-//! in the code array, and a `code` pass that emits the integer step
-//! stream the [`crate::matcher`] VM interprets.
+//! `fxCompileRegExp` pipeline in `xsre.c` — a parse into a term tree (XS's
+//! recursive descent, kept here on explicit stacks), a `measure` pass that
+//! assigns each term its byte offset in the code array, and a `code` pass
+//! that emits the integer step stream the [`crate::matcher`] VM interprets.
 //!
 //! Offsets (`step`, `completion`, `loop_off`, `sequel`) are kept in
 //! **bytes** exactly as XS keeps them (`sizeof(txInteger) == 4`), so
@@ -245,19 +245,20 @@ const MAX_QUANTIFIER: i32 = 0x7FFF_FFFF;
 /// The deepest nesting of groups (`(`, `(?:`, `(?=`, `(?<name>`, …) and
 /// `v`-mode nested classes (`[[…]]`) a pattern may have.
 ///
-/// The recursive-descent parse, the measure pass and the code pass each
-/// recurse once per nesting level on the host's native stack, and XS bounds
-/// that recursion by nothing but its C stack — a 10,000-deep group literal
-/// of 20 KB aborted the process. This crate refuses deeper patterns with a
-/// [`CompileError::Syntax`] instead, so the bound is a counter (deterministic
-/// across hosts and build profiles) rather than a stack-address margin. The
-/// limit is orders of magnitude above real patterns and, with the per-level
-/// frames measured at under 7 KiB unoptimized, keeps the compiler's worst
-/// case under 4 MiB of host stack. Pattern *length* is not
-/// nesting: an alternation, a sequence or a `v`-mode class's list of string
-/// alternatives (`[\q{ab|cd|…}]`, which becomes a left-nested disjunction) of
-/// any length is linear in this crate (see [`Compiler::disjunction_parse`],
-/// [`Compiler::measure`] and [`Compiler::emit`]).
+/// XS's recursive-descent parse, measure pass and code pass each recurse
+/// once per nesting level on the native stack, which bounds that recursion
+/// by nothing but its C stack; before this limit, a 10,000-deep group
+/// literal of 20 KB aborted this crate's port. This crate refuses deeper
+/// patterns with a [`CompileError::Syntax`] instead, so the bound is a
+/// counter (deterministic across hosts and build profiles) rather than a
+/// stack-address margin, and it is part of what a release accepts. The limit
+/// is orders of magnitude above real patterns. Its passes keep their own
+/// stacks ([`Compiler::disjunction_parse`], `Compiler::charset_expression`,
+/// [`Compiler::measure`] and [`Compiler::emit`]), so neither nesting nor
+/// pattern *length* (an alternation, a sequence or a `v`-mode class's list of
+/// string alternatives, `[\q{ab|cd|…}]`, which becomes a left-nested
+/// disjunction) is native recursion depth: both cost heap linear in the
+/// pattern.
 pub const MAX_NESTING_DEPTH: u32 = 512;
 
 struct Compiler<'a, 'b, const MATERIALIZE: bool> {
@@ -308,11 +309,98 @@ struct Compiler<'a, 'b, const MATERIALIZE: bool> {
     /// slot is not known at the point the reference is read).
     pending_named_refs: Vec<(NodeId, String)>,
     /// The current group / nested-class nesting depth of the parse, bounded
-    /// by [`MAX_NESTING_DEPTH`] (see [`Compiler::nested`]).
+    /// by [`MAX_NESTING_DEPTH`] (see [`Compiler::nest`]).
     depth: u32,
 }
 
 type PResult<T> = Result<T, CompileError>;
+
+/// One open `v`-mode class of [`Compiler::charset_expression`]: the state of
+/// `fxCharSetExpression`'s operator loop, which C keeps on its stack while a
+/// nested class recurses.
+struct ClassLevel {
+    /// Whether the class began with `^`.
+    not: bool,
+    /// The operand the loop is waiting for.
+    awaiting: ClassAwait,
+    /// The left operand, and its range kind.
+    left: NodeId,
+    left_kind: i32,
+    /// The set so far.
+    result: Option<NodeId>,
+}
+
+/// Where a [`ClassLevel`]'s operator loop resumes.
+enum ClassAwait {
+    /// The class's first operand, which decides its operator.
+    First,
+    /// The right side of a `--`.
+    Subtraction,
+    /// The right side of a `&&`.
+    Intersection,
+    /// A range's end, after its start and `-`.
+    RangeEnd,
+    /// The union's next operand.
+    UnionNext,
+}
+
+/// The next move of [`Compiler::charset_expression`]'s loop.
+enum ClassStep {
+    /// Open a class, after its `[`.
+    Open,
+    /// Read an operand for the innermost class.
+    Operand,
+    /// Give the innermost class an operand and its range kind.
+    Feed(NodeId, i32),
+    /// A class closed at its `]` with this set.
+    Close(NodeId),
+}
+
+/// How a group whose disjunction [`Compiler::disjunction_parse`] is parsing
+/// ends: what [`Compiler::group_open`] read before the disjunction and
+/// [`Compiler::group_close`] needs after it.
+enum GroupEnd {
+    /// A lookahead (`direction` 1) or lookbehind (-1) assertion.
+    Assertion { not: bool, direction: i32 },
+    /// `(?:…)`, quantified at the enclosing sequence's capture index.
+    NonCapturing { current_index: i32 },
+    /// A capturing group, numbered or named (`name_slot` -1 when numbered).
+    Capture { current_index: i32, name_slot: i32 },
+    /// A modifier group, whose disjunction is parsed under `modified_flags`.
+    Modifiers {
+        outer_flags: u32,
+        modified_flags: u32,
+    },
+}
+
+/// One disjunction being parsed: the pattern's, or an open group's
+/// (`fxDisjunctionParse`'s and `fxSequenceParse`'s locals, which C keeps on
+/// its stack while a nested group recurses).
+struct Level {
+    /// The group the disjunction belongs to; `None` for the pattern.
+    group: Option<GroupEnd>,
+    /// The character that ends the disjunction: `)`, or [`C_EOF`].
+    terminator: i64,
+    /// The tail of the live-name list before the current alternative.
+    left_addr: i32,
+    /// The alternatives before each `|`, with their name-scope addresses,
+    /// innermost last.
+    pending: Vec<(i32, i32, i32, NodeId)>,
+    /// The current alternative's atoms so far.
+    atoms: Vec<NodeId>,
+}
+
+impl Level {
+    fn new(group: Option<GroupEnd>, terminator: i64, left_addr: i32) -> Self {
+        Level {
+            group,
+            terminator,
+            left_addr,
+            pending: Vec::new(),
+            atoms: Vec::new(),
+        }
+    }
+}
 
 /// Compile `pattern` under the `flags` modifier string (e.g. `"gm"`).
 ///
@@ -721,18 +809,18 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         CompileError::Syntax(String::from_utf8_lossy(&bytes[..bytes.len().min(255)]).into_owned())
     }
 
-    /// Parse one nesting level (a group or a `v`-mode nested class) with
-    /// `f`, refusing to descend past [`MAX_NESTING_DEPTH`]. The depth is
-    /// released on every return path, so a syntax error deep in a group
-    /// leaves the counter balanced for the named-capture re-parse.
-    fn nested<T>(&mut self, f: impl FnOnce(&mut Self) -> PResult<T>) -> PResult<T> {
+    /// Enter one nesting level (a group or a `v`-mode nested class),
+    /// refusing to descend past [`MAX_NESTING_DEPTH`]. The parser that
+    /// entered the level leaves it when the level closes. A syntax error
+    /// ends the parse where it stands, and the named-capture re-parse
+    /// follows only a pass that closed every level, so the counter is zero
+    /// again whenever it is next read.
+    fn nest(&mut self) -> PResult<()> {
         if self.depth >= MAX_NESTING_DEPTH {
             return Err(self.error("too much nesting"));
         }
         self.depth += 1;
-        let result = f(self);
-        self.depth -= 1;
-        result
+        Ok(())
     }
 
     /// Reset the parse cursor and per-parse tables for `fxCompileRegExp`'s
@@ -1758,97 +1846,182 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
     /// `fxCharSetExpression`: the v-mode nested-set grammar, including
     /// subtraction, intersection, ordinary union/ranges, reserved doubled
     /// punctuators, and the no-mixing rule for set operators.
+    ///
+    /// C recurses through `fxCharSetExpression` and `fxCharSetOperand` once
+    /// per nested class, so class nesting was native recursion depth. Here
+    /// each open class is a [`ClassLevel`] holding its operator loop's
+    /// state, and the loop below resumes the innermost level with each
+    /// operand (STACK-DEPTH-REFACTOR.md §4.4 B7): a `[` operand opens a
+    /// level and its `]` closes it, its set becoming the operand the
+    /// enclosing level was waiting for. Every `next`, set operation and
+    /// error happens where the recursion made it. Called after the opening
+    /// `[`; returns at the closing `]`, which the caller consumes.
     fn charset_expression(&mut self) -> PResult<NodeId> {
-        self.nested(|c| c.charset_expression_inner())
-    }
-
-    fn charset_expression_inner(&mut self) -> PResult<NodeId> {
-        let mut not = false;
-        if self.character == b'^' as i64 {
-            self.next()?;
-            not = true;
-        }
-        if self.character == b']' as i64 {
-            let mut result = self.charset_empty();
-            if not {
-                result = self.charset_not(result)?;
-            }
-            return Ok(result);
-        }
-        let (mut left, mut left_kind) = self.charset_operand()?;
-        let mut result: Option<NodeId> = None;
-        if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
-            loop {
-                self.next()?;
-                self.next()?;
-                let (right, _) = self.charset_operand()?;
-                result = Some(self.charset_combine(left, right, MX_CHARSET_SUBTRACT_OP)?);
-                if self.character == b']' as i64 {
-                    break;
+        let mut levels: Vec<ClassLevel> = Vec::new();
+        let mut step = ClassStep::Open;
+        loop {
+            step = match step {
+                ClassStep::Open => {
+                    self.nest()?;
+                    let mut not = false;
+                    if self.character == b'^' as i64 {
+                        self.next()?;
+                        not = true;
+                    }
+                    if self.character == b']' as i64 {
+                        let mut result = self.charset_empty();
+                        if not {
+                            result = self.charset_not(result)?;
+                        }
+                        self.depth -= 1;
+                        ClassStep::Close(result)
+                    } else {
+                        levels.push(ClassLevel {
+                            not,
+                            awaiting: ClassAwait::First,
+                            left: 0,
+                            left_kind: 0,
+                            result: None,
+                        });
+                        ClassStep::Operand
+                    }
                 }
-                if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
-                    left = result.expect("subtraction has a result");
-                    continue;
+                ClassStep::Operand => {
+                    if self.character == b'[' as i64 {
+                        self.next()?;
+                        ClassStep::Open
+                    } else {
+                        let (operand, kind) = self.charset_operand()?;
+                        ClassStep::Feed(operand, kind)
+                    }
                 }
-                return Err(self.error("invalid range"));
-            }
-        } else if self.character == b'&' as i64 && self.read8(self.offset) == b'&' {
-            loop {
-                self.next()?;
-                self.next()?;
-                let (right, _) = self.charset_operand()?;
-                result = Some(self.charset_combine(left, right, MX_CHARSET_INTERSECTION_OP)?);
-                if self.character == b']' as i64 {
-                    break;
+                ClassStep::Feed(operand, kind) => {
+                    let level = levels.last_mut().expect("an open class");
+                    if let Some(result) = self.charset_level_feed(level, operand, kind)? {
+                        let level = levels.pop().expect("an open class");
+                        let mut result = result;
+                        if level.not {
+                            result = self.charset_not(result)?;
+                        }
+                        self.depth -= 1;
+                        ClassStep::Close(result)
+                    } else {
+                        ClassStep::Operand
+                    }
                 }
-                if self.character == b'&' as i64 && self.read8(self.offset) == b'&' {
-                    left = result.expect("intersection has a result");
-                    continue;
-                }
-                return Err(self.error("invalid range"));
-            }
-        } else {
-            loop {
-                if self.character == b'-' as i64 {
-                    self.next()?;
-                    let (right, right_kind) = self.charset_operand()?;
-                    if left_kind != 0 && right_kind != 0 {
+                ClassStep::Close(result) => {
+                    if levels.is_empty() {
+                        return Ok(result);
+                    }
+                    // The operand `[…]` of the enclosing class.
+                    if self.character != b']' as i64 {
                         return Err(self.error("invalid range"));
                     }
-                    left = self.charset_range(left, right)?;
+                    self.next()?;
+                    ClassStep::Feed(result, 1)
                 }
-                result = Some(if let Some(former) = result {
-                    self.charset_combine(former, left, MX_CHARSET_UNION_OP)?
+            };
+        }
+    }
+
+    /// Resume a class's operator loop with the operand it was waiting for.
+    /// Returns the class's set (before a `^` negation) once the loop
+    /// reaches the class's `]`, or `None` when it needs another operand.
+    fn charset_level_feed(
+        &mut self,
+        level: &mut ClassLevel,
+        operand: NodeId,
+        kind: i32,
+    ) -> PResult<Option<NodeId>> {
+        match level.awaiting {
+            ClassAwait::First => {
+                level.left = operand;
+                level.left_kind = kind;
+                if self.character == b'-' as i64 && self.read8(self.offset) == b'-' {
+                    self.next()?;
+                    self.next()?;
+                    level.awaiting = ClassAwait::Subtraction;
+                    return Ok(None);
+                }
+                if self.character == b'&' as i64 && self.read8(self.offset) == b'&' {
+                    self.next()?;
+                    self.next()?;
+                    level.awaiting = ClassAwait::Intersection;
+                    return Ok(None);
+                }
+                self.charset_level_union(level)
+            }
+            ClassAwait::Subtraction | ClassAwait::Intersection => {
+                let (op, punctuator, what) = if matches!(level.awaiting, ClassAwait::Subtraction) {
+                    (MX_CHARSET_SUBTRACT_OP, b'-', "subtraction has a result")
                 } else {
-                    left
-                });
+                    (
+                        MX_CHARSET_INTERSECTION_OP,
+                        b'&',
+                        "intersection has a result",
+                    )
+                };
+                level.result = Some(self.charset_combine(level.left, operand, op)?);
                 if self.character == b']' as i64 {
-                    break;
+                    return Ok(level.result);
                 }
-                (left, left_kind) = self.charset_operand()?;
+                if self.character == punctuator as i64 && self.read8(self.offset) == punctuator {
+                    level.left = level.result.expect(what);
+                    self.next()?;
+                    self.next()?;
+                    return Ok(None);
+                }
+                Err(self.error("invalid range"))
+            }
+            ClassAwait::RangeEnd => {
+                if level.left_kind != 0 && kind != 0 {
+                    return Err(self.error("invalid range"));
+                }
+                level.left = self.charset_range(level.left, operand)?;
+                self.charset_level_union_add(level)
+            }
+            ClassAwait::UnionNext => {
+                level.left = operand;
+                level.left_kind = kind;
+                self.charset_level_union(level)
             }
         }
-        let mut result = result.expect("a v set expression starts with an operand");
-        if not {
-            result = self.charset_not(result)?;
+    }
+
+    /// The top of a class's union loop, with `level.left` its next operand:
+    /// a `-` makes it a range's start.
+    fn charset_level_union(&mut self, level: &mut ClassLevel) -> PResult<Option<NodeId>> {
+        if self.character == b'-' as i64 {
+            self.next()?;
+            level.awaiting = ClassAwait::RangeEnd;
+            return Ok(None);
         }
-        Ok(result)
+        self.charset_level_union_add(level)
+    }
+
+    /// The rest of a class's union loop: add `level.left` to the union, and
+    /// end at the class's `]` or wait for the next operand.
+    fn charset_level_union_add(&mut self, level: &mut ClassLevel) -> PResult<Option<NodeId>> {
+        level.result = Some(if let Some(former) = level.result {
+            self.charset_combine(former, level.left, MX_CHARSET_UNION_OP)?
+        } else {
+            level.left
+        });
+        if self.character == b']' as i64 {
+            return Ok(level.result);
+        }
+        level.awaiting = ClassAwait::UnionNext;
+        Ok(None)
     }
 
     /// `fxCharSetOperand`: one v-mode set operand and its range kind (zero
-    /// for a literal singleton, one for a class/string/nested set).
+    /// for a literal singleton, one for a class/string/nested set), other
+    /// than a nested class, which [`Self::charset_expression`] parses as a
+    /// level.
     fn charset_operand(&mut self) -> PResult<(NodeId, i32)> {
         match self.character {
             C_EOF => Err(self.error("invalid range")),
-            c if c == b'[' as i64 => {
-                self.next()?;
-                let result = self.charset_expression()?;
-                if self.character != b']' as i64 {
-                    return Err(self.error("invalid range"));
-                }
-                self.next()?;
-                Ok((result, 1))
-            }
+            c if c == b'[' as i64 => unreachable!("charset_expression parses nested classes"),
             c if c == b'\\' as i64 => {
                 self.next()?;
                 if self.character == b'q' as i64 {
@@ -2034,84 +2207,120 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         Ok(Some(value as i32))
     }
 
-    // ---- the recursive-descent grammar (fxDisjunctionParse etc.) ----
+    // ---- the grammar (fxDisjunctionParse etc.) ----
 
+    /// `fxDisjunctionParse` for the whole pattern, with every group's
+    /// disjunction nested in it, as one loop over a stack of [`Level`]s
+    /// (STACK-DEPTH-REFACTOR.md §4.4 B7).
+    ///
+    /// C recurses through `fxDisjunctionParse`, `fxSequenceParse` and the
+    /// group parsers once per group, so nesting was native recursion depth
+    /// (512 groups needed 229 KB of native stack to compile). Here a `(`
+    /// opens a level, after the depth check ([`Self::nest`]) and the group's
+    /// prefix ([`Self::group_open`]), and its `)` closes it ([`Self::group_close`]),
+    /// whose result is the next atom of the enclosing level; every `next`,
+    /// node and name-scope update happens in the order the recursion made it.
+    ///
+    /// The named-capture scope of each alternative is independent. Before
+    /// parsing the left alternative, remember the tail of the live-name list;
+    /// at the `|`, detach the left alternative's names so the right
+    /// alternative does not see them (a name may recur across
+    /// mutually-exclusive alternatives), then reattach both — the outer scope
+    /// sees the left alternative's names, matching XS's pointer surgery
+    /// exactly (the right's are dropped from the walkable head).
+    ///
+    /// C also recurses once per `|`, so an alternation's length was native
+    /// recursion depth (a 10,000-alternative keyword list overflowed the host
+    /// stack in a debug build). The alternatives are parsed in a loop
+    /// instead, each `|` pushing the frame the C recursion would have kept
+    /// live; unwinding that stack innermost-first then performs exactly the
+    /// node construction and pointer surgery the returns performed, in the
+    /// same order, so the tree and the name tables are identical.
     fn disjunction_parse(&mut self, character: i64) -> PResult<NodeId> {
-        // `fxDisjunctionParse`: the named-capture scope of each alternative is
-        // independent. Before parsing the left alternative, remember the tail
-        // of the live-name list; at the `|`, detach the left alternative's
-        // names so the right alternative does not see them (a name may recur
-        // across mutually-exclusive alternatives), then reattach both — the
-        // outer scope sees the left alternative's names, matching XS's pointer
-        // surgery exactly (the right's are dropped from the walkable head).
-        //
-        // C recurses once per `|`, so an alternation's length was native
-        // recursion depth (a 10,000-alternative keyword list overflowed the
-        // host stack in a debug build). The alternatives are parsed in a loop
-        // instead, each `|` pushing the frame the C recursion would have kept
-        // live; unwinding that stack innermost-first then performs exactly
-        // the node construction and pointer surgery the returns performed, in
-        // the same order, so the tree and the name tables are identical.
-        let mut pending: Vec<(i32, i32, i32, NodeId)> = Vec::new();
-        let mut result;
+        let mut levels = vec![Level::new(None, character, self.participate_last)];
         loop {
-            let left_addr = self.participate_last;
-            result = self.sequence_parse(character)?;
-            if self.character != b'|' as i64 {
-                break;
+            let terminator = levels.last().expect("a level").terminator;
+            // `fxSequenceParse`: the atoms up to the terminator, a `|` or
+            // the end of the pattern.
+            if self.character != C_EOF
+                && self.character != terminator
+                && self.character != b'|' as i64
+            {
+                let current_index = self.capture_index;
+                if self.character == b'(' as i64 {
+                    // A group is one nesting level, left when it closes.
+                    self.nest()?;
+                    let group = self.group_open(current_index)?;
+                    levels.push(Level::new(Some(group), b')' as i64, self.participate_last));
+                } else {
+                    let atom = self.term_parse(current_index)?;
+                    levels.last_mut().expect("a level").atoms.push(atom);
+                }
+                continue;
             }
-            let right_addr = self.participate_last;
-            let left_named = self.participate_read(left_addr);
-            self.participate_write(left_addr, -1);
-            self.next()?;
-            pending.push((left_addr, right_addr, left_named, result));
+            let level = levels.last_mut().expect("a level");
+            let sequence = self.sequence_node(std::mem::take(&mut level.atoms));
+            if self.character == b'|' as i64 {
+                let right_addr = self.participate_last;
+                let left_named = self.participate_read(level.left_addr);
+                self.participate_write(level.left_addr, -1);
+                self.next()?;
+                level
+                    .pending
+                    .push((level.left_addr, right_addr, left_named, sequence));
+                level.left_addr = self.participate_last;
+                continue;
+            }
+            let mut result = sequence;
+            while let Some((left_addr, right_addr, left_named, left)) = level.pending.pop() {
+                result = self.add_node(Kind::Disjunction {
+                    left,
+                    right: result,
+                });
+                let after_left = self.participate_read(left_addr);
+                self.participate_write(right_addr, after_left);
+                self.participate_write(left_addr, left_named);
+            }
+            if self.character != level.terminator {
+                return Err(self.error("invalid sequence"));
+            }
+            let Some(group) = levels.pop().expect("a level").group else {
+                return Ok(result);
+            };
+            let atom = self.group_close(group, result)?;
+            self.depth -= 1;
+            levels
+                .last_mut()
+                .expect("the enclosing level")
+                .atoms
+                .push(atom);
         }
-        while let Some((left_addr, right_addr, left_named, left)) = pending.pop() {
-            result = self.add_node(Kind::Disjunction {
-                left,
-                right: result,
-            });
-            let after_left = self.participate_read(left_addr);
-            self.participate_write(right_addr, after_left);
-            self.participate_write(left_addr, left_named);
-        }
-        if self.character != character {
-            return Err(self.error("invalid sequence"));
-        }
-        Ok(result)
     }
 
-    fn sequence_parse(&mut self, character: i64) -> PResult<NodeId> {
-        // Collect the ordered atoms, then fold into a right-nested
-        // sequence spine. C threads a mutable `formerBranch->right` into a
-        // right-nested `Seq(a0, Seq(a1, ... an))`; because a `Sequence`
-        // node emits no bytes of its own and simply chains `left` then
-        // `right`, the right-nested fold reproduces the identical measure
-        // offsets and emitted step chain (each atom's sequel is the next
-        // atom's step; the last atom's sequel is the outer sequel).
-        let mut atoms: Vec<NodeId> = Vec::new();
-        while self.character != C_EOF && self.character != character {
-            if self.character == b'|' as i64 {
-                break;
-            }
-            let current_index = self.capture_index;
-            atoms.push(self.term_parse(current_index)?);
-        }
-        if atoms.is_empty() {
-            return Ok(self.add_node(Kind::Empty));
-        }
-        let mut result = *atoms.last().unwrap();
+    /// The end of `fxSequenceParse`: fold an alternative's atoms into a
+    /// right-nested sequence spine. C threads a mutable `formerBranch->right`
+    /// into a right-nested `Seq(a0, Seq(a1, ... an))`; because a `Sequence`
+    /// node emits no bytes of its own and simply chains `left` then `right`,
+    /// the right-nested fold reproduces the identical measure offsets and
+    /// emitted step chain (each atom's sequel is the next atom's step; the
+    /// last atom's sequel is the outer sequel).
+    fn sequence_node(&mut self, atoms: Vec<NodeId>) -> NodeId {
+        let Some(&last) = atoms.last() else {
+            return self.add_node(Kind::Empty);
+        };
+        let mut result = last;
         for &atom in atoms.iter().rev().skip(1) {
             result = self.add_node(Kind::Sequence {
                 left: atom,
                 right: result,
             });
         }
-        Ok(result)
+        result
     }
 
     /// One atom (+ its optional quantifier) of a sequence — the big
-    /// dispatch in `fxSequenceParse`.
+    /// dispatch in `fxSequenceParse` — other than a group, which
+    /// [`Self::disjunction_parse`] parses as a nesting level.
     fn term_parse(&mut self, current_index: i32) -> PResult<NodeId> {
         let ch = self.character;
         if ch == b'^' as i64 {
@@ -2130,7 +2339,7 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         } else if ch == b'*' as i64 || ch == b'+' as i64 || ch == b'?' as i64 {
             Err(self.error("invalid character"))
         } else if ch == b'(' as i64 {
-            self.nested(|c| c.group_atom(current_index))
+            unreachable!("disjunction_parse parses groups")
         } else if ch == b')' as i64 {
             Err(self.error("invalid character"))
         } else if ch == b'[' as i64 {
@@ -2147,9 +2356,10 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
             self.next()?;
             self.quantifier_parse(current, current_index)
         } else if ch == b'|' as i64 {
-            // Handled by disjunction_parse; sequence stops here. This is
-            // unreachable because the while-guard covers `character`, but
-            // the '|' case is an explicit break in C.
+            // Handled by disjunction_parse; a sequence stops here. This is
+            // unreachable because disjunction_parse ends the sequence at a
+            // `|` before calling here, but the '|' case is an explicit break
+            // in C.
             Err(self.error("invalid character"))
         } else if (ch == b']' as i64 || ch == b'}' as i64)
             && self.flags & (XS_REGEXP_U | XS_REGEXP_V) != 0
@@ -2236,192 +2446,265 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
         }
     }
 
-    /// The `(`-prefixed atoms: capturing / non-capturing groups and
-    /// lookaround assertions.
-    fn group_atom(&mut self, mut current_index: i32) -> PResult<NodeId> {
+    /// The prefix of a `(`-prefixed atom (`fxGroupParse`, `fxAssertionParse`,
+    /// `fxCaptureParse`, `fxModifiersParse`) up to its disjunction: the `(`
+    /// and the group's syntax, a capture's index and name, and a modifier
+    /// group's scoped flags. [`Self::disjunction_parse`] then parses the
+    /// disjunction as a nesting level and [`Self::group_close`] finishes the
+    /// group with what this returns.
+    fn group_open(&mut self, mut current_index: i32) -> PResult<GroupEnd> {
         self.next()?;
-        if self.character == b'?' as i64 {
+        if self.character != b'?' as i64 {
+            self.capture_index += 1;
+            current_index += 1;
+            return Ok(GroupEnd::Capture {
+                current_index,
+                name_slot: -1,
+            });
+        }
+        self.next()?;
+        if self.character == b'=' as i64 || self.character == b'!' as i64 {
+            let not = self.character == b'!' as i64;
             self.next()?;
-            if self.character == b'=' as i64 {
+            Ok(GroupEnd::Assertion { not, direction: 1 })
+        } else if self.character == b':' as i64 {
+            self.next()?;
+            Ok(GroupEnd::NonCapturing { current_index })
+        } else if self.character == b'<' as i64 {
+            // Peek past '<': `=`/`!` are lookbehind assertions; anything
+            // else begins a group `<name>`, so latch XS_REGEXP_NAME
+            // BEFORE reading the first name char, matching XS's astral
+            // handling during a name.
+            let peek = self.read8(self.offset);
+            if peek != b'=' && peek != b'!' {
+                self.flags |= XS_REGEXP_NAME;
+            }
+            self.next()?;
+            if self.character == b'=' as i64 || self.character == b'!' as i64 {
+                let not = self.character == b'!' as i64;
                 self.next()?;
-                let term = self.disjunction_parse(b')' as i64)?;
+                return Ok(GroupEnd::Assertion { not, direction: -1 });
+            }
+            // `(?<name>…)` named capture. Validate the name
+            // (`fxCaptureNameParse`) and register it — a repeat is
+            // `mxDuplicateCapture` — then parse the body as a normal
+            // capturing group. It codegens exactly like a numbered
+            // group; the only difference is the name-slot operand on
+            // its completion, which the matcher records into `names[]`
+            // so `\k<name>` and the JS `.groups` object can resolve it.
+            self.saw_named_group = true;
+            self.capture_index += 1;
+            current_index += 1;
+            let name = self.capture_name_parse()?;
+            // `fxCaptureNamePut` then `fxCaptureNameParticipate`: a
+            // duplicate name shares its slot but is a SyntaxError only
+            // when already live in this scope (same alternative), not
+            // when it recurs across sibling disjunction alternatives.
+            let name_slot = self.put_capture_name(&name, current_index);
+            self.participate_capture_name(name_slot)?;
+            Ok(GroupEnd::Capture {
+                current_index,
+                name_slot,
+            })
+        } else {
+            // `Modifiers` (`fxModifiersParse`) is `ModifierFlags`
+            // optionally followed by `- ModifierFlags`, where each side is
+            // a non-repeating run of i/m/s and the two sets are disjoint.
+            // The scoped flags apply to the enclosed disjunction and are
+            // restored at the sequel step (the runtime `cxModifiersStep`
+            // sets the matcher's live `flags` register), so case-folding
+            // (compile-time, baked into charsets) and dot-all/multiline
+            // (runtime) both track the scoped flag word.
+            let mut add = 0u32;
+            let mut remove = 0u32;
+            let mut removing = false;
+            loop {
+                let bit = match self.character {
+                    c if c == b'i' as i64 => Some(XS_REGEXP_I),
+                    c if c == b'm' as i64 => Some(XS_REGEXP_M),
+                    c if c == b's' as i64 => Some(XS_REGEXP_S),
+                    _ => None,
+                };
+                if let Some(bit) = bit {
+                    if (if removing { remove } else { add }) & bit != 0 {
+                        return Err(self.error("invalid modifiers"));
+                    }
+                    if removing {
+                        remove |= bit;
+                    } else {
+                        add |= bit;
+                    }
+                    self.next()?;
+                    continue;
+                }
+                if self.character == b'-' as i64 && !removing {
+                    removing = true;
+                    self.next()?;
+                    continue;
+                }
+                break;
+            }
+            // `(?:...)`-terminated, at least one flag total (`(?-:a)` — both
+            // empty — is `mxInvalidModifiers`), and disjoint add/remove
+            // (checked after consuming both lists, as XS does). An
+            // empty *remove* after `-` is legal (`(?i-:a)`), matching XS.
+            if self.character != b':' as i64 || (add | remove) == 0 || (add & remove) != 0 {
+                return Err(self.error("invalid modifiers"));
+            }
+            self.next()?;
+            let outer_flags = self.flags;
+            let modified_flags = (outer_flags | add) & !remove;
+            // Parse the enclosed disjunction under the scoped flags so its
+            // charsets fold (or not) per the modified `i`, then restore.
+            self.flags = modified_flags;
+            Ok(GroupEnd::Modifiers {
+                outer_flags,
+                modified_flags,
+            })
+        }
+    }
+
+    /// The rest of a `(`-prefixed atom once its disjunction `term` is parsed
+    /// and the parser is at its `)`: the node, and a quantifier where the
+    /// group takes one.
+    fn group_close(&mut self, group: GroupEnd, term: NodeId) -> PResult<NodeId> {
+        match group {
+            GroupEnd::Assertion { not, direction } => {
                 self.next()?;
-                let ai = self.assertion_index;
+                let assertion_index = self.assertion_index;
                 self.assertion_index += 1;
                 Ok(self.add_node(Kind::Assertion {
                     term,
-                    not: false,
-                    direction: 1,
-                    assertion_index: ai,
+                    not,
+                    direction,
+                    assertion_index,
                 }))
-            } else if self.character == b'!' as i64 {
+            }
+            GroupEnd::NonCapturing { current_index } => {
                 self.next()?;
-                let term = self.disjunction_parse(b')' as i64)?;
+                self.quantifier_parse(term, current_index)
+            }
+            GroupEnd::Capture {
+                current_index,
+                name_slot,
+            } => {
                 self.next()?;
-                let ai = self.assertion_index;
-                self.assertion_index += 1;
-                Ok(self.add_node(Kind::Assertion {
+                let capture = self.add_node(Kind::Capture {
                     term,
-                    not: true,
-                    direction: 1,
-                    assertion_index: ai,
-                }))
-            } else if self.character == b':' as i64 {
-                self.next()?;
-                let current = self.disjunction_parse(b')' as i64)?;
-                self.next()?;
-                self.quantifier_parse(current, current_index)
-            } else if self.character == b'<' as i64 {
-                // Peek past '<': `=`/`!` are lookbehind assertions; anything
-                // else begins a group `<name>`, so latch XS_REGEXP_NAME
-                // BEFORE reading the first name char, matching XS's astral
-                // handling during a name.
-                let peek = self.read8(self.offset);
-                if peek != b'=' && peek != b'!' {
-                    self.flags |= XS_REGEXP_NAME;
-                }
-                self.next()?;
-                if self.character == b'=' as i64 {
-                    self.next()?;
-                    let term = self.disjunction_parse(b')' as i64)?;
-                    self.next()?;
-                    let ai = self.assertion_index;
-                    self.assertion_index += 1;
-                    Ok(self.add_node(Kind::Assertion {
-                        term,
-                        not: false,
-                        direction: -1,
-                        assertion_index: ai,
-                    }))
-                } else if self.character == b'!' as i64 {
-                    self.next()?;
-                    let term = self.disjunction_parse(b')' as i64)?;
-                    self.next()?;
-                    let ai = self.assertion_index;
-                    self.assertion_index += 1;
-                    Ok(self.add_node(Kind::Assertion {
-                        term,
-                        not: true,
-                        direction: -1,
-                        assertion_index: ai,
-                    }))
-                } else {
-                    // `(?<name>…)` named capture. Validate the name
-                    // (`fxCaptureNameParse`) and register it — a repeat is
-                    // `mxDuplicateCapture` — then parse the body as a normal
-                    // capturing group. It codegens exactly like a numbered
-                    // group; the only difference is the name-slot operand on
-                    // its completion, which the matcher records into `names[]`
-                    // so `\k<name>` and the JS `.groups` object can resolve it.
-                    self.saw_named_group = true;
-                    self.capture_index += 1;
-                    current_index += 1;
-                    let name = self.capture_name_parse()?;
-                    // `fxCaptureNamePut` then `fxCaptureNameParticipate`: a
-                    // duplicate name shares its slot but is a SyntaxError only
-                    // when already live in this scope (same alternative), not
-                    // when it recurs across sibling disjunction alternatives.
-                    let slot = self.put_capture_name(&name, current_index);
-                    self.participate_capture_name(slot)?;
-                    let term = self.disjunction_parse(b')' as i64)?;
-                    self.next()?;
-                    let capture = self.add_node(Kind::Capture {
-                        term,
-                        capture_index: current_index,
-                        name_slot: slot,
-                    });
-                    self.quantifier_parse(capture, current_index - 1)
-                }
-            } else {
-                // `Modifiers` (`fxModifiersParse`) is `ModifierFlags`
-                // optionally followed by `- ModifierFlags`, where each side is
-                // a non-repeating run of i/m/s and the two sets are disjoint.
-                // The scoped flags apply to the enclosed disjunction and are
-                // restored at the sequel step (the runtime `cxModifiersStep`
-                // sets the matcher's live `flags` register), so case-folding
-                // (compile-time, baked into charsets) and dot-all/multiline
-                // (runtime) both track the scoped flag word.
-                let mut add = 0u32;
-                let mut remove = 0u32;
-                let mut removing = false;
-                loop {
-                    let bit = match self.character {
-                        c if c == b'i' as i64 => Some(XS_REGEXP_I),
-                        c if c == b'm' as i64 => Some(XS_REGEXP_M),
-                        c if c == b's' as i64 => Some(XS_REGEXP_S),
-                        _ => None,
-                    };
-                    if let Some(bit) = bit {
-                        if (if removing { remove } else { add }) & bit != 0 {
-                            return Err(self.error("invalid modifiers"));
-                        }
-                        if removing {
-                            remove |= bit;
-                        } else {
-                            add |= bit;
-                        }
-                        self.next()?;
-                        continue;
-                    }
-                    if self.character == b'-' as i64 && !removing {
-                        removing = true;
-                        self.next()?;
-                        continue;
-                    }
-                    break;
-                }
-                // `(?:...)`-terminated, at least one flag total (`(?-:a)` — both
-                // empty — is `mxInvalidModifiers`), and disjoint add/remove
-                // (checked after consuming both lists, as XS does). An
-                // empty *remove* after `-` is legal (`(?i-:a)`), matching XS.
-                if self.character != b':' as i64 || (add | remove) == 0 || (add & remove) != 0 {
-                    return Err(self.error("invalid modifiers"));
-                }
-                self.next()?;
-                let outer_flags = self.flags;
-                let modified_flags = (outer_flags | add) & !remove;
-                // Parse the enclosed disjunction under the scoped flags so its
-                // charsets fold (or not) per the modified `i`, then restore.
-                self.flags = modified_flags;
-                let disjunction = self.disjunction_parse(b')' as i64)?;
+                    capture_index: current_index,
+                    name_slot,
+                });
+                self.quantifier_parse(capture, current_index - 1)
+            }
+            GroupEnd::Modifiers {
+                outer_flags,
+                modified_flags,
+            } => {
                 self.flags = outer_flags;
                 self.next()?;
                 // A modifier group is not itself quantifiable in XS
                 // (`fxModifiersParse` returns without `fxQuantifierParse`); a
                 // following quantifier is a "nothing to repeat" error.
                 Ok(self.add_node(Kind::Modifiers {
-                    disjunction,
+                    disjunction: term,
                     modified_flags: modified_flags as i32,
                     outer_flags: outer_flags as i32,
                 }))
             }
-        } else {
-            self.capture_index += 1;
-            current_index += 1;
-            let term = self.disjunction_parse(b')' as i64)?;
-            self.next()?;
-            let capture = self.add_node(Kind::Capture {
-                term,
-                capture_index: current_index,
-                name_slot: -1,
-            });
-            self.quantifier_parse(capture, current_index - 1)
         }
     }
 
     // ---- the measure pass (fx*Measure) ----
 
-    fn measure(&mut self, id: NodeId, direction: i32) {
+    /// `fx*Measure` over the tree from `root`: each node's step offset, and a
+    /// group's completion and a quantifier's loop offsets, in C's order.
+    ///
+    /// C recurses into a group's term and into each atom of a sequence and
+    /// each alternative of a disjunction, so group nesting was native
+    /// recursion depth. The walk is a loop over a stack of [`MeasureWork`]
+    /// (STACK-DEPTH-REFACTOR.md §4.4 B7): [`Self::measure_node`] measures a
+    /// node when its entry is popped, a group's completion waits below its
+    /// term, and the `|` and sequence spines push their next levels where C
+    /// tail-recurses on `right` (recursing per atom made a flat 1,067-atom
+    /// literal overflow a 2 MiB debug stack). Every `size` increment and work
+    /// charge happens in the C order, so the offsets are byte-identical.
+    fn measure(&mut self, root: NodeId, direction: i32) {
+        let mut work = vec![MeasureWork::Node(root, direction)];
+        while let Some(next) = work.pop() {
+            match next {
+                MeasureWork::Node(id, direction) => self.measure_node(id, direction, &mut work),
+                MeasureWork::Disjunction(id, direction) => {
+                    // C: step, size += 12, measure(left), measure(right). The
+                    // pattern's `|` chain is right-nested, but a `v`-mode
+                    // class's string alternatives (`[\q{ab|cd|…}]`,
+                    // `charset_strings_disjunction`) are left-nested, one
+                    // level per alternative, so both sides are spine entries:
+                    // a node's step is assigned before its left side is
+                    // measured, and its right side is measured when the left
+                    // side has finished, which is the C order.
+                    self.work.charge(1);
+                    if let Shape::Disjunction(left, right) = self.child_shape(id) {
+                        self.nodes[id].step = self.size as i32;
+                        self.size += 12; // mxDisjunctionStepSize
+                        work.push(MeasureWork::Disjunction(right, direction));
+                        work.push(MeasureWork::Disjunction(left, direction));
+                    } else {
+                        work.push(MeasureWork::Node(id, direction));
+                    }
+                }
+                MeasureWork::Sequence(id) => {
+                    // Forward: each level measures its left atom, takes that
+                    // atom's step as its own, then continues into `right`.
+                    self.work.charge(1);
+                    if let Shape::Sequence(left, _) = self.child_shape(id) {
+                        work.push(MeasureWork::SequenceLeftMeasured(id));
+                        work.push(MeasureWork::Node(left, 1));
+                    } else {
+                        work.push(MeasureWork::Node(id, 1));
+                    }
+                }
+                MeasureWork::SequenceLeftMeasured(id) => {
+                    let Shape::Sequence(left, right) = self.child_shape(id) else {
+                        unreachable!("a sequence level")
+                    };
+                    let s = self.nodes[left].step;
+                    self.nodes[id].step = s;
+                    work.push(MeasureWork::Sequence(right));
+                }
+                MeasureWork::BackwardSequenceLevel(id, direction) => {
+                    // A backward level whose right side is measured: it takes
+                    // that side's step, then measures its left atom.
+                    let Shape::Sequence(left, right) = self.child_shape(id) else {
+                        unreachable!("a sequence level")
+                    };
+                    let s = self.nodes[right].step;
+                    self.nodes[id].step = s;
+                    work.push(MeasureWork::Node(left, direction));
+                }
+                MeasureWork::Completion(id) => {
+                    self.nodes[id].completion = self.size as i32;
+                    self.size += match self.child_shape(id) {
+                        Shape::Capture(_) => 16, // mxCaptureCompletionSize
+                        Shape::Assertion { not, .. } => {
+                            if not {
+                                8
+                            } else {
+                                12
+                            }
+                        }
+                        Shape::Quantifier(_) => 24, // mxQuantifierCompletionSize
+                        Shape::Modifiers(_) => 12,  // mxModifiersStepSize
+                        _ => unreachable!("only a group has a completion"),
+                    };
+                }
+            }
+        }
+    }
+
+    /// One node of [`Self::measure`]: its own offsets, with the measuring of
+    /// its children and what follows them pushed on `work`.
+    fn measure_node(&mut self, id: NodeId, direction: i32, work: &mut Vec<MeasureWork>) {
         self.work.charge(1);
-        // Split-borrow: read the kind's child ids first, mutate offsets
-        // after. We recurse by id, so the arena stays coherent.
-        //
-        // The `Disjunction` and `Sequence` arms walk their right-nested spine
-        // in a loop where C tail-recurses on `right`: a pattern's length is
-        // its spine's length, and recursing per atom made a flat 1,067-atom
-        // literal overflow a 2 MiB debug stack. The order of every visit and
-        // of every `size` increment is the C order, so the offsets are
-        // byte-identical.
         match self.child_shape(id) {
             Shape::Term => {
                 self.nodes[id].step = self.size as i32;
@@ -2431,79 +2714,28 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                 self.nodes[id].step = self.size as i32;
                 self.size += 8 + ((1 + count) as i64) * 4;
             }
-            Shape::Disjunction(..) => {
-                // C: step, size += 12, measure(left), measure(right). The
-                // pattern's `|` chain is right-nested, but a `v`-mode class's
-                // string alternatives (`[\q{ab|cd|…}]`, `charset_strings_
-                // disjunction`) are left-nested, one level per alternative, so
-                // the walk keeps its own stack of pending right sides instead
-                // of recursing on either: a node's step is assigned before its
-                // left side is measured, and its right side is measured when
-                // the left side has finished, which is the C order.
-                let mut pending_rights: Vec<NodeId> = Vec::new();
+            Shape::Disjunction(..) => work.push(MeasureWork::Disjunction(id, direction)),
+            Shape::Sequence(..) if direction == 1 => work.push(MeasureWork::Sequence(id)),
+            Shape::Sequence(..) => {
+                // Backward (inside a lookbehind): the rightmost atom is
+                // measured first, then each level, innermost outward, takes
+                // its right side's step and measures its left atom.
                 let mut id = id;
                 loop {
                     self.work.charge(1);
-                    if let Shape::Disjunction(left, right) = self.child_shape(id) {
-                        self.nodes[id].step = self.size as i32;
-                        self.size += 12; // mxDisjunctionStepSize
-                        pending_rights.push(right);
-                        id = left;
-                    } else {
-                        self.measure(id, direction);
-                        match pending_rights.pop() {
-                            Some(right) => id = right,
-                            None => break,
-                        }
-                    }
+                    let Shape::Sequence(_, right) = self.child_shape(id) else {
+                        break;
+                    };
+                    work.push(MeasureWork::BackwardSequenceLevel(id, direction));
+                    id = right;
                 }
-            }
-            Shape::Sequence(..) => {
-                if direction == 1 {
-                    // Forward: each level measures its left atom, takes that
-                    // atom's step as its own, then continues into `right`.
-                    let mut id = id;
-                    loop {
-                        self.work.charge(1);
-                        let Shape::Sequence(left, right) = self.child_shape(id) else {
-                            self.measure(id, direction);
-                            break;
-                        };
-                        self.measure(left, direction);
-                        let s = self.nodes[left].step;
-                        self.nodes[id].step = s;
-                        id = right;
-                    }
-                } else {
-                    // Backward (inside a lookbehind): the rightmost atom is
-                    // measured first, then each level, innermost outward,
-                    // takes its right side's step and measures its left atom.
-                    let mut spine: Vec<(NodeId, NodeId)> = Vec::new();
-                    let mut id = id;
-                    loop {
-                        self.work.charge(1);
-                        let Shape::Sequence(left, right) = self.child_shape(id) else {
-                            break;
-                        };
-                        spine.push((id, left));
-                        id = right;
-                    }
-                    self.measure(id, direction);
-                    let mut right = id;
-                    while let Some((sequence, left)) = spine.pop() {
-                        let s = self.nodes[right].step;
-                        self.nodes[sequence].step = s;
-                        self.measure(left, direction);
-                        right = sequence;
-                    }
-                }
+                work.push(MeasureWork::Node(id, direction));
             }
             Shape::Capture(term) => {
                 self.nodes[id].step = self.size as i32;
                 self.size += 12; // mxCaptureStepSize
-                self.measure(term, direction);
-                self.nodes[id].completion = self.size as i32;
-                self.size += 16; // mxCaptureCompletionSize
+                work.push(MeasureWork::Completion(id));
+                work.push(MeasureWork::Node(term, direction));
             }
             Shape::CaptureReference => {
                 self.nodes[id].step = self.size as i32;
@@ -2516,34 +2748,113 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
             } => {
                 self.nodes[id].step = self.size as i32;
                 self.size += if not { 16 } else { 12 };
-                self.measure(term, dir);
-                self.nodes[id].completion = self.size as i32;
-                self.size += if not { 8 } else { 12 };
+                work.push(MeasureWork::Completion(id));
+                work.push(MeasureWork::Node(term, dir));
             }
             Shape::Quantifier(term) => {
                 self.nodes[id].step = self.size as i32;
                 self.size += 20; // mxQuantifierStepSize
                 self.nodes[id].loop_off = self.size as i32;
                 self.size += 24; // mxQuantifierLoopSize
-                self.measure(term, direction);
-                self.nodes[id].completion = self.size as i32;
-                self.size += 24; // mxQuantifierCompletionSize
+                work.push(MeasureWork::Completion(id));
+                work.push(MeasureWork::Node(term, direction));
             }
             Shape::Modifiers(disj) => {
                 // fxModifiersMeasure: an entry step block, the disjunction, then
                 // a sequel step block — each `mxModifiersStepSize` (12 bytes).
                 self.nodes[id].step = self.size as i32;
                 self.size += 12; // mxModifiersStepSize
-                self.measure(disj, direction);
-                self.nodes[id].completion = self.size as i32;
-                self.size += 12; // mxModifiersStepSize
+                work.push(MeasureWork::Completion(id));
+                work.push(MeasureWork::Node(disj, direction));
             }
         }
     }
 
     // ---- the code pass (fx*Code) ----
 
-    fn emit(&mut self, id: NodeId, direction: i32, sequel: i32) {
+    /// `fx*Code` over the tree from `root`, whose sequel is `sequel`, as a
+    /// loop over a stack of [`EmitWork`] like [`Self::measure`]'s: a group's
+    /// completion waits below its term, the `|` and sequence spines push
+    /// their next levels, and every step is emitted, and every work charge
+    /// made, in the C order.
+    fn emit(&mut self, root: NodeId, direction: i8, sequel: i32) {
+        let mut work = vec![EmitWork::Node {
+            id: root,
+            direction,
+            sequel,
+        }];
+        while let Some(next) = work.pop() {
+            match next {
+                EmitWork::Node {
+                    id,
+                    direction,
+                    sequel,
+                } => self.emit_node(id, direction, sequel, &mut work),
+                EmitWork::Disjunction {
+                    id,
+                    direction,
+                    sequel,
+                } => {
+                    // As in `measure`: the right-nested `|` chain and the
+                    // left-nested `v`-mode string alternatives alike, in the
+                    // C order (a node's step, its left side, then its right
+                    // side; the sequel is the same for every alternative).
+                    self.work.charge(1);
+                    if let Shape::Disjunction(left, right) = self.child_shape(id) {
+                        let at = (self.nodes[id].step / 4) as usize;
+                        self.write_word(at, CX_DISJUNCTION_STEP);
+                        self.write_word(at + 1, self.nodes[left].step);
+                        self.write_word(at + 2, self.nodes[right].step);
+                        work.push(EmitWork::Disjunction {
+                            id: right,
+                            direction,
+                            sequel,
+                        });
+                        work.push(EmitWork::Disjunction {
+                            id: left,
+                            direction,
+                            sequel,
+                        });
+                    } else {
+                        work.push(EmitWork::Node {
+                            id,
+                            direction,
+                            sequel,
+                        });
+                    }
+                }
+                EmitWork::Sequence { id, sequel } => {
+                    // Forward: each atom's sequel is the next atom's step; the
+                    // last atom's sequel is the outer sequel.
+                    self.work.charge(1);
+                    if let Shape::Sequence(left, right) = self.child_shape(id) {
+                        let right_step = self.nodes[right].step;
+                        work.push(EmitWork::Sequence { id: right, sequel });
+                        work.push(EmitWork::Node {
+                            id: left,
+                            direction: 1,
+                            sequel: right_step,
+                        });
+                    } else {
+                        work.push(EmitWork::Node {
+                            id,
+                            direction: 1,
+                            sequel,
+                        });
+                    }
+                }
+                EmitWork::Completion {
+                    id,
+                    direction,
+                    sequel,
+                } => self.emit_completion(id, direction, sequel),
+            }
+        }
+    }
+
+    /// One node of [`Self::emit`]: its step, with the emitting of its
+    /// children and of a group's completion pushed on `work`.
+    fn emit_node(&mut self, id: NodeId, direction: i8, sequel: i32, work: &mut Vec<EmitWork>) {
         self.work.charge(1);
         match self.child_shape(id) {
             Shape::Term => {
@@ -2583,89 +2894,46 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                     }
                 }
             }
-            // The `Disjunction` and `Sequence` arms walk their right-nested
-            // spine in a loop, as `measure` does, emitting every step in the
-            // C order.
-            Shape::Disjunction(..) => {
-                // As in `measure`: an explicit stack of pending right sides
-                // covers the right-nested `|` chain and the left-nested
-                // `v`-mode string alternatives alike, in the C order (a
-                // node's step, its left side, then its right side; the
-                // sequel is the same for every alternative).
-                let mut pending_rights: Vec<NodeId> = Vec::new();
+            Shape::Disjunction(..) => work.push(EmitWork::Disjunction {
+                id,
+                direction,
+                sequel,
+            }),
+            Shape::Sequence(..) if direction == 1 => work.push(EmitWork::Sequence { id, sequel }),
+            Shape::Sequence(..) => {
+                // Backward: the rightmost atom is emitted first with the
+                // innermost left atom's step as its sequel, then each left
+                // atom, innermost outward, sequels to the one before it;
+                // the first atom sequels to the outer sequel.
                 let mut id = id;
+                let mut next_sequel = sequel;
                 loop {
                     self.work.charge(1);
-                    if let Shape::Disjunction(left, right) = self.child_shape(id) {
-                        let at = (self.nodes[id].step / 4) as usize;
-                        self.write_word(at, CX_DISJUNCTION_STEP);
-                        self.write_word(at + 1, self.nodes[left].step);
-                        self.write_word(at + 2, self.nodes[right].step);
-                        pending_rights.push(right);
-                        id = left;
-                    } else {
-                        self.emit(id, direction, sequel);
-                        match pending_rights.pop() {
-                            Some(right) => id = right,
-                            None => break,
-                        }
-                    }
+                    let Shape::Sequence(left, right) = self.child_shape(id) else {
+                        break;
+                    };
+                    work.push(EmitWork::Node {
+                        id: left,
+                        direction,
+                        sequel: next_sequel,
+                    });
+                    next_sequel = self.nodes[left].step;
+                    id = right;
                 }
-            }
-            Shape::Sequence(..) => {
-                if direction == 1 {
-                    // Forward: each atom's sequel is the next atom's step; the
-                    // last atom's sequel is the outer sequel.
-                    let mut id = id;
-                    loop {
-                        self.work.charge(1);
-                        let Shape::Sequence(left, right) = self.child_shape(id) else {
-                            self.emit(id, direction, sequel);
-                            break;
-                        };
-                        let right_step = self.nodes[right].step;
-                        self.emit(left, direction, right_step);
-                        id = right;
-                    }
-                } else {
-                    // Backward: the rightmost atom is emitted first with the
-                    // innermost left atom's step as its sequel, then each left
-                    // atom, innermost outward, sequels to the one before it;
-                    // the first atom sequels to the outer sequel.
-                    let mut lefts: Vec<NodeId> = Vec::new();
-                    let mut id = id;
-                    loop {
-                        self.work.charge(1);
-                        let Shape::Sequence(left, right) = self.child_shape(id) else {
-                            break;
-                        };
-                        lefts.push(left);
-                        id = right;
-                    }
-                    let innermost_left = *lefts.last().expect("a sequence has a left atom");
-                    let first_sequel = self.nodes[innermost_left].step;
-                    self.emit(id, direction, first_sequel);
-                    while let Some(left) = lefts.pop() {
-                        let next_sequel = match lefts.last() {
-                            Some(&previous) => self.nodes[previous].step,
-                            None => sequel,
-                        };
-                        self.emit(left, direction, next_sequel);
-                    }
-                }
+                work.push(EmitWork::Node {
+                    id,
+                    direction,
+                    sequel: next_sequel,
+                });
             }
             Shape::Capture(term) => {
-                let (step, completion, capture_index, name_slot) = {
+                let (step, completion, capture_index) = {
                     let n = &self.nodes[id];
-                    let (ci, ns) = match &n.kind {
-                        Kind::Capture {
-                            capture_index,
-                            name_slot,
-                            ..
-                        } => (*capture_index, *name_slot),
+                    let ci = match &n.kind {
+                        Kind::Capture { capture_index, .. } => *capture_index,
                         _ => unreachable!(),
                     };
-                    (n.step, n.completion, ci, ns)
+                    (n.step, n.completion, ci)
                 };
                 let term_step = self.nodes[term].step;
                 let at = (step / 4) as usize;
@@ -2679,22 +2947,16 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                 );
                 self.write_word(at + 1, term_step);
                 self.write_word(at + 2, capture_index);
-                self.emit(term, direction, completion);
-                let ct = (completion / 4) as usize;
-                self.write_word(
-                    ct,
-                    if direction == 1 {
-                        CX_CAPTURE_FORWARD_COMPLETION
-                    } else {
-                        CX_CAPTURE_BACKWARD_COMPLETION
-                    },
-                );
-                self.write_word(ct + 1, sequel);
-                self.write_word(ct + 2, capture_index);
-                // The name-id operand: the group's name slot for a named
-                // capture (so the matcher records `names[slot] = index` on
-                // completion), or -1 for a plain numbered group.
-                self.write_word(ct + 3, name_slot);
+                work.push(EmitWork::Completion {
+                    id,
+                    direction,
+                    sequel,
+                });
+                work.push(EmitWork::Node {
+                    id: term,
+                    direction,
+                    sequel: completion,
+                });
             }
             Shape::CaptureReference => {
                 let (capture_index, name_slot) = match &self.nodes[id].kind {
@@ -2747,16 +3009,17 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                     self.write_word(at + 1, term_step);
                     self.write_word(at + 2, ai);
                 }
-                self.emit(term, dir, completion);
-                let ct = (completion / 4) as usize;
-                if not {
-                    self.write_word(ct, CX_ASSERTION_NOT_COMPLETION);
-                    self.write_word(ct + 1, ai);
-                } else {
-                    self.write_word(ct, CX_ASSERTION_COMPLETION);
-                    self.write_word(ct + 1, sequel);
-                    self.write_word(ct + 2, ai);
-                }
+                work.push(EmitWork::Completion {
+                    id,
+                    direction,
+                    sequel,
+                });
+                work.push(EmitWork::Node {
+                    id: term,
+                    // An assertion's direction is 1 or -1.
+                    direction: dir as i8,
+                    sequel: completion,
+                });
             }
             Shape::Quantifier(term) => {
                 let (
@@ -2815,27 +3078,25 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                 self.write_word(lp + 3, sequel);
                 self.write_word(lp + 4, capture_index + 1);
                 self.write_word(lp + 5, capture_index + capture_count);
-                self.emit(term, direction, completion);
-                let ct = (completion / 4) as usize;
-                self.write_word(ct, CX_QUANTIFIER_COMPLETION);
-                self.write_word(ct + 1, loop_off);
-                self.write_word(ct + 2, quantifier_index);
-                self.write_word(ct + 3, sequel);
-                self.write_word(ct + 4, capture_index + 1);
-                self.write_word(ct + 5, capture_index + capture_count);
+                work.push(EmitWork::Completion {
+                    id,
+                    direction,
+                    sequel,
+                });
+                work.push(EmitWork::Node {
+                    id: term,
+                    direction,
+                    sequel: completion,
+                });
             }
             Shape::Modifiers(disj) => {
-                let (step, completion, modified_flags, outer_flags) = {
+                let (step, completion, modified_flags) = {
                     let n = &self.nodes[id];
-                    let (mf, of) = match &n.kind {
-                        Kind::Modifiers {
-                            modified_flags,
-                            outer_flags,
-                            ..
-                        } => (*modified_flags, *outer_flags),
+                    let mf = match &n.kind {
+                        Kind::Modifiers { modified_flags, .. } => *modified_flags,
                         _ => unreachable!(),
                     };
-                    (n.step, n.completion, mf, of)
+                    (n.step, n.completion, mf)
                 };
                 let disj_step = self.nodes[disj].step;
                 // Entry: switch the live flags to the scoped word, then flow
@@ -2844,18 +3105,84 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
                 self.write_word(at, CX_MODIFIERS_STEP);
                 self.write_word(at + 1, disj_step);
                 self.write_word(at + 2, modified_flags);
-                self.emit(disj, direction, completion);
-                // Sequel: restore the outer flags, then flow to the real sequel.
-                let ct = (completion / 4) as usize;
-                self.write_word(ct, CX_MODIFIERS_STEP);
-                self.write_word(ct + 1, sequel);
-                self.write_word(ct + 2, outer_flags);
+                work.push(EmitWork::Completion {
+                    id,
+                    direction,
+                    sequel,
+                });
+                work.push(EmitWork::Node {
+                    id: disj,
+                    direction,
+                    sequel: completion,
+                });
             }
         }
     }
 
+    /// The completion of a group whose term [`Self::emit`] has emitted.
+    fn emit_completion(&mut self, id: NodeId, direction: i8, sequel: i32) {
+        let ct = (self.nodes[id].completion / 4) as usize;
+        match self.nodes[id].kind {
+            Kind::Capture {
+                capture_index,
+                name_slot,
+                ..
+            } => {
+                self.write_word(
+                    ct,
+                    if direction == 1 {
+                        CX_CAPTURE_FORWARD_COMPLETION
+                    } else {
+                        CX_CAPTURE_BACKWARD_COMPLETION
+                    },
+                );
+                self.write_word(ct + 1, sequel);
+                self.write_word(ct + 2, capture_index);
+                // The name-id operand: the group's name slot for a named
+                // capture (so the matcher records `names[slot] = index` on
+                // completion), or -1 for a plain numbered group.
+                self.write_word(ct + 3, name_slot);
+            }
+            Kind::Assertion {
+                not,
+                assertion_index: ai,
+                ..
+            } => {
+                if not {
+                    self.write_word(ct, CX_ASSERTION_NOT_COMPLETION);
+                    self.write_word(ct + 1, ai);
+                } else {
+                    self.write_word(ct, CX_ASSERTION_COMPLETION);
+                    self.write_word(ct + 1, sequel);
+                    self.write_word(ct + 2, ai);
+                }
+            }
+            Kind::Quantifier {
+                capture_index,
+                capture_count,
+                quantifier_index,
+                ..
+            } => {
+                let loop_off = self.nodes[id].loop_off;
+                self.write_word(ct, CX_QUANTIFIER_COMPLETION);
+                self.write_word(ct + 1, loop_off);
+                self.write_word(ct + 2, quantifier_index);
+                self.write_word(ct + 3, sequel);
+                self.write_word(ct + 4, capture_index + 1);
+                self.write_word(ct + 5, capture_index + capture_count);
+            }
+            Kind::Modifiers { outer_flags, .. } => {
+                // Sequel: restore the outer flags, then flow to the real sequel.
+                self.write_word(ct, CX_MODIFIERS_STEP);
+                self.write_word(ct + 1, sequel);
+                self.write_word(ct + 2, outer_flags);
+            }
+            _ => unreachable!("only a group has a completion"),
+        }
+    }
+
     /// Classify a node into its measure/code shape, reading child ids and
-    /// charset count without holding a borrow across the recursive calls.
+    /// charset count without holding a borrow while the walk updates nodes.
     fn child_shape(&self, id: NodeId) -> Shape {
         match &self.nodes[id].kind {
             Kind::CharSet { chars, .. } => Shape::CharSet(chars[0]),
@@ -2882,6 +3209,50 @@ impl<const MATERIALIZE: bool> Compiler<'_, '_, MATERIALIZE> {
             Kind::Modifiers { disjunction, .. } => Shape::Modifiers(*disjunction),
         }
     }
+}
+
+/// What [`Compiler::measure`]'s stack holds.
+enum MeasureWork {
+    /// Measure the node, in the direction (`fx*Measure`).
+    Node(NodeId, i32),
+    /// The next node of a `|` spine.
+    Disjunction(NodeId, i32),
+    /// The next level of a forward sequence spine.
+    Sequence(NodeId),
+    /// A forward sequence level whose left atom is measured.
+    SequenceLeftMeasured(NodeId),
+    /// A backward sequence level whose right side is measured.
+    BackwardSequenceLevel(NodeId, i32),
+    /// A group whose term is measured: its completion.
+    Completion(NodeId),
+}
+
+/// What [`Compiler::emit`]'s stack holds.
+///
+/// `direction` is 1 or -1, kept to a byte so that an entry is 16 bytes: a
+/// lookbehind's sequence spine and a class's string alternatives push one
+/// entry per level.
+enum EmitWork {
+    /// Emit the node, in the direction, before its sequel (`fx*Code`).
+    Node {
+        id: NodeId,
+        direction: i8,
+        sequel: i32,
+    },
+    /// The next node of a `|` spine.
+    Disjunction {
+        id: NodeId,
+        direction: i8,
+        sequel: i32,
+    },
+    /// The next level of a forward sequence spine.
+    Sequence { id: NodeId, sequel: i32 },
+    /// A group whose term is emitted: its completion.
+    Completion {
+        id: NodeId,
+        direction: i8,
+        sequel: i32,
+    },
 }
 
 enum Shape {
@@ -3000,18 +3371,21 @@ mod recursion_bounds {
     use super::*;
     use crate::matcher::match_regexp;
 
-    /// The at-limit patterns need a few MiB of stack unoptimized (about
-    /// 7 KiB per nesting level across parse, measure and emit), more than
-    /// the 2 MiB default test thread; run them on a thread sized like the
-    /// engine's own contract (`ironhorse_vm::NATIVE_STACK_BYTES`).
-    fn on_engine_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    /// Parse, measure and emit keep their own stacks, so nesting is not
+    /// native recursion depth: at-limit patterns compile and match on a
+    /// thread far smaller than the engine's contract
+    /// (`ironhorse_vm::NATIVE_STACK_BYTES`), unoptimized. The recursion
+    /// needed about 7 KiB per nesting level here, a few MiB at the limit.
+    fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
         std::thread::Builder::new()
-            .stack_size(32 * 1024 * 1024)
+            .stack_size(SMALL_STACK)
             .spawn(f)
             .expect("spawn")
             .join()
             .expect("the compiler must return, never overflow")
     }
+
+    const SMALL_STACK: usize = 256 * 1024;
 
     fn nested(open: &str, close: &str, depth: usize) -> String {
         format!("{}a{}", open.repeat(depth), close.repeat(depth))
@@ -3019,25 +3393,44 @@ mod recursion_bounds {
 
     #[test]
     fn group_nesting_at_the_limit_compiles_and_one_deeper_is_a_syntax_error() {
-        on_engine_stack(|| {
+        on_small_stack(|| {
             let limit = MAX_NESTING_DEPTH as usize;
             for (open, close, flags) in [
                 ("(", ")", ""),
                 ("(?:", ")", ""),
                 ("(?=", ")", ""),
+                ("(?!", ")", "u"),
+                ("(?<=", ")", ""),
                 ("(?<!", ")", ""),
+                ("(?i:", ")", ""),
+                ("(?s-i:", ")", "i"),
                 ("(?:", ")*", ""),
+                ("(?:", ")+?", "u"),
+                ("(b|", ")", ""),
+                ("(?<=b|", ")", ""),
+                ("(?:b|(?:c|", "))", ""),
                 ("[", "]", "v"),
+                ("[^[^", "]]", "v"),
+                ("[b--[", "]]", "v"),
+                ("[\\w&&[", "]]", "v"),
+                ("[b[", "]c-d]", "vi"),
             ] {
+                let limit = if open.matches(['(', '[']).count() == 2 {
+                    limit / 2
+                } else {
+                    limit
+                };
                 let program = compile(&nested(open, close, limit), flags)
                     .unwrap_or_else(|e| panic!("{open}…{close} at the limit must compile: {e:?}"));
                 let outcome = match_regexp(&program, b"a", 0);
                 if close == ")*" {
                     assert!(outcome.resource_limit, "nested stars hit the state ceiling");
                 } else {
-                    assert!(
+                    // `b` minus a set without `a` never contains `a`.
+                    assert_eq!(
                         outcome.matched,
-                        "{open}…{close} at the limit must still match"
+                        !open.contains("--"),
+                        "{open}…{close} at the limit must still match as it says"
                     );
                 }
                 let past = compile(&nested(open, close, limit + 1), flags).map(|_| ());
@@ -3050,11 +3443,11 @@ mod recursion_bounds {
     }
 
     #[test]
-    fn a_syntax_error_deep_in_a_group_leaves_the_depth_balanced_for_the_reparse() {
+    fn a_deep_named_group_reparses_from_depth_zero() {
         // The non-`u` named-capture path re-parses the whole pattern; the
-        // second pass must start from depth zero even though the first pass
-        // returned through `nested` frames by `?`.
-        on_engine_stack(|| {
+        // second pass must start from depth zero, the first having left
+        // every level it entered.
+        on_small_stack(|| {
             let deep = format!("(?<n>{}a{})\\k<n>", "(".repeat(300), ")".repeat(300));
             let program = compile(&deep, "").expect("a deep named group re-parses");
             assert!(match_regexp(&program, b"aa", 0).matched);
