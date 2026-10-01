@@ -13,6 +13,7 @@
  */
 
 import { Fail } from '@endo/errors';
+import { messageFromResponsesOutput } from '@endo/lal/providers/index.js';
 import {
   assertTranscriptRecord,
   pairToolCalls,
@@ -105,8 +106,33 @@ export const projectTranscript = path => {
     // `system` is the harness's and is not replayed; anything else is not
     // dialogue this stream knows how to carry.
     if (role !== 'user' && role !== 'assistant') return;
-    if (content !== undefined && content.trim() !== '') {
-      records.push(assertTranscriptRecord({ kind: 'message', role, content }));
+    const providerContext =
+      message.responsesOutput === undefined
+        ? undefined
+        : {
+            format: 'responses-output-v1',
+            payload: JSON.stringify(
+              messageFromResponsesOutput(message.responsesOutput)
+                .responsesOutput,
+            ),
+          };
+    if (providerContext) {
+      const retained = messageFromResponsesOutput(message.responsesOutput);
+      (role === 'assistant' &&
+        retained.content === (content ?? '') &&
+        JSON.stringify(retained.tool_calls ?? []) ===
+          JSON.stringify(message.tool_calls ?? [])) ||
+        Fail`Responses projection differs from retained output`;
+    }
+    if (providerContext || (content !== undefined && content.trim() !== '')) {
+      records.push(
+        assertTranscriptRecord({
+          kind: 'message',
+          role,
+          content: content ?? '',
+          ...(providerContext ? { providerContext } : {}),
+        }),
+      );
       if (role === 'user') open.clear();
     }
     if (role !== 'assistant' || !Array.isArray(message.tool_calls)) return;
@@ -139,8 +165,9 @@ harden(projectTranscript);
  * opening summary; superseded history must not become active context again.
  *
  * @param {readonly TranscriptRecord[]} records
+ * @param {string} [providerFormat] A pinned inference format, never inferred from history.
  */
-export const transcriptToProviderMessages = records => {
+export const transcriptToProviderMessages = (records, providerFormat) => {
   const { active } = selectActiveTranscript(records);
   if (active.some(record => record.kind === 'native-context'))
     Fail`Direct provider cannot restore backend-native context`;
@@ -149,13 +176,51 @@ export const transcriptToProviderMessages = records => {
   const { pairs } = pairToolCalls(active, { perTurn: true });
   const resultOf = new Map(pairs.map(pair => [pair.call, pair.result]));
   const messages = [];
+  /** @type {Map<string, any>} */
+  const nativeCalls = new Map();
+  let nativeMessage = false;
   for (const [index, record] of active.entries()) {
     if (record.kind === 'message') {
-      messages.push({ role: record.role, content: record.content });
+      nativeCalls.size === 0 || Fail`Missing canonical Responses calls`;
+      if (record.providerContext) {
+        (record.providerContext.format === 'responses-output-v1' &&
+          providerFormat === record.providerContext.format) ||
+          Fail`Incompatible per-message provider context`;
+        const message = messageFromResponsesOutput(
+          JSON.parse(record.providerContext.payload),
+        );
+        message.content === record.content ||
+          Fail`Responses dialogue differs from retained output`;
+        messages.push(message);
+        nativeMessage = true;
+        for (const call of message.tool_calls ?? [])
+          nativeCalls.set(call.id, call);
+      } else {
+        nativeMessage = false;
+        messages.push({ role: record.role, content: record.content });
+      }
     } else if (record.kind === 'compaction') {
       // Model-authored context, never elevated to a harness/system instruction.
       messages.push({ role: 'assistant', content: record.summary });
     } else if (record.kind === 'tool-call') {
+      const nativeCall = nativeCalls.get(record.id);
+      if (nativeMessage) {
+        (nativeCall &&
+          nativeCall.function.name === record.name &&
+          nativeCall.function.arguments === record.args) ||
+          Fail`Responses call differs from retained output`;
+        nativeCalls.delete(record.id);
+        const result = resultOf.get(record);
+        messages.push({
+          role: 'tool',
+          tool_call_id: record.id,
+          content: result?.content ?? UNKNOWN_TOOL_OUTCOME,
+          ...(result?.failed === undefined ? {} : { failed: result.failed }),
+        });
+        // The exact assistant already includes this call; do not synthesize it.
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       const id = `floot-history-${index}`;
       const result = resultOf.get(record);
       messages.push({
@@ -177,6 +242,7 @@ export const transcriptToProviderMessages = records => {
       });
     }
   }
+  nativeCalls.size === 0 || Fail`Missing canonical Responses calls`;
   return harden(messages);
 };
 harden(transcriptToProviderMessages);

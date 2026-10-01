@@ -80,6 +80,27 @@ const commonMessage = items => {
 };
 
 /**
+ * Validate retained output and recover its common message without losing native
+ * item identities or encrypted reasoning. Used by both conversation owners.
+ * @param {any} output
+ */
+export const messageFromResponsesOutput = output => {
+  (output &&
+    Object.keys(output).length === 2 &&
+    Object.hasOwn(output, 'model') &&
+    Object.hasOwn(output, 'items') &&
+    typeof output.model === 'string' &&
+    output.model !== '' &&
+    Array.isArray(output.items)) ||
+    Fail`Invalid retained Responses output`;
+  return harden({
+    ...commonMessage(output.items),
+    responsesOutput: { model: output.model, items: output.items },
+  });
+};
+harden(messageFromResponsesOutput);
+
+/**
  * @param {any[]} messages
  * @param {string} model
  */
@@ -116,7 +137,7 @@ const requestContext = (messages, model) => {
       message.responsesOutput.model === model ||
         Fail`Incompatible Responses context model`;
       const { items } = message.responsesOutput;
-      commonMessage(items);
+      messageFromResponsesOutput(message.responsesOutput);
       retainCalls(items.filter(item => item.type === 'function_call'));
       input.push(...items);
     } else {
@@ -402,12 +423,8 @@ export const makeSubscriptionResponsesProvider = ({
       }
       completed !== undefined ||
         Fail`Responses stream ended without completion`;
-      const message = commonMessage(completed.output);
       return harden({
-        message: {
-          ...message,
-          responsesOutput: { model, items: completed.output },
-        },
+        message: messageFromResponsesOutput({ model, items: completed.output }),
         ...(usage ? { usage } : {}),
       });
     } finally {

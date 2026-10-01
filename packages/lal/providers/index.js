@@ -121,4 +121,7 @@ export { makeLlamaCppProvider } from './llamacpp.js';
 export { findMockTrace, makeMockProvider } from './mock.js';
 export { makeOllamaProvider } from './ollama.js';
 export { makeOpenRouterProvider } from './openrouter.js';
-export { makeSubscriptionResponsesProvider } from './subscription-responses.js';
+export {
+  makeSubscriptionResponsesProvider,
+  messageFromResponsesOutput,
+} from './subscription-responses.js';

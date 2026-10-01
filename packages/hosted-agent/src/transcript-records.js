@@ -41,7 +41,7 @@ const MESSAGE_ROLES = harden(['user', 'assistant']);
  * `canonicalAuditJson` chains the audit journal.
  */
 const RECORD_FIELDS = harden({
-  message: harden(['kind', 'role', 'content']),
+  message: harden(['kind', 'role', 'content', 'providerContext']),
   'tool-call': harden(['kind', 'id', 'name', 'args']),
   'tool-result': harden(['kind', 'id', 'content', 'failed']),
   compaction: harden(['kind', 'summary', 'retainedTail']),
@@ -50,7 +50,7 @@ const RECORD_FIELDS = harden({
 
 /** Fields a kind may omit. Everything else is required. */
 const OPTIONAL_FIELDS = harden({
-  message: harden([]),
+  message: harden(['providerContext']),
   'tool-call': harden([]),
   'tool-result': harden(['failed']),
   compaction: harden(['retainedTail']),
@@ -60,7 +60,7 @@ const OPTIONAL_FIELDS = harden({
 const KINDS = harden(Object.keys(RECORD_FIELDS));
 
 /**
- * @typedef {{ kind: 'message', role: 'user' | 'assistant', content: string }} TranscriptMessage
+ * @typedef {{ kind: 'message', role: 'user' | 'assistant', content: string, providerContext?: {format: string, payload: string} }} TranscriptMessage
  * @typedef {{ kind: 'tool-call', id: string, name: string, args: string }} TranscriptToolCall
  * @typedef {{ kind: 'tool-result', id: string, content: string, failed?: boolean }} TranscriptToolResult
  * @typedef {TranscriptMessage | TranscriptToolCall | TranscriptToolResult} TranscriptContextRecord
@@ -111,6 +111,19 @@ export const assertTranscriptRecord = candidate => {
   if (kind === 'message') {
     MESSAGE_ROLES.includes(/** @type {string} */ (record.role)) ||
       Fail`transcript message role ${q(record.role)} is not one of ${q(MESSAGE_ROLES)}`;
+    if (Object.hasOwn(record, 'providerContext')) {
+      const context = /** @type {any} */ (record.providerContext);
+      (record.role === 'assistant' &&
+        context &&
+        Object.keys(context).length === 2 &&
+        Object.hasOwn(context, 'format') &&
+        Object.hasOwn(context, 'payload') &&
+        typeof context.format === 'string' &&
+        context.format !== '' &&
+        typeof context.payload === 'string' &&
+        context.payload !== '') ||
+        Fail`Invalid per-message provider context`;
+    }
   }
   if (kind === 'tool-result' && Object.hasOwn(record, 'failed')) {
     typeof record.failed === 'boolean' ||
@@ -118,8 +131,14 @@ export const assertTranscriptRecord = candidate => {
   }
   const textFields = fields.filter(
     key =>
-      !['kind', 'failed', 'role', 'retainedTail', 'context'].includes(key) &&
-      Object.hasOwn(record, key),
+      ![
+        'kind',
+        'failed',
+        'role',
+        'retainedTail',
+        'context',
+        'providerContext',
+      ].includes(key) && Object.hasOwn(record, key),
   );
   for (const key of textFields) {
     typeof record[key] === 'string' ||
@@ -139,6 +158,15 @@ export const assertTranscriptRecord = candidate => {
   const ordered = {};
   for (const key of fields) {
     if (Object.hasOwn(record, key)) ordered[key] = record[key];
+  }
+  if (kind === 'message' && Object.hasOwn(record, 'providerContext')) {
+    const context = /** @type {{format: string, payload: string}} */ (
+      record.providerContext
+    );
+    ordered.providerContext = {
+      format: context.format,
+      payload: context.payload,
+    };
   }
   if (kind === 'compaction' && Object.hasOwn(record, 'retainedTail')) {
     if (!Array.isArray(record.retainedTail)) {
@@ -342,8 +370,11 @@ harden(pairToolCalls);
  * @param {readonly TranscriptRecord[]} records
  */
 export const renderTranscriptDialogue = records => {
-  records.every(record => record.kind !== 'native-context') ||
-    Fail`Cannot render native-context without its format-specific adapter`;
+  records.every(
+    record =>
+      record.kind !== 'native-context' &&
+      !(record.kind === 'message' && record.providerContext),
+  ) || Fail`Cannot render native-context without its format-specific adapter`;
   const lines = [];
   /** @type {Map<string, string>} */
   const calledNames = new Map();
@@ -384,8 +415,11 @@ harden(renderTranscriptDialogue);
  * @param {readonly TranscriptRecord[]} records
  */
 export const responsesApiItems = records => {
-  records.every(record => record.kind !== 'native-context') ||
-    Fail`Cannot translate native-context to Responses API items`;
+  records.every(
+    record =>
+      record.kind !== 'native-context' &&
+      !(record.kind === 'message' && record.providerContext),
+  ) || Fail`Cannot translate native-context to Responses API items`;
   const { active } = selectActiveTranscript(records);
   const { pairs } = pairToolCalls(active, { perTurn: true });
   const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));

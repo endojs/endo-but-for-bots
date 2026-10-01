@@ -74,6 +74,13 @@ Fae and conversation-tree ESLint have no errors; root documentation builds with
 0 errors and 180 warnings.
 Floot provider wiring, context-window metadata integration, compaction, the
 development preset, live acceptance, and deployment remain pending.
+Floot's journal now carries validated per-assistant provider context. Responses
+restoration preserves complete output, encrypted reasoning and native call IDs,
+and checks dialogue/calls against their canonical records. These annotations do
+not replace earlier history. Compaction tails can retain them; incompatible
+exporters refuse rather than silently flattening them. The existing journal
+remains Floot's only conversation authority. Pool selection and live acceptance
+are not claimed by this slice.
 Automatic environment GC is a recorded design gap, not implementation scope for
 this PR; cleanup remains explicit on the administration facet.
 The Codex catalog currently omits context-window metadata; the adapter reports

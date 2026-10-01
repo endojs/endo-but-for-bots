@@ -96,8 +96,11 @@ export const writeClaudeTranscript = (
   // is written as the conversation's opening exchange and the superseded span
   // is not replayed — which is what the boundary means.
   const { active } = selectActiveTranscript(records);
-  active.every(record => record.kind !== 'native-context') ||
-    Fail`Native Claude context requires the sandbox-native importer`;
+  active.every(
+    record =>
+      record.kind !== 'native-context' &&
+      !(record.kind === 'message' && record.providerContext),
+  ) || Fail`Native Claude context requires the sandbox-native importer`;
   const { pairs } = pairToolCalls(active, { perTurn: true });
   const resultFor = new Map(pairs.map(pair => [pair.call, pair.result]));
   // The Messages API accepts only `[A-Za-z0-9_-]` in a tool_use id. Floot
