@@ -167,8 +167,11 @@ environment variables is **defense-in-depth only, not the boundary**: `whereEndo
 derives the socket path from `$XDG_RUNTIME_DIR` / `HOME` / `$TMPDIR` and ultimately
 from `os.tmpdir()`/`os.userInfo()` with an entirely empty env (`packages/where/index.js`),
 so unsetting `ENDO_SOCK` makes the live path the *default*, not absent. The actual
-structural boundary is the `@endo/claude-sandbox` slice (*Design Decision 6*), whose
-filesystem-namespace isolation is what puts the socket path out of reach; it is
+structural boundary is a DD6 slice (*Design Decision 6*), whose
+filesystem-namespace isolation is what puts the socket path out of reach (today
+`@endo/claude` realizes its filesystem half in-package, as the opt-in `bwrap`
+slice described in the note below, rather than as a separate
+`@endo/claude-sandbox`); it is
 **required, not merely recommended, for any guest-influenced prompt**, and the child
 is spawned with a **constructed env allowlist** (§ *The child environment is a
 constructed allowlist*), not the inherited environment minus one variable. In
@@ -177,10 +180,9 @@ no MCP server but the one guest's; it holds *only* the facet's method set. Broad
 OS-level guarantees (no host filesystem, no un-permitted network) are **not**
 properties of `@endo/claude` alone: they hold only inside that DD6 slice.
 
-*Implementation note.* `runConfinedTurn`'s opt-in `sandbox` option realizes the
-filesystem half of this slice in-package, as a `bwrap` slice
-(`packages/claude/src/bwrap-slice.js`, package README § *The `bwrap` slice*)
-rather than through `@endo/claude-sandbox`. It puts the daemon socket out of
+*Implementation note.* The in-package slice is `runConfinedTurn`'s opt-in
+`sandbox` option (`packages/claude/src/bwrap-slice.js`, package README § *The
+`bwrap` slice*). It puts the daemon socket out of
 reach but shares the host network namespace, so the network half of DD6 is
 still open.
 
