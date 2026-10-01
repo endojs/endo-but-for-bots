@@ -37,7 +37,6 @@ HERE = common.LANES / "workerd"
 TIERS = {"liftoff": ["--liftoff-only"], "turbofan": ["--no-liftoff"], "default": []}
 REDUCED_STACK = str(common.lane_b_stack(common.WORKERD_STACK_KB))
 STACKS = {"default": [], REDUCED_STACK: [f"--stack-size={REDUCED_STACK}"]}
-SHADOW_MARGIN = 64 * 1024
 
 
 def config_name(tier, stack):
@@ -125,62 +124,32 @@ class Workerd:
 
 
 def run_config(tier, stack, selected, reference, wasm, args):
+    """One configuration over the selected cases on one workerd process,
+    replaced when a case times out: its report and problems."""
     # workerd's V8 has exnref on by default and rejects the Node-era flag.
     v8_flags = [*TIERS[tier], *STACKS[stack]]
     label = config_name(tier, stack)
     cfg = {"v8_flags": v8_flags, "shadow_stack": args.shadow_stack}
-    expected = common.ExpectedTraps(expected_path(tier, stack), cfg)
-    if not expected.config_matches():
-        if not args.update_expected:
-            raise SystemExit(f"{expected.path} was recorded with {expected.recorded_config}, not {cfg}; "
-                             "pass --update-expected to re-record it")
-        if args.case or args.shard != "all":
-            raise SystemExit(f"re-recording {expected.path} under a new configuration needs the whole "
-                             "corpus: --shard all and no --case")
+    expected = common.lane_b_expected(expected_path(tier, stack), cfg, args)
     try:
         server = Workerd(args.workerd, wasm, v8_flags)
     except common.HarnessError as error:
         raise SystemExit(f"lane B workerd ({label}) cannot start: {error}") from None
-    results, records, marks = {}, {}, {}
-    width = max(len(c["name"]) for c in selected)
+
+    def run_case(name):
+        nonlocal server
+        host = server.run(name, args.paint)
+        if host.timed_out:
+            # The stuck isolate would queue every later case behind it.
+            server.close()
+            server = Workerd(args.workerd, wasm, v8_flags)
+        return host
+
     try:
-        for case in selected:
-            t0 = time.monotonic()
-            try:
-                host = server.run(case["name"], args.paint)
-                if host.timed_out:
-                    # The stuck isolate would queue every later case behind it.
-                    server.close()
-                    server = Workerd(args.workerd, wasm, v8_flags)
-            except common.HarnessError as error:
-                raise SystemExit(f"lane B workerd ({label}) cannot run {case['name']}: {error}") from None
-            verdict = common.classify(case["name"], reference[case["name"]], host, expected.names)
-            results[case["name"]] = verdict
-            records[case["name"]] = {"host": host.as_dict(), "verdict": verdict,
-                                     "seconds": round(time.monotonic() - t0, 3)}
-            if host.shadow_stack is not None:
-                marks[case["name"]] = host.shadow_stack
-            if host.shadow_stack_top is not None and host.shadow_stack_top != args.shadow_stack:
-                raise SystemExit(f"the probe was linked with a {host.shadow_stack_top} B shadow stack, "
-                                 f"not {args.shadow_stack}; pass --shadow-stack {host.shadow_stack_top}")
-            print(f"workerd {label:16s} {case['name']:{width}s}  {verdict}", flush=True)
+        return common.run_lane_b("lane B workerd", label, f"workerd {label:16s}", expected, selected,
+                                 reference, run_case, args)
     finally:
         server.close()
-    problems, trapped, undecided = common.summarize(results)
-    if args.update_expected:
-        problems, wrote = expected.update([c["name"] for c in selected], trapped, problems,
-                                          args.allow_grow, undecided)
-        if wrote:
-            print(f"wrote {expected.path} ({len(expected.names)} expected traps)")
-    limit = args.shadow_stack - SHADOW_MARGIN
-    for name, mark in sorted(marks.items(), key=lambda kv: -kv[1]):
-        if mark > limit:
-            problems.append(f"{name}: shadow stack {mark} B exceeds the linked {args.shadow_stack} B less "
-                            f"the {SHADOW_MARGIN} B margin ({label})")
-    passed = sum(1 for v in results.values() if v == "pass")
-    print(f"lane B workerd {label}: {passed} pass, {len(trapped)} trap ({len(trapped & expected.names)} "
-          f"expected) of {len(results)}" + (f"; shadow stack peak {max(marks.values())} B" if marks else ""))
-    return {"config": cfg, "cases": records, "problems": problems, "shadow_stack": marks}, problems
 
 
 def main():

@@ -110,6 +110,77 @@ class ExpectedTrapsList(unittest.TestCase):
         self.assertFalse(common.ExpectedTraps(self.path, {"stack": 2}).config_matches())
 
 
+class LaneB(unittest.TestCase):
+    """common.run_lane_b and lane_b_expected, which both lane B hosts run."""
+
+    def setUp(self):
+        import argparse
+        import contextlib
+        import io
+        import tempfile
+        self.dir = tempfile.TemporaryDirectory()
+        self.path = f"{self.dir.name}/expected.json"
+        self.args = argparse.Namespace(update_expected=False, allow_grow=False, shadow_stack=1 << 20,
+                                       case=None, shard="all")
+        self.cfg = {"v8_flags": ["--x"], "shadow_stack": 1 << 20}
+        self.cases = [{"name": "a"}, {"name": "b"}, {"name": "c"}]
+        self.reference = {name: common.Outcome(line=f"halt=none result={name}") for name in "abc"}
+        self.quiet = contextlib.redirect_stdout(io.StringIO())
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def run_lane(self, hosts, listed=()):
+        common.write_json(self.path, {"config": self.cfg, "expected_traps": sorted(listed)})
+        expected = common.lane_b_expected(self.path, self.cfg, self.args)
+        with self.quiet:
+            return common.run_lane_b("lane B", "cfg", "cfg", expected, self.cases, self.reference,
+                                     lambda name: hosts[name], self.args)
+
+    def test_verdicts_against_the_reference_and_the_list(self):
+        trap = common.Outcome(trap="TRAP: RangeError")
+        report, problems = self.run_lane({"a": self.reference["a"], "b": trap, "c": trap}, listed={"b"})
+        self.assertEqual({n: r["verdict"] for n, r in report["cases"].items()},
+                         {"a": "pass", "b": "expected-trap", "c": "unexpected trap: TRAP: RangeError"})
+        self.assertEqual(problems, ["c: unexpected trap: TRAP: RangeError"])
+        self.assertEqual(report["config"], self.cfg)
+
+    def test_a_mark_inside_the_margin_is_a_problem(self):
+        hosts = {name: common.Outcome(line=self.reference[name].line) for name in "abc"}
+        hosts["a"].shadow_stack = self.args.shadow_stack - common.LANE_B_SHADOW_MARGIN + 1
+        hosts["b"].shadow_stack = 4096
+        report, problems = self.run_lane(hosts)
+        self.assertEqual(report["shadow_stack"], {"a": hosts["a"].shadow_stack, "b": 4096})
+        self.assertEqual(len(problems), 1)
+        self.assertIn("a: shadow stack", problems[0])
+
+    def test_a_probe_linked_with_another_shadow_stack_stops_the_lane(self):
+        hosts = {name: common.Outcome(line=self.reference[name].line) for name in "abc"}
+        hosts["a"].shadow_stack_top = 4096
+        with self.assertRaisesRegex(SystemExit, "pass --shadow-stack 4096"):
+            self.run_lane(hosts)
+
+    def test_a_host_that_cannot_run_a_case_stops_the_lane(self):
+        def failing(name):
+            raise common.HarnessError("no such file")
+        common.write_json(self.path, {"config": self.cfg, "expected_traps": []})
+        expected = common.lane_b_expected(self.path, self.cfg, self.args)
+        with self.quiet, self.assertRaisesRegex(SystemExit, r"lane B \(cfg\) cannot run a: no such file"):
+            common.run_lane_b("lane B", "cfg", "cfg", expected, self.cases, self.reference, failing,
+                              self.args)
+
+    def test_a_list_recorded_under_another_configuration_is_refused(self):
+        common.write_json(self.path, {"config": {"v8_flags": []}, "expected_traps": []})
+        with self.assertRaisesRegex(SystemExit, "--update-expected"):
+            common.lane_b_expected(self.path, self.cfg, self.args)
+        self.args.update_expected = True
+        self.args.shard = "fast"
+        with self.assertRaisesRegex(SystemExit, "whole corpus"):
+            common.lane_b_expected(self.path, self.cfg, self.args)
+        self.args.shard = "all"
+        self.assertFalse(common.lane_b_expected(self.path, self.cfg, self.args).config_matches())
+
+
 class StackLimit(unittest.TestCase):
     """A V8 --stack-size past the process's stack needs the limit raised."""
     INFINITY = common.resource.RLIM_INFINITY
