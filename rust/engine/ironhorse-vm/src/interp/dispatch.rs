@@ -1307,6 +1307,28 @@ impl Interp {
                 Slot::integer(self.arrays[&array].length as i32),
                 XS_DONT_ENUM_FLAG,
             );
+            // `callee`, after `length` as XS's `fxNewArgumentsSloppyInstance`
+            // and `fxNewArgumentsStrictInstance` add it: the running function,
+            // writable and configurable, in a mapped object;
+            // `%ThrowTypeError%` as both accessor halves, non-configurable, in
+            // an unmapped one.
+            let callee_id = self.intern_static_key_unmetered("callee");
+            if op == XS_CODE_ARGUMENTS_SLOPPY {
+                if !self.cur_func.is_null() {
+                    self.set_own_unmetered_with_flag(
+                        array,
+                        callee_id,
+                        Slot::of(Kind::Reference, Payload::Reference(self.cur_func)),
+                        XS_DONT_ENUM_FLAG,
+                    );
+                }
+            } else if let Some(thrower) = self.throw_type_error_function() {
+                let thrower = Slot::of(Kind::Reference, Payload::Reference(thrower));
+                self.set_own_accessor_unmetered(array, callee_id, Some(thrower), Some(thrower));
+                if let Some(property) = self.find_property(array, callee_id) {
+                    self.slots.get_mut(property).flag |= XS_DONT_DELETE_FLAG;
+                }
+            }
             // A non-strict simple parameter list creates a mapped
             // arguments object. XS compiles each formal's
             // initialization immediately after this instruction as

@@ -941,6 +941,27 @@ impl Interp {
                 );
             }
         }
+        // `%ThrowTypeError%` is frozen (ES2024 10.2.4.1): `length` and `name`
+        // become fixed own data properties, and the function is not
+        // extensible. Once per machine: a later full link finds it sealed.
+        if let Some(thrower) = self.throw_type_error_function() {
+            if self.slots.get(thrower).flag & XS_DONT_PATCH_FLAG == 0 {
+                let name = self.functions[&thrower].name_chunk;
+                for (key, value) in [
+                    ("length", Slot::integer(0)),
+                    ("name", Slot::of(Kind::String, Payload::String(name))),
+                ] {
+                    let id = self.intern_static_key_unmetered(key);
+                    self.set_own_unmetered_with_flag(
+                        thrower,
+                        id,
+                        value,
+                        XS_DONT_ENUM_FLAG | XS_DONT_SET_FLAG | XS_DONT_DELETE_FLAG,
+                    );
+                }
+                self.slots.get_mut(thrower).flag |= XS_DONT_PATCH_FLAG;
+            }
+        }
         // `Promise[@@species]` is a configurable, non-enumerable accessor
         // whose getter returns its receiver and whose setter is undefined.
         if let (Some(species_id), Some(&promise_ctor)) = (
@@ -1387,6 +1408,17 @@ impl Interp {
         self.apply_template_site_ids(&mut remapped, site_order, accesses)?;
         self.install_pending_intrinsics();
         Ok(remapped)
+    }
+
+    /// `%ThrowTypeError%`: the getter boot recorded for
+    /// `%Function.prototype%.caller`.
+    pub(super) fn throw_type_error_function(&self) -> Option<crate::value::SlotIndex> {
+        self.proto_accessors
+            .iter()
+            .find(|(holder, key, ..)| {
+                *holder == self.function_proto && *key == ProtoAccessorKey::String("caller")
+            })
+            .map(|&(_, _, getter, ..)| getter)
     }
 
     /// The boot intrinsic named `name` (a namespace object such as `JSON`),

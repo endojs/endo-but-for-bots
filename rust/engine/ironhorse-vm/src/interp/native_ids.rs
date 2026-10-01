@@ -954,6 +954,11 @@ pub enum NativeMethod {
     /// TypeError for a non-object `this`, a missing argument, or a refused
     /// define (a frozen receiver, a rejecting proxy trap).
     ErrorStackSetter,
+    /// `%ThrowTypeError%` (ES2024 10.2.4.1; XS's `fxThrowTypeError`): the
+    /// frozen poison behind a strict `arguments.callee` and
+    /// `%Function.prototype%`'s `caller`/`arguments` accessors. Every call
+    /// throws XS's "strict mode" TypeError.
+    ThrowTypeError,
     /// `String.prototype.match(regexp)` (`fx_String_prototype_match`): coerce
     /// the receiver to string, the argument to a RegExp, and dispatch to the
     /// matcher — the non-global path returns `exec`'s result; the global path

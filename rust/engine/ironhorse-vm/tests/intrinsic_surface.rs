@@ -159,3 +159,60 @@ fn error_prototypes_match_xs() {
         ),
     ]);
 }
+
+#[test]
+fn throw_type_error_is_one_frozen_function() {
+    check(&[
+        (
+            "frozen",
+            r#"var T = Object.getOwnPropertyDescriptor(function () { 'use strict'; return arguments; }(), 'callee').get; [Object.isFrozen(T), Object.isExtensible(T), Object.getOwnPropertyNames(T).join('+'), JSON.stringify(Object.getOwnPropertyDescriptor(T, 'length')), JSON.stringify(Object.getOwnPropertyDescriptor(T, 'name')), Object.getPrototypeOf(T) === Function.prototype].join()"#,
+            r#"true,false,length+name,{"value":0,"writable":false,"enumerable":false,"configurable":false},{"value":"","writable":false,"enumerable":false,"configurable":false},true"#,
+        ),
+        (
+            "throws",
+            r#"var T = Object.getOwnPropertyDescriptor(function () { 'use strict'; return arguments; }(), 'callee').get; var r = []; try { T(); } catch (e) { r.push(e.constructor.name + ':' + e.message); } try { new T(); } catch (e) { r.push(e.constructor.name); } r.join()"#,
+            r#"TypeError:strict mode,TypeError"#,
+        ),
+        (
+            "function_prototype_accessors",
+            r#"var T = Object.getOwnPropertyDescriptor(function () { 'use strict'; return arguments; }(), 'callee').get; ['caller', 'arguments'].map(function (k) { var d = Object.getOwnPropertyDescriptor(Function.prototype, k); return k + ':' + (d.get === T) + (d.set === T) + d.enumerable + d.configurable; }).join()"#,
+            r#"caller:truetruefalsetrue,arguments:truetruefalsetrue"#,
+        ),
+        (
+            "unique_across_arguments",
+            r#"function a() { 'use strict'; return arguments; } function b(x, y) { 'use strict'; return arguments; } Object.getOwnPropertyDescriptor(a(), 'callee').get === Object.getOwnPropertyDescriptor(b(1), 'callee').set"#,
+            r#"true"#,
+        ),
+    ]);
+}
+
+#[test]
+fn arguments_has_callee() {
+    check(&[
+        (
+            "sloppy",
+            r#"function f(a) { var d = Object.getOwnPropertyDescriptor(arguments, 'callee'); return [arguments.callee === f, d.writable, d.enumerable, d.configurable, Reflect.ownKeys(arguments).map(String).join('+')].join(); } f(1, 2)"#,
+            r#"true,true,false,true,0+1+length+callee+Symbol(Symbol.iterator)"#,
+        ),
+        (
+            "sloppy_delete",
+            r#"function f() { delete arguments.callee; return 'callee' in arguments; } f()"#,
+            r#"false"#,
+        ),
+        (
+            "strict",
+            r#"function g(a) { 'use strict'; var d = Object.getOwnPropertyDescriptor(arguments, 'callee'); return [typeof d.get, d.get === d.set, d.enumerable, d.configurable, Reflect.ownKeys(arguments).map(String).join('+')].join(); } g(1)"#,
+            r#"function,true,false,false,0+length+callee+Symbol(Symbol.iterator)"#,
+        ),
+        (
+            "strict_read_throws",
+            r#"function g() { 'use strict'; try { return arguments.callee; } catch (e) { return e.constructor.name + ':' + e.message; } } g()"#,
+            r#"TypeError:strict mode"#,
+        ),
+        (
+            "strict_delete_throws",
+            r#"function g() { 'use strict'; try { delete arguments.callee; return 'deleted'; } catch (e) { return e.constructor.name; } } g()"#,
+            r#"TypeError"#,
+        ),
+    ]);
+}
