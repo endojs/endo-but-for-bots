@@ -31,6 +31,7 @@ import { createChannelHeader } from '@endo/space-channel/channel-header.js';
 // `@endo/space-channel/outliner-component.js`; this is now the live outliner).
 import { createShareModal } from '@endo/space-channel/share-modal.js';
 import { outlinerComponent } from './outliner-component.js';
+import { assembleMentionSend } from './mention-send.js';
 import { inboxComponent } from './inbox-component.js';
 import { inventoryComponent } from './inventory-component.js';
 import { channelListComponent } from './channel-list.js';
@@ -1513,47 +1514,17 @@ const bodyComponent = (
           `join=${petName} replyTo=${replyToNum}]\n` +
           `Use channelReply to respond.`;
 
-        // Assemble the final send() arrays.
-        // Structure: "You were mentioned in " [channel] ":\n\n"
-        //   [author1] ": msg1\n  " [author2] ": msg2\n\n..."
-        // The channel is always the first embedded reference.
-        /** @type {string[]} */
-        const sendStrings = [`You were mentioned in `];
-        /** @type {string[]} */
-        const sendEdgeNames = [edgeName];
-        /** @type {string[][]} */
-        const sendPetNames = [[channelPetName]];
-
-        if (recap.edgeNames.length > 0) {
-          // String after the channel ref: separator + recap
-          // lead-in. recap.strings is interleaved as:
-          //   strings[0] ref[0] strings[1] ref[1] ... strings[n]
-          sendStrings.push(`:\n\n${recap.strings[0]}`);
-          const usedEdgeNames = new Set([edgeName]);
-          for (let ri = 0; ri < recap.edgeNames.length; ri += 1) {
-            // Ensure edge name uniqueness across the message
-            let recapEdge = recap.edgeNames[ri];
-            if (usedEdgeNames.has(recapEdge)) {
-              recapEdge = `${recapEdge}-author`;
-            }
-            usedEdgeNames.add(recapEdge);
-            sendEdgeNames.push(recapEdge);
-            sendPetNames.push([recap.petNames[ri]]);
-            sendStrings.push(recap.strings[ri + 1] || '');
-          }
-          sendStrings[sendStrings.length - 1] += instructions;
-        } else if (recap.strings.length > 0 && recap.strings[0]) {
-          // Recap text but no embedded refs
-          sendStrings.push(`:\n\n${recap.strings[0]}${instructions}`);
-        } else {
-          sendStrings.push(instructions);
-        }
+        const {
+          strings: sendStrings,
+          edgeNames: sendEdgeNames,
+          petNamePaths,
+        } = assembleMentionSend({ channelPetName, recap, instructions });
 
         await E(/** @type {ERef<EndoHost>} */ (resolvedPowers)).send(
           [petName],
           sendStrings,
           sendEdgeNames,
-          sendPetNames,
+          petNamePaths,
         );
       };
 

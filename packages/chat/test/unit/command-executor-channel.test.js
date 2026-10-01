@@ -358,7 +358,7 @@ test('adopt in channel mode fails when formula ID is missing', async t => {
   t.true(result.error?.message.includes('No formula ID'));
 });
 
-test('adopt in channel mode with slash-path pet name', async t => {
+test('adopt in channel mode keeps a slash in the pet name as one segment', async t => {
   const ctx = createMockContext();
   const { channelRef } = createMockChannelRef([
     { number: 2n, names: ['doc'], ids: ['formula:doc1'] },
@@ -380,7 +380,7 @@ test('adopt in channel mode with slash-path pet name', async t => {
 
   t.true(result.success);
   const writeCall = ctx.calls.find(c => c.method === 'storeLocator');
-  t.deepEqual(writeCall?.args, [['my', 'docs', 'file'], 'formula:doc1']);
+  t.deepEqual(writeCall?.args, [['my/docs/file'], 'formula:doc1']);
 });
 
 test('adopt with getChannelRef returning null falls back to inbox mode', async t => {
@@ -470,7 +470,7 @@ test('reply in channel mode posts to channel with resolved IDs', async t => {
   t.falsy(replyCall);
 });
 
-test('reply in channel mode resolves slash-path pet names', async t => {
+test('reply in channel mode keeps a slash in the pet name as one segment', async t => {
   const ctx = createMockContext();
   const { channelRef, calls: channelCalls } = createMockChannelRef();
 
@@ -491,13 +491,13 @@ test('reply in channel mode resolves slash-path pet names', async t => {
     },
   });
 
-  // Should resolve the slash-path via powers.identify
+  // The preview identify and the posted path name the same one-segment name
   const identifyCall = ctx.calls.find(c => c.method === 'identify');
   t.truthy(identifyCall);
-  t.deepEqual(identifyCall?.args, ['docs', 'shared', 'readme']);
+  t.deepEqual(identifyCall?.args, ['docs/shared/readme']);
 
-  // Channel post should get the resolved ID
   const postCall = channelCalls.find(c => c.method === 'post');
+  t.deepEqual(postCall?.args[2], [['docs/shared/readme']]);
   t.deepEqual(postCall?.args[4], ['id:docs/shared/readme']);
 });
 

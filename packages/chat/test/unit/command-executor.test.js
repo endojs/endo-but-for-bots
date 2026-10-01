@@ -281,6 +281,24 @@ test('execute resolve command', async t => {
   t.deepEqual(ctx.calls[0].args, [10n, ['answer']]);
 });
 
+test('execute resolve command keeps a slash in the pet name as one segment', async t => {
+  const ctx = createMockContext();
+  const executor = createCommandExecutor({
+    powers: ctx.powers,
+    showValue: v => ctx.showValueCalls.push(v),
+    showMessage: m => ctx.showMessageCalls.push(m),
+    showError: e => ctx.showErrorCalls.push(e),
+  });
+
+  const result = await executor.execute('resolve', {
+    messageNumber: 10,
+    petName: 'feature/foo',
+  });
+
+  t.true(result.success);
+  t.deepEqual(ctx.calls[0].args, [10n, ['feature/foo']]);
+});
+
 test('execute reject command', async t => {
   const ctx = createMockContext();
   const executor = createCommandExecutor({
@@ -325,6 +343,32 @@ test('execute js command', async t => {
     ['x'],
     [['my-value']],
     ['answer'],
+  ]);
+});
+
+test('execute js command keeps a slash in each pet name as one segment', async t => {
+  const ctx = createMockContext();
+  const executor = createCommandExecutor({
+    powers: ctx.powers,
+    showValue: v => ctx.showValueCalls.push(v),
+    showMessage: m => ctx.showMessageCalls.push(m),
+    showError: e => ctx.showErrorCalls.push(e),
+  });
+
+  const result = await executor.execute('js', {
+    source: '1 + 1',
+    endowments: [{ codeName: 'x', petName: 'feature/foo' }],
+    resultName: 'feature/bar',
+    workerName: '@main',
+  });
+
+  t.true(result.success);
+  t.deepEqual(ctx.calls[0].args, [
+    ['@main'],
+    '1 + 1',
+    ['x'],
+    [['feature/foo']],
+    ['feature/bar'],
   ]);
 });
 
