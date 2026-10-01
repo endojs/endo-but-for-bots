@@ -1,10 +1,10 @@
 ---
 '@endo/daemon': major
 '@endo/cli': patch
-'@endo/lal': major
-'@endo/sandbox': major
-'@endo/agentry': major
-'@endo/agent-tools': patch
+'@endo/lal': minor
+'@endo/sandbox': minor
+'@endo/agentry': minor
+'@endo/agent-tools': minor
 '@endo/platform': patch
 '@endo/chat': patch
 '@endo/claude-sandbox': patch
@@ -34,13 +34,17 @@
 
 The daemon's Exo surface (host, guest, directory, mail, channel, and inspector methods) now accepts only a pet-name path, an array of path components.
 A bare string is rejected with a `TypeError` asking the caller to retry with an array; a string is never split on a delimiter.
+The argument guards `NamePathArgumentShape` and `NamePathsArgumentShape` admit a string only so that the method can raise that `TypeError`.
 Write `lookup(['counter'])`, not `lookup('counter')`, and `lookup(['subdir', 'value'])`, not `lookup('subdir/value')`.
 The `adopt` method's edge name is a message label, not a path, and stays a string.
 
 Migration:
 `NameOrPathShape` and `NamesOrPathsShape` in `@endo/daemon/type-guards.js` are replaced by `NamePathArgumentShape` and `NamePathsArgumentShape`, and the `NameOrPath` and `NamesOrPaths` types by `NamePath`.
+`@endo/daemon/type-guards.js` also newly exports `NameShape` and `NamePathShape`.
 `@endo/sandbox`'s `provideScratchMount` and `@endo/agentry`'s `NormalizedGitRemoteSpec.credential` now take a pet-name path.
 `@endo/lal`'s tool-call arguments that hold a pet-name path are renamed to say so (`petNameOrPath`, `petName`, `recipientName`, `responseName`, `workerName`, `resultName`, and `petNames` become `petNamePath`, `petNamePath`, `recipientNamePath`, `responseNamePath`, `workerNamePath`, `resultNamePath`, and `petNamePaths`); an agent sending an old key must switch.
+`@endo/lal`'s `readText`, `writeText`, and `editText` tools accept `fileName` as an array of path components, which a daemon directory requires.
+`@endo/agent-tools` code-mode evaluation reads a string `petName` or `resultName` as one pet name: `'a/b'` used to address `b` inside `a` and now names a single entry, so write `['a', 'b']` for a nested name; `LookupPowers.lookup` takes only a path.
 Name hubs outside the daemon reached by a multi-segment path now receive a one-segment array per step.
 The remaining packages pass pet-name paths to the daemon.
 
