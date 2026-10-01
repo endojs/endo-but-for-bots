@@ -138,20 +138,20 @@ slice root is an empty tmpfs. Into it are mounted:
   symlinks) and the `/etc` entries for name resolution, TLS roots, the user
   database, and the dynamic linker (a symlinked `/etc/resolv.conf` is bound
   from its target, so `/run` stays unbound);
-- read-only: `claudePath` and its installation directory, the relay's `node`
-  and script, the broker socket's directory, and that spawn's files directory;
+- read-only: the installation directory of `claudePath` (resolved through
+  symlinks; `claude` is run by its real path), the relay's `node` and script,
+  the broker socket's directory, and that spawn's files directory;
 - writable: the turn's working directory;
 - fresh tmpfs: `/tmp` and a scratch `HOME` (`/home/endo-claude`, set only
   inside the slice).
 
 The daemon socket lives under `$XDG_RUNTIME_DIR`, the user's home, or the host
-`/tmp`, none of which is mounted, so it has no path inside the slice. The
-tests start a listening socket outside the grants and assert that a connect
-from inside fails with `ENOENT`, while the same probe without the slice
-connects. They skip where `bwrap` is absent or cannot create namespaces; CI's
-`sandbox-drivers` job installs `bwrap`, lifts Ubuntu's AppArmor restriction on
-unprivileged user namespaces, and sets `ENDO_CLAUDE_REQUIRE_BWRAP=1` so the
-skip becomes a failure there.
+`/tmp`, none of which is mounted, so it has no path inside the slice.
+
+The slice does not reuse `@endo/sandbox`'s `bwrap` driver. That driver's argv
+assembler is not exported, and it takes capability-shaped `Mount`s through a
+slice factory, while this harness needs a `spawn` that runs host paths in
+place.
 
 The network namespace is shared, because `claude` must reach the inference
 API. A loopback TCP listener on the host is therefore still reachable from the

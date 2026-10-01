@@ -34,6 +34,6 @@ plus a DD8 hardened/passable result taxonomy. The `@endo/agent-tools` MCP
 adapter has since landed, so this package now reuses its allow-list renderer and
 no longer carries the temporary stdio shim. The confined
 `@endo/agent-mcp-stdio` hosting seam, a live negative-and-positive confinement
-test against a real `claude -p`, the DD6 `@endo/sandbox` slice network profile,
-and the credential-path / entitlement verifications remain named prerequisites
-(package README, design Known Gaps).
+test against a real `claude -p`, a network profile for the DD6 slice (the
+`bwrap` slice shares the host network), and the credential-path / entitlement
+verifications remain named prerequisites (package README, design Known Gaps).

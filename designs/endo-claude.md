@@ -177,6 +177,13 @@ no MCP server but the one guest's; it holds *only* the facet's method set. Broad
 OS-level guarantees (no host filesystem, no un-permitted network) are **not**
 properties of `@endo/claude` alone: they hold only inside that DD6 slice.
 
+*Implementation note.* `runConfinedTurn`'s opt-in `sandbox` option realizes the
+filesystem half of this slice in-package, as a `bwrap` slice
+(`packages/claude/src/bwrap-slice.js`, package README § *The `bwrap` slice*)
+rather than through `@endo/claude-sandbox`. It puts the daemon socket out of
+reach but shares the host network namespace, so the network half of DD6 is
+still open.
+
 ### Relationship to `@endo/claude-sandbox`
 
 The sibling package
