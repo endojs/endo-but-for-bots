@@ -2327,6 +2327,16 @@ B6 estimated)*:
 
 Lower lane A's stack accordingly.
 
+**As landed (Phase 1):** lane A runs at 1,048,576 B.
+At that stack its expected traps are the heavy ceilings that cross the dispatch loop without a
+built-in (`async`, `bound`, `function-call`, `getter`, `setter`, `has-instance`, `iterator`,
+`iterator-spread`, `to-primitive`, `valueOf`, each at its ceiling and ceiling + 1, and
+`async-10k`), which A2 targets; the tagged-template chain and its `eval` composition, which D2
+targets; the trapped-Proxy ceiling (B10); and `proxy-proto-cycle`: 26 cases, all of them later
+phases' work.
+Lowering it further would list the callback ceilings as well: 76 cases trap at 786,432 B and
+87 at 524,288 B.
+
 ### Phase 2: structural changes (M-L, release-neutral)
 
 A2 (dispatch split, gated by the 1.25× bench; A2a first, A2b only if needed), B7 (RegExp

@@ -36,7 +36,7 @@ resolves only in a postinstall).
 cd rust/engine/stack-lanes
 python3 build_probe.py                       # native and wasm probes
 python3 ceilings.py --no-build               # the corpus's ceilings still hold
-python3 lane_a.py --no-build --shard all     # Wasmtime at 2,097,152 B
+python3 lane_a.py --no-build --shard all     # Wasmtime at 1,048,576 B
 python3 lane_b_node.py --no-build --shard all --paint
 python3 lane_b_workerd.py --no-build --shard all --paint
 python3 lane_c.py --no-build --output lane-c.json
@@ -69,7 +69,10 @@ Timeouts and native traps are never expected traps.
 A mismatch between a host's output and native is always a failure: it is the
 cross-host determinism check `WASM-BLOCKERS.md` B7 asks for.
 
-Lane A starts at 2,097,152 B and is lowered toward 524,288 B as phases land.
+Lane A started at 2,097,152 B and is lowered toward 524,288 B as phases land.
+After the report's Phase 1 it runs at 1,048,576 B, where it expects traps only from the
+heavy re-entry ceilings (A2), the tagged-template chain (D2), the trapped-Proxy ceiling
+(B10) and a Proxy prototype cycle.
 Lane B's stacks sit under the real limits (the Chromium Worker's 500 KiB, which
 Node stands in for, and workerd's 984 KiB) by the headroom a per-function tier
 mix can need over either pure tier, `TIER_MIX_HEADROOM` in `common.py`: 17.6%
