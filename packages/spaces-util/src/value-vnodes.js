@@ -145,6 +145,9 @@ export const valueToVnodes = value => {
       const remotable = /** @type {{ [Symbol.toStringTag]: string }} */ (value);
       return h('span', { class: 'remotable' }, remotable[Symbol.toStringTag]);
     }
+    case 'sturdyRef': {
+      return h('span', { class: 'sturdyref' }, 'SturdyRef');
+    }
     default: {
       // Unreachable if programmed to account for all pass-styles. Rather than
       // throw (which would crash the whole inbox render), surface it inline.
