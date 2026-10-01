@@ -19,8 +19,30 @@ import { connectLocalControl } from '../src/control/local-control.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { describeNativeResource } from '../src/native/describe-resource.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
+import { makeFsStore } from '../src/store/store-fs.js';
 
 const powers = makeNodePowers();
+
+/** @import { ExecutionContext } from 'ava' */
+
+/**
+ * A supervisor over the replay engine at `path`, with a control client, both
+ * closed at teardown.
+ * @param {ExecutionContext} t
+ * @param {string} path
+ */
+const serve = async (t, path) => {
+  const supervisor = await serveThixotrope(powers, path, {
+    engine: harden({
+      ...makePeerJournalReplayEngine(powers),
+      acquireStore: async () => async () => {},
+    }),
+  });
+  t.teardown(() => supervisor.close());
+  const client = await connectLocalControl(powers, join(path, 'control.sock'));
+  t.teardown(() => client.close());
+  return { supervisor, client };
+};
 
 test.serial(
   'directory installs use separate manager vats and independent startup notices',
@@ -348,3 +370,108 @@ test.serial('collection waits for native installation to finish', async t => {
     '1',
   );
 });
+
+test.serial(
+  'a start frees the bundles no launcher names and keeps the rest',
+  async t => {
+    t.timeout(60_000);
+    const path = await mkdtemp('/tmp/thix-native-sweep-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    let host = await serve(t, path);
+    await host.client.call(
+      'installNative',
+      'one',
+      fileURLToPath(new URL('./fixtures/native-resource/', import.meta.url)),
+    );
+    const store = makeFsStore(powers, path);
+    const [installed, ...others] = store.listBundles();
+    t.regex(installed, /^[0-9a-f]{64}$/);
+    t.deepEqual(others, []);
+    // A bundle nothing names: left by an installation interrupted before its
+    // manager held the launcher, say.
+    const orphan = store.putBundle(
+      'module.exports = { make: () => undefined };\n',
+    );
+    t.deepEqual(store.listBundles(), [installed, orphan].sort());
+    host.client.close();
+    await host.supervisor.close();
+    host = await serve(t, path);
+    t.deepEqual(
+      store.listBundles(),
+      [installed],
+      'the orphan is freed and the named bundle kept',
+    );
+    t.true(await host.client.call('remove', 'one'));
+    host.client.close();
+    await host.supervisor.close();
+    host = await serve(t, path);
+    t.deepEqual(
+      store.listBundles(),
+      [],
+      'a removed installation frees its bundle at the next start',
+    );
+  },
+);
+
+test.serial(
+  'editing or removing the directory after installation changes nothing for it',
+  async t => {
+    t.timeout(60_000);
+    const path = await mkdtemp('/tmp/thix-native-edit-');
+    t.teardown(() => rm(path, { recursive: true, force: true }));
+    // The resource lives inside this package so that its ephemeral module
+    // resolves `@endo/far` the way `resources/http` does; git ignores
+    // `test/tmp`.
+    const scratch = fileURLToPath(new URL('./tmp/', import.meta.url));
+    await mkdir(scratch, { recursive: true });
+    const directory = await mkdtemp(join(scratch, 'edited-'));
+    t.teardown(() => rm(directory, { recursive: true, force: true }));
+    /** @param {number} version */
+    const writeEphemeral = version =>
+      writeFile(
+        join(directory, 'ephemeral.js'),
+        `import { Far } from '@endo/far';\nexport const make = () => Far('Adapter', { version: () => ${version} });\n`,
+      );
+    await writeEphemeral(1);
+    await writeFile(
+      join(directory, 'durable.js'),
+      `export const make = ({ adapters }) => harden({
+        facet: Far('Versioned', {
+          // A fresh process each time, so the answer is the stored bundle's.
+          version: async () => {
+            const incarnation = await E(adapters).create();
+            const version = await E(E(incarnation).getRoot()).version();
+            await E(incarnation).retire();
+            return version;
+          },
+        }),
+        lifecycle: Far('Lifecycle', { started: () => {}, exited: () => {} }),
+      });`,
+    );
+    let host = await serve(t, path);
+    await host.client.call('installNative', 'versioned', directory);
+    const version = () =>
+      host.client.call('evaluate', "E(inventory.get('versioned')).version()");
+    t.is(await version(), '1');
+    await writeEphemeral(2);
+    t.is(
+      await version(),
+      '1',
+      'a running installation launches from its stored bundle',
+    );
+    // The edited directory is a different installation; the name is taken.
+    await t.throwsAsync(
+      () => host.client.call('installNative', 'versioned', directory),
+      { message: /different installation/ },
+    );
+    host.client.close();
+    await host.supervisor.close();
+    await rm(directory, { recursive: true, force: true });
+    host = await serve(t, path);
+    t.is(
+      await version(),
+      '1',
+      'a restarted installation has no use for the directory',
+    );
+  },
+);

@@ -259,8 +259,8 @@ The workspace retains installation bookkeeping and the public facet.
 Each manager receives its own daemon startup notification, independently of workspace execution,
 and an exit notice when its adapter process ends on its own, after a backoff that grows with
 consecutive quick exits; it rebuilds the adapter on either while anything is registered.
-The primary daemon only loads directory metadata and bundles the durable module, launches and
-connects the native process, and manages its lifetime.
+The primary daemon only locates the two entry modules and bundles them, launches and connects
+the native process from the stored ephemeral bundle, and manages its lifetime.
 It contains no HTTP listener implementation or HTTP-specific installation commands.
 
 Installation stores only the public facet in the requested inventory slot, through
@@ -284,9 +284,12 @@ registration, status, or close operation; there is no autonomous restart monitor
 Already accepted calls into durable application vats may still complete.
 A failed port bind does not prevent other registrations from being restored.
 
-Native installation pins the directory's complete file contents and the durable bundle digest.
-Changing installed source requires a new explicit installation; the old manager will refuse to
-launch an adapter with different code.
+Native installation bundles both modules and is identified by the pair of bundle digests.
+The ephemeral bundle is stored in the state directory under its digest, and every adapter process
+verifies that digest over the bytes it loads.
+The directory is not consulted again: editing or removing it after installation changes nothing
+for a running or restarted installation, and changed source is a different installation, so
+install its new version explicitly, under another name or after `thix remove`.
 A name stays taken by its installation, completed, failed, or interrupted, until
 `thix remove ./private-state NAME` removes it: the manager vat is retired, the processes it
 launched are closed and its ports released, its startup notice is withdrawn, and the name is free.
@@ -294,8 +297,10 @@ Capabilities granted from the removed installation break; applications holding o
 grant.
 A corrected directory therefore installs under the same name after `remove`, and never by
 overwriting.
-Dependencies outside the resource directory use ordinary Node module resolution and must remain
-compatible with the installed durable bundle.
+A module's dependencies are frozen in its bundle at installation.
+In the ephemeral module only Node builtins are resolved by the process, imported by name or as a
+namespace (`import * as http from 'node:http'`); a default import of a builtin has no binding in
+the bundle.
 The selected state directory currently identifies the daemon's single user workspace.
 See [native resource installation](designs/native-resource-installation.md) for the module contract.
 
@@ -351,14 +356,14 @@ The host checks wall-clock time before firing, so this is not a precise timer.
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 8 is required.
+Workspace metadata version 9 is required.
 It includes dedicated native manager vats (version 4), the alarm acknowledgement protocol
 (version 3), the mail address book that introduces contacts through the `mail-introductions`
 resource with observable inbox and outbox maps (version 5), adapter launchers described by the
 manager vat that owns them, so that removing or collecting a manager closes its processes
 (version 6), one installation registry for applications and native resources whose values live
-in the inventory (version 7), and the clock and mailbox provided as installations in vats of their
-own (version 8).
+in the inventory (version 7), the clock and mailbox provided as installations in vats of their
+own (version 8), and native adapters launched from bundles stored under their digest (version 9).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 See [alarm settlement](designs/alarm-settlement.md) for recovery and cleanup details.

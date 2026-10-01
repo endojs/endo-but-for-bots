@@ -46,7 +46,7 @@ test.serial(
             },
           },
         }),
-      { message: /this build requires version 8/ },
+      { message: /this build requires version 9/ },
     );
     t.true(released);
     t.false(started);
