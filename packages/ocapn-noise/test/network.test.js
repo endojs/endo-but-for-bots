@@ -595,6 +595,61 @@ test('a sustained SYN replay cannot block settlement of an inbound dial', async 
   t.is(sessionA.remoteLocation.designator, victim.keyId);
 });
 
+test('a sustained SYN replay cannot hang an outbound dial that fails', async t => {
+  t.timeout(15_000);
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, {
+    codec: cborCodec,
+    handshakeTimeoutMs: 400,
+  });
+  const netV = makeNetworkForTest(t, { codec: cborCodec });
+  const { publicKey: publicKeyA } = addFreshKey(netA);
+  const victim = addFreshKey(netV);
+  await netA.addTransport(fabric.transportFor('A'));
+  // V is not listening, so A's own dial fails. Replays claiming V never
+  // produce a proven handshake, so nothing else can settle A's waiter.
+  const locV = {
+    ...netV.locationFor(victim.keyId),
+    hints: { 'mesh:to': 'nowhere' },
+  };
+
+  startReplayLoop(t, fabric, 'A', makeSynFrom(victim, publicKeyA), 150);
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  await t.throwsAsync(
+    within(netA.provideSession(locV), 3000, 'provideSession'),
+    {
+      message: /ocapn-noise:/,
+    },
+  );
+});
+
+test('a genuine re-dial is not refused while a replay is in flight', async t => {
+  t.timeout(15_000);
+  const fabric = makeFabricForTest(t);
+  const netA = makeNetworkForTest(t, {
+    codec: cborCodec,
+    handshakeTimeoutMs: 400,
+  });
+  const netV = makeNetworkForTest(t, { codec: cborCodec });
+  const { keyId: keyA, publicKey: publicKeyA } = addFreshKey(netA);
+  const victim = addFreshKey(netV);
+  await netA.addTransport(fabric.transportFor('A'));
+  await netV.addTransport(fabric.transportFor('V'));
+  const locA = { ...netA.locationFor(keyA), hints: { 'mesh:to': 'A' } };
+
+  startReplayLoop(t, fabric, 'A', makeSynFrom(victim, publicKeyA), 150);
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  // V's first session settles at V at once but waits at A behind the
+  // replay. V drops it and dials again before A has settled.
+  const first = await within(netV.provideSession(locA), 3000, 'first dial');
+  first.close();
+  // A used to refuse this SYN before answering, failing the re-dial.
+  const second = await within(netV.provideSession(locA), 3000, 'second dial');
+  t.not(second, first);
+});
+
 test('when the per-identity cap is full, the oldest unproven handshake is evicted', async t => {
   t.timeout(10_000);
   const fabric = makeFabricForTest(t);

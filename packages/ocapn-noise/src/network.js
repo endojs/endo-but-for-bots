@@ -401,22 +401,27 @@ export const makeOcapnNoiseNetwork = ({
    */
   const pendingInbound = [];
 
+  /**
+   * Per-peer settlement deadline, armed when one handshake for a peer
+   * finishes while others to it are still in flight. Settlement normally
+   * waits for every in-flight handshake (so crossed hellos run the
+   * tiebreaker over both), but each inbound SYN, including a replayed
+   * one, adds to that set. The deadline settles over whatever has been
+   * proven by then, so a stream of replays re-sent before each timeout
+   * delays settlement by at most one `handshakeTimeoutMs`, and a failed
+   * outbound dial still rejects its waiters.
+   *
+   * @type {Map<KeyIdHex, ReturnType<typeof setTimeout>>}
+   */
+  const settleDeadlines = new Map();
+
   /** @param {KeyIdHex} peerId */
-  const decrementAndSettle = peerId => {
-    if (isShutdown) {
-      // `shutdown()` already cleared `inProgress`, `candidates`,
-      // `active`, and `waiters`, and closed every candidate it knew
-      // about. A late-arriving handshake whose own `recordCandidate`
-      // call now sees `isShutdown === true` will close itself; nothing
-      // here is safe to touch.
-      return;
+  const settle = peerId => {
+    const deadline = settleDeadlines.get(peerId);
+    if (deadline !== undefined) {
+      clearTimeout(deadline);
+      settleDeadlines.delete(peerId);
     }
-    const next = (inProgress.get(peerId) ?? 0) - 1;
-    if (next > 0) {
-      inProgress.set(peerId, next);
-      return;
-    }
-    inProgress.delete(peerId);
 
     const fresh = candidates.get(peerId) ?? [];
     candidates.delete(peerId);
@@ -490,6 +495,38 @@ export const makeOcapnNoiseNetwork = ({
     }
   };
 
+  /** @param {KeyIdHex} peerId */
+  const decrementAndSettle = peerId => {
+    if (isShutdown) {
+      // `shutdown()` already cleared `inProgress`, `candidates`,
+      // `active`, and `waiters`, and closed every candidate it knew
+      // about. A late-arriving handshake whose own `recordCandidate`
+      // call now sees `isShutdown === true` will close itself; nothing
+      // here is safe to touch.
+      return;
+    }
+    const next = (inProgress.get(peerId) ?? 0) - 1;
+    if (next > 0) {
+      inProgress.set(peerId, next);
+      if (!settleDeadlines.has(peerId)) {
+        // Handshakes still in flight keep their own count; when they
+        // finish they settle again, and a late candidate then meets the
+        // `existing` branch of `settle` (or becomes a fresh session if
+        // this settlement found none).
+        settleDeadlines.set(
+          peerId,
+          setTimeout(() => {
+            settleDeadlines.delete(peerId);
+            if (!isShutdown) settle(peerId);
+          }, handshakeTimeoutMs),
+        );
+      }
+      return;
+    }
+    inProgress.delete(peerId);
+    settle(peerId);
+  };
+
   /**
    * Forget the active entry for `peerId` if (and only if) it still
    * matches the supplied candidate. Wired into `buildSession.close` so
@@ -502,6 +539,15 @@ export const makeOcapnNoiseNetwork = ({
   const forgetActive = (peerId, candidate) => {
     if (active.get(peerId) === candidate) {
       active.delete(peerId);
+    }
+    // A candidate that closes while still awaiting settlement (its peer
+    // hung up, or re-dialed, before a straggler finished) must not be
+    // picked as the winner.
+    const pending = candidates.get(peerId);
+    const index = pending ? pending.indexOf(candidate) : -1;
+    if (pending && index !== -1) {
+      pending.splice(index, 1);
+      if (pending.length === 0) candidates.delete(peerId);
     }
     // Drop any stale recent-error trail; if the peer reconnects, a
     // fresh failure history is more useful than the previous one.
@@ -1044,19 +1090,6 @@ export const makeOcapnNoiseNetwork = ({
         return;
       }
 
-      // A proven candidate for this peer is already waiting for the
-      // other in-flight handshakes to it to finish (crossed-hello
-      // settlement). Refuse new SYNs for the peer until it settles, as
-      // for an adopted session above: the settlement set is fixed once a
-      // candidate is proven, so a replayed SYN re-sent before each
-      // timeout cannot keep extending it. A genuine peer whose new dial
-      // is refused here converges, in its own settlement, on the session
-      // this side is about to adopt.
-      if (candidates.has(initiatorKeyHex)) {
-        await stream.writer.return(undefined);
-        return;
-      }
-
       // Register this inbound against the peer now, before we answer, so
       // a concurrent outbound `provideSession` to the same peer waits for
       // it in `decrementAndSettle` and both directions run the
@@ -1064,15 +1097,22 @@ export const makeOcapnNoiseNetwork = ({
       // Without this, the two sides can each settle on their own outbound
       // and then mutually close the other's session ("Session
       // disconnected"). A replayed SYN reaches here too and holds this
-      // slot until it times out, but once a proven candidate exists the
-      // check above refuses further SYNs, so a replay delays settlement
-      // by at most one `handshakeTimeoutMs`; it cannot displace the
-      // peer's existing session (deferred to after `exchangeIdentity`).
+      // slot until it times out, but `settleDeadlines` caps how long the
+      // peer's settlement waits on it, and it cannot displace the peer's
+      // existing session (deferred to after `exchangeIdentity`).
       // The count is released in the `catch` or in `decrementAndSettle`.
       registeredPeerId = initiatorKeyHex;
       bumpInProgress(initiatorKeyHex);
       const tiebreaker = tiebreakerFromPrefixedSyn(prefixedSyn);
-      await stream.writer.next(synack);
+      await Promise.race([
+        withTimeout(
+          stream.writer.next(synack),
+          handshakeTimeoutMs,
+          'SYNACK write',
+          stream,
+        ),
+        evicted,
+      ]);
 
       const {
         peerLocation,
@@ -1103,8 +1143,9 @@ export const makeOcapnNoiseNetwork = ({
       // here so a replayed SYN — which never completes `exchangeIdentity`
       // — can never close it. The early `bumpInProgress` above keeps
       // `inProgress` >= 1 for this peer until our own `decrementAndSettle`
-      // below, so no concurrent settlement can change `active` for it in
-      // the meantime; an entry here is the same unclaimed session, if any.
+      // below. A settlement deadline may still have promoted another
+      // proven handshake meanwhile; if that one is unclaimed, this newer
+      // proven session supersedes it exactly as a reconnect would.
       const unclaimed = active.get(initiatorKeyHex);
       if (unclaimed) {
         const pendingIndex = pendingInbound.indexOf(unclaimed.session);
@@ -1378,6 +1419,8 @@ export const makeOcapnNoiseNetwork = ({
     }
     waiters.clear();
     inProgress.clear();
+    for (const [, deadline] of settleDeadlines) clearTimeout(deadline);
+    settleDeadlines.clear();
     inFlightByLocalKey.clear();
     // Close any candidates that recorded themselves between
     // `runInitiator` resolution and `decrementAndSettle`. After this

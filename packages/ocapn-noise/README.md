@@ -58,17 +58,20 @@ first message.
      until `op:start-session` verifies, so a replay cannot close it.
      A replay can still occupy a crossed-hello settlement slot for the
      peer — that slot is needed so two genuine simultaneous dials
-     converge on one session — but the responder refuses a SYN for a peer
-     whose earlier SYN is still awaiting `op:start-session`, so a
-     sustained replay delays a genuine dial by at most one handshake
-     timeout rather than indefinitely.
+     converge on one session — but once any handshake for the peer
+     finishes, settlement waits at most one more handshake timeout for
+     the rest, so a sustained replay can delay a dial by at most that
+     much and cannot keep a failed dial's caller waiting.
      Total pre-`op:start-session` work is bounded by a cap on concurrent
      inbound handshakes per local (responder) identity
      (`maxInProgressPerLocalKey`).
      When the cap is full, a new SYN evicts the oldest unproven handshake
      rather than being dropped, so a flood of stalled handshakes cannot
-     lock a genuine peer out; the cost is that a flood fast enough to
-     cycle the whole cap within one round trip can still starve a dial.
+     lock a genuine peer out.
+     The costs are that every SYN in a flood is now decrypted (one
+     X25519 operation each) before it evicts another, and that a flood
+     fast enough to cycle the whole cap within one round trip can still
+     starve a dial.
 
 2. **SYNACK (responder to initiator)**:
    - **Noise IK message 2**: responder ephemeral, encrypted payload
