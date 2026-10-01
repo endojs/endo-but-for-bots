@@ -35,7 +35,7 @@ connection and binds the resolved facet with `makeGuestMcpServer`.
 
 `startGuestBroker({ connection, formulaId, version })` is that harness-owned
 process's half. Over a connection the caller already holds, it resolves the one
-guest. The preferred connection is `connectToGuestBootstrap({ sockPath })` on a
+guest. The preferred connection is `connectToGuestBootstrap({ socketPath })` on a
 daemon-issued guest socket (`EndoBootstrap.guestBootstrapPath`, or
 `issueGuestBootstrapPath` here): that socket's bootstrap is the guest facet
 itself, so the session carries no host, and the broker accepts it only if the

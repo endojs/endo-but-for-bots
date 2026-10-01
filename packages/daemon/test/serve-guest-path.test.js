@@ -54,9 +54,9 @@ const makeHarness = ({
 
 test('a guest socket is named by a prefix of its formula number', async t => {
   const { issuer, served, madeDirectories } = makeHarness();
-  const sockPath = await issuer.issue(numberA, {});
-  t.is(sockPath, `/run/guests/${'a'.repeat(24)}.sock`);
-  t.deepEqual(served, [sockPath]);
+  const socketPath = await issuer.issue(numberA, {});
+  t.is(socketPath, `/run/guests/${'a'.repeat(24)}.sock`);
+  t.deepEqual(served, [socketPath]);
   t.deepEqual(madeDirectories, ['/run/guests']);
 });
 
@@ -107,7 +107,7 @@ test('a failed issue releases its name so it may be retried', async t => {
   });
   // The failed issue no longer holds the shared prefix either.
   fail = false;
-  const sockPath = await issuer.issue(numberB, {});
-  t.is(sockPath, `/run/guests/${'a'.repeat(24)}.sock`);
+  const socketPath = await issuer.issue(numberB, {});
+  t.is(socketPath, `/run/guests/${'a'.repeat(24)}.sock`);
   t.is(served.length, 2);
 });

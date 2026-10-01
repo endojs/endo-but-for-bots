@@ -1250,7 +1250,7 @@ export const makeDaemonicPowers = async ({
  * @param {typeof import('fs')} powers.fs
  * @param {typeof import('path')} powers.path
  * @param {SocketPowers['servePath']} powers.servePath
- * @param {string} powers.sockPath - the daemon's own socket.
+ * @param {string} powers.daemonSocketPath - the daemon's own socket.
  * @param {Promise<never>} powers.cancelled
  * @param {(err: Error, errorId?: string) => void} [powers.marshalSaveError]
  * @returns {GuestPathIssuer | undefined}
@@ -1259,14 +1259,14 @@ export const makeNodeGuestPathIssuer = ({
   fs,
   path,
   servePath,
-  sockPath,
+  daemonSocketPath,
   cancelled,
   marshalSaveError,
 }) => {
   if (process.platform === 'win32') return undefined;
   const directory = path.join(
-    path.dirname(sockPath),
-    `${path.basename(sockPath, '.sock')}-guests`,
+    path.dirname(daemonSocketPath),
+    `${path.basename(daemonSocketPath, '.sock')}-guests`,
   );
   return makeGuestPathIssuer({
     directory,

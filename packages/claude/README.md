@@ -105,7 +105,7 @@ const result = await runConfinedTurn({
   prompt,               // delivered on stdin
   model: 'claude-sonnet-4-5',
   claudePath: '/usr/local/bin/claude', // the pinned binary, or a sandbox wrapper
-  guestSockPath,        // optional: a daemon-issued guest socket
+  guestSocketPath,        // optional: a daemon-issued guest socket
 });
 ```
 
@@ -117,7 +117,7 @@ reads the prompt from stdin, and writes the tagged result as JSON.
 socket** (`EndoBootstrap.guestBootstrapPath`), whose bootstrap is the one guest
 facet, so the harness holds no host. An operator issues that socket once
 (`issueGuestBootstrapPath` from `@endo/agent-mcp-stdio`) and passes its path as
-`guestSockPath`; without one, the turn issues it over the root daemon socket
+`guestSocketPath`; without one, the turn issues it over the root daemon socket
 and closes that root session before the broker starts. It then starts
 `@endo/agent-mcp-stdio`'s `startGuestBroker` for the one guest. It then
 runs `make(...)` with concrete seams: `makeSpawnFilesPreparer` writes the `0600`

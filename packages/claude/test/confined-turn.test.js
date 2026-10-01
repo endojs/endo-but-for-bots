@@ -7,7 +7,7 @@ import { makeExo } from '@endo/exo';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 
-import { runConfinedTurn } from '../src/confined-turn.js';
+import { makeGuestConnect, runConfinedTurn } from '../src/confined-turn.js';
 import { ALLOWED_ENV_KEYS } from '../src/child-env.js';
 import { resultFromStream } from '../src/launch.js';
 
@@ -221,7 +221,7 @@ test('a confined turn over a daemon-issued guest socket holds no host', async t 
 test('by default a turn connects to its guest socket, not the root socket', async t => {
   const parentDir = fs.mkdtempSync('/tmp/ect-');
   t.teardown(() => fs.rmSync(parentDir, { recursive: true, force: true }));
-  const guestSockPath = `${parentDir}/absent-guest.sock`;
+  const guestSocketPath = `${parentDir}/absent-guest.sock`;
   const error = await t.throwsAsync(
     runConfinedTurn({
       formulaId: FORMULA_ID,
@@ -229,12 +229,76 @@ test('by default a turn connects to its guest socket, not the root socket', asyn
       prompt: '{}',
       model: MODEL,
       claudePath: FAKE_CLAUDE,
-      guestSockPath,
+      guestSocketPath,
       parentDir,
     }),
   );
-  t.true(String(error?.message).includes(guestSockPath));
+  t.true(String(error?.message).includes(guestSocketPath));
   t.false(String(error?.message).includes(DAEMON_SOCK));
+  t.deepEqual(fs.readdirSync(parentDir), []);
+});
+
+test('without a guest socket the default connect issues one over the root socket first', async t => {
+  /** @type {unknown[][]} */
+  const steps = [];
+  const issuedPath = '/run/user/4242/endo/captp0-guests/abababab.sock';
+  const connection = harden({
+    guest: {},
+    closed: new Promise(() => {}),
+    close: () => {},
+  });
+  const connect = makeGuestConnect({
+    formulaId: FORMULA_ID,
+    issue: async ({ formulaId, env }) => {
+      steps.push(['issue', formulaId, env.ENDO_SOCK]);
+      return issuedPath;
+    },
+    connectTo: async ({ socketPath }) => {
+      steps.push(['connect', socketPath]);
+      return /** @type {any} */ (connection);
+    },
+  });
+  t.is(await connect(), connection);
+  t.deepEqual(steps, [
+    ['issue', FORMULA_ID, DAEMON_SOCK],
+    ['connect', issuedPath],
+  ]);
+});
+
+test('with a guest socket the default connect issues nothing', async t => {
+  /** @type {unknown[][]} */
+  const steps = [];
+  const connect = makeGuestConnect({
+    formulaId: FORMULA_ID,
+    guestSocketPath: '/given/guest.sock',
+    issue: async () => {
+      steps.push(['issue']);
+      return '/unexpected.sock';
+    },
+    connectTo: async ({ socketPath }) => {
+      steps.push(['connect', socketPath]);
+      return /** @type {any} */ (harden({ guest: {} }));
+    },
+  });
+  await connect();
+  t.deepEqual(steps, [['connect', '/given/guest.sock']]);
+});
+
+test('a default turn whose root socket is unreachable fails before any spawn', async t => {
+  const parentDir = fs.mkdtempSync('/tmp/ect-');
+  t.teardown(() => fs.rmSync(parentDir, { recursive: true, force: true }));
+  const error = await t.throwsAsync(
+    runConfinedTurn({
+      formulaId: FORMULA_ID,
+      credential: CREDENTIAL,
+      prompt: '{}',
+      model: MODEL,
+      claudePath: FAKE_CLAUDE,
+      parentDir,
+    }),
+  );
+  // The issue went to the root socket, since no guest socket was given.
+  t.true(String(error?.message).includes(DAEMON_SOCK));
   t.deepEqual(fs.readdirSync(parentDir), []);
 });
 
