@@ -65,7 +65,7 @@ export const isSturdyRef = value => sturdyRefDetails.has(value);
 export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
 
 /** @type {EnlivenSturdyRefDetails} */
-const enlivenUnbound = async () => {
+const enlivenUnbound = async _details => {
   throw Error(
     'ocapn: SturdyRef was minted without an OCapN client to enliven it',
   );
