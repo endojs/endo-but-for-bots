@@ -200,6 +200,16 @@ documented size), `ironhorse-compile/tests/recursion_bounds.rs` (every parser
 and tree boundary pinned exactly), the `recursion_bounds` module in
 `ironhorse-regexp/src/compile.rs`, and the `guest_no_abort` fuzz target.
 
+## Where Ironhorse departs from XS
+
+Ironhorse answers as the pinned XS oracle unless XS contradicts the
+specification, with V8 as the second opinion.
+`ironhorse-262/tests/xs_departures.rs` records each deliberate departure, and
+each place where Ironhorse keeps XS's answer although V8 differs, with both
+engines' answers and the reason.
+It runs every row on both engines, so a pin bump or an engine change that moves
+an answer fails the row until the record is updated.
+
 ## Building the oracle: the `c/moddable` pin
 
 Compiler byte identity is defined against XS pin `23b4d6b0a65f` built on x86_64
