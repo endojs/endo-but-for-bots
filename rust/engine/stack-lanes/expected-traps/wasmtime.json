@@ -1,6 +1,6 @@
 {
   "config": {
-    "max_wasm_stack": 1048576
+    "max_wasm_stack": 524288
   },
   "expected_traps": [
     "proxy-proto-cycle"
