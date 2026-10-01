@@ -210,3 +210,22 @@ test('the gate inside the recorder records a needs-containment refusal', async t
   t.is(records[0].resultType, 'needs-containment');
   t.is(records[0].promptOrigin, 'guest-influenced');
 });
+
+test('describe passes through to the wrapped backend', t => {
+  const description = harden({
+    provider: 'anthropic',
+    kind: 'claude-cli',
+    version: '2.1.278',
+  });
+  const { backend } = makeRecordingBackend(
+    harden({ type: 'needs-auth' }),
+    description,
+  );
+  const { sink } = makeSink();
+  const recorder = makeUsageRecorder(backend, {
+    secretId: 'secret:root-subscription',
+    sink,
+    now: makeSteppingClock(),
+  });
+  t.deepEqual(recorder.describe(), description);
+});

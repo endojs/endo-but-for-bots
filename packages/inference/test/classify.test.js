@@ -139,6 +139,24 @@ test('a refill reader belongs only on a retry-later row', t => {
   );
 });
 
+test('a refill reader must be a function', t => {
+  t.throws(
+    () =>
+      makeShapeClassifier(
+        harden({
+          '1.0.0': [
+            {
+              pattern: M.any(),
+              result: { type: 'rate-limited' },
+              retryAfterMs: /** @type {any} */ (1),
+            },
+          ],
+        }),
+      ),
+    { message: /must be a function/ },
+  );
+});
+
 test('an admission refusal maps to the tag of the same name', t => {
   t.deepEqual(admissionRefusalResult({ reason: 'rate-limited' }), {
     type: 'rate-limited',
