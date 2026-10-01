@@ -7,11 +7,7 @@ import '@endo/init';
 import test from 'ava';
 import harden from '@endo/harden';
 import { passStyleOf } from '@endo/pass-style';
-import {
-  makeSturdyRef,
-  enliven,
-  isSturdyRef,
-} from '../src/sturdyref-pony.js';
+import { makeSturdyRef, enliven, isSturdyRef } from '../src/sturdyref-pony.js';
 import {
   provideSturdyRef,
   selectSturdyRef,
