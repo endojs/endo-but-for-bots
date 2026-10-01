@@ -238,6 +238,48 @@ If they become requirements, research and estimate them separately.
 The root-managed per-session producer proposal in #1323 is not selected here, nor is
 NixOS or systemd part of the portable interface.
 
+### Provisioning constraints found during implementation
+
+The next slice must establish the formula recipe before adding native provisioning.
+The existing `SessionOwner` is not a drop-in environment owner: its forwarding
+protocol is conversation-specific (`send`, `interrupt`, and transcript readers).
+Do not encode shell commands as conversation messages to reuse it.
+Use a durable environment administration capability and an independently revivable
+Shell facet, following the existing kit/facet formula pattern.
+This is an authority split, not another delegation transport or job platform.
+
+A stored record of live capabilities alone does not establish passive reconstruction.
+The daemon's `marshal` maker provides every retained slot when it is reconstructed;
+if a slot is a native factory, merely looking up that record can activate the factory.
+Conversely, retaining a powers directory and resolving `lookup('factory')` later
+would follow a mutable binding, not the exact original dependency.
+The recipe needs exact retained formula dependencies and a private lazy resolver.
+The resolver must remain scoped to those recorded dependencies, not grant arbitrary
+host lookup or pathname authority to the Shell holder.
+The precise provisioning entrypoint and resolver wiring are still unimplemented.
+
+Retain an inert native controller and its cleanup before calling its effectful open.
+Persist activation intent before acquisition; keep interrupted intent fenced on
+reconstruction and never replay a command to infer its outcome.
+Clear the intent only after acknowledged cleanup, not after a caller timeout,
+an empty process-local map, or a failed constructor without cleanup evidence.
+The minimum record is lifecycle/admission evidence, not another transcript or
+an accumulating general-purpose command journal.
+
+Cancellation of shared `factory.make()` has a specific limitation: it exposes no
+per-pending-creation cancellation handle.
+Environment stop must close admission immediately, retain the creation promise,
+and dispose a late handle before acknowledging stopped.
+It must not cancel a shared factory and thereby terminate unrelated environments.
+Reuse a scoped controller where its existing cleanup authority is suitable;
+do not copy a native supervisor into the environment caplet.
+Failed or uncertain cleanup keeps the environment fenced, with operator-assisted
+cleanup where needed; this does not select process-loss recovery from #1323.
+
+These constraints need formula-backed tests for passive lookup, exact dependency
+retention after name rebinding, stop during acquisition, failed cleanup, and
+graceful restart before environment provisioning is described as complete.
+
 ## Network and development storage
 
 Execution needs public egress independently of an LLM subscription.
