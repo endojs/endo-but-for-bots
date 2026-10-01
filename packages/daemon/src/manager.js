@@ -5274,9 +5274,11 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Formulate an invitation minted by an inviting `EndoAgent`. The agent may be
-   * an `EndoHost` (via `EndoHost.invite`) or an `EndoGuest` (via
-   * `EndoGuest.invite`); the resulting invitation's locator `from` names the
+   * Formulate an invitation minted by an inviting `EndoHost` (via
+   * `EndoHost.invite`); a guest cannot invite, though an invitation formula
+   * persisted before guests lost `invite` may still name a guest as its
+   * inviter, which settles through `amplifyNameHub`. The resulting
+   * invitation's locator `from` names the
    * inviting agent's handle, and network mediation is supplied internally by the
    * daemon (see `makeInvitation`), never drawn from the inviting agent, so a
    * guest inviter gains no network authority.
@@ -7057,8 +7059,8 @@ const makeDaemonCore = async (
   };
 
   /**
-   * Acceptor-side invitation redemption, shared by `EndoHost.accept` and
-   * `EndoGuest.accept`. Runs on the ACCEPTOR's daemon and binds the
+   * Acceptor-side invitation redemption behind `EndoHost.accept` (a guest
+   * cannot accept). Runs on the ACCEPTOR's daemon and binds the
    * relationship into the CALLING agent — no replacement guest is minted. The
    * accepting agent accepts *as itself*: its own `@self` handle is the identity
    * presented to the inviter, and the inviter's handle is bound reciprocally

@@ -2187,8 +2187,8 @@ export const makeHostMaker = ({
     /**
      * Redeem an invitation locator into THIS host. Acceptance binds the
      * inviter's handle reciprocally under `correspondentName` — no synthetic
-     * local guest is minted. Shares one implementation with `EndoGuest.accept`
-     * via the daemon-core `acceptInvitation` helper, which carries the whole
+     * local guest is minted. Delegates to the daemon-core `acceptInvitation`
+     * helper, which carries the whole
      * register-peer / record-agent-key / bind sequence so the contract does not
      * fork by facet.
      * @param {string} invitationLocator
