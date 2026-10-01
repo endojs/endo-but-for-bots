@@ -30,7 +30,7 @@ use crate::ast::str_to_units;
 use ironhorse_text::SymbolName;
 
 use crate::ast::{flags, Item, Value};
-use crate::parser::{ParseError, ParseErrorKind, Parser, STATEMENT_COST};
+use crate::parser::{charged, ParseError, ParseErrorKind, Parser, STATEMENT_COST};
 use crate::token::{classify_word, Token};
 use crate::token_flags::{
     has_flag, BEGIN_BINDING, BEGIN_EXPRESSION, BEGIN_STATEMENT, END_STATEMENT, IDENTIFIER_NAME,
@@ -282,8 +282,9 @@ impl Parser<'_> {
     /// label), `-1` = program/case body. One [`STATEMENT_COST`] recursion
     /// point: blocks, `if`/loop bodies, labels, `switch` cases, `try`
     /// clauses and function bodies all nest through here.
+    #[inline(never)]
     pub(crate) fn statement(&mut self, block_it: i32) -> PResult<()> {
-        self.nested(STATEMENT_COST, |p| p.statement_inner(block_it))
+        charged!(self, STATEMENT_COST, self.statement_inner(block_it))
     }
 
     fn statement_inner(&mut self, block_it: i32) -> PResult<()> {
@@ -1022,8 +1023,9 @@ impl Parser<'_> {
     /// rather than a destructuring pattern. Annex B B.3.5 admits an
     /// initializer in a `for-in` head only for the identifier form, so
     /// `for_statement` needs to tell them apart.
+    #[inline(never)]
     pub(crate) fn binding(&mut self, token: Token, flags_arg: u32) -> PResult<bool> {
-        self.nested(STATEMENT_COST, |p| p.binding_inner(token, flags_arg))
+        charged!(self, STATEMENT_COST, self.binding_inner(token, flags_arg))
     }
 
     fn binding_inner(&mut self, token: Token, flags_arg: u32) -> PResult<bool> {
