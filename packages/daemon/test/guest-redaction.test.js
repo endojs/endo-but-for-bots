@@ -161,6 +161,7 @@ test('a redacted name change carries no value', t => {
       ),
       change => {
         const redacted = redactNameChange(change);
+        t.true(Object.isFrozen(redacted));
         t.false(Object.hasOwn(redacted, 'value'));
         if ('add' in change) {
           t.is(redacted.add, change.add);

@@ -91,7 +91,7 @@ harden(makeMessageRedactor);
  */
 export const redactNameChange = change => {
   if (!('add' in change)) {
-    return change;
+    return harden({ ...change });
   }
   const { value: _value, ...rest } = change;
   return harden(rest);

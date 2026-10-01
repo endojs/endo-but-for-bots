@@ -102,13 +102,21 @@ const designationMethodNames = new Set([
   'storeLocator',
 ]);
 
-const guestDirectoryHelp = harden(
-  Object.fromEntries(
+const guestDirectoryHelp = harden({
+  ...Object.fromEntries(
     Object.entries(directoryHelp).filter(
       ([method]) => !designationMethodNames.has(method),
     ),
   ),
-);
+  '': `EndoDirectory - A naming hub for managing pet names.
+
+A directory maps pet names to values. Pet names are strings like
+"my-worker", "counter", or "index.html". Special names are @-prefixed
+like "@self", "@host", or "@agent".
+
+Use lookup() to get a value by name, list() to see available names,
+and copy() or move() to name a value you already hold.`,
+});
 
 // A read-only view of a name hub: a local in-daemon exo that forwards only the
 // readable hub methods (help / has / list / lookup / maybeLookup) to the

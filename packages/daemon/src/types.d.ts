@@ -1736,14 +1736,18 @@ export type GuestWithheldMethod =
  * locators are replaced by the guest's own pet names for them, and the
  * attachment, promise, resolver, and value identifiers are withheld. A guest
  * reaches an attachment with `adopt` by edge name.
+ *
+ * The omission distributes over each message kind, so every kind keeps its
+ * own payload fields (`strings`, `names`, `description`, `source`, ...).
  */
-export type GuestMessage = Omit<
-  StampedMessage,
-  'from' | 'to' | 'ids' | 'promiseId' | 'resolverId' | 'valueId'
-> & {
-  fromNames: Name[];
-  toNames: Name[];
-};
+type RedactGuestMessage<M> = M extends unknown
+  ? Omit<M, 'from' | 'to' | 'ids' | 'promiseId' | 'resolverId' | 'valueId'> & {
+      fromNames: Name[];
+      toNames: Name[];
+    }
+  : never;
+
+export type GuestMessage = RedactGuestMessage<StampedMessage>;
 
 export type GuestMessageRevision = Omit<MessageRevision, 'envelope'> & {
   envelope: GuestMessage;
