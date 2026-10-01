@@ -1,3 +1,4 @@
+import shutil
 import subprocess
 import unittest
 
@@ -107,6 +108,36 @@ class ExpectedTrapsList(unittest.TestCase):
     def test_config_mismatch_is_visible(self):
         common.write_json(self.path, {"config": {"stack": 1}, "expected_traps": []})
         self.assertFalse(common.ExpectedTraps(self.path, {"stack": 2}).config_matches())
+
+
+class StackLimit(unittest.TestCase):
+    """A V8 --stack-size past the process's stack needs the limit raised."""
+    INFINITY = common.resource.RLIM_INFINITY
+
+    def test_a_limit_that_holds_the_stack_is_left_alone(self):
+        self.assertIsNone(common.stack_limit_raiser(4096, (self.INFINITY, self.INFINITY)))
+        self.assertIsNone(common.stack_limit_raiser(4096, ((4096 + common.NODE_STACK_SLACK_KB) * 1024,
+                                                           self.INFINITY)))
+
+    def test_a_smaller_soft_limit_is_raised(self):
+        self.assertTrue(callable(common.stack_limit_raiser(16384, (8 << 20, self.INFINITY))))
+        self.assertTrue(callable(common.stack_limit_raiser(16384, (8 << 20, 64 << 20))))
+
+    def test_a_hard_limit_too_small_is_a_harness_error(self):
+        with self.assertRaisesRegex(common.HarnessError, "cannot hold a 16384 KiB"):
+            common.stack_limit_raiser(16384, (8 << 20, 8 << 20))
+
+    @unittest.skipUnless(shutil.which("node"), "needs node")
+    def test_node_runs_under_a_raised_limit(self):
+        """A recursion that needs more than an 8 MiB process stack completes
+        under a 32 MiB V8 stack with the limit raised; without the raise it
+        would fault, not throw."""
+        script = ("function f(n) { return n === 0 ? 0 : 1 + f(n - 1); }"
+                  "console.log(f(300000));")
+        raiser = common.stack_limit_raiser(32768, (8 << 20, self.INFINITY))
+        completed = subprocess.run(["node", "--stack-size=32768", "-e", script], text=True,
+                                   capture_output=True, preexec_fn=raiser)
+        self.assertEqual((completed.returncode, completed.stdout), (0, "300000\n"), completed.stderr)
 
 
 class SelectCases(unittest.TestCase):

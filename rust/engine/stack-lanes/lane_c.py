@@ -10,7 +10,8 @@ STACK-DEPTH-REFACTOR.md §5, "Lane C, trend only":
            (node --print-wasm-code with the tier pinned);
   slopes   for each heavy family, bytes of stack per level and per budget unit
            at two depths: native (the probe's --stack painter) and the shadow
-           stack (node/run.cjs painting);
+           stack (node/run.cjs painting, under a host stack large enough for
+           every family's ceiling);
   chains   for each heavy family, the functions of one recursion level, from
            the stack trace of a trap under Node at a host stack too small for
            the ceiling, cut at the repeating period;
@@ -300,11 +301,22 @@ def native_stack(native, family, n):
     return int(line.rsplit("stack=", 1)[1]) if "stack=" in line else None
 
 
-def shadow_stack(wasm, family, n):
-    """The painted shadow mark of a run that returned, else None: a trap's
-    mark is where it trapped, not what the family needs."""
-    outcome = common.run_node(wasm, ["family", "heavy", family, str(n)], paint=True)
-    return None if outcome.trapped else outcome.shadow_stack
+# The host stack the shadow painter runs under: room for every heavy family at
+# its ceiling under V8's default tiering, which needs more than V8's default
+# and more than lane B's limits (lane B's expected traps). The painter
+# measures; a family that does not fit has no mark to give.
+SLOPE_STACK_KB = 16 * 1024
+
+
+def shadow_stack(wasm, family, n, stack_kb=SLOPE_STACK_KB):
+    """The painted shadow mark of a run that returned. A trap's mark is where
+    it trapped, not what the family needs, so a trap is a HarnessError: the
+    collector read nothing for the family."""
+    outcome = common.run_node(wasm, ["family", "heavy", family, str(n)], paint=True, stack_kb=stack_kb)
+    if outcome.trapped:
+        raise common.HarnessError(f"the shadow painter trapped at depth {n} under a {stack_kb} KiB "
+                                  f"host stack: {outcome.trap}")
+    return outcome.shadow_stack
 
 
 def slopes(native, wasm, problems):

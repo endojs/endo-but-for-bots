@@ -260,6 +260,21 @@ class Chains(unittest.TestCase):
         self.assertEqual(lane_c.units_per_level(42), 48)
 
 
+class Slopes(unittest.TestCase):
+    def test_a_shadow_painter_trap_is_a_problem_not_a_missing_entry(self):
+        import common
+        from unittest import mock
+        trapped = common.Outcome(trap="TRAP: Maximum call stack size exceeded")
+        with mock.patch.object(common, "run_node", return_value=trapped) as run_node:
+            with self.assertRaisesRegex(common.HarnessError, "trapped at depth 7"):
+                lane_c.shadow_stack("probe.wasm", "valueOf", 7)
+        self.assertEqual(run_node.call_args.kwargs["stack_kb"], lane_c.SLOPE_STACK_KB)
+        returned = common.Outcome(line="halt=none result=x")
+        returned.shadow_stack = 4096
+        with mock.patch.object(common, "run_node", return_value=returned):
+            self.assertEqual(lane_c.shadow_stack("probe.wasm", "valueOf", 7), 4096)
+
+
 class TierMix(unittest.TestCase):
     def test_the_excess_is_over_the_larger_pure_tier(self):
         mix = lane_c.tier_mix({"f": [1, 2]}, {1: 100, 2: 10}, {1: 10, 2: 100})
