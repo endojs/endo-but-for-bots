@@ -6387,14 +6387,25 @@ impl Interp {
                 // the already-selected Function builtin tag.
                 let is_callable = self.is_callable_value(this);
                 // A `Symbol.toStringTag` string on the receiver's chain wins
-                // (`Object.prototype.toString` step 15). Only the Intl
-                // formatter/segmenter objects carry one in the frozen profile —
-                // objects the pinned oracle cannot construct — so this
-                // unmetered chain read never perturbs a covered/metered case
-                // (which has no such tag and falls through unchanged).
-                let tag = match this.value {
-                    Payload::Reference(r) => self.string_to_string_tag(code, r)?,
+                // (`Object.prototype.toString` step 15). The chain read is
+                // unmetered, as XS's own read of a data property is; a tag
+                // getter's call is metered as any call.
+                //
+                // A primitive receiver is read through the prototype of the
+                // wrapper ToObject would make, which owns nothing itself (a
+                // String wrapper's own keys are indices and `length`).
+                let tag_holder = match (this.kind, this.value) {
+                    (Kind::Reference, Payload::Reference(r)) => Some(r),
+                    (Kind::Boolean, _) => Some(self.boolean_proto),
+                    (Kind::Integer | Kind::Number, _) => Some(self.number_proto),
+                    (Kind::String, _) => Some(self.string_proto),
+                    (Kind::Symbol, _) => Some(self.symbol_proto),
+                    (Kind::BigInt, _) => Some(self.bigint_proto),
                     _ => None,
+                };
+                let tag = match tag_holder.filter(|holder| !holder.is_null()) {
+                    Some(holder) => self.string_to_string_tag(code, holder)?,
+                    None => None,
                 };
                 if let Some(tag) = tag {
                     let length = tag
@@ -6420,8 +6431,9 @@ impl Interp {
                                 Kind::Boolean => b"[object Boolean]".as_slice(),
                                 Kind::Integer | Kind::Number => b"[object Number]".as_slice(),
                                 Kind::String => b"[object String]".as_slice(),
-                                Kind::Symbol => b"[object Symbol]".as_slice(),
-                                Kind::BigInt => b"[object BigInt]".as_slice(),
+                                // A Symbol or BigInt wrapper has no builtinTag
+                                // of its own: its name comes from the
+                                // prototype's `@@toStringTag`, read above.
                                 _ => b"[object Object]".as_slice(),
                             })
                         }
@@ -6429,6 +6441,11 @@ impl Interp {
                     };
                     let text: &[u8] = match this.value {
                         Payload::Reference(r) if self.dates.contains_key(&r) => b"[object Date]",
+                        // [[RegExpMatcher]] names the tag, whatever the
+                        // instance's prototype (a subclass's `newTarget`).
+                        Payload::Reference(r) if self.regexps.contains_key(&r) => {
+                            b"[object RegExp]"
+                        }
                         Payload::Reference(r) if self.error_data.contains_key(&r) => {
                             b"[object Error]"
                         }
@@ -6436,7 +6453,6 @@ impl Interp {
                             b"[object Arguments]"
                         }
                         Payload::Reference(_) if is_array => b"[object Array]",
-                        Payload::BigInt(_) => b"[object BigInt]",
                         _ if wrapper_tag.is_some() => wrapper_tag.unwrap(),
                         _ if is_callable => b"[object Function]",
                         // A primitive receiver takes the builtinTag of the
@@ -6452,7 +6468,9 @@ impl Interp {
                             b"[object Number]"
                         }
                         _ if this.kind == Kind::String => b"[object String]",
-                        _ if this.kind == Kind::Symbol => b"[object Symbol]",
+                        // A Symbol or BigInt has no builtinTag of its own, as
+                        // its wrapper has none: its name is the prototype's
+                        // `@@toStringTag`, read above.
                         _ => b"[object Object]",
                     };
                     let off = self.alloc_str_text_metered(text)?;

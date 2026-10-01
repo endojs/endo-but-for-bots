@@ -865,6 +865,10 @@ impl Interp {
                 (self.map_iterator_proto, "Map Iterator"),
                 (self.set_iterator_proto, "Set Iterator"),
                 (self.regexp_string_iterator_proto, "RegExp String Iterator"),
+                // %IteratorHelperPrototype% (ES2025 27.1.2.1.2), the
+                // prototype of what `map`, `filter`, `take` and their siblings
+                // return.
+                (self.iterator_helper_proto, "Iterator Helper"),
                 (self.async_generator_proto, "AsyncGenerator"),
                 // The generator-family constructor prototypes each carry a
                 // `Symbol.toStringTag` string (ES2024 25.2.3.1 / 25.3.3.1 /
@@ -885,6 +889,45 @@ impl Interp {
                     self.async_generator_function_proto,
                     "AsyncGeneratorFunction",
                 ),
+                // The other tags XS installs (and the ECMA-402 and Temporal
+                // ones it lacks the objects for), so `Object.prototype.toString`
+                // names a Map, a Symbol wrapper or `JSON` as V8 and XS do
+                // rather than `[object Object]`. `%ArrayIteratorPrototype%`
+                // still has none: String iterators share it here, where XS
+                // tags the two `Array Iterator` and `String Iterator`.
+                (self.map_proto, "Map"),
+                (self.set_proto, "Set"),
+                (self.weakmap_proto, "WeakMap"),
+                (self.weakset_proto, "WeakSet"),
+                (
+                    self.intrinsic_prototype("SharedArrayBuffer"),
+                    "SharedArrayBuffer",
+                ),
+                (
+                    self.intrinsic_prototype("DisposableStack"),
+                    "DisposableStack",
+                ),
+                (
+                    self.intrinsic_prototype("AsyncDisposableStack"),
+                    "AsyncDisposableStack",
+                ),
+                (self.async_function_proto, "AsyncFunction"),
+                (self.symbol_proto, "Symbol"),
+                (self.bigint_proto, "BigInt"),
+                (self.intrinsic_object("JSON"), "JSON"),
+                (self.intrinsic_object("Reflect"), "Reflect"),
+                (self.intrinsic_object("Atomics"), "Atomics"),
+                (self.intl_object, "Intl"),
+                (self.collator_proto, "Intl.Collator"),
+                (self.locale_proto, "Intl.Locale"),
+                (self.temporal_object, "Temporal"),
+                (self.temporal_instant_proto, "Temporal.Instant"),
+                (self.temporal_duration_proto, "Temporal.Duration"),
+                (self.temporal_plain_protos[0], "Temporal.PlainDate"),
+                (self.temporal_plain_protos[1], "Temporal.PlainTime"),
+                (self.temporal_plain_protos[2], "Temporal.PlainDateTime"),
+                (self.temporal_plain_protos[3], "Temporal.PlainYearMonth"),
+                (self.temporal_plain_protos[4], "Temporal.PlainMonthDay"),
             ] {
                 if proto.is_null() {
                     continue;
@@ -1344,6 +1387,25 @@ impl Interp {
         self.apply_template_site_ids(&mut remapped, site_order, accesses)?;
         self.install_pending_intrinsics();
         Ok(remapped)
+    }
+
+    /// The boot intrinsic named `name` (a namespace object such as `JSON`),
+    /// or [`crate::value::SlotIndex::NULL`] in a profile without it.
+    fn intrinsic_object(&self, name: &str) -> crate::value::SlotIndex {
+        self.intrinsics
+            .get(name)
+            .copied()
+            .unwrap_or(crate::value::SlotIndex::NULL)
+    }
+
+    /// The `prototype` of the boot constructor named `name`, or
+    /// [`crate::value::SlotIndex::NULL`] in a profile without it.
+    fn intrinsic_prototype(&self, name: &str) -> crate::value::SlotIndex {
+        self.intrinsics
+            .get(name)
+            .and_then(|ctor| self.ctor_prototype.get(ctor))
+            .copied()
+            .unwrap_or(crate::value::SlotIndex::NULL)
     }
 
     /// Install the machine-wide intrinsic-surface suffix and then catch the
