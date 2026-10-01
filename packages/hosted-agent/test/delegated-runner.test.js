@@ -538,6 +538,53 @@ test('models are the operator’s allowlist, in a session’s spec and on every 
   t.is(await E(session.run).send('hi', harden({ model: 'small' })), 'a turn');
 });
 
+test('creation keeps admission and inference refusal order', async t => {
+  const { factory, beneath, close } = makeHarness({
+    limits: { models: ['small'] },
+  });
+  t.teardown(close);
+  for (const [extra, message] of [
+    [
+      { workspaceHostPath: '/', networkPolicy: 7, model: 7 },
+      'A delegated runner does not take that in a session',
+    ],
+    [
+      { cwd: '/', subscription: 'work', networkPolicy: 7, model: 7 },
+      'A delegated runner’s sessions work in /workspace',
+    ],
+    [
+      { subscription: 'work', networkPolicy: 7, model: 7 },
+      'A delegated runner chooses the subscription',
+    ],
+    [
+      { networkPolicy: 7, model: 7 },
+      'This runner does not allow that network policy',
+    ],
+    [{ model: 7, reasoningEffort: 7 }, 'Invalid session model'],
+    [
+      { model: 'large', reasoningEffort: 7 },
+      'This runner does not allow that model',
+    ],
+    [
+      { reasoningEffort: 7, systemPrompt: 7 },
+      'This runner needs a model named',
+    ],
+    [{ model: '', reasoningEffort: 7 }, 'This runner needs a model named'],
+    [
+      { model: 'small', reasoningEffort: 7, systemPrompt: 7 },
+      'Invalid session reasoning effort',
+    ],
+    [{ model: 'small', systemPrompt: 7 }, 'Invalid session system prompt'],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(
+      () => E(factory).create(harden({ sessionId: 's', ...extra }), tools),
+      { message },
+    );
+  }
+  t.deepEqual(beneath.calls, []);
+});
+
 test('a storage bound needs a backend that enforces one', async t => {
   const { factory, beneath } = makeHarness({
     limits: { storage: { maxSessionBytes: 5_000_000 } },
@@ -741,4 +788,68 @@ test('a turn’s options are checked like a session’s spec', async t => {
     'a turn',
   );
   t.is(beneath.calls.filter(call => call.verb === 'send').length, 1);
+});
+
+test('turns keep their narrower options and may retain the current model', async t => {
+  const { factory, beneath, close } = makeHarness({
+    limits: { models: ['small'], networkPolicies: ['off', 'public-internet'] },
+  });
+  t.teardown(close);
+  const session = await E(factory).create(
+    harden({ sessionId: 's', model: 'small' }),
+    tools,
+  );
+  for (const [options, message] of [
+    [
+      { networkPolicy: 'public-internet', model: 7 },
+      'A delegated runner does not take that in a turn',
+    ],
+    [
+      { subscription: 'auto' },
+      'A delegated runner does not take that in a turn',
+    ],
+    [{ cwd: '/workspace' }, 'A delegated runner does not take that in a turn'],
+    [
+      { storageBoundBytes: 1 },
+      'A delegated runner does not take that in a turn',
+    ],
+    [{ model: 7, reasoningEffort: 7 }, 'Invalid session model'],
+    [
+      { model: 'large', reasoningEffort: 7 },
+      'This runner does not allow that model',
+    ],
+    [
+      { reasoningEffort: 7, systemPrompt: 7 },
+      'Invalid session reasoning effort',
+    ],
+    [{ model: '', systemPrompt: 7 }, 'Invalid session system prompt'],
+  ]) {
+    // eslint-disable-next-line no-await-in-loop
+    await t.throwsAsync(() => E(session.run).send('hi', harden(options)), {
+      message,
+    });
+  }
+  t.is(beneath.calls.filter(call => call.verb === 'send').length, 0);
+  const accepted = harden([
+    undefined,
+    {},
+    { reasoningEffort: 'low' },
+    {
+      model: '',
+      reasoningEffort: '',
+      systemPrompt: '',
+      acknowledgedCheckpoint: 'c1',
+      transcript: [],
+    },
+  ]);
+  for (const options of accepted) {
+    // eslint-disable-next-line no-await-in-loop
+    t.is(await E(session.run).send('hi', options), 'a turn');
+  }
+  t.deepEqual(
+    beneath.calls
+      .filter(call => call.verb === 'send')
+      .map(call => call.options),
+    accepted,
+  );
 });

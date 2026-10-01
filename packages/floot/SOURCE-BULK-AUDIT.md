@@ -339,9 +339,23 @@ The source review does not establish that either branch is dead.
   second moves with the same retained namespace, and occupied destinations with
   stray root names preserved.
   Focused setup/backend-setup tests pass: 47; hosted types, scoped ESLint and
-  formatting pass. Independent review checks publication semantics and reruns tests.
+  formatting pass.
+  Independent review checks publication semantics and reruns tests.
   This removes 21 source lines, bringing the committed count to 42,589.
   No durable format, formula identity or release pin changes; not deployed.
+- **SB-10 done:** delegated create and turn paths share one private pure
+  validator for model, reasoning effort and system prompt.
+  Creation still requires a named model only when the operator supplies a model
+  allowlist; a turn can retain its current model by omitting or emptying that field.
+  Exact refusal order, narrow turn keys, network/storage admission and durable
+  slot/revocation accounting remain in their existing owners.
+  New tests combine invalid fields to check refusal precedence and verify that
+  allowed turn options are forwarded unchanged without admitting session-only fields.
+  The implementer passes 26 runner/module tests; independent review reruns the
+  24 runner tests successfully.
+  Hosted types, scoped ESLint and formatting pass.
+  This removes four source lines, bringing the committed count to 42,585.
+  No new public surface, durable format or release pin changes; not deployed.
 
 Audit status: measured and caller-reviewed; implementation progress is above.
 Fae compaction and evidence-storage scaling remain deferred as directed.

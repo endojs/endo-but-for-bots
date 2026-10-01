@@ -189,6 +189,40 @@ const SPEC_KEYS = harden([
   'cwd',
 ]);
 
+/**
+ * @param {Record<string, any>} options
+ * @param {RunnerLimits} limits
+ * @param {boolean} [requireNamedModel] With an allowlist, creation must name a
+ *   model; a turn may retain its session's current model.
+ */
+const assertInferenceOptions = (options, limits, requireNamedModel = false) => {
+  const { model, reasoningEffort, systemPrompt } = options;
+  model === undefined ||
+    model === '' ||
+    (typeof model === 'string' && MODEL_ID.test(model)) ||
+    Fail`Invalid session model`;
+  !model ||
+    limits.models === undefined ||
+    limits.models.includes(model) ||
+    Fail`This runner does not allow that model`;
+  // The factory beneath would choose its own default, which may not be one
+  // this runner allows. Check this before the other fields, as at creation.
+  !requireNamedModel ||
+    limits.models === undefined ||
+    model ||
+    Fail`This runner needs a model named`;
+  reasoningEffort === undefined ||
+    reasoningEffort === '' ||
+    (typeof reasoningEffort === 'string' && EFFORT.test(reasoningEffort)) ||
+    Fail`Invalid session reasoning effort`;
+  // It is written into the operator's session records, outside any bound
+  // on the session's own directory.
+  systemPrompt === undefined ||
+    (typeof systemPrompt === 'string' &&
+      systemPrompt.length <= MAX_SYSTEM_PROMPT_CHARS) ||
+    Fail`Invalid session system prompt`;
+};
+
 /** The runner's own refusals, which a holder is told as they are. */
 const RUNNER_WORDS = harden([
   'Runner revoked',
@@ -482,23 +516,7 @@ export const makeDelegatedRunner = ({
       if (options === undefined) return undefined;
       Object.keys(options).every(key => TURN_KEYS.includes(key)) ||
         Fail`A delegated runner does not take that in a turn`;
-      const { model, reasoningEffort, systemPrompt } = options;
-      model === undefined ||
-        model === '' ||
-        (typeof model === 'string' && MODEL_ID.test(model)) ||
-        Fail`Invalid session model`;
-      !model ||
-        limits.models === undefined ||
-        limits.models.includes(model) ||
-        Fail`This runner does not allow that model`;
-      reasoningEffort === undefined ||
-        reasoningEffort === '' ||
-        (typeof reasoningEffort === 'string' && EFFORT.test(reasoningEffort)) ||
-        Fail`Invalid session reasoning effort`;
-      systemPrompt === undefined ||
-        (typeof systemPrompt === 'string' &&
-          systemPrompt.length <= MAX_SYSTEM_PROMPT_CHARS) ||
-        Fail`Invalid session system prompt`;
+      assertInferenceOptions(options, limits);
       return options;
     };
     return harden({
@@ -565,30 +583,8 @@ export const makeDelegatedRunner = ({
     (typeof networkPolicy === 'string' &&
       limits.networkPolicies.includes(networkPolicy)) ||
       Fail`This runner does not allow that network policy`;
+    assertInferenceOptions(spec, limits, true);
     const { model, reasoningEffort, systemPrompt } = spec;
-    model === undefined ||
-      model === '' ||
-      (typeof model === 'string' && MODEL_ID.test(model)) ||
-      Fail`Invalid session model`;
-    !model ||
-      limits.models === undefined ||
-      limits.models.includes(model) ||
-      Fail`This runner does not allow that model`;
-    // The factory beneath would choose its own default, which may not be one
-    // this runner allows.
-    limits.models === undefined ||
-      model ||
-      Fail`This runner needs a model named`;
-    reasoningEffort === undefined ||
-      reasoningEffort === '' ||
-      (typeof reasoningEffort === 'string' && EFFORT.test(reasoningEffort)) ||
-      Fail`Invalid session reasoning effort`;
-    // It is written into the operator's session records, outside any bound
-    // on the session's own directory.
-    systemPrompt === undefined ||
-      (typeof systemPrompt === 'string' &&
-        systemPrompt.length <= MAX_SYSTEM_PROMPT_CHARS) ||
-      Fail`Invalid session system prompt`;
     return harden({
       ...(model ? { model } : {}),
       ...(reasoningEffort ? { reasoningEffort } : {}),
