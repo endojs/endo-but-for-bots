@@ -2,8 +2,9 @@
 
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { mustMatch } from '@endo/patterns';
 
-import { InferenceBackendInterface } from './guards.js';
+import { InferResultShape, InferenceBackendInterface } from './guards.js';
 
 /** @import { InferRequest, InferResult, InferenceBackend, UsageRecord, UsageSink } from './types.js' */
 
@@ -40,7 +41,8 @@ const utf8ByteLength = text => {
  *
  * A wrapped backend that rejects breaks the `infer` contract; the rejection
  * propagates and no record is written, because there is no classified result
- * to record.
+ * to record. So does a result that does not match `InferResultShape`,
+ * since the wrapped backend need not be guarded itself.
  *
  * @param {InferenceBackend} backend
  * @param {object} options
@@ -68,6 +70,7 @@ export const makeUsageRecorder = (
     async infer(request) {
       const startedAt = now();
       const result = await backend.infer(request);
+      mustMatch(harden(result), InferResultShape, 'backend result');
       const latencyMs = Math.max(0, now() - startedAt);
       const { provider, kind, version } = backend.describe();
 
