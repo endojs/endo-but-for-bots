@@ -110,18 +110,10 @@ stated once here.
 
 | Method | `EndoMount` (`MountInterface`) | `EndoDirectory` (`NameHubInterface`) | extended `Directory` | genie `LocalMount` |
 |---|---|---|---|---|
-| arg shape | `PathArgShape` = `string \| string[] \| MountEntry` | `NamePath` = `string[]` (guard admits `string \| string[]`; a bare string is refused) | `string \| string[]` | `PathArgShape` = `string \| string[]` |
-| `lookup` | `M.call(PathArgShape)` | `M.call(NameOrPathShape)` guard, then `namePathFrom` refuses a string | `M.call(M.or(string, arrayOf string))` | `M.call(PathArgShape)` |
+| arg shape | `PathArgShape` = `string \| string[] \| MountEntry` | `NameOrPathShape` = `string \| string[]` | `string \| string[]` | `PathArgShape` = `string \| string[]` |
+| `lookup` | `M.call(PathArgShape)` | `M.call(NameOrPathShape)` | `M.call(M.or(string, arrayOf string))` | `M.call(PathArgShape)` |
 | `move` | `M.call(PathArgShape, PathArgShape)` | `M.call(NamePathShape, NamePathShape)` | `M.call(or(string,array), or(string,array))` | `M.call(PathArgShape, PathArgShape)` |
 | `remove` | `M.call(PathArgShape)` | `M.call().rest(NamePathShape)` | `M.call(string)` | `M.call(PathArgShape)` |
-
-Since the pet-name-path-only change (`.changeset/pet-name-path-only.md`),
-`EndoDirectory` no longer accepts a bare string as a one-segment path. Its
-`lookup` still spreads the `@endo/platform` `NameOrPathShape` guard, but the
-implementation narrows the argument with `namePathFrom`, which refuses a
-string, so `lookup("name")` must be written `lookup(["name"])`. The daemon's
-own `NameOrPathShape` export is gone; its methods that take a path guard on
-`NamePathArgumentShape`, which is equally wide for the same reason.
 
 So `EndoMount` accepts a `MountEntry` cap as a path argument where the others
 do not, and `EndoDirectory.remove` is variadic where the others are not. **A

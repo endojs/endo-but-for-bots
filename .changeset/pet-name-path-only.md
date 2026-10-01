@@ -32,27 +32,18 @@
 '@endo/workflow': patch
 ---
 
-The daemon's Exo surface (host, guest, directory, mail, channel, and inspector methods) now accepts only a pet-name path, an array of path components, where it used to accept either a single pet-name string or a path.
-A bare string is rejected with a `TypeError` that says the string is not a pet-name path, is never split on a delimiter, and that the caller should try again with an array of path components: `lookup(['counter'])`, not `lookup('counter')`, and `lookup(['subdir', 'value'])`, not `lookup('subdir/value')`.
+The daemon's Exo surface (host, guest, directory, mail, channel, and inspector methods) now accepts only a pet-name path, an array of path components.
+A bare string is rejected with a `TypeError` asking the caller to retry with an array; a string is never split on a delimiter.
+Write `lookup(['counter'])`, not `lookup('counter')`, and `lookup(['subdir', 'value'])`, not `lookup('subdir/value')`.
+The `adopt` method's edge name is a message label, not a path, and stays a string.
 
-These methods are primarily geared toward agents, and agents are susceptible to the same confusion as people.
-Accepting a string invites confusion about whether the string may be a delimited path, and ambiguity about what the delimiter is in the virtual file (and other capability) systems.
-Refusing the string makes an agent that passed a delimited string learn that the invocation was invalid and retry with an array of path components.
+Migration:
+`NameOrPathShape` and `NamesOrPathsShape` in `@endo/daemon/type-guards.js` are replaced by `NamePathArgumentShape` and `NamePathsArgumentShape`, and the `NameOrPath` and `NamesOrPaths` types by `NamePath`.
+`@endo/sandbox`'s `provideScratchMount` and `@endo/agentry`'s `NormalizedGitRemoteSpec.credential` now take a pet-name path.
+`@endo/lal`'s tool-call arguments that hold a pet-name path are renamed to say so (`petNameOrPath`, `petName`, `recipientName`, `responseName`, `workerName`, `resultName`, and `petNames` become `petNamePath`, `petNamePath`, `recipientNamePath`, `responseNamePath`, `workerNamePath`, `resultNamePath`, and `petNamePaths`); an agent sending an old key must switch.
+Name hubs outside the daemon reached by a multi-segment path now receive a one-segment array per step.
+The remaining packages pass pet-name paths to the daemon.
 
-`NameOrPathShape` and `NamesOrPathsShape` in `@endo/daemon/type-guards.js` are replaced by `NamePathArgumentShape` and `NamePathsArgumentShape`, and the `NameOrPath` and `NamesOrPaths` types are removed in favor of `NamePath`.
-`@endo/daemon/type-guards.js` now also exports `NameShape`, `NamePathShape`, `NamePathArgumentShape`, and `NamePathsArgumentShape`, so consumers such as `@endo/lal` validate pet names and pet-name paths against the same matchers as the daemon's interfaces.
-The `adopt` method's edge name is a message edge label, not a path, and stays a string.
-The `endo` CLI already parses slash-delimited command-line names into arrays; the `cancel`, `request`, `form`, and verbose `list` commands now do so too.
+Scope: mounts and readable trees, and `@endo/platform`'s portable name-hub guards, still accept a string.
 
-`@endo/sandbox`'s `SandboxPowers.provideScratchMount` now takes a pet-name path (`string[]`) instead of a pet name, and `@endo/agentry`'s `NormalizedGitRemoteSpec.credential` is now always a pet-name path (`string[]`).
-`@endo/agentry`'s provisioning and `@endo/platform`'s extended-filesystem modules pass pet-name paths to the daemon, so they require this daemon.
-`@endo/agent-tools`' code-mode daemon helpers accept a pet-name path from the model; a string is passed as a single pet name and is never split, so a delimited string reaches the daemon as an invalid name.
-`@endo/lal` renames its tool-call arguments that hold a pet-name path so that each key says it is a path, and each now expects an array of path components: `petNameOrPath` becomes `petNamePath`, `adopt`'s `petName` becomes `petNamePath`, `request`'s and `send`'s `recipientName` and `responseName` become `recipientNamePath` and `responseNamePath`, and `evaluate`'s `workerName` and `resultName` become `workerNamePath` and `resultNamePath`.
-An agent that still sends an old key must switch to the new one.
-The daemon's `help()` text names these parameters the same way.
-The `powersName` and `resultName` keys of the `makeUnconfined` and `makeArchive` options record are kept on purpose, to avoid breaking every caller of that record; their values are pet-name paths like every other path argument.
-The remaining packages adapt their calls to the daemon to pass pet-name paths.
-
-Invitation records minted before this change, whose stored `guestName` is a bare string, still revive: the daemon reads such a record as a one-segment path.
-The mount and readable-tree surface (`lookup` and `listTree` on mounts) intentionally still accepts a string, as do `@endo/platform`'s portable name-hub guards; the daemon's directories, hosts, and guests are stricter than that portable contract.
-Name hubs outside the daemon that are reached by a multi-segment path now receive a one-segment array from each step of the walk, so they must accept an array.
+Invitation records whose stored `guestName` is a bare string still revive, read as a one-segment path.
