@@ -36,6 +36,15 @@ the operator runtime root, and removes it non-recursively only after unmount
 acknowledgement. Failed removal retains its original owner for explicit retry.
 Recorded `ENDO_NINEP_*` settings now reach the existing mounter validator and
 helper program fields. Neither change moves or deletes durable HOME/workspace.
+Generation 193 then passed live Rust installation, Cargo tests, nonzero exit 7,
+the OpenRouter auto-free workspace pilot, three forced compaction checkpoints,
+and off/public network changes. Cancellation found that parallel listener/slice
+teardown can race network-namespace dependencies. Cleanup now acknowledges the
+native scope before removing its joined listener; early listener cancellation
+remains available before a scope exists. Native errors are made passable before
+crossing controller boundaries. The failed test's original owner acknowledged
+cleanup on explicit retry; its uncertain command receipt is retained, not replayed.
+Cancellation, restart/recall and disposal acceptance remain pending.
 Actual daemon testing also found that daemon exit does not run manager-owned
 environment cancellation hooks. Planned restart must explicitly acknowledge
 `admin.stop()` before stopping the daemon; exit alone leaves the active-intent

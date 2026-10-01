@@ -5,6 +5,7 @@ import path from 'node:path';
 import { Fail } from '@endo/errors';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
+import { toPassableError } from '@endo/pass-style';
 import { makeShell } from '@endo/exo-shell';
 import {
   assertEnvironmentRecipe,
@@ -133,10 +134,13 @@ export const makeEnvironmentRunnerKit = (
             egress?.dispose();
             if (stopping) return stopping;
             const originalScope = scope;
-            const originalWorker = worker;
+            // A joined slice depends on the listener's network namespace.
+            // Stop a listener early only while no scope has been acquired;
+            // otherwise native scope cleanup must acknowledge first.
+            const earlyWorker = originalScope ? undefined : worker;
             const early = Promise.allSettled([
               originalScope ? E(originalScope).close() : Promise.resolve(),
-              originalWorker?.stop(),
+              earlyWorker?.stop(),
             ]);
             stopping = (async () => {
               await started?.catch(() => {});
@@ -146,19 +150,19 @@ export const makeEnvironmentRunnerKit = (
                   scope && scope !== originalScope
                     ? E(scope).close()
                     : Promise.resolve(),
-                  worker && worker !== originalWorker
-                    ? worker.stop()
-                    : Promise.resolve(),
                 ])),
               ];
               const failures = results.flatMap(result =>
-                result.status === 'rejected' ? [result.reason] : [],
+                result.status === 'rejected'
+                  ? [toPassableError(result.reason)]
+                  : [],
               );
               if (failures.length)
                 throw new AggregateError(
                   failures,
                   'Environment native cleanup pending',
                 );
+              if (worker && worker !== earlyWorker) await worker.stop();
               // Native scope/listener acknowledgements precede unmount. Failure
               // keeps all original handles and the registry entry for retry.
               await mounter?.close();
@@ -171,7 +175,10 @@ export const makeEnvironmentRunnerKit = (
               forget();
             })().catch(error => {
               stopping = undefined;
-              throw error;
+              // Native fs/child-process errors can carry enumerable code and
+              // stderr properties. Preserve their diagnostics without making
+              // a cleanup refusal itself fail the capability wire contract.
+              throw toPassableError(error);
             });
             void stopping.catch(() => {});
             return stopping;

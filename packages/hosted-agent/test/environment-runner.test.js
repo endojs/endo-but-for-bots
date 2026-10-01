@@ -2,6 +2,7 @@
 import test from '@endo/ses-ava/prepare-endo.js';
 import { E } from '@endo/eventual-send';
 import { Far } from '@endo/far';
+import { passStyleOf } from '@endo/pass-style';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
 import { bytesWriterFromIterator } from '@endo/exo-stream/bytes-writer-from-iterator.js';
 import {
@@ -40,6 +41,10 @@ const fixture = async t => {
   let mountGate;
   const mountEntered = gate();
   let scopeFails = false;
+  let scopeGate;
+  const scopeEntered = gate();
+  let scopeClosed = false;
+  let requireScopeBeforeListener = false;
   let launch;
   const scope = Far('Scope', {
     makeResolved: async options => {
@@ -70,7 +75,11 @@ const fixture = async t => {
     },
     close: async () => {
       calls.push('scope-close');
-      if (scopeFails) throw Error('scope cleanup pending');
+      scopeEntered.resolve();
+      await scopeGate?.promise;
+      if (scopeFails)
+        throw Object.assign(Error('scope cleanup pending'), { code: 'EBUSY' });
+      scopeClosed = true;
     },
   });
   const native = Far('Native', {
@@ -131,6 +140,8 @@ const fixture = async t => {
           }),
           stop: async () => {
             calls.push('network-stop');
+            if (requireScopeBeforeListener && !scopeClosed)
+              throw Error('network container has dependents');
           },
         };
       },
@@ -182,6 +193,13 @@ const fixture = async t => {
     getLaunch: () => launch,
     getMounterEnv: () => mounterEnv,
     socketRoot,
+    blockScope: () => {
+      scopeGate = gate();
+      return { ...scopeGate, entered: scopeEntered.promise };
+    },
+    requireScopeBeforeListener: () => {
+      requireScopeBeforeListener = true;
+    },
     blockMount: () => {
       mountGate = gate();
       return { ...mountGate, entered: mountEntered.promise };
@@ -294,7 +312,10 @@ test('failed scope cleanup retains deletion fence and original mounter until ret
   );
   await E(controller).open();
   f.failScope(true);
-  await t.throwsAsync(E(controller).stop(), { message: /cleanup pending/ });
+  const failure = await t.throwsAsync(E(controller).stop(), {
+    message: /cleanup pending/,
+  });
+  t.is(passStyleOf(harden(failure)), 'error');
   t.false(f.calls.includes('unmount'));
   await t.throwsAsync(E(f.runner).removeEnvironmentStorage(id), {
     message: /must stop/,
@@ -326,5 +347,26 @@ test('socket directory removal failure retains the owner for explicit retry', as
   await unlink(obstruction);
   await E(controller).stop();
   t.deepEqual(await readdir(f.socketRoot), []);
+  await E(f.runner).removeEnvironmentStorage(id);
+});
+
+test('joined native scope cleanup acknowledges before network listener removal', async t => {
+  const f = await fixture(t);
+  const controller = await E(f.runner).provideEnvironment(
+    id,
+    harden({ ...recipe, networkPolicy: 'public-internet' }),
+    f.dependencies,
+  );
+  await E(controller).open();
+  f.requireScopeBeforeListener();
+  const scope = f.blockScope();
+  const stopped = E(controller).stop();
+  await scope.entered;
+  t.false(f.calls.includes('network-stop'));
+  t.false(f.calls.includes('unmount'));
+  scope.resolve();
+  await stopped;
+  t.true(f.calls.indexOf('scope-close') < f.calls.indexOf('network-stop'));
+  t.true(f.calls.indexOf('network-stop') < f.calls.indexOf('unmount'));
   await E(f.runner).removeEnvironmentStorage(id);
 });
