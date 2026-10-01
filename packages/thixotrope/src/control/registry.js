@@ -13,24 +13,30 @@ import { makeSerialQueue } from '../serial-queue.js';
  *
  * @typedef {object} InstallRequest
  * @property {string} name the inventory name the installed value takes
+ * @property {string} [workspace] the workspace the installation belongs to
+ *   and whose inventory takes the value; absent for one the daemon holds
+ *   for every workspace, which takes no grants and whose value the host
+ *   hands out
  * @property {InstallationKind} kind
  * @property {string} digest identifies the exact code installed
  * @property {string} allocationKey the host's idempotent vat allocation key
  * @property {ReadonlyArray<string[]>} [grants] `[power, inventory key]`
  *   pairs, resolved in the workspace before any vat exists
- * @property {any} workspace the workspace's access facet
+ * @property {any} [access] the workspace's access facet, with the workspace
  * @property {string} [bundleDigest] an application's bundle, in the store
  * @property {string} [durableDigest] a native resource's durable bundle
  * @property {string} [ephemeralDigest] a native resource's ephemeral bundle
  *
  * @typedef {object} Installation
+ * @property {string | undefined} workspace
  * @property {InstallationKind} kind
  * @property {string} digest
  * @property {string} signature the canonical grant mapping
  * @property {Array<[string, string]>} grants
  * @property {string} allocationKey
  * @property {Record<string, unknown>} powers
- * @property {any} workspace
+ * @property {any} access the workspace's access facet, or undefined for a
+ *   daemon-wide installation
  * @property {string | undefined} bundleDigest
  * @property {string | undefined} durableDigest
  * @property {string | undefined} ephemeralDigest
@@ -82,6 +88,9 @@ import { makeSerialQueue } from '../serial-queue.js';
 export const makeRegistry = ({ installer, index, restartMessage }) => {
   // Shipped by source: the guards travel with the factory, defined here.
   const KindShape = M.or('application', 'native');
+  // What the supervisor accepts as a workspace name, checked here too so
+  // the two boundaries agree.
+  const WorkspaceNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
   const DigestShape = M.string({ stringLengthLimit: 128 });
   const GrantsShape = M.arrayOf(harden([M.string(), M.string()]));
   const RequestShape = M.splitRecord(
@@ -90,9 +99,10 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
       kind: KindShape,
       digest: DigestShape,
       allocationKey: M.string(),
-      workspace: M.remotable('workspace'),
     },
     {
+      workspace: M.string(),
+      access: M.remotable('workspace'),
       grants: GrantsShape,
       bundleDigest: DigestShape,
       durableDigest: DigestShape,
@@ -103,11 +113,18 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
   const RegistryI = M.interface('Registry', {
     help: M.call().returns(M.string()),
     install: M.call(RequestShape).returns(M.promise()),
-    lookup: M.call(M.string()).returns(M.opt(M.record())),
-    remove: M.call(M.string()).returns(M.promise()),
+    lookup: M.call(M.string()).optional(M.string()).returns(M.opt(M.record())),
+    remove: M.call(M.string()).optional(M.string()).returns(M.promise()),
     list: M.call().returns(M.arrayOf(M.record())),
   });
 
+  /**
+   * One name per workspace, and one daemon-wide namespace for what the host
+   * provides to every workspace.
+   * @param {string | undefined} workspace
+   * @param {string} name
+   */
+  const keyOf = (workspace, name) => JSON.stringify([workspace ?? null, name]);
   /** @type {Map<string, Installation>} */
   const installed = new Map();
   // Installations and removals take turns: a removal must not race the
@@ -163,8 +180,10 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
     retrying(async () => {
       // A record made again after a restart must not revive a name a
       // removal has forgotten meanwhile.
-      if (installed.get(name) !== entry) return undefined;
+      if (installed.get(keyOf(entry.workspace, name)) !== entry)
+        return undefined;
       return E(index).record(
+        entry.workspace,
         name,
         harden({
           kind: entry.kind,
@@ -195,7 +214,8 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
    * @param {Installation} entry
    */
   const assertCurrent = (name, entry) => {
-    installed.get(name) === entry || Fail`Installation was removed`;
+    installed.get(keyOf(entry.workspace, name)) === entry ||
+      Fail`Installation was removed`;
   };
 
   /**
@@ -272,16 +292,18 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
    * @param {unknown} value
    */
   const place = async (name, entry, value) => {
-    try {
-      await E(entry.workspace).put(name, value);
-    } catch (error) {
-      entry.unplaced = harden({ value });
-      throw error;
+    if (entry.access !== undefined) {
+      try {
+        await E(entry.access).put(name, value);
+      } catch (error) {
+        entry.unplaced = harden({ value });
+        throw error;
+      }
     }
-    if (installed.get(name) !== entry) {
+    if (installed.get(keyOf(entry.workspace, name)) !== entry) {
       // Removed while the value was on its way: the removal found nothing
       // to take out, so it is taken out here.
-      await E(entry.workspace).remove(name, value);
+      if (entry.access !== undefined) await E(entry.access).remove(name, value);
       throw Fail`Installation was removed`;
     }
     entry.unplaced = undefined;
@@ -296,7 +318,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
 
   return makeExo('Registry', RegistryI, {
     help: () =>
-      "The daemon's record of installed applications and native resources, and their installer: install(request) reserves a name, resolves its grants in the workspace, allocates a vat, stages the code and puts the value into the workspace; lookup(name), remove(name), list().",
+      "The daemon's record of installed applications and native resources, and their installer: install(request) reserves a name in a workspace, or daemon-wide, resolves its grants in the workspace, allocates a vat, stages the code and puts the value into the workspace; lookup(name, workspace?), remove(name, workspace?), list().",
     /**
      * Reserve a name for one installation, or find the reservation a retry
      * is resuming: the same kind, code and grants, else refused. Resolves,
@@ -308,11 +330,25 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
     install: request =>
       enqueue(async () => {
         await null;
-        const { name, kind, digest, allocationKey, workspace } = request;
+        const { name, kind, digest, allocationKey, workspace, access } =
+          request;
         name.length > 0 || Fail`Expected an inventory name`;
+        if (workspace === undefined) {
+          access === undefined ||
+            Fail`A daemon-wide installation has no workspace access`;
+        } else {
+          WorkspaceNamePattern.test(workspace) ||
+            Fail`Expected a workspace name`;
+          access !== undefined ||
+            Fail`A workspace installation needs the workspace's access`;
+        }
         const canonical = canonicalGrants(request.grants ?? harden([]));
+        workspace !== undefined ||
+          canonical.length === 0 ||
+          Fail`A daemon-wide installation takes no grants`;
         const signature = JSON.stringify(canonical);
-        let entry = installed.get(name);
+        const key = keyOf(workspace, name);
+        let entry = installed.get(key);
         if (entry !== undefined) {
           (entry.kind === kind &&
             entry.digest === digest &&
@@ -332,7 +368,7 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
               },
               error => {
                 current.placing = undefined;
-                if (installed.get(name) === current) {
+                if (installed.get(key) === current) {
                   current.status = 'failed';
                   current.error = describeError(error);
                   void recordIndex(name, current).catch(() => {});
@@ -355,17 +391,22 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
             Fail`A native resource names its two bundles`;
         }
         // Grants are checked before any vat exists, in the workspace.
-        const powers = await E(workspace).lookupGrants(canonical);
-        !(await E(workspace).has(name)) ||
-          Fail`Inventory name is already occupied`;
+        /** @type {Record<string, unknown>} */
+        let powers = harden({});
+        if (access !== undefined) {
+          powers = await E(access).lookupGrants(canonical);
+          !(await E(access).has(name)) ||
+            Fail`Inventory name is already occupied`;
+        }
         entry = {
+          workspace,
           kind,
           digest,
           signature,
           grants: canonical,
           allocationKey,
           powers,
-          workspace,
+          access,
           bundleDigest: request.bundleDigest,
           durableDigest: request.durableDigest,
           ephemeralDigest: request.ephemeralDigest,
@@ -380,10 +421,10 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
           unplaced: undefined,
           placing: undefined,
         };
-        installed.set(name, entry);
+        installed.set(key, entry);
         const current = entry;
         current.result = drive(name, current).catch(error => {
-          if (installed.get(name) === current) {
+          if (installed.get(key) === current) {
             current.status = 'failed';
             current.error = describeError(error);
             // Recorded for the host; a failure to record it is not the
@@ -402,18 +443,21 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
         return harden({ result: current.result });
       }),
     /**
-     * The vat behind a name, for the host; undefined for a name this
-     * registry does not hold.
+     * The vat behind a name, for the host, with the installed value once
+     * there is one, so the host can hand a daemon-wide value to every
+     * workspace; undefined for a name this registry does not hold.
      * @param {string} name
+     * @param {string} [workspace]
      */
-    lookup: name => {
-      const entry = installed.get(name);
+    lookup: (name, workspace = undefined) => {
+      const entry = installed.get(keyOf(workspace, name));
       if (!entry) return undefined;
       return harden({
         kind: entry.kind,
         workerId: entry.workerId,
         complete: entry.complete,
         status: entry.status,
+        value: entry.value,
       });
     },
     /**
@@ -424,30 +468,42 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
      * entry a retry resolves rather than an orphaned vat. Returns whether the
      * name was installed.
      * @param {string} name
+     * @param {string} [workspace]
      */
-    remove: name =>
+    remove: (name, workspace = undefined) =>
       enqueue(async () => {
         await null;
-        const entry = installed.get(name);
+        const key = keyOf(workspace, name);
+        const entry = installed.get(key);
         if (entry === undefined) return false;
         if (entry.workerId !== undefined)
           await retrying(() => E(installer).retire(entry.workerId));
-        installed.delete(name);
+        installed.delete(key);
         try {
-          if (entry.complete)
-            await E(entry.workspace).remove(name, entry.value);
+          if (entry.complete && entry.access !== undefined)
+            await E(entry.access).remove(name, entry.value);
         } finally {
           // The host's index forgets the name whatever the workspace, which
           // may be quarantined, made of the value.
-          await retrying(() => E(index).forget(name));
+          await retrying(() => E(index).forget(workspace, name));
         }
         return true;
       }),
     list: () =>
       harden(
-        [...installed].map(([name, { kind, digest, grants, status, error }]) =>
-          harden({ name, kind, digest, grants, status, error }),
-        ),
+        [...installed].map(([key, entry]) => {
+          const [, name] = JSON.parse(key);
+          const { workspace, kind, digest, grants, status, error } = entry;
+          return harden({
+            ...(workspace === undefined ? {} : { workspace }),
+            name,
+            kind,
+            digest,
+            grants,
+            status,
+            error,
+          });
+        }),
       ),
   });
 };

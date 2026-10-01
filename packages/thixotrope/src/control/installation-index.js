@@ -6,8 +6,8 @@ import harden from '@endo/harden';
 
 /**
  * The host's own record of what the registry vat holds: one entry per
- * installed name with its kind, code digest, grants, allocation key, vat and
- * status. The registry vat is the authority and writes it at every step;
+ * installed name, in a workspace or daemon-wide, with its kind, code
+ * digest, grants, allocation key, vat and status. The registry vat is the authority and writes it at every step;
  * this copy lets the host list installations and retire their vats when the
  * registry vat cannot run, and keeps installed vats and stored bundles
  * accounted for without any user's workspace.
@@ -16,6 +16,8 @@ import harden from '@endo/harden';
  * on each change.
  *
  * @typedef {object} IndexEntry
+ * @property {string} [workspace] the workspace the installation belongs to;
+ *   absent for one the daemon holds for every workspace
  * @property {'application' | 'native'} kind
  * @property {string} digest
  * @property {Array<[string, string]>} grants
@@ -30,7 +32,13 @@ import harden from '@endo/harden';
  *   received the request; the registry's own records replace it
  */
 
-const INDEX_VERSION = 1;
+const INDEX_VERSION = 2;
+
+/**
+ * @param {string | undefined} workspace
+ * @param {string} name
+ */
+const keyOf = (workspace, name) => JSON.stringify([workspace ?? null, name]);
 
 /**
  * @param {SyncStringAtom} storage
@@ -41,11 +49,20 @@ export const makeInstallationIndex = storage => {
     (typeof name === 'string' && name.length > 0) ||
       Fail`Expected an installation name`;
   };
+  /** @param {string | undefined} workspace */
+  const assertWorkspace = workspace => {
+    workspace === undefined ||
+      (typeof workspace === 'string' && workspace.length > 0) ||
+      Fail`Expected a workspace name`;
+  };
   /** @param {unknown} entry */
   const assertEntry = entry => {
     const record = /** @type {IndexEntry} */ (entry);
     (typeof record === 'object' &&
       record !== null &&
+      (record.workspace === undefined ||
+        (typeof record.workspace === 'string' &&
+          record.workspace.length > 0)) &&
       (record.kind === 'application' || record.kind === 'native') &&
       typeof record.digest === 'string' &&
       Array.isArray(record.grants) &&
@@ -73,46 +90,70 @@ export const makeInstallationIndex = storage => {
     version === INDEX_VERSION ||
       Fail`Installation index version ${q(version)} needs migration`;
     stored === undefined ||
-      (typeof stored === 'object' && stored !== null) ||
+      Array.isArray(stored) ||
       Fail`Invalid installation index entries`;
     entries = new Map(
-      Object.entries(/** @type {Record<string, unknown>} */ (stored ?? {})).map(
-        ([name, entry]) => {
-          assertName(name);
-          return [name, harden({ ...assertEntry(entry) })];
-        },
-      ),
+      /** @type {unknown[]} */ (stored ?? []).map(item => {
+        const { name, ...entry } = /** @type {{name: string}} */ (item);
+        assertName(name);
+        const record = assertEntry(entry);
+        return [keyOf(record.workspace, name), harden({ ...record })];
+      }),
     );
   }
   const save = () => {
     storage.write(
       `${JSON.stringify({
         version: INDEX_VERSION,
-        entries: Object.fromEntries(entries),
+        entries: [...entries].map(([key, entry]) => {
+          const [, name] = JSON.parse(key);
+          return { name, ...entry };
+        }),
       })}\n`,
     );
   };
   const index = harden({
     /**
+     * @param {string | undefined} workspace
      * @param {string} name
      * @param {IndexEntry} entry
      */
-    record: (name, entry) => {
+    record: (workspace, name, entry) => {
+      assertWorkspace(workspace);
       assertName(name);
-      entries.set(name, harden({ ...assertEntry(entry) }));
+      const record = assertEntry(entry);
+      entries.set(
+        keyOf(workspace, name),
+        harden({
+          ...record,
+          ...(workspace === undefined ? {} : { workspace }),
+        }),
+      );
       save();
     },
-    /** @param {string} name */
-    forget: name => {
+    /**
+     * @param {string | undefined} workspace
+     * @param {string} name
+     */
+    forget: (workspace, name) => {
+      assertWorkspace(workspace);
       assertName(name);
-      if (!entries.delete(name)) return false;
+      if (!entries.delete(keyOf(workspace, name))) return false;
       save();
       return true;
     },
-    /** @param {string} name */
-    get: name => entries.get(name),
+    /**
+     * @param {string | undefined} workspace
+     * @param {string} name
+     */
+    get: (workspace, name) => entries.get(keyOf(workspace, name)),
     list: () =>
-      harden([...entries].map(([name, entry]) => harden({ name, ...entry }))),
+      harden(
+        [...entries].map(([key, entry]) => {
+          const [, name] = JSON.parse(key);
+          return harden({ name, ...entry });
+        }),
+      ),
     /**
      * The facet the registry vat writes through; the host keeps `get` and
      * `list` to itself.
@@ -120,7 +161,7 @@ export const makeInstallationIndex = storage => {
     resource: () =>
       Far('InstallationIndex', {
         help: () =>
-          "The host's record of installations: record(name, entry) and forget(name).",
+          "The host's record of installations: record(workspace, name, entry) and forget(workspace, name).",
         record: index.record,
         forget: index.forget,
       }),

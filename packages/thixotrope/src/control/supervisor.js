@@ -84,8 +84,11 @@ import {
 // which the launcher's description names in place of a directory, and the
 // clock is a native resource, with no host alarm ledger; 10: the
 // installation registry is the host's, in a registry vat of its own with an
-// index beside it, and a workspace only resolves grants and holds values.
-const WORKSPACE_VERSION = 10;
+// index beside it, and a workspace only resolves grants and holds values;
+// 11: workspaces are a table, each in a vat allocated under a key derived
+// from its name, and an installation belongs to a workspace or to the
+// daemon, whose clock every workspace is handed.
+const WORKSPACE_VERSION = 11;
 // The daemon takes allocation keys from the host alone, so a fixed key names
 // the host's own registry vat and nothing else can carry it.
 const REGISTRY_ALLOCATION_KEY = '00000000000000000000000000000001';
@@ -391,33 +394,15 @@ export const serveThixotrope = async (
     );
 
     if (config === undefined) {
-      // createWorker records the label with its id. Recover that allocation
-      // if a crash occurred before workspace.json selected it.
-      const candidates = daemon
-        .inspectWorkers()
-        .filter(worker => worker.debugLabel === 'workspace');
-      if (candidates.length > 1)
-        throw Error('Ambiguous interrupted workspace initialization');
-      const workerId =
-        candidates.length === 1
-          ? candidates[0].workerId
-          : (await daemon.createWorker({ debugLabel: 'workspace' })).workerId;
-      config = {
-        version: WORKSPACE_VERSION,
-        workerId,
-        publication: `workspace-${workerId}`,
-        initialized: false,
-      };
+      config = { version: WORKSPACE_VERSION, workspaces: {} };
       await save(files, configPath, config);
     }
     if (
       config?.version !== WORKSPACE_VERSION ||
-      !daemon.listWorkerIds().includes(config.workerId) ||
-      config.publication !== `workspace-${config.workerId}` ||
-      typeof config.initialized !== 'boolean'
+      typeof config.workspaces !== 'object' ||
+      config.workspaces === null
     )
       throw Error('Invalid workspace metadata');
-    const workspace = daemon.getWorker(config.workerId);
     // The registry vat is the host's: allocated under a fixed key, so every
     // start finds the same vat with no record to lose, and published under
     // a name only the host knows, as a retention root. Publishing is
@@ -476,17 +461,18 @@ export const serveThixotrope = async (
      */
     const requestInstall = async request => {
       if (requested) throw Error('Supervisor is stopping');
-      const { name } = request;
-      const held = index.get(name);
+      const { name, workspace } = request;
+      const held = index.get(workspace, name);
       // A record of the host's own is replaced by the registry's at its
       // first step; one still the host's names a request the registry never
       // received, the host having ended in between, and is replaced too.
       const provisional =
         held === undefined ||
         (held.provisional === true &&
-          (await E(registry).lookup(name)) === undefined);
+          (await E(registry).lookup(name, workspace)) === undefined);
       if (provisional) {
-        index.record(name, {
+        index.record(workspace, name, {
+          ...(workspace === undefined ? {} : { workspace }),
           kind: request.kind,
           digest: request.digest,
           grants: Array.isArray(request.grants) ? request.grants : [],
@@ -508,150 +494,193 @@ export const serveThixotrope = async (
         return await E(registry).install(request);
       } catch (error) {
         // Refused before the registry held it: still the host's record.
-        if (provisional && index.get(name)?.provisional === true)
-          index.forget(name);
+        if (provisional && index.get(workspace, name)?.provisional === true)
+          index.forget(workspace, name);
         throw error;
       }
     };
-    // Metadata selects the vat before initialization. Repeating initialization
-    // after a crash reuses its globals instead of replacing retained values.
-    if (!config.initialized) {
-      const root = await workspace.evaluate(
-        "(globalThis.vats ??= controller, globalThis.workspaceRoot ??= Far('Workspace', { help: () => 'Persistent workspace' }))",
-        { controller: daemon.makeResource('worker-controller') },
-      );
-      daemon.publish(root, config.publication);
-      await workspace.sleep();
-      config.initialized = true;
-      await save(files, configPath, config);
-    }
-    let inventory;
-    /** @type {any} */
-    let workspaceAccess;
-    if (
-      !daemon
-        .inspectWorkers()
-        .find(worker => worker.workerId === config.workerId)?.failure
-    ) {
-      inventory = await workspace.evaluate(
-        `(globalThis.inventory ??= (${makeObservableMap.toString()})())`,
-      );
-      await E(inventory).disconnectEphemeral();
-      // The workspace's whole part in installing: resolving grants and
-      // holding installed values. The registry vat does the rest. A vat
-      // that already holds the access object is asked first, so a start
-      // costs one message rather than the source again.
-      workspaceAccess = await workspace.evaluate('globalThis.workspaceAccess');
-      if (workspaceAccess === undefined) {
-        workspaceAccess = await evaluateSource(
-          workspace,
-          `(() => (globalThis.workspaceAccess ??= (${makeWorkspaceAccess.toString()})(inventory)))`,
-          {},
+    /**
+     * An installation the supervisor provides rather than the user: the
+     * same path as any installation, so it has a vat, a budget and a
+     * failure lifetime of its own, is listed with the rest, and can be
+     * removed, in which case the next start provides it again. Its digest
+     * is a constant: what it ships changes only with the workspace
+     * version. One provided daemon-wide is held by the registry, and its
+     * value handed to every workspace; one provided to a workspace takes
+     * its name in that workspace's inventory. A name the user has taken is
+     * theirs; the supervisor says so and goes on without.
+     *
+     * The registry finds one it holds again, so a healthy installation
+     * costs a start one lookup; only one that is missing, or whose vat is
+     * gone, or whose installation did not complete, is installed, and its
+     * code is put in the store for that. Resolves to the installed value,
+     * or to undefined when it could not be provided.
+     * @param {string} name
+     * @param {() => Promise<{kind: 'application', bundleDigest: string} | {kind: 'native', durableDigest: string, ephemeralDigest: string}>} stage
+     *   put the code in the store and name it
+     * @param {{ workspace: string, access: any }} [into] the workspace the
+     *   installation belongs to; absent for a daemon-wide one
+     * @param {Iterable<Workspace>} [among] the workspaces a stale
+     *   daemon-wide value is taken back from; those served, by default
+     */
+    const provide = async (
+      name,
+      stage,
+      into = undefined,
+      among = workspaces.values(),
+    ) => {
+      const where = into === undefined ? '' : ` to ${into.workspace}`;
+      if (!registryHealthy()) {
+        log.error(
+          `${name} not provided${where}: the registry vat is quarantined`,
         );
+        return undefined;
       }
-      /**
-       * An installation the supervisor provides rather than the user: the
-       * same path as any installation, so it has a vat, a budget and a
-       * failure lifetime of its own, is listed with the rest, and can be
-       * removed, in which case the next start provides it again. Its digest
-       * is a constant: what it ships changes only with the workspace
-       * version. A name the user has taken is theirs; the supervisor says so
-       * and goes on without. Nothing here reads the inventory global, which
-       * the user may have replaced.
-       *
-       * The registry finds one it holds again, so a healthy installation
-       * costs a start one lookup; only one that is missing, or whose
-       * installation did not complete, is installed, and its code is put in
-       * the store for that.
-       * @param {string} name
-       * @param {() => Promise<{kind: 'application', bundleDigest: string} | {kind: 'native', durableDigest: string, ephemeralDigest: string}>} stage
-       *   put the code in the store and name it
-       */
-      const provide = async (name, stage) => {
-        if (!registryHealthy()) {
-          log.error(`${name} not provided: the registry vat is quarantined`);
-          return;
-        }
-        try {
-          const held = await E(registry).lookup(name);
-          if (held?.status === 'ready') {
-            if (
-              held.workerId !== undefined &&
-              daemon.listWorkerIds().includes(held.workerId)
-            )
-              return;
-            // Ready, but its vat is gone: retired by the host while the
-            // registry could not answer. The name is freed and provided
-            // afresh.
-            await E(registry).remove(name);
+      try {
+        const held = await E(registry).lookup(name, into?.workspace);
+        if (held?.status === 'ready') {
+          if (
+            held.workerId !== undefined &&
+            daemon.listWorkerIds().includes(held.workerId)
+          ) {
+            // Held and alive. A workspace installation is put under its
+            // name again, which is nothing to do while it is there, and
+            // provides it afresh to an inventory it was taken out of.
+            if (into !== undefined) {
+              await E(into.access)
+                .put(name, held.value)
+                .catch((/** @type {Error} */ error) => {
+                  log.error(`${name} not provided${where}:`, error);
+                });
+            }
+            return held.value;
           }
-          const { result } = await requestInstall(
-            harden({
-              name,
-              digest: `builtin:${name}`,
-              allocationKey: randomId(),
-              grants: [],
-              workspace: workspaceAccess,
-              ...(await stage()),
-            }),
-          );
-          await result;
-        } catch (error) {
-          log.error(`${name} not provided:`, error);
+          // Ready, but its vat is gone: retired by the host while the
+          // registry could not answer, or collected once quarantined. The
+          // name is freed, a daemon-wide value taken back from every
+          // workspace, and the installation provided afresh.
+          await E(registry).remove(name, into?.workspace);
+          if (into === undefined && held.value !== undefined)
+            await takeBack(name, held.value, among);
         }
-      };
-      // The clock is a native resource shipped with the package: its manager
-      // vat holds every pending deadline, and its adapter process holds the
-      // timers. Removing it retires both; the next start provides it again.
-      // Its durable factory is shipped by source like every other built-in,
-      // so it must be whole (closing over nothing but the guest prelude); the
-      // adapter's module is bundled into the store under its digest, so the
-      // package's own directory is never pinned and may change underneath a
-      // running installation. The installed clock keeps running the bundle
-      // it was installed with, so a change to what its two halves say to
-      // each other is a WORKSPACE_VERSION bump, which makes a fresh
-      // installation of it.
-      await provide('clock', async () => {
-        const directory = paths.resolve(packagePath, 'resources', 'clock');
-        return {
-          kind: 'native',
-          durableDigest: store.putBundle(`({ make: ${makeClock.toString()} })`),
-          ephemeralDigest: store.putBundle(
-            await platform.bundler.bundleNative(
-              paths.join(directory, 'ephemeral.js'),
-            ),
+        const { result } = await requestInstall(
+          harden({
+            name,
+            ...(into === undefined ? {} : into),
+            digest: `builtin:${name}`,
+            allocationKey: randomId(),
+            grants: [],
+            ...(await stage()),
+          }),
+        );
+        return await result;
+      } catch (error) {
+        log.error(`${name} not provided${where}:`, error);
+        return undefined;
+      }
+    };
+    // The clock is a native resource shipped with the package, provided
+    // daemon-wide: its manager vat holds every pending deadline, and its
+    // adapter process holds the timers, and every workspace holds its facet
+    // under `clock`. Removing it retires both; the next start provides it
+    // again. Its durable factory is shipped by source like every other
+    // built-in, so it must be whole (closing over nothing but the guest
+    // prelude); the adapter's module is bundled into the store under its
+    // digest, so the package's own directory is never pinned and may change
+    // underneath a running installation. The installed clock keeps running
+    // the bundle it was installed with, so a change to what its two halves
+    // say to each other is a WORKSPACE_VERSION bump, which makes a fresh
+    // installation of it.
+    const clockStage = async () => {
+      const directory = paths.resolve(packagePath, 'resources', 'clock');
+      return /** @type {const} */ ({
+        kind: 'native',
+        durableDigest: store.putBundle(`({ make: ${makeClock.toString()} })`),
+        ephemeralDigest: store.putBundle(
+          await platform.bundler.bundleNative(
+            paths.join(directory, 'ephemeral.js'),
           ),
-        };
-      });
-      await provide('mailbox', async () => ({
-        kind: 'application',
-        bundleDigest: store.putBundle(
-          `({ make: () => (${makeMailbox.toString()})((${makeObservableMap.toString()})) })`,
         ),
-      }));
-    }
-    // Only the lock owner may reclaim the socket left by a dead supervisor.
-    await files.remove(socketPath, { force: true });
-    // The workspace owns the durable root. Reuse its presence during this host
-    // lifetime instead of journaling another evaluator call for every command.
-    /** @type {Promise<any> | undefined} */
-    let mailboxAddressBook;
-    const getMailbox = () => {
-      if (mailboxAddressBook) return mailboxAddressBook;
-      // Some fifteen kilobytes of guest source, more than one message can
-      // carry: transferred in bounded messages, on a stage of its own so no
-      // future transfer into the workspace can collide with it. A vat that
-      // already holds the address book is asked first, so a supervisor
-      // restart costs one message rather than the whole transfer again.
-      const introductions = daemon.makeResource('mail-introductions');
-      const opening = workspace
-        .evaluate('globalThis.mailAddressBook')
-        .then(existing =>
-          existing !== undefined
-            ? existing
-            : evaluateSource(
-                workspace,
-                `(({ introductions }) => {
+      });
+    };
+    // The clock's facet as provided this lifetime, handed to every
+    // workspace; dropped when the clock is removed, so a workspace made
+    // afterwards is handed nothing stale and the next start's clock instead.
+    /** @type {unknown} */
+    let clockFacet;
+    /** @returns {Promise<{kind: 'application', bundleDigest: string}>} */
+    const mailboxStage = async () => ({
+      kind: 'application',
+      bundleDigest: store.putBundle(
+        `({ make: () => (${makeMailbox.toString()})((${makeObservableMap.toString()})) })`,
+      ),
+    });
+
+    /**
+     * A workspace: a vat of its own, published as a retention root, with an
+     * inventory, an access object for the registry, a provided mailbox and,
+     * on first use, an address book. One per name, `default` always.
+     *
+     * @typedef {object} Workspace
+     * @property {string} name
+     * @property {string} workerId
+     * @property {any} worker the vat's facade
+     * @property {any} inventory the inventory's presence; undefined while
+     *   the vat is quarantined
+     * @property {any} access the workspace access object's presence;
+     *   undefined while the vat is quarantined
+     * @property {() => Promise<any>} getMailbox the address book, made on
+     *   first use
+     */
+    /** @type {Map<string, Workspace>} */
+    const workspaces = new Map();
+    const DEFAULT_WORKSPACE = 'default';
+    const WorkspaceNamePattern = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+    /** @param {unknown} name */
+    const assertWorkspaceName = name => {
+      if (typeof name !== 'string' || !WorkspaceNamePattern.test(name))
+        throw Error(
+          'Expected a workspace name: letters, digits, dot, dash and underscore, 64 at most, starting with a letter or digit',
+        );
+    };
+    /**
+     * The allocation key of a workspace's vat is derived from its name, so
+     * every start finds the vat again with no record to lose, and a start
+     * interrupted between creating the vat and recording the name leaves
+     * nothing to recover by label.
+     * @param {string} name
+     */
+    const workspaceKey = name =>
+      hashes
+        .sha256Hex(new TextEncoder().encode(`thixotrope:workspace:${name}`))
+        .slice(0, 32);
+    /**
+     * The address book of a workspace, made in its vat on first use and
+     * reused for this host lifetime rather than journaling another
+     * evaluator call for every command.
+     * @param {string} name
+     * @param {any} worker
+     */
+    const makeMailboxGetter = (name, worker) => {
+      /** @type {Promise<any> | undefined} */
+      let mailboxAddressBook;
+      return () => {
+        if (mailboxAddressBook) return mailboxAddressBook;
+        // Some fifteen kilobytes of guest source, more than one message
+        // can carry: transferred in bounded messages, on a stage of its
+        // own so no future transfer into the workspace can collide with
+        // it. A vat that already holds the address book is asked first, so
+        // a supervisor restart costs one message rather than the whole
+        // transfer again.
+        const introductions = daemon.makeResource('mail-introductions');
+        const opening = worker
+          .evaluate('globalThis.mailAddressBook')
+          .then((/** @type {any} */ existing) =>
+            existing !== undefined
+              ? existing
+              : evaluateSource(
+                  worker,
+                  `(({ introductions }) => {
           // The book and its contacts look the mailbox up at each use, so
           // one provided afresh after a removal is the one they speak to,
           // and its absence is reported at every use, not memoised.
@@ -673,30 +702,272 @@ export const serveThixotrope = async (
             return mail;
           })());
         })`,
-                { introductions },
-                { stage: 'thixotrope.mailSource' },
-              ),
-        );
-      // Supervisor restart is a lifetime boundary for view subscriptions on
-      // the mailbox, as it is for the inventory's; the mailbox vat is woken
-      // for it on the first mail command of a lifetime, not at every start.
-      mailboxAddressBook = opening.then(async book => {
-        await workspace.evaluate(
-          "E(inventory.get('mailbox')).disconnectEphemeral().then(() => true)",
-        );
-        return book;
-      });
-      // Failed initialization can be repaired in the workspace. Do not pin a
-      // rejected attempt in the host after the user repairs its durable root.
-      const wrapped = mailboxAddressBook;
-      void wrapped.catch(() => {
-        if (mailboxAddressBook === wrapped) mailboxAddressBook = undefined;
-      });
-      return wrapped;
+                  { introductions },
+                  { stage: 'thixotrope.mailSource' },
+                ),
+          );
+        // Supervisor restart is a lifetime boundary for view subscriptions
+        // on the mailbox, as it is for the inventory's; the mailbox vat is
+        // woken for it on the first mail command of a lifetime, not at
+        // every start.
+        /** @type {Promise<any>} */
+        const settled = opening.then(async (/** @type {any} */ book) => {
+          await worker.evaluate(
+            "E(inventory.get('mailbox')).disconnectEphemeral().then(() => true)",
+          );
+          return book;
+        });
+        mailboxAddressBook = settled;
+        // Failed initialization can be repaired in the workspace. Do not
+        // pin a rejected attempt in the host after the user repairs its
+        // durable root.
+        void settled.catch(() => {
+          if (mailboxAddressBook === settled) mailboxAddressBook = undefined;
+        });
+        return settled;
+      };
     };
-    const assertWorkspace = () => {
+    /**
+     * Hand a daemon-wide value to a workspace under its name. The same value
+     * under the name already is nothing to do; a name the user has taken is
+     * theirs, and the supervisor says so and goes on without.
+     * @param {Workspace} workspace
+     * @param {string} name
+     * @param {unknown} value
+     */
+    const handOut = async (workspace, name, value) => {
+      if (workspace.access === undefined) return;
+      try {
+        await E(workspace.access).put(name, value);
+      } catch (error) {
+        log.error(`${name} not provided to ${workspace.name}:`, error);
+      }
+    };
+    /**
+     * Take a daemon-wide value back from every workspace that still holds
+     * it under its name; a value the user put there since is theirs.
+     * @param {string} name
+     * @param {unknown} value
+     * @param {Iterable<Workspace>} [among] those served, by default
+     */
+    const takeBack = async (name, value, among = workspaces.values()) => {
+      for (const workspace of among) {
+        if (workspace.access !== undefined) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(workspace.access)
+            .remove(name, value)
+            .catch((/** @type {Error} */ error) => {
+              log.error(
+                `${name} not taken back from ${workspace.name}:`,
+                error,
+              );
+            });
+        }
+      }
+    };
+    /**
+     * Remove every installation of a workspace whose vat is gone: their
+     * values were in that vat's inventory, so they go with it, and the name
+     * is provided afresh. The registry removes them, retiring their vats;
+     * the host's index does when the registry cannot answer.
+     * @param {string} workspace
+     */
+    const removeInstallationsOf = async workspace => {
+      if (registryHealthy()) {
+        const entries = (await E(registry).list()).filter(
+          (/** @type {{workspace?: string}} */ entry) =>
+            entry.workspace === workspace,
+        );
+        for (const { name } of entries) {
+          // eslint-disable-next-line no-await-in-loop
+          await E(registry)
+            .remove(name, workspace)
+            .catch((/** @type {Error} */ error) => {
+              // The entry is gone and its vat retired; what failed is
+              // taking the value out of the workspace vat that is gone.
+              log.error(
+                `workspace ${workspace}: ${name} removed; its value stays in the vat that is gone:`,
+                error,
+              );
+            });
+        }
+        return;
+      }
+      for (const entry of index.list()) {
+        if (entry.workspace === workspace) {
+          const { workerId, name } = entry;
+          if (
+            workerId !== undefined &&
+            daemon.listWorkerIds().includes(workerId)
+          )
+            // eslint-disable-next-line no-await-in-loop
+            await serialized(() => daemon.getWorker(workerId).retire());
+          index.forget(workspace, name);
+        }
+      }
+    };
+    /**
+     * Open a workspace by name: find or make its vat under the key derived
+     * from the name, publish its root, record it, and bootstrap its
+     * inventory and access object unless the vat is quarantined, in which
+     * case the workspace is served without them and its commands say so.
+     * The vat and its publication are one turn with collection, since
+     * nothing roots a fresh vat before its publication. The table is a
+     * cache of the names served: a row naming a vat that is gone, collected
+     * once quarantined, say, is dropped, and the vat under the name's key
+     * serves, made afresh if there is none.
+     * @param {string} name
+     */
+    const openWorkspace = async name => {
+      const stale = config.workspaces[name];
+      if (
+        stale !== undefined &&
+        !daemon.listWorkerIds().includes(stale.workerId)
+      ) {
+        log.error(
+          `workspace ${name}: the vat ${stale.workerId} the table names is gone; its installations go with it, and the vat under its key serves, made afresh if there is none`,
+        );
+        // The installations go first: removal is idempotent by name, so a
+        // start that ends in between finds the row again and retries.
+        await removeInstallationsOf(name);
+        delete config.workspaces[name];
+        await save(files, configPath, config);
+      }
+      const worker = await serialized(async () => {
+        const vat = await daemon.createWorker({
+          debugLabel: `workspace:${name}`,
+          allocationKey: workspaceKey(name),
+        });
+        const failed = daemon
+          .inspectWorkers()
+          .find(entry => entry.workerId === vat.workerId)?.failure;
+        if (!failed) {
+          // Repeating this after a restart reuses the globals rather than
+          // replacing retained values.
+          const root = await vat.evaluate(
+            "(globalThis.vats ??= controller, globalThis.workspaceRoot ??= Far('Workspace', { help: () => 'Persistent workspace' }))",
+            { controller: daemon.makeResource('worker-controller') },
+          );
+          daemon.publish(root, `workspace-${vat.workerId}`);
+        }
+        return vat;
+      });
+      const { workerId } = worker;
+      const recorded = config.workspaces[name];
+      if (recorded === undefined) {
+        config.workspaces[name] = { workerId };
+        await save(files, configPath, config);
+      } else if (recorded.workerId !== workerId) {
+        throw Error('Invalid workspace metadata');
+      }
+      let inventory;
+      /** @type {any} */
+      let access;
+      if (
+        !daemon.inspectWorkers().find(entry => entry.workerId === workerId)
+          ?.failure
+      ) {
+        inventory = await worker.evaluate(
+          `(globalThis.inventory ??= (${makeObservableMap.toString()})())`,
+        );
+        await E(inventory).disconnectEphemeral();
+        // The workspace's whole part in installing: resolving grants and
+        // holding installed values. The registry vat does the rest. A vat
+        // that already holds the access object is asked first, so a start
+        // costs one message rather than the source again.
+        access = await worker.evaluate('globalThis.workspaceAccess');
+        if (access === undefined) {
+          access = await evaluateSource(
+            worker,
+            `(() => (globalThis.workspaceAccess ??= (${makeWorkspaceAccess.toString()})(inventory)))`,
+            {},
+          );
+        }
+      }
+      /** @type {Workspace} */
+      const workspace = harden({
+        name,
+        workerId,
+        worker,
+        inventory,
+        access,
+        getMailbox: makeMailboxGetter(name, worker),
+      });
+      return workspace;
+    };
+    /**
+     * What every workspace is provided: the daemon's clock under `clock`,
+     * and a mailbox of its own, in a vat of its own, under `mailbox`.
+     * @param {Workspace} workspace
+     */
+    const provideInto = async workspace => {
+      if (workspace.access === undefined) {
+        log.error(
+          `nothing provided to ${workspace.name}: the workspace vat is quarantined`,
+        );
+        return;
+      }
+      if (clockFacet !== undefined)
+        await handOut(workspace, 'clock', clockFacet);
+      await provide('mailbox', mailboxStage, {
+        workspace: workspace.name,
+        access: workspace.access,
+      });
+    };
+    // Every workspace is opened before the clock is provided, so a clock
+    // whose vat is gone is taken back from each of them; a workspace is
+    // served, and visible, once everything has been provided into it.
+    /** @type {Workspace[]} */
+    const opened = [];
+    for (const name of new Set([
+      DEFAULT_WORKSPACE,
+      ...Object.keys(config.workspaces),
+    ])) {
+      assertWorkspaceName(name);
+      // eslint-disable-next-line no-await-in-loop
+      opened.push(await openWorkspace(name));
+    }
+    clockFacet = await provide('clock', clockStage, undefined, opened);
+    for (const workspace of opened) {
+      // eslint-disable-next-line no-await-in-loop
+      await provideInto(workspace);
+      workspaces.set(workspace.name, workspace);
+    }
+    /** @type {Map<string, Promise<Workspace>>} */
+    const creating = new Map();
+    /**
+     * Make a workspace by name, or find it; two requests for one name make
+     * one workspace.
+     * @param {string} name
+     */
+    const createWorkspace = async name => {
+      assertWorkspaceName(name);
       if (requested) throw Error('Supervisor is stopping');
-      if (workspaceAccess === undefined)
+      const existing = workspaces.get(name);
+      if (existing !== undefined) return existing;
+      let opening = creating.get(name);
+      if (opening === undefined) {
+        opening = openWorkspace(name).then(async workspace => {
+          const handed = clockFacet;
+          await provideInto(workspace);
+          workspaces.set(name, workspace);
+          // A clock removed meanwhile was taken back from the workspaces
+          // served then; this one was handed it before it was served.
+          if (handed !== undefined && clockFacet !== handed)
+            await takeBack('clock', handed, [workspace]);
+          return workspace;
+        });
+        creating.set(name, opening);
+        void opening.catch(() => {}).then(() => creating.delete(name));
+      }
+      return opening;
+    };
+    // Only the lock owner may reclaim the socket left by a dead supervisor.
+    await files.remove(socketPath, { force: true });
+    /** @param {Workspace} workspace */
+    const assertWorkspace = workspace => {
+      if (requested) throw Error('Supervisor is stopping');
+      if (workspace.access === undefined)
         throw Error('The workspace vat is quarantined; repair it first');
     };
     /**
@@ -709,26 +980,55 @@ export const serveThixotrope = async (
         ? E(registry).list()
         : index
             .list()
-            .map(({ name, kind, digest, grants, status, error }) =>
-              harden({ name, kind, digest, grants, status, error }),
+            .map(({ workspace, name, kind, digest, grants, status, error }) =>
+              harden({
+                ...(workspace === undefined ? {} : { workspace }),
+                name,
+                kind,
+                digest,
+                grants,
+                status,
+                error,
+              }),
             );
     // Vats the installer has handed out and the registry has not yet named
     // are kept from collection; one retired meanwhile is no longer a vat.
     const kept = () =>
       [...allocating].filter(id => daemon.listWorkerIds().includes(id));
-    const adminMethods = {
+    const describeWorkspace = (/** @type {Workspace} */ workspace) =>
+      harden({ name: workspace.name, workerId: workspace.workerId });
+    const daemonMethods = {
       help: () =>
-        'Local supervisor: evaluate(source), status(), stop(), install(name, bundle, grants), installNative(name, directory), installations(), remove(name), alarmStatus(), reachability(), collect(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id); each connection also has watchInventory(listener).',
-      evaluate: async source => {
-        if (requested) throw Error('Supervisor is stopping');
-        if (typeof source !== 'string')
-          throw Error('Expected JavaScript source');
-        const value = await workspace.evaluate(source);
-        return display.describe(value);
+        'Local supervisor. Daemon-wide: status(), stop(), installations(), reachability(), collect(), workspaces(), createWorkspace(name), selectWorkspace(name). In the selected workspace, `default` unless selected: evaluate(source), install(name, bundle, grants), installNative(name, directory), remove(name), alarmStatus(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id), watchInventory(listener).',
+      stop: () => {
+        timers.setTimer(requestStop, 0);
+        return 'Stopping supervisor';
       },
+      installations: () => {
+        if (requested) throw Error('Supervisor is stopping');
+        return listInstallations();
+      },
+      reachability: () => daemon.inspectReachability({ keep: kept() }),
+      collect: () => serialized(() => daemon.collectVats({ keep: kept() })),
+      workspaces: () => harden([...workspaces.values()].map(describeWorkspace)),
+      /** @param {string} name */
+      createWorkspace: async name =>
+        describeWorkspace(await createWorkspace(name)),
+    };
+    /**
+     * The methods of one connection on the workspace it has selected.
+     * @param {() => Workspace} current
+     */
+    const makeWorkspaceMethods = current => ({
       status: () =>
         harden({
-          workspace: config.workerId,
+          workspace: current().workerId,
+          workspaces: Object.fromEntries(
+            [...workspaces.values()].map(({ name, workerId }) => [
+              name,
+              workerId,
+            ]),
+          ),
           registry: registryWorker.workerId,
           ...(ironhorseLimits ? { ironhorse: ironhorseLimits } : {}),
           workers: daemon.inspectWorkers(),
@@ -742,9 +1042,13 @@ export const serveThixotrope = async (
             ]),
           ),
         }),
-      stop: () => {
-        timers.setTimer(requestStop, 0);
-        return 'Stopping supervisor';
+      /** @param {string} source */
+      evaluate: async source => {
+        if (requested) throw Error('Supervisor is stopping');
+        if (typeof source !== 'string')
+          throw Error('Expected JavaScript source');
+        const value = await current().worker.evaluate(source);
+        return display.describe(value);
       },
       /**
        * Install an application from its bundle into a fresh vat, with the
@@ -757,7 +1061,8 @@ export const serveThixotrope = async (
        * @param {Array<[string, string]>} grants
        */
       install: async (name, bundle, grants) => {
-        assertWorkspace();
+        const workspace = current();
+        assertWorkspace(workspace);
         assertRegistry();
         if (typeof bundle !== 'string') throw Error('Expected module bundle');
         // The bundle goes into the store, where the registry vat has the
@@ -768,27 +1073,20 @@ export const serveThixotrope = async (
         const { result } = await requestInstall(
           harden({
             name,
+            workspace: workspace.name,
+            access: workspace.access,
             kind: 'application',
             digest: bundleDigest,
             allocationKey: randomId(),
             grants,
-            workspace: workspaceAccess,
             bundleDigest,
           }),
         );
         await result;
-        return (await E(registry).list()).find(entry => entry.name === name);
-      },
-      installations: () => {
-        if (requested) throw Error('Supervisor is stopping');
-        return listInstallations();
-      },
-      reachability: () => daemon.inspectReachability({ keep: kept() }),
-      collect: () => serialized(() => daemon.collectVats({ keep: kept() })),
-      inventoryStatus: () => {
-        if (inventory === undefined)
-          throw Error('The workspace vat is quarantined; repair it first');
-        return E(inventory).subscriptionCounts();
+        return (await E(registry).list()).find(
+          (/** @type {{workspace?: string, name: string}} */ entry) =>
+            entry.workspace === workspace.name && entry.name === name,
+        );
       },
       /**
        * Install a native resource from its directory: both entry modules
@@ -802,7 +1100,8 @@ export const serveThixotrope = async (
        * @param {string} directory
        */
       installNative: async (name, directory) => {
-        assertWorkspace();
+        const workspace = current();
+        assertWorkspace(workspace);
         assertRegistry();
         if (typeof directory !== 'string')
           throw Error('Expected a native resource directory');
@@ -829,10 +1128,11 @@ export const serveThixotrope = async (
         const { result } = await requestInstall(
           harden({
             name,
+            workspace: workspace.name,
+            access: workspace.access,
             kind: 'native',
             digest,
             allocationKey: randomId(),
-            workspace: workspaceAccess,
             durableDigest,
             ephemeralDigest,
           }),
@@ -844,66 +1144,112 @@ export const serveThixotrope = async (
        * Remove an installation of either kind by name: its vat is retired,
        * the processes it launched are closed, and the name is free again,
        * whether the installation completed, failed, or was interrupted.
-       * Capabilities already handed out from it break.
+       * Capabilities already handed out from it break. The selected
+       * workspace's installation under the name goes first; failing that,
+       * the daemon-wide one, taken back from every workspace.
        * @param {string} name
        */
       remove: async name => {
         if (requested) throw Error('Supervisor is stopping');
         if (typeof name !== 'string' || !name.length)
           throw Error('Expected an inventory name');
-        if (registryHealthy() && (await E(registry).remove(name))) return true;
+        const workspace = current();
+        if (registryHealthy()) {
+          if (await E(registry).remove(name, workspace.name)) return true;
+          const held = await E(registry).lookup(name);
+          if (held !== undefined) {
+            const removed = await E(registry).remove(name);
+            if (removed && held.value !== undefined)
+              await takeBack(name, held.value);
+            if (removed && name === 'clock') clockFacet = undefined;
+            return removed;
+          }
+        }
         // The registry vat does not hold the name, or cannot answer. The
         // host index may still: for a request that never reached the
         // registry, the host having ended between recording it and handing
         // it over, or for a vat the registry cannot retire. It is retired
         // and forgotten here; the inventory entry, if any, is the
         // workspace's to clear.
-        const entry = index.get(name);
-        if (entry === undefined) return false;
-        const { workerId } = entry;
-        if (workerId !== undefined && daemon.listWorkerIds().includes(workerId))
-          await serialized(() => daemon.getWorker(workerId).retire());
-        index.forget(name);
-        return true;
+        for (const scope of [workspace.name, undefined]) {
+          const entry = index.get(scope, name);
+          if (entry !== undefined) {
+            const { workerId } = entry;
+            if (
+              workerId !== undefined &&
+              daemon.listWorkerIds().includes(workerId)
+            )
+              // eslint-disable-next-line no-await-in-loop
+              await serialized(() => daemon.getWorker(workerId).retire());
+            index.forget(scope, name);
+            return true;
+          }
+        }
+        return false;
       },
       alarmStatus: async () => {
-        assertWorkspace();
+        const workspace = current();
+        assertWorkspace(workspace);
         // The clock counts its own pending alarms; the host keeps none.
-        if (!(await workspace.evaluate("inventory.has('clock')")))
+        if (!(await workspace.worker.evaluate("inventory.has('clock')")))
           throw Error('The clock is not installed');
-        const { pending } = await workspace.evaluate(
+        const { pending } = await workspace.worker.evaluate(
           "E(inventory.get('clock')).status()",
         );
         return harden({ pending: Number(pending) });
       },
-      invite: name => E(getMailbox()).invite(name),
+      inventoryStatus: () => {
+        const { inventory } = current();
+        if (inventory === undefined)
+          throw Error('The workspace vat is quarantined; repair it first');
+        return E(inventory).subscriptionCounts();
+      },
+      /** @param {string} name */
+      invite: name => E(current().getMailbox()).invite(name),
+      /**
+       * @param {string} name
+       * @param {string} invitationText
+       */
       accept: (name, invitationText) =>
-        E(getMailbox()).accept(name, invitationText),
+        E(current().getMailbox()).accept(name, invitationText),
+      /** @param {string} invitationText */
       revokeInvitation: invitationText =>
-        E(getMailbox()).revokeInvitation(invitationText),
-      contacts: () => E(getMailbox()).contacts(),
-      inbox: () => E(getMailbox()).inbox(),
-      outbox: () => E(getMailbox()).outbox(),
+        E(current().getMailbox()).revokeInvitation(invitationText),
+      contacts: () => E(current().getMailbox()).contacts(),
+      inbox: () => E(current().getMailbox()).inbox(),
+      outbox: () => E(current().getMailbox()).outbox(),
+      /**
+       * @param {string} name
+       * @param {string} text
+       * @param {string} key
+       */
       send: async (name, text, key) => {
+        const workspace = current();
         // Resolve the grant in the workspace so only the explicitly selected
         // value crosses into the mailbox vat.
-        await getMailbox();
-        return workspace.evaluate(
+        await workspace.getMailbox();
+        return workspace.worker.evaluate(
           'E(mailAddressBook).send(name, text, inventory.get(key))',
           { name, text, key },
         );
       },
+      /**
+       * @param {string} id
+       * @param {string} key
+       */
       takeMessage: async (id, key) => {
         if (typeof key !== 'string' || !key.length)
           throw Error('Expected inventory key');
-        const book = await getMailbox();
-        return workspace.evaluate(
+        const workspace = current();
+        const book = await workspace.getMailbox();
+        return workspace.worker.evaluate(
           'E(book).take(id).then(value => { inventory.set(key, value); return true; })',
           { id, key, book },
         );
       },
-      discardMessage: id => E(getMailbox()).discard(id),
-    };
+      /** @param {string} id */
+      discardMessage: id => E(current().getMailbox()).discard(id),
+    });
     controlListener = await sockets.listenPath({
       path: socketPath,
       mode: 0o600,
@@ -913,10 +1259,25 @@ export const serveThixotrope = async (
           return;
         }
         controlConnections.add(connection);
-        const view = makeInventoryViewLifetime(timers, inventory);
-        const disconnect = () => {
+        // Each connection speaks for one workspace at a time, `default`
+        // until it selects another; its inventory views are per workspace
+        // and end with the connection.
+        let selected = /** @type {Workspace} */ (
+          workspaces.get(DEFAULT_WORKSPACE)
+        );
+        /** @type {Map<string, ReturnType<typeof makeInventoryViewLifetime>>} */
+        const views = new Map();
+        const viewOf = (/** @type {Workspace} */ workspace) => {
+          let view = views.get(workspace.name);
+          if (view === undefined) {
+            view = makeInventoryViewLifetime(timers, workspace.inventory);
+            views.set(workspace.name, view);
+          }
+          return view;
+        };
+        const disconnect = async () => {
           disconnectViews.delete(connection);
-          return view.disconnect();
+          await Promise.all([...views.values()].map(view => view.disconnect()));
         };
         disconnectViews.set(connection, disconnect);
         void connection.closed.then(() => {
@@ -930,10 +1291,22 @@ export const serveThixotrope = async (
           pendingDisconnects.track(cleanup);
         });
         const admin = Far('ThixotropeLocalAdmin', {
-          ...adminMethods,
+          ...daemonMethods,
+          ...makeWorkspaceMethods(() => selected),
+          /** @param {string} name */
+          selectWorkspace: name => {
+            assertWorkspaceName(name);
+            const workspace = workspaces.get(name);
+            if (workspace === undefined)
+              throw Error(`Unknown workspace: ${name}`);
+            selected = workspace;
+            return describeWorkspace(workspace);
+          },
+          /** @param {any} listener */
           watchInventory: listener => {
             if (requested) throw Error('Connection is closing');
-            return view.watch(listener);
+            assertWorkspace(selected);
+            return viewOf(selected).watch(listener);
           },
         });
         void makeLocalControl(

@@ -60,10 +60,11 @@ an access object that resolves grants and takes and gives back installed values;
 provides the clock and the mailbox through the registry.
 A quarantined registry vat leaves the host serving from the index, listing and removing
 installations and making none.
-A native resource is still installed per name from one workspace; sharing one installation between
-workspaces is section 2's.
+A native resource is still installed per name from one workspace; what section 2 shares between
+workspaces is the daemon's clock, through the registry's daemon-wide namespace, which any other
+shared resource can use the same way.
 
-## 2. Many workspaces, one by default
+## 2. Many workspaces, one by default (Done.)
 
 Today a state directory has exactly one workspace: `workspace.json` records one worker id and the
 publication `workspace-<id>`, the administration facet is bound to it, and the clock, mailbox and
@@ -79,6 +80,14 @@ The hub, the peers socket, the alarm ledger and the registry vat of section 1 st
 
 Cost: `workspace.json` becomes a table; the admin facet becomes per workspace; the TUI and the CLI
 gain a selector.
+
+Done: `workspace.json` is the table, each workspace allocated under a key derived from its name, so
+the label is identity nowhere; a connection selects a workspace (`selectWorkspace`), `thix` takes
+`--workspace NAME`, and `createWorkspace`/`workspaces` make and list them.
+The registry keys installations by workspace and name; the clock is the daemon's, held by the
+registry and handed to every workspace, and the mailbox is provided to each.
+The default's name is fixed; the table is a cache of the names served, so a row naming a vat that
+is gone is dropped, the installations of that vat removed with it, and the name served afresh.
 
 ## 3. The control socket stays host code
 
@@ -131,11 +140,12 @@ read-side fallback for the field renamed this session retires with the old shape
 
 ## 4a. `debugLabel`
 
-Today the label is a free-form string used for logging, process names, `status`, the TUI and the
-reachability report, with one use as identity: the supervisor recovers an interrupted first start
-by finding the worker labelled `workspace`.
+When this note was written the label was a free-form string used for logging, process names,
+`status`, the TUI and the reachability report, with one use as identity: the supervisor recovered
+an interrupted first start by finding the worker labelled `workspace`.
 After sections 1 and 2 nothing identifies a worker by its label: installations and workspaces are
 allocated under allocation keys, and the host index records each worker's kind and name.
+(The identity use is gone with section 2; the label is still an input to `createWorker`.)
 The label is then derived (`kind:name`) for display and need not be an input at all; it should not
 be upgraded into something more, because the index record is the something more.
 

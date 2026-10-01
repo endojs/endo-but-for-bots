@@ -354,7 +354,11 @@ Cancellation is supported; recurring scheduling remains application work.
 
 ## Workspace and installed applications
 
-The local supervisor owns a persistent workspace and exposes administration over a private Unix socket.
+The local supervisor owns a table of persistent workspaces, `default` among them, and exposes
+administration over a private Unix socket; a connection speaks for one workspace at a time.
+Each workspace is a vat allocated under a key derived from its name, published as a retention root,
+with an inventory, a mailbox and an address book of its own; the hub, the registry and the clock are
+the daemon's.
 Terminal attachment does not own the workspace lifetime.
 Disconnecting a terminal leaves guest state available for later attachment.
 The socket carries local administrative authority and is protected by the state directory's ownership
@@ -363,8 +367,8 @@ and permissions.
 Workspace metadata carries a version the supervisor bumps whenever a guest closure it ships changes
 shape; the current version includes dedicated native managers, the mail address book with its
 introductions resource, manager-owned adapter launchers, the one installation registry, the clock
-and mailbox provided through it, the clock as a native resource, and the registry in a vat of the
-daemon's own with the host's index beside it.
+and mailbox provided through it, the clock as a native resource, the registry in a vat of the
+daemon's own with the host's index beside it, and the table of workspaces.
 Earlier workspaces require explicit migration or fresh state; startup rejects them before restoring
 workers, because their heap-persisted registry and clock closures cannot be replaced by loading
 new source.
@@ -412,8 +416,8 @@ established contact.
 Each mailbox lives in a guest vat, separate from the workspace and shared application vats.
 Received offers and delivery listeners persist as ordinary mailbox guest state.
 The mailbox accepts correspondent capabilities directly and has no pet-name registry.
-A separate workspace address book resolves names through the user's observable `contacts` inventory
-entry by convention.
+A separate address book in each workspace resolves names through the user's observable `contacts`
+inventory entry by convention.
 The same identity can be kept in an ordinary variable and passed to `mailbox.send` without naming it.
 Incoming facets bind the local sender identity; peers cannot supply their own display labels.
 Inbox and outbox records retain identities, while the address book resolves current labels for the UI.

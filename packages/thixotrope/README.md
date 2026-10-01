@@ -101,7 +101,26 @@ yarn workspace @endo/thixotrope thix stop ./private-state
 It accepts local OCapN admin sessions on `control.sock` (mode 0600).
 Only the supervisor opens the persistence store.
 The socket grants full local administration; anyone running as the same OS user
-can administer this workspace.
+can administer every workspace.
+
+A state directory serves many workspaces, each a vat of its own with its own inventory, mailbox
+and address book; `serve` makes one named `default`.
+A connection speaks for one workspace at a time, `default` unless it selects another, and every
+`thix` command of a workspace's takes `--workspace NAME` (or `--workspace=NAME`) ahead of it to
+select one:
+
+```sh
+yarn workspace @endo/thixotrope thix workspaces ./private-state
+yarn workspace @endo/thixotrope thix create-workspace ./private-state alice
+yarn workspace @endo/thixotrope thix --workspace alice attach ./private-state
+```
+
+A workspace name is letters, digits, dot, dash and underscore, 64 at most, starting with a letter
+or digit.
+Its vat is allocated under a key derived from the name, so a start finds it again with no record
+to lose; `workspace.json` is the table of names the host serves.
+The hub, the peers socket, the registry of installations and the clock are the daemon's, shared by
+every workspace.
 A service manager can restart the foreground process; clients never start it implicitly.
 
 `attach` evaluates one JavaScript line at a time in the same persisted workspace vat.
@@ -181,6 +200,11 @@ The idle sleep delay is 30 seconds; `stop`, SIGINT, and SIGTERM park workers bef
 A quarantined application or native manager vat is cleared by `thix remove` of its installation
 and reinstalled; a quarantined workspace vat remains inspectable with `status`, and this version
 offers no command to repair it.
+Nothing roots a quarantined workspace vat, so `thix collect` sweeps it, and the next start serves
+the name with a fresh vat, provided like any other; the installations of the vat that is gone go
+with it, since their values were in its inventory.
+A row of `workspace.json` naming a vat that is gone is taken to mean the workspace is gone; the
+table is the host's, not to be edited by hand.
 
 ### Persistent applications
 
@@ -211,8 +235,11 @@ The inventory itself and the worker controller are not implicitly granted.
 
 The application's root takes the name in the inventory: from `attach`, call
 `E(inventory.get('counter')).incr()`.
-`thix installations` reports each installation of either kind with its SHA-256 code digest,
-grants, and status.
+`thix installations` reports each installation of either kind with its workspace, SHA-256 code
+digest, grants, and status.
+An installation belongs to the workspace that asked for it, so the same name in two workspaces is
+two installations, and `thix remove` takes the selected workspace's installation under the name
+first, then the daemon's; the clock has no workspace and is the daemon's.
 One registry, in a vat of the daemon's own, records applications and native resources alike: a
 name, a code digest, a grant mapping, the vat allocated for it, and its outcome.
 The registry retains the factory's result, including a pending result promise, which is guest to
@@ -309,8 +336,8 @@ See [native resource installation](designs/native-resource-installation.md) for 
 
 ## Durable alarms and reminders
 
-The workspace provides a clock under `clock`, a native resource the supervisor installs at every
-start; grant it to an application like any inventory entry:
+Every workspace holds the daemon's clock under `clock`, a native resource the supervisor installs
+at every start and hands to each workspace; grant it to an application like any inventory entry:
 
 ```sh
 thix install ./private-state reminders ./examples/reminder.js clock=clock
@@ -355,7 +382,7 @@ The process checks wall-clock time before reporting, so this is not a precise ti
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 10 is required.
+Workspace metadata version 11 is required.
 It includes dedicated native manager vats (version 4), the mail address book that introduces
 contacts through the `mail-introductions` resource with observable inbox and outbox maps
 (version 5), adapter launchers described by the manager vat that owns them, so that removing or
@@ -363,7 +390,9 @@ collecting a manager closes its processes (version 6), one installation registry
 and native resources whose values live in the inventory (version 7), the clock and mailbox provided
 as installations in vats of their own (version 8), native adapters launched from bundles stored
 under their digest together with the clock as a native resource with no host ledger (version 9),
-and the registry in a vat of the daemon's own with the host's index beside it (version 10).
+the registry in a vat of the daemon's own with the host's index beside it (version 10), and a
+table of workspaces, each allocated under a key derived from its name, with installations
+belonging to a workspace or to the daemon (version 11).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 
@@ -424,8 +453,8 @@ the state directory argument against the current working directory when it start
 Unix socket paths are limited by `sun_path`, 103 bytes here, so a deeply nested state directory
 cannot serve peers; choose a short absolute path.
 
-The mailbox is an installation the supervisor provides at every start, in a vat of its own, under
-`mailbox`; the address book is created over it on first use, and it and every contact look the
+The mailbox is an installation the supervisor provides to every workspace at every start, in a
+vat of its own, under `mailbox`; the address book is created over it on first use, and it and every contact look the
 mailbox up at each use, so a mailbox provided afresh after a removal is the one they speak to, with
 the removed mailbox's messages gone.
 The workspace inventory holds the `contacts` map and the `mail` address book, so an application
