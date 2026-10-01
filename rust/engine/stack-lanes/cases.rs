@@ -74,6 +74,18 @@ const REGEXP_DEEP: &str = "var r = []; \
     r.push(new RegExp('a'.repeat(20000)).test('a'.repeat(20000))); \
     r.join()";
 
+/// RegExp nests at the 512-level limit that compile, through every pass:
+/// lookbehind (the backward measure and code walks), modifier groups, a named
+/// group around alternations (with the named-capture re-parse) and `v`-mode
+/// nested and intersected classes (STACK-DEPTH-REFACTOR.md §4.4 B7).
+const REGEXP_NESTS: &str = "var r = []; \
+    r.push(new RegExp('(?<='.repeat(512) + 'a' + ')'.repeat(512)).test('a')); \
+    r.push(new RegExp('(?i:'.repeat(512) + 'a' + ')'.repeat(512)).test('A')); \
+    r.push(new RegExp('(?<n>' + '(?:b|'.repeat(511) + 'a' + ')'.repeat(512) + '\\\\k<n>').test('aa')); \
+    r.push(new RegExp('['.repeat(512) + 'a' + ']'.repeat(512), 'v').test('a')); \
+    r.push(new RegExp('[\\\\w&&['.repeat(256) + 'a' + ']]'.repeat(256), 'v').test('a')); \
+    r.join()";
+
 /// A family that re-enters `dispatch_at` (or a native) once per level: the
 /// program at depth `n`, and whether it needs the eval bridge. The ceiling is
 /// the largest `n` that completes natively; `n + 1` halts with `ReentryLimit`.
@@ -435,6 +447,7 @@ pub fn cases() -> Vec<Case> {
             "var k='constructor';var d=Object.getOwnPropertyDescriptor(Iterator.prototype,k);var o={};Object.defineProperty(o,k,d);o[k]=1;'done'".into(),
         ),
         run("regexp-deep", REGEXP_DEEP.into()),
+        run("regexp-nests-512", REGEXP_NESTS.into()),
         // Walks that stay in place: controls that must stay flat in the chain length.
         run(
             "proto-chain-ordinary-20k",
