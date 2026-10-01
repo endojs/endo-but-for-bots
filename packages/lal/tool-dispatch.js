@@ -296,43 +296,48 @@ export const makeExecuteTool = powers => {
         );
       }
       case 'send': {
-        const { recipientNamePath, strings, edgeNames, petNames } = args;
+        const { recipientNamePath, strings, edgeNames, petNamePaths } = args;
         if (
           recipientNamePath === undefined ||
           !strings ||
           !edgeNames ||
-          !petNames
+          !petNamePaths
         ) {
           throw new Error(
-            'recipientNamePath, strings, edgeNames, and petNames are required',
+            'recipientNamePath, strings, edgeNames, and petNamePaths are required',
           );
         }
-        return E(powers).send(recipientNamePath, strings, edgeNames, petNames);
+        return E(powers).send(
+          recipientNamePath,
+          strings,
+          edgeNames,
+          petNamePaths,
+        );
       }
       case 'reply': {
-        const { messageNumber, strings, edgeNames, petNames } = args;
+        const { messageNumber, strings, edgeNames, petNamePaths } = args;
         if (
           messageNumber === undefined ||
           !strings ||
           !edgeNames ||
-          !petNames
+          !petNamePaths
         ) {
           throw new Error(
-            'messageNumber, strings, edgeNames, and petNames are required',
+            'messageNumber, strings, edgeNames, and petNamePaths are required',
           );
         }
-        return E(powers).reply(messageNumber, strings, edgeNames, petNames);
+        return E(powers).reply(messageNumber, strings, edgeNames, petNamePaths);
       }
       case 'editMessage': {
-        const { messageNumber, strings, edgeNames, petNames, done } = args;
+        const { messageNumber, strings, edgeNames, petNamePaths, done } = args;
         if (
           messageNumber === undefined ||
           !strings ||
           !edgeNames ||
-          !petNames
+          !petNamePaths
         ) {
           throw new Error(
-            'messageNumber, strings, edgeNames, and petNames are required',
+            'messageNumber, strings, edgeNames, and petNamePaths are required',
           );
         }
         const options = done === undefined ? undefined : harden({ done });
@@ -340,7 +345,7 @@ export const makeExecuteTool = powers => {
           messageNumber,
           strings,
           edgeNames,
-          petNames,
+          petNamePaths,
           options,
         );
       }

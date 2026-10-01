@@ -329,7 +329,7 @@ Messages arrive as `InboxMessage` (alias for `StampedMessage`) objects with:
 ### Outbound Messages
 
 ```javascript
-await E(powers).send(recipientNamePath, strings, edgeNames, petNames);
+await E(powers).send(recipientNamePath, strings, edgeNames, petNamePaths);
 ```
 
 Messages are sent as packages with interleaved text and capability references.

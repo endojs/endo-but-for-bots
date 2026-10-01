@@ -75,7 +75,7 @@ export function makeMockPowers(options = {}) {
   /** @type {Map<string, { promise: Promise<unknown>, resolve: (value?: unknown) => void }>} */
   const dismissWaiters = new Map();
 
-  /** @type {Array<{ recipient: string, strings: string[], edgeNames: string[], petNames: string[], replyTo?: string }>} */
+  /** @type {Array<{ recipient: string, strings: string[], edgeNames: string[], petNamePaths: string[], replyTo?: string }>} */
   const sent = [];
   /** @type {Array<{ messageNumber: string, edgeName: string, petName: string }>} */
   const adoptions = [];
@@ -296,21 +296,23 @@ export function makeMockPowers(options = {}) {
       });
     },
 
-    send(recipientName, strings, edgeNames, petNames) {
+    send(recipientName, strings, edgeNames, petNamePaths) {
       const record = {
         recipient: Array.isArray(recipientName)
           ? recipientName.join('/')
           : recipientName,
         strings,
         edgeNames,
-        petNames: petNames.map(p => (Array.isArray(p) ? p.join('/') : p)),
+        petNamePaths: petNamePaths.map(p =>
+          Array.isArray(p) ? p.join('/') : p,
+        ),
       };
       sent.push(record);
       resolveNextSend(record);
       return Promise.resolve();
     },
 
-    reply(messageNumber, strings, edgeNames, petNames) {
+    reply(messageNumber, strings, edgeNames, petNamePaths) {
       // Find the parent message to determine the other party
       const parent = messages.find(m =>
         sameMessageNumber(m.number, messageNumber),
@@ -324,7 +326,9 @@ export function makeMockPowers(options = {}) {
         recipient: recipientName,
         strings,
         edgeNames,
-        petNames: petNames.map(p => (Array.isArray(p) ? p.join('/') : p)),
+        petNamePaths: petNamePaths.map(p =>
+          Array.isArray(p) ? p.join('/') : p,
+        ),
         replyTo: parent ? parent.messageId : undefined,
       };
       sent.push(record);

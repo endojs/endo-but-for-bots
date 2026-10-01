@@ -68,13 +68,13 @@ export const mailToolDefs = harden([
     name: 'send',
     summary:
       'Send a package message with values to another agent. ' +
-      'Arguments: recipientNamePath, strings (string[]), edgeNames (string[]), petNames. ' +
+      'Arguments: recipientNamePath, strings (string[]), edgeNames (string[]), petNamePaths. ' +
       'For text-only messages: send(["@host"], ["text"], [], []).',
     params: M.splitRecord({
       recipientNamePath: NamePathArgumentShape,
       strings: M.arrayOf(M.string()),
       edgeNames: M.arrayOf(M.string()),
-      petNames: M.arrayOf(NamePathArgumentShape),
+      petNamePaths: M.arrayOf(NamePathArgumentShape),
     }),
   },
   {
@@ -82,12 +82,12 @@ export const mailToolDefs = harden([
     summary:
       'Reply to a message in your inbox, threading the response to the original message. ' +
       'Use this instead of send() when responding to a received message. ' +
-      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+3"), strings (string[]), edgeNames (string[]), petNames.',
+      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+3"), strings (string[]), edgeNames (string[]), petNamePaths.',
     params: M.splitRecord({
       messageNumber: MessageNumberShape,
       strings: M.arrayOf(M.string()),
       edgeNames: M.arrayOf(M.string()),
-      petNames: M.arrayOf(NamePathArgumentShape),
+      petNamePaths: M.arrayOf(NamePathArgumentShape),
     }),
   },
 
@@ -124,7 +124,7 @@ settled.`,
           items: { type: 'string' },
           description: 'Labels for the values being sent.',
         },
-        petNames: {
+        petNamePaths: {
           type: 'array',
           items: {
             oneOf: [
@@ -133,7 +133,7 @@ settled.`,
             ],
           },
           description:
-            'Pet names of values to include (same length as edgeNames).',
+            'Pet-name paths of the values to include (same length as edgeNames).',
         },
         done: {
           type: 'boolean',
@@ -141,7 +141,7 @@ settled.`,
             'Defaults to true. Pass false to mark this revision as a partial submission.',
         },
       },
-      required: ['messageNumber', 'strings', 'edgeNames', 'petNames'],
+      required: ['messageNumber', 'strings', 'edgeNames', 'petNamePaths'],
     },
   },
 

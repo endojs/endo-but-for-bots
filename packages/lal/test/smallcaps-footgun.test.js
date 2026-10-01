@@ -287,7 +287,7 @@ test('reply: messageNumber "+3" decodes to BigInt 3n', async t => {
         messageNumber: '+3',
         strings: ['Thanks for the update!'],
         edgeNames: [],
-        petNames: [],
+        petNamePaths: [],
       }),
     ),
   });
@@ -313,7 +313,7 @@ test('send: "!+15551234567" in strings[] delivers the literal string "+155512345
       // "!+15551234567" is SmallCaps-escaped "+15551234567"
       strings: ['!+15551234567'],
       edgeNames: [],
-      petNames: [],
+      petNamePaths: [],
     }),
   );
   await piAgent.prompt('start');
@@ -334,7 +334,7 @@ test('send: "!+5" in strings[] delivers the literal string "+5"', async t => {
       recipientNamePath: ['@host'],
       strings: ['!+5'],
       edgeNames: [],
-      petNames: [],
+      petNamePaths: [],
     }),
   );
   await piAgent.prompt('start');
@@ -351,7 +351,7 @@ test('send: "!#undefined" in strings[] delivers the literal string "#undefined"'
       recipientNamePath: ['@host'],
       strings: ['!#undefined'],
       edgeNames: [],
-      petNames: [],
+      petNamePaths: [],
     }),
   );
   await piAgent.prompt('start');
@@ -368,7 +368,7 @@ test('send: "!%percentage" in strings[] delivers the literal string "%percentage
       recipientNamePath: ['@host'],
       strings: ['!%percentage'],
       edgeNames: [],
-      petNames: [],
+      petNamePaths: [],
     }),
   );
   await piAgent.prompt('start');
@@ -392,7 +392,7 @@ test('send: plain strings without sigil prefix pass through unchanged', async t 
         'Numbers like 42 and 3.14 are fine',
       ],
       edgeNames: [],
-      petNames: [],
+      petNamePaths: [],
     }),
   );
   await piAgent.prompt('start');
@@ -417,7 +417,7 @@ test('send: multiple sigil-prefixed strings with !-escapes all decode correctly'
       recipientNamePath: ['@host'],
       strings: ['!+1 555 123 4567', '!#main', '!%percent and $variable'],
       edgeNames: [],
-      petNames: [],
+      petNamePaths: [],
     }),
   );
   await piAgent.prompt('start');

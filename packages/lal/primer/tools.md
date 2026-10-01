@@ -28,9 +28,9 @@
   a capability
 - `resolve(messageNumber, petNamePath)` — Respond to a request
 - `reject(messageNumber, reason?)` — Decline a request
-- `reply(messageNumber, strings, edgeNames, petNames)` — Reply
+- `reply(messageNumber, strings, edgeNames, petNamePaths)` — Reply
   to a message (PREFERRED for responses)
-- `send(recipientNamePath, strings, edgeNames, petNames)` — Send a
+- `send(recipientNamePath, strings, edgeNames, petNamePaths)` — Send a
   NEW message (only for initiating conversations)
 
 ## Identity

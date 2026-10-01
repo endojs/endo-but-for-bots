@@ -157,7 +157,7 @@ test('PiAgent + lal tools: normal arg dispatch + decodeToolArgs JSON-string retr
             recipientNamePath: ['@host'],
             strings: ['hello from the test'],
             edgeNames: [],
-            petNames: [],
+            petNamePaths: [],
           },
         },
         {
