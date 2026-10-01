@@ -569,6 +569,41 @@ impl Interp {
         matches!(v.value, Payload::Reference(r) if v.kind == Kind::Reference && self.slot_is_callable(r))
     }
 
+    /// The constructor a `super(...)` in the running function calls (XS's
+    /// `XS_CODE_SUPER`): the derived constructor's [[Prototype]]. An arrow
+    /// function has no [[Construct]] and no class of its own, so from one XS
+    /// takes the class its home object's own `constructor` names, and its
+    /// [[Prototype]]. `NULL` when there is none; the caller throws.
+    pub(super) fn super_parent(&self) -> crate::value::SlotIndex {
+        let function = if self.slot_is_constructor(self.cur_func) {
+            self.cur_func
+        } else {
+            let home = self
+                .functions
+                .get(&self.cur_func)
+                .map(|info| info.home)
+                .unwrap_or(crate::value::SlotIndex::NULL);
+            if home.is_null() {
+                return crate::value::SlotIndex::NULL;
+            }
+            let Some(&id) = self.symbol_ids.get("constructor") else {
+                return crate::value::SlotIndex::NULL;
+            };
+            match self
+                .find_property(home, id)
+                .map(|property| self.slots.get(property))
+            {
+                Some(Slot {
+                    kind: Kind::Reference,
+                    value: Payload::Reference(class),
+                    ..
+                }) => class,
+                _ => return crate::value::SlotIndex::NULL,
+            }
+        };
+        self.instance_prototype(function)
+    }
+
     /// `IsConstructor(v)` (ECMA-262 7.2.4). A bound/proxy callable follows its
     /// target. Native prototype methods and `eval` have no `[[Construct]]`.
     /// `Symbol` and `BigInt` do — the specification makes them constructors
