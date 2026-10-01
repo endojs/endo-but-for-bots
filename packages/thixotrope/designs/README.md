@@ -4,8 +4,8 @@ The [main design](../../../designs/thixotrope.md) describes the architecture and
 and is the normative document; its vocabulary section defines the terms used here.
 This directory holds the implementation notes behind contracts that are implemented,
 [native resource installation](native-resource-installation.md),
-[alarm settlement](alarm-settlement.md), [Ironhorse limits](ironhorse-limits.md) and
-[layered message delivery](message-delivery.md), together with proposals that remain exploratory.
+[Ironhorse limits](ironhorse-limits.md) and [layered message delivery](message-delivery.md),
+together with proposals that remain exploratory.
 [Vat replacement and SQL heap upgrades](vat-replacement.md) explore upgrade fallback mechanisms and
 possible table designs in more detail.
 [Host-managed resources](host-managed-resources.md) gathers the changes proposed while reviewing

@@ -30,7 +30,6 @@
 /** @import { PromiseKit } from '@endo/promise-kit' */
 import { E, Far } from '@endo/far';
 import harden from '@endo/harden';
-import { PENDING_ANSWER_ABORTED_MESSAGE } from '@endo/ocapn';
 import { syrupCodec } from '@endo/ocapn/syrup';
 import { makePromiseKit } from '@endo/promise-kit';
 
@@ -47,9 +46,8 @@ import {
   removeInstallation,
 } from './install.js';
 import { makeInstallations } from './installations.js';
-import { makeDurableAlarms } from '../alarms/durable-alarms.js';
-import { makeGuestClock } from '../alarms/guest-clock.js';
 import { makeThixotropeDaemon } from '../core/daemon.js';
+import { make as makeClock } from '../../resources/clock/durable.js';
 import { makeDurableNetLayer } from '../net/durable-netlayer.js';
 import { makeIronhorseEngine } from '../ironhorse/ironhorse-engine.js';
 import { readIronhorseLimits } from '../ironhorse/ironhorse-limits.js';
@@ -60,7 +58,6 @@ import { makeMailbox } from '../mail/mailbox.js';
 import { makeMailContact } from '../mail/mail-contact.js';
 import { makeMailAddressBook } from '../mail/mail-address-book.js';
 import { makeMailIntroductions } from '../mail/introductions.js';
-import { makeFileSyncStringAtom } from '../store/file-sync-string-atom.js';
 import { makeFsStore } from '../store/store-fs.js';
 import {
   assertUnixPeerLocation,
@@ -75,15 +72,16 @@ import {
 // the mail address book) are frozen in the heap at first evaluation, so a
 // build whose closures differ cannot serve an older workspace and refuses
 // it rather than run new host code against old guest code.
-// 3: alarm acknowledgement; 4: dedicated native manager vats; 5: the mail
-// address book introduces contacts through the `mail-introductions` resource
-// and its inbox and outbox are observable; 6: a manager's adapter launcher
-// is described by the manager, so retiring the manager closes its processes;
-// 7: one `installations` registry for applications and native resources,
-// whose values live in the inventory under their names; 8: the clock and the
+// 4: dedicated native manager vats; 5: the mail address book introduces
+// contacts through the `mail-introductions` resource and its inbox and outbox
+// are observable; 6: a manager's adapter launcher is described by the
+// manager, so retiring the manager closes its processes; 7: one
+// `installations` registry for applications and native resources, whose
+// values live in the inventory under their names; 8: the clock and the
 // mailbox are installations the supervisor provides, each in its own vat;
 // 9: native adapters are launched from bundles stored under their digest,
-// which the launcher's description names in place of a directory.
+// which the launcher's description names in place of a directory, and the
+// clock is a native resource, with no host alarm ledger.
 const WORKSPACE_VERSION = 9;
 
 // sun_path on the strictest supported platform: 104 bytes including the NUL.
@@ -108,12 +106,12 @@ const save = async (files, path, value) => {
  * Run a single local supervisor. The engine lease encloses socket lifetime.
  * @param {PlatformPowers} platform
  * @param {string} statePath
- * @param {{engine?: WorkerEngine, idleSleepMs?: number, alarmNow?: () => bigint}} [options]
+ * @param {{engine?: WorkerEngine, idleSleepMs?: number}} [options]
  */
 export const serveThixotrope = async (
   platform,
   statePath,
-  { engine, idleSleepMs = 30_000, alarmNow } = {},
+  { engine, idleSleepMs = 30_000 } = {},
 ) => {
   const {
     timers,
@@ -233,23 +231,6 @@ export const serveThixotrope = async (
   const { promise: stopped } = stopKit;
   const requestStop = () => stopKit.resolve();
   let daemon;
-  // The host keeps deadlines and unacknowledged outcomes, with one timer for
-  // the earliest deadline. It calls nothing; settling a promise resource
-  // wakes whichever vat was listening on it.
-  const alarms = makeDurableAlarms(
-    { timers },
-    {
-      storage: makeFileSyncStringAtom(
-        syncFiles,
-        paths.join(statePath, 'alarms.json'),
-      ),
-      makeResource: (name, description) =>
-        daemon.makeResource(name, description),
-      retireResource: (name, description) =>
-        daemon.retireResource(name, description),
-      ...(alarmNow === undefined ? {} : { now: alarmNow }),
-    },
-  );
   /** @type {Awaited<ReturnType<typeof makeUnixNetLayer>> | undefined} */
   let peerNetlayer;
   const closePeers = async () => {
@@ -306,17 +287,7 @@ export const serveThixotrope = async (
             );
           }
         },
-        // Re-arm the host timer from the durable table once every worker
-        // session is seated and before any vat is notified, so an alarm
-        // already past its deadline settles as part of startup, with its
-        // listener seated, rather than at some later point after it.
-        beforeStartNotices: () => alarms.start(),
-        onRetireWorker: workerId => {
-          alarms.retireWorker(workerId);
-        },
         resources: {
-          alarm: alarms.resource,
-          alarms: alarms.clockResource,
           // Makers run while the endpoint restores, before `daemon` is
           // assigned and before the netlayer exists, so every use of the
           // daemon is deferred to the call.
@@ -431,11 +402,9 @@ export const serveThixotrope = async (
        * the installer forgets and replaces; a healthy one costs a start
        * nothing beyond the registry's own report.
        * @param {string} name
-       * @param {string} source an expression yielding `{ make }`, which may
-       *   close over `endowments`
-       * @param {(workerId: string) => Record<string, unknown>} [makeEndowments]
+       * @param {string} source an expression yielding `{ make }`
        */
-      const provide = async (name, source, makeEndowments) => {
+      const provide = async (name, source) => {
         const held = provided[name];
         if (
           held?.complete &&
@@ -450,20 +419,68 @@ export const serveThixotrope = async (
             allocationKey: randomId(),
             bundle: source,
             grants: [],
-            makeEndowments,
           });
           await result;
         } catch (error) {
           log.error(`${name} not provided:`, error);
         }
       };
-      // The clock lives in its own vat, holding its own promises and cleanup
-      // acknowledgements; the host keeps deadlines and unacknowledged
-      // outcomes under that vat's id, and drops them if it is retired.
-      await provide(
+      /**
+       * A native resource the supervisor provides, from a directory the
+       * package ships, under the same rule as `provide`: a constant digest,
+       * installed only when missing, unfinished or without its vat. Its
+       * durable factory is shipped by source like every other built-in, so
+       * it must be whole (closing over nothing but the guest prelude), and
+       * a start bundles nothing.
+       * @param {string} name
+       * @param {string} directory
+       * @param {(powers: any) => unknown} make the durable module's factory
+       */
+      const provideNative = async (name, directory, make) => {
+        const held = provided[name];
+        if (
+          held?.complete &&
+          held.workerId !== undefined &&
+          daemon.listWorkerIds().includes(held.workerId)
+        )
+          return;
+        try {
+          const description = await describeNativeResource(
+            { files, paths },
+            directory,
+          );
+          // The adapter's module is bundled into the store under its digest
+          // once, here; the launcher names the digest, so the package's own
+          // directory is never pinned and may change underneath a running
+          // installation. The installed clock keeps running the bundle it
+          // was installed with, so a change to what its two halves say to
+          // each other is a WORKSPACE_VERSION bump, which makes a fresh
+          // installation of it.
+          const bundleDigest = store.putBundle(
+            await platform.bundler.bundleNative(description.ephemeralPath),
+          );
+          await installNative(daemon, workspace, {
+            name,
+            digest: `builtin:${name}`,
+            allocationKey: randomId(),
+            bundle: `({ make: ${make.toString()} })`,
+            makeAdapters: workerId =>
+              daemon.makeResource('native-adapter', {
+                bundleDigest,
+                workerId,
+              }),
+          });
+        } catch (error) {
+          log.error(`${name} not provided:`, error);
+        }
+      };
+      // The clock is a native resource shipped with the package: its manager
+      // vat holds every pending deadline, and its adapter process holds the
+      // timers. Removing it retires both; the next start provides it again.
+      await provideNative(
         'clock',
-        `({ make: () => (${makeGuestClock.toString()})(endowments.alarms, { restartMessage: ${JSON.stringify(PENDING_ANSWER_ABORTED_MESSAGE)} }) })`,
-        workerId => ({ alarms: daemon.makeResource('alarms', { workerId }) }),
+        paths.resolve(packagePath, 'resources', 'clock'),
+        makeClock,
       );
       await provide(
         'mailbox',
@@ -669,18 +686,15 @@ export const serveThixotrope = async (
             throw Error('Expected an inventory name');
           return removeInstallation(daemon, workspace, name);
         }),
-      alarmStatus: () => {
-        const status = alarms.status();
-        // Plain numbers: the CLI prints this record as JSON, and each count
-        // is bounded by the alarm table's row limit. `pending` rows are still
-        // armed; `retained` counts every row the table holds, armed or
-        // settled and awaiting the clock's acknowledgement.
-        return harden({
-          pending: Number(status.armed),
-          retained: Number(status.retained),
-          materialised: Number(status.materialised),
-          stopped: status.stopped,
-        });
+      alarmStatus: async () => {
+        assertWorkspace();
+        // The clock counts its own pending alarms; the host keeps none.
+        if (!(await workspace.evaluate("inventory.has('clock')")))
+          throw Error('The clock is not installed');
+        const { pending } = await workspace.evaluate(
+          "E(inventory.get('clock')).status()",
+        );
+        return harden({ pending: Number(pending) });
       },
       invite: name => E(getMailbox()).invite(name),
       accept: (name, invitationText) =>
@@ -771,12 +785,8 @@ export const serveThixotrope = async (
           await closeControl();
         } finally {
           try {
-            try {
-              alarms.shutdown();
-            } finally {
-              await closePeers();
-              await daemon.shutdown();
-            }
+            await closePeers();
+            await daemon.shutdown();
           } finally {
             closeSocket();
             requestStop();
@@ -791,12 +801,8 @@ export const serveThixotrope = async (
       await closeControl();
     } finally {
       closeSocket();
-      try {
-        alarms.shutdown();
-      } finally {
-        await closePeers();
-        await daemon?.crash();
-      }
+      await closePeers();
+      await daemon?.crash();
     }
     throw error;
   }

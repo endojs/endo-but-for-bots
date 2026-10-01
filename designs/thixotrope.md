@@ -79,7 +79,7 @@ One word for one thing, throughout the code, the README and this document:
 | vat | One guest heap behind one OCapN endpoint, run by a worker. A **durable** vat has a heap image and journal and survives sleep and restart; an **ephemeral** vat or worker has no recovery baseline and is discarded at startup. |
 | session | A logical protocol relationship in the hub, with reference tables, answer routes and lifecycle; never a socket. A **durable session** belongs to a worker, a remote peer or the host endpoint itself and outlives sockets, processes and the daemon. A **transient session** (`transient:` key prefix) belongs to a transient client or a native adapter process and is discarded at startup. |
 | transient client | A disposable host-side OCapN client with a transient session, for embedders; `daemon.openTransientClient()`. |
-| resource | A host capability with a durable description, reconstructed through a registered factory at the host endpoint and retired when its meaning ends (`makeResource`, `retireResource`): alarms, introductions, worker facades. |
+| resource | A host capability with a durable description, reconstructed through a registered factory at the host endpoint and retired when its meaning ends (`makeResource`, `retireResource`): introductions, worker facades, adapter launchers. |
 | native resource | A directory with `durable.js` and `ephemeral.js`, installed by name; its **manager** runs the durable module in a dedicated vat and its **adapter** runs the ephemeral module in a Node process. |
 | manager | The durable half of a native resource: keeps desired registrations in its heap, holds one adapter incarnation through a **keeper**, and is notified at every start. |
 | adapter | The ephemeral half of a native resource: one incarnation per Node process, restored from the manager's desired state; the only sense of the word in this package's code and documents. Platform ports have implementations, not adapters. |
@@ -234,7 +234,8 @@ Host capabilities have durable descriptions and are reconstructed through regist
 A resource whose meaning has ended is retired: the host forgets its instance and nulls its recorded
 exports, so a restart seats tombstones for it rather than re-running the factory, and the guest's
 release of an export drops that export's record.
-Retiring a worker also releases the host state keyed by it, such as its alarm rows.
+Retiring a worker also releases the host state keyed by it, such as the adapter processes it
+launched.
 Host-origin nondeterministic results enter guest state as journaled protocol replies.
 The host endpoint treats unrecoverable pending host-operation answers as at-most-once obligations:
 restart rejects them rather than blindly repeating an external effect.
@@ -315,7 +316,8 @@ changed source is a new installation.
 Removing an installation retires the manager vat first, which closes the processes it launched and
 withdraws its start notice, and only then forgets the name.
 
-HTTP is the first native resource, `resources/http`.
+HTTP is the first native resource a user installs, `resources/http`; the clock, `resources/clock`,
+is the first the supervisor installs itself, at every start.
 Its facet registers a handler on a port with an optional origin policy and returns the handle;
 registration succeeds even when binding fails, and `status()` retries the binding and reports an
 inactive listener with its error, so a caller can always withdraw desired state.
@@ -327,26 +329,25 @@ clients.
 A replacement adapter restores registrations, never pending requests, and an already accepted guest
 invocation may complete after the HTTP client is gone.
 
-### Durable time promises
+### The clock
 
-The supervisor provides a public clock as an installation in a vat of its own, under `clock` in the
-inventory, so it has its own budget and failure lifetime and retiring it drops its alarm rows.
-It exposes `now()`, `when(deadline)`, and `arm(deadline)` with a per-alarm cancellation capability.
-The host records deadlines and terminal outcomes in a small manual-persistence ledger.
-It schedules one timer for the earliest pending deadline; there is no periodic guest scan or host
-control facet that enumerates guest alarms.
+The supervisor provides a clock as a native resource installed at every start, under `clock` in
+the inventory, so it has its own budget and failure lifetime and retiring it drops its alarms.
+It exposes `at(deadline)`, `after(delay)` and `arm({ at } | { after })`, the last with a per-alarm
+cancellation capability, and no `now()`: a program that only needs a delay never learns the time.
+The deadlines live in the clock's manager vat, durable for free; the timers live in its adapter
+process, which owns a clock of its own, arms one timer per alarm and reports each firing to the
+manager's sink.
+A delay is resolved to a deadline in the adapter when the alarm is bound, and the manager adopts
+the resolved registration, so a restart restores the deadline, never the delay counted again.
+A restart, or the adapter ending on its own, rebuilds the adapter and re-arms every pending alarm;
+one whose deadline passed meanwhile fires at once, and a firing the manager never recorded is
+reported again and settles once, since settlement is idempotent per key.
+There is no host ledger, no acknowledgement protocol and no host control facet that enumerates
+guest alarms; `alarms` reports a count.
 
-Fulfillment time or cancellation is persisted before settling the corresponding host promise.
-The clock observes that promise and gives callers a separate guest-owned promise, which other vats
-may retain without directly observing the host resource.
-After recording settlement through the vat's normal persistence mechanism, it acknowledges cleanup.
-The host retains the outcome until that acknowledgement, so restart can replay an interrupted delivery.
-An interrupted acknowledgement retries; other cleanup failures retry on subsequent clock use.
-An interrupted arm is abandoned explicitly because the host may already have stored its deadline.
-See [alarm settlement](../packages/thixotrope/designs/alarm-settlement.md) for the protocol.
-
-The initial profile uses absolute bigint Unix milliseconds in the nonnegative signed 64-bit range.
-The shared limit of 1,024 rows includes pending alarms and unacknowledged outcomes.
+The initial profile uses absolute bigint Unix milliseconds in the nonnegative signed 64-bit range
+and delays up to 2^53 milliseconds.
 A deadline that passes during downtime settles after restart, preserving downstream guest listeners.
 Wall-clock adjustments affect when deadlines become due; this is not a real-time scheduling guarantee.
 Cancellation is supported; recurring scheduling remains application work.
@@ -360,9 +361,9 @@ The socket carries local administrative authority and is protected by the state 
 and permissions.
 
 Workspace metadata carries a version the supervisor bumps whenever a guest closure it ships changes
-shape; the current version includes dedicated native managers, the alarm acknowledgement protocol,
-the mail address book with its introductions resource, manager-owned adapter launchers, the one
-installation registry, and the clock and mailbox provided through it.
+shape; the current version includes dedicated native managers, the mail address book with its
+introductions resource, manager-owned adapter launchers, the one installation registry, the clock
+and mailbox provided through it, and the clock as a native resource.
 Earlier workspaces require explicit migration or fresh state; startup rejects them before restoring
 workers, because their heap-persisted registry and clock closures cannot be replaced by loading
 new source.
@@ -433,9 +434,7 @@ on every operating system.
 Persistent service metadata uses a `SyncStringAtom`: a synchronous `read()` returns a string or
 `undefined`, and a successful `write(string)` durably replaces the slot before the next effect.
 The file-backed atom is one implementation.
-The host alarm ledger performs its JSON encoding and transitions above this interface.
-HTTP registrations live in their installed manager vat's heap; the public clock's promises live in
-the clock vat's heap.
+HTTP registrations and the clock's alarms live in their manager vats' heaps.
 The manual persistence boundary is confined to host state that cannot rely on a durable guest heap.
 Platform implementations return plain data, iterator facades, and opaque tokens rather than Node
 streams,
@@ -465,7 +464,7 @@ Administration goes through the endpoint's durable session, and the inventory vi
 control-socket connection whose subscription the supervisor releases.
 The mechanism remains for embedders.
 Native adapter processes instead have one transient hub session per incarnation; HTTP shares that
-session across requests, and alarm settlement uses restorable host promises.
+session across requests, and the clock's adapter reports firings over it.
 Closing a client retires its session and releases its references and answer routes.
 The daemon tracks both clients being opened and clients already open, so shutdown cannot miss
 an opening that completes concurrently.

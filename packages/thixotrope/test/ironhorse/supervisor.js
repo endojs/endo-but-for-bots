@@ -155,7 +155,10 @@ test.serial(
     const publications = JSON.parse(
       await readFile(hubPath, 'utf8'),
     ).publications;
-    t.is(Object.keys(publications).length, 1);
+    // The workspace root, and the clock manager's start notice: the clock is
+    // a native resource, and a native manager's lifecycle facet is published
+    // privately for its notices.
+    t.is(Object.keys(publications).length, 2);
 
     // A worker allocation exists, but its selection record did not commit.
     await rm(configPath);

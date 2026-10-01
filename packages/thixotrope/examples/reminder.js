@@ -2,12 +2,13 @@
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
 const { E, makeExo, M } = /** @type {GuestGlobals} */ (globalThis);
 
-// A signed 64-bit Unix deadline in milliseconds, as the clock takes it.
-const DeadlineShape = M.and(M.bigint(), M.gte(0n), M.lt(2n ** 63n));
+// A delay in milliseconds, as the clock takes it; the application never
+// learns what time it is.
+const DelayShape = M.and(M.bigint(), M.gte(0n), M.lte(2n ** 53n));
 
 const ReminderI = M.interface('ReminderApplication', {
   help: M.call().returns(M.string()),
-  arm: M.call(DeadlineShape, M.string()).returns(M.boolean()),
+  arm: M.call(DelayShape, M.string()).returns(M.boolean()),
   status: M.call().returns(M.record()),
 });
 
@@ -15,22 +16,22 @@ const ReminderI = M.interface('ReminderApplication', {
 export const make = ({ clock }) => {
   let count = 0n;
   let nextId = 0n;
-  /** @type {Array<{id: bigint, deadline: bigint, message: string, state: string, firedAt?: bigint, error?: string}>} */
+  /** @type {Array<{id: bigint, delay: bigint, message: string, state: string, firedAt?: bigint, error?: string}>} */
   const items = [];
   return makeExo('ReminderApplication', ReminderI, {
     help: () =>
-      'arm(deadline, message) records a reminder; status() reports its durable listener state and firing count.',
+      'arm(delay, message) records a reminder due that many milliseconds from now; status() reports its durable listener state and firing count.',
     /**
-     * @param {bigint} deadline
+     * @param {bigint} delay
      * @param {string} message
      */
-    arm: (deadline, message) => {
+    arm: (delay, message) => {
       nextId += 1n;
       /** @type {(typeof items)[number]} */
-      const item = { id: nextId, deadline, message, state: 'waiting' };
+      const item = { id: nextId, delay, message, state: 'waiting' };
       items.push(item);
       void E(clock)
-        .when(deadline)
+        .after(delay)
         .then(
           firedAt => {
             item.state = 'fired';

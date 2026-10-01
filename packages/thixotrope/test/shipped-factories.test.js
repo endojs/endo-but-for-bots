@@ -5,7 +5,6 @@ import { getInterfaceGuardPayload } from '@endo/patterns';
 import test from '@endo/ses-ava/test.js';
 
 import { makeAdapterKeeper } from '../src/adapter-keeper.js';
-import { makeGuestClock } from '../src/alarms/guest-clock.js';
 import { makeInstallations } from '../src/control/installations.js';
 import { guestPrelude } from '../src/guest/prelude.js';
 import { makeMailAddressBook } from '../src/mail/mail-address-book.js';
@@ -14,6 +13,7 @@ import { makeMailbox } from '../src/mail/mailbox.js';
 import { makeManager } from '../src/native/manager-kit.js';
 import { makeNativeManager } from '../src/native/manager.js';
 import { makeObservableMap } from '../src/observable-map.js';
+import { make as makeClock } from '../resources/clock/durable.js';
 
 /**
  * The supervisor ships these factories into vats as source, by
@@ -85,13 +85,7 @@ test('the observable map, mailbox, contact and address book are whole', async t 
   t.is(await first, 0n, 'the plain listener was notified');
 });
 
-test('the guest clock and the installation registry are whole', async t => {
-  const alarms = Far('Alarms', { now: () => 7n });
-  const clock = evaluateShipped(makeGuestClock)(alarms, {
-    restartMessage: 'restart',
-  });
-  assertInterface(t, clock, 'GuestClock');
-  t.is(await E(clock).now(), 7n);
+test('the installation registry is whole', t => {
   const installations = evaluateShipped(makeInstallations)(new Map());
   assertInterface(t, installations, 'Installations');
   t.deepEqual(installations.list(), []);
@@ -119,4 +113,35 @@ test('the native manager and its kit are whole', async t => {
     adapters,
   );
   t.deepEqual(await E(kit.facet).keys(), []);
+});
+
+test('the clock the supervisor provides is whole', async t => {
+  // Shipped by source like every built-in, though it is a native resource:
+  // its factory may close over nothing but the guest prelude.
+  const adapters = Far('Launcher', {
+    create: () =>
+      Far('Incarnation', {
+        getRoot: () =>
+          Far('Adapter', {
+            bind: () => undefined,
+            unbind: () => false,
+            restore: () => harden([]),
+            keys: () => harden([]),
+          }),
+        retire: () => {},
+      }),
+  });
+  const kit = evaluateShipped(makeClock)(
+    harden({
+      makeManager: (/** @type {any} */ options) =>
+        makeManager({ adapters, makeKeeper: makeAdapterKeeper }, options),
+    }),
+  );
+  assertInterface(t, kit.facet, 'Clock');
+  t.deepEqual(await E(kit.facet).status(), { pending: 0 });
+  const { canceller } = await E(kit.facet).arm(harden({ after: 5n }));
+  assertInterface(t, canceller, 'AlarmCanceller');
+  t.deepEqual(await E(kit.facet).status(), { pending: 1 });
+  t.true(await E(canceller).cancel());
+  t.deepEqual(await E(kit.facet).status(), { pending: 0 });
 });

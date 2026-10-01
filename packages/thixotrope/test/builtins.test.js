@@ -46,14 +46,16 @@ test.serial(
     const listed = await host.client.call('installations');
     t.like(
       listed.find(entry => entry.name === 'clock'),
-      { kind: 'application', digest: 'builtin:clock', status: 'ready' },
+      { kind: 'native', digest: 'builtin:clock', status: 'ready' },
     );
     t.like(
       listed.find(entry => entry.name === 'mailbox'),
       { kind: 'application', digest: 'builtin:mailbox', status: 'ready' },
     );
+    // A zero delay settles at once with the host time, through the clock's
+    // own adapter process.
     t.regex(
-      await host.client.call('evaluate', "E(inventory.get('clock')).now()"),
+      await host.client.call('evaluate', "E(inventory.get('clock')).after(0n)"),
       /^[0-9]+n$/,
     );
     t.is(
@@ -65,16 +67,20 @@ test.serial(
     );
     const vatOf = async name => {
       const status = await host.client.call('status');
-      return status.workers.find(worker => worker.debugLabel === `app:${name}`)
-        ?.workerId;
+      return status.workers.find(
+        worker =>
+          worker.debugLabel === `app:${name}` ||
+          worker.debugLabel === `native:${name}`,
+      )?.workerId;
     };
     const clockVat = await vatOf('clock');
     t.truthy(clockVat);
     t.not(clockVat, (await host.client.call('status')).workspace);
-    // An alarm armed through the clock is a row under the clock vat's id.
+    // An alarm armed through the clock is a registration in the clock's
+    // manager vat, counted by its status.
     await host.client.call(
       'evaluate',
-      "globalThis.never = E(inventory.get('clock')).when(2n ** 50n); never.catch(() => {}); undefined",
+      "globalThis.never = E(inventory.get('clock')).at(2n ** 50n); never.catch(() => {}); undefined",
     );
     // Arming is asynchronous to the evaluation that requested it.
     let armed = false;
@@ -86,10 +92,12 @@ test.serial(
       if (!armed) await setTimeout(25);
     }
     t.true(armed);
-    // Removing the clock retires its vat and drops its rows; the next start
-    // provides a fresh one.
+    // Removing the clock retires its vat, with its alarms and its adapter
+    // process; the next start provides a fresh one.
     t.true(await host.client.call('remove', 'clock'));
-    t.like(await host.client.call('alarmStatus'), { pending: 0, retained: 0 });
+    await t.throwsAsync(() => host.client.call('alarmStatus'), {
+      message: /not installed/,
+    });
     t.is(await host.client.call('evaluate', "inventory.has('clock')"), 'false');
     const mailboxVat = await vatOf('mailbox');
     t.truthy(mailboxVat);

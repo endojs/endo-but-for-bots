@@ -15,6 +15,9 @@ const nodePowers = makeNodePowers();
 
 /** @import {TestFn} from 'ava' */
 /**
+ * The clock keeps real time in its adapter process, so the test works with
+ * short real delays: an alarm armed for a little while out, a restart that
+ * outlasts it, and the settlement that must follow.
  * @param {TestFn} test
  * @param {'replay'|'ironhorse'} kind
  */
@@ -25,10 +28,8 @@ export const registerAlarmIntegration = (test, kind) => {
       t.timeout(180_000);
       const path = await mkdtemp('/tmp/thix-alarm-app-');
       t.teardown(() => rm(path, { recursive: true, force: true }));
-      let wallClock = 1000n;
       const start = async () => {
         const supervisor = await serveThixotrope(nodePowers, path, {
-          alarmNow: () => wallClock,
           ...(kind === 'ironhorse'
             ? {}
             : {
@@ -46,17 +47,40 @@ export const registerAlarmIntegration = (test, kind) => {
         t.teardown(() => client.close());
         return { supervisor, client };
       };
+      /**
+       * @param {{client: any}} host
+       * @param {string} source an expression over the reminder's status
+       */
+      const reminder = (host, source) =>
+        host.client.call(
+          'evaluate',
+          `E(inventory.get('reminders')).status().then(s => ${source})`,
+        );
+      /**
+       * @param {{client: any}} host
+       * @param {string} source
+       */
+      const waitFor = async (host, source) => {
+        for (let attempt = 0; attempt < 400; attempt += 1) {
+          // eslint-disable-next-line no-await-in-loop
+          if ((await reminder(host, source)) === 'true') return;
+          // eslint-disable-next-line no-await-in-loop
+          await setTimeout(50);
+        }
+        throw Error(`Reminder never satisfied: ${source}`);
+      };
+      // Arming travels through two vats and a process launch, which under
+      // Ironhorse takes seconds; the deadline must still be ahead when the
+      // host goes down.
+      const delay = kind === 'ironhorse' ? 10_000n : 4000n;
       let host = await start();
-      t.is(
-        await host.client.call('evaluate', "E(inventory.get('clock')).now()"),
-        '1000n',
-      );
       t.is(
         await host.client.call(
           'evaluate',
-          "E(inventory.get('clock')).__getMethodNames__().then(names => names.includes('fire') || names.includes('pending'))",
+          "E(inventory.get('clock')).__getMethodNames__().then(names => names.includes('now') || names.includes('fire'))",
         ),
         'false',
+        'the clock neither tells the time nor exposes the sink',
       );
       const { bundle } = await nodePowers.bundler.bundle(
         fileURLToPath(new URL('../examples/reminder.js', import.meta.url)),
@@ -64,88 +88,60 @@ export const registerAlarmIntegration = (test, kind) => {
       await host.client.call('install', 'reminders', bundle, [
         ['clock', 'clock'],
       ]);
+      const armedAt = BigInt(Date.now());
       t.is(
         await host.client.call(
           'evaluate',
-          "E(inventory.get('reminders')).arm(2000n, 'after restart')",
+          `E(inventory.get('reminders')).arm(${delay}n, 'after restart')`,
         ),
         'true',
       );
-      t.is(
-        await host.client.call(
-          'evaluate',
-          "E(inventory.get('reminders')).status().then(s => s.count === 0n && s.items[0].state === 'waiting')",
-        ),
-        'true',
+      await waitFor(host, "s.count === 0n && s.items[0].state === 'waiting'");
+      // The deadline is in the clock's hands before the host goes down.
+      let pending = 0;
+      for (let attempt = 0; attempt < 400 && pending !== 1; attempt += 1) {
+        // eslint-disable-next-line no-await-in-loop
+        ({ pending } = await host.client.call('alarmStatus'));
+        // eslint-disable-next-line no-await-in-loop
+        if (pending !== 1) await setTimeout(50);
+      }
+      t.is(pending, 1, 'the clock holds the alarm');
+      t.true(
+        BigInt(Date.now()) - armedAt < delay,
+        'the deadline is still ahead when the host goes down',
       );
       host.client.close();
       await host.supervisor.close();
-      // Advance only while the host is absent. Its replacement must rebuild
-      // its timer index and settle the original guest promise and listener.
-      wallClock = 3000n;
+      // The deadline passes while the host is absent. Its replacement must
+      // rebuild the adapter, re-arm the overdue alarm, and settle the
+      // original guest promise and listener.
+      const elapsed = BigInt(Date.now()) - armedAt;
+      if (elapsed < delay + 200n)
+        await setTimeout(Number(delay + 200n - elapsed));
       host = await start();
-      const waitForHostDelivery = async () => {
-        for (let attempt = 0; attempt < 200; attempt += 1) {
-          // Observe the host only; do not wake the reminder with status calls
-          // while waiting for the overdue alarm dispatch acknowledgment.
-          // eslint-disable-next-line no-await-in-loop
-          const status = await host.client.call('alarmStatus');
-          // Delivered and acknowledged: the table holds no row at all.
-          if (status.pending === 0 && status.retained === 0) return;
-          // eslint-disable-next-line no-await-in-loop
-          await setTimeout(30);
-        }
-        throw Error('Alarm scheduler did not finish delivery');
-      };
-      await waitForHostDelivery();
-      t.is(
-        await host.client.call(
-          'evaluate',
-          "E(inventory.get('reminders')).status().then(s => s.count === 1n && s.items[0].state === 'fired' && s.items[0].message === 'after restart' && s.items[0].firedAt === 3000n)",
-        ),
-        'true',
+      await waitFor(
+        host,
+        `s.count === 1n && s.items[0].state === 'fired' && s.items[0].message === 'after restart' && s.items[0].firedAt >= ${armedAt + delay}n`,
       );
+      t.like(await host.client.call('alarmStatus'), { pending: 0 });
       // Restart again with no pending alarm: the completed listener must not
       // fire again. Reuse the exact retained clock grant for a new alarm.
       host.client.close();
       await host.supervisor.close();
-      wallClock = 4000n;
       host = await start();
+      t.is(await reminder(host, 's.count === 1n'), 'true');
       t.is(
         await host.client.call(
           'evaluate',
-          "E(inventory.get('reminders')).status().then(s => s.count)",
-        ),
-        '1n',
-      );
-      t.is(
-        await host.client.call(
-          'evaluate',
-          "E(inventory.get('reminders')).arm(5000n, 'reuse')",
+          "E(inventory.get('reminders')).arm(100n, 'reuse')",
         ),
         'true',
       );
-      wallClock = 6000n;
-      // Registration travels through the guest clock; wait for its durable
-      // pending record before examining host completion of the second alarm.
-      for (let attempt = 0; attempt < 200; attempt += 1) {
-        // eslint-disable-next-line no-await-in-loop
-        const result = await host.client.call(
-          'evaluate',
-          "E(inventory.get('reminders')).status().then(s => s.count)",
-        );
-        if (result === '2n') break;
-        // eslint-disable-next-line no-await-in-loop
-        await setTimeout(30);
-      }
-      t.is(
-        await host.client.call(
-          'evaluate',
-          "E(inventory.get('reminders')).status().then(s => s.count === 2n && s.items.length === 2 && s.items[1].state === 'fired' && s.items[1].message === 'reuse' && s.items[1].firedAt === 6000n)",
-        ),
-        'true',
+      await waitFor(
+        host,
+        "s.count === 2n && s.items.length === 2 && s.items[1].state === 'fired' && s.items[1].message === 'reuse'",
       );
-      await waitForHostDelivery();
+      t.like(await host.client.call('alarmStatus'), { pending: 0 });
     },
   );
 };

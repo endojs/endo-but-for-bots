@@ -88,8 +88,11 @@ test.serial(
       '0',
     );
     const status = await host.client.call('status');
-    const managers = status.workers.filter(worker =>
-      worker.debugLabel?.startsWith('native:'),
+    // The two installed here; the clock the supervisor provides is native too.
+    const managers = status.workers.filter(
+      worker =>
+        worker.debugLabel?.startsWith('native:') &&
+        worker.debugLabel !== 'native:clock',
     );
     t.is(managers.length, 2);
     t.not(managers[0].workerId, managers[1].workerId);
@@ -321,7 +324,9 @@ test.serial('collection waits for native installation to finish', async t => {
       ...engine,
       acquireStore: async () => async () => {},
       start: async options => {
-        if (options.debugName.startsWith('native:')) {
+        // Only the installation under test; the clock the supervisor
+        // provides is a native manager vat too.
+        if (options.debugName.startsWith('native:resource')) {
           started.resolve(undefined);
           await gate.promise;
         }
@@ -378,28 +383,33 @@ test.serial(
     const path = await mkdtemp('/tmp/thix-native-sweep-');
     t.teardown(() => rm(path, { recursive: true, force: true }));
     let host = await serve(t, path);
+    const store = makeFsStore(powers, path);
+    // The clock the supervisor provides is a native resource with a bundle
+    // of its own, named by its launcher from the first start on.
+    const provided = store.listBundles();
+    t.is(provided.length, 1);
     await host.client.call(
       'installNative',
       'one',
       fileURLToPath(new URL('./fixtures/native-resource/', import.meta.url)),
     );
-    const store = makeFsStore(powers, path);
-    const [installed, ...others] = store.listBundles();
+    const others = store.listBundles().filter(d => !provided.includes(d));
+    t.is(others.length, 1);
+    const [installed] = others;
     t.regex(installed, /^[0-9a-f]{64}$/);
-    t.deepEqual(others, []);
     // A bundle nothing names: left by an installation interrupted before its
     // manager held the launcher, say.
     const orphan = store.putBundle(
       'module.exports = { make: () => undefined };\n',
     );
-    t.deepEqual(store.listBundles(), [installed, orphan].sort());
+    t.deepEqual(store.listBundles(), [...provided, installed, orphan].sort());
     host.client.close();
     await host.supervisor.close();
     host = await serve(t, path);
     t.deepEqual(
       store.listBundles(),
-      [installed],
-      'the orphan is freed and the named bundle kept',
+      [...provided, installed].sort(),
+      'the orphan is freed and the named bundles kept',
     );
     t.true(await host.client.call('remove', 'one'));
     host.client.close();
@@ -407,7 +417,7 @@ test.serial(
     host = await serve(t, path);
     t.deepEqual(
       store.listBundles(),
-      [],
+      provided,
       'a removed installation frees its bundle at the next start',
     );
   },
