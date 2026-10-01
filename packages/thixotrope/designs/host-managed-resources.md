@@ -352,9 +352,11 @@ by the rebuilt adapter, and the key's idempotence makes it exactly-once.
 
 Registrations clean themselves up at their deadline, so a retired workspace's
 alarms cost at most one timer each; no retirement route is needed.
-`now()` needs the adapter: the manager holds the adapter's presence through
-the keeper, so the kit should let `makeAdapter` take methods beyond the four
-of the protocol (`methods: { now }`), since a vat cannot read time itself.
+`now()` stays inside the protocol: it is `when(0n)`, a registration whose
+timer fires at once and whose `fire(key, at)` carries the host time, after
+which the manager closes the handle.
+One verb between the halves, register a desire and the adapter reports, is
+enough for a clock.
 
 Removed: everything section 7.1 removes, plus the host timer resource and the
 separate clock vat.
@@ -415,21 +417,34 @@ would run the hub's transport over a hub session.
    workspace the alarm facet (section 2).
    A missing or broken control resource is reinstalled at start, since it is
    the operator's only way in.
-3. A way for the manager to call the adapter beyond the protocol.
-   The adapter module has all of Node, so reading the time is no problem
-   there.
-   What is missing is the method: `makeAdapter` builds the adapter's facet
-   with exactly `bind`, `unbind`, `restore` and `keys`, and the manager
-   kit holds that facet through the keeper without exposing it to
-   `durable.js`.
-   So `now()` needs `makeAdapter` to accept extra methods for the facet
-   (`methods: { now }`) and the manager to expose a call on the current
-   incarnation (`manager.call('now')`, which provides through the keeper as
-   `register` does).
-4. Code upgrade of a native resource is out of scope here.
-   The identity pins the directory's digest, so a package upgrade that
-   changes `durable.js` cannot start under the old manager; what becomes of
-   that manager's registrations is not addressed by this note.
+3. Bundle the ephemeral module at install, as the durable one already is.
+   Today `installNative` bundles `durable.js` with `makeBundle` and
+   evaluates the bundle into the manager vat, so that half is detached from
+   the directory from the first moment.
+   `ephemeral.js` is not: the launcher's description carries the module URL
+   and the directory's identity, and the adapter process re-digests the
+   directory and imports the module from disk at every launch, which is why
+   the directory must stay present and unchanged, and why an edit refuses to
+   start.
+   Bundle `ephemeral.js` at install too, in the mapper's `cjs` format, which
+   turns Node builtins (`node:http`, `node:timers`) into exits that the
+   process resolves natively while the resource's own modules and the adapter
+   kit it imports are frozen in the bundle, as `makeManager` is already
+   frozen in the manager's heap.
+   Store the bundle in the state directory under its digest
+   (`bundles/<sha256>`), the content-addressed store that section 7.2 wants
+   for application bundles as well: manually persisted, immutable, verified
+   by digest on read, freed when the installation is removed.
+   The launcher's description then names the bundle digest instead of a
+   module URL and a directory, the process imports the bundle file, and the
+   digest check at launch replaces `describeNativeResource` there.
+   The installation's identity becomes the pair of bundle digests, so the
+   directory's real path drops out of it and a resource can be installed from
+   a pair of bundles without a directory at all.
+   An edited directory no longer matters, and a new version is a new
+   installation under a new name or after a removal, exactly as for an
+   application; what becomes of the old manager's registrations across that
+   is out of scope here.
 
 ### 8.4 The host afterwards
 
