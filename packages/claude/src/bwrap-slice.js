@@ -5,6 +5,10 @@
 // granted paths, and fresh `/tmp` and HOME, so the daemon socket has no path
 // inside it. The network namespace is shared because `claude` must reach the
 // inference API; a host loopback TCP listener stays reachable.
+//
+// `@endo/sandbox`'s `bwrap` driver is not reused: its argv assembler is not
+// exported, and it takes capability-shaped `Mount`s through a slice factory,
+// whereas this harness needs a `spawn` that runs host paths in place.
 
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -12,13 +16,7 @@ import path from 'node:path';
 import { makeError, X, q } from '@endo/errors';
 
 /** @import { SpawnOptions, ChildProcess } from 'node:child_process' */
-
-/**
- * @typedef {object} SliceMount
- * @property {'ro-bind' | 'bind' | 'symlink'} kind
- * @property {string} source - the host path, or the link text of a symlink.
- * @property {string} target - the path inside the slice.
- */
+/** @import { SliceMount } from './claude.types.js' */
 
 /** Host directories bound read-only (or recreated as symlinks) when present. */
 export const SYSTEM_DIRECTORIES = harden([

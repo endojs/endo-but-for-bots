@@ -48,3 +48,11 @@ export { INFER_RESULT_TYPES } from './src/results.js';
 export { runConfinedTurn, readClaudeVersion } from './src/confined-turn.js';
 export { makeLaunch, resultFromStream } from './src/launch.js';
 export { makeSpawnFilesPreparer } from './src/spawn-files.js';
+export {
+  makeBwrapSpawn,
+  assembleBwrapArgv,
+  resolveSystemMounts,
+  SYSTEM_DIRECTORIES,
+  SYSTEM_ETC_ENTRIES,
+  DEFAULT_SCRATCH_HOME,
+} from './src/bwrap-slice.js';
