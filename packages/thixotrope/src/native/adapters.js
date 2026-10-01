@@ -25,13 +25,12 @@ harden(MAX_EXIT_NOTICE_DELAY_MS);
 /**
  * Each native incarnation is an ephemeral session: no heap or input replay.
  *
- * A launcher is described by the code it launches, the digest of the stored
- * ephemeral bundle (`description.bundleDigest`), and the manager vat that
- * owns it (`description.workerId`), so the processes a manager started can
- * be closed with the manager: retiring a vat retires the host resources it
- * owns, and a native process is one. `bundlePath` says where the store
- * keeps a bundle, for the process to load; the process checks the digest
- * over the bytes it finds there.
+ * A launcher is bound to the manager vat that owns it (`workerId`), so the
+ * processes a manager started can be closed with the manager: retiring a
+ * vat retires the host resources bound to it, and a native process is one.
+ * Its key is the code it launches, the digest of the stored ephemeral
+ * bundle. `bundlePath` says where the store keeps a bundle, for the process
+ * to load; the process checks the digest over the bytes it finds there.
  *
  * An incarnation that exits on its own, rather than through `retire`, its
  * owner's retirement or shutdown, is reported to its owner through
@@ -117,10 +116,8 @@ export const makeNativeAdapters = (
 
   /** @param {any} description */
   const resource = description => {
-    const { workerId: owner, bundleDigest } =
-      /** @type {{ workerId?: string, bundleDigest?: string }} */ (
-        description ?? {}
-      );
+    const { workerId: owner, key: bundleDigest } =
+      /** @type {{ workerId?: string, key?: string }} */ (description ?? {});
     return Far('NativeAdapterLauncher', {
       help: () =>
         'create() starts a fresh native adapter from this installation.',

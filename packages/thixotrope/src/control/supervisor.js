@@ -87,8 +87,10 @@ import {
 // index beside it, and a workspace only resolves grants and holds values;
 // 11: workspaces are a table, each in a vat allocated under a key derived
 // from its name, and an installation belongs to a workspace or to the
-// daemon, whose clock every workspace is handed.
-const WORKSPACE_VERSION = 11;
+// daemon, whose clock every workspace is handed; 12: a host resource is
+// bound to a worker and a key, and a launcher's key is its ephemeral
+// bundle digest.
+const WORKSPACE_VERSION = 12;
 // The daemon takes allocation keys from the host alone, so a fixed key names
 // the host's own registry vat and nothing else can carry it.
 const REGISTRY_ALLOCATION_KEY = '00000000000000000000000000000001';

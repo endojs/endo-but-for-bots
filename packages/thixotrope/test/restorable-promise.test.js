@@ -72,7 +72,7 @@ test.serial(
     {
       const d1 = await makeDaemon(statePath);
       const worker = await d1.createWorker({ debugLabel: 'listener' });
-      const pending = d1.makeResource('pending-value', { id: 'a1' });
+      const pending = d1.makeResource('pending-value', { key: 'a1' });
       const watcher = await worker.evaluate(
         `
       (() => {
@@ -99,7 +99,7 @@ test.serial(
 
       // Re-seating the guest's export re-ran the factory for the same
       // description, so this process owns a fresh resolver for the same alarm.
-      const settle = settlers.get(JSON.stringify({ id: 'a1' }));
+      const settle = settlers.get(JSON.stringify({ key: 'a1' }));
       t.truthy(settle, 'the factory re-ran for the same description');
       settle?.('after-restart');
 

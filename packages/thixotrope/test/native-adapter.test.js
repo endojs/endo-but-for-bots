@@ -145,7 +145,7 @@ const makeExitFixture = () => {
   );
   /** @param {string} owner */
   const launcherOf = owner =>
-    adapters.resource({ bundleDigest: owner, workerId: owner });
+    adapters.resource({ key: owner, workerId: owner });
   return { adapters, fake, children, exits, launcherOf };
 };
 
@@ -155,7 +155,7 @@ test.serial(
     t.timeout(30_000);
     const { daemon, bundleDigest } = await makeNativeFixture(t);
     const launcher = /** @type {{create: () => Promise<any>}} */ (
-      daemon.makeResource('native-adapter', { bundleDigest })
+      daemon.makeResource('native-adapter', { key: bundleDigest })
     );
     const incarnation = await E(launcher).create();
     const root = await E(incarnation).getRoot();
@@ -213,7 +213,7 @@ test.serial(
     );
     t.teardown(() => adapters.shutdown());
     const launcherOf = owner =>
-      adapters.resource({ bundleDigest: owner, workerId: owner });
+      adapters.resource({ key: owner, workerId: owner });
     await launcherOf('a').create();
     await launcherOf('a').create();
     await launcherOf('b').create();
@@ -282,7 +282,7 @@ test.serial('native shutdown closes a process awaiting its root', async t => {
     },
   );
   t.teardown(() => adapters.shutdown());
-  const creating = adapters.resource({ bundleDigest: 'fixture' }).create();
+  const creating = adapters.resource({ key: 'fixture' }).create();
   const rejected = t.throwsAsync(() => creating, { message: /Root retired/ });
   await requested;
   await adapters.shutdown();
@@ -409,8 +409,8 @@ test.serial(
     worker.notifyOnStart(lifecycle);
     const launcher = /** @type {{create: () => Promise<any>}} */ (
       daemon.makeResource('native-adapter', {
-        bundleDigest,
         workerId: worker.workerId,
+        key: bundleDigest,
       })
     );
     const incarnation = await E(launcher).create();
@@ -443,7 +443,7 @@ test.serial(
     t.timeout(30_000);
     const { daemon, store, bundleDigest } = await makeNativeFixture(t);
     const launcher = /** @type {{create: () => Promise<any>}} */ (
-      daemon.makeResource('native-adapter', { bundleDigest })
+      daemon.makeResource('native-adapter', { key: bundleDigest })
     );
     const incarnation = await E(launcher).create();
     await E(incarnation).retire();

@@ -108,8 +108,8 @@ export const makeInstaller = ({
       allocating.delete(workerId);
       const manager = daemon.getWorker(workerId);
       const adapters = daemon.makeResource('native-adapter', {
-        bundleDigest: ephemeralDigest,
         workerId,
+        key: ephemeralDigest,
       });
       // A retry finds the manager already made more often than not; one
       // message asks before the transfer.
