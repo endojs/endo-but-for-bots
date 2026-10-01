@@ -93,3 +93,139 @@ fn a_walk_that_names_indices_at_every_level_matches_xs() {
         ),
     );
 }
+
+/// A walk over `json` whose reviver logs each visit, runs `mutate` with the
+/// holder as `this` when it visits key `0`, and returns `ret`.
+fn mutating_walk(json: &str, mutate: &str, ret: &str) -> String {
+    format!(
+        "{LOGGING_REVIVER} var v = JSON.parse('{json}', function (k, val, ctx) {{ \
+             logged(k, val, ctx); if (k === '0') {{ {mutate} }} return {ret}; }}); \
+         JSON.stringify(v) + ' | ' + log.join(' ')"
+    )
+}
+
+/// An Array holder is walked by the same snapshot of indices, so a sibling an
+/// earlier visit redefined is read as it now is: a data redefinition with the
+/// parsed value keeps its source, an accessor's value has none.
+#[test]
+fn an_array_holder_reads_a_sibling_an_earlier_reviver_redefined() {
+    assert_result(
+        &mutating_walk(
+            "[1,2,3]",
+            "Object.defineProperty(this, '2', { value: 3, writable: true, enumerable: true, \
+                 configurable: true });",
+            "val",
+        ),
+        "[1,2,3] | 0=1:1 1=2:2 2=3:3 =[1,2,3]:-",
+    );
+    assert_result(
+        &mutating_walk(
+            "[1,2,3]",
+            "Object.defineProperty(this, '2', { get: function () { return 33; }, \
+                 enumerable: true, configurable: true });",
+            "val",
+        ),
+        "[1,2,33] | 0=1:1 1=2:2 2=33:- =[1,2,33]:-",
+    );
+}
+
+/// A sibling deleted before its turn is still visited, as `undefined` and
+/// without a source, and the `undefined` the reviver returns deletes nothing
+/// more. Re-added with its parsed value it keeps its source; with another
+/// value it loses it.
+#[test]
+fn a_sibling_deleted_mid_walk_is_visited_as_undefined() {
+    for (json, mutate, expected) in [
+        (
+            "[1,2,3]",
+            "delete this[1];",
+            "[1,null,3] | 0=1:1 1=undefined:- 2=3:3 =[1,null,3]:-",
+        ),
+        (
+            r#"{"0":1,"1":2,"2":3}"#,
+            "delete this[1];",
+            r#"{"0":1,"2":3} | 0=1:1 1=undefined:- 2=3:3 ={"0":1,"2":3}:-"#,
+        ),
+        (
+            r#"{"0":1,"1":2,"2":3}"#,
+            "delete this[1]; this[1] = 2;",
+            r#"{"0":1,"1":2,"2":3} | 0=1:1 1=2:2 2=3:3 ={"0":1,"1":2,"2":3}:-"#,
+        ),
+        (
+            r#"{"0":1,"1":2,"2":3}"#,
+            "delete this[1]; this[1] = 5;",
+            r#"{"0":1,"1":5,"2":3} | 0=1:1 1=5:- 2=3:3 ={"0":1,"1":5,"2":3}:-"#,
+        ),
+    ] {
+        assert_result(&mutating_walk(json, mutate, "val"), expected);
+    }
+}
+
+/// A sibling made non-configurable and read-only before its turn refuses the
+/// write-back silently: a replacement value is dropped, and an `undefined`
+/// cannot delete it, so it is the one key left on the holder.
+#[test]
+fn a_sibling_made_read_only_mid_walk_keeps_its_value() {
+    let freeze_one = "Object.defineProperty(this, '1', { value: 2, writable: false, \
+         enumerable: true, configurable: false });";
+    assert_result(
+        &mutating_walk("[1,2,3]", freeze_one, "k === '1' ? 'changed' : val"),
+        "[1,2,3] | 0=1:1 1=2:2 2=3:3 =[1,2,3]:-",
+    );
+    assert_result(
+        &mutating_walk(
+            r#"{"0":1,"1":2}"#,
+            freeze_one,
+            "k === '1' ? 'changed' : val",
+        ),
+        r#"{"0":1,"1":2} | 0=1:1 1=2:2 ={"0":1,"1":2}:-"#,
+    );
+    assert_result(
+        &mutating_walk(r#"{"0":1,"1":2}"#, freeze_one, "undefined"),
+        r#"undefined | 0=1:1 1=2:2 ={"1":2}:-"#,
+    );
+}
+
+/// A sibling promoted to an accessor and turned back into data with its
+/// parsed value before its turn keeps its source, as does one redefined
+/// non-enumerable: the snapshot still lists it.
+#[test]
+fn a_sibling_redefined_and_restored_mid_walk_keeps_its_source() {
+    assert_result(
+        &mutating_walk(
+            r#"{"0":1,"1":2,"9":9}"#,
+            "Object.defineProperty(this, '1', { get: function () { return 22; }, \
+                 enumerable: true, configurable: true }); \
+             Object.defineProperty(this, '1', { value: 2, writable: true, enumerable: true, \
+                 configurable: true });",
+            "val",
+        ),
+        r#"{"0":1,"1":2,"9":9} | 0=1:1 1=2:2 9=9:9 ={"0":1,"1":2,"9":9}:-"#,
+    );
+    assert_result(
+        &mutating_walk(
+            r#"{"0":1,"1":2,"2":3}"#,
+            "Object.defineProperty(this, '1', { value: 2, writable: true, enumerable: false, \
+                 configurable: true });",
+            "val",
+        ),
+        r#"{"0":1,"1":2,"2":3} | 0=1:1 1=2:2 2=3:3 ={"0":1,"1":2,"2":3}:-"#,
+    );
+}
+
+/// In a nested holder, object or Array, a sibling replaced by a
+/// non-enumerable getter is read through the getter and written back as an
+/// ordinary enumerable data property, so the parent sees it.
+#[test]
+fn a_nested_sibling_replaced_by_a_hidden_getter_is_written_back() {
+    let hide_one = "Object.defineProperty(this, '1', { get: function () { return 'g'; }, \
+         enumerable: false, configurable: true });";
+    assert_result(
+        &mutating_walk(r#"{"a":{"0":1,"1":2}}"#, hide_one, "val"),
+        r#"{"a":{"0":1,"1":"g"}} | 0=1:1 1="g":- a={"0":1,"1":"g"}:- ={"a":{"0":1,"1":"g"}}:-"#,
+    );
+    assert_result(
+        &mutating_walk(r#"{"a":[1,2]}"#, hide_one, "val"),
+        r#"{"a":[1,"g"]} | 0=1:1 1="g":- a=[1,"g"]:- ={"a":[1,"g"]}:-"#,
+    );
+}

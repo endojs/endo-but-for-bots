@@ -177,6 +177,101 @@ fn a_proxy_level_runs_its_traps() {
             r#"var log = []; var t = {a: 1, b: 2}; var p = new Proxy(t, {ownKeys: function (t) { log.push('keys'); return Reflect.ownKeys(t); }, getOwnPropertyDescriptor: function (t, k) { log.push('gopd' + k); return Reflect.getOwnPropertyDescriptor(t, k); }, getPrototypeOf: function (t) { log.push('proto'); return Reflect.getPrototypeOf(t); }}); for (var k in p) log.push('body' + k); log.join()"#,
             r#"keys,gopda,bodya,gopdb,bodyb,proto"#,
         ),
+        // A Proxy level is listed only when its turn comes. V8 lists every level
+        // first: `keys,proto,bodyc,gopda,bodya,gopdb,bodyb`.
+        (
+            "prototype_trap_order",
+            r#"var log = []; var t = {a: 1, b: 2}; var p = new Proxy(t, {ownKeys: function (t) { log.push('keys'); return Reflect.ownKeys(t); }, getOwnPropertyDescriptor: function (t, k) { log.push('gopd' + k); return Reflect.getOwnPropertyDescriptor(t, k); }, getPrototypeOf: function (t) { log.push('proto'); return Reflect.getPrototypeOf(t); }}); var o = Object.create(p); o.c = 1; for (var k in o) log.push('body' + k); log.join()"#,
+            r#"bodyc,keys,gopda,bodya,gopdb,bodyb,proto"#,
+        ),
+        // A key whose descriptor the trap denies is passed over, on the receiver
+        // or on a prototype level.
+        (
+            "descriptor_undefined",
+            r#"var p = new Proxy({a: 1, b: 2}, {getOwnPropertyDescriptor: function (t, k) { return k === 'a' ? undefined : Reflect.getOwnPropertyDescriptor(t, k); }}); var r = []; for (var k in p) r.push(k); r.join()"#,
+            r#"b"#,
+        ),
+        (
+            "descriptor_undefined_on_prototype",
+            r#"var p = new Proxy({a: 1, b: 2}, {getOwnPropertyDescriptor: function (t, k) { return k === 'a' ? undefined : Reflect.getOwnPropertyDescriptor(t, k); }}); var o = Object.create(p); var r = []; for (var k in o) r.push(k); r.join()"#,
+            r#"b"#,
+        ),
+        (
+            "descriptor_not_enumerable",
+            r#"var p = new Proxy({a: 1}, {getOwnPropertyDescriptor: function (t, k) { return {value: 1, enumerable: false, configurable: true}; }}); var r = []; for (var k in p) r.push(k); r.join() + '|'"#,
+            r#"|"#,
+        ),
+        // A symbol key is never yielded, and the trap's own key order is kept.
+        (
+            "symbol_and_unknown_keys",
+            r#"var s = Symbol('s'); var p = new Proxy({}, {ownKeys: function () { return ['a', s, 'b']; }, getOwnPropertyDescriptor: function (t, k) { return {value: 1, enumerable: true, configurable: true}; }}); var r = []; for (var k in p) r.push(k); r.join()"#,
+            r#"a,b"#,
+        ),
+        (
+            "own_keys_order",
+            r#"var p = new Proxy({a: 1, b: 2}, {ownKeys: function () { return ['b', 'a', 'zz']; }}); var r = []; for (var k in p) r.push(k); r.join()"#,
+            r#"b,a"#,
+        ),
+        (
+            "hidden_by_a_non_enumerable_own_key",
+            r#"var p = new Proxy({b: 1}, {}); var o = Object.create(p); o.a = 1; Object.defineProperty(o, 'b', {value: 1, enumerable: false}); var r = []; for (var k in o) r.push(k); r.join()"#,
+            r#"a"#,
+        ),
+        (
+            "key_added_to_target_mid_loop",
+            r#"var t = {a: 1}; var p = new Proxy(t, {}); var r = []; for (var k in p) { r.push(k); t.b = 1; } r.join()"#,
+            r#"a"#,
+        ),
+        (
+            "array_target",
+            r#"var r = []; for (var k in new Proxy([1, 2], {})) r.push(k); r.join()"#,
+            r#"0,1"#,
+        ),
+        // A trap's throw propagates out of the loop when that level's turn comes.
+        // V8 answers `RangeError` for the second and third, having listed every
+        // level before the first iteration.
+        (
+            "throwing_own_keys",
+            r#"var p = new Proxy({}, {ownKeys: function () { throw new RangeError('k'); }}); try { for (var k in p); 'no' } catch (e) { e.constructor.name }"#,
+            r#"RangeError"#,
+        ),
+        (
+            "throwing_own_keys_on_prototype",
+            r#"var p = new Proxy({}, {ownKeys: function () { throw new RangeError('k'); }}); var o = Object.create(p); o.x = 1; var r = []; try { for (var k in o) r.push(k); } catch (e) { r.push(e.constructor.name); } r.join()"#,
+            r#"x,RangeError"#,
+        ),
+        (
+            "throwing_get_prototype_of",
+            r#"var p = new Proxy({a: 1}, {getPrototypeOf: function () { throw new RangeError('p'); }}); var r = []; try { for (var k in p) r.push(k); } catch (e) { r.push(e.constructor.name); } r.join()"#,
+            r#"a,RangeError"#,
+        ),
+        (
+            "throwing_descriptor",
+            r#"var p = new Proxy({a: 1}, {getOwnPropertyDescriptor: function () { throw new RangeError('d'); }}); var r = []; try { for (var k in p) r.push(k); } catch (e) { r.push(e.constructor.name); } r.join()"#,
+            r#"RangeError"#,
+        ),
+        // A revoked level, or one whose trap reports a key twice, throws a
+        // TypeError at its turn.
+        (
+            "revoked",
+            r#"var o = Proxy.revocable({}, {}); o.revoke(); try { for (var k in o.proxy); 'no' } catch (e) { e.constructor.name }"#,
+            r#"TypeError"#,
+        ),
+        (
+            "revoked_mid_loop_on_the_chain",
+            r#"var o = Proxy.revocable({a: 1}, {}); var c = Object.create(o.proxy); c.x = 1; var r = []; try { for (var k in c) { r.push(k); o.revoke(); } } catch (e) { r.push(e.constructor.name); } r.join()"#,
+            r#"x,TypeError"#,
+        ),
+        (
+            "duplicate_own_keys",
+            r#"var p = new Proxy({}, {ownKeys: function () { return ['a', 'a']; }}); try { for (var k in p); 'no' } catch (e) { e.constructor.name }"#,
+            r#"TypeError"#,
+        ),
+        (
+            "duplicate_own_keys_on_prototype",
+            r#"var p = new Proxy({}, {ownKeys: function () { return ['a', 'a']; }}); var o = Object.create(p); try { for (var k in o); 'no' } catch (e) { e.constructor.name }"#,
+            r#"TypeError"#,
+        ),
     ]);
 }
 
@@ -201,6 +296,11 @@ fn a_key_deleted_before_its_turn_is_skipped() {
         (
             "arguments",
             r#"function f() { var r = []; for (var k in arguments) { r.push(k); delete arguments[1]; } return r.join(); } f(1, 2, 3)"#,
+            r#"0,2"#,
+        ),
+        (
+            "strict_arguments",
+            r#"function f(a, b) { 'use strict'; var r = []; for (var k in arguments) { r.push(k); delete arguments[1]; } return r.join(); } f(1, 2, 3)"#,
             r#"0,2"#,
         ),
         (
@@ -305,6 +405,113 @@ fn every_value_can_be_enumerated() {
             "symbol",
             r#"Symbol.prototype.z = 1; var r = []; for (var k in Symbol()) r.push(k); r.join()"#,
             r#"z"#,
+        ),
+    ]);
+}
+
+/// Every kind of object lists its own keys, then each prototype's in turn:
+/// an instance's class prototype, a Map's or a TypedArray's intrinsic
+/// prototype, and no prototype at all. A frozen object enumerates as any
+/// other, and a symbol key is never yielded.
+#[test]
+fn every_object_kind_lists_its_own_level_first() {
+    check(&[
+        (
+            "own_key_added_mid_loop",
+            r#"var o = {a: 1}; var r = []; for (var k in o) { r.push(k); o.b = 2; } r.join()"#,
+            r#"a"#,
+        ),
+        (
+            "class_instance",
+            r#"class C { constructor() { this.y = 1; this[1] = 1; } m() {} } C.prototype.z = 1; var r = []; for (var k in new C()) r.push(k); r.join()"#,
+            r#"1,y,z"#,
+        ),
+        (
+            "map_expando",
+            r#"var m = new Map(); m.a = 1; Map.prototype.zz = 1; var r = []; for (var k in m) r.push(k); delete Map.prototype.zz; r.join()"#,
+            r#"a,zz"#,
+        ),
+        (
+            "typed_array_expando",
+            r#"var t = new Uint8Array(2); t.x = 1; Object.getPrototypeOf(Uint8Array.prototype).q = 1; var r = []; for (var k in t) r.push(k); delete Object.getPrototypeOf(Uint8Array.prototype).q; r.join()"#,
+            r#"0,1,x,q"#,
+        ),
+        (
+            "frozen",
+            r#"var o = Object.freeze({a: 1, b: 2}); var r = []; for (var k in o) r.push(k); r.join()"#,
+            r#"a,b"#,
+        ),
+        (
+            "symbol_keys_skipped",
+            r#"var s = Symbol(); var o = {[s]: 1, a: 1}; var r = []; for (var k in o) r.push(typeof k); r.join()"#,
+            r#"string"#,
+        ),
+        (
+            "null_prototype",
+            r#"var o = Object.create(null); o.a = 1; var r = []; for (var k in o) r.push(k); r.join()"#,
+            r#"a"#,
+        ),
+    ]);
+}
+
+/// Every loop head binds each key as an ordinary assignment or binding
+/// would, and every jump out of or past an iteration leaves the enumerator
+/// in step.
+#[test]
+fn every_loop_head_and_jump_steps_the_enumerator() {
+    check(&[
+        (
+            "let_closures",
+            r#"var r = []; for (let k in {a: 1, b: 2}) r.push(function () { return k; }); r.map(function (f) { return f(); }).join()"#,
+            r#"a,b"#,
+        ),
+        (
+            "const_closures",
+            r#"var r = []; for (const k in {a: 1, b: 2}) r.push(function () { return k; }); r.map(function (f) { return f(); }).join()"#,
+            r#"a,b"#,
+        ),
+        (
+            "member_and_pattern_heads",
+            r#"var o = {}; var r = []; for (o.p in {a: 1, b: 2}) r.push(o.p); var x = {}; for ([x.q] in {ab: 1}) r.push(x.q); r.join()"#,
+            r#"a,b,a"#,
+        ),
+        (
+            "array_pattern_head",
+            r#"var r = []; for (var [a, b] in {xy: 1, zw: 2}) r.push(b + a); r.join()"#,
+            r#"yx,wz"#,
+        ),
+        (
+            "object_pattern_head",
+            r#"var r = []; for (let {length} in {abc: 1, d: 2}) r.push(length); r.join()"#,
+            r#"3,1"#,
+        ),
+        (
+            "continue",
+            r#"var r = []; for (var k in {a: 1, b: 2, c: 3}) { if (k === 'b') continue; r.push(k); } r.join()"#,
+            r#"a,c"#,
+        ),
+        (
+            "labelled_continue",
+            r#"var o = {a: 1, b: 2}; var r = []; outer: for (var i = 0; i < 2; i++) { for (var k in o) { r.push(i + k); continue outer; } } r.join()"#,
+            r#"0a,1a"#,
+        ),
+        (
+            "labelled_continue_between_for_ins",
+            r#"var r = []; outer: for (var k in {a: 1, b: 2}) { for (var j in {x: 1, y: 2}) { if (j === 'y') continue outer; r.push(k + j); } } r.join()"#,
+            r#"ax,bx"#,
+        ),
+        (
+            "labelled_break",
+            r#"var r = []; outer: for (var k in {a: 1, b: 2}) { for (var j in {x: 1, y: 2}) { r.push(k + j); break outer; } } r.join()"#,
+            r#"ax"#,
+        ),
+        // A `return` or a `throw` out of the loop closes the enumerator, as
+        // `return_on_break` does for a `break`. V8 has no enumerator to close and
+        // answers 0.
+        (
+            "return_and_throw_close_the_enumerator",
+            r#"var IP = Object.getPrototypeOf(Object.getPrototypeOf([][Symbol.iterator]())); var n = 0; IP.return = function () { n++; return {}; }; function f() { for (var k in {a: 1}) return k; } f(); try { for (var k in {a: 1}) throw 1; } catch (e) {} delete IP.return; n"#,
+            r#"2"#,
         ),
     ]);
 }

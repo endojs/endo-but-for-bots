@@ -80,6 +80,15 @@ check("Float64Array", function () { class C extends Float64Array {} return [C, n
 check("Compartment", function () { class C extends Compartment {} return [C, new C()]; }, function (o) { return o.evaluate("40 + 2"); });
 check("Function", function () { class C extends Function {} return [C, new C("return 1")]; }, function (o) { return o(); });
 check("GeneratorFunction", function () { var G = Object.getPrototypeOf(function* () {}).constructor; class C extends G {} return [C, new C("yield 1")]; }, function (o) { return o().next().value; });
+[Int8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float32Array, BigInt64Array, BigUint64Array].forEach(function (T) { check(T.name, function () { class C extends T {} return [C, new C(2)]; }, function (o) { return o.length + "/" + o.byteLength; }); });
+check("AsyncFunction", function () { var F = Object.getPrototypeOf(async function () {}).constructor; class C extends F {} return [C, new C("return 1")]; }, function (o) { return typeof o().then; });
+check("AsyncGeneratorFunction", function () { var F = Object.getPrototypeOf(async function* () {}).constructor; class C extends F {} return [C, new C("yield 1")]; }, function (o) { return typeof o().next; });
+check("Object", function () { class C extends Object {} return [C, new C()]; }, function (o) { return typeof o; });
+check("Date", function () { class C extends Date {} return [C, new C(0)]; }, function (o) { return o.getTime(); });
+check("RegExp", function () { class C extends RegExp {} return [C, new C("a", "g")]; }, function (o) { return o.test("a") + o.flags; });
+check("Promise", function () { class C extends Promise {} return [C, new C(function (r) { r(1); })]; }, function (o) { return Promise.prototype.then.call(o, function () {}) instanceof Promise; });
+check("AsyncDisposableStack", function () { class C extends AsyncDisposableStack {} return [C, new C()]; }, function (o) { return o.disposed; });
+check("Iterator", function () { class C extends Iterator {} return [C, new C()]; }, function (o) { return typeof o.map; });
 out.join("\n")"#
         ),
         r#"Boolean:true,true,true
@@ -108,7 +117,24 @@ Uint8Array:true,true,2/5
 Float64Array:true,true,1.5
 Compartment:true,true,42
 Function:true,true,1
-GeneratorFunction:true,true,1"#,
+GeneratorFunction:true,true,1
+Int8Array:true,true,2/2
+Uint8ClampedArray:true,true,2/2
+Int16Array:true,true,2/4
+Uint16Array:true,true,2/4
+Int32Array:true,true,2/8
+Uint32Array:true,true,2/8
+Float32Array:true,true,2/8
+BigInt64Array:true,true,2/16
+BigUint64Array:true,true,2/16
+AsyncFunction:true,true,function
+AsyncGeneratorFunction:true,true,function
+Object:true,true,object
+Date:true,true,0
+RegExp:true,true,trueg
+Promise:true,true,true
+AsyncDisposableStack:true,true,false
+Iterator:true,true,function"#,
     );
 }
 
@@ -156,6 +182,94 @@ R-AggregateError:true,true,object
 N-AggregateError:true,true,object
 R-TypeError:true,true,object
 N-TypeError:true,true,object"#,
+    );
+}
+
+/// The same retargeting, and the same fallback, for every TypedArray and the
+/// natives the table above leaves out.
+#[test]
+fn reflect_construct_retargets_every_typed_array_and_the_remaining_natives() {
+    assert_eq!(
+        run(
+            r#"function R(base, args) { function F() {} F.prototype = Object.create(base.prototype); return [F, Reflect.construct(base, args || [], F)]; }
+function N(base, args) { function F() {} F.prototype = 1; return [base, Reflect.construct(base, args || [], F)]; }
+var cases = [["Int8Array", Int8Array, [1]], ["Uint8ClampedArray", Uint8ClampedArray, [1]], ["Int16Array", Int16Array, [1]], ["Uint16Array", Uint16Array, [1]], ["Int32Array", Int32Array, [1]], ["Uint32Array", Uint32Array, [1]], ["Float32Array", Float32Array, [1]], ["Float64Array", Float64Array, [1]], ["BigInt64Array", BigInt64Array, [1]], ["BigUint64Array", BigUint64Array, [1]], ["Date", Date, [0]], ["RegExp", RegExp, ["a"]], ["Promise", Promise, [function () {}]], ["Function", Function, ["return 1"]], ["WeakSet", WeakSet], ["Object", Object]];
+for (var i = 0; i < cases.length; i++) {
+  (function (c) {
+    check("R-" + c[0], function () { return R(c[1], c[2]); }, function (o) { return typeof o; });
+    // A non-object `newTarget.prototype` falls back to the intrinsic.
+    check("N-" + c[0], function () { return N(c[1], c[2]); }, function (o) { return typeof o; });
+  })(cases[i]);
+}
+out.join("\n")"#
+        ),
+        r#"R-Int8Array:true,true,object
+N-Int8Array:true,true,object
+R-Uint8ClampedArray:true,true,object
+N-Uint8ClampedArray:true,true,object
+R-Int16Array:true,true,object
+N-Int16Array:true,true,object
+R-Uint16Array:true,true,object
+N-Uint16Array:true,true,object
+R-Int32Array:true,true,object
+N-Int32Array:true,true,object
+R-Uint32Array:true,true,object
+N-Uint32Array:true,true,object
+R-Float32Array:true,true,object
+N-Float32Array:true,true,object
+R-Float64Array:true,true,object
+N-Float64Array:true,true,object
+R-BigInt64Array:true,true,object
+N-BigInt64Array:true,true,object
+R-BigUint64Array:true,true,object
+N-BigUint64Array:true,true,object
+R-Date:true,true,object
+N-Date:true,true,object
+R-RegExp:true,true,object
+N-RegExp:true,true,object
+R-Promise:true,true,object
+N-Promise:true,true,object
+R-Function:true,true,function
+N-Function:true,true,function
+R-WeakSet:true,true,object
+N-WeakSet:true,true,object
+R-Object:true,true,object
+N-Object:true,true,object"#,
+    );
+}
+
+/// A bound function has no `prototype` of its own, so a native constructed
+/// with one as `newTarget` reads `undefined` there and falls back to its own
+/// intrinsic prototype.
+#[test]
+fn a_new_target_without_a_prototype_falls_back_to_the_intrinsic() {
+    assert_eq!(
+        run(
+            r#"var natives = [[Uint8Array, [1]], [Map], [Error, ["m"]], [Array, [2]], [Date, [0]], [Promise, [function () {}]], [RegExp, ["a"]], [Function, ["return 1"]], [ArrayBuffer, [1]], [DataView, [new ArrayBuffer(1)]], [Set], [WeakMap], [Boolean, [1]], [Number, [1]], [String, ["a"]], [Float64Array, [1]], [TypeError], [AggregateError, [[]]], [DisposableStack]];
+natives.forEach(function (c) {
+  check(c[0].name, function () { var B = function () {}.bind(null); return [c[0], Reflect.construct(c[0], c[1] || [], B)]; }, function (o) { return typeof o; });
+});
+out.join("\n")"#
+        ),
+        r#"Uint8Array:true,true,object
+Map:true,true,object
+Error:true,true,object
+Array:true,true,object
+Date:true,true,object
+Promise:true,true,object
+RegExp:true,true,object
+Function:true,true,function
+ArrayBuffer:true,true,object
+DataView:true,true,object
+Set:true,true,object
+WeakMap:true,true,object
+Boolean:true,true,object
+Number:true,true,object
+String:true,true,object
+Float64Array:true,true,object
+TypeError:true,true,object
+AggregateError:true,true,object
+DisposableStack:true,true,object"#,
     );
 }
 

@@ -55,6 +55,16 @@ fn an_array_iterator_result_has_value_and_done() {
         "Object.getOwnPropertyNames([1][Symbol.iterator]().next()).join('|')",
         "value|done",
     );
+    // An arguments object iterates with the Array iterator, sloppy or strict.
+    assert_result(
+        "JSON.stringify((function () { return arguments[Symbol.iterator]().next(); })(4))",
+        r#"{"value":4,"done":false}"#,
+    );
+    assert_result(
+        "Object.keys((function () { 'use strict'; \
+             return arguments[Symbol.iterator]().next(); })(4)).join('|')",
+        "value|done",
+    );
 }
 
 #[test]
@@ -90,6 +100,18 @@ fn collection_regexp_and_generator_results_have_value_and_done() {
     assert_result(
         "function* g() {} Object.keys(g().return(5)).join('|') + JSON.stringify(g().next())",
         r#"value|done{"done":true}"#,
+    );
+    // Every Map and Set iterator kind, by name and by `@@iterator`.
+    assert_result(
+        "JSON.stringify(new Set([3]).entries().next()) \
+         + JSON.stringify(new Map([[1, 2]])[Symbol.iterator]().next()) \
+         + JSON.stringify(new Set([3]).keys().next())",
+        r#"{"value":[3,3],"done":false}{"value":[1,2],"done":false}{"value":3,"done":false}"#,
+    );
+    assert_result(
+        "JSON.stringify(new Map([[1, 2]]).values().next()) \
+         + JSON.stringify(new Set([3])[Symbol.iterator]().next())",
+        r#"{"value":2,"done":false}{"value":3,"done":false}"#,
     );
 }
 
@@ -159,5 +181,92 @@ fn an_async_generator_result_has_value_and_done() {
          drain(); log",
         "{\"value\":1,\"done\":false},value:true,true,true done:true,true,true,\
          {\"value\":2,\"done\":true},value:true,true,true done:true,true,true,true,true",
+    );
+}
+
+/// A TypedArray iterates with the Array iterator's builder, for each of its
+/// three kinds and `@@iterator`, and an exhausted one still answers both
+/// keys. No program here spells either name.
+#[test]
+fn a_typed_array_iterator_result_has_value_and_done() {
+    assert_result(
+        "JSON.stringify(new Uint8Array([5]).values().next()) \
+         + JSON.stringify(new Uint8Array([5]).keys().next()) \
+         + JSON.stringify(new Uint8Array([5]).entries().next())",
+        r#"{"value":5,"done":false}{"value":0,"done":false}{"value":[0,5],"done":false}"#,
+    );
+    assert_result(
+        "JSON.stringify(new Float64Array([1.5])[Symbol.iterator]().next()) \
+         + Object.keys(new Int16Array(0).values().next()).join('|')",
+        r#"{"value":1.5,"done":false}value|done"#,
+    );
+}
+
+/// Every Iterator helper builds its own result, and so do `take(0)`, a
+/// `return()` before the first step and a helper past its end; `Iterator.from`
+/// hands back the Array and String iterators. No program here spells either
+/// name.
+#[test]
+fn an_iterator_helper_result_has_value_and_done() {
+    assert_result(
+        "JSON.stringify([1, 2].values().map(function (x) { return x * 2; }).next())",
+        r#"{"value":2,"done":false}"#,
+    );
+    assert_result(
+        "JSON.stringify([1, 2].values().filter(function (x) { return x === 1; }).next()) \
+         + JSON.stringify([1, 2].values().take(1).next()) \
+         + JSON.stringify([1, 2].values().drop(1).next()) \
+         + JSON.stringify([1, 2].values().flatMap(function (x) { return [x]; }).next())",
+        concat!(
+            r#"{"value":1,"done":false}{"value":1,"done":false}"#,
+            r#"{"value":2,"done":false}{"value":1,"done":false}"#,
+        ),
+    );
+    assert_result(
+        "JSON.stringify([[1, 2]].values().flatMap(function (x) { return x; }).drop(1).next())",
+        r#"{"value":2,"done":false}"#,
+    );
+    assert_result(
+        "JSON.stringify([1].values().take(0).next()) \
+         + JSON.stringify([1].values().map(function (x) { return x; }).return())",
+        r#"{"done":true}{"done":true}"#,
+    );
+    assert_result(
+        "Object.keys([1].values().take(0).next()).join('|') + ' ' \
+         + Object.keys([1].values().map(function (x) { return x; }).return()).join('|') + ' ' \
+         + Object.keys([].values().filter(function () { return true; }).next()).join('|')",
+        "value|done value|done value|done",
+    );
+    assert_result(
+        "var it = [1].values().map(function (x) { return x; }); it.next(); \
+         JSON.stringify(it.next())",
+        r#"{"done":true}"#,
+    );
+    assert_result(
+        "JSON.stringify(Iterator.from([1]).next()) + JSON.stringify(Iterator.from('ab').next())",
+        r#"{"value":1,"done":false}{"value":"a","done":false}"#,
+    );
+}
+
+/// A generator that delegates with `yield*` answers both keys from a step
+/// and from a `throw()` the delegation catches, and a generator a `throw()`
+/// closed before it started answers from its next step. `yield*` compiles
+/// both names, so these pin the result's shape on those paths rather than
+/// the interning.
+#[test]
+fn a_delegating_generator_result_has_value_and_done() {
+    assert_result(
+        "function* g() { yield* [7]; } JSON.stringify(g().next())",
+        r#"{"value":7,"done":false}"#,
+    );
+    assert_result(
+        "function* g() { try { yield* [1]; } catch (e) {} } var it = g(); it.next(); \
+         var r = it.throw(5); JSON.stringify(r) + ' ' + Object.keys(r).join('|')",
+        r#"{"done":true} value|done"#,
+    );
+    assert_result(
+        "function* g() {} var it = g(); var r; try { it.throw(5); } catch (e) { r = e; } \
+         String(r) + JSON.stringify(it.next())",
+        r#"5{"done":true}"#,
     );
 }
