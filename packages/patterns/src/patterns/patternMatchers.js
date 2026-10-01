@@ -2306,12 +2306,10 @@ const makePatternKit = () => {
   });
 };
 
-// Only include those whose meaning is independent of an imputed sort order
-// of remotables, or of encoding of passable as sortable strings. Thus,
-// getRankCover is omitted. To get one, you'd need to instantiate
-// `makePatternKit()` yourself. Since there are currently no external
-// uses of `getRankCover`, for clarity during development, `makePatternKit`
-// is not currently exported.
+// `getRankCover` is exported too. It takes the `encodePassable` that imputes
+// a sort order as an argument and rejects any pattern whose pass style has no
+// rank, such as a SturdyRef, with an error naming that pass style.
+// `makePatternKit` is not exported.
 export const {
   confirmMatches,
   confirmLabeledMatches,
