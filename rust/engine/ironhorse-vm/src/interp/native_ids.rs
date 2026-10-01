@@ -518,6 +518,9 @@ pub enum NativeMethod {
     /// yield the next `{value, done}` (mutating and returning the iterator's
     /// reused result object).
     ArrayIteratorNext,
+    /// The for-in enumerator's `next` (`fx_Enumerator_prototype_next`), owned
+    /// by its private prototype.
+    EnumeratorNext,
     /// A `Math.*` static (`xsMath.c`), dispatched ignoring the receiver.
     Math(MathId),
     /// `String.prototype.charCodeAt(pos)` (`fx_String_prototype_charCodeAt`):

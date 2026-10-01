@@ -4166,6 +4166,13 @@ pub(crate) fn decode_iterators(p: &[u8]) -> Result<Vec<IteratorRow>, SnapshotErr
                 "iterator cursors: for-in cursor past its key list",
             ));
         }
+        // A for-in cursor always names the prototype level it steps (even
+        // `for (k in null)` names `%Object.prototype%`) and its result.
+        if kind == 3 && (iterable == u32::MAX || result == u32::MAX) {
+            return Err(SnapshotError::Corrupt(
+                "iterator cursors: for-in cursor without its level or result",
+            ));
+        }
         if kind == 8
             && iterator_from_wrapper_malformed(
                 iterable,
@@ -5913,11 +5920,25 @@ mod tests {
         assert!(decode_iterators(&encode_iterators(&[forin.clone()])).is_ok());
         forin.index = 2;
         assert_eq!(
-            decode_iterators(&encode_iterators(&[forin])),
+            decode_iterators(&encode_iterators(&[forin.clone()])),
             Err(SnapshotError::Corrupt(
                 "iterator cursors: for-in cursor past its key list"
             ))
         );
+        forin.index = 1;
+        for field in 0..2 {
+            let mut invalid = forin.clone();
+            match field {
+                0 => invalid.iterable = u32::MAX,
+                _ => invalid.result = u32::MAX,
+            }
+            assert_eq!(
+                decode_iterators(&encode_iterators(&[invalid])),
+                Err(SnapshotError::Corrupt(
+                    "iterator cursors: for-in cursor without its level or result"
+                ))
+            );
+        }
         // Reset each independent malformed wrapper component from its valid row.
         for field in 0..6 {
             let mut invalid = row(8);

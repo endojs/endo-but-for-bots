@@ -3751,9 +3751,9 @@ impl Interp {
     /// string cursor past its text or splitting a UTF-16 unit, or a
     /// RegExp String Iterator with invalid mode bits or malformed UTF-16, a
     /// lazy Iterator helper missing its underlying iterator or its holder
-    /// array, or
-    /// a for-in cursor past its key list or holding a key id outside the
-    /// restored name table.
+    /// array, or a for-in cursor without the level it steps or its result,
+    /// past its key list, or holding a key id outside the restored name
+    /// table.
     pub(super) fn restore_iterators(&mut self, rows: Vec<IteratorRow>) -> Result<(), RestoreError> {
         const ROW: &str = "Iterators";
         self.validate_restore_owners(rows.iter().map(|row| row.owner), ROW)?;
@@ -3837,7 +3837,14 @@ impl Interp {
                     }
                 }
                 3 => {
-                    if r.index as usize > r.enum_keys.len() {
+                    // The level being stepped is always an object: even
+                    // `for (k in null)` names `%Object.prototype%`, and
+                    // `enumerator_next` reads its own properties and writes
+                    // its result.
+                    if r.iterable == crate::value::SlotIndex::NULL.0
+                        || r.result == crate::value::SlotIndex::NULL.0
+                        || r.index as usize > r.enum_keys.len()
+                    {
                         return Err(RestoreError {
                             row: ROW,
                             reason: "malformed iterator state",
@@ -3898,6 +3905,7 @@ impl Interp {
                     done: r.done,
                     enum_keys: std::rc::Rc::new(r.enum_keys),
                     str_bytes: std::rc::Rc::new(r.str_bytes),
+                    enum_visited: None,
                 },
             );
         }
