@@ -598,8 +598,8 @@ export const makeProviderBrokerGrantIssuer = ({
     });
 
   /**
-   * Retain one grant's cleanup before queued issuance. This is the same issuer,
-   * account policy, runtime and admission queue as callable promise issuance.
+   * Retain one grant's cleanup before queued issuance under this issuer's
+   * account policy, runtime and admission queue.
    * A rejected value does not release its listener; revoke() remains scoped to
    * this grant and retries its original listener acquisition owner.
    * @param {any} requested
@@ -846,19 +846,17 @@ export const makeProviderBrokerGrantIssuer = ({
     if (errors.length)
       throw AggregateError(errors, 'Provider grant cleanup failed');
   };
-  return harden(
-    Object.assign(spec => issueKit(spec).value, {
-      issueKit,
-      openEndpoint,
-      retryCleanup: () => serialize(() => clean(pending)),
-      dispose: () => {
-        disposed = true;
-        // Withdrawal must not wait behind a listener still being acquired.
-        // Cleanup stays serialized so it also reaps that late acquisition.
-        for (const fence of fences) void fence().catch(() => {});
-        return serialize(() => clean(grants));
-      },
-    }),
-  );
+  return harden({
+    issueKit,
+    openEndpoint,
+    retryCleanup: () => serialize(() => clean(pending)),
+    dispose: () => {
+      disposed = true;
+      // Withdrawal must not wait behind a listener still being acquired.
+      // Cleanup stays serialized so it also reaps that late acquisition.
+      for (const fence of fences) void fence().catch(() => {});
+      return serialize(() => clean(grants));
+    },
+  });
 };
 harden(makeProviderBrokerGrantIssuer);

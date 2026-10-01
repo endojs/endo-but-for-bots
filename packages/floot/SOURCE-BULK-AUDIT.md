@@ -262,7 +262,22 @@ The source review does not establish that either branch is dead.
   Full package type checks encounter existing stale declaration/fixture typing,
   tracked separately rather than reported as a clean gate.
   No image helper, durable owner, format or release pin changes; not deployed.
-- **SB-02 through SB-06 and SB-08 pending:** the operator authorizes removing
+- **SB-05 and SB-06 done:** removed the MCP startup convenience, asynchronous
+  listener-runtime constructor, value-only listener start and callable issuer.
+  Tests and opt-in operator probes use the existing owned kits; cleanup custody
+  is retained before acquisition, and rejection retains scoped retry handles.
+  No second acquisition API, cleanup owner or lifecycle framework replaces them.
+  This removes 54 source lines; probes under `test/` are excluded from the metric.
+  The committed count after this slice is 42,681.
+  Full shared-package tests pass: 776, with one existing skip, after granting
+  permission for local socket fixtures. The first sandboxed run failed from
+  local socket denial and is not recorded as green.
+  Focused migration tests pass: 113 shared, eight Claude and ten OpenCode;
+  independent review reruns 73 shared and those 18 broker tests successfully.
+  Hosted types, scoped ESLint, operator syntax and formatting pass.
+  Existing pins and persisted authority are unchanged; live Podman probes were
+  not run and this source cleanup is not deployed.
+- **SB-02 through SB-04 and SB-08 pending:** the operator authorizes removing
   the alternate public/operator APIs after in-repository caller migration.
   No compatibility shim or replacement framework is required.
 

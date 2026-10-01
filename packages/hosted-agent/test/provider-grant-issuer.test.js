@@ -392,7 +392,7 @@ test('issuer carries the trusted adapter only to host-side inference', async t =
     },
   });
   t.teardown(f.issuer.dispose);
-  const grant = await f.issuer(spec);
+  const grant = await f.issuer.issueKit(spec).value;
   const attestation = await E(grant).attestation();
   t.is(attestation.providerOrigin, spec.providerOrigin);
   t.false(Object.hasOwn(attestation, 'adaptRequest'));
@@ -459,7 +459,10 @@ test('public egress is lease-bound and revoked before cleanup retries', async t 
     observeNetwork: () => networkEvidence,
   });
   t.teardown(f.issuer.dispose);
-  const lease = await f.issuer({ ...spec, networkPolicy: 'public-internet' });
+  const lease = await f.issuer.issueKit({
+    ...spec,
+    networkPolicy: 'public-internet',
+  }).value;
   t.is(requested?.networkPolicy, 'public-internet');
   t.deepEqual(f.listenerNetwork(), { endpoint });
   t.deepEqual((await E(lease).attestation()).network, networkEvidence);
@@ -484,12 +487,18 @@ test('public egress admission follows the operator setting at each grant', async
     observeNetwork: () => networkEvidence,
   });
   t.teardown(f.issuer.dispose);
-  await t.throwsAsync(f.issuer({ ...spec, networkPolicy: 'public-internet' }), {
-    message: /Unsupported provider grant network policy/,
-  });
+  await t.throwsAsync(
+    f.issuer.issueKit({ ...spec, networkPolicy: 'public-internet' }).value,
+    {
+      message: /Unsupported provider grant network policy/,
+    },
+  );
   t.is(made, 0, 'a refused grant makes no egress');
   allowed = true;
-  const lease = await f.issuer({ ...spec, networkPolicy: 'public-internet' });
+  const lease = await f.issuer.issueKit({
+    ...spec,
+    networkPolicy: 'public-internet',
+  }).value;
   t.is(made, 1);
   t.deepEqual((await E(lease).attestation()).network, networkEvidence);
   await E(lease).revoke();
@@ -512,15 +521,15 @@ test('network mismatch or drift revokes public egress', async t => {
     if (mismatch) {
       // eslint-disable-next-line no-await-in-loop
       await t.throwsAsync(
-        f.issuer({ ...spec, networkPolicy: 'public-internet' }),
+        f.issuer.issueKit({ ...spec, networkPolicy: 'public-internet' }).value,
         { message: /admission failed/ },
       );
     } else {
       // eslint-disable-next-line no-await-in-loop
-      const lease = await f.issuer({
+      const lease = await f.issuer.issueKit({
         ...spec,
         networkPolicy: 'public-internet',
-      });
+      }).value;
       drift = true;
       // eslint-disable-next-line no-await-in-loop
       await t.throwsAsync(E(lease).attestation(), {
@@ -535,19 +544,30 @@ test('network mismatch or drift revokes public egress', async t => {
 test('unsupported public policy and unexpected off egress fail closed', async t => {
   const f = fixture();
   t.teardown(f.issuer.dispose);
-  await t.throwsAsync(f.issuer({ ...spec, networkPolicy: 'public-internet' }), {
-    message: /Unsupported.*network policy/,
-  });
-  await t.throwsAsync(f.issuer({ ...spec, networkPolicy: 'private' }), {
-    message: /Unsupported.*network policy/,
-  });
-  await t.throwsAsync(f.issuer({ ...spec, networkPolicy: null }), {
-    message: /Unsupported.*network policy/,
-  });
+  await t.throwsAsync(
+    f.issuer.issueKit({ ...spec, networkPolicy: 'public-internet' }).value,
+    {
+      message: /Unsupported.*network policy/,
+    },
+  );
+  await t.throwsAsync(
+    f.issuer.issueKit({ ...spec, networkPolicy: 'private' }).value,
+    {
+      message: /Unsupported.*network policy/,
+    },
+  );
+  await t.throwsAsync(
+    f.issuer.issueKit({ ...spec, networkPolicy: null }).value,
+    {
+      message: /Unsupported.*network policy/,
+    },
+  );
   t.is(f.listenerLimits(), undefined);
   const unexpected = fixture({ observeNetwork: () => networkEvidence });
   t.teardown(unexpected.issuer.dispose);
-  await t.throwsAsync(unexpected.issuer(spec), { message: /admission failed/ });
+  await t.throwsAsync(unexpected.issuer.issueKit(spec).value, {
+    message: /admission failed/,
+  });
   t.is(unexpected.stops(), 1);
 });
 
@@ -559,7 +579,7 @@ test('request deadlines are independent of session lifetime', async t => {
     const f = fixture({ requestTimeoutMs });
     t.teardown(f.issuer.dispose);
     // eslint-disable-next-line no-await-in-loop
-    await f.issuer(spec);
+    await f.issuer.issueKit(spec).value;
     t.is(f.listenerLimits().timeoutMs, expected);
   }
 });
@@ -573,7 +593,7 @@ test('listener limits mirror the lease routes and client authorization mode', as
     },
   });
   t.teardown(f.issuer.dispose);
-  const lease = await f.issuer(spec);
+  const lease = await f.issuer.issueKit(spec).value;
   t.deepEqual(f.listenerLimits().allowedPaths, ['/api/v1/chat/completions']);
   t.is(f.listenerLimits().clientAuthorization, 'strip');
   await E(lease).revoke();
@@ -598,7 +618,7 @@ test('invalid host request deadlines are refused', t => {
 test('lease binds observations and only delegates inference; retry preserves live lease', async t => {
   const f = fixture();
   t.teardown(f.issuer.dispose);
-  const lease = await f.issuer(spec);
+  const lease = await f.issuer.issueKit(spec).value;
   t.like(await E(lease).attestation(), {
     sessionId: 'session',
     accountRef: 'account',
@@ -633,7 +653,7 @@ test('lease binds observations and only delegates inference; retry preserves liv
 test('failed lease teardown retains authority and retries the same worker', async t => {
   const f = fixture();
   t.teardown(f.issuer.dispose);
-  const lease = await f.issuer(spec);
+  const lease = await f.issuer.issueKit(spec).value;
   f.failCleanup();
   await t.throwsAsync(() => E(lease).revoke(), {
     message: 'cleanup unavailable',
@@ -660,7 +680,7 @@ test('grant preserves identity beyond 64 requests until explicit revocation', as
   t.timeout(LOADED_RUNNER_BUDGET_MS);
   const f = fixture();
   t.teardown(f.issuer.dispose);
-  const grant = await f.issuer(spec);
+  const grant = await f.issuer.issueKit(spec).value;
   const initial = await E(grant).attestation();
   t.false(Object.hasOwn(initial, 'expiresAt'));
   t.false(Object.hasOwn(initial, 'limits'));
@@ -695,7 +715,7 @@ test('worker disconnect revokes host endpoint', async t => {
   t.timeout(LOADED_RUNNER_BUDGET_MS);
   const f = fixture();
   t.teardown(f.issuer.dispose);
-  await f.issuer(spec);
+  await f.issuer.issueKit(spec).value;
   f.disconnect();
   await f.closed;
   await t.throwsAsync(
@@ -720,7 +740,7 @@ test('disposal during acquisition waits and cleans late worker', async t => {
   });
   const f = fixture({ startBarrier });
   t.teardown(f.issuer.dispose);
-  const starting = f.issuer(spec);
+  const starting = f.issuer.issueKit(spec).value;
   await untilStarted(t, f);
   const disposing = f.issuer.dispose();
   t.teardown(release);
@@ -744,7 +764,7 @@ test('disposal during acquisition waits and cleans late worker', async t => {
 test('attestation rejects changed worker network identity', async t => {
   const f = fixture();
   t.teardown(f.issuer.dispose);
-  const lease = await f.issuer(spec);
+  const lease = await f.issuer.issueKit(spec).value;
   f.drift();
   await t.throwsAsync(() => E(lease).attestation(), {
     message: /identity changed/,
@@ -757,7 +777,7 @@ test('queued lease request cannot be changed after issue invocation', async t =>
   const f = fixture();
   t.teardown(f.issuer.dispose);
   const mutable = { ...spec };
-  const issuing = f.issuer(mutable);
+  const issuing = f.issuer.issueKit(mutable).value;
   mutable.sessionId = 'different';
   const lease = await issuing;
   t.is((await E(lease).attestation()).sessionId, 'session');
@@ -782,7 +802,7 @@ test('the grant reports the account authority while an oauth credential is bound
     credential: oauthCredential('provider-account'),
   });
   t.teardown(f.issuer.dispose);
-  const lease = await f.issuer(spec);
+  const lease = await f.issuer.issueKit(spec).value;
   t.like(await E(lease).attestation(), {
     accountRef: spec.accountRef,
     authMode: 'oauth',
@@ -824,7 +844,7 @@ test('retained issuance revoked before its queue turn acquires no listener', asy
   await closing;
   t.is(f.endpoint(), undefined);
   t.is(f.stops(), 0);
-  const next = await f.issuer({ ...spec, sessionId: 'next' });
+  const next = await f.issuer.issueKit({ ...spec, sessionId: 'next' }).value;
   t.is((await E(next).attestation()).sessionId, 'next');
 });
 
@@ -914,7 +934,7 @@ test('failed issuance retains A-only cleanup while B remains usable', async t =>
     failA = false;
     await issuer.dispose();
   });
-  const b = await issuer({ ...spec, sessionId: 'b' });
+  const b = await issuer.issueKit({ ...spec, sessionId: 'b' }).value;
   const a = issuer.issueKit({ ...spec, sessionId: 'a' });
   await t.throwsAsync(a.value, { message: /admission and cleanup failed/ });
   t.is(listeners[1].stops, 1);
@@ -1026,6 +1046,7 @@ test('a pool issuer serves a session from its chosen subscription and reads each
       forSession: chooser.forSession,
     },
   });
+  t.teardown(issuer.dispose);
   const kit = issuer.issueKit(spec);
   await kit.value;
   const response = await E(endpoint).request(
@@ -1047,9 +1068,11 @@ test('a pool issuer serves a session from its chosen subscription and reads each
   t.is(readings.work[0].status, 429);
   t.is(readings.home[0].rateLimits.windows[0].usedPercent, 12);
   // The pool now knows `work` is blocked, until the time its refusal named.
-  const standing = chooser.standings().find(entry => entry.id === 'work');
-  t.true(standing.blocked);
-  t.is(standing.blockedUntilMs, 4_000_000_000_000);
+  t.deepEqual(chooser.forSession('after-refusal', 'auto').select(), ['home']);
+  t.is(
+    readings.work[0].rateLimits.windows[0].resetsAt,
+    '2096-10-02T07:06:40.000Z',
+  );
   // The next request of this session does not try `work` again.
   await E(endpoint).request(
     harden({
@@ -1451,12 +1474,12 @@ test('a scope that pins a model is issued only if an account it may be served fr
   t.teardown(() => issuer.dispose());
   /** @param {string} model @param {string} [subscription] */
   const issue = (model, subscription) =>
-    issuer({
+    issuer.issueKit({
       ...spec,
       sessionId: `s-${model}-${subscription ?? 'auto'}`,
       model,
       ...(subscription === undefined ? {} : { subscription }),
-    });
+    }).value;
   // `auto` asks the accounts not set aside: one of them lists each.
   await t.notThrowsAsync(() => issue('allowed'));
   await t.notThrowsAsync(() => issue('other'));
@@ -1472,27 +1495,30 @@ test('a scope that pins a model is issued only if an account it may be served fr
   });
   await t.notThrowsAsync(() => issue('other', 'home'));
   // A session that pins no model is issued; each request is admitted then.
-  await t.notThrowsAsync(() =>
-    issuer({ ...spec, sessionId: 's-unpinned', model: undefined }),
+  await t.notThrowsAsync(
+    () =>
+      issuer.issueKit({ ...spec, sessionId: 's-unpinned', model: undefined })
+        .value,
   );
   await t.throwsAsync(
-    () => issuer({ ...spec, sessionId: 's-empty', model: '' }),
+    () => issuer.issueKit({ ...spec, sessionId: 's-empty', model: '' }).value,
     { message: /Provider grant request denied/ },
   );
 });
 
 test('a single-credential issuer asks its one account, and refuses without an admission source', async t => {
+  const issuer = makeIssuer({
+    runtime: listenerRuntime(() => {}),
+    secret: Far('secret', { readBase64: async () => btoa('key') }),
+    fetch: /** @type {any} */ (async () => new Response('ok')),
+    policy,
+    imageDigest: digest,
+    accountRef: 'account',
+    admits: admitsModels(['other']),
+  });
+  t.teardown(issuer.dispose);
   await t.throwsAsync(
-    () =>
-      makeIssuer({
-        runtime: listenerRuntime(() => {}),
-        secret: Far('secret', { readBase64: async () => btoa('key') }),
-        fetch: /** @type {any} */ (async () => new Response('ok')),
-        policy,
-        imageDigest: digest,
-        accountRef: 'account',
-        admits: admitsModels(['other']),
-      })({ ...spec, sessionId: 'refused' }),
+    issuer.issueKit({ ...spec, sessionId: 'refused' }).value,
     { message: /Provider grant request denied/ },
   );
   t.throws(

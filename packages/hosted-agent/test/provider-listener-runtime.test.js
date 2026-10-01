@@ -17,10 +17,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import {
-  makePodmanProviderListenerRuntime,
-  makePodmanProviderListenerRuntimeKit,
-} from '../src/provider-listener-runtime.js';
+import { makePodmanProviderListenerRuntimeKit } from '../src/provider-listener-runtime.js';
 import { readHttpText, requestHttp } from './http-client.js';
 
 const digest = `sha256:${'b'.repeat(64)}`;
@@ -179,10 +176,10 @@ test.serial(
     t.teardown(kit.close);
     env.HOME = '/changed/after-capture';
     const runtime = await kit.open();
-    const listener = await runtime.start({
+    const listener = await runtime.startKit({
       endpoint: Far('unused inference', {}),
       limits,
-    });
+    }).value;
     await listener.observe();
     await listener.stop();
     await kit.close();
@@ -240,7 +237,7 @@ for (const diagnosticsEnabled of [false, true]) {
       let child;
       /** @type {Uint8Array[]} */
       const diagnostics = [];
-      const runtime = await makePodmanProviderListenerRuntime({
+      const runtimeKit = makePodmanProviderListenerRuntimeKit({
         ...f.options,
         host: {
           ...f.options.host,
@@ -253,9 +250,10 @@ for (const diagnosticsEnabled of [false, true]) {
             : {}),
         },
       });
-      t.teardown(runtime.dispose);
+      t.teardown(runtimeKit.close);
+      const runtime = await runtimeKit.open();
       let calls = 0;
-      const listener = await runtime.start({
+      const listener = await runtime.startKit({
         endpoint: Far('inference after stderr', {
           requestByteStream() {
             calls += 1;
@@ -269,7 +267,7 @@ for (const diagnosticsEnabled of [false, true]) {
           },
         }),
         limits,
-      });
+      }).value;
       if (!child?.stderr) throw Error('Expected listener stderr');
       // The real worker may have emitted startup diagnostics before ready.
       const initialChunks = diagnostics.length;
@@ -317,14 +315,20 @@ for (const diagnosticsEnabled of [false, true]) {
 
 test('runtime excludes a second live owner and permits reacquisition after disposal', async t => {
   const f = await fixture(t);
-  const runtime = await makePodmanProviderListenerRuntime(f.options);
-  t.teardown(runtime.dispose);
-  await t.throwsAsync(() => makePodmanProviderListenerRuntime(f.options), {
+  const runtimeKit = makePodmanProviderListenerRuntimeKit(f.options);
+  t.teardown(runtimeKit.close);
+  const runtime = await runtimeKit.open();
+  const competingKit = makePodmanProviderListenerRuntimeKit(f.options);
+  t.teardown(competingKit.close);
+  await t.throwsAsync(competingKit.open(), {
     message: /already active/,
   });
+  await competingKit.close();
   await runtime.dispose();
   await runtime.dispose();
-  const again = await makePodmanProviderListenerRuntime(f.options);
+  const againKit = makePodmanProviderListenerRuntimeKit(f.options);
+  t.teardown(againKit.close);
+  const again = await againKit.open();
   await again.dispose();
 });
 
@@ -333,13 +337,14 @@ test.serial(
   async t => {
     t.timeout(5000);
     const f = await fixture(t, true);
-    const runtime = await makePodmanProviderListenerRuntime(f.options);
-    t.teardown(runtime.dispose);
-    const listener = await runtime.start({
+    const runtimeKit = makePodmanProviderListenerRuntimeKit(f.options);
+    t.teardown(runtimeKit.close);
+    const runtime = await runtimeKit.open();
+    const listener = await runtime.startKit({
       endpoint: Far('unused inference', {}),
       limits,
       network: { endpoint: Far('test egress', {}) },
-    });
+    }).value;
     const observed = await listener.observe();
     t.deepEqual(observed.network, {
       policy: 'public-internet',
@@ -366,15 +371,16 @@ test.serial(
 
 test('runtime requires explicit operator public network enablement', async t => {
   const f = await fixture(t);
-  const runtime = await makePodmanProviderListenerRuntime(f.options);
-  t.teardown(runtime.dispose);
+  const runtimeKit = makePodmanProviderListenerRuntimeKit(f.options);
+  t.teardown(runtimeKit.close);
+  const runtime = await runtimeKit.open();
   await t.throwsAsync(
     () =>
-      runtime.start({
+      runtime.startKit({
         endpoint: Far('unused inference', {}),
         limits,
         network: { endpoint: Far('test egress', {}) },
-      }),
+      }).value,
     { message: /not configured by the operator/ },
   );
 });
@@ -391,7 +397,7 @@ test.serial(
     t.teardown(kit.close);
     const runtime = await kit.open();
     const start = () =>
-      runtime.start({ endpoint: Far('unused inference', {}), limits });
+      runtime.startKit({ endpoint: Far('unused inference', {}), limits }).value;
     const first = await start();
     await t.throwsAsync(start, { message: /capacity exceeded/ });
     await kit.configure({ maxListeners: 2 });
@@ -422,11 +428,11 @@ test.serial(
     const runtime = await kit.open();
     const resolverPath = join(f.options.stateDirectory, 'public-resolv.conf');
     const startPublic = () =>
-      runtime.start({
+      runtime.startKit({
         endpoint: Far('unused inference', {}),
         limits,
         network: { endpoint: Far('test egress', {}) },
-      });
+      }).value;
     await t.throwsAsync(startPublic, {
       message: /not configured by the operator/,
     });
@@ -439,10 +445,10 @@ test.serial(
     );
     // The resolver file is written once, at the first public admission.
     t.is((await lstat(resolverPath)).mode % 0o1000, 0o444);
-    const closed = await runtime.start({
+    const closed = await runtime.startKit({
       endpoint: Far('unused inference', {}),
       limits,
-    });
+    }).value;
     await kit.configure({ publicInternet: false });
     // The public listener is gone; the private one is untouched.
     t.is(f.removals.length, 1);
@@ -459,8 +465,9 @@ test('runtime recovers a dead owner and sweeps only its exactly labelled orphan'
   const f = await fixture(t);
   await symlink('999999-1', join(f.options.stateDirectory, 'test-owner.lock'));
   f.orphan();
-  const runtime = await makePodmanProviderListenerRuntime(f.options);
-  t.teardown(runtime.dispose);
+  const runtimeKit = makePodmanProviderListenerRuntimeKit(f.options);
+  t.teardown(runtimeKit.close);
+  await runtimeKit.open();
   t.deepEqual(f.removals, ['abcdef123456']);
 });
 
@@ -474,21 +481,22 @@ test.serial(
     t.log('creating runtime fixture');
     const f = await fixture(t);
     t.log('acquiring runtime');
-    const runtime = await makePodmanProviderListenerRuntime(f.options);
-    t.teardown(runtime.dispose);
+    const runtimeKit = makePodmanProviderListenerRuntimeKit(f.options);
+    t.teardown(runtimeKit.close);
+    const runtime = await runtimeKit.open();
     t.log('starting first worker');
-    const first = await runtime.start({
+    const first = await runtime.startKit({
       endpoint: Far('inference', {}),
       limits,
-    });
+    }).value;
     t.log('retrying cleanup with first worker live');
     await runtime.retryCleanup();
     t.is(f.removals.length, 0);
     t.log('starting second worker');
-    const second = await runtime.start({
+    const second = await runtime.startKit({
       endpoint: Far('inference', {}),
       limits,
-    });
+    }).value;
     t.log('observing both workers');
     t.not(
       (await first.observe()).containerName,
@@ -509,12 +517,13 @@ test.serial(
     // that lets those runtime deadlines finish on a busy CI worker.
     t.timeout(30_000);
     const f = await fixture(t);
-    const runtime = await makePodmanProviderListenerRuntime(f.options);
-    t.teardown(runtime.dispose);
+    const runtimeKit = makePodmanProviderListenerRuntimeKit(f.options);
+    t.teardown(runtimeKit.close);
+    const runtime = await runtimeKit.open();
     f.wrongNamespace();
     f.failRemoval();
     const error = await t.throwsAsync(
-      () => runtime.start({ endpoint: Far('inference', {}), limits }),
+      () => runtime.startKit({ endpoint: Far('inference', {}), limits }).value,
       { instanceOf: AggregateError },
     );
     t.regex(error.errors[0].message, /isolation is not proved/);
@@ -530,11 +539,12 @@ test.serial(
   async t => {
     t.timeout(5000);
     const f = await fixture(t);
-    const runtime = await makePodmanProviderListenerRuntime(f.options);
-    t.teardown(runtime.dispose);
+    const runtimeKit = makePodmanProviderListenerRuntimeKit(f.options);
+    t.teardown(runtimeKit.close);
+    const runtime = await runtimeKit.open();
     f.racePid();
     await t.throwsAsync(
-      () => runtime.start({ endpoint: Far('inference', {}), limits }),
+      () => runtime.startKit({ endpoint: Far('inference', {}), limits }).value,
       { message: /startup failed/ },
     );
     t.is(f.removals.length, 1);
@@ -680,8 +690,9 @@ test('resolver file handle survives failed initialization close for retry', asyn
 
 test('failed recovery reservation release is retained without removing a live foreign lock', async t => {
   const f = await fixture(t);
-  const live = await makePodmanProviderListenerRuntime(f.options);
-  t.teardown(live.dispose);
+  const liveKit = makePodmanProviderListenerRuntimeKit(f.options);
+  t.teardown(liveKit.close);
+  const live = await liveKit.open();
   let failRelease = true;
   const reservation = join(f.options.stateDirectory, 'test-owner.recover');
   const kit = makePodmanProviderListenerRuntimeKit({
@@ -741,7 +752,10 @@ test.serial(
       await kit.close();
     });
     const runtime = await kit.open();
-    const starting = runtime.start({ endpoint: Far('inference', {}), limits });
+    const starting = runtime.startKit({
+      endpoint: Far('inference', {}),
+      limits,
+    }).value;
     const rejected = t.throwsAsync(starting, { message: /startup failed/ });
     await admission;
     const closing = kit.close();
@@ -760,7 +774,7 @@ test.serial(
       { code: 'ENOENT' },
     );
     await t.throwsAsync(
-      () => runtime.start({ endpoint: Far('later', {}), limits }),
+      () => runtime.startKit({ endpoint: Far('later', {}), limits }).value,
       { message: /disposed/ },
     );
   },
@@ -811,8 +825,9 @@ test('stale takeover retains its sweep before recovery reservation cleanup can f
 test('retained listener stopped before its queue turn acquires no native child', async t => {
   t.timeout(5000);
   const f = await fixture(t);
-  const runtime = await makePodmanProviderListenerRuntime(f.options);
-  t.teardown(runtime.dispose);
+  const runtimeKit = makePodmanProviderListenerRuntimeKit(f.options);
+  t.teardown(runtimeKit.close);
+  const runtime = await runtimeKit.open();
   const kit = runtime.startKit({ endpoint: Far('unused', {}), limits });
   const stopping = kit.stop();
   await t.throwsAsync(kit.value, { message: /inactive/ });
@@ -828,7 +843,7 @@ test.serial(
     const f = await fixture(t);
     let bName;
     let failA = false;
-    const runtime = await makePodmanProviderListenerRuntime({
+    const runtimeKit = makePodmanProviderListenerRuntimeKit({
       ...f.options,
       host: {
         ...f.options.host,
@@ -844,9 +859,10 @@ test.serial(
     });
     t.teardown(async () => {
       failA = false;
-      await runtime.dispose();
+      await runtimeKit.close();
     });
-    const b = await runtime.start({ endpoint: Far('b', {}), limits });
+    const runtime = await runtimeKit.open();
+    const b = await runtime.startKit({ endpoint: Far('b', {}), limits }).value;
     bName = (await b.observe()).containerName;
     failA = true;
     const a = runtime.startKit({ endpoint: Far('a', {}), limits });
@@ -877,7 +893,7 @@ test.serial(
       entered = () => resolve(undefined);
     });
     let held = false;
-    const runtime = await makePodmanProviderListenerRuntime({
+    const runtimeKit = makePodmanProviderListenerRuntimeKit({
       ...f.options,
       host: {
         ...f.options.host,
@@ -893,8 +909,9 @@ test.serial(
     });
     t.teardown(async () => {
       release();
-      await runtime.dispose();
+      await runtimeKit.close();
     });
+    const runtime = await runtimeKit.open();
     const kit = runtime.startKit({ endpoint: Far('inference', {}), limits });
     const rejected = t.throwsAsync(kit.value, { message: /startup failed/ });
     await admission;
@@ -929,7 +946,7 @@ test.serial(
     const nativeClosed = new Promise(resolve => {
       closed = () => resolve(undefined);
     });
-    const runtime = await makePodmanProviderListenerRuntime({
+    const runtimeKit = makePodmanProviderListenerRuntimeKit({
       ...f.options,
       host: {
         ...f.options.host,
@@ -965,9 +982,10 @@ test.serial(
       }
       if (failedChild) await nativeClosed;
       release();
-      await runtime.dispose();
+      await runtimeKit.close();
     });
-    const b = await runtime.start({ endpoint: Far('b', {}), limits });
+    const runtime = await runtimeKit.open();
+    const b = await runtime.startKit({ endpoint: Far('b', {}), limits }).value;
     const bName = (await b.observe()).containerName;
     capture = true;
     const a = runtime.startKit({ endpoint: Far('a', {}), limits });
@@ -992,7 +1010,7 @@ test.serial(
   async t => {
     t.timeout(5000);
     const f = await fixture(t);
-    const runtime = await makePodmanProviderListenerRuntime({
+    const runtimeKit = makePodmanProviderListenerRuntimeKit({
       ...f.options,
       host: {
         ...f.options.host,
@@ -1003,7 +1021,8 @@ test.serial(
         },
       },
     });
-    t.teardown(runtime.dispose);
+    t.teardown(runtimeKit.close);
+    const runtime = await runtimeKit.open();
     const a = runtime.startKit({ endpoint: Far('a', {}), limits });
     await t.throwsAsync(a.value, { message: /startup failed/ });
     await a.stop();

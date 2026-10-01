@@ -24,35 +24,34 @@ const makeFakeRuntime = () => {
     starts,
     stops: () => stops,
     disposes: () => disposes,
-    async start(input) {
-      starts.push(input);
-      return harden({
-        async observe() {
-          return harden({
-            endpoint: 'http://127.0.0.1:1234',
-            containerName: 'listener',
-            networkNamespaceId: 'net-1',
-            listenerImageDigest: digest,
-            ...(input.network
-              ? {
-                  network: {
-                    policy: 'public-internet',
-                    proxyUrl: 'http://127.0.0.1:23457',
-                    dnsHost: '127.0.0.53',
-                    resolverConfigPath: '/private-runtime/public-resolv.conf',
-                  },
-                }
-              : {}),
-          });
-        },
-        async stop() {
-          stops += 1;
-        },
-        closed: new Promise(() => {}),
-      });
-    },
     startKit(input) {
-      const value = this.start(input);
+      const value = (async () => {
+        starts.push(input);
+        return harden({
+          async observe() {
+            return harden({
+              endpoint: 'http://127.0.0.1:1234',
+              containerName: 'listener',
+              networkNamespaceId: 'net-1',
+              listenerImageDigest: digest,
+              ...(input.network
+                ? {
+                    network: {
+                      policy: 'public-internet',
+                      proxyUrl: 'http://127.0.0.1:23457',
+                      dnsHost: '127.0.0.53',
+                      resolverConfigPath: '/private-runtime/public-resolv.conf',
+                    },
+                  }
+                : {}),
+            });
+          },
+          async stop() {
+            stops += 1;
+          },
+          closed: new Promise(() => {}),
+        });
+      })();
       return {
         value,
         stop: async () => {
@@ -119,13 +118,13 @@ test('leases report broker-only evidence and listener limits', async t => {
   const { broker, close } = await startBroker(t, runtime);
   t.is(broker.imageRef, `localhost/opencode-sandbox@${digest}`);
 
-  const lease = await broker.issuer({
+  const lease = await broker.issuer.issueKit({
     sessionId: 'session-1',
     providerOrigin: OPENROUTER_ORIGIN,
     accountRef: OPENCODE_BROKER_ACCOUNT,
     model: models[0],
     networkPolicy: 'off',
-  });
+  }).value;
   t.deepEqual(runtime.starts[0].limits.allowedPaths, [
     OPENROUTER_INFERENCE_PATH,
   ]);
@@ -160,48 +159,48 @@ test('denies leases for other origins, accounts, or models', async t => {
   const { broker } = await startBroker(t, makeFakeRuntime());
   await t.throwsAsync(
     () =>
-      broker.issuer({
+      broker.issuer.issueKit({
         sessionId: 'session-1',
         providerOrigin: 'https://example.com',
         accountRef: OPENCODE_BROKER_ACCOUNT,
         model: models[0],
         networkPolicy: 'off',
-      }),
+      }).value,
     { message: /denied/ },
   );
   await t.throwsAsync(
     () =>
-      broker.issuer({
+      broker.issuer.issueKit({
         sessionId: 'session-1',
         providerOrigin: OPENROUTER_ORIGIN,
         accountRef: 'other-account',
         model: models[0],
         networkPolicy: 'off',
-      }),
+      }).value,
     { message: /denied/ },
   );
   await t.throwsAsync(
     () =>
-      broker.issuer({
+      broker.issuer.issueKit({
         sessionId: 'session-1',
         providerOrigin: OPENROUTER_ORIGIN,
         accountRef: OPENCODE_BROKER_ACCOUNT,
         model: 'other/model',
         networkPolicy: 'off',
-      }),
+      }).value,
     { message: /denied/ },
   );
   // No public egress factory is configured: a public-internet lease is denied
   // rather than silently run without the extra network.
   await t.throwsAsync(
     () =>
-      broker.issuer({
+      broker.issuer.issueKit({
         sessionId: 'session-1',
         providerOrigin: OPENROUTER_ORIGIN,
         accountRef: OPENCODE_BROKER_ACCOUNT,
         model: models[0],
         networkPolicy: 'public-internet',
-      }),
+      }).value,
     { message: /Unsupported provider grant network policy/ },
   );
 });
@@ -279,13 +278,13 @@ test('refuses unpinned images and invalid operator identity', async t => {
 test('public grants use shared egress and revocation removes its authority', async t => {
   const runtime = makeFakeRuntime();
   const { broker } = await startBroker(t, runtime, { publicInternet: true });
-  const grant = await broker.issuer({
+  const grant = await broker.issuer.issueKit({
     sessionId: 'public-session',
     providerOrigin: OPENROUTER_ORIGIN,
     accountRef: OPENCODE_BROKER_ACCOUNT,
     model: models[0],
     networkPolicy: 'public-internet',
-  });
+  }).value;
   const { network } = runtime.starts[0];
   t.deepEqual(Object.keys(network), ['endpoint']);
   const evidence = await E(grant).attestation();
@@ -418,11 +417,12 @@ test('broker retries failed grant revocation without repeating released runtime 
   const kit = makeProviderBrokerKit(
     brokerOptions({
       ...runtime,
-      start: async input => {
-        const worker = await runtime.start(input);
+      startKit: input => {
+        const listener = runtime.startKit(input);
         return {
-          ...worker,
+          ...listener,
           stop: async () => {
+            await listener.value;
             stops += 1;
             if (failStop) throw Error('stop failed');
           },
@@ -435,23 +435,23 @@ test('broker retries failed grant revocation without repeating released runtime 
     await kit.close();
   });
   const broker = await kit.start();
-  const grant = await broker.issuer({
+  const grant = await broker.issuer.issueKit({
     sessionId: 'session-retry',
     providerOrigin: OPENROUTER_ORIGIN,
     accountRef: OPENCODE_BROKER_ACCOUNT,
     model: models[0],
     networkPolicy: 'off',
-  });
+  }).value;
   const closing = kit.close();
   await t.throwsAsync(
     () =>
-      broker.issuer({
+      broker.issuer.issueKit({
         sessionId: 'other',
         providerOrigin: OPENROUTER_ORIGIN,
         accountRef: OPENCODE_BROKER_ACCOUNT,
         model: models[0],
         networkPolicy: 'off',
-      }),
+      }).value,
     { message: /denied/ },
   );
   await t.throwsAsync(closing, { message: /cleanup pending/ });

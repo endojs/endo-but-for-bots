@@ -3,7 +3,7 @@ import '@endo/init';
 
 import { E, Far } from '@endo/far';
 import { bytesReaderFromIterator } from '@endo/exo-stream/bytes-reader-from-iterator.js';
-import { makePodmanProviderListenerRuntime } from '@endo/hosted-agent/provider-listener-runtime.js';
+import { makePodmanProviderListenerRuntimeKit } from '@endo/hosted-agent/provider-listener-runtime.js';
 import { makePublicEgress } from '@endo/hosted-agent/public-egress.js';
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
@@ -78,18 +78,20 @@ const diagnosticEndpoint = Far('Synthetic public network diagnostics', {
     });
   },
 });
-let runtime;
+let runtimeKit;
+let listenerKit;
 let clean = false;
 let brokerRequests = 0;
 const failures = [];
 try {
-  runtime = await makePodmanProviderListenerRuntime({
+  runtimeKit = makePodmanProviderListenerRuntimeKit({
     imageRef,
     ownerId: `public-test-${randomUUID()}`,
     stateDirectory: directory,
     publicInternet: true,
   });
-  const listener = await runtime.start({
+  const runtime = await runtimeKit.open();
+  listenerKit = runtime.startKit({
     endpoint: Far('No provider credentials', {
       requestByteStream() {
         brokerRequests += 1;
@@ -110,6 +112,7 @@ try {
     },
     network: { endpoint: diagnosticEndpoint },
   });
+  const listener = await listenerKit.value;
   const evidence = await listener.observe();
   const env = makeBrokerEnvironment(evidence.network);
   const broker = new URL(evidence.endpoint);
@@ -217,7 +220,8 @@ print('OUTER_EGRESS_AND_GUEST_LISTENERS_OK')
       timeout: 10_000,
       maxBuffer: 4096,
     }),
-    Promise.resolve().then(() => runtime?.dispose()),
+    Promise.resolve().then(() => listenerKit?.stop()),
+    Promise.resolve().then(() => runtimeKit?.close()),
   ]);
   const cleanupFailures = results
     .filter(result => result.status === 'rejected')

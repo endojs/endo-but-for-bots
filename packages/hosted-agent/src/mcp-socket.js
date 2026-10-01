@@ -226,29 +226,3 @@ export const makeMcpSocketListener = ({
   return harden({ start, close });
 };
 harden(makeMcpSocketListener);
-
-/**
- * Convenience entrypoint for callers that have not adopted the inert kit.
- * A rejected start with failed rollback does not provide cleanup proof or a
- * retry handle. Resource owners must retain makeMcpSocketListener() before
- * start() instead; this wrapper will be removed as those callers migrate.
- * @param {Parameters<typeof makeMcpSocketListener>[0]} options
- */
-export const listenMcpSocket = async options => {
-  const listener = makeMcpSocketListener(options);
-  try {
-    await listener.start();
-    return listener;
-  } catch (error) {
-    try {
-      await listener.close();
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        'MCP listener startup and cleanup failed',
-      );
-    }
-    throw error;
-  }
-};
-harden(listenMcpSocket);
