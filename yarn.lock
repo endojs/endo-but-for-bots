@@ -1873,6 +1873,7 @@ __metadata:
     c8: "catalog:dev"
     eslint: "catalog:dev"
     expect-type: "npm:^1.4.0"
+    fast-check: "npm:^4.10.2"
     ses: "workspace:^"
     typescript: "catalog:dev"
     ws: "npm:^8.21.3"
