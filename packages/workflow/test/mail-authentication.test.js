@@ -59,9 +59,9 @@ test('mail correlation authenticates both parties, including after recovery', as
   const genuine = controls.findMessage('form', 'Approve the reviewed');
   t.truthy(genuine);
   t.false((await E(run).status()).done);
-  const attacker = await E(powers).locate('attacker');
+  const attacker = controls.designate(['attacker']);
   // Same replyTo, authenticated but wrong sender.
-  await controls.submitForm({ ...genuine, to: attacker }, { approved: true });
+  await controls.submitForm(genuine, { approved: true }, { sender: attacker });
   await settle(100);
   t.false((await E(run).status()).done);
   h1.stop();

@@ -77,11 +77,20 @@ export const makeFakeAgent = () => {
   const root = makeNode();
   /** @type {any[]} */
   const messages = [];
-  const identities = new Map();
-  const locator = path => {
-    const key = toPath(path).join('/');
-    if (!identities.has(key)) identities.set(key, identities.size + 1);
-    return `endo://${'a'.repeat(64)}/${identities.get(key).toString(16).padStart(64, '0')}?type=handle`;
+  // A guest reads no locators. Each message's correspondents are the
+  // capabilities its `@mail/<n>/@from` and `@mail/<n>/@to` edges designate;
+  // the listed message carries only the reader's pet names for them.
+  const selfHandle = Far('FakeSelfHandle', {});
+  /** @type {Map<string, any>} synthetic handles for names not in the tree */
+  const strangers = new Map();
+  /** @type {Map<string, { from: any, to: any }>} by decimal number */
+  const correspondents = new Map();
+  const namesOf = (party, recipientPath) => {
+    if (party === selfHandle) return harden(['@self']);
+    if (recipientPath !== undefined && recipientPath.length === 1) {
+      return harden([...recipientPath]);
+    }
+    return harden([]);
   };
   let nextMessageNumber = 0n;
   let nextMessageId = 0;
@@ -122,9 +131,15 @@ export const makeFakeAgent = () => {
     parent.set(path[path.length - 1], { value });
   };
 
-  const deliver = message => {
-    messages.push(harden(message));
-    return message;
+  const deliver = ({ from, to, recipientPath, ...message }) => {
+    correspondents.set(String(message.number), { from, to });
+    const listed = harden({
+      ...message,
+      fromNames: namesOf(from, undefined),
+      toNames: namesOf(to, recipientPath),
+    });
+    messages.push(listed);
+    return listed;
   };
 
   const settleRequest = (numberName, status, valueOrReason, incarnation) => {
@@ -178,8 +193,18 @@ export const makeFakeAgent = () => {
     };
 
     const lookupPath = path => {
+      if (path.length === 1 && path[0] === '@self') {
+        return selfHandle;
+      }
       if (path[0] === '@mail') {
         const numberName = path[1];
+        if (path[2] === '@from' || path[2] === '@to') {
+          const edges = correspondents.get(numberName);
+          if (edges === undefined) {
+            throw Error(`fake-agent: no message ${numberName}`);
+          }
+          return path[2] === '@from' ? edges.from : edges.to;
+        }
         if (path[2] === '@result') {
           return waitForRequest(numberName);
         }
@@ -202,8 +227,20 @@ export const makeFakeAgent = () => {
       return entry.value;
     };
 
+    const recipientOf = recipient => {
+      const path = toPath(recipient);
+      try {
+        return lookupPath(path);
+      } catch {
+        const key = path.join('/');
+        if (!strangers.has(key)) {
+          strangers.set(key, Far('FakeStrangerHandle', {}));
+        }
+        return strangers.get(key);
+      }
+    };
+
     const powers = Far('FakeAgentPowers', {
-      locate: async (...path) => locator(path),
       has: async (...path) => {
         const parent = walk(path.slice(0, -1));
         return parent !== undefined && parent.has(path[path.length - 1]);
@@ -261,8 +298,9 @@ export const makeFakeAgent = () => {
           number,
           messageId: `m${nextMessageId}`,
           description,
-          from: locator(['@self']),
-          to: locator(recipient),
+          from: selfHandle,
+          to: recipientOf(recipient),
+          recipientPath: toPath(recipient),
         });
         requests.set(String(number), {
           responseName:
@@ -283,8 +321,9 @@ export const makeFakeAgent = () => {
           messageId: `m${nextMessageId}`,
           description,
           fields,
-          from: locator(['@self']),
-          to: locator(recipient),
+          from: selfHandle,
+          to: recipientOf(recipient),
+          recipientPath: toPath(recipient),
         });
         for (const follower of incarnation.followers) {
           follower.next(message);
@@ -331,6 +370,7 @@ export const makeFakeAgent = () => {
       },
     });
 
+    incarnation.recipientOf = recipientOf;
     return { powers, incarnation };
   };
 
@@ -375,7 +415,10 @@ export const makeFakeAgent = () => {
       );
       await null;
     },
-    submitForm: async (formMessage, values) => {
+    // `sender` overrides the replying party (default: the form's
+    // recipient), to model a reply from someone the form was not sent to.
+    submitForm: async (formMessage, values, { sender } = {}) => {
+      const formEdges = correspondents.get(String(formMessage.number));
       const number = nextMessageNumber;
       nextMessageNumber += 1n;
       nextMessageId += 1;
@@ -385,8 +428,8 @@ export const makeFakeAgent = () => {
         number,
         messageId: `m${nextMessageId}`,
         replyTo: formMessage.messageId,
-        from: formMessage.to,
-        to: formMessage.from,
+        from: sender ?? formEdges?.to,
+        to: formEdges?.from,
       });
       for (const follower of currentIncarnation.followers) {
         follower.next(message);
@@ -407,6 +450,8 @@ export const makeFakeAgent = () => {
       return next.powers;
     },
     // Read a stored value directly, bypassing the powers surface.
+    // The capability a pet-name path designates, for building `sender`.
+    designate: path => currentIncarnation.recipientOf(path),
     peek: path => {
       const parent = walk(path.slice(0, -1));
       const entry = parent?.get(path[path.length - 1]);

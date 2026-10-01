@@ -38,7 +38,6 @@
  */
 
 import { Fail, q } from '@endo/errors';
-import { parseLocator } from '@endo/daemon/locator.js';
 import { E } from '@endo/eventual-send';
 import { makeExo } from '@endo/exo';
 import { readerFromIterator } from '@endo/exo-stream/reader-from-iterator.js';
@@ -119,23 +118,6 @@ const randomHex = (length = 12) => {
   }
   return hex.slice(0, length);
 };
-
-// Locators may carry changing connection hints; authenticate the formula.
-const sameParty = (left, right) => {
-  if (typeof left !== 'string' || typeof right !== 'string') return false;
-  try {
-    const a = parseLocator(left);
-    const b = parseLocator(right);
-    return a.node === b.node && a.number === b.number;
-  } catch {
-    return false;
-  }
-};
-const isFormReply = (message, correlation) =>
-  message.type === 'value' &&
-  message.replyTo === correlation.messageId &&
-  sameParty(message.from, correlation.to) &&
-  sameParty(message.to, correlation.from);
 
 const defaultClock = harden({
   now: () => Date.now(),
@@ -263,7 +245,9 @@ harden(resolveChartRefs);
  * @param {any} options.powers - agent-shaped powers (a guest or host):
  *   the pet-store surface (`lookup`, `maybeLookup`, `has`, `list`,
  *   `makeDirectory`, `storeValue`) plus, for `ask` effects, the mail
- *   surface (`request`, `form`, `listMessages`, `followMessages`).
+ *   surface (`request`, `form`, `listMessages`, `followMessages`, and
+ *   `lookup` of `@self` and `@mail/<n>/@from|@to` to authenticate
+ *   correspondents without identifiers or locators).
  * @param {any} [options.context] - caplet lifecycle context; cancellation
  *   stops timers and the mail watcher.
  * @param {{ now: () => number, setTimeout: (fn: () => void, ms: number) => any, clearTimeout: (handle: any) => void }} [options.clock]
@@ -281,6 +265,37 @@ export const makeWorkflowService = async ({
   iterateMessages = reader => reader,
 }) => {
   const isoNow = () => new Date(clock.now()).toISOString();
+
+  // A guest neither reveals nor reads locators, so correspondents are
+  // authenticated by capability identity: the handle a message's own
+  // `@from`/`@to` edge designates, compared with what this agent's
+  // `@self` and the recipient's pet-name path designate.
+  const correspondentOf = async (message, edge) => {
+    await null;
+    try {
+      return await E(powers).lookup(['@mail', String(message.number), edge]);
+    } catch {
+      return undefined;
+    }
+  };
+  const isEdge = async (message, edge, party) => {
+    await null;
+    if (party === undefined) return false;
+    return (await correspondentOf(message, edge)) === party;
+  };
+
+  // A form reply is the value message answering our form's messageId,
+  // sent by the asked party back to this agent.
+  const isFormReply = async (message, correlation) => {
+    await null;
+    return (
+      message.type === 'value' &&
+      message.replyTo !== undefined &&
+      message.replyTo === correlation.messageId &&
+      (await isEdge(message, '@from', correlation.recipient)) &&
+      isEdge(message, '@to', correlation.self)
+    );
+  };
 
   /** @type {Map<string, any>} */
   const engines = new Map();
@@ -1021,6 +1036,14 @@ export const makeWorkflowService = async ({
 
     const markerFor = effectId => `[workflow ${runId} ${effectId}]`;
 
+    const partiesFor = async effect => {
+      const [self, recipient] = await Promise.all([
+        E(powers).lookup('@self'),
+        E(powers).lookup(runPath(runId, ENDOWMENTS, effect.to)),
+      ]);
+      return harden({ self, recipient });
+    };
+
     const findOwnMessage = async (type, marker, parties) => {
       const messages = await E(powers).listMessages();
       for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -1029,8 +1052,10 @@ export const makeWorkflowService = async ({
           message.type === type &&
           typeof message.description === 'string' &&
           message.description.endsWith(marker) &&
-          sameParty(message.from, parties.from) &&
-          sameParty(message.to, parties.to)
+          // eslint-disable-next-line no-await-in-loop
+          (await isEdge(message, '@from', parties.self)) &&
+          // eslint-disable-next-line no-await-in-loop
+          (await isEdge(message, '@to', parties.recipient))
         ) {
           return message;
         }
@@ -1098,10 +1123,7 @@ export const makeWorkflowService = async ({
         mode === 'request' ? effect.what.description : effect.form.description;
       const description = `${base} ${marker}`;
       const recipientPath = runPath(runId, ENDOWMENTS, effect.to);
-      const parties = harden({
-        from: await E(powers).locate('@self'),
-        to: await E(powers).locate(...recipientPath),
-      });
+      const parties = await partiesFor(effect);
       let existing = await findOwnMessage(mode, marker, parties);
       if (existing === undefined) {
         if (mode === 'request') {
@@ -1120,8 +1142,9 @@ export const makeWorkflowService = async ({
         }
         existing = await scanForOwnMessage(mode, marker, parties);
       }
+      // The journaled correlation is data only; the authenticating parties
+      // are re-resolved by pet name on recovery.
       const correlation = harden({
-        ...parties,
         mode,
         responseName: answersPathFor(effectId),
         ...(existing !== undefined
@@ -1141,14 +1164,17 @@ export const makeWorkflowService = async ({
         if (existing !== undefined) {
           formCorrelations.set(existing.messageId, {
             ...correlation,
+            ...parties,
             runId,
             effectId,
           });
           // Adopt a reply that arrived before the correlation was
           // registered (or while the daemon was down).
           const messages = await E(powers).listMessages();
+          const authenticated = { ...correlation, ...parties };
           for (const message of messages) {
-            if (isFormReply(message, correlation)) {
+            // eslint-disable-next-line no-await-in-loop
+            if (await isFormReply(message, authenticated)) {
               // eslint-disable-next-line no-await-in-loop
               const value = await E(powers).lookup([
                 '@mail',
@@ -1671,11 +1697,7 @@ export const makeWorkflowService = async ({
                 const authenticated = {
                   ...correlation,
                   // eslint-disable-next-line no-await-in-loop
-                  from: await E(powers).locate('@self'),
-                  // eslint-disable-next-line no-await-in-loop
-                  to: await E(powers).locate(
-                    ...runPath(runId, ENDOWMENTS, effect.to),
-                  ),
+                  ...(await partiesFor(effect)),
                 };
                 if (correlation.messageId !== undefined) {
                   formCorrelations.set(correlation.messageId, {
@@ -1688,7 +1710,8 @@ export const makeWorkflowService = async ({
                 // eslint-disable-next-line no-await-in-loop
                 const messages = await E(powers).listMessages();
                 for (const message of messages) {
-                  if (isFormReply(message, authenticated)) {
+                  // eslint-disable-next-line no-await-in-loop
+                  if (await isFormReply(message, authenticated)) {
                     // eslint-disable-next-line no-await-in-loop
                     const value = await E(powers).lookup([
                       '@mail',
@@ -2533,7 +2556,7 @@ export const makeWorkflowService = async ({
           if (
             correlation !== undefined &&
             engine !== undefined &&
-            isFormReply(message, correlation)
+            (await isFormReply(message, correlation))
           ) {
             const value = await E(powers).lookup([
               '@mail',
