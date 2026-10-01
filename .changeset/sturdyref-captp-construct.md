@@ -14,8 +14,9 @@ it recorded.
   option, and rejects when that option is absent. The new `peerId` option makes
   construction refuse data that names a different peer.
 - The `@endo/ocapn` client gains `makeSturdyRefFromData(data)` and
-  `getSturdyRefData(ref)`, which map the same vocabulary onto an OCapN
-  `(location, secret)` pair. The result is an ordinary OCapN SturdyRef.
+  `getSturdyRefData(ref)`, which map the same field names onto an OCapN
+  `(location, secret)` pair. The result is an ordinary OCapN SturdyRef, and a
+  client reveals the data only of refs it minted itself.
 
 Both capabilities are closely held by whoever made the CapTP or client; neither
 is reachable from a peer, a SturdyRef, or the realm.
