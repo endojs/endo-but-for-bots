@@ -145,6 +145,16 @@ test('stop is idempotent and stays quiet after an abort', t => {
   t.is(second.terminations(), 1);
 });
 
+test('output byte counts must be non-negative safe integers', t => {
+  const { enforcer, terminations } = setup();
+  t.throws(() => enforcer.countOutputBytes(NaN));
+  t.throws(() => enforcer.countOutputBytes(-1));
+  t.throws(() => enforcer.countOutputBytes(1.5));
+  t.true(enforcer.countOutputBytes(10));
+  t.false(enforcer.countOutputBytes(1));
+  t.is(terminations(), 1);
+});
+
 test('limits are checked at construction', t => {
   t.throws(() =>
     makeLimitEnforcer({
