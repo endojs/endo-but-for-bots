@@ -1705,10 +1705,7 @@ impl Interp {
             idxs.try_reserve(ordinary_ids.len())
                 .map_err(|_| Step::Host(Halt::HeapExhausted))?;
             self.charge_builtin_work((ordinary_ids.len() + idxs.len()) as u64)?;
-            idxs.extend(ordinary_ids.iter().filter_map(|id| {
-                self.scalar_key_text(*id)
-                    .and_then(|name| string_to_index(&name))
-            }));
+            idxs.extend(ordinary_ids.iter().filter_map(|&id| self.key_id_index(id)));
             idxs.sort_unstable();
             idxs.dedup();
             for i in idxs {
@@ -1728,11 +1725,7 @@ impl Interp {
                 self.push_prepaid_scratch(&mut out, key)?;
             }
             for id in ordinary_ids {
-                if (!is_arguments && id == length_id)
-                    || self
-                        .scalar_key_text(id)
-                        .is_some_and(|name| string_to_index(&name).is_some())
-                {
+                if (!is_arguments && id == length_id) || self.key_id_index(id).is_some() {
                     continue;
                 }
                 self.charge_builtin_work(1)?;
@@ -1757,10 +1750,7 @@ impl Interp {
                 self.push_prepaid_scratch(&mut out, key)?;
             }
             for id in self.ordered_own_key_ids(inst) {
-                if self
-                    .scalar_key_text(id)
-                    .is_some_and(|name| string_to_index(&name).is_some())
-                {
+                if self.key_id_index(id).is_some() {
                     continue;
                 }
                 self.charge_builtin_work(1)?;
@@ -1801,7 +1791,7 @@ impl Interp {
             let mut index_expandos: Vec<(u32, u16)> = ordinary_ids
                 .iter()
                 .filter_map(|&id| {
-                    let index = string_to_index(&self.scalar_key_text(id)?)?;
+                    let index = self.key_id_index(id)?;
                     (index as usize >= units).then_some((index, id))
                 })
                 .collect();
@@ -1818,11 +1808,7 @@ impl Interp {
             for id in ordinary_ids {
                 // Every index-named expando is already placed above, in range
                 // as a unit and out of range as its own key.
-                if id == length_id
-                    || self
-                        .scalar_key_text(id)
-                        .is_some_and(|name| string_to_index(&name).is_some())
-                {
+                if id == length_id || self.key_id_index(id).is_some() {
                     continue;
                 }
                 self.charge_builtin_work(1)?;
@@ -1955,8 +1941,7 @@ impl Interp {
             if self.is_symbol_key_id(*id) {
                 (2u8, 0u32)
             } else {
-                self.scalar_key_text(*id)
-                    .and_then(|name| string_to_index(&name))
+                self.key_id_index(*id)
                     .map(|index| (0u8, index))
                     .unwrap_or((1u8, 0))
             }
