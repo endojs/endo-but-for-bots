@@ -303,17 +303,20 @@ export const makeGuestMaker = ({
 
       const workerId = await prepareWorkerFormulation(workerName, tasks.push);
 
-      /** @type {(FormulaIdentifier | NamePath)[]} */
-      const endowmentFormulaIdsOrPaths = petNamesOrPaths.map(petNameOrPath => {
+      // Every endowment, even a single name, resolves by a lookup through
+      // this guest, never by formula identifier, so a directory arrives as
+      // its pet-name facet as from the guest's own `lookup`. A raw identifier
+      // would hand the evaluated code the full directory, with `identify`,
+      // `locate`, and `storeIdentifier`.
+      /** @type {NamePath[]} */
+      const endowmentPaths = petNamesOrPaths.map(petNameOrPath => {
         const petNamePath = namePathFrom(petNameOrPath);
-        if (petNamePath.length === 1) {
-          const id = specialStore.identifyLocal(petNamePath[0]);
-          if (id === undefined) {
-            throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
-          }
-          return /** @type {FormulaIdentifier} */ (id);
+        if (
+          petNamePath.length === 1 &&
+          specialStore.identifyLocal(petNamePath[0]) === undefined
+        ) {
+          throw new Error(`Unknown pet name ${q(petNamePath[0])}`);
         }
-
         return petNamePath;
       });
 
@@ -328,7 +331,7 @@ export const makeGuestMaker = ({
         guestId,
         source,
         codeNames,
-        endowmentFormulaIdsOrPaths,
+        endowmentPaths,
         tasks,
         workerId,
         resultName === undefined ? pinTransient : undefined,

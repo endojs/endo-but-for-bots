@@ -3658,6 +3658,48 @@ test('a directory reaches a guest without identifier or locator methods', async 
   });
 });
 
+test('a guest evaluation endowed with a directory receives its facet', async t => {
+  // An endowment bound by formula identifier would hand the evaluated code
+  // the full directory, with `identify`, `locate`, and `storeIdentifier`.
+  const { host } = await prepareHost(t);
+  await E(host).makeDirectory(['granted']);
+  await E(host).makeDirectory(['granted', 'inner']);
+  const guest = await E(host).provideGuest('guest', {
+    agentName: 'guest-agent',
+  });
+  await E(host).copy(['granted'], ['guest-agent', 'granted']);
+
+  for (const endowment of [['granted'], ['granted', 'inner']]) {
+    // eslint-disable-next-line no-await-in-loop
+    const methods = await E(guest).evaluate(
+      undefined,
+      'E(hub).__getMethodNames__()',
+      ['hub'],
+      [endowment],
+      undefined,
+    );
+    t.true(methods.includes('lookup'), `${endowment} keeps lookup`);
+    for (const method of directoryDesignationMethods) {
+      t.false(methods.includes(method), `${endowment} lacks ${method}`);
+    }
+  }
+  await t.throwsAsync(
+    () =>
+      E(guest).evaluate(
+        undefined,
+        'E(hub).locate("inner")',
+        ['hub'],
+        ['granted'],
+        undefined,
+      ),
+    { message: /target has no method/u },
+  );
+  await t.throwsAsync(
+    () => E(guest).evaluate(undefined, '1', ['x'], ['missing'], undefined),
+    { message: /Unknown pet name/u },
+  );
+});
+
 test('a guest cannot adopt a host formula identifier carried as data', async t => {
   // #1371: a guest that read the host's formula identifier from its prompt
   // stored it with `storeIdentifier` and then held `?type=host`.
