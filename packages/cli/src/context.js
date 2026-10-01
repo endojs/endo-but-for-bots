@@ -96,7 +96,7 @@ export const withEndoAgent = (agentNamePath, { os, process }, callback) =>
  */
 export const assertAgentHoldsLocators = async (agent, command) => {
   // eslint-disable-next-line no-underscore-dangle
-  const methods = await E(agent).__getMethodNames__();
+  const methods = await E(/** @type {any} */ (agent)).__getMethodNames__();
   if (!methods.includes('locate')) {
     throw Error(`${command} is not available to a guest agent`);
   }

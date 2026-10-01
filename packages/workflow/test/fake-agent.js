@@ -131,6 +131,9 @@ export const makeFakeAgent = () => {
     parent.set(path[path.length - 1], { value });
   };
 
+  /**
+   * @param {{ from: any, to: any, recipientPath?: string[], [key: string]: any }} message
+   */
   const deliver = ({ from, to, recipientPath, ...message }) => {
     correspondents.set(String(message.number), { from, to });
     const listed = harden({
@@ -417,7 +420,11 @@ export const makeFakeAgent = () => {
     },
     // `sender` overrides the replying party (default: the form's
     // recipient), to model a reply from someone the form was not sent to.
-    submitForm: async (formMessage, values, { sender } = {}) => {
+    submitForm: async (
+      formMessage,
+      values,
+      /** @type {{ sender?: any }} */ { sender } = {},
+    ) => {
       const formEdges = correspondents.get(String(formMessage.number));
       const number = nextMessageNumber;
       nextMessageNumber += 1n;
