@@ -455,3 +455,54 @@ fn the_budget_is_released_on_the_error_path() {
         assert!(compile(&wrapped("(", "1", ")", 91)).is_ok());
     });
 }
+
+#[test]
+fn chains_near_the_tree_depth_limit_compile_on_a_small_stack() {
+    // The scoper and coder walk a chain the parser folded into a deep tree
+    // with explicit stacks (STACK-DEPTH-REFACTOR.md D2), so no pass recurses
+    // over its links: each of these compiles at or near the tree-depth limit
+    // (a class body or a mixed chain spends some of its levels elsewhere) on a
+    // thread far smaller than one host frame per link would need.
+    let chains: [(&str, String); 16] = [
+        ("binary", wrapped("1+", "1", "", 2045)),
+        ("member", format!("a{}", ".b".repeat(2045))),
+        ("computed", format!("a{}", "[0]".repeat(2045))),
+        ("call", format!("f{}", "()".repeat(2044))),
+        ("method call", format!("a{}", ".b()".repeat(1022))),
+        ("optional", format!("a{}", "?.b".repeat(1022))),
+        ("optional call", format!("a{}", "?.()".repeat(1022))),
+        ("tagged template", format!("f{}", "``".repeat(2043))),
+        ("tagged substitution", format!("f{}", "`${1}`".repeat(2043))),
+        ("and", format!("a{}", " && a".repeat(2045))),
+        ("or", format!("a{}", " || a".repeat(2045))),
+        ("nullish", format!("a{}", " ?? a".repeat(2045))),
+        (
+            "else if",
+            format!("if (a) x; {}else y;", "else if (a) x; ".repeat(2044)),
+        ),
+        (
+            "else if with blocks",
+            format!(
+                "if (a) {{ x; }} {}else {{ y; }}",
+                "else if (a) { x; } ".repeat(2041)
+            ),
+        ),
+        (
+            "private member",
+            format!(
+                "class C {{ #b; m() {{ return this{}; }} }}",
+                ".#b".repeat(2000)
+            ),
+        ),
+        ("mixed", format!("a{}", ".b()[0]``.c?.d && a".repeat(300))),
+    ];
+    for (name, source) in chains {
+        let result = std::thread::Builder::new()
+            .stack_size(256 * 1024)
+            .spawn(move || compile(&source).map(|_| ()))
+            .expect("spawn")
+            .join()
+            .expect("the compiler must not overflow a small stack on a flat chain");
+        assert!(result.is_ok(), "{name}: {result:?}");
+    }
+}
