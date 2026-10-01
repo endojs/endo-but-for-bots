@@ -2685,22 +2685,8 @@ impl Interp {
                     Err(halt) => dispatch_halt_flow!(halt, self, return_depth, code),
                 }
             }
-            // BoundFunction.[[Call]] is ordinary abstract Call
-            // redispatch: prepend this wrapper's arguments,
-            // substitute its `this`, and repeat for a chain. Use
-            // the shared dispatcher so user/native/method targets
-            // have identical semantics at opcode and callback call
-            // sites.
-            let args = self.stack[base + 4..base + 4 + argc].to_vec();
-            let this = self
-                .stack
-                .get(base)
-                .copied()
-                .unwrap_or_else(Slot::undefined);
-            let func = Slot::of(Kind::Reference, Payload::Reference(bf));
-            self.stack.truncate(base);
             let result = dispatch_result_flow!(
-                self.invoke_value(code, func, this, &args),
+                self.call_bound_frame(code, bf, base, argc),
                 self,
                 return_depth,
                 code
@@ -2714,13 +2700,9 @@ impl Interp {
             // `p(...)` / `new p(...)`: collect the frame's args and
             // receiver, clear the frame, and run the proxy's
             // `[[Call]]`/`[[Construct]]` (its `apply`/`construct`
-            // trap, or the target). `new.target` for a construct is
-            // the proxy itself.
-            let args: Vec<Slot> = self
-                .stack
-                .get(base + 4..base + 4 + argc)
-                .map(|s| s.to_vec())
-                .unwrap_or_default();
+            // trap, or the target).
+            let args =
+                dispatch_result_flow!(self.frame_arguments(base, argc), self, return_depth, code);
             let this = self
                 .stack
                 .get(base)

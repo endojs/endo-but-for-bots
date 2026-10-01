@@ -15,6 +15,7 @@ const SOURCE: &str = concat!(
     include_str!("../src/interp/errors.rs"),
     include_str!("../src/interp/eval.rs"),
     include_str!("../src/interp/frames.rs"),
+    include_str!("../src/interp/host.rs"),
     include_str!("../src/interp/function.rs"),
     include_str!("../src/interp/invoke.rs"),
     include_str!("../src/interp/iterable.rs"),
@@ -778,4 +779,48 @@ fn parser_and_collection_paths_keep_incremental_admission() {
         !method("json_parse_string_units").contains("&input[i..]"),
         "decoding each scalar must not revalidate the entire remaining string"
     );
+}
+
+/// A Proxy `apply` trap's argument list is reserved fallibly
+/// (`invoke_proxy_turn`). A bytecode trap receives it through
+/// `run_user_callback`, which must push it onto the stack, and `enter_call`,
+/// which must reserve the callee's copy fallibly: an allocation whose
+/// failure aborts the host on either step would undo the first.
+#[test]
+fn every_call_path_copies_a_frames_arguments_fallibly() {
+    // The bound call, the Proxy call and construct, the bound native
+    // construct and the host call each copy the frame's arguments before
+    // re-dispatching. Each goes through one fallible copy.
+    assert!(method("frame_arguments").contains("reserved_vec("));
+    for name in [
+        "exec_run",
+        "call_bound_frame",
+        "construct_bound_native",
+        "call_host",
+    ] {
+        let body = method(name);
+        assert!(
+            body.contains("frame_arguments("),
+            "{name} no longer copies through frame_arguments"
+        );
+        assert!(
+            !body.contains(".to_vec()"),
+            "{name} copies a list with .to_vec()"
+        );
+    }
+}
+
+#[test]
+fn a_callback_frame_is_pushed_without_an_infallible_copy() {
+    assert!(method("invoke_proxy_turn").contains("reserved_vec("));
+    assert!(method("enter_call").contains("reserved_vec("));
+    for name in ["run_user_callback", "enter_call"] {
+        let body = method(name);
+        for copy in [".to_vec()", ".collect", "Vec::with_capacity", "vec!["] {
+            assert!(
+                !body.contains(copy),
+                "{name} copies its arguments with {copy}"
+            );
+        }
+    }
 }

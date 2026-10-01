@@ -251,7 +251,7 @@ impl Interp {
             .get(&data.id)
             .cloned()
             .ok_or(Step::Host(Halt::Refused("host:missing-service")))?;
-        let args = self.stack[base + 4..base + 4 + argc].to_vec();
+        let args = self.frame_arguments(base, argc)?;
         let this = self.stack[base];
         let mut context = HostCallContext {
             interp: self,
