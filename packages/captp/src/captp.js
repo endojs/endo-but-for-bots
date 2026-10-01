@@ -11,8 +11,10 @@ import harden from '@endo/harden';
 import { Remotable, Far, makeMarshal, QCLASS } from '@endo/marshal';
 import { E, HandledPromise } from '@endo/eventual-send';
 import { isPromise, makePromiseKit } from '@endo/promise-kit';
+import { passStyleOf } from '@endo/pass-style';
+import { makeSturdyRef, enliven } from '@endo/sturdyref';
 
-import { X, Fail, annotateError } from '@endo/errors';
+import { X, Fail, annotateError, makeError, q } from '@endo/errors';
 import { makeTrap } from './trap.js';
 
 import { makeFinalizingMap } from './finalize.js';
@@ -481,6 +483,7 @@ export const makeCapTP = (
   // and 't' for traps.;
   let lastQuestionID = 0;
   let lastTrapID = 0;
+  let lastSturdyRefID = 0;
 
   /** @type {Map<CapTPSlot, Settler<unknown>>} */
   const settlers = new Map();
@@ -605,6 +608,13 @@ export const makeCapTP = (
       if (exportedTrapHandlers.has(val)) {
         lastTrapID += 1;
         slot = `t+${lastTrapID}`;
+      } else if (passStyleOf(val) === 'sturdyRef') {
+        // A SturdyRef is exported under its own 's+' slot kind, allocated
+        // here rather than by the import/export tables so that custom
+        // tables carry SturdyRefs too. The peer mints a SturdyRef of its
+        // own for it, which enlivens by asking us.
+        lastSturdyRefID += 1;
+        slot = `s+${lastSturdyRefID}`;
       } else {
         slot = importExportTables.makeSlotForValue(val);
       }
@@ -699,6 +709,31 @@ export const makeCapTP = (
   };
 
   /**
+   * Make the local SturdyRef for an 's' slot the peer exported. Like the
+   * 's+' allocation in convertValToSlot, this lives outside the
+   * import/export tables so that custom tables need not know the kind.
+   *
+   * @param {CapTPSlot} slot
+   * @returns {{val: any, settler: Settler }}
+   */
+  const makeSturdyRefForSlot = slot => {
+    const { settler } = makeRemoteKit(slot);
+    // Its handler holds a presence for the peer's export, never exposed,
+    // and enlivening sends that export `enliven()`: the peer enlivens its
+    // own SturdyRef and returns the live result. It fails once the
+    // connection is gone.
+    const enlivener = /** @type {{ enliven: () => unknown }} */ (
+      settler.resolveWithPresence()
+    );
+    const val = makeSturdyRef(
+      harden({
+        enliven: () => E(enlivener).enliven(),
+      }),
+    );
+    return { val, settler };
+  };
+
+  /**
    * Set up import
    *
    * @type {import('@endo/marshal').ConvertSlotToVal<CapTPSlot>}
@@ -714,7 +749,10 @@ export const makeCapTP = (
       if (iface === undefined) {
         iface = `Alleged: Presence ${ourId} ${slot}`;
       }
-      const { val, settler } = importExportTables.makeValueForSlot(slot, iface);
+      const { val, settler } =
+        slot[0] === 's'
+          ? makeSturdyRefForSlot(slot)
+          : importExportTables.makeValueForSlot(slot, iface);
       if (importHook) {
         importHook(val, slot);
       }
@@ -779,6 +817,22 @@ export const makeCapTP = (
       let val;
       if (answers.has(target)) {
         val = answers.get(target);
+      } else if (typeof target === 'string' && target[0] === 's') {
+        // The peer is enlivening a SturdyRef we exported. The target is
+        // an enliven facet for it, not the SturdyRef itself. The peer picks
+        // the method and arguments, so the facet answers only `enliven()`
+        // and refuses anything else, including methods it inherits.
+        const slot = reverseSlot(target);
+        importExportTables.hasExport(slot) || Fail`Unknown export ${slot}`;
+        const sturdyRef = importExportTables.getExport(slot);
+        val =
+          prop === 'enliven' && args && args.length === 0
+            ? Far('SturdyRefEnlivener', { enliven: () => enliven(sturdyRef) })
+            : Promise.reject(
+                makeError(
+                  X`SturdyRef export ${slot} answers only enliven(), not ${q(prop)}`,
+                ),
+              );
       } else {
         val = unserialize({
           body: JSON.stringify({

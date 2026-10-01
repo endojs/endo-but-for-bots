@@ -36,7 +36,10 @@ export const ocapnPassStyleOf = value => {
     );
   }
   try {
-    return passStyleOf(value);
+    const passStyle = passStyleOf(value);
+    // Every realm SturdyRef takes the OCapN sturdyref codec, which writes
+    // the ones OCapN minted and refuses the rest.
+    return passStyle === 'sturdyRef' ? 'sturdyref' : passStyle;
   } catch (error) {
     throw Error(`Unexpected value ${value} for OcapnPassable`, {
       cause: error,
