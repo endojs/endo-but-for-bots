@@ -241,6 +241,10 @@ export const makeEncodeToCapData = (encodeOptions = {}) => {
           'error',
         )}: ${encoded}`;
       }
+      case 'sturdyRef': {
+        // Marshal does not yet give a SturdyRef a representation.
+        throw Fail`a ${q(passStyle)} cannot be marshalled`;
+      }
       default: {
         throw assert.fail(
           X`internal: Unrecognized passStyle ${q(passStyle)}`,

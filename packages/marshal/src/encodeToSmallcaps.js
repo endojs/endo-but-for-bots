@@ -267,6 +267,10 @@ export const makeEncodeToSmallcaps = (encodeOptions = {}) => {
         assertEncodedError(result);
         return result;
       }
+      case 'sturdyRef': {
+        // Marshal does not yet give a SturdyRef a representation.
+        throw Fail`a ${q(passStyle)} cannot be marshalled`;
+      }
       default: {
         throw assert.fail(
           X`internal: Unrecognized passStyle ${q(passStyle)}`,
