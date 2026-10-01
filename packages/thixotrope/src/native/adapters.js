@@ -19,8 +19,7 @@ import { randomHex128 } from '../random-id.js';
  */
 export const QUICK_EXIT_MS = 10_000;
 harden(QUICK_EXIT_MS);
-export const MAX_EXIT_NOTICE_DELAY_MS = 30_000;
-harden(MAX_EXIT_NOTICE_DELAY_MS);
+const MAX_EXIT_NOTICE_DELAY_MS = 30_000;
 
 /**
  * Each native incarnation is an ephemeral session: no heap or input replay.

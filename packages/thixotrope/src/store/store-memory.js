@@ -1,16 +1,15 @@
 // @ts-check
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
-import { sha256 } from '@noble/hashes/sha2.js';
-import { bytesToHex } from '@noble/hashes/utils.js';
 
 import {
   assertBundleDigest,
   assertSessionToken,
   assertWorkerId,
+  bundleDigestOf,
 } from './store-validators.js';
 
-/** @import { ThixotropeStore, WorkerStore, WorkerMeta, TablesRecord, SessionStore } from './store-fs.js' */
+/** @import { ThixotropeStore, WorkerStore, WorkerMeta, TablesRecord, SessionStore } from './store.js' */
 
 /**
  * In-memory {@link ThixotropeStore} for tests. Simulates restart survival as
@@ -61,7 +60,7 @@ export const makeMemoryStore = () => {
     return harden(workerStore);
   };
 
-  /** @type {Map<string, { meta: Record<string, any>, frames: Array<{ n: number, b64: string, hubSequence?: string }> }>} */
+  /** @type {Map<string, { meta: Record<string, any> }>} */
   const sessions = new Map();
 
   /** @param {string} token */
@@ -69,7 +68,7 @@ export const makeMemoryStore = () => {
     assertSessionToken(token);
     let entry = sessions.get(token);
     if (!entry) {
-      entry = { meta: {}, frames: [] };
+      entry = { meta: {} };
       sessions.set(token, entry);
     }
     const state = entry;
@@ -79,11 +78,6 @@ export const makeMemoryStore = () => {
       setMeta: meta => {
         state.meta = JSON.parse(JSON.stringify(meta));
       },
-      appendFrame: frame => state.frames.push({ ...frame }),
-      readFrames: () => state.frames.map(frame => ({ ...frame })),
-      truncateFramesUpTo: upToN => {
-        state.frames = state.frames.filter(frame => frame.n > upToN);
-      },
     };
     return harden(sessionStore);
   };
@@ -92,7 +86,6 @@ export const makeMemoryStore = () => {
   // file: a daemon over this store cannot launch a native process.
   /** @type {Map<string, string>} */
   const bundles = new Map();
-  const encoder = new TextEncoder();
 
   /** @type {ThixotropeStore} */
   const store = {
@@ -107,11 +100,8 @@ export const makeMemoryStore = () => {
     },
     listSessionTokens: () => [...sessions.keys()].sort(),
     provideSessionStore,
-    deleteSession: token => {
-      sessions.delete(token);
-    },
     putBundle: text => {
-      const digest = bytesToHex(sha256(encoder.encode(text)));
+      const digest = bundleDigestOf(text);
       if (!bundles.has(digest)) bundles.set(digest, text);
       return digest;
     },

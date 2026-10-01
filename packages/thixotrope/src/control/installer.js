@@ -1,6 +1,6 @@
 // @ts-check
 /** @import { ThixotropeDaemon } from '../core/daemon.js' */
-/** @import { ThixotropeStore } from '../store/store-fs.js' */
+/** @import { ThixotropeStore } from '../store/store.js' */
 import { Fail, q } from '@endo/errors';
 import { Far } from '@endo/far';
 import harden from '@endo/harden';

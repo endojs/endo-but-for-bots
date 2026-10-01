@@ -3,8 +3,9 @@
 /** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
-import { encodeHex } from '@endo/hex';
 import { locationToLocationId } from '@endo/ocapn/client/util';
+
+import { HEX128_PATTERN, randomHex128 } from '../random-id.js';
 
 /**
  * Version 2 transfers message responsibility independently of sockets.
@@ -106,7 +107,7 @@ export const makeDurableNetLayer = async (
     maxReconnectDelayMs = 1000,
   },
 ) => {
-  const makeToken = () => encodeHex(random.randomBytes(16));
+  const makeToken = () => randomHex128(random);
 
   /** @type {Map<string, LogicalConnection>} */
   const sessions = new Map();
@@ -403,7 +404,7 @@ export const makeDurableNetLayer = async (
             (!bound && !physical.isOutgoing) ||
               Fail`Unexpected retirement greeting`;
             (typeof header.tok === 'string' &&
-              /^[0-9a-f]{32}$/.test(header.tok)) ||
+              HEX128_PATTERN.test(header.tok)) ||
               Fail`Invalid session token`;
             const logical = restore(header.tok);
             if (logical) {
@@ -427,7 +428,7 @@ export const makeDurableNetLayer = async (
             (!bound && !physical.isOutgoing) ||
               Fail`Unexpected session greeting`;
             (typeof header.tok === 'string' &&
-              /^[0-9a-f]{32}$/.test(header.tok)) ||
+              HEX128_PATTERN.test(header.tok)) ||
               Fail`Invalid session token`;
             if (retired.has(header.tok) || resumption?.isRetired(header.tok)) {
               physical.write(encode({ t: 'retired' }));

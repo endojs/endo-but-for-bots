@@ -5,9 +5,8 @@
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
 import { locationToLocationId } from '@endo/ocapn/client/util';
-import { writeOcapnHandshakeMessage } from '@endo/ocapn/operations';
 
-/** @import { Connection, NetlayerHandlers, Logger, NetLayer, SelfIdentity } from '@endo/ocapn/client/types' */
+/** @import { Connection, NetlayerHandlers, Logger, NetLayer } from '@endo/ocapn/client/types' */
 
 // Bound each physical fragment, not the already-admitted logical message.
 const maxFrameLength = 1024 * 1024;
@@ -212,7 +211,7 @@ export const makeUnixNetLayer = async (
     return connection;
   };
 
-  /** @type {NetLayer & { closed: Promise<void>, networkId: string, sendSessionHandshake: (connection: Connection, version: string, identity: SelfIdentity, codec: any) => void }} */
+  /** @type {NetLayer & { closed: Promise<void>, networkId: string }} */
   const netlayer = harden({
     networkId,
     get closed() {
@@ -235,21 +234,6 @@ export const makeUnixNetLayer = async (
       // callback.
       listener.close();
       for (const drop of connections.values()) drop();
-    },
-    sendSessionHandshake(connection, captpVersion, identity, codec) {
-      const { keyPair, location: peerLocation, locationSignature } = identity;
-      connection.write(
-        writeOcapnHandshakeMessage(
-          {
-            type: 'op:start-session',
-            captpVersion,
-            sessionPublicKey: keyPair.publicKey.descriptor,
-            location: peerLocation,
-            locationSignature,
-          },
-          codec,
-        ),
-      );
     },
   });
   listener = await sockets.listenPath({

@@ -313,7 +313,8 @@ test('Ironhorse distinguishes a newer manifest from an incompatible or invalid o
   const write = value => host.texts.set(manifestPath, JSON.stringify(value));
   write({ ...manifest, format: 3 });
   await t.throwsAsync(() => acquire(t, host, {}), {
-    message: /newer version: manifest format 3 exceeds supported format 2/,
+    message:
+      /newer build wrote the Ironhorse runtime manifest: version 3 exceeds supported version 2/,
   });
   write({ ...manifest, limits: { ...manifest.limits, stackCeiling: 1 } });
   await t.throwsAsync(() => acquire(t, host, {}), {
@@ -324,9 +325,12 @@ test('Ironhorse distinguishes a newer manifest from an incompatible or invalid o
     message: /newer version: unrecognized manifest field "attestation"/,
   });
   // An older format or a different runtime is incompatible, not newer.
-  const incompatible = /^Incompatible Ironhorse runtime: worker, bootstrap/;
   write({ ...manifest, format: 1, extra: true });
-  await t.throwsAsync(() => acquire(t, host, {}), { message: incompatible });
+  await t.throwsAsync(() => acquire(t, host, {}), {
+    message:
+      /^Incompatible Ironhorse runtime manifest: this build requires version 2/,
+  });
+  const incompatible = /^Incompatible Ironhorse runtime: worker or bootstrap/;
   write({ ...manifest, worker: 'other' });
   await t.throwsAsync(() => acquire(t, host, {}), { message: incompatible });
   write({ ...manifest, bootstrap: [] });

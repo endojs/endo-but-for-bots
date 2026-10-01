@@ -1,6 +1,8 @@
 // @ts-check
 /** @import { GuestGlobals } from '@endo/thixotrope/guest.js' */
-const { E, makeExo, M } = /** @type {GuestGlobals} */ (globalThis);
+const { E, describeError, makeExo, M } = /** @type {GuestGlobals} */ (
+  globalThis
+);
 
 // A delay in milliseconds, as the clock takes it; the application never
 // learns what time it is.
@@ -40,7 +42,7 @@ export const make = ({ clock }) => {
           },
           error => {
             item.state = 'failed';
-            item.error = String(error);
+            item.error = describeError(error);
           },
         );
       return true;

@@ -10,7 +10,7 @@ import { WorkerHaltError } from './worker-engine.js';
 
 /**
  * @import {WorkerEngine, WorkerIncarnation} from './worker-engine.js'
- * @import {WorkerStore} from '../store/store-fs.js'
+ * @import {WorkerStore} from '../store/store.js'
  */
 
 /**

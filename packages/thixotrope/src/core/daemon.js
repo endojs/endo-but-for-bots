@@ -33,7 +33,7 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
  * @import {ERef, FarRef} from '@endo/eventual-send'
  * @import {Connection, OcapnBootstrap} from '@endo/ocapn/client/types'
  * @import {WorkerEngine} from './worker-engine.js'
- * @import {ThixotropeStore} from '../store/store-fs.js'
+ * @import {ThixotropeStore} from '../store/store.js'
  * @import {ThixotropeWorkerShell} from './worker-peer.js'
  */
 
@@ -127,6 +127,8 @@ import { makeWorkerSessionRecords } from './worker-session-records.js';
 
 const textEncoder = new TextEncoder();
 const SHELL_SWISSNUM = swissnumFromBytes(textEncoder.encode('shell'));
+// A durable peer session's record; version 1 recorded receipts only.
+const SESSION_RECORD_VERSION = 2;
 // The endpoint's pseudo-worker id: its session records (resource
 // descriptions, pending answers) live in this worker store.
 const ENDPOINT_ID = 'e'.repeat(32);
@@ -750,7 +752,7 @@ const buildDaemon = async (
       !store.listSessionTokens().includes(token) ||
         Fail`durable session token has already been used`;
       store.provideSessionStore(token).setMeta({
-        version: 2,
+        version: SESSION_RECORD_VERSION,
         isOriginator: location !== undefined,
         ...(location === undefined ? {} : { location }),
         recvSeq: '0',
@@ -766,7 +768,7 @@ const buildDaemon = async (
       if (!store.listSessionTokens().includes(token)) return undefined;
       const meta = store.provideSessionStore(token).getMeta();
       // Receipt-only v1 records cannot establish durable acceptance.
-      if (meta.version !== 2) return undefined;
+      if (meta.version !== SESSION_RECORD_VERSION) return undefined;
       return {
         recvSeq: meta.recvSeq,
         sendSeq: meta.sendSeq,
