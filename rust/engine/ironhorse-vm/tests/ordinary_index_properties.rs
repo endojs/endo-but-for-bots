@@ -334,6 +334,58 @@ fn a_function_lists_and_freezes_its_stored_index_keys() {
     );
 }
 
+/// Index keys a program adds to an intrinsic prototype list ahead of its boot
+/// properties, as every own-keys order puts array indices first
+/// (`fxOrdinaryOwnKeys` queues the index chunk before the named chain). A `1`
+/// and `3` written by index and a `2` promoted to a named slot by its
+/// accessor come first and ascending, then the boot string keys in boot
+/// order, then a named key added after them, then the boot symbol keys. An
+/// instance's `for-in` meets the inherited keys in the same order.
+///
+/// The probe reads the boot surface before it adds anything, so every added
+/// key is created after every boot property, and it compares against that
+/// surface rather than spelling it: the boot keys' own order is the engine's
+/// choice, and XS and V8 already create them in different orders. A
+/// comparison answers `true`, or the list it read. The added keys are
+/// configurable, and deleting them must restore the boot surface. XS and V8
+/// give every answer below.
+#[test]
+fn an_intrinsic_prototype_lists_its_index_keys_first() {
+    // Nothing assigns an array element while the index-2 getter is
+    // installed: on `Array.prototype` it is an inherited accessor without a
+    // setter, so `push` would throw, as in XS and V8. Array literals and the
+    // Array methods define their elements instead.
+    let probe = "function probe(P, instance) { \
+         var boot = Reflect.ownKeys(P); \
+         Object.defineProperty(P, '2', {get: function () { return 9; }, \
+             enumerable: true, configurable: true}); \
+         P[3] = 1; P[1] = 1; P.zz = 1; \
+         var strings = boot.filter(function (k) { return typeof k === 'string'; }); \
+         var symbols = boot.filter(function (k) { return typeof k !== 'string'; }).map(String); \
+         var all = Reflect.ownKeys(P).map(String).join('+'); \
+         var names = Object.getOwnPropertyNames(P).join('+'); \
+         var inherited = ''; for (var k in instance) inherited += '+' + k; \
+         var answer = [ \
+             all === ['1', '2', '3'].concat(strings, ['zz'], symbols).join('+') || all, \
+             names === ['1', '2', '3'].concat(strings, ['zz']).join('+') || names, \
+             Object.keys(P).join('+'), inherited.slice(1), [P[1], P[2], P[3]].join() \
+         ]; \
+         delete P[1]; delete P[2]; delete P[3]; delete P.zz; \
+         answer.push(Reflect.ownKeys(P).map(String).join('+') === boot.map(String).join('+')); \
+         return answer.join(' ; '); \
+     }";
+    for target in [
+        "Map.prototype, new Map()",
+        "String.prototype, new String('')",
+        "Array.prototype, []",
+    ] {
+        assert_result(
+            &format!("{probe} probe({target})"),
+            "true ; true ; 1+2+3+zz ; 1+2+3+zz ; 1,9,1 ; true",
+        );
+    }
+}
+
 /// Every "this index is provably absent" claim in the engine enumerates the
 /// storages an index can live in, and adding one falsifies each of them. These
 /// are the sites that got it wrong: the generic-Array answerability probe, the
