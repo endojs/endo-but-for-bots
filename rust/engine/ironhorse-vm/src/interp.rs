@@ -637,6 +637,28 @@ struct ProxyData {
     revoked: bool,
 }
 
+/// What one Proxy layer of an internal method does: forward the method to
+/// its target (the trap is absent), or finish with the trap's checked result.
+/// The `mop_*` walks loop over `Forward` instead of recursing once per layer
+/// (STACK-DEPTH-REFACTOR.md B1).
+enum ProxyStep<T> {
+    Forward(crate::value::SlotIndex),
+    Done(T),
+}
+
+/// What one Proxy layer of `[[Call]]` does: forward the call to its target
+/// with the same receiver and arguments, or call the `apply` trap with the
+/// handler as receiver and `(target, thisArgument, argumentsList)`. Either is
+/// a tail call, which `invoke_value` takes as its next turn.
+enum ProxyCall {
+    Forward(crate::value::SlotIndex),
+    Trap {
+        trap: Slot,
+        handler: Slot,
+        args: [Slot; 3],
+    },
+}
+
 /// One guest `Compartment` instance's internal slots (`fx_Compartment`,
 /// `xsModule.c:2864`), keyed by the instance slot in
 /// [`Interp::guest_compartments`]. Membership is the brand: every
