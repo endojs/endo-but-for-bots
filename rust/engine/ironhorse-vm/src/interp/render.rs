@@ -27,6 +27,78 @@ impl Interp {
     }
 
     pub(super) fn render_at(&self, s: &Slot, depth: usize) -> Result<String, Step> {
+        let mut out = String::new();
+        self.render_into(s, depth, &mut out)?;
+        Ok(out)
+    }
+
+    /// Append the render of `s` to `out`. An array renders its elements
+    /// joined with commas, each in turn; the nesting is an explicit stack of
+    /// open arrays (STACK-DEPTH-REFACTOR.md B8), each charged
+    /// [`Self::render_descend`] before its first element as the recursion
+    /// was, so the same render is refused at the same depth on a flat host
+    /// stack.
+    fn render_into(&self, s: &Slot, depth: usize, out: &mut String) -> Result<(), Step> {
+        // (array, next index, the depth its elements render at)
+        let mut open: Vec<(crate::value::SlotIndex, u32, usize)> = Vec::new();
+        let mut next = Some((*s, depth));
+        loop {
+            if let Some((value, depth)) = next.take() {
+                match value.value {
+                    // An `arguments` object is stored in the array side table
+                    // for its indexed elements but renders as its tag, below.
+                    Payload::Reference(r)
+                        if !self.arguments_objects.contains(&r) && self.arrays.contains_key(&r) =>
+                    {
+                        // An array stringifies through `Array.prototype.toString`
+                        // → `join(",")`: each index in `[0, length)` rendered,
+                        // holes and `undefined`/`null` rendered as the empty
+                        // string, joined with commas.
+                        open.push((r, 0, self.render_descend(depth)?));
+                    }
+                    _ => out.push_str(&self.render_leaf(&value, depth)?),
+                }
+            }
+            let Some(top) = open.last_mut() else {
+                return Ok(());
+            };
+            let (r, i, depth) = *top;
+            let a = &self.arrays[&r];
+            if i >= a.length {
+                open.pop();
+                continue;
+            }
+            top.1 += 1;
+            if i > 0 {
+                out.push(',');
+            }
+            if let Some(item) = a.items().get(&i) {
+                if item.kind != Kind::Undefined && item.kind != Kind::Null {
+                    next = Some((*item, depth));
+                }
+            } else if let Some(id) = self.symbol_ids.get(i.to_string()).copied() {
+                // A restrictive `defineProperty` descriptor moves the index
+                // out of the compact item table and into the ordinary
+                // property chain. Include a materialized data index in the
+                // diagnostic as the guest `join` path's MOP read does. (An
+                // accessor would require re-entering guest code after the run
+                // and remains outside this read-only renderer.)
+                if let Some(property) = self.find_property(r, id) {
+                    let item = self.slots.get(property);
+                    if item.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0
+                        && item.kind != Kind::Undefined
+                        && item.kind != Kind::Null
+                    {
+                        next = Some((item, depth));
+                    }
+                }
+            }
+        }
+    }
+
+    /// The render of a value that is not an array (see
+    /// [`Self::render_into`]).
+    fn render_leaf(&self, s: &Slot, depth: usize) -> Result<String, Step> {
         Ok(match s.value {
             Payload::String(off) => self.str_text_lossy(off),
             // A BigInt completion renders as its decimal magnitude (XS's
@@ -41,45 +113,11 @@ impl Interp {
                     // builtinTag is `Arguments` (its prototype is
                     // `Object.prototype`, so `String(arguments)` does NOT run
                     // `Array.prototype.join`). It is stored in the array side
-                    // table for its indexed elements, so this arm precedes the
-                    // array arm to keep the join from mis-rendering `1,2` where
-                    // the oracle reports `[object Arguments]`.
+                    // table for its indexed elements, so `render_into` leaves
+                    // it to this arm rather than joining it, which would
+                    // mis-render `1,2` where the oracle reports
+                    // `[object Arguments]`.
                     "[object Arguments]".to_string()
-                } else if let Some(a) = self.arrays.get(&r) {
-                    // An array stringifies through `Array.prototype.toString` →
-                    // `join(",")`: each index in `[0, length)` rendered, holes
-                    // and `undefined`/`null` rendered as the empty string,
-                    // joined with commas.
-                    let depth = self.render_descend(depth)?;
-                    let mut out = String::new();
-                    for i in 0..a.length {
-                        if i > 0 {
-                            out.push(',');
-                        }
-                        if let Some(item) = a.items().get(&i) {
-                            if item.kind != Kind::Undefined && item.kind != Kind::Null {
-                                out.push_str(&self.render_at(item, depth)?);
-                            }
-                        } else if let Some(id) = self.symbol_ids.get(i.to_string()).copied() {
-                            // A restrictive `defineProperty` descriptor moves
-                            // the index out of the compact item table and into
-                            // the ordinary property chain. Include a
-                            // materialized data index in the diagnostic as the
-                            // guest `join` path's MOP read does. (An accessor
-                            // would require re-entering guest code after the
-                            // run and remains outside this read-only renderer.)
-                            if let Some(property) = self.find_property(r, id) {
-                                let item = self.slots.get(property);
-                                if item.flag & (XS_GETTER_FLAG | XS_SETTER_FLAG) == 0
-                                    && item.kind != Kind::Undefined
-                                    && item.kind != Kind::Null
-                                {
-                                    out.push_str(&self.render_at(&item, depth)?);
-                                }
-                            }
-                        }
-                    }
-                    out
                 } else if self.typed_arrays.contains_key(&r) {
                     // A TypedArray's `toString` IS `Array.prototype.toString`
                     // (`%TypedArray%.prototype.toString === Array.prototype.

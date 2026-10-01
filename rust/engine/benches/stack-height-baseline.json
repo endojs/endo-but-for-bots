@@ -168,7 +168,7 @@
       "outcome": "compiled"
     },
     "render-nested-256.run": {
-      "bytes": 101127,
+      "bytes": 8999,
       "outcome": "completed"
     },
     "render-self.compile": {
@@ -176,7 +176,7 @@
       "outcome": "compiled"
     },
     "render-self.run": {
-      "bytes": 789255,
+      "bytes": 8999,
       "outcome": "ReentryLimit"
     },
     "json-parse-arr-10k.compile": {
@@ -1088,7 +1088,7 @@
       "outcome": "compiled"
     },
     "render-arr-2047.run": {
-      "bytes": 788871,
+      "bytes": 8999,
       "outcome": "completed"
     },
     "render-arr-2048.compile": {
@@ -1096,7 +1096,7 @@
       "outcome": "compiled"
     },
     "render-arr-2048.run": {
-      "bytes": 789255,
+      "bytes": 8999,
       "outcome": "ReentryLimit"
     },
     "parse-parens-91.compile": {
