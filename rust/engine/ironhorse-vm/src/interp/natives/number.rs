@@ -365,6 +365,68 @@ impl Interp {
                 let rendered = crate::intl_number::format_to_string(&resolved, to_number(&prim));
                 self.intl_string(&rendered)
             }
+            // `toFixed` / `toExponential` / `toPrecision` (ES2024 21.1.3.3,
+            // .2, .5): thisNumberValue, then the digit count's
+            // ToIntegerOrInfinity, then the spec's order of the non-finite and
+            // range checks. The digits round the exact value, a tie to the
+            // larger digits, and `toPrecision` keeps its trailing zeros, as the
+            // specification and V8 do; XS agrees except that
+            // `(±0.5).toFixed(0)` is `0`/`-0` there and some `toPrecision`
+            // results lose trailing zeros (`(12).toPrecision(4)` is `12.0`).
+            NumberToFixed | NumberToExponential | NumberToPrecision => {
+                let prim = match this.value {
+                    Payload::Integer(_) | Payload::Number(_) => this,
+                    Payload::Reference(r) => match self.wrapper_data.get(&r).copied() {
+                        Some(s) if matches!(s.value, Payload::Integer(_) | Payload::Number(_)) => s,
+                        _ => return Err(self.catchable_type_error_msg("this: not a number".into())),
+                    },
+                    _ => return Err(self.catchable_type_error_msg("this: not a number".into())),
+                };
+                let x = to_number(&prim);
+                let digits = arg0.unwrap_or_else(Slot::undefined);
+                let text = match m {
+                    NumberToFixed => {
+                        let f = self.array_to_integer_or_infinity(code, digits)?;
+                        if !(0.0..=100.0).contains(&f) {
+                            return Err(
+                                self.catchable_range_error_msg("invalid fractionDigits".into())
+                            );
+                        }
+                        if !x.is_finite() || x.abs() >= 1e21 {
+                            number_to_ecma_string(x)
+                        } else {
+                            number_to_fixed(x, f as usize)
+                        }
+                    }
+                    NumberToExponential => {
+                        let f = self.array_to_integer_or_infinity(code, digits)?;
+                        if !x.is_finite() {
+                            number_to_ecma_string(x)
+                        } else if !(0.0..=100.0).contains(&f) {
+                            return Err(
+                                self.catchable_range_error_msg("invalid fractionDigits".into())
+                            );
+                        } else {
+                            let f = (digits.kind != Kind::Undefined).then_some(f as usize);
+                            number_to_exponential(x, f)
+                        }
+                    }
+                    _ if digits.kind == Kind::Undefined => number_to_ecma_string(x),
+                    _ => {
+                        let p = self.array_to_integer_or_infinity(code, digits)?;
+                        if !x.is_finite() {
+                            number_to_ecma_string(x)
+                        } else if !(1.0..=100.0).contains(&p) {
+                            return Err(self.catchable_range_error_msg("invalid precision".into()));
+                        } else {
+                            number_to_precision(x, p as usize)
+                        }
+                    }
+                };
+                self.meter.tick_builtin();
+                let off = self.alloc_str_text_metered(text.as_bytes())?;
+                Slot::of(Kind::String, Payload::String(off))
+            }
             // Number.prototype.toString([radix]) — radix 10 renders through the
             // metered `fxNumberToString`; a radix in [2,36] runs the digit
             // conversion. The non-decimal path covers the finite integral

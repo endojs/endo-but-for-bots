@@ -2505,6 +2505,9 @@ impl Interp {
             | NativeMethod::NumberIsSafeInteger
             | NativeMethod::NumberToString
             | NativeMethod::NumberToLocaleString
+            | NativeMethod::NumberToFixed
+            | NativeMethod::NumberToExponential
+            | NativeMethod::NumberToPrecision
             | NativeMethod::GlobalParseInt
             | NativeMethod::GlobalParseFloat
             | NativeMethod::GlobalIsNaN
@@ -7602,6 +7605,9 @@ impl Interp {
             | NativeMethod::NumberIsSafeInteger
             | NativeMethod::NumberToString
             | NativeMethod::NumberToLocaleString
+            | NativeMethod::NumberToFixed
+            | NativeMethod::NumberToExponential
+            | NativeMethod::NumberToPrecision
             | NativeMethod::GlobalParseInt
             | NativeMethod::GlobalParseFloat
             | NativeMethod::GlobalIsNaN

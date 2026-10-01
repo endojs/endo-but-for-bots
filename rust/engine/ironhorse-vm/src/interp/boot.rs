@@ -2389,6 +2389,14 @@ impl Interp {
                 self.alloc_named_method(NativeMethod::NumberToLocaleString, "toLocaleString", 0);
             self.proto_methods
                 .push((self.number_proto, "toLocaleString", to_locale_string));
+            for (name, method) in [
+                ("toExponential", NativeMethod::NumberToExponential),
+                ("toFixed", NativeMethod::NumberToFixed),
+                ("toPrecision", NativeMethod::NumberToPrecision),
+            ] {
+                let function = self.alloc_named_method(method, name, 1);
+                self.proto_methods.push((self.number_proto, name, function));
+            }
         }
         // The numeric global functions, bound into the global object by name
         // (a native function instance, so `typeof parseInt === "function"`).

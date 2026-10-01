@@ -619,6 +619,15 @@ pub enum NativeMethod {
     NumberToString,
     /// `Number.prototype.toLocaleString([locales[, options]])`.
     NumberToLocaleString,
+    /// `Number.prototype.toFixed(fractionDigits)`: the exact value rounded
+    /// to a fixed number of places, a tie to the larger digits.
+    NumberToFixed,
+    /// `Number.prototype.toExponential(fractionDigits)`: one digit before the
+    /// point, the given places after it (or the shortest round-tripping digits).
+    NumberToExponential,
+    /// `Number.prototype.toPrecision(precision)`: `precision` significant
+    /// digits, in fixed or exponential notation by magnitude.
+    NumberToPrecision,
     /// The global `parseInt(string[,radix])` (`fx_parseInt`): the integer
     /// prefix parse. No `mxMeterSome`, no chunk.
     GlobalParseInt,
