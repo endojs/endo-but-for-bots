@@ -1,7 +1,9 @@
 from pathlib import Path
+import resource
 import shutil
 import subprocess
 import unittest
+from unittest import mock
 
 import common
 
@@ -240,16 +242,22 @@ class ShadowPaint(unittest.TestCase):
 
 class StackLimit(unittest.TestCase):
     """A V8 --stack-size past the process's stack needs the limit raised."""
-    INFINITY = common.resource.RLIM_INFINITY
+    INFINITY = resource.RLIM_INFINITY
 
     def test_a_limit_that_holds_the_stack_is_left_alone(self):
         self.assertIsNone(common.stack_limit_raiser(4096, (self.INFINITY, self.INFINITY)))
         self.assertIsNone(common.stack_limit_raiser(4096, ((4096 + common.NODE_STACK_SLACK_KB) * 1024,
                                                            self.INFINITY)))
 
-    def test_a_smaller_soft_limit_is_raised(self):
-        self.assertTrue(callable(common.stack_limit_raiser(16384, (8 << 20, self.INFINITY))))
-        self.assertTrue(callable(common.stack_limit_raiser(16384, (8 << 20, 64 << 20))))
+    def test_a_smaller_soft_limit_is_raised_under_the_hard_limit_it_has(self):
+        """Only the soft limit moves: an unprivileged process may not raise
+        its hard limit, so a finite one (macOS's default is just under
+        64 MiB) is passed back unchanged."""
+        need = (16384 + common.NODE_STACK_SLACK_KB) * 1024
+        for hard in (self.INFINITY, 64 << 20):
+            with self.subTest(hard=hard), mock.patch.object(resource, "setrlimit") as setrlimit:
+                common.stack_limit_raiser(16384, (8 << 20, hard))()
+                setrlimit.assert_called_once_with(resource.RLIMIT_STACK, (need, hard))
 
     def test_a_hard_limit_too_small_is_a_harness_error(self):
         with self.assertRaisesRegex(common.HarnessError, "cannot hold a 16384 KiB"):
@@ -259,13 +267,32 @@ class StackLimit(unittest.TestCase):
     def test_node_runs_under_a_raised_limit(self):
         """A recursion that needs more than an 8 MiB process stack completes
         under a 32 MiB V8 stack with the limit raised; without the raise it
-        would fault, not throw."""
+        would fault, not throw. The child starts from an 8 MiB soft limit
+        under this process's hard limit, and under a finite 48 MiB one, which
+        is how a host with a finite default (macOS) starts it, and the raiser
+        is handed the limits the child has: handed an unlimited hard limit
+        the child does not have, it would try to raise the child's hard
+        limit, which only a privileged process may."""
         script = ("function f(n) { return n === 0 ? 0 : 1 + f(n - 1); }"
                   "console.log(f(300000));")
-        raiser = common.stack_limit_raiser(32768, (8 << 20, self.INFINITY))
-        completed = subprocess.run(["node", "--stack-size=32768", "-e", script], text=True,
-                                   capture_output=True, preexec_fn=raiser)
-        self.assertEqual((completed.returncode, completed.stdout), (0, "300000\n"), completed.stderr)
+        _, own_hard = resource.getrlimit(resource.RLIMIT_STACK)
+        for hard in (own_hard, 48 << 20):
+            with self.subTest(hard=hard):
+                if own_hard != self.INFINITY and hard > own_hard:
+                    self.skipTest(f"this process's stack hard limit is {own_hard} B")
+                limits = (8 << 20, hard)
+                try:
+                    raiser = common.stack_limit_raiser(32768, limits)
+                except common.HarnessError as error:
+                    self.skipTest(str(error))
+
+                def start_from_limits_then_raise():
+                    resource.setrlimit(resource.RLIMIT_STACK, limits)
+                    raiser()
+
+                completed = subprocess.run(["node", "--stack-size=32768", "-e", script], text=True,
+                                           capture_output=True, preexec_fn=start_from_limits_then_raise)
+                self.assertEqual((completed.returncode, completed.stdout), (0, "300000\n"), completed.stderr)
 
 
 class SelectCases(unittest.TestCase):
