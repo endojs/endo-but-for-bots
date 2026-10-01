@@ -77,6 +77,51 @@ function sampleGlobals(globalObject, newPropertyNames) {
 }
 
 /**
+ * The `SturdyRef` permit admits any function under that global name, but SES
+ * shares it with every compartment only because the `@endo/sturdyref` shim
+ * confers no authority. Before admitting it, check for the shim's identifying
+ * statics, `enliven` and `isSturdyRef`, as own data properties holding
+ * functions. The shim's own `isSturdyRefConstructor` reads them by `[[Get]]`,
+ * so it also accepts inherited or accessor statics; this check is stricter,
+ * and reads the global binding and each static by descriptor, without running
+ * a getter, refusing an accessor global.
+ *
+ * This is a misconfiguration guard, not an authority boundary: it catches an
+ * unrelated application `SturdyRef` global or a broken shim, but any function
+ * with those two statics passes, whatever it closes over.
+ *
+ * @param {object} globalObject
+ */
+export const assertSturdyRefShape = globalObject => {
+  if (!hasOwn(globalObject, 'SturdyRef')) {
+    return;
+  }
+  // Read the binding by descriptor so no getter runs, and so the value checked
+  // here is the value `sampleGlobals` later captures.
+  const binding = getOwnPropertyDescriptor(globalObject, 'SturdyRef');
+  if (binding === undefined || !hasOwn(binding, 'value')) {
+    throw TypeError(
+      'lockdown expected globalThis.SturdyRef to be a data property, not an accessor',
+    );
+  }
+  const candidate = binding.value;
+  /** @param {string} name */
+  const hasStaticMethod = name => {
+    const descriptor = getOwnPropertyDescriptor(candidate, name);
+    return descriptor !== undefined && typeof descriptor.value === 'function';
+  };
+  if (
+    typeof candidate !== 'function' ||
+    !hasStaticMethod('enliven') ||
+    !hasStaticMethod('isSturdyRef')
+  ) {
+    throw TypeError(
+      'lockdown expected globalThis.SturdyRef to be the @endo/sturdyref constructor, with enliven and isSturdyRef statics',
+    );
+  }
+};
+
+/**
  * @param {Reporter} reporter
  */
 export const makeIntrinsicsCollector = reporter => {

@@ -5,12 +5,55 @@ import {
   defineProperty,
   entries,
   freeze,
+  getOwnPropertyDescriptor,
   hasOwn,
+  is,
   unscopablesSymbol,
 } from './commons.js';
 import { makeEvalFunction } from './make-eval-function.js';
 import { makeFunctionConstructor } from './make-function-constructor.js';
 import { constantProperties, universalPropertyNames } from './permits.js';
+
+/**
+ * Universal globals that a shim may install before `lockdown`, locked
+ * first-wins, and that `lockdown` then leaves in place rather than redefining.
+ * Every other universal global keeps the fail-closed behavior: a pre-lockdown
+ * non-configurable binding makes `lockdown` throw.
+ * So after `lockdown`, these are the only universal globals whose
+ * start-compartment binding stays non-writable and non-configurable; a child
+ * compartment's binding is writable and configurable as usual.
+ *
+ * `SturdyRef` is deliberately the only entry. Admitting another would take
+ * three coordinated edits: its entry in `universalPropertyNames` (permits.js),
+ * its entry here, and a shape guard like `assertSturdyRefShape` (intrinsics.js)
+ * called from `repairIntrinsics`. Generalize those into permit data only when
+ * a second first-wins global actually arrives.
+ */
+const firstWinsPropertyNames = freeze({
+  __proto__: null,
+  SturdyRef: true, // Shimmed by `@endo/sturdyref`.
+});
+
+/**
+ * Whether a pre-existing global binding is exactly the first-wins shape a shim
+ * installs: a non-writable, non-enumerable, non-configurable data property
+ * whose value is the intrinsic `lockdown` would install. Any other shape falls
+ * through to the ordinary redefinition, which throws on a non-configurable
+ * binding, so a misconfigured shim fails loudly.
+ * In the start compartment `value` was sampled from this same binding, so the
+ * value comparison always holds there; it guards only against a future change
+ * in how `lockdown` samples the intrinsic.
+ *
+ * @param {PropertyDescriptor | undefined} descriptor
+ * @param {unknown} value
+ */
+const isFirstWinsDescriptor = (descriptor, value) =>
+  descriptor !== undefined &&
+  hasOwn(descriptor, 'value') &&
+  is(descriptor.value, value) &&
+  descriptor.writable === false &&
+  descriptor.enumerable === false &&
+  descriptor.configurable === false;
 
 /**
  * The host's ordinary global object is not provided by a `with` block, so
@@ -88,8 +131,21 @@ export const setGlobalObjectMutableProperties = (
 ) => {
   for (const [name, intrinsicName] of entries(universalPropertyNames)) {
     if (hasOwn(intrinsics, intrinsicName)) {
+      const value = intrinsics[intrinsicName];
+      const descriptor = getOwnPropertyDescriptor(globalObject, name);
+      if (
+        hasOwn(firstWinsPropertyNames, name) &&
+        isFirstWinsDescriptor(descriptor, value)
+      ) {
+        // The shim already locked the start compartment's binding to the very
+        // intrinsic we would install, so leave it. A child compartment gets
+        // the same value from its own call to this function, where its fresh
+        // global object has no such binding yet.
+        // eslint-disable-next-line no-continue
+        continue;
+      }
       defineProperty(globalObject, name, {
-        value: intrinsics[intrinsicName],
+        value,
         writable: true,
         enumerable: false,
         configurable: true,
