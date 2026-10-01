@@ -11,3 +11,4 @@ An object that merely inherits from `SturdyRef.prototype`, a ref from a construc
 The brand check is consulted only after every other pass style has declined a value, so it cannot reclassify a value that already has a pass style.
 `globalThis` here is the global of the compartment that loaded `@endo/pass-style`, so a child compartment recognizes the same refs only when the shim was installed before `lockdown`.
 When no `SturdyRef` shim has run, nothing changes.
+The `Passable` type admits the new `SturdyRefObject` type, alone or inside a container.
