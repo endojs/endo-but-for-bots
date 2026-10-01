@@ -309,7 +309,7 @@ test('send: "!+15551234567" in strings[] delivers the literal string "+155512345
   // The LLM emits the `!` escape to pass a string that starts with `+`.
   const { piAgent, sent } = buildAgent(
     oneToolCall('send', {
-      recipientName: '@host',
+      recipientNamePath: ['@host'],
       // "!+15551234567" is SmallCaps-escaped "+15551234567"
       strings: ['!+15551234567'],
       edgeNames: [],
@@ -331,7 +331,7 @@ test('send: "!+15551234567" in strings[] delivers the literal string "+155512345
 test('send: "!+5" in strings[] delivers the literal string "+5"', async t => {
   const { piAgent, sent } = buildAgent(
     oneToolCall('send', {
-      recipientName: '@host',
+      recipientNamePath: ['@host'],
       strings: ['!+5'],
       edgeNames: [],
       petNames: [],
@@ -348,7 +348,7 @@ test('send: "!+5" in strings[] delivers the literal string "+5"', async t => {
 test('send: "!#undefined" in strings[] delivers the literal string "#undefined"', async t => {
   const { piAgent, sent } = buildAgent(
     oneToolCall('send', {
-      recipientName: '@host',
+      recipientNamePath: ['@host'],
       strings: ['!#undefined'],
       edgeNames: [],
       petNames: [],
@@ -365,7 +365,7 @@ test('send: "!#undefined" in strings[] delivers the literal string "#undefined"'
 test('send: "!%percentage" in strings[] delivers the literal string "%percentage"', async t => {
   const { piAgent, sent } = buildAgent(
     oneToolCall('send', {
-      recipientName: '@host',
+      recipientNamePath: ['@host'],
       strings: ['!%percentage'],
       edgeNames: [],
       petNames: [],
@@ -384,7 +384,7 @@ test('send: plain strings without sigil prefix pass through unchanged', async t 
   // escaping. They pass through byte-identical to their JSON representation.
   const { piAgent, sent } = buildAgent(
     oneToolCall('send', {
-      recipientName: '@host',
+      recipientNamePath: ['@host'],
       strings: [
         'Hello world',
         'foo bar',
@@ -414,7 +414,7 @@ test('send: multiple sigil-prefixed strings with !-escapes all decode correctly'
   //   "!%percent" → "%percent" (literal % string)
   const { piAgent, sent } = buildAgent(
     oneToolCall('send', {
-      recipientName: '@host',
+      recipientNamePath: ['@host'],
       strings: ['!+1 555 123 4567', '!#main', '!%percent and $variable'],
       edgeNames: [],
       petNames: [],
@@ -486,11 +486,11 @@ test('evaluate: "#undefined" workerName decodes to undefined', async t => {
     toolExecution: 'sequential',
     streamFn: makeScriptedStreamFn(
       oneToolCall('evaluate', {
-        workerName: '#undefined',
+        workerNamePath: '#undefined',
         source: 'Math.PI',
         codeNames: [],
         edgeNames: [],
-        resultName: 'r',
+        resultNamePath: ['r'],
       }),
     ),
   });

@@ -12,29 +12,31 @@ export type { NamePath };
  */
 export type ToolCallArgs = {
   methodName?: string;
+  // Pet-name path fields carry their pre-validation shape:
+  // `NamePathArgumentShape` admits a bare string so that the daemon's
+  // `namePathFrom` can refuse it with a retry hint, rather than the guard
+  // rejecting it opaquely.
   // `name` is the optional argument to the `list` tool when called against a
   // capability other than the guest's own root directory.
-  name?: NamePath;
-  petNamePath?: NamePath;
+  name?: NamePath | string;
+  petNamePath?: NamePath | string;
   fromPath?: NamePath;
   toPath?: NamePath;
   messageNumber?: number | bigint;
   reason?: string;
   edgeName?: string;
-  petName?: NamePath;
-  recipientName?: NamePath;
+  recipientNamePath?: NamePath | string;
   description?: string;
-  responseName?: NamePath;
+  responseNamePath?: NamePath | string;
   strings?: string[];
   edgeNames?: Name[];
-  petNames?: NamePath[];
-  // Pre-validation shape: `NamePathArgumentShape` admits a bare string so the
-  // dispatcher can map the LLM's literal `'undefined'` sentinel to absent and
-  // forward any other string for the daemon to refuse.
-  workerName?: NamePath | string;
+  petNames?: (NamePath | string)[];
+  // The dispatcher also maps the LLM's literal `'undefined'` sentinel to
+  // absent before forwarding any other string for the daemon to refuse.
+  workerNamePath?: NamePath | string;
   source?: string;
   codeNames?: string[];
-  resultName?: NamePath;
+  resultNamePath?: NamePath | string;
   fileName?: string;
   content?: string;
   // Arguments to the `glob`/`grep` search tools: a glob or regexp `pattern`,

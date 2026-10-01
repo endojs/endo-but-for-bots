@@ -24,13 +24,13 @@
 - `adopt(messageNumber, edgeName, petNamePath)` — Adopt a value
   from a message
 - `dismiss(messageNumber)` — Remove a message from inbox
-- `request(recipientName, description, responseName?)` — Request
+- `request(recipientNamePath, description, responseNamePath?)` — Request
   a capability
 - `resolve(messageNumber, petNamePath)` — Respond to a request
 - `reject(messageNumber, reason?)` — Decline a request
 - `reply(messageNumber, strings, edgeNames, petNames)` — Reply
   to a message (PREFERRED for responses)
-- `send(recipientName, strings, edgeNames, petNames)` — Send a
+- `send(recipientNamePath, strings, edgeNames, petNames)` — Send a
   NEW message (only for initiating conversations)
 
 ## Identity
@@ -70,7 +70,7 @@
 
 - `define(source, slots)` — Propose code with named slots for the
   host to fill (PREFERRED)
-- `evaluate(workerName?, source, codeNames, edgeNames, resultName)`
+- `evaluate(workerNamePath?, source, codeNames, edgeNames, resultNamePath)`
   — Evaluate code directly using your own capabilities
 
 ## Prefer Direct Tools Over Code

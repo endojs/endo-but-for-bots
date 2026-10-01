@@ -71,11 +71,11 @@ export const petnamesToolDefs = harden([
     name: 'adopt',
     summary:
       'Adopt a value from an incoming package message, giving it a pet name. ' +
-      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), edgeName, petName.',
+      'Arguments: messageNumber (BigInt encoded as "+N", e.g. "+5"), edgeName, petNamePath.',
     params: M.splitRecord({
       messageNumber: MessageNumberShape,
       edgeName: M.string(),
-      petName: NamePathArgumentShape,
+      petNamePath: NamePathArgumentShape,
     }),
   },
 ]);

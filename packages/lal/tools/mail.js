@@ -58,20 +58,20 @@ export const mailToolDefs = harden([
     name: 'request',
     summary:
       'Send a request to another agent asking for a capability. ' +
-      'Arguments: recipientName, description (string), optional responseName.',
+      'Arguments: recipientNamePath, description (string), optional responseNamePath.',
     params: M.splitRecord(
-      { recipientName: NamePathArgumentShape, description: M.string() },
-      { responseName: NamePathArgumentShape },
+      { recipientNamePath: NamePathArgumentShape, description: M.string() },
+      { responseNamePath: NamePathArgumentShape },
     ),
   },
   {
     name: 'send',
     summary:
       'Send a package message with values to another agent. ' +
-      'Arguments: recipientName, strings (string[]), edgeNames (string[]), petNames. ' +
-      'For text-only messages: send("@host", ["text"], [], []).',
+      'Arguments: recipientNamePath, strings (string[]), edgeNames (string[]), petNames. ' +
+      'For text-only messages: send(["@host"], ["text"], [], []).',
     params: M.splitRecord({
-      recipientName: NamePathArgumentShape,
+      recipientNamePath: NamePathArgumentShape,
       strings: M.arrayOf(M.string()),
       edgeNames: M.arrayOf(M.string()),
       petNames: M.arrayOf(NamePathArgumentShape),

@@ -245,7 +245,7 @@ This handles Endo-specific types:
 
 `Guest.evaluate` executes code directly and returns the result. There is no
 proposal/grant workflow — the `evaluate` tool call blocks until the code
-finishes and the result is stored under `resultName`.
+finishes and the result is stored under `resultNamePath`.
 
 ```
 Lal
@@ -329,7 +329,7 @@ Messages arrive as `InboxMessage` (alias for `StampedMessage`) objects with:
 ### Outbound Messages
 
 ```javascript
-await E(powers).send(recipientName, strings, edgeNames, petNames);
+await E(powers).send(recipientNamePath, strings, edgeNames, petNames);
 ```
 
 Messages are sent as packages with interleaved text and capability references.
@@ -337,7 +337,7 @@ Messages are sent as packages with interleaved text and capability references.
 ### Requests
 
 ```javascript
-await E(powers).request(recipientName, description, responseName);
+await E(powers).request(recipientNamePath, description, responseNamePath);
 ```
 
 Requests are a special message type where Lal asks another agent for a
@@ -490,10 +490,10 @@ A complete request lifecycle:
    b. E(powers).listMessages() → [...messages]
    c. chat(transcript) → LLM calls evaluate(source: "E(counter).increment()",
       codeNames: ["counter"], edgeNames: ["my-counter"],
-      resultName: "increment-result")
+      resultNamePath: ["increment-result"])
    d. E(powers).evaluate(...) → code executes, result returned
-   e. chat(transcript) → LLM calls lookup("increment-result")
-   f. chat(transcript) → LLM calls send("@host", ["The counter is now 42"], [], [])
+   e. chat(transcript) → LLM calls lookup(["increment-result"])
+   f. chat(transcript) → LLM calls send(["@host"], ["The counter is now 42"], [], [])
    g. chat(transcript) → LLM calls dismiss("+5")
    h. chat(transcript) → LLM returns no tool calls
    i. Loop exits

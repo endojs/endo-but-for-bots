@@ -265,15 +265,17 @@ export const makeExecuteTool = powers => {
         return E(powers).reject(messageNumber, reason);
       }
       case 'adopt': {
-        const { messageNumber, edgeName, petName } = args;
+        const { messageNumber, edgeName, petNamePath } = args;
         if (
           messageNumber === undefined ||
           edgeName === undefined ||
-          petName === undefined
+          petNamePath === undefined
         ) {
-          throw new Error('messageNumber, edgeName, and petName are required');
+          throw new Error(
+            'messageNumber, edgeName, and petNamePath are required',
+          );
         }
-        return E(powers).adopt(messageNumber, edgeName, petName);
+        return E(powers).adopt(messageNumber, edgeName, petNamePath);
       }
       case 'dismiss': {
         const { messageNumber } = args;
@@ -283,25 +285,29 @@ export const makeExecuteTool = powers => {
         return E(powers).dismiss(messageNumber);
       }
       case 'request': {
-        const { recipientName, description, responseName } = args;
-        if (recipientName === undefined || description === undefined) {
-          throw new Error('recipientName and description are required');
+        const { recipientNamePath, description, responseNamePath } = args;
+        if (recipientNamePath === undefined || description === undefined) {
+          throw new Error('recipientNamePath and description are required');
         }
-        return E(powers).request(recipientName, description, responseName);
+        return E(powers).request(
+          recipientNamePath,
+          description,
+          responseNamePath,
+        );
       }
       case 'send': {
-        const { recipientName, strings, edgeNames, petNames } = args;
+        const { recipientNamePath, strings, edgeNames, petNames } = args;
         if (
-          recipientName === undefined ||
+          recipientNamePath === undefined ||
           !strings ||
           !edgeNames ||
           !petNames
         ) {
           throw new Error(
-            'recipientName, strings, edgeNames, and petNames are required',
+            'recipientNamePath, strings, edgeNames, and petNames are required',
           );
         }
-        return E(powers).send(recipientName, strings, edgeNames, petNames);
+        return E(powers).send(recipientNamePath, strings, edgeNames, petNames);
       }
       case 'reply': {
         const { messageNumber, strings, edgeNames, petNames } = args;
@@ -459,30 +465,30 @@ export const makeExecuteTool = powers => {
       // Code evaluation
       case 'evaluate': {
         const {
-          workerName: rawWorkerName,
+          workerNamePath: rawWorkerNamePath,
           source,
           codeNames = [],
           edgeNames = [],
-          resultName,
+          resultNamePath,
         } = args;
         if (source === undefined) {
           throw new Error('source is required');
         }
-        if (resultName === undefined) {
-          throw new Error('resultName is required');
+        if (resultNamePath === undefined) {
+          throw new Error('resultNamePath is required');
         }
         // With SmallCaps decode, `"#undefined"` arrives as JS `undefined`
         // already. The string `"undefined"` is not a SmallCaps constant
         // so it passes through as-is; treat it as the literal undefined
-        // sentinel the LLM may emit when it lacks a workerName.
-        const workerName =
-          rawWorkerName === 'undefined' ? undefined : rawWorkerName;
+        // sentinel the LLM may emit when it lacks a workerNamePath.
+        const workerNamePath =
+          rawWorkerNamePath === 'undefined' ? undefined : rawWorkerNamePath;
         return E(powers).evaluate(
-          workerName,
+          workerNamePath,
           source,
           harden(codeNames),
           harden(edgeNames),
-          resultName,
+          resultNamePath,
         );
       }
 
