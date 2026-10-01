@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import re
+import resource
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,12 +91,32 @@ def _outcome(completed, trap_markers, signal_is_trap):
     return Outcome(line=lines[-1] if lines else None, trap=trap, stderr=stderr)
 
 
-def _run(command, stdin, timeout, env=None):
+def _run(command, stdin, timeout, env=None, preexec_fn=None):
     try:
         return subprocess.run(command, input=stdin, text=True, stdout=subprocess.PIPE,
-                              stderr=subprocess.PIPE, timeout=timeout, env=env)
+                              stderr=subprocess.PIPE, timeout=timeout, env=env, preexec_fn=preexec_fn)
     except subprocess.TimeoutExpired:
         return None
+
+
+# What the process stack needs past V8's --stack-size: Node's own frames above
+# the isolate and the native code that runs past V8's limit check.
+NODE_STACK_SLACK_KB = 1024
+
+
+def stack_limit_raiser(stack_kb, limits=None):
+    """A preexec function that raises the child's stack limit to hold a V8
+    stack of `stack_kb` KiB, or None when the current limit already does. A
+    --stack-size past the process's real stack faults instead of throwing
+    RangeError, so a large one needs the limit raised with it. `limits` is
+    (soft, hard) for tests; the default reads this process's."""
+    soft, hard = limits or resource.getrlimit(resource.RLIMIT_STACK)
+    need = (stack_kb + NODE_STACK_SLACK_KB) * 1024
+    if soft == resource.RLIM_INFINITY or soft >= need:
+        return None
+    if hard != resource.RLIM_INFINITY and hard < need:
+        raise HarnessError(f"the stack hard limit ({hard} B) cannot hold a {stack_kb} KiB V8 stack")
+    return lambda: resource.setrlimit(resource.RLIMIT_STACK, (need, hard))
 
 
 def run_native(probe, args, stdin=None, timeout=600):
@@ -116,10 +137,17 @@ def run_wasmtime(wasmtime, wasm, args, max_wasm_stack, stdin=None, timeout=900):
     return _outcome(completed, WASMTIME_TRAP, signal_is_trap=False)
 
 
-def run_node(wasm, args, v8_flags=(), stdin=None, timeout=900, node="node", paint=False, trap_frames=0):
+def run_node(wasm, args, v8_flags=(), stdin=None, timeout=900, node="node", paint=False, trap_frames=0,
+             stack_kb=None):
     """Node's WASI preview1 through node/run.cjs, with exnref enabled. With
     `paint`, the outcome carries the shadow stack's high-water mark in bytes;
-    with `trap_frames`, the innermost that many wasm frames of a trap."""
+    with `trap_frames`, the innermost that many wasm frames of a trap; with
+    `stack_kb`, V8 runs with that --stack-size and the process's stack limit
+    is raised to hold it (`stack_limit_raiser`)."""
+    preexec_fn = None
+    if stack_kb is not None:
+        v8_flags = (*v8_flags, f"--stack-size={stack_kb}")
+        preexec_fn = stack_limit_raiser(stack_kb)
     # `--no-turbo-fast-api-calls`: with fast API calls, a garbage collection
     # that WASI's `fd_write` triggers (external memory pressure) can crash Node
     # 22 while it walks a TurboFan wasm frame (SIGSEGV in
@@ -132,7 +160,7 @@ def run_node(wasm, args, v8_flags=(), stdin=None, timeout=900, node="node", pain
         env["PAINT_SHADOW_STACK"] = "1"
     if trap_frames:
         env["TRAP_STACK_FRAMES"] = str(trap_frames)
-    completed = _run(command, stdin, timeout, env=env)
+    completed = _run(command, stdin, timeout, env=env, preexec_fn=preexec_fn)
     if completed is None:
         return Outcome(trap=f"timeout after {timeout}s", timed_out=True)
     outcome = _outcome(completed, NODE_TRAP, signal_is_trap=False)
