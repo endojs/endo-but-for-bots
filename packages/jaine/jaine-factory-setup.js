@@ -57,12 +57,14 @@ export const main = async agent => {
     });
   }
 
-  const factoryPowers = await E(agent).lookup(agentName);
-  await E(factoryPowers).storeIdentifier('llm-provider', providerId);
+  // A guest consumes no identifiers, so the host binds the provider into the
+  // factory's namespace by path.
+  await E(agent).storeIdentifier([agentName, 'llm-provider'], providerId);
 
   await E(agent).makeUnconfined('@main', jaineFactorySpecifier, {
     powersName: agentName,
     resultName: factoryName,
+    env: harden({ JAINE_FACTORY_POWERS_NAME: agentName }),
   });
 
   console.log(

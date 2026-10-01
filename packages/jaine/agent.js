@@ -238,15 +238,42 @@ export const spawnWorkerLoop = async (
   const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 
   /**
+   * A guest holds no formula identifiers, so channels are keyed by pet name.
+   * Several pet names (`ch-<n>`, one per mention adopted) may designate the
+   * same channel; the first name under which a channel reference was seen
+   * keys it, so it is watched once however many mentions name it.
+   *
+   * @type {Map<object, string>}
+   */
+  const channelKeyByRef = new Map();
+
+  /**
+   * @param {string} channelName - the guest's pet name for a channel
+   * @param {object} channelRef - the channel that name designates
+   * @returns {string}
+   */
+  const channelKeyFor = (channelName, channelRef) => {
+    const known = channelKeyByRef.get(channelRef);
+    if (known !== undefined) return known;
+    channelKeyByRef.set(channelRef, channelName);
+    return channelName;
+  };
+
+  /**
    * Watch a channel for new messages and route them through Layer 1.
    * Runs as a background loop — fire-and-forget via void.
    *
    * @param {string} channelName - petname for the channel
-   * @param {string} channelId - canonical formula identifier
+   * @param {string} channelKey - the guest's pet name for the channel
    * @param {object} member - channel member handle
    * @param {string | null} selfMemberId - own member ID to skip own msgs
    */
-  const watchChannel = async (channelName, channelId, member, selfMemberId) => {
+  const watchChannel = async (
+    channelName,
+    channelKey,
+    member,
+    selfMemberId,
+  ) => {
     console.log(`[jaine][watch] Watching ${channelName}`);
 
     // Initialize lastSeen to current latest to avoid replaying history
@@ -319,7 +346,7 @@ export const spawnWorkerLoop = async (
 
           const decision = await router.routeChannelMessage(
             msg,
-            channelId,
+            channelKey,
             recentContext,
             authorName,
           );
@@ -332,7 +359,7 @@ export const spawnWorkerLoop = async (
           // Handle participation change
           if (decision.participationChange) {
             router.setParticipation(
-              channelId,
+              channelKey,
               decision.participationChange.level,
             );
             if (decision.participationChange.acknowledgment) {
@@ -352,15 +379,15 @@ export const spawnWorkerLoop = async (
           // Compose and post response using channel-scoped layers
           if (decision.shouldEngage) {
             try {
-              if (!channelLayers.has(channelId)) {
+              if (!channelLayers.has(channelKey)) {
                 channelLayers.set(
-                  channelId,
+                  channelKey,
                   makeChannelLayers(member, channelName),
                 );
               }
               const layers =
                 /** @type {{ composer: { compose: Function } }} */ (
-                  channelLayers.get(channelId)
+                  channelLayers.get(channelKey)
                 );
               await handleChannelResponse(layers.composer, member, msg);
             } catch (err) {
@@ -421,15 +448,15 @@ export const spawnWorkerLoop = async (
       try {
         const ch = await E(powers).lookup(chName);
         const member = await E(ch).join('jaine');
-        const channelId = await E(powers).identify(chName);
+        const channelKey = channelKeyFor(chName, ch);
 
-        if (!watchedChannels.has(channelId)) {
-          watchedChannels.set(channelId, true);
+        if (!watchedChannels.has(channelKey)) {
+          watchedChannels.set(channelKey, true);
           const selfMemberId = await resolveSelfMemberId(member, 'jaine');
           console.log(
             `[jaine] Channel ${chName}: selfMemberId=${selfMemberId}`,
           );
-          void watchChannel(chName, channelId, member, selfMemberId);
+          void watchChannel(chName, channelKey, member, selfMemberId);
         }
       } catch (chErr) {
         console.error(
@@ -518,12 +545,13 @@ export const spawnWorkerLoop = async (
         // the response using channel-scoped layers
         if (mentionResult) {
           try {
-            const channelId = await E(powers).identify(
+            const channelKey = channelKeyFor(
               mentionResult.channelName,
+              await E(powers).lookup(mentionResult.channelName),
             );
-            if (!channelLayers.has(channelId)) {
+            if (!channelLayers.has(channelKey)) {
               channelLayers.set(
-                channelId,
+                channelKey,
                 makeChannelLayers(
                   mentionResult.member,
                   mentionResult.channelName,
@@ -533,12 +561,12 @@ export const spawnWorkerLoop = async (
 
             // Now compose the response with channel-scoped executor
             const layers = /** @type {{ composer: { compose: Function } }} */ (
-              channelLayers.get(channelId)
+              channelLayers.get(channelKey)
             );
             await mentionResult.compose(layers.composer);
 
-            if (!watchedChannels.has(channelId)) {
-              watchedChannels.set(channelId, true);
+            if (!watchedChannels.has(channelKey)) {
+              watchedChannels.set(channelKey, true);
               const selfMemberId = await resolveSelfMemberId(
                 mentionResult.member,
                 decision.mentionInfo.join,
@@ -548,7 +576,7 @@ export const spawnWorkerLoop = async (
               );
               void watchChannel(
                 mentionResult.channelName,
-                channelId,
+                channelKey,
                 mentionResult.member,
                 selfMemberId,
               );
@@ -879,13 +907,20 @@ harden(handleInbox);
 // ============================================================================
 
 /**
+ * The Jaine factory runs as a guest, which neither produces nor consumes
+ * formula identifiers. `JAINE_FACTORY_POWERS_NAME` is the host's pet name for
+ * this factory's own guest: the factory hands its providers on to each new
+ * driver through the host, by path, under that name.
+ *
  * @param {any} guestPowers
  * @param {Promise<object> | object | undefined} _context
+ * @param {{ env?: Record<string, string> }} [options]
  * @returns {object}
  */
-export const make = (guestPowers, _context) => {
+export const make = (guestPowers, _context, { env: factoryEnv } = {}) => {
   /** @type {any} */
   const powers = guestPowers;
+  const selfName = factoryEnv?.JAINE_FACTORY_POWERS_NAME || '';
 
   return makeExo('JaineFactory', JaineFactoryInterface, {
     /**
@@ -897,6 +932,11 @@ export const make = (guestPowers, _context) => {
      */
     async createAgent(name, options = {}) {
       const { systemPrompt: agentPrompt, pin = false } = options;
+      if (selfName === '') {
+        throw Error(
+          "The Jaine factory needs JAINE_FACTORY_POWERS_NAME, the host's name for its guest; re-run the Jaine setup",
+        );
+      }
       const hostAgent = await E(powers).lookup('host-agent');
       const guestName = name;
       const agentName = `profile-for-${name}`;
@@ -918,28 +958,22 @@ export const make = (guestPowers, _context) => {
         });
       }
 
-      // Write provider + agent refs into driver namespace
-      const driverPowers = await E(hostAgent).lookup(driverProfileName);
-      const providerId = await E(powers).identify('llm-provider');
-      await E(driverPowers).storeIdentifier('llm-provider', providerId);
+      // Write provider + agent refs into the driver's namespace. Both the
+      // factory and the driver are guests, so the host binds each by path.
+      await E(hostAgent).copy(
+        [selfName, 'llm-provider'],
+        [driverProfileName, 'llm-provider'],
+      );
 
       // Propagate fast provider if configured
-      try {
-        const fastProviderId = await E(powers).identify('llm-provider-fast');
-        if (fastProviderId) {
-          await E(driverPowers).storeIdentifier(
-            'llm-provider-fast',
-            fastProviderId,
-          );
-        }
-      } catch {
-        // No fast provider configured — that's fine.
+      if (await E(powers).has('llm-provider-fast')) {
+        await E(hostAgent).copy(
+          [selfName, 'llm-provider-fast'],
+          [driverProfileName, 'llm-provider-fast'],
+        );
       }
 
-      // eslint-disable-next-line no-unused-vars
-      const agentLocator = await E(hostAgent).locate(agentName);
-      const agentId = await E(hostAgent).identify(agentName);
-      await E(driverPowers).storeIdentifier('agent', agentId);
+      await E(hostAgent).copy([agentName], [driverProfileName, 'agent']);
 
       // Launch driver
       /** @type {Record<string, string>} */

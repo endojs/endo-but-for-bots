@@ -209,13 +209,16 @@ export const main = async agent => {
     });
   }
 
-  // Write provider references into the factory's namespace
-  const factoryPowers = await E(agent).lookup(agentName);
-  await E(factoryPowers).storeIdentifier('llm-provider', providerId);
+  // Write provider references into the factory's namespace. A guest
+  // consumes no identifiers, so the host binds them by path.
+  await E(agent).storeIdentifier([agentName, 'llm-provider'], providerId);
 
   if (hasFastConfig) {
     const fastProviderId = await resolveProvider(agent, fastProviderName);
-    await E(factoryPowers).storeIdentifier('llm-provider-fast', fastProviderId);
+    await E(agent).storeIdentifier(
+      [agentName, 'llm-provider-fast'],
+      fastProviderId,
+    );
     console.log(`[jaine] Fast provider "${fastProviderName}" configured.`);
   }
 
@@ -223,6 +226,7 @@ export const main = async agent => {
   await E(agent).makeUnconfined('@main', jaineFactorySpecifier, {
     powersName: agentName,
     resultName: factoryName,
+    env: harden({ JAINE_FACTORY_POWERS_NAME: agentName }),
   });
 
   console.log('[jaine] Factory created.');
