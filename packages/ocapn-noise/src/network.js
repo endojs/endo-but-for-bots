@@ -402,18 +402,34 @@ export const makeOcapnNoiseNetwork = ({
   const pendingInbound = [];
 
   /**
-   * Per-peer settlement deadline, armed when one handshake for a peer
-   * finishes while others to it are still in flight. Settlement normally
-   * waits for every in-flight handshake (so crossed hellos run the
-   * tiebreaker over both), but each inbound SYN, including a replayed
-   * one, adds to that set. The deadline settles over whatever has been
-   * proven by then, so a stream of replays re-sent before each timeout
-   * delays settlement by at most one `handshakeTimeoutMs`, and a failed
-   * outbound dial still rejects its waiters.
+   * Local outbound dials (`runInitiator`) in flight per peer. These are
+   * bounded by their own timeouts and only we can start them, so a
+   * settlement deadline never cuts one short.
+   *
+   * @type {Map<KeyIdHex, number>}
+   */
+  const outboundInFlight = new Map();
+
+  /**
+   * Per-peer settlement deadline. Settlement normally waits for every
+   * in-flight handshake to the peer (so crossed hellos run the tiebreaker
+   * over both), but each inbound SYN, including a replayed one, adds to
+   * that set. Once no local dial to the peer is in flight and something
+   * is waiting on the outcome (a proven candidate, or a caller), the
+   * deadline settles over whatever has been proven within one more
+   * `handshakeTimeoutMs`. A stream of replays therefore delays a dial by
+   * at most that much, and a failed outbound dial still rejects its
+   * waiters. A genuine crossed hello whose second direction takes longer
+   * than that to prove can still be settled without it.
    *
    * @type {Map<KeyIdHex, ReturnType<typeof setTimeout>>}
    */
   const settleDeadlines = new Map();
+
+  /** @param {KeyIdHex} peerId */
+  const shouldSettleEarly = peerId =>
+    !outboundInFlight.has(peerId) &&
+    (candidates.has(peerId) || waiters.has(peerId));
 
   /** @param {KeyIdHex} peerId */
   const settle = peerId => {
@@ -480,7 +496,7 @@ export const makeOcapnNoiseNetwork = ({
     waiters.delete(peerId);
     if (queue.length > 0) {
       for (const { resolve } of queue) resolve(winner.session);
-    } else if (!inboundClosed) {
+    } else if (!inboundClosed && !winner.session.isInitiator) {
       // Nobody is waiting on provideSession for this peer; this is a
       // peer-initiated session. Hand it off to the inboundSessions
       // iterable for the embedding client to wire up. If the queue
@@ -508,7 +524,7 @@ export const makeOcapnNoiseNetwork = ({
     const next = (inProgress.get(peerId) ?? 0) - 1;
     if (next > 0) {
       inProgress.set(peerId, next);
-      if (!settleDeadlines.has(peerId)) {
+      if (!settleDeadlines.has(peerId) && shouldSettleEarly(peerId)) {
         // Handshakes still in flight keep their own count; when they
         // finish they settle again, and a late candidate then meets the
         // `existing` branch of `settle` (or becomes a fresh session if
@@ -517,7 +533,14 @@ export const makeOcapnNoiseNetwork = ({
           peerId,
           setTimeout(() => {
             settleDeadlines.delete(peerId);
-            if (!isShutdown) settle(peerId);
+            // A local dial started since arming will settle when it
+            // finishes; do not reject its caller out from under it.
+            if (isShutdown || !shouldSettleEarly(peerId)) return;
+            try {
+              settle(peerId);
+            } catch (_err) {
+              // Only a candidate's best-effort teardown can throw here.
+            }
           }, handshakeTimeoutMs),
         );
       }
@@ -1363,15 +1386,23 @@ export const makeOcapnNoiseNetwork = ({
     // wait for settlement: either our own handshake graduates, or a
     // concurrent inbound handshake (crossed hello) wins.
     bumpInProgress(peerId);
+    outboundInFlight.set(peerId, (outboundInFlight.get(peerId) ?? 0) + 1);
+    const outboundDone = () => {
+      const left = (outboundInFlight.get(peerId) ?? 0) - 1;
+      if (left > 0) outboundInFlight.set(peerId, left);
+      else outboundInFlight.delete(peerId);
+    };
     // Two-argument `then`: a throw while settling a successful handshake
     // must not reach the failure handler and decrement a second time.
     runInitiator(rk, remote, peerEd25519)
       .then(
         candidate => {
+          outboundDone();
           recordCandidate(peerId, candidate);
           decrementAndSettle(peerId);
         },
         err => {
+          outboundDone();
           recordError(peerId, /** @type {Error} */ (err));
           decrementAndSettle(peerId);
         },
@@ -1421,6 +1452,7 @@ export const makeOcapnNoiseNetwork = ({
     inProgress.clear();
     for (const [, deadline] of settleDeadlines) clearTimeout(deadline);
     settleDeadlines.clear();
+    outboundInFlight.clear();
     inFlightByLocalKey.clear();
     // Close any candidates that recorded themselves between
     // `runInitiator` resolution and `decrementAndSettle`. After this

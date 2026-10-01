@@ -19,10 +19,11 @@ IK message 1 has no freshness, so a captured genuine SYN can be replayed and
 passes this cryptographic check. The responder therefore defers displacing the
 named peer's unclaimed inbound session until the post-handshake
 `op:start-session` signature proves the peer is live, which a replay cannot
-reproduce, so a replay can no longer close that session. Once any handshake for a
-peer finishes, settlement waits at most one more handshake timeout for the
-others still in flight, so a sustained replay delays a genuine dial by at most
-that much and cannot leave a failed dial's caller waiting forever.
+reproduce, so a replay can no longer close that session. Once no local dial to a
+peer is in flight and either a handshake has proven or a caller is waiting,
+settlement waits at most one more handshake timeout for inbound handshakes
+still in flight, so a sustained replay delays a genuine dial by at most that
+much and cannot leave a failed dial's caller waiting forever.
 
 The pre-liveness work a flood can pin is now bounded by a cap on concurrent
 inbound handshakes per local identity, configurable via the new
