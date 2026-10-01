@@ -792,15 +792,16 @@ off-box. Two transports, in preference order:
   the same default path from `$XDG_RUNTIME_DIR`/`HOME`/`$TMPDIR` and finally from
   `os.tmpdir()`/`os.userInfo()` with an entirely empty env, so unsetting the
   variable makes the live path the *default*, not absent. The boundary that
-  actually puts the socket path out of reach is the **`@endo/claude-sandbox` slice's
-  filesystem-namespace isolation** (DD6). With the broker's fd held outside the
+  actually puts the socket path out of reach is the **DD6 slice's
+  filesystem-namespace isolation**, realized today by `@endo/claude`'s in-package
+  `bwrap` slice. With the broker's fd held outside the
   confined tree *and* the DD6 slice, the confined process reaches only the adapter,
   the adapter reaches only the broker, and the broker holds only the pre-attenuated
   facet: a structural boundary, not a courtesy.
   There is **no** listening port and **no** HTTP surface for the local case, no
   shared endpoint, no `Authorization` header; the formula id designates which facet
   the harness resolved at grant time, not a bearer on a wire. This is the tightest
-  local shape and the primary target. **It runs inside a `@endo/claude-sandbox`
+  local shape and the primary target. **It runs inside a DD6
   slice for any guest-influenced prompt** (DD6, required), so even a leak past
   `--tools ""` cannot reach the socket path the scrub alone cannot hide.
 - **Alternative: a loopback HTTP listener.** The same `@endo/agent-tools` MCP
