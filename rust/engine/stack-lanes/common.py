@@ -120,7 +120,13 @@ def run_node(wasm, args, v8_flags=(), stdin=None, timeout=900, node="node", pain
     """Node's WASI preview1 through node/run.cjs, with exnref enabled. With
     `paint`, the outcome carries the shadow stack's high-water mark in bytes;
     with `trap_frames`, the innermost that many wasm frames of a trap."""
-    command = [node, "--experimental-wasm-exnref", *v8_flags, str(NODE_RUNNER), str(wasm), *args]
+    # `--no-turbo-fast-api-calls`: with fast API calls, a garbage collection
+    # that WASI's `fd_write` triggers (external memory pressure) can crash Node
+    # 22 while it walks a TurboFan wasm frame (SIGSEGV in
+    # `InnerPointerToCodeCache::GetCacheEntry`), under load and only some of the
+    # time. The slow call path changes no wasm frame.
+    command = [node, "--experimental-wasm-exnref", "--no-turbo-fast-api-calls", *v8_flags,
+               str(NODE_RUNNER), str(wasm), *args]
     env = dict(os.environ)
     if paint:
         env["PAINT_SHADOW_STACK"] = "1"
