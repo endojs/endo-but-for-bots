@@ -115,6 +115,16 @@ Focused tests cover forced compaction/continuation and factory reconstruction,
 unknown capacity, malformed summaries, recent opaque context, cancelled/stale
 publication and ambiguous checkpoint writes.
 Live pool/compaction acceptance is not yet claimed.
+The shared credential-free listener worker now accepts a closed network-only
+bootstrap with only a public-egress endpoint, and publishes `ManagedNetworkV1`
+readiness without creating or reporting an inference HTTP endpoint.
+It reuses the same rootless isolated runtime, network observations, DNS/proxy
+listeners and retained cleanup; no fake provider grant or new sidecar framework.
+Nested extra capabilities and missing egress authority are rejected before
+native admission.
+The worker/runtime suites pass 31 tests, including source/bundle inference
+regressions and network-only lifecycle tests; types and ESLint pass.
+Live egress and durable environment composition remain pending.
 No admitted inbox command or inference is replayed to discover its result.
 The delegation registry's closed-ask and unsolicited-sender routing remains
 process-local; published claimed-reply receipts prevent their replay, but an

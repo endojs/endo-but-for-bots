@@ -183,7 +183,7 @@ test.serial(
         '-e',
         `
     import { startProviderListenerWorker } from ${JSON.stringify(new URL('../src/provider-worker.js', import.meta.url).href)};
-    import { E } from '@endo/eventual-send';
+    import { E } from ${JSON.stringify(import.meta.resolve('@endo/eventual-send'))};
     await startProviderListenerWorker({input:process.stdin,output:process.stdout,
       async makeNetworkListeners({endpoint}) {
         await E(endpoint).activated();
