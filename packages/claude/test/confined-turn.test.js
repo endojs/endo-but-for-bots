@@ -347,10 +347,13 @@ test('the sandbox wraps claude in bwrap, granting the broker and spawn directori
   t.true(readOnly.includes(spawnDirectory), 'spawn directory granted');
   t.true(readOnly.includes(path.dirname(brokerSocket)), 'broker granted');
   t.true(readOnly.includes(relayArguments[2]), 'relay script granted');
-  t.deepEqual(writable, [report.cwd], 'only the work directory is writable');
+  // `report.cwd` is the canonical path (`/private/tmp/...` on macOS).
+  t.is(writable.length, 1, 'only the work directory is writable');
+  t.true(report.cwd.endsWith(writable[0]));
 
   // No grant covers the whole turn directory, which holds every spawn's files.
-  const turnDirectory = path.dirname(report.cwd);
+  const turnDirectory = path.dirname(writable[0]);
+  t.is(path.dirname(spawnDirectory), turnDirectory);
   t.false([...readOnly, ...writable].includes(turnDirectory));
 });
 
