@@ -68,7 +68,9 @@ test('a SturdyRef cannot be marshalled', t => {
 });
 
 test('a SturdyRef cannot pass through a membrane', t => {
-  const message = /"sturdyRef" cannot/;
+  // The membrane serializes what crosses it, so the encoder's own refusal is
+  // what stops a SturdyRef.
+  const message = /a "sturdyRef" cannot be marshalled/;
   t.throws(() => makeDotMembraneKit(makeRef()), { message });
   const { proxy } = makeDotMembraneKit(
     Far('holder', { getRef: () => makeRef() }),
