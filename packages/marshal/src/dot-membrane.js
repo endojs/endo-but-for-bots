@@ -118,7 +118,9 @@ const makeConverter = (mirrorConverter = undefined) => {
           harden({
             enliven: () => {
               // As with remotables, use mineIf so that enlivening fails once
-              // the membrane is revoked.
+              // the membrane is revoked. This gives the correct error
+              // behavior, but may not actually enable mine to be gc'ed,
+              // depending on the JS engine.
               const mineIf = passBack(yours);
               // As with promises, pass both the fulfillment and the
               // rejection, so that neither crosses the membrane unwrapped.
