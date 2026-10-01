@@ -2,6 +2,7 @@ import '@endo/sturdyref/shim.js';
 import test from '@endo/ses-ava/test.js';
 
 import harden from '@endo/harden';
+import fc from 'fast-check';
 import { Far, Remotable } from '@endo/marshal';
 import { isPromise } from '@endo/promise-kit';
 import { passStyleOf } from '@endo/pass-style';
@@ -330,6 +331,51 @@ test('constructing a SturdyRef from data validates the data', t => {
   });
   t.is(reads, 1);
   t.deepEqual(left.getSturdyRefData(ref)?.hints, { port: '1234' });
+});
+
+test('constructing a SturdyRef from data rejects non-objects and symbol keys', t => {
+  const { left } = makeOptionsPair({}, {});
+  t.throws(() => left.makeSturdyRefFromData(/** @type {any} */ (null)), {
+    message: /data must be an object/,
+  });
+  t.throws(
+    () =>
+      left.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'right',
+          objectId: 'x',
+          [Symbol('smuggled')]: true,
+        }),
+      ),
+    { message: /Unexpected SturdyRef data properties/ },
+  );
+});
+
+test('no SturdyRef data validation error reveals the objectId', t => {
+  const { left } = makeOptionsPair({ peerId: 'right' }, {});
+  // The prefix keeps a short generated id from matching ordinary message text.
+  const objectIds = fc.string({ minLength: 1 }).map(id => `swiss:${id}`);
+  /** @type {Record<string, unknown>[]} */
+  const invalid = [
+    { peerId: 'other' },
+    { peerId: 1 },
+    { peerId: 'right', extra: true },
+    { peerId: 'right', network: 1 },
+    { peerId: 'right', hints: null },
+    { peerId: 'right', hints: { port: 1 } },
+  ];
+  fc.assert(
+    fc.property(objectIds, fc.constantFrom(...invalid), (objectId, base) => {
+      let message = '';
+      try {
+        left.makeSturdyRefFromData(/** @type {any} */ ({ ...base, objectId }));
+      } catch (error) {
+        message = /** @type {Error} */ (error).message;
+      }
+      return message !== '' && !message.includes(objectId);
+    }),
+  );
+  t.pass();
 });
 
 test('a SturdyRef from data rejects when the peer locates nothing', async t => {

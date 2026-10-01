@@ -95,11 +95,14 @@ export const getSturdyRefDetails = sturdyRef => sturdyRefDetails.get(sturdyRef);
  * @returns {SturdyRefDetails}
  */
 export const sturdyRefDataToDetails = data => {
+  if (typeof data !== 'object' || data === null) {
+    throw TypeError('ocapn: SturdyRef data must be an object');
+  }
   const { peerId, objectId, network, hints = undefined, ...rest } = data;
-  const extra = Object.keys(rest);
+  const extra = Reflect.ownKeys(rest);
   if (extra.length !== 0) {
     throw TypeError(
-      `ocapn: unexpected SturdyRef data properties ${extra.join(', ')}`,
+      `ocapn: unexpected SturdyRef data properties ${extra.map(String).join(', ')}`,
     );
   }
   if (typeof peerId !== 'string') {
@@ -135,7 +138,9 @@ export const sturdyRefDataToDetails = data => {
       hints:
         hintEntries === undefined ? false : Object.fromEntries(hintEntries),
     }),
-    secret: objectId,
+    // Copy bytes, so a later change to the caller's buffer cannot change
+    // which object the SturdyRef names.
+    secret: typeof objectId === 'string' ? objectId : objectId.slice(),
   };
 };
 

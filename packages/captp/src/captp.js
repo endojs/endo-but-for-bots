@@ -1,5 +1,6 @@
 /** @import {RemoteKit, Settler} from '@endo/eventual-send' */
 /** @import {CapData} from '@endo/marshal' */
+/** @import {SturdyRef} from '@endo/pass-style' */
 /** @import {CapTPSlot, TrapHost, TrapGuest, TrapImpl} from './types.js' */
 
 // Your app may need to `import '@endo/eventual-send/shim.js'` to get HandledPromise
@@ -227,7 +228,10 @@ export const makeDefaultCapTPImportExportTables = ({
  * objects marked with makeTrapHandler to synchronous clients (guests)
  * @property {boolean} [gcImports] if true, aggressively garbage collect imports
  * @property {string} [peerId] our name for the peer. If specified,
- * `makeSturdyRefFromData` refuses data that names a different peer.
+ * `makeSturdyRefFromData` refuses data that names a different peer. This
+ * catches bookkeeping mistakes; it is not a security boundary, since
+ * `objectId` is the only access check. Without it, the secret goes to
+ * whichever peer this connection reaches.
  * @property {(objectId: string) => unknown} [locateSturdyRef] if specified,
  * serve the peer's SturdyRefs-from-data: when the peer enlivens a SturdyRef
  * it constructed with `objectId`, answer with this hook's result (or a
@@ -1205,9 +1209,11 @@ export const makeCapTP = (
    * reachable from the peer, from a SturdyRef, or from the realm.
    *
    * @param {SturdyRefData} data
-   * @returns {import('@endo/pass-style').SturdyRef}
+   * @returns {SturdyRef}
    */
   const makeSturdyRefFromData = data => {
+    (typeof data === 'object' && data !== null) ||
+      Fail`SturdyRef data must be an object`;
     const {
       peerId: dataPeerId,
       objectId,
@@ -1215,7 +1221,7 @@ export const makeCapTP = (
       hints = {},
       ...rest
     } = data;
-    const extra = Object.keys(rest);
+    const extra = Reflect.ownKeys(rest);
     extra.length === 0 || Fail`Unexpected SturdyRef data properties ${extra}`;
     typeof dataPeerId === 'string' ||
       Fail`SturdyRef peerId must be a string, not ${dataPeerId}`;
@@ -1237,12 +1243,14 @@ export const makeCapTP = (
       ...(network === undefined ? {} : { network }),
       hints: Object.fromEntries(hintEntries),
     });
-    const sturdyRef = /** @type {import('@endo/pass-style').SturdyRef} */ (
+    const sturdyRef = /** @type {SturdyRef} */ (
       makeSturdyRef(
         harden({
           enliven: () => {
-            /** @type {{ promise: any }} */
-            const { promise: locator } = makeRemoteKit('l-0');
+            const { promise: locator } =
+              /** @type {RemoteKit<{ locate: (objectId: string) => Promise<unknown> }>} */ (
+                makeRemoteKit('l-0')
+              );
             return E(locator).locate(objectId);
           },
         }),

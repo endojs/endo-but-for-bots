@@ -6,6 +6,7 @@ import { Far } from '@endo/marshal';
 import harden from '@endo/harden';
 import { passStyleOf } from '@endo/pass-style';
 import { provideSturdyRef } from '@endo/sturdyref';
+import fc from 'fast-check';
 import { test, testWithErrorUnwrapping, makeTestClient } from './_util.js';
 import {
   decodeSwissnum,
@@ -18,6 +19,7 @@ import {
   getSturdyRefDetails,
   makeSturdyRef,
   makeSturdyRefTracker,
+  sturdyRefDataToDetails,
 } from '../src/client/sturdyrefs.js';
 import { ocapnPassStyleOf } from '../src/codecs/ocapn-pass-style.js';
 import { AllCodecs, makeCodecTestKit } from './codecs/_codecs_util.js';
@@ -379,10 +381,28 @@ test('constructing an OCapN SturdyRef from data validates the data', async t => 
     objectId: bytes,
     network: 'tcp',
   });
-  t.is(getSturdyRefDetails(ref)?.secret, bytes);
+  t.deepEqual(getSturdyRefDetails(ref)?.secret, bytes);
+  t.not(getSturdyRefDetails(ref)?.secret, bytes);
+  bytes[0] = 0;
+  t.deepEqual(getSturdyRefDetails(ref)?.secret, Uint8Array.of(0x80, 0x81));
+  t.throws(() => client.makeSturdyRefFromData(/** @type {any} */ (null)), {
+    message: /data must be an object/,
+  });
+  t.throws(
+    () =>
+      client.makeSturdyRefFromData(
+        /** @type {any} */ ({
+          peerId: 'p',
+          objectId: 'x',
+          network: 'tcp',
+          [Symbol('smuggled')]: true,
+        }),
+      ),
+    { message: /unexpected SturdyRef data properties/ },
+  );
   t.deepEqual(client.getSturdyRefData(ref), {
     peerId: 'p',
-    objectId: bytes,
+    objectId: Uint8Array.of(0x80, 0x81),
     network: 'tcp',
   });
   t.is(client.getSturdyRefData(/** @type {any} */ (harden({}))), undefined);
@@ -479,4 +499,29 @@ test('a client reveals SturdyRef data only for refs it minted', async t => {
   t.is(clientB.getSturdyRefData(minted), undefined);
   clientA.shutdown();
   clientB.shutdown();
+});
+
+test('no SturdyRef data validation error reveals the objectId', t => {
+  // The prefix keeps a short generated id from matching ordinary message text.
+  const objectIds = fc.string({ minLength: 1 }).map(id => `swiss:${id}`);
+  /** @type {Record<string, unknown>[]} */
+  const invalid = [
+    { peerId: 1, network: 'tcp' },
+    { peerId: 'p' },
+    { peerId: 'p', network: 'tcp', extra: true },
+    { peerId: 'p', network: 'tcp', hints: null },
+    { peerId: 'p', network: 'tcp', hints: { port: 1234 } },
+  ];
+  fc.assert(
+    fc.property(objectIds, fc.constantFrom(...invalid), (objectId, base) => {
+      let message = '';
+      try {
+        sturdyRefDataToDetails(/** @type {any} */ ({ ...base, objectId }));
+      } catch (error) {
+        message = /** @type {Error} */ (error).message;
+      }
+      return message !== '' && !message.includes(objectId);
+    }),
+  );
+  t.pass();
 });

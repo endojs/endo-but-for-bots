@@ -52,6 +52,7 @@
     "ava": "catalog:dev",
     "c8": "catalog:dev",
     "eslint": "catalog:dev",
+    "fast-check": "^4.10.2",
     "ses": "workspace:^",
     "typescript": "catalog:dev"
   },
