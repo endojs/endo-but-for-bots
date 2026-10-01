@@ -1,11 +1,12 @@
 // @ts-check
-import { Fail } from '@endo/errors';
+import { Fail, q } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/far';
 import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 import { makePromiseKit } from '@endo/promise-kit';
 
+import { describeError } from '../describe-error.js';
 import { makeSerialQueue } from '../serial-queue.js';
 
 /**
@@ -135,10 +136,6 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
   // to one.
   const enqueue = makeSerialQueue();
 
-  // Remote-controlled text: bound it here as well as at display.
-  /** @param {unknown} reason */
-  const describeError = reason =>
-    String(/** @type {Error} */ (reason)?.message ?? reason).slice(0, 512);
   /**
    * A host call, made again if a host restart broke its answer; every host
    * call here is idempotent under the allocation key.
@@ -354,10 +351,16 @@ export const makeRegistry = ({ installer, index, restartMessage }) => {
         const key = keyOf(workspace, name);
         let entry = installed.get(key);
         if (entry !== undefined) {
-          (entry.kind === kind &&
-            entry.digest === digest &&
-            entry.signature === signature) ||
-            Fail`Installation name has a different installation`;
+          const differs =
+            entry.kind !== kind
+              ? 'kind'
+              : entry.digest !== digest
+                ? 'code'
+                : entry.signature !== signature
+                  ? 'grants'
+                  : undefined;
+          differs === undefined ||
+            Fail`Installation name has a different installation: its ${q(differs)} differs`;
           await entry.issued.promise;
           if (entry.unplaced !== undefined && entry.placing === undefined) {
             // One placement at a time: an install arriving while another's

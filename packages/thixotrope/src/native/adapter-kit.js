@@ -2,6 +2,7 @@
 import { Far } from '@endo/far';
 import harden from '@endo/harden';
 
+import { describeError } from '../describe-error.js';
 import { makeSerialQueue } from '../serial-queue.js';
 
 /**
@@ -150,9 +151,7 @@ export const makeAdapter = ({
             error =>
               harden({
                 key,
-                error: String(
-                  /** @type {Error} */ (error)?.message ?? error,
-                ).slice(0, 512),
+                error: describeError(error),
               }),
           );
           results.push(result);

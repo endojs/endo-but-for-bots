@@ -3,8 +3,10 @@ import { Fail } from '@endo/errors';
 import { makeExo } from '@endo/exo';
 import { E } from '@endo/far';
 import harden from '@endo/harden';
-import { passStyleOf } from '@endo/pass-style';
 import { M } from '@endo/patterns';
+
+import { describeError } from '../describe-error.js';
+import { isRemotable } from '../is-remotable.js';
 
 /** @import { Mailbox } from './mailbox.js' */
 
@@ -59,9 +61,6 @@ export const makeMailContact = provideMailbox => {
     (status !== 'ready' && remote === undefined && !invitationOpen) ||
       Fail`Introduction already started`;
   };
-  // Remote-controlled text: bound it here as well as at display.
-  /** @param {unknown} reason */
-  const describeError = reason => String(reason).slice(0, 512);
   // The sender cannot choose the contact recorded in our inbox: this facet
   // binds delivery to the local contact that owns this introduction.
   const receiver = makeExo('ContactInbox', ContactInboxI, {
@@ -137,8 +136,7 @@ export const makeMailContact = provideMailbox => {
       const attempt = E(invitation)
         .accept(receiver)
         .then(counterpart => {
-          passStyleOf(counterpart) === 'remotable' ||
-            Fail`Expected a remotable capability`;
+          isRemotable(counterpart) || Fail`Expected a remotable capability`;
           return counterpart;
         })
         .then(

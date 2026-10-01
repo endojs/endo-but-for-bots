@@ -1,6 +1,7 @@
 // @ts-check
 import harden from '@endo/harden';
-import { passStyleOf } from '@endo/pass-style';
+
+import { isRemotable } from '../is-remotable.js';
 
 /**
  * Evaluated only in the dedicated manager vat, so it may import only what the
@@ -23,14 +24,6 @@ export const makeNativeManager = (
 ) => {
   // A module's facets are checked, not marshalled: a value that is not even
   // passable is refused with the contract's message, not the marshaller's.
-  /** @param {unknown} value */
-  const isRemotable = value => {
-    try {
-      return passStyleOf(value) === 'remotable';
-    } catch (_error) {
-      return false;
-    }
-  };
   try {
     const namespace = load();
     if (typeof namespace.make !== 'function')

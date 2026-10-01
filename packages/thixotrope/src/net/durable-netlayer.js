@@ -3,6 +3,7 @@
 /** @import { TimerHandle, TimerPowers } from '../platform/timers.js' */
 import { Fail } from '@endo/errors';
 import harden from '@endo/harden';
+import { encodeHex } from '@endo/hex';
 import { locationToLocationId } from '@endo/ocapn/client/util';
 
 /**
@@ -105,12 +106,7 @@ export const makeDurableNetLayer = async (
     maxReconnectDelayMs = 1000,
   },
 ) => {
-  const makeToken = () => {
-    const bytes = random.randomBytes(16);
-    return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join(
-      '',
-    );
-  };
+  const makeToken = () => encodeHex(random.randomBytes(16));
 
   /** @type {Map<string, LogicalConnection>} */
   const sessions = new Map();

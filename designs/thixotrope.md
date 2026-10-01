@@ -119,7 +119,8 @@ Those capabilities cross the host endpoint and have their own failure contracts.
 
 Every vat has the same globals beside the language and the shared intrinsics: `E`, `Far`,
 `harden`, `makeExo`, `defineExoClass`, `defineExoClassKit`, `M`, `matches`, `mustMatch`,
-`passStyleOf`, `Fail`, `q`, `makeError`, `makePromiseKit` and `makeSerialQueue`.
+`passStyleOf`, `Fail`, `q`, `makeError`, `makePromiseKit`, `makeSerialQueue`, `describeError` and
+`isRemotable`.
 The prelude is one hardened record installed on the compartment of every worker peer on every
 engine, so source evaluated in a vat, a bundle installed into one, and a factory the supervisor
 ships into one by its source text all see one vocabulary, and guest code is held to the same
@@ -425,7 +426,8 @@ Incoming facets bind the local sender identity; peers cannot supply their own di
 Inbox and outbox records retain identities, while the address book resolves current labels for the UI.
 Renaming a contact therefore does not rewrite mailbox records or replace remote references.
 An offer carries one explicitly selected capability; accepting it may retain it in the user's inventory.
-The recipient's terminal receives descriptions only and disconnects when closed.
+The recipient's terminal renders descriptions, a representation for a text view whose session ends
+with the connection rather than a confinement, and disconnects when closed.
 The node outbox handles delivery retries after admission; mailbox code does not resend on reconnect.
 
 ## Platform powers and service atoms

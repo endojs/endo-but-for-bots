@@ -174,8 +174,9 @@ inventory.set('note', 'hello');
 inventory.delete('note');
 ```
 
-The TUI redraws from subscribed snapshots and displays object/capability placeholders;
-it receives no references to the inventory's actual capability values.
+The TUI redraws from subscribed snapshots and displays object/capability placeholders: a text
+view renders descriptions, which is a choice of representation for a session that ends with the
+connection, not a confinement, since the operator holds everything the socket reaches.
 Press `q` then Enter, Ctrl-D, or Ctrl-C to close the view.
 The TUI always disconnects its dedicated socket on close, including EOF and signals.
 An abruptly killed TUI also loses its socket, so the supervisor cancels its subscription.
@@ -231,8 +232,8 @@ The bundle is staged into the application's vat in bounded messages, so there is
 cap; grants are checked in the workspace before any vat exists.
 Use the guest prelude rather than bundling those libraries: every vat has `E`, `Far`, `harden`,
 `makeExo`, `defineExoClass`, `defineExoClassKit`, `M`, `matches`, `mustMatch`, `passStyleOf`,
-`Fail`, `q`, `makeError`, `makePromiseKit`, and `makeSerialQueue` as globals, with no ambient Node
-powers.
+`Fail`, `q`, `makeError`, `makePromiseKit`, `makeSerialQueue`, `describeError`, and `isRemotable` as
+globals, with no ambient Node powers.
 Bundled code reads the ones it wants off `globalThis` in one destructure, typed as `GuestGlobals`
 from `@endo/thixotrope/guest.js`; `mustMatch`, being an assertion, needs a binding of its own
 annotated as `GuestGlobals['mustMatch']`.
@@ -435,7 +436,7 @@ Bob's mailbox view supports `r` to refresh, `take <id> <inventory-key>`,
 `discard <id>`, and `q` to disconnect.
 `inbox`, `outbox`, and `contacts` provide the same descriptions as JSON for scripts.
 `take` copies a message's capability into the inventory; `discard` releases only the mailbox's reference.
-The view never receives the capabilities themselves and creates no guest subscriptions.
+The view renders descriptions rather than the capabilities and creates no guest subscriptions.
 Message text and contact labels are remote-controlled, so every command that prints them
 escapes terminal control characters, including the C1 controls and Unicode line separators
 that JSON quoting leaves raw.

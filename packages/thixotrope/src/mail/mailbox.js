@@ -5,6 +5,8 @@ import { E } from '@endo/far';
 import harden from '@endo/harden';
 import { M } from '@endo/patterns';
 
+import { describeError } from '../describe-error.js';
+
 /** @import { ObservableMap } from '../observable-map.js' */
 
 /**
@@ -55,9 +57,6 @@ export const makeMailbox = makeObservableMap => {
   const outbox = makeObservableMap();
   let nextReceived = 0n;
   let nextSent = 0n;
-  // Remote-controlled text: bound it here as well as at display.
-  /** @param {unknown} reason */
-  const describeError = reason => String(reason).slice(0, 512);
   /** @type {Map<any, bigint>} */
   const accepted = new Map();
   return makeExo('Mailbox', MailboxI, {

@@ -108,10 +108,11 @@ Two smaller changes follow:
   values", which reads as confinement.
   It is a representation choice for a text view whose session ends with the connection; the
   operator already holds everything.
-  Reword both.
+  Reword both. (Done.)
 - `evaluate` returns a rendered string, so an operator cannot hold a value from one command to the
   next except through the inventory.
   The session is already OCapN; the admin facet could return references and render client-side.
+  (Not done: a change to the control protocol, left for a pass of its own.)
 
 ## 4. Resources bound to workers, not described (Done.)
 
@@ -160,19 +161,23 @@ allocated under allocation keys, and the host index records each worker's kind a
 The label is then derived (`kind:name`) for display and need not be an input at all; it should not
 be upgraded into something more, because the index record is the something more.
 
-## 5. Smaller items
+## 5. Smaller items (Done, but for the third.)
 
 - `alarmStatus` flattens bigint counts to `Number` for the JSON the CLI prints; `status` uses
   strings for its counts. One convention for counts over the control socket.
+  (Done: counts are numbers; a count over the control socket is a JSON number.)
 - Node replay doubles load the guest prelude as host modules, so environment options those
   packages read (`ENDO_RANK_STRINGS`, `DEBUG`) must be the same across runs that share a journal.
   Either pin them in the doubles or document the constraint where the doubles are configured.
+  (Done: documented in the prelude and the replay engine.)
 - The manager kit's `describe` receives no spec for a closed registration; the HTTP facet could
   carry a `closedAt` or similar if views want it.
+  (Not done: no view wants it yet.)
 - `installNative` returns the installation record; `thix install` prints it. A `thix install`
   retry that hits "name has a different installation" should say what differed.
+  (Done: the registry says whether the kind, the code or the grants differ.)
 
-## 6. Reuse of building blocks
+## 6. Reuse of building blocks (Partly done; see each entry.)
 
 A survey of what the package writes more than once, and of what other Endo packages already
 provide.
@@ -185,26 +190,31 @@ Each entry names the copies; the fix is the one piece they should share.
   `manager-kit.js` and `adapter-kit.js`.
   Four of the five are shipped into vats by source, so the helper belongs in the guest prelude
   beside `makeSerialQueue`.
+  (Done: `describeError`, in the prelude and imported by the adapter kit.)
 - **Remotable checks that must not throw.**
   `passStyleOf` throws on a non-passable value, so `mail-address-book.js`, `workspace-access.js` and
   `native/manager.js` each wrap it in a try/catch `isRemotable`; `@endo/pass-style`'s own
   `isRemotable` throws the same way and is not a drop-in.
-  One prelude helper.
+  One prelude helper. (Done: `isRemotable`, in the prelude.)
 - **Bytes to hex.**
   `hub.js`, `durable-netlayer.js` and `random-id.js` each spell `byte.toString(16).padStart(2,
   '0')`; `@endo/hex` exports `encodeHex` and is already in the Ironhorse bundle's graph.
+  (Done.)
 - **Versioned records on disk.**
   The alarm ledger (version 2), workspace metadata (version 8), the runtime manifest (format 2) and
   worker metadata each check a version and compose their own "newer than this build" and
   "migrate or use a fresh directory" messages.
   One `versionedRecord` over `SyncStringAtom`, with the three outcomes (current, newer, older)
   and one message shape.
+  (Done for the workspace metadata and the installation index, `assertRecordVersion`; the
+  Ironhorse manifest keeps its own, since it also refuses fields it does not know.)
 - **Length-prefixed framing.**
   `unix-netlayer.js` and `local-control.js` each read and write four-byte length frames over a
   socket with their own size cap and error path; `pipe-network.js` frames worker pipes.
   One framing function for sockets, and further, the control connection could be a transient hub
   session over the Unix netlayer rather than a separate OCapN peer per socket, which also gives
   section 3 its references.
+  (Not done; the control socket of 8.2 reuses `local-control.js` as is.)
 - **Keeping one incarnation.**
   `adapter-keeper.js` (in a vat) and `durable-worker-transport.js` (in the host) both hold one
   incarnation, probe it, retire it when dead, rebuild it and serialise the operations around it.
@@ -216,11 +226,13 @@ Each entry names the copies; the fix is the one piece they should share.
   `subscribeInbox` and `subscribeOutbox` and nothing on the host uses them.
   Generalise the bridge to `watch(map)` for the inventory, the inbox, the outbox and the contacts,
   and every view is live through one lifetime.
+  (Not done.)
 - **Test fixtures.**
   Twenty-three test files construct a daemon by hand, eleven a memory store, fourteen a control
   client, thirty-four a temporary directory, and four an adapter double.
   The Ironhorse lane already has `_fixture.js`; the Node suite wants the same: `withDaemon`,
   `withSupervisor`, `fakeAdapter`, `fakeIntroductions`.
+  (Not done.)
 
 ### Already provided by another Endo package
 
@@ -229,25 +241,30 @@ Each entry names the copies; the fix is the one piece they should share.
   `makeQueue`.
   Both daemons need it and the guest prelude ships it, so it belongs in one small package (under
   `@endo/promise-kit` or `@endo/stream`) that both import.
+  (Not done: a change to another package.)
 - **Change notification.**
   `@endo/pubsub` exports `makeLatestTopic` and `makeChangeTopic`: one outstanding notification per
   subscriber, the newest value coalesced, which is exactly the observable map's subscription
   policy.
   The map is shipped into vats and may import only the prelude, so it cannot import the package
   today; if the latest topic were in the prelude, the map would be the topic plus a key index.
+  (Not done.)
 - **Platform ports.**
   `@endo/platform` already defines filesystem port types (`fs/lite`) with a Node implementation,
   and process helpers.
   Thixotrope's `platform/files.js` and `platform/processes.js` are a second set of ports for the
   same concerns; converge on one, in whichever package keeps the stricter plain-data discipline.
+  (Not done.)
 - **State locations.**
   `@endo/where` gives the conventional state, ephemeral-state and socket locations per platform;
   `thix` requires an explicit state directory on every command and could default to them.
+  (Not done.)
 - **Mail.**
   `@endo/daemon` has a mailbox, a pet store and invitations as host-side objects; Thixotrope's are
   guest exos in a vat, so code cannot be shared across that boundary.
   The invitation text format and the `help()` conventions can be, in a package both depend on;
   low priority.
+  (Not done.)
 
 ### Order
 
