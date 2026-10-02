@@ -3,7 +3,7 @@
     "target": "x86_64-unknown-linux-gnu",
     "rustc": "rustc 1.91.1 (ed61e7d7e 2025-11-07)",
     "profile": "release",
-    "engine_tree": "98182699851d25e8bfeafe9322358b7e5706f138"
+    "engine_tree": "31d8f180c186ec0ab12ce31e9abbf7c16c6fb930"
   },
   "slack": 0.02,
   "cases": {
@@ -192,7 +192,7 @@
       "outcome": "compiled"
     },
     "json-parse-obj-10k.run": {
-      "bytes": 9151,
+      "bytes": 9135,
       "outcome": "ReentryLimit"
     },
     "json-parse-arr-256.compile": {
@@ -208,7 +208,7 @@
       "outcome": "compiled"
     },
     "json-reviver-10k.run": {
-      "bytes": 10951,
+      "bytes": 10935,
       "outcome": "ReentryLimit"
     },
     "json-reviver-200.compile": {
@@ -216,7 +216,7 @@
       "outcome": "compiled"
     },
     "json-reviver-200.run": {
-      "bytes": 11239,
+      "bytes": 11223,
       "outcome": "completed"
     },
     "json-stringify-10k.compile": {
@@ -224,7 +224,7 @@
       "outcome": "compiled"
     },
     "json-stringify-10k.run": {
-      "bytes": 8927,
+      "bytes": 9039,
       "outcome": "ReentryLimit"
     },
     "json-stringify-256.compile": {
@@ -232,7 +232,7 @@
       "outcome": "compiled"
     },
     "json-stringify-256.run": {
-      "bytes": 9055,
+      "bytes": 9039,
       "outcome": "completed"
     },
     "flat-self.compile": {
@@ -304,7 +304,7 @@
       "outcome": "compiled"
     },
     "regexp-deep.run": {
-      "bytes": 10199,
+      "bytes": 10111,
       "outcome": "completed"
     },
     "regexp-nests-512.compile": {
@@ -312,7 +312,7 @@
       "outcome": "compiled"
     },
     "regexp-nests-512.run": {
-      "bytes": 10167,
+      "bytes": 10199,
       "outcome": "completed"
     },
     "proto-chain-ordinary-20k.compile": {
@@ -408,7 +408,7 @@
       "outcome": "compiled"
     },
     "reflect-apply-63.run": {
-      "bytes": 340047,
+      "bytes": 8471,
       "outcome": "completed"
     },
     "reflect-apply-64.compile": {
@@ -416,7 +416,7 @@
       "outcome": "compiled"
     },
     "reflect-apply-64.run": {
-      "bytes": 344523,
+      "bytes": 8471,
       "outcome": "ReentryLimit"
     },
     "sort-cmp-63.compile": {
@@ -1032,7 +1032,7 @@
       "outcome": "compiled"
     },
     "proxy-preventextensions-trap-61.run": {
-      "bytes": 368155,
+      "bytes": 367179,
       "outcome": "completed"
     },
     "proxy-preventextensions-trap-62.compile": {
@@ -1040,7 +1040,7 @@
       "outcome": "compiled"
     },
     "proxy-preventextensions-trap-62.run": {
-      "bytes": 372555,
+      "bytes": 371563,
       "outcome": "ReentryLimit"
     },
     "proxy-construct-trap-119.compile": {
@@ -1128,7 +1128,7 @@
       "outcome": "compiled"
     },
     "proxy-reflect-get-trap-61.run": {
-      "bytes": 408171,
+      "bytes": 407195,
       "outcome": "completed"
     },
     "proxy-reflect-get-trap-62.compile": {
@@ -1136,7 +1136,7 @@
       "outcome": "compiled"
     },
     "proxy-reflect-get-trap-62.run": {
-      "bytes": 413227,
+      "bytes": 412235,
       "outcome": "ReentryLimit"
     },
     "proxy-with-has-trap-119.compile": {
@@ -1288,7 +1288,7 @@
       "outcome": "compiled"
     },
     "jparse-obj-2015.run": {
-      "bytes": 9151,
+      "bytes": 9135,
       "outcome": "completed"
     },
     "jparse-obj-2016.compile": {
@@ -1296,7 +1296,7 @@
       "outcome": "compiled"
     },
     "jparse-obj-2016.run": {
-      "bytes": 9151,
+      "bytes": 9135,
       "outcome": "ReentryLimit"
     },
     "jrevive-arr-2000.compile": {
@@ -1304,7 +1304,7 @@
       "outcome": "compiled"
     },
     "jrevive-arr-2000.run": {
-      "bytes": 10623,
+      "bytes": 10607,
       "outcome": "completed"
     },
     "jrevive-arr-2001.compile": {
@@ -1312,7 +1312,7 @@
       "outcome": "compiled"
     },
     "jrevive-arr-2001.run": {
-      "bytes": 9771,
+      "bytes": 9755,
       "outcome": "ReentryLimit"
     },
     "jrevive-obj-1999.compile": {
@@ -1320,7 +1320,7 @@
       "outcome": "compiled"
     },
     "jrevive-obj-1999.run": {
-      "bytes": 10623,
+      "bytes": 10607,
       "outcome": "completed"
     },
     "jrevive-obj-2000.compile": {
@@ -1328,7 +1328,7 @@
       "outcome": "compiled"
     },
     "jrevive-obj-2000.run": {
-      "bytes": 9771,
+      "bytes": 9755,
       "outcome": "ReentryLimit"
     },
     "jstr-arr-2014.compile": {
@@ -1336,7 +1336,7 @@
       "outcome": "compiled"
     },
     "jstr-arr-2014.run": {
-      "bytes": 8967,
+      "bytes": 8911,
       "outcome": "completed"
     },
     "jstr-arr-2015.compile": {
@@ -1344,7 +1344,7 @@
       "outcome": "compiled"
     },
     "jstr-arr-2015.run": {
-      "bytes": 8927,
+      "bytes": 8951,
       "outcome": "ReentryLimit"
     },
     "jstr-obj-2014.compile": {
@@ -1352,7 +1352,7 @@
       "outcome": "compiled"
     },
     "jstr-obj-2014.run": {
-      "bytes": 9935,
+      "bytes": 9975,
       "outcome": "completed"
     },
     "jstr-obj-2015.compile": {
@@ -1360,7 +1360,7 @@
       "outcome": "compiled"
     },
     "jstr-obj-2015.run": {
-      "bytes": 9935,
+      "bytes": 9919,
       "outcome": "ReentryLimit"
     },
     "jstr-replacer-1999.compile": {
@@ -1368,7 +1368,7 @@
       "outcome": "compiled"
     },
     "jstr-replacer-1999.run": {
-      "bytes": 10847,
+      "bytes": 10831,
       "outcome": "completed"
     },
     "jstr-replacer-2000.compile": {
@@ -1376,7 +1376,7 @@
       "outcome": "compiled"
     },
     "jstr-replacer-2000.run": {
-      "bytes": 10847,
+      "bytes": 10831,
       "outcome": "ReentryLimit"
     },
     "flat-fast-2015.compile": {
@@ -1680,7 +1680,7 @@
       "outcome": "compiled"
     },
     "u2-tojson-flat-1022.run": {
-      "bytes": 14423,
+      "bytes": 14407,
       "outcome": "completed"
     },
     "u2-tojson-regexp-512.compile": {
@@ -1688,7 +1688,7 @@
       "outcome": "compiled"
     },
     "u2-tojson-regexp-512.run": {
-      "bytes": 16119,
+      "bytes": 16103,
       "outcome": "completed"
     },
     "u3-eval-nest-tagged-2038.compile": {
@@ -1712,7 +1712,7 @@
       "outcome": "compiled"
     },
     "u4-function-callchain-in-tojson-1900.run": {
-      "bytes": 24103,
+      "bytes": 24087,
       "outcome": "completed"
     },
     "regexp-backtrack.compile": {
