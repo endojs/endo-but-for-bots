@@ -3,6 +3,7 @@
 /** @import { Logger } from '../platform/logging.js' */
 import harden from '@endo/harden';
 
+import { makeWorkspaceClient } from '../control/workspace-client.js';
 import { printJson } from './terminal-text.js';
 import { bindViewSession } from './view-session.js';
 
@@ -17,11 +18,13 @@ import { bindViewSession } from './view-session.js';
  */
 export const showMailbox = async (session, logging, client) => {
   const { close } = bindViewSession(session, client);
+  const mail = makeWorkspaceClient(client);
   const refresh = async () => {
     // Message text and contact labels are remote-controlled: every control
-    // character is escaped before it reaches the terminal. The view receives
-    // descriptions, never capabilities.
-    printJson(logging, await client.call('inbox'));
+    // character is escaped before it reaches the terminal. The view renders
+    // descriptions; a capability it takes passes through it on its way from
+    // the address book into the inventory.
+    printJson(logging, await mail.inbox());
   };
   try {
     await refresh();
@@ -33,9 +36,9 @@ export const showMailbox = async (session, logging, client) => {
       if (command === 'q') break;
       try {
         if (command === 'take') {
-          await client.call('takeMessage', id, key);
+          await mail.take(id, key);
         } else if (command === 'discard') {
-          await client.call('discardMessage', id);
+          await mail.discard(id);
         } else if (command !== 'r') {
           logging.log('Unknown command');
           // eslint-disable-next-line no-continue

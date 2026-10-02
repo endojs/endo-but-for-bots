@@ -441,6 +441,13 @@ Each message carries exactly one capability.
 Bob's mailbox view supports `r` to refresh, `take <id> <inventory-key>`,
 `discard <id>`, and `q` to disconnect.
 `inbox`, `outbox`, and `contacts` provide the same descriptions as JSON for scripts.
+The administration keeps no mail or alarm methods: `thix` asks it for the selected workspace's
+address book with `getAddressBook()`, for the capability under an inventory key with
+`lookup(key)`, which hands out only a remotable one, and to keep a value under a key with
+`keep(key, value)`, and speaks to the book and the clock as any holder of them would, so a script
+on a control connection does the same.
+A reference such a script exports itself and keeps in the inventory breaks when its connection
+closes.
 `take` copies a message's capability into the inventory; `discard` releases only the mailbox's reference.
 The view renders descriptions rather than the capabilities and creates no guest subscriptions.
 Message text and contact labels are remote-controlled, so every command that prints them

@@ -8,6 +8,7 @@ import { setTimeout } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 
 import { connectLocalControl } from '../../src/control/local-control.js';
+import { makeWorkspaceClient } from '../../src/control/workspace-client.js';
 
 import { makeNodePowers } from '../../src/platform/node/powers.js';
 
@@ -119,7 +120,7 @@ test.serial(
     // alarm in the clock's count proves its adapter took it; one still being
     // registered when the host is killed is rejected, by design.
     await waitUntil(async () => {
-      const status = await first.client.call('alarmStatus');
+      const status = await makeWorkspaceClient(first.client).alarms();
       return status.armed === 1;
     });
     t.is(
@@ -138,7 +139,7 @@ test.serial(
     const recovered = await start(t, path);
     const waitForDelivery = () =>
       waitUntil(async () => {
-        const status = await recovered.client.call('alarmStatus');
+        const status = await makeWorkspaceClient(recovered.client).alarms();
         return status.pending === 0;
       });
     await waitForDelivery();

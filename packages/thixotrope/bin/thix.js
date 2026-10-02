@@ -7,6 +7,7 @@ import process from 'node:process';
 
 import { connectLocalControl } from '../src/control/local-control.js';
 import { serveThixotrope } from '../src/control/supervisor.js';
+import { makeWorkspaceClient } from '../src/control/workspace-client.js';
 import { showAttach } from '../src/tui/attach-view.js';
 import { showInventory } from '../src/tui/inventory-view.js';
 import { showMailbox } from '../src/tui/mailbox-view.js';
@@ -96,7 +97,9 @@ try {
     );
     try {
       if (command === 'alarms') {
-        logging.log(JSON.stringify(await client.call('alarmStatus'), null, 2));
+        logging.log(
+          JSON.stringify(await makeWorkspaceClient(client).alarms(), null, 2),
+        );
       } else if (command === 'install-native') {
         const [name, resourceDirectory] = args;
         if (!name || !resourceDirectory)
@@ -129,18 +132,25 @@ try {
           'outbox',
         ].includes(command)
       ) {
-        const method =
-          command === 'revoke-invite'
-            ? 'revokeInvitation'
-            : command === 'take'
-              ? 'takeMessage'
-              : command === 'discard'
-                ? 'discardMessage'
-                : command;
-        const result = await client.call(method, ...args);
+        // Mail is the address book's: the client speaks to it, and to the
+        // inventory for what a message carries or brought.
+        const mail = makeWorkspaceClient(client);
+        /** @type {Record<string, (args: string[]) => Promise<unknown>>} */
+        const commands = {
+          'revoke-invite': ([text]) => mail.revokeInvitation(text),
+          invite: ([name]) => mail.invite(name),
+          accept: ([name, text]) => mail.accept(name, text),
+          send: ([name, text, key]) => mail.send(name, text, key),
+          take: ([id, key]) => mail.take(id, key),
+          discard: ([id]) => mail.discard(id),
+          contacts: () => mail.contacts(),
+          inbox: () => mail.inbox(),
+          outbox: () => mail.outbox(),
+        };
+        const result = await commands[command](args);
         // Invitation text is JSON whose escapes survive sanitising; other
         // results carry remote-controlled message text and labels.
-        if (command === 'invite') logging.log(terminalText(result));
+        if (command === 'invite') logging.log(terminalText(String(result)));
         else printJson(logging, result);
       } else if (command === 'install') {
         const [name, modulePath, ...grantArgs] = args;

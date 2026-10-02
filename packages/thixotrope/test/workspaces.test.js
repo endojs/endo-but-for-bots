@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { serveThixotrope } from '../src/control/supervisor.js';
 import { connectLocalControl } from '../src/control/local-control.js';
+import { makeWorkspaceClient } from '../src/control/workspace-client.js';
 import { makePeerJournalReplayEngine } from '../src/core/peer-replay-engine.js';
 import { makeNodePowers } from '../src/platform/node/powers.js';
 import { makeFsStore } from '../src/store/store-fs.js';
@@ -85,7 +86,7 @@ test.serial(
       ),
       "'fired'",
     );
-    t.like(await alice.call('alarmStatus'), { pending: 0 });
+    t.like(await makeWorkspaceClient(alice).alarms(), { pending: 0 });
     const mailboxes = (await admin.call('installations')).filter(
       (/** @type {{name: string}} */ entry) => entry.name === 'mailbox',
     );
@@ -100,8 +101,8 @@ test.serial(
     );
     t.is(clocks.length, 1);
     t.is(clocks[0].workspace, undefined, 'the clock belongs to the daemon');
-    t.deepEqual(await alice.call('contacts'), []);
-    t.deepEqual(await alice.call('inbox'), []);
+    t.deepEqual(await makeWorkspaceClient(alice).contacts(), []);
+    t.deepEqual(await makeWorkspaceClient(alice).inbox(), []);
     const aliceMailbox = await alice.call(
       'evaluate',
       "E(inventory.get('mailbox')).__getMethodNames__().then(() => 'own')",
@@ -187,9 +188,9 @@ test.serial(
     await host.supervisor.close();
     host = await serve(t, path);
     const lateAgain = await host.connect('late');
-    t.like(await lateAgain.call('alarmStatus'), { pending: 0 });
+    t.like(await makeWorkspaceClient(lateAgain).alarms(), { pending: 0 });
     const defaultAgain = await host.connect();
-    t.like(await defaultAgain.call('alarmStatus'), { pending: 0 });
+    t.like(await makeWorkspaceClient(defaultAgain).alarms(), { pending: 0 });
   },
 );
 
@@ -222,6 +223,12 @@ test.serial(
       message: /quarantined/,
     });
     await t.throwsAsync(() => quarantined.call('watchInventory', harden({})), {
+      message: /quarantined/,
+    });
+    await t.throwsAsync(() => makeWorkspaceClient(quarantined).alarms(), {
+      message: /quarantined/,
+    });
+    await t.throwsAsync(() => makeWorkspaceClient(quarantined).inbox(), {
       message: /quarantined/,
     });
     t.true((await admin.call('collect')).includes(workerId));
@@ -275,7 +282,7 @@ test.serial(
     t.true(await admin.call('remove', 'clock'));
     t.is(await admin.call('evaluate', "inventory.has('clock')"), 'false');
     t.is(await bob.call('evaluate', "inventory.get('clock')"), "'mine'");
-    await t.throwsAsync(() => admin.call('alarmStatus'), {
+    await t.throwsAsync(() => makeWorkspaceClient(admin).alarms(), {
       message: /not installed/,
     });
     admin.close();
@@ -283,7 +290,7 @@ test.serial(
     await host.supervisor.close();
     host = await serve(t, path);
     const restored = await host.connect();
-    t.like(await restored.call('alarmStatus'), { pending: 0 });
+    t.like(await makeWorkspaceClient(restored).alarms(), { pending: 0 });
     const bobAgain = await host.connect('bob');
     t.is(await bobAgain.call('evaluate', "inventory.get('clock')"), "'mine'");
   },

@@ -156,6 +156,14 @@ export const connectLocalControl = async (
        */
       call: (method, ...args) =>
         Promise.race([E(admin)[method](...args), disconnected]),
+      /**
+       * Race a call made on a reference the administration handed out
+       * against the connection, as `call` races its own.
+       * @template T
+       * @param {Promise<T>} promise
+       * @returns {Promise<T>}
+       */
+      race: promise => Promise.race([promise, disconnected]),
     });
   } catch (error) {
     control.close();

@@ -107,7 +107,8 @@ import {
 // and the name validators, which the registry and the address book use;
 // 21: the kit releases a replaced binding in place before it retires an
 // incarnation and takes only a passable record from `decorate`, and the
-// workspace access checks names with the prelude's validator.
+// workspace access checks names with the prelude's validator and words its
+// refusal of a grant for any grant.
 const WORKSPACE_VERSION = 21;
 // The daemon takes allocation keys from the host alone, so a fixed key names
 // the host's own registry vat and nothing else can carry it.
@@ -575,7 +576,7 @@ export const serveThixotrope = async (
       [...allocating].filter(id => daemon.listWorkerIds().includes(id));
     const daemonMethods = {
       help: () =>
-        'Local supervisor. Daemon-wide: status(), stop(), installations(), reachability(), collect(), workspaces(), createWorkspace(name), selectWorkspace(name), close(). In the selected workspace, `default` unless selected: evaluate(source), install(name, bundle, grants), installNative(name, directory), remove(name), alarmStatus(), inventoryStatus(), invite(name), accept(name, invitationText), revokeInvitation(invitationText), contacts(), inbox(), outbox(), send(name, text, key), takeMessage(id, key), discardMessage(id), watchInventory(listener).',
+        'Local supervisor. Daemon-wide: status(), stop(), installations(), reachability(), collect(), workspaces(), createWorkspace(name), selectWorkspace(name), close(). In the selected workspace, `default` unless selected: evaluate(source), install(name, bundle, grants), installNative(name, directory), remove(name), lookup(key), keep(key, value), getAddressBook(), inventoryStatus(), watchInventory(listener).',
       stop: () => {
         timers.setTimer(requestStop, 0);
         return 'Stopping supervisor';
@@ -760,16 +761,37 @@ export const serveThixotrope = async (
         }
         return false;
       },
-      alarmStatus: async () => {
+      /**
+       * The remotable capability under an inventory key, checked in the
+       * workspace, so no copy data crosses and a promise is refused rather
+       * than awaited; undefined for a key with nothing under it. A client
+       * composes what it does with the workspace's values from this and
+       * `keep`, and holds no inventory of its own to subscribe to.
+       * @param {string} key
+       */
+      lookup: async key => {
         const workspace = current();
         assertWorkspace(workspace);
-        // The clock counts its own pending alarms; the host keeps none.
-        if (!(await workspace.worker.evaluate("inventory.has('clock')")))
-          throw Error('The clock is not installed');
-        const { pending, armed } = await workspace.worker.evaluate(
-          "E(inventory.get('clock')).status()",
+        assertInstallationName(key);
+        if (!(await E(workspace.access).has(key))) return undefined;
+        const { value } = await E(workspace.access).lookupGrants(
+          harden([['value', key]]),
         );
-        return harden({ pending: Number(pending), armed: Number(armed) });
+        return value;
+      },
+      /**
+       * Keep a value under an inventory key, replacing what was there. A
+       * reference this connection exports itself breaks when it closes;
+       * what the workspace or a correspondent holds does not.
+       * @param {string} key
+       * @param {unknown} value
+       */
+      keep: async (key, value) => {
+        const workspace = current();
+        assertWorkspace(workspace);
+        assertInstallationName(key);
+        await E(workspace.inventory).set(key, value);
+        return true;
       },
       inventoryStatus: () => {
         const { inventory } = current();
@@ -777,51 +799,16 @@ export const serveThixotrope = async (
           throw Error('The workspace vat is quarantined; repair it first');
         return E(inventory).subscriptionCounts();
       },
-      /** @param {string} name */
-      invite: name => E(current().getAddressBook()).invite(name),
       /**
-       * @param {string} name
-       * @param {string} invitationText
+       * The selected workspace's address book, made on first use: mail is
+       * the book's to send and receive, spoken to as any holder of it
+       * would.
        */
-      accept: (name, invitationText) =>
-        E(current().getAddressBook()).accept(name, invitationText),
-      /** @param {string} invitationText */
-      revokeInvitation: invitationText =>
-        E(current().getAddressBook()).revokeInvitation(invitationText),
-      contacts: () => E(current().getAddressBook()).contacts(),
-      inbox: () => E(current().getAddressBook()).inbox(),
-      outbox: () => E(current().getAddressBook()).outbox(),
-      /**
-       * @param {string} name
-       * @param {string} text
-       * @param {string} key
-       */
-      send: async (name, text, key) => {
+      getAddressBook: () => {
         const workspace = current();
-        // Resolve the grant in the workspace so only the explicitly selected
-        // value crosses into the mailbox vat.
-        await workspace.getAddressBook();
-        return workspace.worker.evaluate(
-          'E(mailAddressBook).send(name, text, inventory.get(key))',
-          { name, text, key },
-        );
+        assertWorkspace(workspace);
+        return workspace.getAddressBook();
       },
-      /**
-       * @param {string} id
-       * @param {string} key
-       */
-      takeMessage: async (id, key) => {
-        if (typeof key !== 'string' || !key.length)
-          throw Error('Expected inventory key');
-        const workspace = current();
-        const book = await workspace.getAddressBook();
-        return workspace.worker.evaluate(
-          'E(book).take(id).then(value => { inventory.set(key, value); return true; })',
-          { id, key, book },
-        );
-      },
-      /** @param {string} id */
-      discardMessage: id => E(current().getAddressBook()).discard(id),
     });
     /**
      * The administration one client connection speaks to: the daemon's

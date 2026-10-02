@@ -309,7 +309,7 @@ test('grants are checked in the workspace before any vat exists', async t => {
   );
   await t.throwsAsync(
     () => E(f.registry).install(request(f, { grants: [['service', 'data']] })),
-    { message: /remotable capabilities/ },
+    { message: /must be a remotable capability/ },
   );
   await t.throwsAsync(
     () =>
