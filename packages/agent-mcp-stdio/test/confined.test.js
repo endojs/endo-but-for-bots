@@ -55,6 +55,15 @@ test('selectConfinedTools keeps declaration order and ignores unknown names', t 
   ]);
 });
 
+test('selectConfinedTools handles empty inputs and passes duplicates through', t => {
+  t.deepEqual(selectConfinedTools([]), []);
+  t.deepEqual(selectConfinedTools([{ name: 'list' }], []), []);
+  t.deepEqual(selectConfinedTools([{ name: 'list' }, { name: 'list' }]), [
+    { name: 'list' },
+    { name: 'list' },
+  ]);
+});
+
 test('the confined allow-list is frozen', t => {
   t.true(Object.isFrozen(confinedToolNames));
 });

@@ -95,9 +95,10 @@ families are:
   `readFollower` pulls at most `maxItems` items, waiting at most
   `waitMilliseconds` in all, and `closeFollower` releases the handle.
 
-The harness renders the same declaration into `--allowedTools` with
-`renderGuestAllowedTools()` (`mcp__endo__<tool>`) and the config entry with
-`makeMcpConfig({ formulaId })`.
+For the single-tenant shape, the harness renders the full declaration into
+`--allowedTools` with `renderGuestAllowedTools()` (`mcp__endo__<tool>`) and the
+config entry with `makeMcpConfig({ formulaId })`. The confined broker does not
+use these helpers; it serves only the confined allow-list above.
 
 ## Failure shapes
 
