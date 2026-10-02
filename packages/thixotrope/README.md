@@ -290,8 +290,9 @@ A trusted native-resource directory supplies `durable.js` and `ephemeral.js`.
 Each installation runs its durable module in a dedicated manager vat with its own heap and limits.
 Its `make({ adapters, makeKeeper, makeManager })` returns `{ facet, lifecycle }`, the record also
 carrying whatever the installation was granted or provided, such as the control socket's `admin`;
-`makeManager` writes the manager's bookkeeping once, so the module supplies only what identifies a
-registration and how to describe its status.
+`makeManager` writes the manager's bookkeeping once, the status record included, so the module
+supplies only what identifies a registration and, optionally, fields its status carries beside
+`key`, `status` (`bound`, `inactive` or `closed`) and `error`.
 The ephemeral module runs in a separate Node process with native platform APIs; its `make()`
 builds the adapter with `makeAdapter` from `@endo/thixotrope/native-adapter.js`, supplying the
 identity rules, the two verbs that acquire and release the resource, and optionally `resolve`,
@@ -397,7 +398,7 @@ The process checks wall-clock time before reporting, so this is not a precise ti
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 14 is required.
+Workspace metadata version 15 is required.
 It includes dedicated native manager vats (version 4), the mail address book that introduces
 contacts through the `mail-introductions` resource with observable inbox and outbox maps
 (version 5), adapter launchers described by the manager vat that owns them, so that removing or
@@ -410,7 +411,8 @@ table of workspaces, each allocated under a key derived from its name, with inst
 belonging to a workspace or to the daemon (version 11), and host resources bound to a worker and
 a key, the adapter launcher's key being its bundle digest (version 12), and an export record
 naming its resource's binding (version 13), and an installation whose name is taken while it runs
-failing (version 14).
+failing (version 14), and the manager kit owning the status record every native resource
+reports (version 15).
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 

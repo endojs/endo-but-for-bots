@@ -717,7 +717,7 @@ Options:
 Recommendation: (b).
 Workspace version bump, since both kits are frozen into heaps and bundles.
 
-### 10.4 Status owned by the kit
+### 10.4 Status owned by the kit (Done.)
 
 Each resource shapes its status record by hand and invents a word for bound (`listening`,
 `armed`, `listening`), and the clock and the control resource each probe `status()` right after

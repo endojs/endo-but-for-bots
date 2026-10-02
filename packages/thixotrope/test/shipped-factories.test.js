@@ -119,7 +119,6 @@ test('the native manager and its kit are whole', async t => {
         const inner = make({
           label: 'Slot',
           same: Object.is,
-          describe: (key, spec, state) => harden({ key, spec, state }),
         });
         return harden({
           facet: Far('Registration', { keys: () => inner.keys() }),
@@ -192,11 +191,11 @@ test('the control socket the supervisor provides is whole', async t => {
   assertInterface(t, kit.facet, 'ControlSocket');
   t.deepEqual(await E(kit.facet).status(), { status: 'closed' });
   t.like(await E(kit.facet).serve('/tmp/control.sock'), {
-    path: '/tmp/control.sock',
-    status: 'listening',
+    key: '/tmp/control.sock',
+    status: 'bound',
   });
   t.like(await E(kit.facet).serve('/tmp/control.sock'), {
-    status: 'listening',
+    status: 'bound',
   });
   t.true(await E(kit.facet).close());
   t.false(await E(kit.facet).close());

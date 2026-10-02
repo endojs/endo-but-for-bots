@@ -51,24 +51,20 @@ export const make = ({ makeManager, admin }) => {
       existing.path === wanted.path && existing.admin === wanted.admin,
     // The same path with another administration takes the new one.
     replaces: () => true,
-    /**
-     * @param {unknown} key
-     * @param {ControlSpec | undefined} spec
-     * @param {'bound' | 'inactive' | 'closed'} state
-     * @param {string} [error]
-     */
-    describe: (key, spec, state, error) =>
-      harden({
-        path: key,
-        status: state === 'bound' ? 'listening' : state,
-        ...(error === undefined ? {} : { error }),
-      }),
   });
   /** The one registration's handle and path, kept across restarts. */
   /** @type {any} */
   let handle;
   /** @type {string | undefined} */
   let served;
+  /** Withdraw the registration this side holds, if any. */
+  const release = async () => {
+    if (handle === undefined) return false;
+    const closing = handle;
+    handle = undefined;
+    served = undefined;
+    return closing.close();
+  };
   const facet = makeExo('ControlSocket', ControlI, {
     help: () =>
       'serve(path) listens for local administration sessions on the Unix socket at path, each starting from a facet of its own that the administration this resource was provided makes; status() reports the listener; close() stops it.',
@@ -79,26 +75,24 @@ export const make = ({ makeManager, admin }) => {
      * @param {string} path
      */
     serve: async path => {
-      if (handle !== undefined && served !== path) {
-        const closing = handle;
-        handle = undefined;
-        served = undefined;
-        await closing.close();
-      }
+      if (served !== path) await release();
+      /** @type {{status: string, error?: string}} */
+      let status;
       if (handle === undefined) {
-        handle = await manager.register(path, harden({ path, admin }));
+        const registered = await manager.register(
+          path,
+          harden({ path, admin }),
+        );
+        handle = registered.handle;
         served = path;
+        status = registered.status;
+      } else {
+        status = await handle.status();
       }
-      const status = /** @type {{status: string, error?: string}} */ (
-        await handle.status()
-      );
       if (status.status === 'inactive') {
         // Nothing stays desired across lifetimes for a path this side could
         // not take, which the host may be serving itself.
-        const closing = handle;
-        handle = undefined;
-        served = undefined;
-        await closing.close();
+        await release();
         throw Error(
           `Control socket not served: ${status.error ?? 'adapter unavailable'}`,
         );
@@ -107,13 +101,7 @@ export const make = ({ makeManager, admin }) => {
     },
     status: async () =>
       handle === undefined ? harden({ status: 'closed' }) : handle.status(),
-    close: async () => {
-      if (handle === undefined) return false;
-      const closing = handle;
-      handle = undefined;
-      served = undefined;
-      return closing.close();
-    },
+    close: release,
   });
   return harden({ facet, lifecycle: manager.lifecycle });
 };

@@ -85,18 +85,11 @@ export const make = ({ makeManager }) => {
       existing.sink === wanted.sink &&
       (wanted.at === undefined || existing.at === wanted.at),
     /**
-     * @param {unknown} key
-     * @param {AlarmSpec | undefined} spec
-     * @param {'bound' | 'inactive' | 'closed'} state
-     * @param {string} [error]
+     * @param {unknown} _key
+     * @param {AlarmSpec} spec
      */
-    describe: (key, spec, state, error) =>
-      harden({
-        key,
-        ...(spec?.at === undefined ? {} : { at: spec.at }),
-        status: state === 'bound' ? 'armed' : state,
-        ...(error === undefined ? {} : { error }),
-      }),
+    decorate: (_key, spec) =>
+      spec.at === undefined ? {} : harden({ at: spec.at }),
   });
 
   /**
@@ -140,7 +133,7 @@ export const make = ({ makeManager }) => {
     const entry = { kit, handle: undefined };
     pending.set(key, entry);
     try {
-      entry.handle = await manager.register(
+      const { handle, status } = await manager.register(
         key,
         harden(
           when.at === undefined
@@ -148,13 +141,11 @@ export const make = ({ makeManager }) => {
             : { at: when.at, sink },
         ),
       );
+      entry.handle = handle;
       // A registration the adapter could not take (no adapter could be
       // built, or it refused the alarm) would otherwise wait in silence
       // until the next rebuild; the caller hears about it instead and may
       // arm again.
-      const status = /** @type {{status: string, error?: string}} */ (
-        await entry.handle.status()
-      );
       if (status.status === 'inactive')
         throw Error(
           `Alarm not armed: ${status.error ?? 'adapter unavailable'}`,

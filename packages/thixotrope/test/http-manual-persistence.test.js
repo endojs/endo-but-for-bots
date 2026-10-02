@@ -69,12 +69,12 @@ test('HTTP registration keeps private lifecycle separate and closes only its own
     handle: () => harden({ status: 200, body: 'ok' }),
   });
   const first = await E(kit.facet).register(18_080, handler);
-  t.is((await E(first).status()).status, 'listening');
+  t.is((await E(first).status()).status, 'bound');
   t.true(await E(first).close());
   const second = await E(kit.facet).register(18_080, handler);
   t.false(await E(first).close());
   t.true(bound.has(18_080));
-  t.is((await E(second).status()).status, 'listening');
+  t.is((await E(second).status()).status, 'bound');
   t.is((await E(first).status()).status, 'closed');
   t.true(await E(second).close());
 });
@@ -103,7 +103,7 @@ test('an interrupted close retires the adapter before another registration is se
   // process and the close reports success.
   t.true(await E(first).close());
   t.false(bound.has(18_080));
-  t.is((await E(second).status()).status, 'listening');
+  t.is((await E(second).status()).status, 'bound');
   t.false(bound.has(18_080));
 });
 
@@ -151,7 +151,7 @@ test('invalid HTTP policy does not consume a registration', async t => {
     { message: /origins must be an array/ },
   );
   const registration = await E(kit.facet).register(18_080, handler);
-  t.is((await E(registration).status()).status, 'listening');
+  t.is((await E(registration).status()).status, 'bound');
 });
 
 test('a failed initial bind still returns a handle that can cancel or retry', async t => {
@@ -167,6 +167,6 @@ test('a failed initial bind still returns a handle that can cancel or retry', as
   allowBind();
   await E(kit.lifecycle).started();
   t.false(bound.has(18_080));
-  t.is((await E(retried).status()).status, 'listening');
+  t.is((await E(retried).status()).status, 'bound');
   t.true(await E(retried).close());
 });
