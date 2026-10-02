@@ -142,7 +142,7 @@ test('property: any repeat of --settings or --mcp-config is refused', t => {
   );
 });
 
-// --- property: six-flag spawn-refusal predicate -------------------------
+// property: six-flag spawn-refusal predicate
 
 const conformingArgv = () => [...buildArgv(spec())];
 
