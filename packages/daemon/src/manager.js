@@ -47,7 +47,11 @@ import {
 } from '@endo/tar/writer.js';
 import { checkinTarTree } from './tar-checkin.js';
 import { makeEndoRegistry, makeRegistryTable } from './registry.js';
-import { makeDirectoryMaker, makeReadOnlyDirectoryView } from './directory.js';
+import {
+  makeDirectoryMaker,
+  makeReadOnlyDirectoryView,
+  registerReadOnlyGuestFacet,
+} from './directory.js';
 import { makeContentDataPlaneRegistry } from './content-data-plane.js';
 import { makeHttpContentDataPlane } from './http-content-plane.js';
 import { makeDeferredTasks } from './deferred-tasks.js';
@@ -3066,6 +3070,28 @@ const makeDaemonCore = async (
       )
     );
 
+    // A guest that looks this hub up receives its guest facet, which has no
+    // identifier or locator methods.
+    registerReadOnlyGuestFacet(
+      mailHub,
+      {
+        has,
+        list,
+        listValues,
+        lookup,
+        maybeLookup,
+        reverseLookup,
+        followNameChanges: () => followNameChanges(),
+      },
+      () => {
+        if (mailboxCancelled) {
+          throw new Error('Mailbox directory has been revoked');
+        }
+      },
+      disallowedMutation,
+      notSupported,
+    );
+
     return mailHub;
   };
 
@@ -3488,6 +3514,28 @@ const makeDaemonCore = async (
           }),
         )
       )
+    );
+
+    // A guest that looks this hub up receives its guest facet, which has no
+    // identifier or locator methods.
+    registerReadOnlyGuestFacet(
+      messageHub,
+      {
+        has,
+        list,
+        listValues,
+        lookup,
+        maybeLookup,
+        reverseLookup,
+        followNameChanges: () => followNameChanges(),
+      },
+      () => {
+        if (messageCancelled) {
+          throw new Error('Message directory has been revoked');
+        }
+      },
+      disallowedMutation,
+      notSupported,
     );
 
     return messageHub;

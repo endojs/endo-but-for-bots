@@ -5350,6 +5350,47 @@ test('form value message @value is addressable via @mail/N/@value', async t => {
   t.deepEqual(resultValue, { displayName: 'Bob' });
 });
 
+test('guest mail and message hubs have no designation methods', async t => {
+  const { host } = await prepareHost(t);
+  const guest = await E(host).provideGuest('guest');
+  await E(host).send('guest', ['Hello'], [], []);
+  const guestIterator = iterateReader(E(guest).followMessages());
+  const { value: message } = await guestIterator.next();
+
+  const designationMethods = [
+    'identify',
+    'locate',
+    'reverseLocate',
+    'followLocatorNameChanges',
+    'listIdentifiers',
+    'listLocators',
+    'storeIdentifier',
+    'storeLocator',
+  ];
+  const mailHub = await E(guest).lookup('@mail');
+  const messageHub = await E(guest).lookup(['@mail', String(message.number)]);
+  const nestedMessageHub = await E(mailHub).lookup(String(message.number));
+  const hubsMethodNames = await Promise.all(
+    [mailHub, messageHub, nestedMessageHub].map(hub =>
+      // eslint-disable-next-line no-underscore-dangle
+      E(hub).__getMethodNames__(),
+    ),
+  );
+  for (const methodNames of hubsMethodNames) {
+    for (const name of designationMethods) {
+      t.false(methodNames.includes(name), name);
+    }
+  }
+  t.true((await E(mailHub).list()).includes(String(message.number)));
+  t.true((await E(messageHub).list()).includes('@from'));
+  await t.throwsAsync(() => E(mailHub).remove(String(message.number)));
+
+  // The host still holds the full hubs.
+  const hostMailHub = await E(host).lookup('@mail');
+  // eslint-disable-next-line no-underscore-dangle
+  t.true((await E(hostMailHub).__getMethodNames__()).includes('identify'));
+});
+
 // Formula write failure test removed: SQLite provides transactional
 // atomicity, making partial writes structurally impossible.
 

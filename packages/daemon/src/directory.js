@@ -91,6 +91,94 @@ export const unwrapGuestFacet = value => {
 };
 harden(unwrapGuestFacet);
 
+/**
+ * Register a guest facet for a read-only name hub that is not built by
+ * `makeIdentifiedDirectory` (the mailbox hub behind `@mail` and each message
+ * hub under it). Like a directory's facet, it has no identifier or locator
+ * methods, so a guest that looks the hub up cannot read a message's
+ * designations as data through `identify`, `locate`, or `listIdentifiers`.
+ * Its lookups yield guest facets in turn, so a message hub reached through
+ * the mailbox hub is narrowed too.
+ *
+ * @param {object} hubExo The hub as daemon code holds it.
+ * @param {object} hub
+ * @param {NameHub['has']} hub.has
+ * @param {NameHub['list']} hub.list
+ * @param {() => Promise<unknown[]>} hub.listValues
+ * @param {NameHub['lookup']} hub.lookup
+ * @param {NameHub['maybeLookup']} hub.maybeLookup
+ * @param {NameHub['reverseLookup']} hub.reverseLookup
+ * @param {() => AsyncGenerator<PetStoreNameChange, undefined, undefined>} hub.followNameChanges
+ * @param {() => void} assertLive Throws once the hub has been canceled.
+ * @param {() => Promise<never>} disallowedMutation
+ * @param {() => Promise<never>} notSupported
+ */
+export const registerReadOnlyGuestFacet = (
+  hubExo,
+  hub,
+  assertLive,
+  disallowedMutation,
+  notSupported,
+) => {
+  /** @param {unknown} value */
+  const forGuest = async value => guestFacetFor(await value);
+  /** @type {object | undefined} */
+  let guestFacet;
+  const makeGuestFacet = () => {
+    if (guestFacet !== undefined) {
+      return guestFacet;
+    }
+    const lookup = (/** @type {any} */ petNamePath) =>
+      forGuest(hub.lookup(petNamePath));
+    const maybeLookup = (/** @type {any} */ petNamePath) =>
+      forGuest(hub.maybeLookup(petNamePath));
+    const readOnlyView = makeReadOnlyDirectoryView(
+      harden({ has: hub.has, list: hub.list, lookup, maybeLookup }),
+      assertLive,
+    );
+    guestFacet = makeExo(
+      'EndoGuestDirectory',
+      GuestDirectoryInterface,
+      /** @type {any} */ ({
+        help: makeHelp(guestDirectoryHelp),
+        has: hub.has,
+        list: hub.list,
+        listValues: async () =>
+          harden(
+            (await hub.listValues()).map(value =>
+              Promise.resolve(value).then(guestFacetFor),
+            ),
+          ),
+        followNameChanges: () => {
+          const iterator = mapCancelableIterator(
+            hub.followNameChanges(),
+            redactNameChange,
+          );
+          return readerFromIterator(iterator, {
+            cancelPending: () => cancelPendingIterator(iterator),
+          });
+        },
+        lookup,
+        maybeLookup,
+        reverseLookup: value => hub.reverseLookup(unwrapGuestFacet(value)),
+        remove: disallowedMutation,
+        move: disallowedMutation,
+        copy: disallowedMutation,
+        makeDirectory: disallowedMutation,
+        readText: notSupported,
+        maybeReadText: notSupported,
+        writeText: disallowedMutation,
+        readOnly: async () => readOnlyView,
+      }),
+    );
+    directoriesByGuestFacet.set(guestFacet, hubExo);
+    registerGuestDirectory(guestFacet, /** @type {any} */ (hubExo));
+    return guestFacet;
+  };
+  guestFacetMakers.set(hubExo, makeGuestFacet);
+};
+harden(registerReadOnlyGuestFacet);
+
 const designationMethodNames = new Set([
   'identify',
   'locate',

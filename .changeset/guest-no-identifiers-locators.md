@@ -17,6 +17,8 @@ A capability another principal deliberately delegates to a guest, such as its ho
 Messages a guest reads replace `from` and `to` with `fromNames` and `toNames`, the guest's own pet names for its correspondents, and withhold `ids`, `promiseId`, `resolverId`, and `valueId`; a guest reaches an attachment or a submitted form value with `adopt`.
 A guest's `followNameChanges` withholds each change's `value`.
 A directory reaches a guest, through `makeDirectory`, `lookup`, `maybeLookup`, `listValues`, or the resolution of its `request`, only as an `EndoGuestDirectory`, which carries the directory's pet-name and file methods without the identifier and locator methods, and narrows the directories it reaches in turn.
+The mailbox hub a guest looks up as `@mail`, and each message hub under it, likewise reaches the guest only as a read-only `EndoGuestDirectory` without the identifier and locator methods.
+Channels are outside this scope: a channel message still carries `ids` to every member, guests included.
 A guest's `evaluate` resolves every endowment, even a single pet name, by a lookup through the guest, so a directory endowment arrives as its `EndoGuestDirectory` facet.
 A host can still traverse a pet-name path into its own guest (for example, `host.copy(['answer'], ['guest-agent', 'answer'])`) to bind a value there.
 A guest's own `copy` and `move` cannot traverse a path through another guest it names.
