@@ -70,10 +70,10 @@ export const registerAlarmIntegration = (test, kind) => {
         }
         throw Error(`Reminder never satisfied: ${source}`);
       };
-      // Arming travels through two vats and a process launch, which under
-      // Ironhorse takes seconds; the deadline must still be ahead when the
-      // host goes down.
-      const delay = kind === 'ironhorse' ? 10_000n : 4000n;
+      // Arming travels through two vats and a process launch, which takes
+      // seconds under Ironhorse and under coverage; the deadline must still
+      // be ahead when the host goes down, after the alarm is armed.
+      const delay = 10_000n;
       let host = await start();
       t.is(
         await host.client.call(
