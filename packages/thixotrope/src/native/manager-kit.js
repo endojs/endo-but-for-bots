@@ -19,7 +19,7 @@ import { makeSerialQueue } from '../serial-queue.js';
  * `makeAdapter`, supplies the verbs.
  *
  * The manager and the adapter speak one protocol: `bind(key, spec)`,
- * `unbind(key)`, `restore([[key, spec], ...])` and `keys()`, where `spec` is
+ * `unbind(key)` and `restore([[key, spec], ...])`, where `spec` is
  * whatever passable record the author registers under a key. A bind or a
  * restore may answer a resolved spec, what the registration became once
  * bound; the manager adopts it as the desired spec, so `same`, `decorate`
@@ -30,7 +30,8 @@ import { makeSerialQueue } from '../serial-queue.js';
  *
  * @template Spec
  * @param {{ adapters: any, makeKeeper: any }} powers the adapter launcher
- *   the host installed the manager with, and the keeper factory
+ *   the host installed the manager with, and the keeper factory; bound by
+ *   the native manager, so a durable module receives `makeManager` alone
  * @param {object} options
  * @param {string} options.label what a key names, for messages
  * @param {(existing: Spec, wanted: Spec) => boolean} options.same
@@ -113,7 +114,7 @@ export const makeManager = (
       // An adapter that reports nothing resolved nothing; one that answers
       // out of shape is the author's problem to see in status, not a reason
       // for the manager to lose its restore.
-      if (!Array.isArray(results)) return results;
+      if (!Array.isArray(results)) return;
       for (const result of results) {
         const entry =
           typeof result === 'object' && result !== null
@@ -121,7 +122,6 @@ export const makeManager = (
             : undefined;
         if (entry !== undefined) adopt(result.key, entry, result.spec);
       }
-      return results;
     },
   });
   const rebuildIfDesired = () =>

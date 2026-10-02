@@ -288,7 +288,7 @@ curl http://127.0.0.1:8080/read
 
 A trusted native-resource directory supplies `durable.js` and `ephemeral.js`.
 Each installation runs its durable module in a dedicated manager vat with its own heap and limits.
-Its `make({ adapters, makeKeeper, makeManager })` returns `{ facet, lifecycle }`, the record also
+Its `make({ makeManager })` returns `{ facet, lifecycle }`, the record also
 carrying whatever the installation was granted or provided, such as the control socket's `admin`;
 `makeManager` writes the manager's bookkeeping once, the status record included, so the module
 supplies only what identifies a registration and, optionally, fields its status carries beside
@@ -398,21 +398,10 @@ The process checks wall-clock time before reporting, so this is not a precise ti
 A backward clock adjustment delays firing; a forward adjustment is noticed at the next timer check.
 Recurring scheduling, per-application quotas, and notification UI remain future work.
 
-Workspace metadata version 15 is required.
-It includes dedicated native manager vats (version 4), the mail address book that introduces
-contacts through the `mail-introductions` resource with observable inbox and outbox maps
-(version 5), adapter launchers described by the manager vat that owns them, so that removing or
-collecting a manager closes its processes (version 6), one installation registry for applications
-and native resources whose values live in the inventory (version 7), the clock and mailbox provided
-as installations in vats of their own (version 8), native adapters launched from bundles stored
-under their digest together with the clock as a native resource with no host ledger (version 9),
-the registry in a vat of the daemon's own with the host's index beside it (version 10), a
-table of workspaces, each allocated under a key derived from its name, with installations
-belonging to a workspace or to the daemon (version 11), and host resources bound to a worker and
-a key, the adapter launcher's key being its bundle digest (version 12), and an export record
-naming its resource's binding (version 13), and an installation whose name is taken while it runs
-failing (version 14), and the manager kit owning the status record every native resource
-reports (version 15).
+Workspace metadata version 16 is required.
+The supervisor bumps the version whenever a guest closure it ships by source changes shape, since
+an installed closure is frozen in its vat's heap; `src/control/supervisor.js` lists what each
+version changed.
 Older workspaces require migration or a fresh state directory because persisted registry and clock
 closures cannot be updated by loading new source; startup rejects them before restoring workers.
 

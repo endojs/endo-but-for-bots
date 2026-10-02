@@ -287,8 +287,7 @@ A manager holding a consumer's handler retains that consumer's vat, which is cor
 served is reachable, and withdrawing the registration releases it: a closed handle no longer
 names the handler it was made with.
 
-`durable.js` exports a synchronous `make(powers)` that receives `{ adapters, makeKeeper,
-makeManager }` together with whatever the installation was granted or provided, such as the control
+`durable.js` exports a synchronous `make(powers)` that receives `{ makeManager }` together with whatever the installation was granted or provided, such as the control
 socket's `admin`, with the guest prelude in scope, and returns `{ facet, lifecycle }`.
 `makeManager({ label, same, replaces, decorate })` writes the manager's bookkeeping once: it keeps
 the desired registrations, holds one adapter incarnation through a keeper, reconciles each
@@ -303,8 +302,8 @@ replaces, bind, unbind, resolve })` from `@endo/thixotrope/native-adapter.js`, w
 operations, keeps the bindings, replaces or refuses a differing registration as the author decides,
 and restores a set of registrations one at a time, reporting each failure without giving up on the
 rest.
-The two speak one protocol: `bind(key, spec)`, `unbind(key)`, `restore([[key, spec], …])` and
-`keys()`, where `spec` is whatever passable record the author registers under a key.
+The two speak one protocol: `bind(key, spec)`, `unbind(key)` and `restore([[key, spec], …])`,
+where `spec` is whatever passable record the author registers under a key.
 A registration may resolve at bind time, when binding settles something the spec left open (a
 relative delay becomes an absolute deadline; a port of zero becomes the port the listener got):
 the optional `resolve(binding, spec)` says what it became, a bind answers that resolved spec

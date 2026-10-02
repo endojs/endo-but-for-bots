@@ -22,13 +22,9 @@
  * granted from the inventory and provided by the host, by name.
  *
  * @typedef {object} NativeDurablePowers
- * @property {any} adapters the launcher: `create()` starts a fresh adapter
- *   process from this installation and returns its incarnation, whose
- *   `getRoot()` is the adapter and whose `retire()` ends the process
- * @property {any} makeKeeper `makeAdapterKeeper`, for a manager that wants
- *   to hold an incarnation itself
  * @property {(options: ManagerOptions<any>) => Manager<any>} makeManager
- *   the manager kit, bound to this installation's launcher and keeper
+ *   the manager kit, bound to this installation's launcher, which starts
+ *   its adapter processes, and to the keeper that holds one of them
  *
  * @typedef {object} NativeDurableKit
  * @property {any} facet the public facet, installed into the inventory
@@ -48,7 +44,7 @@
 /**
  * The protocol between a manager and its adapter. A registration is a
  * passable `spec` desired under a `key`; the adapter binds it, unbinds it,
- * restores a set of them one at a time, and lists what it holds. A bind
+ * and restores a set of them one at a time. A bind
  * answers the resolved spec when binding settled something the spec left
  * open, or `undefined` when the registration is as sent; a restore reports
  * each resolved registration with its resolved spec. The manager adopts a
@@ -63,7 +59,6 @@
  * @property {(key: unknown, spec: Spec) => Promise<Spec | undefined>} bind
  * @property {(key: unknown) => Promise<boolean>} unbind
  * @property {(entries: Array<[unknown, Spec]>) => Promise<Array<{ key: unknown, spec?: Spec, error?: string }>>} restore
- * @property {() => Promise<Array<unknown>>} keys
  */
 
 /**

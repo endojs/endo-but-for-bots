@@ -46,7 +46,7 @@ test.serial(
             },
           },
         }),
-      { message: /this build requires version 15/ },
+      { message: /this build requires version 16/ },
     );
     t.true(released);
     t.false(started);

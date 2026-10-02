@@ -18,7 +18,7 @@ stored bundle, owns its native APIs and exposes only its root over the existing 
 protocol.
 The primary daemon never imports or executes it.
 
-The durable factory is synchronous and receives `{adapters, makeKeeper, makeManager}` together with
+The durable factory is synchronous and receives `{makeManager}` together with
 whatever the installation was granted or provided, with the guest prelude in scope as globals.
 It returns `{facet, lifecycle}`, both remotables; `src/native/contract.js` states the contract as
 types.

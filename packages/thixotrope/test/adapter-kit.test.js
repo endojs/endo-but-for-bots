@@ -14,6 +14,8 @@ const fixture = () => {
   const log = [];
   let next = 0;
   let failUnbind = false;
+  /** What the fake resource holds, by key, in acquisition order. */
+  const held = new Map();
   const adapter = makeAdapter({
     label: 'Slot',
     /**
@@ -34,6 +36,7 @@ const fixture = () => {
       if (key === 'broken') throw Error('cannot bind broken');
       next += 1;
       log.push(`bind ${key} ${spec.who}${spec.n} -> ${next}`);
+      held.set(key, next);
       return next;
     },
     /**
@@ -46,11 +49,13 @@ const fixture = () => {
         throw Error('release interrupted');
       }
       log.push(`unbind ${key} ${token}`);
+      held.delete(key);
     },
   });
   return {
     adapter,
     log,
+    held: () => [...held.keys()],
     failNextUnbind: () => {
       failUnbind = true;
     },
@@ -66,6 +71,8 @@ const resolvingFixture = () => {
   /** @type {string[]} */
   const log = [];
   let next = 0;
+  /** What the fake resource holds, by key, in acquisition order. */
+  const held = new Map();
   const adapter = makeAdapter({
     label: 'Slot',
     /**
@@ -81,6 +88,7 @@ const resolvingFixture = () => {
     bind: async (key, spec) => {
       next += 1;
       log.push(`bind ${key} ${spec.who} -> ${next}`);
+      held.set(key, next);
       return next;
     },
     /**
@@ -98,17 +106,22 @@ const resolvingFixture = () => {
      */
     unbind: async (slot, key) => {
       log.push(`unbind ${key} ${slot}`);
+      held.delete(key);
     },
   });
-  return { adapter, log };
+  return {
+    held: () => [...held.keys()],
+    adapter,
+    log,
+  };
 };
 
 test('a repeated bind of the same registration changes nothing', async t => {
-  const { adapter, log } = fixture();
+  const { adapter, log, held } = fixture();
   t.is(await E(adapter).bind('one', harden({ who: 'a', n: 1 })), undefined);
   t.is(await E(adapter).bind('one', harden({ who: 'a', n: 1 })), undefined);
   t.deepEqual(log, ['bind one a1 -> 1']);
-  t.deepEqual(await E(adapter).keys(), ['one']);
+  t.deepEqual(held(), ['one']);
 });
 
 test('a replaceable registration is released before the new one is bound; others are refused', async t => {
@@ -124,22 +137,22 @@ test('a replaceable registration is released before the new one is bound; others
 });
 
 test('a replacement whose release fails stays bound until a release succeeds', async t => {
-  const { adapter, log, failNextUnbind } = fixture();
+  const { adapter, log, failNextUnbind, held } = fixture();
   await E(adapter).bind('one', harden({ who: 'a', n: 1 }));
   failNextUnbind();
   await t.throwsAsync(
     () => E(adapter).bind('one', harden({ who: 'a', n: 2 })),
     { message: /release interrupted/ },
   );
-  t.deepEqual(await E(adapter).keys(), ['one'], 'the old binding is kept');
+  t.deepEqual(held(), ['one'], 'the old binding is kept');
   t.deepEqual(log, ['bind one a1 -> 1'], 'and nothing new was bound');
   failNextUnbind();
   await t.throwsAsync(() => E(adapter).unbind('one'), {
     message: /release interrupted/,
   });
-  t.deepEqual(await E(adapter).keys(), ['one'], 'a failed unbind keeps it');
+  t.deepEqual(held(), ['one'], 'a failed unbind keeps it');
   t.true(await E(adapter).unbind('one'), 'until one succeeds');
-  t.deepEqual(await E(adapter).keys(), []);
+  t.deepEqual(held(), []);
   t.deepEqual(log, ['bind one a1 -> 1', 'unbind one 1']);
 });
 
@@ -159,17 +172,17 @@ test('the adapter refuses a construction that leaves out what it needs', t => {
 });
 
 test('unbind releases the binding and reports whether there was one', async t => {
-  const { adapter, log } = fixture();
+  const { adapter, log, held } = fixture();
   t.false(await E(adapter).unbind('one'));
   await E(adapter).bind('one', harden({ who: 'a', n: 1 }));
   t.true(await E(adapter).unbind('one'));
   t.false(await E(adapter).unbind('one'));
   t.deepEqual(log, ['bind one a1 -> 1', 'unbind one 1']);
-  t.deepEqual(await E(adapter).keys(), []);
+  t.deepEqual(held(), []);
 });
 
 test('restore binds each entry and reports failures without giving up', async t => {
-  const { adapter } = fixture();
+  const { adapter, held } = fixture();
   const spec = harden({ who: 'a', n: 1 });
   const results = await E(adapter).restore(
     harden([
@@ -183,7 +196,7 @@ test('restore binds each entry and reports failures without giving up', async t 
     { key: 'broken', error: 'cannot bind broken' },
     { key: 'two' },
   ]);
-  t.deepEqual(await E(adapter).keys(), ['one', 'two']);
+  t.deepEqual(held(), ['one', 'two']);
 });
 
 test('a bind answers undefined when the registration is as sent', async t => {
@@ -221,7 +234,7 @@ test('a resolving adapter answers what the registration became, and keeps it', a
 });
 
 test('a restore reports each resolved registration with its resolved spec', async t => {
-  const { adapter } = resolvingFixture();
+  const { adapter, held } = resolvingFixture();
   t.deepEqual(
     await E(adapter).restore(
       harden([
@@ -235,7 +248,7 @@ test('a restore reports each resolved registration with its resolved spec', asyn
     ],
     'an unresolved entry resolves; a resolved one round-trips as it is',
   );
-  t.deepEqual(await E(adapter).keys(), ['one', 'two']);
+  t.deepEqual(held(), ['one', 'two']);
 });
 
 test('resolve, when given, must be a function', t => {
@@ -278,5 +291,5 @@ test('a resolve that throws releases the binding and fails the bind', async t =>
     message: /address unavailable/,
   });
   t.deepEqual(log, ['bind', 'unbind 1'], 'the resource was released');
-  t.deepEqual(await E(adapter).keys(), [], 'and nothing is kept under the key');
+  t.false(await E(adapter).unbind('one'), 'and nothing is kept under the key');
 });

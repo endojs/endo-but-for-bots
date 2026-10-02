@@ -16,8 +16,7 @@ import { makeSerialQueue } from '../serial-queue.js';
  * registration and the two verbs.
  *
  * The adapter and its manager, built with `makeManager`, speak one protocol:
- * `bind(key, spec)`, `unbind(key)`, `restore([[key, spec], ...])` and
- * `keys()`, where `spec` is whatever passable record the manager registers
+ * `bind(key, spec)`, `unbind(key)` and `restore([[key, spec], ...])`, where `spec` is whatever passable record the manager registers
  * under a key. A bind answers what the registration became when binding
  * settled something the spec left open (a delay becomes a deadline, a port
  * of zero becomes the port the listener got), or `undefined` when it is as
@@ -158,7 +157,6 @@ export const makeAdapter = ({
         }
         return harden(results);
       }),
-    keys: () => harden([...bound.keys()]),
   });
 };
 harden(makeAdapter);
