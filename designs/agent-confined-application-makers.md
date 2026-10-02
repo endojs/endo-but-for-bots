@@ -17,6 +17,20 @@ applications: built from a bundle, an archive, or a virtual filesystem, with or
 without `node_modules` in situ, and with or without a pre-generated
 `compartment-map.json`.
 
+Some vocabulary, used throughout. A daemon user acts through an **agent**. The
+**host** (`EndoHost`) is the user's own agent and holds the user's full
+authority; a **guest** (`EndoGuest`) is an agent the host makes for a party it
+does not fully trust, such as an LLM, with only the capabilities the host
+grants it. A **facet** is one object presenting one view of an agent; the MCP
+server holds the guest facet. Each agent resolves pet names in its own **name
+hub**, the namespace of names it has been given. The daemon persists every
+value it makes as a **formula**, a durable record of how to make the value;
+an **incarnation** is one run of that recipe, at first use and again after
+every daemon restart (a reincarnation). A **confined** application runs in a
+worker under SES with no ambient authority: no filesystem, network, or
+process access except through the capabilities passed to it as `powers`.
+*Makers* are the agent methods that formulate such an application from code.
+
 `evaluate` and `define` are on the guest and are now projected. The makers are
 not, because the guest has none. Only `EndoHost` has makers, and they cover part
 of the source-by-layout matrix (the table in the next section). Tracking issue:
@@ -39,7 +53,7 @@ module graph from its sources and writing it out as archive bytes.
 | Tree or mount | `package.json` only | designed, not started: `makeFromPackage` ([daemon-worker-import-from-mount](daemon-worker-import-from-mount.md)) | `mapSnapshot` ([snapshot-mapper](snapshot-mapper.md)) | — |
 
 The host also has `makeUnconfinedFromTree`, which stages a tree onto real disk
-with `stageTree` (`packages/daemon/src/host.js`) and runs the unconfined Node
+with `stageTree` (`../packages/daemon/src/host.js`) and runs the unconfined Node
 loader there. This design does not reuse that path for confined makers: the
 staged copy is a scratch directory the confined worker would read through
 ambient filesystem powers, a guest has no `stageTree`, and an XS worker has no
@@ -60,9 +74,13 @@ is.
 
 ### Capture to an archive, then run the archive
 
-Every source shape reaches the worker as compartment-mapper archive bytes, and
-the worker's existing `makeArchive` method runs them. No worker method is
-added.
+Every source shape this design adds reaches the worker as compartment-mapper
+archive bytes, and the worker's existing `makeArchive` method runs them. No
+worker method is added. The existing `'archive'` layout is unchanged and out
+of scope: a Node worker still receives that tree whole and packs it inside its
+own `makeFromTree` method, while a locked (XS) worker already receives packed
+archive bytes. Moving the Node worker's archive layout onto daemon-side capture
+would retire that second path; it is a follow-up, not part of this design.
 
 - An **archive** carries original sources and a `compartment-map.json`, never
   precompiled sources. `makeArchive` refuses an archive whose compartment map
@@ -99,10 +117,10 @@ parsers enabled. A bundle is therefore of limited use on endor.
 
 This choice gives three properties:
 
-- **One worker entry point.** The daemon already routes locked (XS) workers'
-  `makeFromTree` through archive bytes (`packTreeIntoArchiveBytes`, then the
-  worker's `makeArchive`), so archive bytes are the shape every worker kind is
-  converging on. A new worker method would need a second XS bridge. The bus XS
+- **One worker entry point for the new layouts.** The daemon already routes
+  locked (XS) workers' `makeFromTree` through archive bytes
+  (`packTreeIntoArchiveBytes`, then the worker's `makeArchive`), and the new
+  layouts follow that route on every worker kind. A new worker method would need a second XS bridge. The bus XS
   worker's `makeArchive` is still a stub (`bus-worker-xs-facet.js`,
   [worker-rust-xs](worker-rust-xs.md) § Known Gaps); this design adds no new
   XS gap.
@@ -116,7 +134,8 @@ This choice gives three properties:
   its place), and the inspector and the maker's result text show it, so the
   caller does not have to remember which object it passed.
 - **The formula record states what ran.** The inspector shows the archive blob,
-  the bundle blob, or the tree reference with its layout.
+  the bundle blob, or the tree reference with its requested layout and the
+  layout the current incarnation ran as (§ Layout detection).
 
 Capture runs in the daemon (or a Node helper worker it owns), never in the
 target worker, so the confined worker receives only archive bytes.
@@ -147,11 +166,17 @@ A new `makeTreeReadPowers(tree, { root })` in `@endo/platform/fs` turns a
   `mapNodeModules` relies on this to build one compartment for a package
   reached through more than one `node_modules` path; without it, such a
   package would load twice and break identity-sensitive code (`instanceof`,
-  module-level singletons). For a `Mount`, `canonical` asks the daemon for the
-  directory's physical path, confined to the mount root (the same `realPath`
-  check the mount already applies to every access), and maps it back under the
-  synthetic root. A snapshot tree stores files and directories but no links,
-  so each package has one path and `canonical` is the identity.
+  module-level singletons). `makeTreeReadPowers` takes an optional
+  `canonical(segments)` hook and defaults to the identity. The public
+  `EndoMount` exo (`MountInterface`) exposes no physical path, and this design
+  does not add one: the mount's physical-path accessors (`getMountBacking`,
+  `getEntryPhysicalPath` in `../packages/daemon/src/mount.js`) are host-private.
+  Capture runs inside the daemon, so the daemon supplies the hook for a mount
+  it backs: it resolves the directory's physical path with
+  `getEntryPhysicalPath`, which applies the mount's root-confinement `realPath`
+  check, and maps the result back under the synthetic root. That wiring is new
+  daemon work in Phase 2. A snapshot tree stores files and directories but no
+  links, so each package has one path and the identity is correct.
 
 A tree read from a mount must keep every package directory physically under
 the mount root. The reason is links that resolve outside it: the mount refuses
@@ -188,16 +213,19 @@ The maker takes an optional `layout`:
 
 | `layout` | Meaning | Pipeline |
 |---|---|---|
-| `'archive'` | `compartment-map.json` at root, archive paths | existing `makeFromTree` |
+| `'archive'` | `compartment-map.json` at root, archive paths (a tree laid out like an archive, not an archive blob; `makeArchive` takes the blob) | existing `makeFromTree` |
 | `'node-modules-with-map'` | `compartment-map.json` whose compartment locations are under the root, modules under `node_modules` | `captureFromMap` |
 | `'node-modules-scan'` | `package.json` at root, `node_modules` in situ, no map | `mapNodeModules`, then `captureFromMap` |
 | `'package'` | `package.json` only | `makeFromPackage`, when built |
 
-When `layout` is omitted the daemon detects it and records the detected value
-in the formula's provenance. Because the tree is live, the daemon detects again
-at each incarnation, before it captures; a tree whose layout has changed runs
-under the new layout. A caller who passes `layout` fixes it, and an incarnation
-whose tree no longer matches that layout fails the capture. A tree that matches
+The formula records only the **requested** layout: the caller's `layout`
+value, or `'detect'` when it is omitted. That field is fixed at formulation.
+The **detected** layout is a live fact, not formula state: each incarnation
+detects it before capturing, and the inspector and the maker's result text
+report it as "running as `<layout>`" for the current incarnation, alongside
+the fixed requested value. With `'detect'`, a tree whose layout has changed
+runs under the new layout. A caller who passes `layout` fixes it, and an
+incarnation whose tree no longer matches that layout fails the capture. A tree that matches
 no layout (no `compartment-map.json` and no `package.json` at the root) is
 rejected with an error naming the layouts it looked for, and nothing is
 formulated; an unsupported layout, such as a link out of the root, is rejected
@@ -225,7 +253,7 @@ the made value and, with `resultName`, stores it.
 | `makeFromBundle(workerPetName, bundleName, options?)` | new | new | blob or value holding an `endoZipBase64` bundle, precompiled |
 
 The parameter keeps the existing `workerPetName` spelling of `EndoHost`
-(`packages/daemon/src/types.d.ts`). The guest and MCP `makeArchive` likewise
+(`../packages/daemon/src/types.d.ts`). The guest and MCP `makeArchive` likewise
 keep the host's name rather than a `makeFromArchive` spelling, so one
 operation has one name on every facet; its doc comment and tool description
 say that it runs an archive rather than producing one.
@@ -236,7 +264,11 @@ precompiled parsers enabled.
 
 The guest methods are bounded by the guest's authority:
 
-- `workerPetName` and `powersName` resolve in the guest's own name hub. A guest
+- `workerPetName` and `powersName` resolve in the guest's own name hub. The
+  host's `prepareMakeCaplet` is a closure inside the host maker, not reachable
+  from the guest; Phase 4 factors its worker and powers resolution into a
+  helper that each agent calls with its own name hub, so the guest gains an
+  equivalent without reaching the host's. A guest
   that names `@agent` grants the made application the guest itself, never the
   host.
 - The guest options shape omits `workerTrustedShims`, which runs code outside
@@ -268,10 +300,10 @@ Capture errors surface as an `isError` result, and a rejected option
 
 | Boundary | Mechanism | Policy | Durable state | Lifecycle authority | Value crossing |
 |---|---|---|---|---|---|
-| MCP adapter → guest | adapter validates JSON arguments | catalog declaration | none | guest | pet-name paths, strings |
-| Guest → daemon formulation | `prepareMakeCaplet` | guest name hub bounds worker and powers | pet store entry for `resultName` | daemon | formula identifiers |
-| Daemon capture → compartment-mapper | `makeTreeReadPowers`, `captureFromMap` | layout detection, root confinement, in-root package directories | CAS blob for an archive or bundle; the formula's tree reference for a tree | daemon | archive bytes |
-| Daemon → worker | `make-archive` worker method | worker kind | none in the worker | daemon (reincarnation) | archive blob, powers, context |
+| MCP adapter -> guest | adapter validates JSON arguments | catalog declaration | none | guest | pet-name paths, strings |
+| Guest -> daemon formulation | the shared caplet-preparation helper (Phase 4) | guest name hub bounds worker and powers | pet store entry for `resultName` | daemon | formula identifiers |
+| Daemon capture -> compartment-mapper | `makeTreeReadPowers`, `captureFromMap` | layout detection, root confinement, in-root package directories | CAS blob for an archive or bundle; the formula's tree reference for a tree | daemon | archive bytes |
+| Daemon -> worker | `make-archive` worker method | worker kind | none in the worker | daemon (reincarnation) | archive blob, powers, context |
 
 - **Persistent state**: the daemon owns it (the CAS blob and the formula).
 - **Commit or discard**: the daemon; a capture failure formulates nothing.
@@ -284,20 +316,27 @@ Capture errors surface as an `isError` result, and a rejected option
 ## Phased implementation
 
 1. `makeTreeReadPowers` in `@endo/platform/fs`, with segment-confinement tests.
-2. Daemon capture for `node-modules-with-map` and `node-modules-scan`; `EndoHost.makeFromTree`
+2. Daemon capture for `node-modules-with-map` and `node-modules-scan`,
+   including the daemon's `canonical` hook for mounts; `EndoHost.makeFromTree`
    gains `layout` and `entry`.
 3. `EndoHost.makeFromBundle`, and `makeArchive`'s refusal of precompiled archives.
-4. `EndoGuest.makeArchive`, `makeFromTree`, and `makeFromBundle`, bounded by
-   the guest's name hub and options shape.
+4. A caplet-preparation helper factored out of the host's `prepareMakeCaplet`;
+   `EndoGuest.makeArchive`, `makeFromTree`, and `makeFromBundle` on it, bounded
+   by the guest's name hub and options shape.
 5. MCP tools for the three guest makers in `@endo/agent-mcp-stdio`, with
    `resultName` required.
 
 ## Test plan
 
 - A `node_modules` tree laid out by npm, one by pnpm with
-  `node-linker=hoisted`, and one by Yarn with `nodeLinker: node-modules` run
-  to the same result on a Node worker and an XS worker. A Yarn Plug'n'Play
-  tree (no `node_modules`) is rejected with the no-layout error.
+  `node-linker=hoisted`, one by Yarn with `nodeLinker: node-modules`, and one
+  by Yarn with `nodeLinker: pnpm` (this repository's own linker, whose links
+  point into the in-root `node_modules/.store`) run to the same result on a
+  Node worker and an XS worker. A Yarn Plug'n'Play tree (no `node_modules`)
+  is rejected with the no-layout error.
+- A valid pre-generated map under `node_modules` (`node-modules-with-map`)
+  captures through `captureFromMap` and runs on a Node worker and an XS
+  worker.
 - A package reached through two `node_modules` paths in a mount (an in-root
   link) loads as one compartment.
 - A root `package.json` whose `exports["."]` is a conditions object resolves
@@ -307,7 +346,9 @@ Capture errors surface as an `isError` result, and a rejected option
 - A guest-made application given `@agent` holds the guest, not the host.
 - A guest call with `workerTrustedShims` is refused.
 - Changing a mutable mount after `makeFromTree` changes the reincarnated
-  application; a snapshot tree reincarnates the same application.
+  application; a snapshot tree reincarnates the same application. A formula
+  made with `layout` omitted keeps `'detect'` as its requested layout while the
+  inspector reports the layout each incarnation ran as.
 - A pnpm workspace link that resolves outside the mount root is reported as an
   unsupported layout under both the isolated and the hoisted linker; the same
   workspace mounted at its root, or with injected workspace dependencies, runs.
@@ -328,7 +369,7 @@ Capture errors surface as an `isError` result, and a rejected option
 
 1. Capture into an archive, not new worker methods, so every worker kind runs
    the result. An archive or bundle replays fixed bytes; a tree replays
-   whatever its capture reads (Decision 6).
+   whatever its capture reads (Decision 5).
 2. Considered and rejected: restoring the `make-bundle` formula. Reason: a
    bundle is an archive in base64, and the removal rationale in
    [daemon-make-archive](daemon-make-archive.md) still holds.
@@ -343,15 +384,11 @@ Capture errors surface as an `isError` result, and a rejected option
    through in-root links still load once, because `canonical` collapses them. A filesystem
    mount attenuation that shows chosen roots of the full POSIX namespace, with
    a controller facet to add and remove roots, is tracked as a separate design.
-5. Archives carry original sources and a compartment map, never precompiled
-   sources. Bundles keep carrying precompiled sources. Every option stays
-   reachable, but precompiled artifacts are kept only where no other system is
-   practical, such as a web page.
-6. Every `makeFromTree` layout keeps a live tree reference rather than
-   capturing once. A caller who wants immutability provides a snapshot, and
-   the formula records which of the two it holds. Capture from a mount being
-   written to may be torn; the daemon does not detect that.
-7. The guest makers exist. A guest's made applications share its metering by
+5. Considered and rejected: capturing a tree once at formulation and storing
+   the archive. Reason: every `makeFromTree` layout keeps a live tree
+   reference, as the archive layout does today; a caller who wants fixed bytes
+   passes a snapshot.
+6. The guest makers exist. A guest's made applications share its metering by
    default. Whether guests make guests is out of scope here. Guests can
    already invite other parties and accept invitations as themselves
    (`EndoGuest.invite`, `EndoGuest.accept`), and guest-made guests belong to
