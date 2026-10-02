@@ -94,8 +94,9 @@ import {
 // daemon, whose clock every workspace is handed; 12: a host resource is
 // bound to a worker and a key, and a launcher's key is its ephemeral
 // bundle digest; 13: an export record names its resource's binding; 14: a
-// name taken while an installation runs fails the installation.
-const WORKSPACE_VERSION = 14;
+// name taken while an installation runs fails the installation; 15: the
+// manager kit owns the status record and `register` reports it.
+const WORKSPACE_VERSION = 15;
 // The daemon takes allocation keys from the host alone, so a fixed key names
 // the host's own registry vat and nothing else can carry it.
 const REGISTRY_ALLOCATION_KEY = '00000000000000000000000000000001';

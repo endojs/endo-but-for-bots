@@ -137,7 +137,7 @@ test.serial(
         'evaluate',
         "E(inventory.get('site')).status().then(s => s.status)",
       );
-      if (waiting === 'true' && status === "'listening'") {
+      if (waiting === 'true' && status === "'bound'") {
         ready = true;
         break;
       }

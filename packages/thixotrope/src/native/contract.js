@@ -72,21 +72,31 @@
  * @property {string} label what a key names, for messages
  * @property {(existing: Spec, wanted: Spec) => boolean} same
  * @property {(existing: Spec, wanted: Spec) => boolean} [replaces]
- * @property {(key: unknown, spec: Spec | undefined, state: 'bound' | 'inactive' | 'closed', error?: string) => unknown} describe
- *   the status record a handle reports; a closed registration has no spec
+ * @property {(key: unknown, spec: Spec, status: 'bound' | 'inactive') => Record<string, unknown>} [decorate]
+ *   fields a status record carries beside `key`, `status` and `error`;
+ *   never asked of a closed registration
+ */
+
+/**
+ * The status record of a registration, the same shape for every resource:
+ * `bound` while the adapter holds it, `inactive` with the error while it
+ * could not, `closed` once withdrawn; and what the author's `decorate` adds.
+ * @typedef {{ key: unknown, status: 'bound' | 'inactive' | 'closed', error?: string } & Record<string, unknown>} RegistrationStatus
  */
 
 /**
  * @template Spec
  * @typedef {object} Manager
- * @property {(key: unknown, spec: Spec) => Promise<RegistrationHandle>} register
+ * @property {(key: unknown, spec: Spec) => Promise<{ handle: RegistrationHandle, status: RegistrationStatus }>} register
+ *   the handle, and the status reconciling it reported
  * @property {() => Array<unknown>} keys
  * @property {{ started: () => Promise<void>, exited: () => Promise<void> }} lifecycle
  */
 
 /**
  * @typedef {object} RegistrationHandle
- * @property {() => Promise<unknown>} status the record `describe` returns
+ * @property {() => Promise<RegistrationStatus>} status reconciles the
+ *   registration again and reports it
  * @property {() => Promise<boolean>} close whether this registration was
  *   still in place; a later registration under the same key is untouched
  */

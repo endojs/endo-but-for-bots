@@ -290,10 +290,12 @@ names the handler it was made with.
 `durable.js` exports a synchronous `make(powers)` that receives `{ adapters, makeKeeper,
 makeManager }` together with whatever the installation was granted or provided, such as the control
 socket's `admin`, with the guest prelude in scope, and returns `{ facet, lifecycle }`.
-`makeManager({ label, same, replaces, describe })` writes the manager's bookkeeping once: it keeps
+`makeManager({ label, same, replaces, decorate })` writes the manager's bookkeeping once: it keeps
 the desired registrations, holds one adapter incarnation through a keeper, reconciles each
-registration against it, hands out per-registration handles whose `status()` and `close()` act only
-on their own generation, withdraws desired state durably before telling the adapter, retires an
+registration against it, answers `register` with the handle and the status reconciling found,
+hands out per-registration handles whose `status()` and `close()` act only on their own
+generation, reports every status as one record, `{ key, status, error? }` with `bound`,
+`inactive` or `closed` and whatever fields the optional `decorate` adds, withdraws desired state durably before telling the adapter, retires an
 incarnation whose unbinding is uncertain, and rebuilds the adapter at startup and after its own
 exit when anything is desired.
 `ephemeral.js` exports `make()` returning the adapter, built with `makeAdapter({ label, same,
@@ -307,7 +309,7 @@ A registration may resolve at bind time, when binding settles something the spec
 relative delay becomes an absolute deadline; a port of zero becomes the port the listener got):
 the optional `resolve(binding, spec)` says what it became, a bind answers that resolved spec
 (`undefined` when the registration is as sent), a restore reports it, and the manager adopts it as
-the desired spec, so `same`, `describe` and the next restore all see the resolved form.
+the desired spec, so `same`, `decorate` and the next restore all see the resolved form.
 Sameness of a registration is the author's to state on both sides, since a record crosses the wire
 as a fresh copy each time; an adapter forgets a binding only once its release succeeds, so a failed
 release is retried by a later unbind and reaches the manager's retirement path.

@@ -97,9 +97,8 @@ const fixture = () => {
        * @param {{who: string}} b
        */
       replaces: (a, b) => a.who === b.who,
-      /** @type {(key: unknown, spec: any, state: string, error?: string) => unknown} */
-      describe: (key, spec, state, error) =>
-        harden({ key, spec, state, ...(error === undefined ? {} : { error }) }),
+      /** @type {(key: unknown, spec: any) => Record<string, unknown>} */
+      decorate: (_key, spec) => harden({ spec }),
     },
   );
   return {
@@ -119,11 +118,17 @@ const fixture = () => {
 test('a registration is reconciled, described, and closed by its own handle only', async t => {
   const { manager, bound, log } = fixture();
   const spec = harden({ who: 'a', n: 1 });
-  const first = await manager.register('one', spec);
-  t.deepEqual(await E(first).status(), { key: 'one', spec, state: 'bound' });
+  const registered = await manager.register('one', spec);
+  t.deepEqual(
+    registered.status,
+    { spec, key: 'one', status: 'bound' },
+    'register reports what reconciling found',
+  );
+  const first = registered.handle;
+  t.deepEqual(await E(first).status(), { key: 'one', spec, status: 'bound' });
   t.true(bound.has('one'));
   t.is(
-    await manager.register('one', harden({ who: 'a', n: 1 })),
+    (await manager.register('one', harden({ who: 'a', n: 1 }))).handle,
     first,
     'the same registration is the same handle',
   );
@@ -132,10 +137,10 @@ test('a registration is reconciled, described, and closed by its own handle only
   t.false(bound.has('one'));
   t.deepEqual(
     await E(first).status(),
-    { key: 'one', spec: undefined, state: 'closed' },
+    { key: 'one', status: 'closed' },
     'a closed handle no longer names what it was made with',
   );
-  const second = await manager.register('one', spec);
+  const second = (await manager.register('one', spec)).handle;
   t.not(second, first);
   t.false(
     await E(first).close(),
@@ -159,8 +164,10 @@ test('a registration is reconciled, described, and closed by its own handle only
 
 test('a differing registration replaces or is refused as the author decides', async t => {
   const { manager, bound } = fixture();
-  const handle = await manager.register('one', harden({ who: 'a', n: 1 }));
-  const replaced = await manager.register('one', harden({ who: 'a', n: 2 }));
+  const handle = (await manager.register('one', harden({ who: 'a', n: 1 })))
+    .handle;
+  const replaced = (await manager.register('one', harden({ who: 'a', n: 2 })))
+    .handle;
   t.is(replaced, handle, 'a replacement keeps the handle');
   t.deepEqual(bound.get('one'), { who: 'a', n: 2 });
   await t.throwsAsync(
@@ -173,27 +180,30 @@ test('a differing registration replaces or is refused as the author decides', as
 test('a failed bind keeps the desired state and reports it until it succeeds', async t => {
   const { manager, bound, setFailBind } = fixture();
   setFailBind(true);
-  const handle = await manager.register('one', harden({ who: 'a', n: 1 }));
+  const handle = (await manager.register('one', harden({ who: 'a', n: 1 })))
+    .handle;
   t.like(await E(handle).status(), {
-    state: 'inactive',
+    status: 'inactive',
     error: 'resource unavailable',
   });
   t.false(bound.has('one'));
   setFailBind(false);
-  t.like(await E(handle).status(), { state: 'bound' });
+  t.like(await E(handle).status(), { status: 'bound' });
   t.true(bound.has('one'));
 });
 
 test('an uncertain unbind retires the incarnation; the rest rebuild on next use', async t => {
   const { manager, bound, log, incarnations, failNextUnbind } = fixture();
-  const first = await manager.register('one', harden({ who: 'a', n: 1 }));
-  const second = await manager.register('two', harden({ who: 'b', n: 1 }));
+  const first = (await manager.register('one', harden({ who: 'a', n: 1 })))
+    .handle;
+  const second = (await manager.register('two', harden({ who: 'b', n: 1 })))
+    .handle;
   t.is(incarnations(), 1);
   failNextUnbind();
   t.true(await E(first).close());
   t.true(log.includes('retire'));
   t.false(bound.has('one'));
-  t.like(await E(second).status(), { state: 'bound' });
+  t.like(await E(second).status(), { status: 'bound' });
   t.is(incarnations(), 2, 'a fresh incarnation restored the survivor');
   t.deepEqual(log.at(-2), 'restore two');
   t.false(bound.has('one'));
@@ -201,8 +211,10 @@ test('an uncertain unbind retires the incarnation; the rest rebuild on next use'
 
 test('closing while no incarnation is live does not build one', async t => {
   const { manager, log, incarnations, failNextUnbind } = fixture();
-  const first = await manager.register('one', harden({ who: 'a', n: 1 }));
-  const second = await manager.register('two', harden({ who: 'b', n: 1 }));
+  const first = (await manager.register('one', harden({ who: 'a', n: 1 })))
+    .handle;
+  const second = (await manager.register('two', harden({ who: 'b', n: 1 })))
+    .handle;
   failNextUnbind();
   t.true(await E(first).close());
   t.is(incarnations(), 1);
@@ -217,25 +229,25 @@ test('closing while no incarnation is live does not build one', async t => {
 
 test('the manager refuses a construction that leaves out what it needs', t => {
   const adapters = Far('Launcher', { create: () => {} });
-  const describe = () => harden({});
   const same = () => true;
   /** @param {any} options */
   const attempt = options =>
     makeManager({ adapters, makeKeeper: makeAdapterKeeper }, options);
-  t.throws(() => attempt({ same, describe }), { message: /needs a label/ });
-  t.throws(() => attempt({ label: 'Slot', describe }), {
+  t.throws(() => attempt({ same }), { message: /needs a label/ });
+  t.throws(() => attempt({ label: 'Slot' }), {
     message: /needs same\(\)/,
   });
-  t.throws(() => attempt({ label: 'Slot', same }), {
-    message: /needs describe\(\)/,
-  });
+  // The status record is the kit's own: nothing beyond the label and
+  // sameness is needed to make a manager.
+  t.notThrows(() => attempt({ label: 'Slot', same }));
 });
 
 test('startup rebuilds the adapter only when something is desired', async t => {
   const { manager, incarnations, log } = fixture();
   await E(manager.lifecycle).started();
   t.is(incarnations(), 0);
-  const handle = await manager.register('one', harden({ who: 'a', n: 1 }));
+  const handle = (await manager.register('one', harden({ who: 'a', n: 1 })))
+    .handle;
   t.is(incarnations(), 1);
   await E(manager.lifecycle).started();
   t.is(incarnations(), 1, 'a live incarnation is kept');
@@ -247,19 +259,21 @@ test('startup rebuilds the adapter only when something is desired', async t => {
 
 test('a resolved spec is adopted as the desired one, described, and restored', async t => {
   const { manager, bound, log, failNextUnbind } = fixture();
-  const handle = await manager.register('one', harden({ who: 'r', n: 1 }));
+  const handle = (await manager.register('one', harden({ who: 'r', n: 1 })))
+    .handle;
   t.deepEqual(
     await E(handle).status(),
-    { key: 'one', spec: { who: 'r', n: 1, slot: 101 }, state: 'bound' },
+    { key: 'one', spec: { who: 'r', n: 1, slot: 101 }, status: 'bound' },
     'status describes what the registration became',
   );
   t.deepEqual(bound.get('one'), { who: 'r', n: 1, slot: 101 });
   // Retire the incarnation through an uncertain unbind of another key; the
   // survivor is restored in its resolved form, not the one first registered.
-  const other = await manager.register('two', harden({ who: 'b', n: 1 }));
+  const other = (await manager.register('two', harden({ who: 'b', n: 1 })))
+    .handle;
   failNextUnbind();
   t.true(await E(other).close());
-  t.like(await E(handle).status(), { state: 'bound', spec: { slot: 101 } });
+  t.like(await E(handle).status(), { status: 'bound', spec: { slot: 101 } });
   t.deepEqual(
     bound.get('one'),
     { who: 'r', n: 1, slot: 101 },
@@ -272,7 +286,8 @@ test('an exit notice rebuilds the adapter only when something is desired', async
   const { manager, incarnations, bound } = fixture();
   await E(manager.lifecycle).exited();
   t.is(incarnations(), 0, 'nothing desired, nothing rebuilt');
-  const handle = await manager.register('one', harden({ who: 'a', n: 1 }));
+  const handle = (await manager.register('one', harden({ who: 'a', n: 1 })))
+    .handle;
   t.is(incarnations(), 1);
   await E(manager.lifecycle).exited();
   t.is(incarnations(), 1, 'a live incarnation answers the probe and is kept');
@@ -324,30 +339,29 @@ test('over a resolving adapter, a first registration is bound once and adopted; 
     {
       label: 'Slot',
       same,
-      /** @type {(key: unknown, spec: any, state: string, error?: string) => unknown} */
-      describe: (key, spec, state, error) =>
-        harden({ key, spec, state, ...(error === undefined ? {} : { error }) }),
+      /** @type {(key: unknown, spec: any) => Record<string, unknown>} */
+      decorate: (_key, spec) => harden({ spec }),
     },
   );
   // No incarnation yet: providing one restores this registration, which
   // resolves; the bind that follows must send the adopted form, or the
   // adapter would see a different registration under the same key.
-  const first = await manager.register('one', harden({ who: 'a' }));
+  const first = (await manager.register('one', harden({ who: 'a' }))).handle;
   t.deepEqual(await E(first).status(), {
     key: 'one',
     spec: { who: 'a', slot: 1 },
-    state: 'bound',
+    status: 'bound',
   });
   t.deepEqual(log, ['bind one unresolved'], 'bound once');
   // A live incarnation: adoption comes from the bind's own answer.
-  const second = await manager.register('two', harden({ who: 'b' }));
+  const second = (await manager.register('two', harden({ who: 'b' }))).handle;
   t.deepEqual(await E(second).status(), {
     key: 'two',
     spec: { who: 'b', slot: 2 },
-    state: 'bound',
+    status: 'bound',
   });
   t.is(
-    await manager.register('one', harden({ who: 'a' })),
+    (await manager.register('one', harden({ who: 'a' }))).handle,
     first,
     'the consumer may register the unresolved form again',
   );

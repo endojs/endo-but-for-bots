@@ -15,14 +15,14 @@ import { makeSerialQueue } from '../serial-queue.js';
  * the adapter at startup and after its own exit when there is anything to
  * restore. This factory
  * writes all of that once. A resource author supplies the identity of a
- * registration and how to describe its state; the adapter side, built with
+ * registration and, optionally, what its status carries; the adapter side, built with
  * `makeAdapter`, supplies the verbs.
  *
  * The manager and the adapter speak one protocol: `bind(key, spec)`,
  * `unbind(key)`, `restore([[key, spec], ...])` and `keys()`, where `spec` is
  * whatever passable record the author registers under a key. A bind or a
  * restore may answer a resolved spec, what the registration became once
- * bound; the manager adopts it as the desired spec, so `same`, `describe`
+ * bound; the manager adopts it as the desired spec, so `same`, `decorate`
  * and the next restore all see the resolved form.
  *
  * Shipped by source: this factory is evaluated in the manager vat, so it
@@ -45,18 +45,36 @@ import { makeSerialQueue } from '../serial-queue.js';
  *   whether a differing registration may take the place of the existing one
  *   under the same key, in which case the adapter is told to rebind; never by
  *   default, so the key is refused as already registered
- * @param {(key: unknown, spec: Spec | undefined, state: 'bound' | 'inactive' | 'closed', error?: string) => unknown} options.describe
- *   the status record a handle reports; a closed registration has no spec,
- *   since its handle no longer names what it was made with
+ * @param {(key: unknown, spec: Spec, status: 'bound' | 'inactive') => Record<string, unknown>} [options.decorate]
+ *   fields a status record carries beside the kit's own `key`, `status`
+ *   and `error`, from what the registration is (the URL a listener serves,
+ *   the deadline an alarm keeps); never asked of a closed registration,
+ *   which no longer names what it was made with
  */
 export const makeManager = (
   { adapters, makeKeeper },
-  { label, same, replaces = () => false, describe },
+  { label, same, replaces = () => false, decorate = undefined },
 ) => {
   if (typeof label !== 'string') throw Error('makeManager needs a label');
   if (typeof same !== 'function') throw Error('makeManager needs same()');
-  if (typeof describe !== 'function')
-    throw Error('makeManager needs describe()');
+  /**
+   * The status record a handle reports: one shape and one word for each
+   * state across every resource, `bound`, `inactive` or `closed`, with
+   * what the author adds beside it.
+   * @param {unknown} key
+   * @param {Spec | undefined} spec
+   * @param {'bound' | 'inactive' | 'closed'} status
+   * @param {string} [error]
+   */
+  const report = (key, spec, status, error = undefined) =>
+    harden({
+      ...(spec === undefined || status === 'closed' || decorate === undefined
+        ? {}
+        : decorate(key, spec, status)),
+      key,
+      status,
+      ...(error === undefined ? {} : { error }),
+    });
   /**
    * Desired state, one mutable record per key. The handle a caller holds is
    * bound to its record, so a later registration under the same key cannot
@@ -128,22 +146,17 @@ export const makeManager = (
         entry,
         await E(adapter).bind(key, /** @type {Spec} */ (entry.spec)),
       );
-      return harden(describe(key, /** @type {Spec} */ (entry.spec), 'bound'));
+      return report(key, entry.spec, 'bound');
     } catch (error) {
-      return harden(
-        describe(
-          key,
-          /** @type {Spec} */ (entry.spec),
-          'inactive',
-          describeError(error),
-        ),
-      );
+      return report(key, entry.spec, 'inactive', describeError(error));
     }
   };
   return harden({
     /**
      * Desire a registration under a key and reconcile it now. Returns the
-     * handle for it, the same handle for the same registration. The spec is
+     * handle for it, the same handle for the same registration, with the
+     * status the reconciliation reported, so a caller that cannot use an
+     * inactive registration learns so without binding it again. The spec is
      * hardened here, since it is kept and sent as it is.
      * @param {unknown} key
      * @param {Spec} spec
@@ -160,7 +173,7 @@ export const makeManager = (
             status: () =>
               enqueue(async () => {
                 if (desired.get(key) !== created)
-                  return harden(describe(key, created.spec, 'closed'));
+                  return report(key, undefined, 'closed');
                 return reconcile(key, created);
               }),
             close: () =>
@@ -206,8 +219,8 @@ export const makeManager = (
             entry.spec = spec;
           }
         }
-        await reconcile(key, entry);
-        return entry.handle;
+        const status = await reconcile(key, entry);
+        return harden({ handle: entry.handle, status });
       }),
     /** The keys currently desired, for a public facet that lists them. */
     keys: () => harden([...desired.keys()]),

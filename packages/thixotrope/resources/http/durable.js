@@ -63,17 +63,11 @@ export const make = ({ makeManager }) => {
     replaces: (existing, wanted) => existing.handler === wanted.handler,
     /**
      * @param {unknown} port
-     * @param {HttpRegistrationSpec | undefined} _spec
-     * @param {'bound' | 'inactive' | 'closed'} state
-     * @param {string} [error]
+     * @param {HttpRegistrationSpec} _spec
+     * @param {'bound' | 'inactive'} status
      */
-    describe: (port, _spec, state, error) =>
-      harden({
-        port,
-        status: state === 'bound' ? 'listening' : state,
-        ...(state === 'bound' ? { url: `http://127.0.0.1:${port}/` } : {}),
-        ...(error === undefined ? {} : { error }),
-      }),
+    decorate: (port, _spec, status) =>
+      status === 'bound' ? harden({ url: `http://127.0.0.1:${port}/` }) : {},
   });
   const facet = Far('Http', {
     help: () =>
@@ -83,15 +77,18 @@ export const make = ({ makeManager }) => {
      * @param {any} handler
      * @param {{origins?: string[]}} [policy]
      */
-    register: (port, handler, policy = {}) => {
+    register: async (port, handler, policy = {}) => {
       if (!Number.isInteger(port) || port < 1024 || port > 65_535)
         throw Error('Expected HTTP port 1024–65535');
       if (passStyleOf(handler) !== 'remotable')
         throw Error('Expected a remotable HTTP handler');
-      return manager.register(
+      // A registration whose port could not be bound is kept and its
+      // handle returned all the same: status() retries it.
+      const { handle } = await manager.register(
         port,
         harden({ handler, policy: normalizePolicy(policy) }),
       );
+      return handle;
     },
   });
   return harden({ facet, lifecycle: manager.lifecycle });
