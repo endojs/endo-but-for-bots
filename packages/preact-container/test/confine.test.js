@@ -1190,4 +1190,86 @@ describe('../src/compartment.js', () => {
     // function should detect this and throw.
     expect(() => render(h(Confined, null), scratch)).to.throw(/renderConfined/);
   });
+
+  // The README's "What `renderConfined` alone does not contain" sends
+  // hostile code here. Each shape below reaches Preact's internals when a
+  // component is rendered through `renderConfined` directly; the coercer
+  // rebuilds every guest vnode with `h()`, so Preact renders copies the
+  // guest never holds. (A guest's `this` is covered above.)
+  describe('vnode shapes renderConfined alone does not contain', () => {
+    // Preact's published names for `vnode._dom` and `vnode._parent`.
+    const VNODE_DOM = '__e';
+    const VNODE_PARENT = '__';
+
+    it('a hand-built vnode with a ref and an _original never receives a DOM node', () => {
+      let stolen;
+      const Confined = confineComponent(() => ({
+        type: 'div',
+        props: { children: 'x' },
+        ref: el => {
+          if (el) stolen = el;
+        },
+        constructor: undefined,
+        // Without an `_original` (published as `__v`), Preact 10 takes a
+        // new hand-built element vnode for an unchanged one and renders
+        // nothing.
+        __v: 1,
+      }));
+      renderConfined(h(Confined, null), scratch);
+      expect(stolen).to.equal(undefined);
+      expect(scratch.innerHTML).to.equal('<div>x</div>');
+    });
+
+    it('a vnode the guest keeps is never the one Preact renders', () => {
+      let kept;
+      let keptLiteral;
+      const Confined = confineComponent(({ h }) => {
+        keptLiteral = {
+          type: 'span',
+          props: { children: 'y' },
+          constructor: undefined,
+          __v: 1,
+        };
+        kept = h('div', null, 'x', keptLiteral);
+        return kept;
+      });
+      renderConfined(h(Confined, null), scratch);
+      expect(scratch.innerHTML).to.equal('<div>x<span>y</span></div>');
+      // `h()` starts both fields at `null`; the literal never had them.
+      for (const vnode of [kept, keptLiteral]) {
+        expect(vnode[VNODE_DOM] ?? null).to.equal(null);
+        expect(vnode[VNODE_PARENT] ?? null).to.equal(null);
+      }
+    });
+
+    it('a vnode changed after h() is rebuilt and sanitized', () => {
+      let stolen;
+      const Confined = confineComponent(({ h }) => {
+        const vnode = h('div', null);
+        vnode.props.dangerouslySetInnerHTML = {
+          __html: '<b id="MUTATED_INJ">x</b>',
+        };
+        vnode.ref = el => {
+          if (el) stolen = el;
+        };
+        return vnode;
+      });
+      renderConfined(h(Confined, null), scratch);
+      expect(scratch.querySelector('#MUTATED_INJ')).to.equal(null);
+      expect(stolen).to.equal(undefined);
+    });
+
+    it('an object type that converts to a tag name becomes a Fragment', () => {
+      const Confined = confineComponent(({ h }) =>
+        h(
+          { toString: () => 'div' },
+          { dangerouslySetInnerHTML: { __html: '<b id="OBJTYPE_INJ">x</b>' } },
+          h('span', null, 'kept'),
+        ),
+      );
+      renderConfined(h(Confined, null), scratch);
+      expect(scratch.querySelector('#OBJTYPE_INJ')).to.equal(null);
+      expect(scratch.innerHTML).to.equal('<span>kept</span>');
+    });
+  });
 });
